@@ -2,6 +2,8 @@
 in its own checkout, the review loop per pair, the integration and the delivery
 (ADR-0011, ADR-0014)."""
 
+import re
+
 import pytest
 
 from agentic.core.process.application.deliver import deliver
@@ -43,6 +45,12 @@ TASK = {
 }
 ASK, ANSWER = "tech_lead_ephemeral", "tech_lead_interviewee"
 TASK_PATH = MemoryWorkspace.ROOT / "GH-12"
+
+
+def _unmeasured(section: str) -> str:
+    """The section with the measured seconds of each check row replaced by `-`: the figure
+    is wall time of a fake command, never an exact value to pin."""
+    return re.sub(r"\| \d+\.\d \|\n", "| - |\n", section)
 
 
 @pytest.fixture
@@ -107,6 +115,8 @@ async def test_plan_repairs_a_markdown_missing_the_subtasks_heading(cfg):
             "integration": "",
             "estimated_cost_usd": 20.0,
             "estimated_files": 5,
+            "ci_required": [],
+            "ci_none_reason": "The issue requires no external check.",
         },
         0.3,
         2,
@@ -148,10 +158,10 @@ async def test_develop_runs_the_developer_unattended_in_the_subtask_checkout(cfg
     assert patch["subtasks"] == {
         "api": {**sub("api"), "status": "delivered", "branch": "agentic/GH-12.api", "base": "base1"}
     }
-    assert patch["sections"] == {
+    assert {name: _unmeasured(text) for name, text in patch["sections"].items()} == {
         "Developer: api": "### Checks\n\nRun by the system on `head2` when the Developer "
-        "delivered.\n\n| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` "
-        "| passed |\n\n### Changes\n\nx.py"
+        "delivered.\n\n| Check | Command | Result | Seconds |\n|---|---|---|---|\n"
+        "| `tests` | `pytest` | passed | - |\n\n### Changes\n\nx.py"
     }
     assert patch["runs"][0]["section"] == "Developer: api" and patch["status"] == "developing"
     # A Developer run with no `depends_on` produces the same patch keys and the same
@@ -852,7 +862,7 @@ async def test_the_integrator_builds_on_the_task_branch_with_the_branches_listed
     assert patch["subtasks"][INTEGRATION]["status"] == "delivered"
     (section,) = patch["sections"]
     assert section == "Developer: integration"
-    assert patch["sections"][section].endswith("| passed |\n\n### Changes\n\nx.py")
+    assert patch["sections"][section].endswith("\n\n### Changes\n\nx.py")
 
 
 async def test_deliver_pushes_opens_the_pull_request_and_tells_the_issue(cfg):
@@ -919,7 +929,7 @@ def developing(ports, subtasks=("api", "domain")):
 
 async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_records_them(cfg):
     checks = {"tests": "uv run pytest", "lint": "ruff check ."}
-    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner, stack=MemoryStack(checks), commands=commands)
     state, checkout = developing(ports)
@@ -932,7 +942,10 @@ async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_reco
     (reason,) = runner.refused
     assert "(1 of 2)" in reason and "`lint` failed: `ruff check .`" in reason
     assert "E501 line too long" in reason
-    assert commands.ran == [(checkout.path, c) for c in [*checks.values(), *checks.values()]]
+    # The red lint ran once more inside the first gate call (ADR-0066), then both once more.
+    first, second = list(checks.values()), list(checks.values())
+    first.insert(2, "ruff check .")
+    assert commands.ran == [(checkout.path, c) for c in [*first, *second]]
     section = patch["sections"]["Developer: api"]
     assert section.startswith("### Checks\n\nRun by the system on `head")
     assert "| `lint` | `ruff check .` | passed |" in section
@@ -941,7 +954,7 @@ async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_reco
 
 
 async def test_the_presubmit_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
-    red = [CommandResult(1, "1 failed")] * 3
+    red = [CommandResult(1, "1 failed")] * 6
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner, commands=MemoryCommands(pytest=red))
     state, _ = developing(ports)
@@ -1283,25 +1296,28 @@ async def test_the_integrator_never_maps_invariants_and_writes_no_coverage_block
     ports.workspace.moved.add(TASK_PATH)
     patch = await develop(state, cfg, ports)
     assert "Coverage" not in patch["sections"]["Developer: integration"]
-    assert patch["sections"]["Developer: integration"].endswith("| passed |\n\n### Changes\n\nx.py")
+    assert patch["sections"]["Developer: integration"].endswith("\n\n### Changes\n\nx.py")
     assert "### Coverage" not in patch["sections"]["Developer: integration"]
     # Only the schema guard: no map check is wired on the integration.
     assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
 
 
-async def test_a_plan_with_no_invariants_wires_no_map_check_and_writes_no_block(cfg):
+async def test_a_plan_with_no_invariants_still_checks_locations_and_writes_no_block(cfg):
     state = {**TASK, "subtasks": {"api": sub("api"), "b": sub("b")}, "subtask_id": "api"}
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner)
     ports.workspace.moved.add(ports.workspace.subtask_checkout("GH-12", "api").path)
     patch = await develop(state, cfg, ports)
     # Exactly what the section was before the coverage map existed: checks, then the text.
-    assert patch["sections"]["Developer: api"] == (
+    assert _unmeasured(patch["sections"]["Developer: api"]) == (
         "### Checks\n\nRun by the system on `head2` when the Developer delivered.\n\n"
-        "| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` | passed |\n\n"
+        "| Check | Command | Result | Seconds |\n|---|---|---|---|\n"
+        "| `tests` | `pytest` | passed | - |\n\n"
         "### Changes\n\nx.py"
     )
-    assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
+    # The `brief:` locations are checked on every non-integration subtask, so the map check is
+    # chained after the schema guard even with nothing to map.
+    assert type(runner.calls[0]["guard"]).__name__ == "GuardChain"
 
 
 class _ShortAndFullHeads(MemoryWorkspace):
@@ -1331,3 +1347,27 @@ async def test_a_review_records_the_full_head_it_reviewed(cfg):
     )
     patch = await review(state, cfg, ports)
     assert patch["subtasks"]["api"]["reviewed_head"] == _ShortAndFullHeads.FULL
+
+
+async def test_escalate_does_not_label_an_account_limit_only_pause_but_comments(cfg):
+    log = [
+        {"kind": "failure", "value": "account_limit", "section": "Developer"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    state = {**TASK, "escalated": "Developer failed 1 times: 429", "pause_log": log}
+    ports = memory_ports()
+    assert await escalate(state, cfg, ports) == {}
+    assert ports.tracker.labels == []
+    assert ports.tracker.comments[0][1].startswith("Escalated: Developer failed")
+    assert ports.documents.last == state  # the pause and its clock are still written
+
+
+async def test_escalate_labels_a_pause_the_predicate_keeps_for_a_human(cfg):
+    # Rejected input for the no-label rule: an upstream pause and a mixed set both label.
+    for reasons in (["upstream"], ["account_limit", "sdk"]):
+        log = [{"kind": "failure", "value": r, "section": "Developer"} for r in reasons]
+        log.append({"kind": "escalation", "value": "failure"})
+        state = {**TASK, "escalated": "Developer failed", "pause_log": log}
+        ports = memory_ports()
+        await escalate(state, cfg, ports)
+        assert ports.tracker.labels == [("GH-12", "needs-human")]

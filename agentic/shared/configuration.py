@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ENV_PREFIX = "AGENTIC_"
 # The legacy, shared checkpointer file, relative to the product root, outside version
@@ -31,6 +31,8 @@ STATE_DIR = Path(".agentic/state")
 LOGS_DIR = Path(".agentic/logs")
 
 RoleKind = Literal["actor", "verifier"]
+# What `max_parallel_subtasks` resolves to when unset, before the role-slot cap (GH-364).
+DEFAULT_PARALLEL_SUBTASKS = 4
 
 
 class MissingProductDir(ValueError):
@@ -92,6 +94,12 @@ class Configuration(BaseModel):
     # sub-agents. A 429 arrives as a role failure and two of those escalate the task,
     # which is dearer than waiting for a slot.
     max_concurrent_roles: int = Field(default=4, ge=1)
+    # Subtasks one task runs at once (GH-364). Unset resolves to `min(4, max_concurrent_roles)`
+    # (`parallel_subtasks`): 4 is the default until the machine-wide scheduler (#361) makes a
+    # higher value safe. Only an explicit value above `max_concurrent_roles` is rejected, so
+    # no environment that was valid before this field is refused, and one role per subtask
+    # in flight means a review never waits for a slot behind a new Developer.
+    max_parallel_subtasks: int | None = Field(default=None, ge=1)
     # Rounds an interview may take before the interviewer closes with what it has
     # (ADR-0014).
     interview_max_rounds: int = Field(default=4, ge=1)
@@ -187,6 +195,26 @@ class Configuration(BaseModel):
     # The machine's store of passing check results (ADR-0065): outside every checkout and
     # shared by every product, built like `run_registry_dir`.
     check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
+
+    @model_validator(mode="after")
+    def _parallel_within_role_slots(self) -> Configuration:
+        if (
+            self.max_parallel_subtasks is not None
+            and self.max_parallel_subtasks > self.max_concurrent_roles
+        ):
+            raise ValueError(
+                f"max_parallel_subtasks ({self.max_parallel_subtasks}) exceeds "
+                f"max_concurrent_roles ({self.max_concurrent_roles}): a review would wait "
+                "for a slot behind a new Developer"
+            )
+        return self
+
+    @property
+    def parallel_subtasks(self) -> int:
+        """Subtasks one task runs at once: the explicit setting, or `min(4, roles)`."""
+        if self.max_parallel_subtasks is not None:
+            return self.max_parallel_subtasks
+        return min(DEFAULT_PARALLEL_SUBTASKS, self.max_concurrent_roles)
 
     @classmethod
     def from_sources(

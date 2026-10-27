@@ -27,6 +27,7 @@ from typing import Any, Literal, get_args
 import yaml
 
 from .copy import copy_location_parts
+from .returns import is_return
 from .schemas import TaskType
 from .task import INTEGRATION, CopyCategory, FindingCategory
 
@@ -135,7 +136,7 @@ class Backing:
 def return_backing(entry: Mapping[str, Any], task_type: str) -> Backing | None:
     """The `Backing` a `return_history` entry makes, or `None`: a landing return, a pair
     the table does not name (PM's return to Tech Lead has no subtask to attribute to)."""
-    if entry.get("by") == "landing":
+    if not is_return(entry):
         return None  # the landing reopened the stage; no role returned it
     pair = entry.get("pair")
     category = entry.get("category")

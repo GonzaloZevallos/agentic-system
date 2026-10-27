@@ -36,9 +36,14 @@ from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
 from .core.process.adapters.langgraph.graph import build_graph
-from .core.process.adapters.shell import ShellCommands, ShellReaper, ShellSampleApp
+from .core.process.adapters.shell import (
+    NullStopFlag,
+    ShellCommands,
+    ShellReaper,
+    ShellSampleApp,
+)
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
-from .core.process.application.ports import Ports
+from .core.process.application.ports import Ports, StopFlag
 from .core.process.application.preflight import refuse_its_own_checkout
 from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
@@ -114,8 +119,11 @@ def widget_data(project_id: str) -> ClickHouseWidgetData | None:
     return ClickHouseWidgetData(url, user, password, project_id)
 
 
-def default_ports(cfg: Configuration) -> Ports:
-    ports = _ports(cfg)
+def default_ports(cfg: Configuration, stop_flag: StopFlag | None = None) -> Ports:
+    """The ports of a product. `stop_flag` is the one flag `run`/`resume` can mark when a
+    signal stops them (GH-355); every other caller leaves it out and gets one that is never
+    set, so no other verb can have a command raise `RunStopped`."""
+    ports = _ports(cfg, stop_flag if stop_flag is not None else NullStopFlag())
     # Here and not only in `preflight`, which is the CLI's: `langgraph dev`, Studio and
     # the LangGraph API import the wired graph and never see the CLI, and this is the
     # door all of them share. The refusal is the application's; the root only asks
@@ -141,7 +149,7 @@ def system_repo() -> SystemRepo:
     return SystemRepo(GhTracker(telemetry.REPO), GhInbox(telemetry.REPO))
 
 
-def _ports(cfg: Configuration) -> Ports:
+def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
     # Append mode, line buffered: up to `max_concurrent_roles` nodes hold their own
     # handle on the same path, and whole lines are what makes that safe to interleave
     # (README.md, 14). `None` with no `log_file` -- the `langgraph dev` door -- opens
@@ -184,7 +192,7 @@ def _ports(cfg: Configuration) -> Ports:
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=GhTracker(cfg.product_dir),
         stack=GitStack(cfg.product_dir),
-        commands=ShellCommands(product_key, reaper),
+        commands=ShellCommands(product_key, reaper, stop_flag),
         sample_app=ShellSampleApp(),
         reaper=reaper,
         check_scheduler=FilesystemCheckLedger(cfg.check_ledger_dir, product_key, reaper, limits),

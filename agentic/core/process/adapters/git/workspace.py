@@ -32,6 +32,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -60,6 +61,22 @@ FETCH_TIMEOUT_S: float = 30
 # How long one `git merge-tree` may take (GH-255). Declared, not measured: it bounds one
 # serial poll round, so a hung probe costs a conflict left unread, never a hung poller.
 MERGE_TREE_TIMEOUT_S: float = 30
+# How long one of the system's own `merge` / `worktree add` waits on a ref lock another
+# git process holds, in milliseconds (GH-364): a Developer committing in a sibling worktree
+# of the same `.git` holds `packed-refs` or a ref for a moment. Passed as `-c` options of
+# the call itself, never written to the product's `.git/config`. Declared, not measured.
+LOCK_TIMEOUT_MS = 5000
+# How many times one of those calls is retried when git still reports a lock, waiting
+# `LOCK_BACKOFF_S * 2**attempt` seconds before each retry.
+LOCK_RETRIES = 4
+LOCK_BACKOFF_S = 0.25
+_LOCK_OPTIONS = (
+    "-c",
+    f"core.filesRefLockTimeout={LOCK_TIMEOUT_MS}",
+    "-c",
+    f"core.packedRefsTimeout={LOCK_TIMEOUT_MS}",
+)
+_LOCK_ERROR = re.compile(r"Unable to create '[^']*\.lock': File exists|cannot lock ref")
 # At most this many left-out local commits are named in a note.
 _LEFT_OUT_SHOWN = 10
 
@@ -127,7 +144,7 @@ class GitWorkspace:
         path = self.product_dir / relative
         self.exclude_system_files()
         if not self._branch_exists(branch):
-            self._git("branch", branch, start())
+            self._git_locked("branch", branch, start())
             base = self._git("rev-parse", "--short", branch)
             self._note_base(branch, base)
         # The worktree on disk and not the branch decides `created`: the directory is
@@ -136,7 +153,7 @@ class GitWorkspace:
         created = not path.is_dir()
         if created:
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._git("worktree", "add", str(path), branch)
+            self._git_locked("worktree", "add", str(path), branch)
         return Checkout(branch=branch, path=path, base=self._base_of(branch), created=created)
 
     def head(self, path: Path) -> str:
@@ -202,7 +219,7 @@ class GitWorkspace:
     def merge(self, path: Path, branch: str) -> str | None:
         """A conflict is not an error of the system: the merge is undone so the
         checkout stays clean, and the reason goes back for a role to resolve by hand."""
-        result = self._run("merge", "--no-edit", "-q", branch, cwd=path)
+        result = self._run_locked("merge", "--no-edit", "-q", branch, cwd=path)
         if result.returncode == 0:
             return None
         self._run("merge", "--abort", cwd=path)
@@ -256,7 +273,7 @@ class GitWorkspace:
         left it, conflicted or refused, for the dependency-merge path in `develop.py`
         to hand a Developer (`Workspace.merge`'s own docstring, and this task's own
         addendum to ADR-0004, has the why the two stay separate)."""
-        result = self._run("merge", "--no-edit", "-q", branch, cwd=path)
+        result = self._run_locked("merge", "--no-edit", "-q", branch, cwd=path)
         if result.returncode == 0:
             return MergeOutcome(reason=None)
         conflicted = tuple(
@@ -470,6 +487,17 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
+        # Two-dot, `--no-renames` (a rename lists both sides, whatever `diff.renames` the
+        # machine has) and `-z` with `core.quotepath` off (a name comes back as it is). The
+        # output is not stripped: a name may end in a blank.
+        result = self._run(
+            *_PLAIN, "diff", "--name-only", "--no-renames", "-z", f"{older}..{newer}"
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff {older}..{newer} failed: {result.stderr.strip()}")
+        return tuple(path for path in result.stdout.split("\0") if path)
+
     def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:
         # `--no-renames`: a file renamed into `docs/adr` is an addition of its new path
         # whatever `diff.renames` the machine has. The marker is a control character no
@@ -540,7 +568,7 @@ class GitWorkspace:
         path = self.checkout_path(name)
         self.exclude_system_files()
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._git("worktree", "add", "--detach", str(path), sha)
+        self._git_locked("worktree", "add", "--detach", str(path), sha)
         return path
 
     def remove_checkout(self, name: str) -> None:
@@ -763,6 +791,25 @@ class GitWorkspace:
             capture_output=True,
             text=True,
         )
+
+    def _run_locked(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        """`_run` for the system's own `merge` and `worktree add` (GH-364): the call waits
+        on a ref lock through `-c` options of its own, and a lock error that survives the
+        wait is retried a bounded number of times with a growing pause. Any other outcome
+        comes back at once, as it would from `_run`."""
+        for attempt in range(LOCK_RETRIES + 1):
+            result = self._run(*_LOCK_OPTIONS, *args, cwd=cwd)
+            if result.returncode == 0 or not _LOCK_ERROR.search(result.stderr):
+                return result
+            if attempt < LOCK_RETRIES:
+                time.sleep(LOCK_BACKOFF_S * 2**attempt)
+        return result
+
+    def _git_locked(self, *args: str, cwd: Path | None = None) -> str:
+        result = self._run_locked(*args, cwd=cwd)
+        if result.returncode != 0:
+            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout.strip()
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:
         result = self._run(*args, cwd=cwd)

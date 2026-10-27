@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
-from agentic.core.process.application.coverage_guard import InvariantCoverageGuard
-from agentic.core.process.application.ports import RawResult
+from agentic.core.process.application.coverage_guard import InvariantCoverageGuard, checkout_view
+from agentic.core.process.application.ports import GitError, RawResult
 from agentic.core.process.application.run_role import run_with_retry
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
 from agentic.core.process.domain import coverage
 from agentic.core.process.domain.roles import DEVELOPER, PJM
-from tests.fakes import ScriptedRunner, classified, delivered
+from tests.fakes import MemoryWorkspace, ScriptedRunner, classified, delivered
 
 pytestmark = pytest.mark.anyio
 
@@ -152,3 +152,101 @@ async def test_a_delivery_check_alone_reaches_a_role_with_no_schema_guard():
         delivery_check=check,
     )
     assert runner.calls[0]["guard"] is check
+
+
+class View:
+    """A `LocationView` over fixed files: records the paths it was asked about."""
+
+    def __init__(self, lengths: dict[str, int], diff: set[str]):
+        self.lengths, self.diff = lengths, diff
+        self.asked: list[set[str]] = []
+
+    def __call__(self, paths: set[str]) -> tuple[dict[str, int], set[str]]:
+        self.asked.append(paths)
+        return self.lengths, self.diff
+
+
+def test_denies_a_location_that_is_not_in_the_diff_with_the_reason_then_passes():
+    guard = InvariantCoverageGuard(1, View({"a.py": 5}, set()))
+    reason = guard(MAPPED)
+    assert reason is not None and "a.py:1" in reason and "not in your diff" in reason
+    assert guard.refusals == 1
+    assert guard(MAPPED) is None  # the one refusal is spent, stale or not
+    assert guard.refusals == coverage.REFUSALS
+
+
+def test_a_gap_and_a_stale_location_share_one_refusal_and_one_message():
+    guard = InvariantCoverageGuard(2, View({}, set()))
+    reason = guard({"coverage": ["invariant 1: nope.py:3"]})
+    assert reason is not None and "invariant(s) 2." in reason and "nope.py:3" in reason
+    assert guard.refusals == 1
+    assert guard({"coverage": ["invariant 1: other.py:3"]}) is None  # no second denial
+    assert guard.refusals == 1
+
+
+def test_a_map_of_real_locations_in_the_diff_is_accepted_and_the_view_is_asked_its_paths():
+    look = View({"a.py": 5}, {"a.py"})
+    guard = InvariantCoverageGuard(1, look)
+    assert guard(MAPPED) is None
+    assert guard.refusals == 0
+    assert look.asked == [{"a.py"}]
+
+
+def nothing(paths: set[str]) -> None:
+    return None
+
+
+def test_without_a_view_or_when_the_view_cannot_answer_the_locations_are_not_checked():
+    assert InvariantCoverageGuard(1)(MAPPED) is None
+    assert InvariantCoverageGuard(1, nothing)(MAPPED) is None
+
+
+def test_a_map_without_locations_never_asks_the_View():
+    look = View({}, set())
+    guard = InvariantCoverageGuard(1, look)
+    assert guard({"coverage": ["invariant 1: unsatisfiable, see Decisions"]}) is None
+    assert look.asked == []
+
+
+def test_the_stale_reasons_are_capped_and_the_rest_counted():
+    lines = [f"invariant 1: n{i}.py:1" for i in range(8)]
+    reason = InvariantCoverageGuard(1, View({}, set()))({"coverage": lines})
+    assert reason is not None
+    assert "n0.py:1" in reason and "n7.py:1" not in reason and "and 3 more" in reason
+
+
+class BrokenDiff(MemoryWorkspace):
+    def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
+        raise GitError("boom")
+
+
+def test_the_checkout_view_reads_lengths_at_the_head_and_the_diff_since_the_base():
+    workspace = MemoryWorkspace()
+    workspace.moved.add(Path("/p"))
+    workspace.files[("head1", "a.py")] = "x\ny\nz\n"
+    workspace.files[("head1", "empty.py")] = ""
+    workspace.diff_paths = ("a.py",)
+    look = checkout_view(workspace, Path("/p"), "base", "base")
+    assert look({"a.py", "gone.py", "empty.py"}) == ({"a.py": 3, "empty.py": 0}, {"a.py"})
+    assert workspace.diff_reads == [("base", "head1")]
+
+
+def test_the_checkout_view_has_no_answer_before_a_commit_or_when_git_fails():
+    unmoved = MemoryWorkspace()  # head stays "base", the commit the run started from
+    assert checkout_view(unmoved, Path("/p"), "base", "base")({"a.py"}) is None
+    broken = BrokenDiff()
+    broken.moved.add(Path("/p"))
+    assert checkout_view(broken, Path("/p"), "base", "base")({"a.py"}) is None
+
+
+def test_a_plan_with_no_invariants_still_denies_a_brief_location_that_is_not_in_the_diff():
+    guard = InvariantCoverageGuard(0, View({"a.py": 5}, set()))
+    reason = guard({**BARE, "coverage": ["brief: add the parser -> a.py:1"]})
+    assert reason is not None and "a.py:1" in reason and "not in your diff" in reason
+    assert guard.refusals == 1
+    assert (
+        InvariantCoverageGuard(0, View({"a.py": 5}, {"a.py"}))(
+            {**BARE, "coverage": ["brief: add the parser -> a.py:1"]}
+        )
+        is None
+    )

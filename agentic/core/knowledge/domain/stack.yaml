@@ -58,6 +58,41 @@ checks:
 #
 # delivery_checks: [tests]
 #
+# `rerun_checks`: optional (ADR-0066). A red check reruns once inside the gate before it
+# refuses; a pass on the rerun is a recorded flake, not a failure. This key gives a check, by
+# the name it has under `checks`, a "failed tests only" form for the delivery gate's rerun, and
+# a `test_id` regex whose one group names a failed test in the check's output (read over the
+# last 64 KB, at most 50 ids). The form must not stop early (`-x`, `--maxfail`, `maxFailures`);
+# the product chooses what an empty cache does (`--lfnf=none`); `{base}` is not substituted. It
+# runs only when `test_id` found an id, otherwise the check's full command reruns; the merge
+# gate and `full_checks` always rerun the full command. A form requires `delivery_checks`, so
+# the full run on the integrated head covers what it skipped. `test_id` must compile, have
+# exactly one group, be at most 200 characters and have no quantified group that contains a
+# quantifier or an alternation. A check with no form still reruns, in full.
+#
+# rerun_checks:
+#   tests:
+#     command: uv run pytest -m "not llm" --lf --lfnf=none
+#     test_id: "(?m)^FAILED (\\S+)"
+#
+# `check_budgets`: optional (GH-365). The seconds each check may take, by the name it has under
+# `checks`: a positive number. It is compared only by the once-per-task `full_checks` run on
+# the integrated head -- never by the delivery gate or the merge -- so it requires
+# `delivery_checks`. Per check, never per tier: under `parallel_checks` a tier's wall time is
+# not the sum of its checks. A check over its budget is recorded, it blocks nothing.
+#
+# check_budgets:
+#   tests: 600
+#
+# `merge_inert`: optional (ADR-0045, amendment). The globs of the paths none of the checks
+# reads. When master moves, the merge reuses a recorded pass only if everything master gained
+# since matches one of these (never `.agentic/stack.yaml`, `.github/**` or other
+# configuration, whatever is declared). A glob that matches everything (`*`, `**`, `*.md`), an
+# absolute path or a `..` segment is refused. Declare a path only if no test or check reads it.
+#
+# merge_inert:
+#   - "docs/assets/**"
+#
 # `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
 # adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
 # denial carries verbatim. One that was already in the file is not the task's. What a

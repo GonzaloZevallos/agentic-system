@@ -15,6 +15,12 @@ When it times out the reaper also takes the unmarked processes whose cwd is the 
 `CommandResult` is the same as without the reap; the only difference is what is left alive.
 Each process the mark reap stops is one `reaper: stopped ...` line on stderr; the cwd reap
 prints its own.
+
+With the run's stop flag set (SIGTERM or SIGHUP reached `run`/`resume`, GH-355) `run` raises
+`RunStopped` and never returns a `CommandResult`: before it launches anything, right after
+the launch (the signal's reap may have run just before the `Popen` and found nothing), or
+when the command ended, whatever it answered. It raises only once the command's process has
+ended, so a caller that restores the checkout afterwards never races a live check.
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ from uuid import uuid4
 
 from agentic.shared.environment import without_own_configuration, without_own_toolchain
 
-from ...application.ports import CommandResult, ProcessReaper
+from ...application.ports import CommandResult, ProcessReaper, RunStopped, StopFlag
 from ...domain import reaping
 
 # How long to wait for the output of a command already killed.
@@ -37,9 +43,10 @@ _DRAIN_S = 5.0
 
 
 class ShellCommands:
-    def __init__(self, product_key: str, reaper: ProcessReaper) -> None:
+    def __init__(self, product_key: str, reaper: ProcessReaper, stop: StopFlag) -> None:
         self._product = product_key
         self._reaper = reaper
+        self._stop = stop
 
     def run(
         self,
@@ -49,6 +56,8 @@ class ShellCommands:
         *,
         env: Mapping[str, str] | None = None,
     ) -> CommandResult:
+        if self._stop.is_set():
+            raise RunStopped
         token = uuid4().hex
         child_env = without_own_configuration(without_own_toolchain(os.environ))
         # The grant's variables go over the cleaned environment and under the mark: whatever
@@ -69,25 +78,39 @@ class ShellCommands:
             start_new_session=True,
         )
         try:
+            if self._stop.is_set():
+                # The reap of the stop ran before this `Popen` and could not see the check.
+                self._kill_and_drain(process, token, cwd)
+                raise RunStopped
             try:
                 output, _ = process.communicate(timeout=timeout_s)
             except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass  # it ended between the timeout and the kill
-                self._reap_token(token)
-                self._reaper.reap_within([cwd])  # prints its own lines
-                try:
-                    output, _ = process.communicate(timeout=_DRAIN_S)
-                except subprocess.TimeoutExpired:
-                    # A descendant that left the group still holds the pipe: give up on it.
-                    process.kill()
-                    output = ""
-                return CommandResult(process.returncode or -1, output or "", timed_out=True)
+                output = self._kill_and_drain(process, token, cwd)
+                if self._stop.is_set():
+                    raise RunStopped from None
+                return CommandResult(process.returncode or -1, output, timed_out=True)
+            if self._stop.is_set():
+                raise RunStopped
             return CommandResult(process.returncode, output or "")
         finally:
             self._reap_token(token)
+
+    def _kill_and_drain(self, process: subprocess.Popen[str], token: str, cwd: Path) -> str:
+        """Stops the check's whole group and what carries its mark, and returns what it wrote.
+        On return the check's process has ended."""
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # it ended between the timeout and the kill
+        self._reap_token(token)
+        self._reaper.reap_within([cwd])  # prints its own lines
+        try:
+            output, _ = process.communicate(timeout=_DRAIN_S)
+        except subprocess.TimeoutExpired:
+            # A descendant that left the group still holds the pipe: give up on it.
+            process.kill()
+            return ""
+        return output or ""
 
     def _reap_token(self, token: str) -> None:
         """Stop what still carries the check's mark: one stderr line per process stopped."""

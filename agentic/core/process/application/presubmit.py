@@ -9,7 +9,7 @@ Developer's word."""
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -21,8 +21,15 @@ from agentic.shared.stage0 import CHECKOUT
 from ..domain import check_results as reuse_rules
 from ..domain import presubmit
 from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
-from ..domain.presubmit import AffectedPlan, CheckResult, Mode, WitnessResult
-from ..domain.task import GateRecord, TaskState
+from ..domain.presubmit import (
+    AffectedPlan,
+    CheckResult,
+    FlakeGate,
+    Mode,
+    RerunForm,
+    WitnessResult,
+)
+from ..domain.task import FlakeRecord, GateRecord, TaskState
 from .checkouts import task_base
 from .ports import CheckRequest, GitError, Grant, Ports
 from .preflight import criteria_regressed, product_name
@@ -111,6 +118,8 @@ class CheckoutPresubmit:
         affected: AffectedPlan | None = None,
         criteria_base: str | None = None,
         reuse: Reuse | None = None,
+        rerun_forms: Mapping[str, RerunForm] | None = None,
+        flake_gate: FlakeGate = "delivery",
     ):
         self.ports = ports
         self.path = path
@@ -149,6 +158,12 @@ class CheckoutPresubmit:
         # What keys a stored pass (ADR-0065), or None: every check runs, as before.
         # Keyword-only with this default so every construction site compiles untouched.
         self.reuse = reuse
+        # The product's failed-tests-only forms (ADR-0066), by check, and which gate this
+        # presubmit is: the form is used only at the delivery gate. None and "delivery" are
+        # the gate of before, plus the one full rerun of a red check. Keyword-only with
+        # these defaults so every construction site compiles untouched.
+        self.rerun_forms: Mapping[str, RerunForm] = rerun_forms or {}
+        self.flake_gate: FlakeGate = flake_gate
         # Set once per call on a clean, moved tree (`_prepare_reuse`): the tree, the
         # environment fingerprint, and whether this checkout may store what it runs.
         self._tree: str | None = None
@@ -159,6 +174,9 @@ class CheckoutPresubmit:
         # run builds a new instance and starts on affected-only again.
         self.stuck_full: set[str] = set()
         self.refusals = 0
+        # The failed ids each refusal named, in order (None when the product declares no
+        # `rerun_checks`): `presubmit.refusal_allowed` reads the last two.
+        self._refused_ids: list[tuple[str, ...] | None] = []
         # The witness's own budget, separate from `refusals`/`REFUSALS`: a misdeclared
         # witness must never spend the budget the checks need.
         self.witness_refusals = 0
@@ -190,13 +208,16 @@ class CheckoutPresubmit:
             # slowest one bounds the call, and the witness runs before them, alone. With
             # an affected plan that one worker may run its affected form and then the
             # full one, one after the other.
-            runs = 2 if self.affected is not None else 1
+            # The worker's last row may be red and rerun once more (ADR-0066).
+            runs = (2 if self.affected is not None else 1) + 1
             return self.check_timeout_s * runs + witness
+        # Serial: each declared check may be rerun once, one more run per check.
+        reruns = self.check_timeout_s * len(self.checks)
         if self.affected is not None:
             runs = len(self.checks) + len(self.affected.commands)
-            return self.check_timeout_s * max(runs, 1) + witness
+            return self.check_timeout_s * max(runs, 1) + reruns + witness
         base = self.check_timeout_s * max(len(self.checks), 1)
-        return base + (self.check_timeout_s if self.witness else 0)
+        return base + reruns + (self.check_timeout_s if self.witness else 0)
 
     @property
     def wait_max_s(self) -> float:
@@ -231,15 +252,20 @@ class CheckoutPresubmit:
         reason = presubmit.refusal(
             moved, clean, presubmit.final_results(self.results or []), self.regressions
         )
-        if reason is None or self.refusals >= presubmit.REFUSALS:
+        if reason is None:
+            return None
+        # A third refusal asks whether the failure moved between the last two refusals.
+        previous, current = ([None, None, *self._refused_ids])[-2:]
+        if not presubmit.refusal_allowed(self.refusals, previous, current):
             return None
         self.refusals += 1
+        self._refused_ids.append(self._failed_ids())
         return presubmit.refused(reason, self.refusals)
 
     def _run_holding_a_share(self, head: str) -> str | None:
         """The witness and the checks, under a share of the machine's cores. `__call__` is
         its only caller; the acquire itself is `_share`, the one place that asks the
-        scheduler (ADR-0066). The time spent waiting for the share is over before any
+        scheduler (ADR-0069). The time spent waiting for the share is over before any
         command starts, so it is never part of a check's timeout."""
         asked_at = datetime.now(UTC).isoformat(timespec="milliseconds")
         with self._share() as grant:
@@ -302,6 +328,23 @@ class CheckoutPresubmit:
             if fresh:
                 self.grant = previous
 
+    def _failed_ids(self) -> tuple[str, ...] | None:
+        """The test ids the failing checks of this look name, or None when the product declares
+        no failed-tests form (the gate then keeps its budget of before). Read from each failing
+        check's first run, the one that saw the whole failure, never from its rerun."""
+        if not self.rerun_forms:
+            return None
+        ids: list[str] = []
+        for final in presubmit.final_results(self.results or []):
+            form = self.rerun_forms.get(final["name"])
+            if final["passed"] or form is None:
+                continue
+            first = [
+                r for r in self.results or [] if r["name"] == final["name"] and not r.get("rerun")
+            ]
+            ids.extend(presubmit.failed_ids(first[-1]["output"], form.test_id))
+        return tuple(ids)
+
     def _modes(self, plan: AffectedPlan, head: str) -> dict[str, Mode]:
         """Which form each check runs under the plan. A changed-paths lookup that fails
         is `None` for the domain, which runs everything full."""
@@ -313,12 +356,13 @@ class CheckoutPresubmit:
 
     def _run_unplanned(self) -> list[CheckResult]:
         if not self.parallel:
-            return [self._run(n, c) for n, c in self.checks.items()]
+            return [row for n, c in self.checks.items() for row in self._run_once(n, c)]
         # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
         # the other started checks before the error propagates, so no check outlives
         # the call; nothing is recorded for it, the same as serial.
         with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
-            return list(pool.map(lambda item: self._run(*item), self.checks.items()))
+            per_check = pool.map(lambda item: self._run_once(*item), self.checks.items())
+            return [row for rows in per_check for row in rows]
 
     def _run_under_plan(self, plan: AffectedPlan, modes: dict[str, Mode]) -> list[CheckResult]:
         if not self.parallel:
@@ -352,7 +396,43 @@ class CheckoutPresubmit:
         rows.append(full)
         if not full["passed"]:
             self.stuck_full.add(name)
-        return rows
+        return self._with_rerun(name, command, rows)
+
+    def _run_once(self, name: str, command: str) -> list[CheckResult]:
+        """One check without a plan: its row, and its one rerun when it went red."""
+        return self._with_rerun(name, command, [self._run(name, command)])
+
+    def _with_rerun(self, name: str, command: str, rows: list[CheckResult]) -> list[CheckResult]:
+        """`rows` and, right after them, the one rerun of the check's last row when the
+        domain says it reruns (ADR-0066): a red row that did not time out. Never the stored
+        pass: a rerun is a run, and the row says so."""
+        last = rows[-1]
+        form = self.rerun_forms.get(name)
+        rerun_as = presubmit.rerun_command(command, last, form, self.flake_gate)
+        if rerun_as is None:
+            return rows
+        again = self._execute(name, rerun_as, last.get("mode"))
+        again["rerun"] = True
+        return [*rows, again]
+
+    def flakes(self) -> list[FlakeRecord]:
+        """The flakes of the last call: one record per check the domain judges a `flake`,
+        with the test ids its first failure named when the product declares a form."""
+        rows = self.results or []
+        head = self.head
+        if head is None:
+            return []
+        records: list[FlakeRecord] = []
+        for name, verdict in presubmit.outcomes(rows).items():
+            if verdict != "flake":
+                continue
+            first = [r for r in rows if r["name"] == name and not r.get("rerun")][-1]
+            form = self.rerun_forms.get(name)
+            ids = presubmit.failed_ids(first["output"], form.test_id) if form else ()
+            records.append(
+                {"check": name, "head": head, "gate": self.flake_gate, "tests": list(ids)}
+            )
+        return records
 
     def markdown(self) -> str | None:
         """The checks as the Developer's section opens with them; None if none ran. The
@@ -464,7 +544,7 @@ class CheckoutPresubmit:
             # `_stored`: a pass at a share of 6 is the pass of the check at a share of 12.
             declared = self._declared.get((row["name"], row["command"]), row["command"])
             key = self._key(row["name"], declared)
-            if key is None or not row["passed"] or row.get("reused"):
+            if key is None or not row["passed"] or row.get("reused") or row.get("rerun"):
                 continue
             try:
                 store.put(key, row, time.time())
@@ -475,6 +555,9 @@ class CheckoutPresubmit:
     def _run(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
         if (stored := self._stored(name, command, mode)) is not None:
             return stored
+        return self._execute(name, command, mode)
+
+    def _execute(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
         started = time.monotonic()
         declared, command = command, self._sized(command)
         self._declared[(name, command)] = declared
@@ -490,6 +573,8 @@ class CheckoutPresubmit:
             "output": output,
             "duration_s": duration_s,
         }
+        if result.timed_out:
+            row["timed_out"] = True
         if mode is not None:
             row["mode"] = mode
         return row

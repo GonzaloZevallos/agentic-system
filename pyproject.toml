@@ -77,6 +77,8 @@ files = [
     "agentic/core/process/application/landing_sync.py",
     "agentic/core/process/application/landing_fix.py",
     "agentic/core/process/application/landing_flakes.py",
+    "agentic/core/process/application/schedule.py",
+    "agentic/core/process/application/pre_pr_fix.py",
     "scripts/poll_waits.py",
     "scripts/gate_concurrency.py",
     "tests/fakes.py",

@@ -27,24 +27,25 @@ def presubmit(commands: MemoryCommands, workspace: MemoryWorkspace | None = None
 
 
 def test_a_refused_delivery_still_leaves_its_invocation_with_a_duration():
-    commands = MemoryCommands(pytest=[CommandResult(1, "1 failed")])
+    commands = MemoryCommands(pytest=[CommandResult(1, "1 failed")] * 2)
     gate, _ = presubmit(commands)
     reason = gate()
     assert reason is not None and "failed" in reason
     (invocation,) = gate.invocations
-    (check,) = invocation
+    check, again = invocation  # the red row and its one rerun (ADR-0066)
+    assert again["rerun"] is True
     assert check["name"] == "tests" and check["passed"] is False
     assert check["duration_s"] >= 0.0
 
 
 def test_every_invocation_that_actually_ran_checks_is_kept_in_order():
-    commands = MemoryCommands(pytest=[CommandResult(1, "1 failed"), CommandResult(0, "ok")])
+    commands = MemoryCommands(pytest=[CommandResult(1, "1 failed")] * 2 + [CommandResult(0, "ok")])
     gate, _ = presubmit(commands)
     first = gate()
     second = gate()
     assert first is not None and second is None  # refused once, then let through
     assert len(gate.invocations) == 2
-    assert [inv[0]["passed"] for inv in gate.invocations] == [False, True]
+    assert [inv[-1]["passed"] for inv in gate.invocations] == [False, True]
 
 
 def test_a_call_before_a_commit_leaves_no_invocation():

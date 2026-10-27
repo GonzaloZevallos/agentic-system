@@ -1,5 +1,6 @@
 """Retry semantics and delivery of one role, against a scripted runner."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
 
@@ -406,7 +407,9 @@ async def test_a_max_turns_cut_with_no_session_appends_the_message_to_the_prompt
     assert out.cost_usd == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("reason", [r for r in get_args(FailureReason) if r != "max_turns"])
+@pytest.mark.parametrize(
+    "reason", [r for r in get_args(FailureReason) if r not in ("max_turns", "account_limit")]
+)
 async def test_every_other_failure_reason_keeps_todays_retry_message_byte_for_byte(reason):
     cut = AttemptFailed("something broke", 0.05, session_id="sess-1", reason=reason)
     runner = ScriptedRunner(pjm=[cut, OK])
@@ -418,6 +421,109 @@ async def test_every_other_failure_reason_keeps_todays_retry_message_byte_for_by
         "Retry. Fix exactly what failed."
     )
     assert out.cost_usd == pytest.approx(0.08)
+
+
+@pytest.mark.parametrize(
+    ("reason", "attempts"), [("account_limit", 1), ("upstream", 2), ("network", 2)]
+)
+async def test_only_an_account_limit_failure_is_not_retried(reason, attempts):
+    # A retry against a limit that cannot clear before its reset only fails the same way
+    # (ADR-0039, addendum GH-381); the other external reasons keep their one retry.
+    cut = AttemptFailed("cut", 0.0, reason=reason)
+    runner = ScriptedRunner(pjm=[cut, cut])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner)
+    assert len(runner.calls) == attempts
+    assert len(caught.value.failures) == attempts
+
+
+async def test_an_account_limit_failure_with_a_session_is_not_continued():
+    cut = AttemptFailed("cut", 0.0, session_id="sess-1", reason="account_limit")
+    runner = ScriptedRunner(pjm=[cut, OK])
+    with pytest.raises(RoleFailure):
+        await run_pjm(runner)
+    assert len(runner.calls) == 1
+
+
+async def test_a_later_account_limit_after_another_reason_is_still_not_retried():
+    # Only the *first* failure decides: a run that failed otherwise first has its one retry,
+    # and a 429 on that retry ends the run like any second failure.
+    first = AttemptFailed("x", 0.0, reason="schema")
+    limit = AttemptFailed("cut", 0.0, reason="account_limit")
+    runner = ScriptedRunner(pjm=[first, limit, OK])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner)
+    assert len(runner.calls) == 2
+    assert [f["reason"] for f in caught.value.failures] == ["schema", "account_limit"]
+
+
+ISSUE_429 = (
+    "You've hit your session limit · resets 5:40am (America/Argentina/Buenos_Aires) "
+    "(terminal reason: api_error, HTTP 429, exit code 1)"
+)
+
+
+async def test_an_account_limit_failure_carries_the_reset_its_text_states(monkeypatch):
+    monkeypatch.setattr(
+        "agentic.core.process.application.run_role._now",
+        lambda: datetime(2026, 10, 27, 4, 0, tzinfo=UTC),  # 01:00 in Buenos Aires
+    )
+    runner = ScriptedRunner(pjm=[AttemptFailed(ISSUE_429, 0.0, reason="account_limit")])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner)
+    (failure,) = caught.value.failures
+    assert failure["resets_at"] == "2026-10-27T05:40:00-03:00"
+
+
+async def test_an_account_limit_failure_whose_text_does_not_parse_has_no_resets_at(monkeypatch):
+    monkeypatch.setattr(
+        "agentic.core.process.application.run_role._now",
+        lambda: datetime(2026, 10, 27, 4, 0, tzinfo=UTC),
+    )
+    runner = ScriptedRunner(pjm=[AttemptFailed("HTTP 429, try later", 0.0, reason="account_limit")])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner)
+    assert "resets_at" not in caught.value.failures[0]
+
+
+async def test_a_reset_in_the_text_of_another_reason_is_never_parsed(monkeypatch):
+    # The reason is decided by the status alone; a text that merely says "resets" under
+    # another reason is no wait hint (invariant: the text never decides the reason).
+    monkeypatch.setattr(
+        "agentic.core.process.application.run_role._now",
+        lambda: datetime(2026, 10, 27, 4, 0, tzinfo=UTC),
+    )
+    runner = ScriptedRunner(pjm=[AttemptFailed(ISSUE_429, 0.0, reason="upstream")] * 2)
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner)
+    assert all("resets_at" not in f for f in caught.value.failures)
+
+
+async def test_the_pause_log_failure_entry_carries_resets_at_only_when_the_failure_has_it(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        "agentic.core.process.application.run_role._now",
+        lambda: datetime(2026, 10, 27, 4, 0, tzinfo=UTC),
+    )
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(pjm=[AttemptFailed(ISSUE_429, 0.0, reason="account_limit")])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
+    )
+    assert output is None
+    assert patch["pause_log"][0] == {
+        "kind": "failure",
+        "value": "account_limit",
+        "section": "PjM",
+        "resets_at": "2026-10-27T05:40:00-03:00",
+    }
+    assert patch["escalated"].startswith("PjM failed 1 times:")
+    runner = ScriptedRunner(pjm=[AttemptFailed("HTTP 429", 0.0, reason="account_limit")])
+    _, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
+    )
+    assert patch["pause_log"][0] == {"kind": "failure", "value": "account_limit", "section": "PjM"}
 
 
 async def test_the_task_cap_stops_a_role_before_its_first_attempt():

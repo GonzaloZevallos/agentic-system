@@ -108,7 +108,7 @@ def test_a_red_affected_run_is_followed_by_the_full_form_as_a_second_row():
 
 def test_a_red_affected_and_red_full_run_refuses_on_the_final_row():
     commands = MemoryCommands(
-        **{AFFECTED: [CommandResult(1, "stale")], "pytest": [CommandResult(1, "real")]}
+        **{AFFECTED: [CommandResult(1, "stale")], "pytest": [CommandResult(1, "real")] * 2}
     )
     g = gate(commands)
     reason = g()
@@ -153,7 +153,7 @@ def test_a_check_that_failed_in_full_never_runs_affected_again_on_that_instance(
     commands = MemoryCommands(
         **{
             AFFECTED: [CommandResult(1, "stale")],
-            "pytest": [CommandResult(1, "real"), CommandResult(0, "ok"), CommandResult(0, "ok")],
+            "pytest": [CommandResult(1, "real")] * 2 + [CommandResult(0, "ok")] * 2,
         }
     )
     g = gate(commands)
@@ -161,7 +161,7 @@ def test_a_check_that_failed_in_full_never_runs_affected_again_on_that_instance(
     assert g() is None  # now full only, even though it passes
     assert g() is None  # and still full only
     assert ran(commands).count(AFFECTED) == 1
-    assert ran(commands).count("pytest") == 3
+    assert ran(commands).count("pytest") == 4  # the red full run, its rerun, then two greens
     assert len(g.invocations) == 3
     assert g.refusals == 1
 
@@ -170,7 +170,7 @@ def test_a_check_that_failed_in_full_runs_full_only_on_the_next_parallel_call():
     commands = MemoryCommands(
         **{
             AFFECTED: [CommandResult(1, "stale")],
-            "pytest": [CommandResult(1, "real"), CommandResult(0, "ok")],
+            "pytest": [CommandResult(1, "real")] * 2 + [CommandResult(0, "ok")],
         }
     )
     g = gate(commands, parallel=True)
@@ -179,7 +179,7 @@ def test_a_check_that_failed_in_full_runs_full_only_on_the_next_parallel_call():
     assert g.results is not None
     assert [(r["name"], r["mode"]) for r in g.results] == [("tests", "full"), ("lint", "full")]
     assert ran(commands).count(AFFECTED) == 1
-    assert ran(commands).count("pytest") == 2
+    assert ran(commands).count("pytest") == 3
 
 
 def test_a_fresh_instance_starts_on_affected_only_again():
@@ -220,17 +220,19 @@ def test_the_parallel_gate_keeps_declared_order_and_each_rerun_inside_its_check(
 
 def test_timeout_with_a_plan_counts_the_affected_runs():
     commands = MemoryCommands()
-    assert gate(commands).timeout_s == 30.0 * (2 + 1)
-    assert gate(commands, witness="echo").timeout_s == 30.0 * 3 + 30.0
-    assert gate(commands, parallel=True).timeout_s == 60.0
-    assert gate(commands, parallel=True, witness="echo").timeout_s == 90.0
+    # Three runs and one possible rerun per declared check (ADR-0066).
+    assert gate(commands).timeout_s == 30.0 * (2 + 1) + 30.0 * 2
+    assert gate(commands, witness="echo").timeout_s == 30.0 * 3 + 30.0 * 2 + 30.0
+    # Affected, full and the rerun, one after the other in one worker.
+    assert gate(commands, parallel=True).timeout_s == 90.0
+    assert gate(commands, parallel=True, witness="echo").timeout_s == 120.0
 
 
 def test_a_none_plan_is_the_gate_of_today():
     commands = MemoryCommands()
     workspace = MemoryWorkspace()
     g = gate(commands, plan=None, workspace=workspace)
-    assert g.timeout_s == 60.0
+    assert g.timeout_s == 120.0  # a run and a possible rerun per check
     assert g() is None
     assert ran(commands) == ["pytest", "ruff check ."]
     assert g.results is not None and all("mode" not in r for r in g.results)

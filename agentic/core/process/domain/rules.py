@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
@@ -1593,6 +1593,12 @@ def next_archive_run(refs: Sequence[str], live: Sequence[str], task_id: str) -> 
     return None
 
 
+# The graph node that runs the subtasks. The graph's own `PIPELINE` constant has this value
+# and keeps it; the domain cannot import the adapter, so the rule that reads a pending node
+# name holds its own spelling, the way `after_integrate` returns the strings.
+PIPELINE_NODE = "pipeline"
+
+
 def ready_subtasks(state: TaskState) -> list[str]:
     """Subtasks to build now: pending or returned, with every dependency approved."""
     subtasks = state.get("subtasks", {})
@@ -1616,6 +1622,54 @@ def dispatched_subtasks(state: TaskState) -> list[str]:
     """Subtasks the next wave runs: the ones to build, and the ones already delivered
     whose review never happened, which is where a run stopped by the cap resumes."""
     return [*ready_subtasks(state), *delivered_subtasks(state)]
+
+
+def _remaining_path(subtasks: Mapping[str, Subtask]) -> dict[str, int]:
+    """Per subtask, the length of the longest chain of subtasks that transitively depend on
+    it (0 for one nothing depends on). A cycle in a malformed plan is cut where it closes
+    instead of recursing forever."""
+    dependents: dict[str, list[str]] = {sid: [] for sid in subtasks}
+    for sid, sub in subtasks.items():
+        for dep in sub.get("depends_on", []):
+            if dep in dependents:
+                dependents[dep].append(sid)
+    lengths: dict[str, int] = {}
+
+    def length(sid: str, visiting: frozenset[str]) -> int:
+        if sid in lengths:
+            return lengths[sid]
+        below = [length(d, visiting | {sid}) + 1 for d in dependents[sid] if d not in visiting]
+        lengths[sid] = max(below, default=0)
+        return lengths[sid]
+
+    return {sid: length(sid, frozenset()) for sid in subtasks}
+
+
+def next_to_start(state: TaskState, in_flight: Collection[str], limit: int) -> list[str]:
+    """The subtasks the loop starts now (GH-364, ADR-0004's successor): the ones
+    `dispatched_subtasks` names that are not already `in_flight`, the longest remaining
+    dependency chain first and ties in plan order, at most what is left under `limit`. The
+    only place readiness, ordering and the parallel bound are computed together. Nothing
+    starts while the task is escalated; a role already running is never this rule's to stop."""
+    if state.get("escalated"):
+        return []
+    room = max(0, limit - len(in_flight))
+    path = _remaining_path(state.get("subtasks", {}))
+    plan_order = {sid: n for n, sid in enumerate(state.get("subtasks", {}))}
+    waiting = [sid for sid in dispatched_subtasks(state) if sid not in in_flight]
+    waiting.sort(key=lambda sid: (-path[sid], plan_order[sid]))
+    return waiting[:room]
+
+
+def resume_source(
+    next_node: Sequence[str] | str | None, crashed: bool
+) -> Literal["checkpoint", "document"]:
+    """Where a resume rebuilds the task from (GH-364): the document, only for a crash with
+    the pipeline the pending node, because the loop's branches leave no checkpoint of their
+    own; anything else resumes from the checkpoint. Decided from the pending node, never by
+    comparing counts."""
+    pending = (next_node,) if isinstance(next_node, str) else tuple(next_node or ())
+    return "document" if crashed and pending == (PIPELINE_NODE,) else "checkpoint"
 
 
 def pipeline_entry(state: TaskState) -> str:
@@ -1979,6 +2033,23 @@ def full_checks_due(state: TaskState) -> bool:
     return not (recorded and recorded["passed"] and same_commit(recorded["head"], head))
 
 
+def pre_pr_important_due(state: TaskState) -> bool:
+    """Whether the important pass runs before the pull request opens (GH-354, ADR-0053
+    amendment): every unit is approved, the final unit (the integration's, or the single
+    subtask's when there is none) has been reviewed, no pull request exists yet, the
+    task's `owned` or `plan` `important` rows (`important_partition`) hold one that was not
+    lowered (`reported_severity`: the system's reading of an unbacked block, never a reason
+    to run a pass), and the pass is not spent. `outside` rows are the follow-up issue's."""
+    target = reviewed_unit_name(state)
+    if target is None or state.get("pull_request") or not all_approved(state):
+        return False
+    if _latest_index(state, review_section(target)) is None or important_pass_spent(state):
+        return False
+    partition = important_partition(state)
+    rows = [*(row for owned in partition.owned.values() for row in owned), *partition.plan]
+    return any("reported_severity" not in row for row in rows)
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -1986,6 +2057,8 @@ def after_integrate(state: TaskState) -> str | None:
         return "pipeline"
     if not all_approved(state):
         return None
+    if pre_pr_important_due(state):
+        return FIX_IMPORTANT
     if full_checks_due(state):
         return "full_checks"
     if copy_review_due(state):
@@ -1993,6 +2066,13 @@ def after_integrate(state: TaskState) -> str | None:
     if final_validation_due(state):
         return "final_validation"
     return "qa_performance" if qa_performance_due(state) else "deliver"
+
+
+def after_fix_important(state: TaskState) -> str | None:
+    """Always back to the fan-in: the pass reopened the owning units, which
+    `dispatched_subtasks` picks up; once they and the integration are approved again
+    `important_pass_spent` reads `True` and `after_integrate` goes on to the checks."""
+    return None if state.get("escalated") else "integrate"
 
 
 def after_final_validation(state: TaskState) -> str | None:
@@ -2156,7 +2236,8 @@ def resumed_status(state: TaskState) -> Status:
     """The status the task had before the escalation overwrote it, derived from what the
     state holds, since the document keeps only `waiting_on_human` too."""
     if state.get("pull_request") and not landing_open(state):
-        return "ready_for_review"
+        # An owed publication is not delivered yet: `deliver` is what sets the end status.
+        return "developing" if _publication_owed(state) else "ready_for_review"
     if state.get("status") == "discarded":
         # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
         # (a diagnosis, PM's ruling) would otherwise read as a definition ready to plan.
@@ -2344,13 +2425,48 @@ def entry_closed(entry: Mapping[str, object]) -> bool:
     )
 
 
+def before_pr(entry: Mapping[str, object]) -> bool:
+    """Whether a `landing` entry was written before the pull request existed (the pre-PR
+    important pass, GH-354): it says nothing about a pull request. The only place the key
+    `before_pr` is read; `returns.before_pr` re-exports it."""
+    return bool(entry.get("before_pr"))
+
+
+LANDING_IMPORTANT_PASSES_MAX = 1
+"""`fix_important` passes per task (GH-294, GH-354), before or after the pull request;
+declared, not measured. `domain.landing` re-exports it."""
+
+FIX_IMPORTANT = "fix_important"
+
+
+def important_pass_spent(state: Mapping[str, object], *, resolved_only: bool = False) -> bool:
+    """Whether the task's important pass (`LANDING_IMPORTANT_PASSES_MAX`) is spent: the
+    `landing` list holds that many `fix_important` entries, written before the pull request
+    (`before_pr`) or after it. With `resolved_only` an entry still in flight does not count --
+    the merge reads the pass as done only once the re-delivery closed it. The one place the
+    entries are counted: the pre-PR route, `landing_plan` and `MergeFacts.important_pass_done`
+    ask this and none counts `fix_important` itself."""
+    entries = state.get("landing")
+    passes = sum(
+        1
+        for entry in (entries if isinstance(entries, list) else [])
+        if isinstance(entry, Mapping)
+        and entry.get("step") == FIX_IMPORTANT
+        and (not resolved_only or entry.get("resolved_at"))
+    )
+    return passes >= LANDING_IMPORTANT_PASSES_MAX
+
+
 def landing_open(state: TaskState) -> bool:
     """A landing pass is in flight (GH-239): the last `landing` entry is not resolved and
     some subtask is reopened for it -- `returned`, `pending` or `delivered` awaiting its
-    review. `domain.landing.landing_open` is this, under the landing's own name."""
+    review. `domain.landing.landing_open` is this, under the landing's own name. An entry
+    written before the pull request existed (`before_pr`) is never one."""
     document: Mapping[str, object] = state  # `landing` is a document key, not a state field
     entries = document.get("landing")
     if not isinstance(entries, list) or not entries or entry_closed(entries[-1]):
+        return False
+    if before_pr(entries[-1]):
         return False
     return any(
         unit.get("status") in ("returned", "pending", "delivered")
@@ -2358,11 +2474,67 @@ def landing_open(state: TaskState) -> bool:
     )
 
 
+def approved_head(state: TaskState) -> str | None:
+    """The head the task may publish (GH-373): the one its last review approved. On a tiered
+    product (the fan-in stamped `task_head`) that is `task_head`, only if the reviewed unit's
+    `reviewed_head` is the same commit and `full_checks` passed on it; without tiers it is the
+    reviewed unit's `reviewed_head`. `None` when there is none, and for a head the task moved
+    after its review (a heal, a landing pass): nobody approved that one."""
+    name = reviewed_unit_name(state)
+    reviewed = state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
+    if not reviewed:
+        return None
+    task_head = state.get("task_head")
+    if not task_head:
+        return reviewed
+    recorded = state.get("full_checks")
+    if not same_commit(reviewed, task_head):
+        return None
+    if not (recorded and recorded["passed"] and same_commit(recorded["head"], task_head)):
+        return None
+    return task_head
+
+
+def publication_candidate(state: TaskState) -> str | None:
+    """The head a stopped run may still owe (GH-373): `approved_head` of a task that has a
+    pull request, no landing pass in flight, no escalation, every unit approved and nothing
+    left for the full tier. `None` otherwise."""
+    if not state.get("pull_request") or landing_open(state) or state.get("escalated"):
+        return None
+    if not all_approved(state) or full_checks_due(state):
+        return None
+    return approved_head(state)
+
+
+def owed_publication(state: TaskState, published: bool, branch_at_head: bool) -> str | None:
+    """The `publish_owed` value of a resume (GH-373), from the facts `prepare` read:
+    `published` is whether the remote already holds the candidate, `branch_at_head` whether
+    the task branch is at it or differs only in the task document. The candidate when the
+    branch is there and either the remote lacks it or the status never reached the end of a
+    delivery (`ready_for_review`) or a human's pause; `None` otherwise."""
+    candidate = publication_candidate(state)
+    if candidate is None or not branch_at_head:
+        return None
+    if not published or state.get("status") not in ("ready_for_review", "waiting_on_human"):
+        return candidate
+    return None
+
+
+def _publication_owed(state: TaskState) -> bool:
+    """`publish_owed` names the head the task may publish, and nothing has moved it."""
+    if state.get("escalated") or not all_approved(state) or full_checks_due(state):
+        return False
+    return same_commit(state.get("publish_owed"), approved_head(state))
+
+
 def resume_target(state: TaskState) -> str | None:
     """Where a resumed task goes next, from the same facts the routing reads. A pull
-    request ends the road unless the landing reopened the stage under it."""
-    if state.get("escalated") or (state.get("pull_request") and not landing_open(state)):
+    request ends the road unless the landing reopened the stage under it, or a stopped run
+    still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`."""
+    if state.get("escalated"):
         return None
+    if state.get("pull_request") and not landing_open(state):
+        return "deliver" if _publication_owed(state) else None
     if state.get("status") == "split":
         return None  # an end like a pull request: the parts are other tasks now
     if state.get("status") == "tracker_only":
@@ -2427,6 +2599,14 @@ RETAKE_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 # (ADR-0039, 2026-10-05 addendum). Never read off the API's "resets at" prose.
 ACCOUNT_LIMIT_SCHEDULE: tuple[int, ...] = (15,) * 24
 
+# The provider's session window: a stated reset further away than this is not a session
+# reset (ADR-0039, addendum GH-381; `account_reset.reset_at`).
+SESSION_WINDOW = timedelta(hours=5)
+
+# Clock skew between this machine and the provider, added to the window so a reset the
+# provider states at the window's edge is not refused (ADR-0039, addendum GH-381).
+SESSION_WINDOW_MARGIN = timedelta(minutes=10)
+
 # Backstop for a loop the per-window count cannot see: a cheap role keeps delivering
 # runs (each one opens a fresh window) while another role keeps hitting a per-model
 # 429. Compared against the whole-chase count a delivered run never resets, only a
@@ -2439,6 +2619,17 @@ ACCOUNT_LIMIT_CHASE_MAX = 96
 # Never read off the API's "resets at" prose (ADR-0029).
 ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
+
+
+def _failure_entry(failure: Failure) -> FailurePauseEntry:
+    """The `pause_log` entry of one failed attempt; `resets_at` is copied only when the
+    failure has one, so an entry without a stated reset has no such key."""
+    entry = FailurePauseEntry(
+        kind="failure", value=failure.get("reason", "other"), section=failure.get("section", "")
+    )
+    if "resets_at" in failure:
+        entry["resets_at"] = failure["resets_at"]
+    return entry
 
 
 def logged(
@@ -2456,12 +2647,7 @@ def logged(
     about its own cause must never read as `account_limit` and ease into an automatic
     retry. `lapses` (GH-342) are bookkeeping steps that failed after the work was done, one
     `"lapse"` entry each, after the failures: no reader of the epoch counts them."""
-    entries: list[PauseEntry] = [
-        FailurePauseEntry(
-            kind="failure", value=f.get("reason", "other"), section=f.get("section", "")
-        )
-        for f in failures
-    ]
+    entries: list[PauseEntry] = [_failure_entry(f) for f in failures]
     if (cls := patch.get("escalation_class")) is not None:
         entries.append(EscalationPauseEntry(kind="escalation", value=cls))
     entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)
@@ -2505,6 +2691,19 @@ def auto_resumable(state: TaskState) -> FailureReason | None:
     if not all(f["value"] in EXTERNAL_REASONS for f in failures):
         return None
     return failures[-1]["value"]
+
+
+def stated_reset(state: TaskState) -> datetime | None:
+    """The latest `resets_at` among the current epoch's `account_limit` failure entries
+    (ADR-0039, addendum GH-381), the latest by time whatever order they were logged in;
+    entries without one, or with one that is not ISO-8601 with an offset, are ignored.
+    `None` when none states a reset: the pause then follows its calendar as ever."""
+    stated = [
+        _instant(entry.get("resets_at"))
+        for entry in _current_epoch(state)
+        if entry["kind"] == "failure" and entry["value"] == "account_limit"
+    ]
+    return max((t for t in stated if t is not None), default=None)
 
 
 def schedule_for(reason: FailureReason, chase_prior: int = 0) -> tuple[int, ...]:
@@ -3021,6 +3220,42 @@ class ResumeCandidate:
     # spent: appended with defaults so a candidate built without them stays valid.
     chase_prior: int = 0
     ceiling_spent: bool = False
+    # An `account_limit` pause's stated reset (ADR-0039, addendum GH-381): the latest
+    # `resets_at` of the current epoch's failures, and whether a retake was already made
+    # after the `Escalated:` comment that followed it. Read only by `account_limit_due`.
+    resets_at: datetime | None = None
+    retaken: bool = False
+
+
+def account_limit_due(
+    since: datetime,
+    prior: int,
+    limit: int,
+    now: datetime,
+    *,
+    schedule: tuple[int, ...],
+    resets_at: datetime | None,
+    retaken: bool,
+) -> datetime | None:
+    """The one place an `account_limit` pause's due time is decided (ADR-0039, addendum
+    GH-381), only once due like `next_attempt_at`: the stated reset `resets_at` for the
+    first retake after the `Escalated:` comment that followed it (never before it, with no
+    margin, and whatever `prior` and `limit` say: the slots before the reset are neither
+    run nor counted); `next_attempt_at(since, prior, limit, now, schedule)` otherwise --
+    no stated reset, or a retake already made (`retaken`) -- so a later retake keeps its
+    spacing and its exhaustion. Reads no clock: `now` arrives as an argument."""
+    if resets_at is not None and not retaken:
+        return resets_at if resets_at <= now else None
+    return next_attempt_at(since, prior, limit, now, schedule=schedule)
+
+
+def _governing_reset(r: ResumeCandidate) -> datetime | None:
+    """The stated reset that decides `r`'s due time, `None` when none does: only an
+    `account_limit` pause that is not yet retaken and has not spent the persisted week
+    (`account_limit_persisted` escalates it, whatever the hint says)."""
+    if r.reason != "account_limit" or r.retaken or account_limit_persisted(r):
+        return None
+    return r.resets_at
 
 
 def retake_calendar(
@@ -3046,15 +3281,26 @@ def retake_due(r: ResumeCandidate, now: datetime) -> datetime | None:
     """The candidate's next automatic attempt, only once due (`next_attempt_at` on the
     calendar `_calendar` names)."""
     schedule, prior, limit = _calendar(r)
-    return next_attempt_at(r.since, prior, limit, now, schedule=schedule)
+    return account_limit_due(
+        r.since,
+        prior,
+        limit,
+        now,
+        schedule=schedule,
+        resets_at=_governing_reset(r),
+        retaken=r.retaken,
+    )
 
 
 def resume_exhausted(r: ResumeCandidate) -> bool:
     """Whether a resume candidate needs a human now: its own calendar is spent
     (`limit` counts window slots only, `0` is just an empty calendar; an `account_limit`
     past `ACCOUNT_LIMIT_CHASE_MAX` has the hourly week) or an interview's ceiling is
-    spent. The one exhaustion decision `poll_plan` takes over a resume."""
+    spent. The one exhaustion decision `poll_plan` takes over a resume. A pause a stated
+    reset governs (`_governing_reset`) is not exhausted by the calendar it skips."""
     schedule, prior, limit = _calendar(r)
+    if _governing_reset(r) is not None:
+        return r.ceiling_spent
     return _schedule_exhausted(prior, limit, schedule=schedule) or r.ceiling_spent
 
 
@@ -3080,6 +3326,19 @@ def account_limit_persisted_patch() -> dict[str, Any]:
         reason="other",
     )
     return logged({**escalation("failure", ACCOUNT_LIMIT_PERSISTED)}, [failure])
+
+
+def needs_a_human(state: TaskState) -> bool:
+    """Whether a pause or escalation adds the `needs-human` label (GH-381): the one
+    decision every site that labels calls. False only for a pause the poller retakes on
+    its own because the account limit alone caused it (`auto_resumable` reads
+    `account_limit`) and that has not spent the hourly week (`ACCOUNT_LIMIT_PERSISTED`,
+    the escalation that is left to the human). Everything else keeps the label: an
+    `upstream` or `network` pause, a mixed set of external and own failures, an
+    escalation that is not a failure."""
+    if state.get("escalated") == ACCOUNT_LIMIT_PERSISTED:
+        return True
+    return auto_resumable(state) != "account_limit"
 
 
 @dataclass(frozen=True)
@@ -3595,14 +3854,24 @@ class MergeFacts:
     convened, and decides as it always did. `criteria_regressed` (GH-334) is the messages of the
     criteria documents the head pushes past their cap (`application.preflight.criteria_regressed`
     against the merge base): `()` none, which is also what a `MergeFacts` built without it
-    reads, and `None` unreadable.
+    reads, and `None` unreadable. `ci_required` holds the stack's names joined with the plan's
+    (`ci_gate_names`, GH-371) and `ci_plan_only` the plan's that the stack does not declare: a
+    green CI that covers only those never decides `merge`, the local checks do.
+    `ci_red_on_base` (GH-371) is the failing required names that are also red on the base
+    branch's latest CI report (`ci.red_on_base`): `()` when none, when that report was not read,
+    or in a `MergeFacts` built without it; only the landing reads it.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
     `failed_step` is the step of the recorded `merge_checks` that failed, which only the
     landing reads. `adr_collision` (GH-229) is what `application.adr_collision` found: the
     `Renaming` that fixes an own ADR whose number master took, an `Ambiguous` one, or `None`
-    (no collision, or the diff touches no `docs/adr/` path so nothing was read)."""
+    (no collision, or the diff touches no `docs/adr/` path so nothing was read).
+    `masters_covered` (GH-353, ADR-0045 addendum) is `master_gain.masters_covered`'s verdict on
+    the masters the recorded check rows ran on: `True` every one is the current master or
+    only behind by an inert gain, `False` something is in doubt, and `None` (what a
+    `MergeFacts` built without it reads, the poller's) leaves the recorded `checks_master`
+    to be compared with `current_master`, exactly as before."""
 
     task_id: str
     status: str | None
@@ -3631,6 +3900,7 @@ class MergeFacts:
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
     adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
+    masters_covered: bool | None = None
     conflicts: bool | None = None
     open_outside: int = 0
     important_pass_done: bool = False
@@ -3638,6 +3908,34 @@ class MergeFacts:
     perf_verdict: Literal["approved", "returned", "unverified"] | None = None
     perf_head: str | None = None
     criteria_regressed: tuple[str, ...] | None = ()
+    ci_plan_only: tuple[str, ...] = ()
+    ci_red_on_base: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CiGate:
+    """The check names that gate a merge: `names` the stack's declared ones first, then the
+    plan's, without duplicates; `plan_only` the plan's that the stack does not declare."""
+
+    names: tuple[str, ...]
+    plan_only: tuple[str, ...]
+
+
+def ci_gate_names(declared: tuple[str, ...], plan_required: Sequence[str]) -> CiGate:
+    """The one place the names that gate a merge are decided (GH-371, ADR-0045 addendum):
+    every `MergeFacts.ci_required`, `MergeFacts.ci_plan_only` and the review's CI read takes
+    them from here. The plan's names are joined to the stack's, never replacing them."""
+    names = tuple(dict.fromkeys(declared))
+    plan_only = tuple(name for name in dict.fromkeys(plan_required) if name not in names)
+    return CiGate((*names, *plan_only), plan_only)
+
+
+def required_paths_missing(required: Sequence[str], touched: Sequence[str]) -> tuple[str, ...]:
+    """The plan's `required_paths` when the integrated diff touches none of them, else the
+    empty tuple (also when nothing is required)."""
+    if not required or any(path in touched for path in required):
+        return ()
+    return tuple(required)
 
 
 @dataclass(frozen=True)
@@ -3716,14 +4014,20 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
-    product declares its CI (`ci_required`): `ci_unreadable`, a `wait` for a head that is not the
-    reviewed one, `ci_failed` and
-    `ci_missing`, a green and fresh CI being the `merge` itself (a green stale one goes on);
+    product declares its CI or the plan requires checks (`ci_required`): `ci_unreadable`, a `wait`
+    for a head that is not the reviewed one, `ci_failed` and
+    `ci_missing`, a green and fresh CI being the `merge` itself when it covers a name the stack
+    declares (a green stale one, or one that covers only the plan's names -- `ci_plan_only` --
+    goes on to the checks, GH-371);
     then `checks_failed` (only when the recorded checks cover this head on this master;
     otherwise the next check) and
     `attempts_exhausted`. A CI that cannot be decided yet is a `wait` until
     `ci.CI_WAIT_MAX_S` have passed since its anchor, a refusal after. `master_moved` is not
-    here: the merge verb gives it, after its last fetch. The checks last: they are the costly
+    here: the merge verb gives it, after its last fetch. A recorded pass covers the current
+    master when the recorded `checks_master` is it (`masters_covered` None) or when
+    `masters_covered` says every row's master is only behind by an inert gain (GH-353); a
+    `False` is not covered even if `checks_master` is current, since a rerun stamps it with
+    the newest master. The checks last: they are the costly
     fact, so nothing is run for a pull request that is refused anyway, and a run is asked
     for only when the recorded one does not cover this head on this master. `attempts`
     bounds those runs per head (`MERGE_ATTEMPTS_MAX`), here and nowhere else; `merge_failures`
@@ -3772,7 +4076,7 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         facts.checks_passed is not None
         and facts.checks_head == facts.pr_head
         and facts.current_master is not None
-        and facts.checks_master == facts.current_master
+        and _master_covered(facts)
     )
     if covers:
         if facts.checks_passed:
@@ -3781,6 +4085,14 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def _master_covered(facts: MergeFacts) -> bool:
+    """The master conjunct of a recorded pass covering the head: the verb's reading of the
+    rows' masters when it made one, else the record's own `master` against the current one."""
+    if facts.masters_covered is None:
+        return facts.checks_master == facts.current_master
+    return facts.masters_covered
 
 
 def merge_conflicts_from(
@@ -3825,6 +4137,17 @@ def criteria_probe_wanted(facts: MergeFacts) -> bool:
     )
 
 
+def gain_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether reading what master gained is worth it for `facts` (GH-353): the only answer
+    to that question, derived from the order of `auto_merge_decision`. It is worth it
+    exactly when a covered verdict would change the decision, that is, when no refusal ahead
+    of the checks and no CI that merges already settles the pull request, and the recorded
+    pass or the attempts left leave it open."""
+    return auto_merge_decision(replace(facts, masters_covered=True)) != auto_merge_decision(
+        replace(facts, masters_covered=False)
+    )
+
+
 def adr_probe_wanted(facts: MergeFacts) -> bool:
     """Whether the ADR-collision read is worth running for `facts` (GH-262): the only answer
     to that question, derived from the order of `auto_merge_decision` and never from a list
@@ -3839,7 +4162,9 @@ def adr_probe_wanted(facts: MergeFacts) -> bool:
 
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     """The CI's part of `auto_merge_decision`: `None` means a green CI that is not fresh,
-    which goes on to the local checks, as does any green CI whose definition is untrusted."""
+    which goes on to the local checks, as does any green CI whose definition is untrusted and
+    any green CI that covers only names the plan required (`ci_plan_only`): those are a
+    necessary condition of a merge, never a sufficient one (GH-371)."""
     spent = facts.ci_waited_s is not None and facts.ci_waited_s >= ci.CI_WAIT_MAX_S
     if facts.ci_unreadable is not None:
         return MergeDecision("refuse", "ci_unreadable") if spent else MergeDecision("wait", None)
@@ -3852,7 +4177,8 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
         return MergeDecision("refuse", "ci_failed")
     if verdict.state == "pending":
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
-    if facts.ci_fresh is True and facts.ci_untrusted is False:
+    declared = set(facts.ci_required) - set(facts.ci_plan_only)
+    if declared and facts.ci_fresh is True and facts.ci_untrusted is False:
         return MergeDecision("merge", None)
     return None
 

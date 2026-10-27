@@ -39,11 +39,11 @@ def test_no_witness_runs_no_extra_command_and_leaves_no_markdown_line():
     assert gate() is None
     assert [c for _, c in commands.ran] == ["pytest"]  # the check alone, nothing else
     assert gate.invocations and "itness" not in (gate.markdown() or "")
-    assert gate.timeout_s == 30.0  # check_timeout_s * max(len(checks), 1), unchanged
+    assert gate.timeout_s == 60.0  # a run and a possible rerun per check (ADR-0066)
 
 
 def test_no_witness_leaves_the_witness_budget_and_refusals_untouched():
-    commands = MemoryCommands(pytest=[CommandResult(1, "boom")])
+    commands = MemoryCommands(pytest=[CommandResult(1, "boom")] * 2)
     gate = presubmit(commands)
     reason = gate()
     assert reason is not None and "boom" in reason
@@ -54,7 +54,7 @@ def test_a_witness_that_agrees_runs_before_the_checks_and_does_not_refuse():
     commands = MemoryCommands()
     commands.queues["echo ok"] = [CommandResult(0, str(PATH))]
     gate = presubmit(commands, witness="echo ok")
-    assert gate.timeout_s == 60.0  # check_timeout_s * max(len(checks), 1) + check_timeout_s
+    assert gate.timeout_s == 90.0  # a run, its rerun and the witness's own budget
     assert gate() is None
     assert [c for _, c in commands.ran] == ["echo ok", "pytest"]  # witness first
     assert gate.witness_refusals == 0

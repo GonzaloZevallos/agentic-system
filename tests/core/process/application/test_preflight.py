@@ -24,6 +24,7 @@ from agentic.core.process.application.preflight import (
 )
 from agentic.core.process.application.run_role import load_prompt
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.presubmit import RerunForm
 from agentic.core.process.domain.roles import ROLES
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.shared.configuration import Configuration
@@ -625,3 +626,77 @@ def test_both_tech_lead_prompts_render_the_one_text_on_tracker_work_with_parts(
     assert rules.TRACKER_WITH_PARTS in text
     assert "so do not write those\n   items" in text
     assert "re-point" not in text.replace(rules.TRACKER_WITH_PARTS, "")
+
+
+class BrokenRerunChecksStack(MemoryStack):
+    """A stack whose base declares a `rerun_checks` form with no `delivery_checks`, read by
+    the real domain function, so the message is the one a product would see."""
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        return stack.rerun_checks(
+            {
+                "checks": {"tests": "pytest"},
+                "rerun_checks": {"tests": {"command": "pytest --lf", "test_id": r"(\S+)"}},
+            },
+            "stack.yaml",
+        )
+
+
+def test_a_broken_rerun_checks_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match=r"`rerun_checks` requires `delivery_checks`"):
+        preflight(
+            Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenRerunChecksStack())
+        )
+
+
+def test_a_broken_rerun_checks_also_refuses_at_a_tasks_base(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match=r"`rerun_checks` requires `delivery_checks`"):
+        declared_stack(replace(ports, stack=BrokenRerunChecksStack()), "abc123")
+
+
+def test_a_stack_with_a_rerun_form_passes_preflight(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack_ = MemoryStack(
+        delivery_checks=("tests",),
+        rerun_checks={"tests": RerunForm(command="pytest --lf", test_id=r"(\S+)")},
+    )
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
+
+
+class BrokenCheckBudgetsStack(MemoryStack):
+    """A stack whose base declares `check_budgets` with no `delivery_checks`, read by the
+    real domain function, so the message is the one a product would see."""
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        return stack.check_budgets(
+            {"checks": {"tests": "pytest"}, "check_budgets": {"tests": 30}}, "stack.yaml"
+        )
+
+
+def test_a_broken_check_budgets_refuses_before_spending_and_at_a_tasks_base(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    broken = replace(ports, stack=BrokenCheckBudgetsStack())
+    with pytest.raises(ValueError, match=r"`check_budgets` requires `delivery_checks`"):
+        preflight(Configuration(product_dir=PRODUCT), broken)
+    with pytest.raises(ValueError, match=r"`check_budgets` requires `delivery_checks`"):
+        declared_stack(broken, "abc123")
+
+
+def test_a_stack_with_check_budgets_passes_preflight(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack_ = MemoryStack(delivery_checks=("tests",), check_budgets={"tests": 30.0})
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
+
+
+def test_a_refused_merge_inert_glob_refuses_before_spending(stage0):
+    """`*` would whitelist every path; the loader refuses it, and preflight reports it at
+    load instead of leaving the merge gate to read it as "not covered" (GH-353)."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack_ = MemoryStack()
+    stack_.merge_inert_error = "stack.yaml: '*' under `merge_inert` is refused: wildcard_root"
+    with pytest.raises(ValueError, match=r"under `merge_inert` is refused"):
+        preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
+    with pytest.raises(ValueError, match=r"under `merge_inert` is refused"):
+        declared_stack(replace(ports, stack=stack_), "abc123")

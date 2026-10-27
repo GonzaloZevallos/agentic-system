@@ -21,8 +21,8 @@ from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from .checkouts import SetupFailed, subtask_checkout, task_base
-from .coverage_guard import InvariantCoverageGuard
+from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
+from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
 from .run_check import RunCheck
@@ -34,7 +34,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     subtask = state["subtasks"][subtask_id]
     role = DEVELOPER_INTEGRATOR if subtask_id == INTEGRATION else DEVELOPER
     try:
-        checkout = subtask_checkout(state, subtask_id, cfg, ports)
+        checkout = await subtask_checkout_in_thread(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(role), ports)
     # A dependency gates the order and provides the code: its approved branch is
@@ -113,6 +113,8 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         affected=plan,
         criteria_base=base,
         reuse=reuse_of(ports, base),
+        rerun_forms=ports.stack.rerun_checks(base),
+        flake_gate="delivery",
     )
     # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
     # presubmit of its own that shares the gate's checkout, witness, budget and `Reuse`, so
@@ -181,8 +183,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             state, role, ports, checkout.path, notice_text, extra_sections, subtask_id
         )
     # The Developer's coverage map (GH-174): only a subtask's own Developer maps the plan's
-    # invariants, never the integrator, and only when the plan has any. Built once per
-    # run, so its one-denial cap survives the retry.
+    # invariants, never the integrator. The guard is built for every non-integration
+    # subtask, also when the plan has no invariants (count 0), because it checks the
+    # `brief:` locations too. Built once per run, so its one-denial cap survives the retry.
     mapped = 0 if subtask_id == INTEGRATION else len(state.get("invariants", []))
     output, patch = await run_role(
         state,
@@ -197,7 +200,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         prompt=prompt,
         cold_prompt=cold_prompt,
         presubmit=delivery_presubmit,
-        delivery_check=InvariantCoverageGuard(mapped) if mapped else None,
+        delivery_check=None
+        if subtask_id == INTEGRATION
+        else InvariantCoverageGuard(
+            mapped, checkout_view(ports.workspace, checkout.path, base, before)
+        ),
         forbidden=forbidden,
         check_tool=check_tool,
         tiers=presubmit.tier_section(list(fast), [n for n in checks if n not in fast])
@@ -230,6 +237,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             *patch["runs"][:-1],
             {**patch["runs"][-1], "gates": list(delivery_presubmit.gates)},
         ]
+    if flakes := delivery_presubmit.flakes():
+        # ADR-0066: the checks that went red and then passed on the gate's one rerun. A
+        # persisted key, merged by `add_flakes` at the fan-in so a re-delivery of the same head
+        # adds nothing; recording it never changes the delivery.
+        patch["flakes"] = flakes
 
     # The system decides the dependency landed, never the model's own word for it
     # (README.md's own rule for this task): a marker scan runs only on a delivery whose

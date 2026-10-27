@@ -32,6 +32,7 @@ from agentic.core.process.application.ports import (
     RoleRunner,
     RunRegistry,
     SampleApp,
+    StopFlag,
     TaskDocuments,
     Tracker,
     Workspace,
@@ -42,6 +43,7 @@ from tests.fakes import (
     FakePerfLock,
     FakePerfRunner,
     FakeReaper,
+    FakeStopFlag,
     MemoryCheckResults,
     MemoryCommands,
     MemoryDocuments,
@@ -75,6 +77,7 @@ _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
 _perf_lock: PerfLock = FakePerfLock()
 _check_scheduler: CheckScheduler = FakeCheckScheduler()
+_stop_flag: StopFlag = FakeStopFlag()
 
 
 def ports_of_doubles() -> Ports:
@@ -117,6 +120,7 @@ COVERED: dict[str, type] = {
     "PerfRunner": FakePerfRunner,
     "PerfLock": FakePerfLock,
     "CheckScheduler": FakeCheckScheduler,
+    "StopFlag": FakeStopFlag,
 }
 
 

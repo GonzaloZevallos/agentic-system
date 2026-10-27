@@ -20,7 +20,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult
+from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -430,6 +430,30 @@ class ProductStack(Protocol):
         product declares no tiers, which is the gate of today, byte for byte."""
         ...
 
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        """Check name -> its failed-tests-only form (`core.knowledge`, ADR-0066), as the
+        commit `revision` declares them. Empty when the product declares none, which is the
+        gate of today. Raises `ValueError` when the key is malformed, or declared by a
+        product with no `delivery_checks`."""
+        ...
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        """Check name -> the seconds it may take on the `full_checks` run (`core.knowledge`,
+        GH-365), as the commit `revision` declares them. Empty when the product declares none,
+        which is every verdict of today. Raises `ValueError` when the key is malformed, or
+        declared by a product with no `delivery_checks`."""
+        ...
+
+    def merge_inert(self, revision: str) -> tuple[str, ...]:
+        """The globs of the paths the product promises none of its checks reads
+        (`core.knowledge`, ADR-0045 amendment), as the commit `revision` declares them: what
+        master may gain without a recorded check pass going stale. Empty when the key is
+        absent -- the merge gate of today -- and also when the revision cannot be read (not
+        fetched, no file, YAML that does not parse): it never raises for those and never
+        falls back to another revision's list. Raises `ValueError` when the key is there but
+        broken, or a glob is refused by `master_gain.glob_refusal`."""
+        ...
+
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
         """The suppressions this product forbids a Developer's Edit or Write from
         adding (`core.knowledge`, issue #38), in file order: first declared rule wins.
@@ -479,9 +503,30 @@ class CommandResult:
         return self.exit_code == 0 and not self.timed_out
 
 
+class RunStopped(BaseException):
+    """The run was told to stop (SIGTERM or SIGHUP) while a product command was running or
+    about to run. Not an `Exception`: nothing in between may swallow it -- the delivery gate,
+    the flake rerun, the thread pools of the presubmit, the `except Exception` of a graph
+    node -- the same reason `PerfInterrupted` is not one. It is never a `CommandResult`, a
+    rejection, a flake or a line of the task document: the stop is not a verdict on the work."""
+
+
+class StopFlag(Protocol):
+    """Whether the run was told to stop. Only `run` and `resume` own one that can be set;
+    every other verb gets one that never is."""
+
+    def is_set(self) -> bool: ...
+
+    def set(self) -> None: ...
+
+
 class Commands(Protocol):
     """Runs a product's command in a checkout, as a shell would, for the system itself:
-    the presubmit. Never fails for a non-zero exit; that is the result."""
+    the presubmit. Never fails for a non-zero exit; that is the result.
+
+    With the run's stop flag set, `run` raises `RunStopped` instead -- before it launches
+    anything, or after the command it launched has ended -- and never returns a
+    `CommandResult` for a command the stop killed."""
 
     def run(
         self,
@@ -900,6 +945,15 @@ class Workspace(Protocol):
         pull request changes against the commit it branched from. Raises `GitError`."""
         ...
 
+    def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
+        """Every path that differs between `older` and `newer`, two-dot and with renames
+        off, so a rename lists both its old and its new path: what master gained since a
+        recorded check pass. This is the only read of a master gain's paths; `changed_paths`
+        is the pull request's own three-dot diff and never stands in for it. Names are
+        returned as they are, unquoted. Raises `GitError` on any git failure (an unknown
+        sha included): a gain that cannot be read is the caller's "not covered"."""
+        ...
+
     def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:
         """Every path under `docs/adr` that a non-merge commit of `master..head` added,
         with the commit that added it (GH-229): the branch's own ADRs, whatever master
@@ -1073,6 +1127,13 @@ class Tracker(Protocol):
         word. The landing (GH-239, ADR-0048) is the caller that passes one, `agentic`, for
         the follow-ups and flakes it files, which the product repo always has: it is the
         queue's own label. Any state a reader needs goes in `title` instead."""
+        ...
+
+    def comment_on_issue(self, reference: str, text: str) -> None:
+        """Comments `text` on the issue at `reference`: the URL or number `open_issue`
+        answers, and the first element of each `Inbox.open_issue_bodies()` pair. Not
+        `comment`, which writes on the task's own issue by its task id. Raises
+        `ValueError` when the platform refuses or cannot be reached, as `open_issue`."""
         ...
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:

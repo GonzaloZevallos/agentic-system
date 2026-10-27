@@ -4,6 +4,8 @@ A worktree has no environment of its own, so a tool that wants one walks up unti
 finds the product's. The system prepares each checkout once, with what the product
 declares, before any role works in it."""
 
+from pathlib import Path
+
 import pytest
 
 from agentic.core.process.application.checkouts import SetupFailed, subtask_checkout, task_checkout
@@ -11,7 +13,7 @@ from agentic.core.process.application.define import define
 from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.integrate import integrate
-from agentic.core.process.application.ports import CommandResult
+from agentic.core.process.application.ports import CommandResult, RunStopped
 from agentic.core.process.domain.task import WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
@@ -206,3 +208,40 @@ def test_a_checkout_whose_setup_failed_is_reaped_before_it_is_discarded(cfg):
         task_checkout(TASK, cfg, ports)
 
     assert journal == ["reap:GH-12", "discard:GH-12"]
+
+
+class StoppedCommands(MemoryCommands):
+    """A command runner whose run was told to stop (GH-355): it raises `RunStopped` on `stop_at`."""
+
+    def __init__(self, stop_at: str):
+        super().__init__()
+        self.stop_at = stop_at
+        self.resumed = False
+
+    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
+        if command == self.stop_at and not self.resumed:
+            raise RunStopped()
+        return super().run(cwd, command, timeout_s)
+
+
+def test_a_stop_during_setup_discards_the_checkout_and_lets_the_stop_through(cfg):
+    """GH-355: not a `SetupFailed` (nothing escalates), and no half-built tree left for a
+    later `created=False` to take for ready: the resume makes it and prepares it anew."""
+    journal: list[str] = []
+    ports = ports_with(commands=StoppedCommands("uv sync --locked"))
+    assert isinstance(ports.workspace, MemoryWorkspace) and isinstance(ports.reaper, FakeReaper)
+    ports.workspace.journal = journal
+    ports.reaper.journal = journal
+
+    with pytest.raises(RunStopped):
+        task_checkout(TASK, cfg, ports)
+
+    assert ports.commands.ran == [(TASK_PATH, "uv venv")]  # the stop ended the steps
+    assert ports.workspace.discarded == [TASK_PATH]
+    assert journal == ["reap:GH-12", "discard:GH-12"]
+
+    ports.commands.resumed = True
+    ports.commands.ran.clear()
+    again = task_checkout(TASK, cfg, ports)
+    assert again.created
+    assert ports.commands.ran == [(TASK_PATH, "uv venv"), (TASK_PATH, "uv sync --locked")]

@@ -4,10 +4,12 @@ run opens, the clean tree it leaves, and the refusals that never run a command."
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
-from agentic.core.process.application.full_checks import full_checks
-from agentic.core.process.application.ports import CommandResult
+from agentic.core.process.application.full_checks import _shown_up, _without_output, full_checks
+from agentic.core.process.application.ports import CommandResult, RunStopped
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
@@ -88,6 +90,14 @@ async def test_a_green_run_writes_a_passed_record_and_no_rows():
     assert ports.documents.saved
 
 
+async def test_a_passed_record_names_no_master_on_any_result():
+    """Invariant 6: the run's rows are not `merge_checks` rows, so none carries a master."""
+    patch = await full_checks(state_of(), CFG, ports_of())
+    assert patch["full_checks"]["results"]
+    assert all("master" not in row for row in patch["full_checks"]["results"])
+    assert "master" not in patch["full_checks"]
+
+
 async def test_a_green_run_of_a_later_version_follows_the_previous_record():
     previous = {
         "version": 2,
@@ -105,18 +115,18 @@ async def test_a_green_run_of_a_later_version_follows_the_previous_record():
 
 
 async def test_a_red_run_keeps_no_command_output_in_the_record_only_in_the_section():
-    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
     patch = await full_checks(state_of(), CFG, ports_of(commands))
-    assert patch["full_checks"]["results"] == [
-        {"name": "tests", "passed": True},
-        {"name": "lint", "passed": False},
+    assert [(r["name"], r["passed"]) for r in patch["full_checks"]["results"]] == [
+        ("tests", True),
+        ("lint", False),
     ]
     assert "E501" not in repr(patch["full_checks"])
     assert "E501" in patch["sections"]["Full checks"]
 
 
 async def test_a_red_run_reopens_the_integration_with_a_row_per_failed_check_and_the_section():
-    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
     ports = ports_of(commands)
     patch = await full_checks(state_of(), CFG, ports)
     reopened = patch["subtasks"][INTEGRATION]
@@ -137,7 +147,7 @@ async def test_a_red_run_reopens_the_integration_with_a_row_per_failed_check_and
 
 
 async def test_a_red_run_at_the_pair_limit_escalates_instead_of_reopening_forever():
-    commands = MemoryCommands(**{"pytest": [CommandResult(1, "1 failed")]})
+    commands = MemoryCommands(**{"pytest": [CommandResult(1, "1 failed")] * 2})
     limited = Configuration(product_dir=MemoryWorkspace.ROOT, max_changes_requested_per_pair=0)
     patch = await full_checks(state_of(), limited, ports_of(commands))
     assert patch["escalated"]
@@ -146,7 +156,7 @@ async def test_a_red_run_at_the_pair_limit_escalates_instead_of_reopening_foreve
 
 
 async def test_a_check_that_dirties_the_tree_leaves_it_clean_green_or_red():
-    for queue in ({}, {"pytest": [CommandResult(1, "boom")]}):
+    for queue in ({}, {"pytest": [CommandResult(1, "boom")] * 2}):
         workspace = MemoryWorkspace()
         ports = memory_ports(
             stack=MemoryStack(checks=CHECKS, delivery_checks=("tests",)),
@@ -200,3 +210,137 @@ async def test_a_second_run_on_the_same_tree_reuses_the_pass_and_runs_no_command
         {"name": "lint", "passed": True, "reused": True},
     ]
     assert "tests (reused)" in second["sections"]["Full checks"]
+
+
+class Stopped(MemoryCommands):
+    """The run is stopped while this command runs: it raises `RunStopped`, and says which
+    thread it ran in."""
+
+    def __init__(self, stops: str | None = None):
+        super().__init__()
+        self.stops = stops
+        self.threads: list[str] = []
+
+    def run(self, cwd, command, timeout_s):
+        self.threads.append(threading.current_thread().name)
+        if command == self.stops:
+            raise RunStopped
+        return super().run(cwd, command, timeout_s)
+
+
+async def test_a_stop_during_the_checks_propagates_restores_the_tree_and_returns_no_patch():
+    workspace = MemoryWorkspace()
+    commands = Stopped(stops="pytest")
+    ports = memory_ports(
+        stack=MemoryStack(checks=CHECKS, delivery_checks=("tests",)),
+        workspace=workspace,
+        commands=commands,
+    )
+    with pytest.raises(RunStopped):
+        await full_checks(state_of(), CFG, ports)
+    assert workspace.restored == [TASK_PATH]  # `finally`, after the command was gone
+    assert ports.documents.load("GH-1") is None  # nothing written for the stop
+
+
+async def test_the_checks_run_off_the_event_loop_thread():
+    commands = Stopped()
+    ports = ports_of(commands)
+    await full_checks(state_of(), CFG, ports)
+    assert commands.threads
+    assert threading.main_thread().name not in commands.threads
+
+
+async def test_a_stop_during_setup_discards_the_checkout_and_is_not_a_setup_failure():
+    commands = Stopped(stops="make env")
+    workspace = MemoryWorkspace()
+    ports = memory_ports(
+        stack=MemoryStack(checks=CHECKS, setup={"env": "make env"}),
+        workspace=workspace,
+        commands=commands,
+    )
+    with pytest.raises(RunStopped):
+        await full_checks(state_of(), CFG, ports)
+    assert workspace.discarded == [TASK_PATH]
+    assert TASK_PATH not in workspace.on_disk  # the next ask makes it again, setup included
+    assert threading.main_thread().name not in commands.threads
+
+
+# -- each check's duration in the record (GH-365) ---------------------------------------
+
+
+def test_without_output_keeps_the_verdict_marks_and_the_duration_and_drops_the_rest():
+    entries = [
+        {
+            "name": "tests",
+            "passed": True,
+            "reused": True,
+            "flake": True,
+            "duration_s": 12.5,
+            "tail": ["free text"],
+            "master": "m",
+        },
+        {"name": "lint", "passed": False, "tail": ["boom"], "rerun": True},
+    ]
+    assert _without_output(entries) == [
+        {"name": "tests", "passed": True, "reused": True, "flake": True, "duration_s": 12.5},
+        {"name": "lint", "passed": False},
+    ]
+
+
+def test_without_output_keeps_a_zero_duration_a_check_that_ran_instantly():
+    assert _without_output([{"name": "t", "passed": True, "duration_s": 0.0}]) == [
+        {"name": "t", "passed": True, "duration_s": 0.0}
+    ]
+
+
+async def test_the_record_holds_each_checks_duration_as_a_number():
+    patch = await full_checks(state_of(), CFG, ports_of())
+    rows = patch["full_checks"]["results"]
+    assert [row["name"] for row in rows] == ["tests", "lint"]
+    assert all(isinstance(row["duration_s"], float) and row["duration_s"] >= 0 for row in rows)
+
+
+# -- the budget finding: a record and a sentence, never a return (GH-365) --------------------
+
+OVER = -1.0  # the fake stack does not validate; any real duration is above it
+ROOMY = 10_000.0
+
+
+async def test_a_green_run_over_a_budget_records_the_breach_and_still_passes():
+    ports = ports_of(check_budgets={"tests": OVER, "lint": ROOMY})
+    patch = await full_checks(state_of(), CFG, ports)
+    record = patch["full_checks"]
+    assert record["passed"] is True
+    [breach] = record["over_budget"]
+    assert breach["name"] == "tests"
+    assert breach["budget_s"] == OVER
+    tests_row = next(r for r in record["results"] if r["name"] == "tests")
+    # Rounded up to a tenth, so the figure shown is never at or under the budget it broke.
+    assert tests_row["duration_s"] <= breach["duration_s"] <= tests_row["duration_s"] + 0.1
+    assert not {"findings", "changes_requested", "subtasks", "status"} & patch.keys()
+    section = patch["sections"]["Full checks"]
+    assert section.startswith("Passed on `base`: tests, lint.")
+    assert section.endswith(f" Over budget: tests {breach['duration_s']}s / {OVER}s.")
+
+
+def test_a_narrow_breach_is_written_above_its_budget_not_rounded_down_to_it():
+    assert _shown_up(10.04) == 10.1
+    assert _shown_up(10.0) == 10.0
+    assert _shown_up(0.3) == 0.3  # float noise in 0.3 * 10 does not push it up a tenth
+
+
+async def test_a_run_within_budget_or_with_no_budgets_writes_no_over_budget_and_the_same_text():
+    plain = await full_checks(state_of(), CFG, ports_of())
+    roomy = await full_checks(state_of(), CFG, ports_of(check_budgets={"tests": ROOMY}))
+    for patch in (plain, roomy):
+        assert "over_budget" not in patch["full_checks"]
+        assert patch["sections"]["Full checks"] == "Passed on `base`: tests, lint."
+
+
+async def test_a_red_run_is_not_compared_with_the_budgets():
+    commands = MemoryCommands(pytest=[CommandResult(1, "boom")] * 2)
+    ports = ports_of(commands, check_budgets={"lint": OVER})
+    patch = await full_checks(state_of(), CFG, ports)
+    assert patch["full_checks"]["passed"] is False
+    assert "over_budget" not in patch["full_checks"]
+    assert "Over budget" not in patch["sections"]["Full checks"]

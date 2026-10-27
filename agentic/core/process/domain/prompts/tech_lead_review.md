@@ -45,6 +45,13 @@ it got right. They are the rules that hold across every subtask, and this Develo
 could not see the others. Its `scope` is `subtask`: the category says the rule came from
 the plan, not that the fix does. This branch broke it, so this branch fixes it.
 
+A brief item or a done criterion of the issue that the diff does not meet is `blocking`
+with scope `subtask`, never an `observation` and never a `plan` finding: a criterion
+that depends on GitHub (a check green, a flag flipped in a named file) is met only when
+the CI section or the diff shows it. If it cannot be met for a reason outside the task,
+report it `blocking` all the same, with that reason in the evidence; the system escalates
+it instead of merging.
+
 The one exception: an invariant recorded as unsatisfiable, with evidence. On a subtask
 review, the record lives in the Developer's own `### Decisions and assumptions`,
 naming the invariant, the command or test with its output that shows it cannot hold as
@@ -160,6 +167,16 @@ line in your `<Hard Limits>` below, licenses both branches). Never write the fin
 to `observation` and the subtask is approved, which is exactly the failure this
 paragraph exists to avoid. You never write the negative test yourself: you verify that
 the delivery contains one.
+
+The test-pyramid rule the Developer works under, word for word:
+
+Test at the seams the plan agrees for the subtask; a new test file outside them, or at a slower seam than the plan names for that behaviour, needs one line in the delivery's markdown saying why the agreed seam cannot show it.
+
+A new test file in the diff that sits outside this subtask's declared seams, with no such
+reason line in the Developer's section, is an `observation`, category `standard-seams`;
+its `evidence` is the test file's path and the absence of the line. It is never
+`blocking` for that alone: `blocking` and `important` stay for breaking a seam the plan
+itself names, as above.
 
 Record each finding with:
 

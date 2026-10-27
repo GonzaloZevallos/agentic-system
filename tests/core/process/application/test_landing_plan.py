@@ -245,3 +245,40 @@ def test_pending_counts_a_released_diagnose_as_go_and_still_skips_an_unreleased_
     # Released has no effect on any other step.
     other = landing_plan.pending({}, "master_moved", facts, live, now, released=True)
     assert other is None
+
+
+def _checks(head: str, *entries: dict) -> dict:
+    return {"merge_checks": {"head": head, "passed": False, "checks": list(entries)}}
+
+
+@pytest.mark.parametrize(
+    ("raw", "reran"),
+    [
+        (_checks(HEAD, {"name": "tests", "passed": False, "tail": "x", "rerun": True}), True),
+        (_checks(HEAD, {"name": "tests", "passed": False, "tail": "x"}), False),
+        (_checks("c" * 40, {"name": "tests", "passed": False, "tail": "x", "rerun": True}), False),
+        (_checks(HEAD, {"name": "tests", "passed": True, "flake": True}), False),
+        ({}, False),
+        ({"merge_checks": "garbage"}, False),
+        ({"merge_checks": {"head": HEAD, "checks": "garbage"}}, False),
+    ],
+    ids=[
+        "rerun_row",
+        "before_the_change",
+        "other_head",
+        "flake_only",
+        "absent",
+        "text",
+        "bad_list",
+    ],
+)
+def test_a_red_check_with_a_rerun_row_on_the_head_is_a_fact_of_the_plan(raw, reran):
+    assert landing_plan.spent(raw, HEAD, None).checks_rerun_on_head is reran
+
+
+def test_a_pass_written_before_the_pull_request_spends_the_important_budget_and_no_model_pass():
+    raw = {"landing": [{"head": "h", "step": "fix_important", "before_pr": True, "at": "t"}]}
+    spent = landing_plan.spent(raw, "h", None)
+    assert spent.important_passes == landing.LANDING_IMPORTANT_PASSES_MAX
+    assert spent.passes == 0 and spent.syncs == 0 and spent.reruns_on_head == 0
+    assert landing_plan.spent({"landing": [{"step": "fix"}]}, "h", None).important_passes == 0

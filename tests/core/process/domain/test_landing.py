@@ -160,6 +160,22 @@ def test_a_red_head_is_rerun_once_then_fixed_then_diagnosed(refusal):
     assert _step(refusal, spent, ("integration",)).kind == "diagnose"
 
 
+def test_a_red_head_whose_gate_already_reran_it_goes_straight_to_a_fix():
+    """ADR-0066: the gate reran the red check on this head, so the landing's own rerun would be
+    the third run of a failure that repeated. Without the fact (a record from before) the
+    table is the one above; the CI keeps its rerun."""
+    reran = _spent(checks_rerun_on_head=True)
+    assert _step("checks_failed", reran, ("integration",)) == LandingStep(
+        "fix", "checks_failed", ("integration",)
+    )
+    assert _step("checks_failed", _spent(), ("integration",)).kind == "rerun"
+    assert _step("ci_failed", reran).kind == "rerun"
+    spent = _spent(checks_rerun_on_head=True, passes=landing.LANDING_PASSES_MAX)
+    assert _step("checks_failed", spent, ("integration",)).kind == "diagnose"
+    conflict = _step("checks_failed", reran, failed_step="conflict")
+    assert conflict.kind == "sync_master"
+
+
 @pytest.mark.parametrize("refusal", ["eval_set_unreadable", "ci_missing", "ci_unreadable"])
 def test_an_undecidable_ci_waits_until_the_bound_then_diagnoses(refusal):
     assert _step(refusal, _spent(waited_s=None)).kind == "wait"

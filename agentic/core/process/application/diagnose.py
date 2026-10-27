@@ -17,7 +17,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import presubmit
 from ..domain.roles import PRODUCT_ANALYST_BUG, diagnoser_for
 from ..domain.task import TaskState
-from .checkouts import SetupFailed, task_checkout
+from .checkouts import SetupFailed, task_checkout_in_thread
 from .ports import Ports
 from .presubmit import declared_checks
 from .run_role import finish, run_role
@@ -27,7 +27,7 @@ async def diagnose(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     # The task's checkout is born here on a bug, as it is in `define` on a feature: the
     # Product Analyst reproduces in it, and this is where the product's setup can fail.
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(PRODUCT_ANALYST_BUG), ports)
     checks = declared_checks(state, ports)

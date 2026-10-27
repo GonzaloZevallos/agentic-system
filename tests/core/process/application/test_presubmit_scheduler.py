@@ -57,7 +57,8 @@ def gate_over(
 
 def test_a_gate_refused_twice_then_passing_acquires_three_times_under_one_place():
     scheduler = FakeCheckScheduler(wait_s=400.0)
-    commands = MemoryCommands(pytest=[CommandResult(1, "red"), CommandResult(1, "red")])
+    # A red check is rerun once (ADR-0066): two reds per refused look.
+    commands = MemoryCommands(pytest=[CommandResult(1, "red")] * 4)
     gate = gate_over(scheduler, commands, wait_max_s=1000.0)
     assert gate() is not None and gate() is not None and gate() is None
     assert len(scheduler.requests) == 3
@@ -69,7 +70,7 @@ def test_a_gate_refused_twice_then_passing_acquires_three_times_under_one_place(
 
 def test_the_total_wait_asked_never_passes_the_ceiling():
     scheduler = FakeCheckScheduler(wait_s=400.0)
-    commands = MemoryCommands(pytest=[CommandResult(1, "red")] * 4)
+    commands = MemoryCommands(pytest=[CommandResult(1, "red")] * 8)
     gate = gate_over(scheduler, commands, wait_max_s=1000.0)
     for _ in range(4):
         gate()
@@ -80,7 +81,8 @@ def test_the_total_wait_asked_never_passes_the_ceiling():
 def test_the_wait_is_not_part_of_the_timeout_of_the_gate():
     quiet = gate_over(FakeCheckScheduler(), wait_max_s=0.0)
     patient = gate_over(FakeCheckScheduler(), wait_max_s=1800.0)
-    assert quiet.timeout_s == patient.timeout_s == 60.0
+    # Two checks, each with its one rerun (ADR-0066), and nothing for the wait.
+    assert quiet.timeout_s == patient.timeout_s == 30.0 * (2 + 2)
     assert patient.wait_max_s == 1800.0
 
 

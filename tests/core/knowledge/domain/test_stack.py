@@ -539,3 +539,155 @@ def test_the_template_keeps_delivery_checks_commented_out_and_explained():
     assert "delivery_checks" not in data
     assert "# delivery_checks:" in text
     assert stack.delivery_checks(data, stack.TEMPLATE) == ()
+
+
+# --- rerun_checks (ADR-0066) ---------------------------------------------------------------
+
+FORM_PATTERN = r"(?m)^FAILED (\S+)"
+
+
+def rerun_data(**entry):
+    form = {"command": "pytest --lf", "test_id": FORM_PATTERN, **entry}
+    return {
+        "checks": {"tests": "pytest", "lint": "ruff check ."},
+        "delivery_checks": ["tests"],
+        "rerun_checks": {"tests": form},
+    }
+
+
+def test_an_absent_rerun_checks_is_the_gate_of_today():
+    assert stack.rerun_checks({"checks": {"tests": "pytest"}}, "x") == {}
+
+
+def test_a_declared_form_is_kept_by_check_name():
+    found = stack.rerun_checks(rerun_data(), "x")
+    assert found == {"tests": stack.RerunForm(command="pytest --lf", test_id=FORM_PATTERN)}
+
+
+def test_rerun_checks_is_a_key_the_file_may_declare():
+    assert "rerun_checks" in stack.KEYS
+    stack.checks(rerun_data(), "x")  # an unknown key would raise here
+
+
+def reject(data, match):
+    with pytest.raises(ValueError, match=match):
+        stack.rerun_checks(data, "stack.yaml")
+
+
+def test_a_check_that_is_not_declared_is_refused():
+    data = rerun_data()
+    data["rerun_checks"] = {"e2e": data["rerun_checks"]["tests"]}
+    reject(data, r"'e2e' under `rerun_checks` is not a check declared under `checks`")
+
+
+def test_a_command_without_test_id_is_refused():
+    data = rerun_data()
+    del data["rerun_checks"]["tests"]["test_id"]
+    reject(data, r"'tests' under `rerun_checks`.*`test_id`")
+
+
+def test_a_test_id_without_command_is_refused():
+    data = rerun_data()
+    del data["rerun_checks"]["tests"]["command"]
+    reject(data, r"'tests' under `rerun_checks`.*`command`")
+
+
+def test_an_empty_or_misshapen_rerun_checks_is_refused():
+    for bad in (None, {}, [], "tests", {"tests": "pytest --lf"}, {"tests": {}}):
+        data = rerun_data()
+        data["rerun_checks"] = bad
+        reject(data, r"`rerun_checks`")
+
+
+def test_an_unknown_sub_key_is_refused():
+    reject(rerun_data(extra="x"), r"unknown key\(s\) extra under `rerun_checks`")
+
+
+@pytest.mark.parametrize("pattern", ["(", "(?P<a>x", "[a-"])
+def test_a_test_id_that_does_not_compile_is_refused(pattern):
+    reject(rerun_data(test_id=pattern), r"`test_id`.*does not compile")
+
+
+@pytest.mark.parametrize("pattern", [r"FAILED \S+", r"(a)(b)", r"(?:a)b"])
+def test_a_test_id_without_exactly_one_group_is_refused(pattern):
+    reject(rerun_data(test_id=pattern), r"`test_id`.*exactly one capturing group")
+
+
+def test_a_test_id_longer_than_200_characters_is_refused():
+    reject(rerun_data(test_id="(" + "a" * 199 + ")"), r"`test_id`.*at most 200 characters")
+    stack.rerun_checks(rerun_data(test_id="(" + "a" * 198 + ")"), "x")
+
+
+@pytest.mark.parametrize("pattern", [r"(a+)+", r"(\w+\s)*", r"(?:\d+,)+(x)", r"(a*b)+"])
+def test_a_quantified_group_that_contains_a_quantifier_is_refused(pattern):
+    reject(rerun_data(test_id=pattern), r"`test_id`.*quantified group that contains a quantifier")
+
+
+@pytest.mark.parametrize("pattern", [r"(a|bc)+", r"((?:foo|bar)x)*", r"(?:a|ab)+(z)"])
+def test_an_alternation_inside_a_quantified_group_is_refused(pattern):
+    reject(rerun_data(test_id=pattern), r"`test_id`.*alternation inside a quantified group")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [FORM_PATTERN, r"^\s+(\S+\.spec\.ts:\d+)", r"(a|b)c", r"(?m)^(?:FAILED|ERROR) (\S+)"],
+)
+def test_ordinary_patterns_are_accepted(pattern):
+    stack.rerun_checks(rerun_data(test_id=pattern), "x")
+
+
+def test_a_form_without_delivery_checks_is_refused():
+    data = rerun_data()
+    del data["delivery_checks"]
+    reject(data, r"`rerun_checks`.*requires `delivery_checks`")
+
+
+# --- check_budgets (GH-365) ----------------------------------------------------------------
+
+
+def budget_data(budgets=None, **more):
+    return {
+        "checks": {"tests": "pytest", "lint": "ruff check ."},
+        "delivery_checks": ["lint"],
+        "check_budgets": {"tests": 600, "lint": 30.5} if budgets is None else budgets,
+        **more,
+    }
+
+
+def test_an_absent_check_budgets_declares_none():
+    assert stack.check_budgets({"checks": {"tests": "pytest"}}, "x") == {}
+
+
+def test_check_budgets_keep_each_figure_by_check_name_in_order():
+    found = stack.check_budgets(budget_data(), "x")
+    assert list(found.items()) == [("tests", 600), ("lint", 30.5)]
+
+
+def test_check_budgets_is_a_key_the_file_may_declare():
+    assert "check_budgets" in stack.KEYS
+    stack.checks(budget_data(), "x")  # an unknown key would raise here
+
+
+@pytest.mark.parametrize(
+    ("budgets", "match"),
+    [
+        ([("tests", 5)], "mapping of checks to seconds"),
+        ({}, "declared empty"),
+        ({"e2e": 5}, "'e2e' under `check_budgets` is not a check declared under `checks`"),
+        ({"tests": 0}, "positive number of seconds"),
+        ({"tests": -3}, "positive number of seconds"),
+        ({"tests": True}, "positive number of seconds"),
+        ({"tests": "600"}, "positive number of seconds"),
+        ({"tests": None}, "positive number of seconds"),
+    ],
+)
+def test_a_check_budgets_that_is_not_check_to_positive_seconds_fails_at_load(budgets, match):
+    with pytest.raises(ValueError, match=match):
+        stack.check_budgets(budget_data(budgets), "stack.yaml")
+
+
+def test_check_budgets_without_delivery_checks_is_refused_naming_the_full_run():
+    data = budget_data()
+    del data["delivery_checks"]
+    with pytest.raises(ValueError, match="stack.yaml: `check_budgets` requires `delivery_checks`"):
+        stack.check_budgets(data, "stack.yaml")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import threading
@@ -12,7 +13,7 @@ from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
+from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, ShellReaper
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
@@ -57,7 +58,7 @@ from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
-from agentic.core.process.domain.presubmit import CheckResult
+from agentic.core.process.domain.presubmit import CheckResult, RerunForm
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -117,6 +118,60 @@ class ScriptedRunner:
         """Which subtask each run of `slug` worked on, in order: the shape of a wave
         without depending on how two concurrent branches interleaved."""
         return [_subtask_of(c.get("cwd")) for c in self.calls if c["slug"] == slug]
+
+
+class BlockingRunner(ScriptedRunner):
+    """A `ScriptedRunner` whose roles can wait on an `asyncio.Event` per `<slug>__<subtask>`
+    key (the subtask of the checkout the role runs in, empty for the task's own), so a test
+    decides which role of which subtask is still running while the others go on (GH-364).
+
+    `hold(key)` makes every run of that key wait until `release(key)`; `started(key)` returns
+    once a run of that key has begun; `began` and `finished` are the keys in order; `peak` is
+    the most subtask roles (those whose key names a subtask) that were running at once."""
+
+    def __init__(self, **queues: list[RawResult | Exception]):
+        super().__init__(**queues)
+        self._held: dict[str, asyncio.Event] = {}
+        self._began: dict[str, asyncio.Event] = {}
+        self.began: list[str] = []
+        self.finished: list[str] = []
+        self.on_call: Callable[[str], None] | None = None
+        self.running = 0
+        self.peak = 0
+
+    def hold(self, *keys: str) -> None:
+        for key in keys:
+            self._held.setdefault(key, asyncio.Event())
+
+    def release(self, *keys: str) -> None:
+        for key in keys:
+            self._held.setdefault(key, asyncio.Event()).set()
+
+    async def started(self, key: str, timeout: float = 20.0) -> None:
+        await asyncio.wait_for(self._began.setdefault(key, asyncio.Event()).wait(), timeout)
+
+    async def run_once(self, role: Role, prompt: str, **kwargs: Any) -> RawResult:
+        subtask = _subtask_of(kwargs.get("cwd"))
+        key = f"{role.slug}__{subtask}"
+        self.began.append(key)
+        self._began.setdefault(key, asyncio.Event()).set()
+        if self.on_call is not None:
+            self.on_call(key)
+        counted = bool(subtask)
+        if counted:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        try:
+            if key in self._held:
+                await asyncio.wait_for(self._held[key].wait(), 20.0)
+            else:
+                await asyncio.sleep(0.01)
+            result = await super().run_once(role, prompt, **kwargs)
+            self.finished.append(key)
+            return result
+        finally:
+            if counted:
+                self.running -= 1
 
 
 def _subtask_of(cwd: Path | str | None) -> str:
@@ -286,6 +341,9 @@ class MemoryStack:
         affected_fallback: tuple[str, ...] = (),
         performance: dict[str, Scenario] | None = None,
         delivery_checks: tuple[str, ...] = (),
+        rerun_checks: dict[str, RerunForm] | None = None,
+        merge_inert: tuple[str, ...] = (),
+        check_budgets: dict[str, float] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -325,6 +383,14 @@ class MemoryStack:
         self.declared_affected_fallback = affected_fallback
         # Empty is a product with no tiers: every delivery runs all of `checks`.
         self.declared_delivery_checks = delivery_checks
+        # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
+        self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
+        # Empty is a product with no check budget (GH-365): every verdict of today.
+        self.declared_check_budgets = {} if check_budgets is None else check_budgets
+        # Empty is a product that declares no `merge_inert`: the merge gate of today.
+        self.declared_merge_inert = merge_inert
+        # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
+        self.merge_inert_error: str | None = None
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -363,6 +429,20 @@ class MemoryStack:
     def delivery_checks(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_delivery_checks
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_rerun_checks
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_check_budgets
+
+    def merge_inert(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        if self.merge_inert_error is not None:
+            raise ValueError(self.merge_inert_error)
+        return self.declared_merge_inert
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -689,6 +769,11 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # `gain_paths`: what master gained per (older, newer), and every pair asked in order.
+        # A pair with no entry raises `GitError`, the way an unknown sha does; an entry may
+        # also be an exception to raise.
+        self.gains: dict[tuple[str, str], tuple[str, ...] | Exception] = {}
+        self.gain_reads: list[tuple[str, str]] = []
         self.detached: list[str] = []
         # GH-318: the names `checkout_names(prefix)` answers (the `perf-*` a hard kill left), and
         # a text that makes `detached_checkout` raise it as a `GitError`.
@@ -1005,6 +1090,15 @@ class MemoryWorkspace:
         self.diff_reads.append((base, head))
         return self.diff_paths
 
+    def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
+        self.gain_reads.append((older, newer))
+        gain = self.gains.get((older, newer))
+        if gain is None:
+            raise GitError(f"git diff {older}..{newer} failed: no gain scripted")
+        if isinstance(gain, Exception):
+            raise gain
+        return gain
+
     def checkout_path(self, name: str) -> Path:
         return self.ROOT / name
 
@@ -1097,6 +1191,11 @@ class MemoryTracker:
         # every `rerun_failed_ci` and the run links it answers, its `ValueError` text and
         # every reference `close_pull_request` closed.
         self.opened_labels: list[str | None] = []
+        # `(reference, text)` of every `comment_on_issue` that succeeded, and the calls
+        # (0-based, failed ones counted) that raise `ValueError` instead.
+        self.commented_issues: list[tuple[str, str]] = []
+        self.comment_on_issue_calls = 0
+        self.comment_on_issue_fails_on: set[int] = set()
         self.rerun_calls: list[tuple[str, str]] = []
         self.failed_runs: list[str] = []
         self.rerun_error: str | None = None
@@ -1222,6 +1321,16 @@ class MemoryTracker:
         return (
             f"https://github.com/o/r/issues/{self.issue_numbers_from + len(self.opened_issues) - 1}"
         )
+
+    def comment_on_issue(self, reference: str, text: str) -> None:
+        """Records `(reference, text)` of each comment on an issue by its reference.
+        `comment_on_issue_fails_on` lists the calls (0-based, failed ones counted) that
+        raise `ValueError`, `gh`'s own failure shape; a failed call records nothing."""
+        call = self.comment_on_issue_calls
+        self.comment_on_issue_calls += 1
+        if call in self.comment_on_issue_fails_on:
+            raise ValueError("gh issue comment failed: scripted")
+        self.commented_issues.append((reference, text))
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """GH-239: the runs of `head` that failed, rerun. Scripted by `failed_runs`; a bad
@@ -1430,6 +1539,19 @@ class FakePerfRunner:
     ) -> Run:
         self.calls.append((checkout, command, dict(extra_env), timeout_s))
         return self.script.pop(0) if self.script else Run(None, 0, False, None, None)
+
+
+class FakeStopFlag:
+    """GH-355: the run's stop flag, marked by `set()` and read by `is_set()`."""
+
+    def __init__(self) -> None:
+        self.marked = False
+
+    def is_set(self) -> bool:
+        return self.marked
+
+    def set(self) -> None:
+        self.marked = True
 
 
 class FakePerfLock:
@@ -1680,6 +1802,8 @@ def planned(
             "integration": integration,
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "ci_required": [],
+            "ci_none_reason": "The issue requires no external check.",
             **({"tracker_checklist": list(tracker_checklist)} if tracker_checklist else {}),
         },
         cost,
@@ -1705,6 +1829,8 @@ def planned_tracker_only(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": 0,
+            "ci_required": [],
+            "ci_none_reason": "The work is on the tracker.",
             "tracker_checklist": list(checklist),
         },
         cost,
@@ -1739,6 +1865,8 @@ def planned_parts(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "ci_required": [],
+            "ci_none_reason": "The issue requires no external check.",
         },
         cost,
         2,
@@ -1968,7 +2096,9 @@ def ruled(
 def real_commands() -> ShellCommands:
     """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
     nothing: each check reaps its own mark, and no cwd reap can match."""
-    return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))
+    return ShellCommands(
+        "tests", ShellReaper("tests", Path("/nonexistent/worktrees")), NullStopFlag()
+    )
 
 
 # The texts (README.md, 4): Tech Writer writes a plain `CopyDraft`, its review a `CopyReview`.

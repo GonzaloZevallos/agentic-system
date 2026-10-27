@@ -22,7 +22,9 @@ from agentic.core.process.domain.coverage import (
     classify,
     missing_invariants,
     parse,
+    referenced_paths,
     render,
+    stale_locations,
 )
 
 FULL = [
@@ -378,3 +380,68 @@ def test_the_developer_prompt_quotes_the_forms_and_one_example_equal_to_the_cons
     assert blocks == [EXAMPLE]
     assert "range of lines" in prompt and "one comment in parentheses" in prompt
     assert parse(blocks[blocks.index(EXAMPLE)], 3).missing == ()
+
+
+LENGTHS = {"a.py": 20, "b.py": 5, "tests/t.py": 40}
+DIFF = {"a.py", "b.py", "tests/t.py"}
+
+
+def test_a_map_whose_locations_exist_in_the_diff_is_not_stale():
+    lines = [
+        "invariant 1: a.py:3, b.py:5 (the last line)",
+        "invariant 2: tests/t.py:10-40",
+        "brief: add it -> a.py:1-20",
+    ]
+    assert stale_locations(lines, LENGTHS, DIFF) == []
+
+
+def test_a_path_that_does_not_exist_is_stale():
+    reasons = stale_locations(["invariant 1: nope.py:3"], LENGTHS, DIFF)
+    assert len(reasons) == 1
+    assert "nope.py:3" in reasons[0] and "does not exist" in reasons[0]
+
+
+def test_a_line_past_the_end_of_the_file_is_stale_in_a_plain_location_and_in_a_range():
+    plain = stale_locations(["invariant 1: b.py:6"], LENGTHS, DIFF)
+    ranged = stale_locations(["brief: x -> b.py:3-9"], LENGTHS, DIFF)
+    zero = stale_locations(["invariant 1: b.py:0"], LENGTHS, DIFF)
+    for reasons in (plain, ranged, zero):
+        assert len(reasons) == 1 and "b.py" in reasons[0] and "5 lines" in reasons[0]
+
+
+def test_a_path_outside_the_diff_is_stale_even_when_it_exists():
+    reasons = stale_locations(["invariant 1: a.py:3"], LENGTHS, {"b.py"})
+    assert len(reasons) == 1 and "a.py:3" in reasons[0] and "not in your diff" in reasons[0]
+
+
+def test_each_stale_location_of_a_line_is_reported_once_and_the_good_one_is_not():
+    lines = ["invariant 1: a.py:3, b.py:9, b.py:9, nope.py:1 (a, b, c)"]
+    reasons = stale_locations(lines, LENGTHS, DIFF)
+    assert len(reasons) == 2
+    assert not any("a.py" in reason for reason in reasons)
+
+
+def test_unsatisfiable_not_touched_and_unreadable_lines_are_skipped():
+    lines = [
+        f"invariant 1: {UNSATISFIABLE}",
+        f"invariant 2: {NOT_TOUCHED}: only nope.py:99 changes",
+        "invariant 3: not a location",
+        "free text nope.py:3",
+    ]
+    assert stale_locations(lines, LENGTHS, DIFF) == []
+    assert stale_locations("not lines", LENGTHS, DIFF) == []
+    assert stale_locations(None, LENGTHS, DIFF) == []
+
+
+def test_a_string_of_lines_and_a_leading_dot_slash_read_like_the_list():
+    reasons = stale_locations("invariant 1: ./a.py:3\nbrief: x -> nope.py:1", LENGTHS, DIFF)
+    assert len(reasons) == 1 and "nope.py:1" in reasons[0]
+
+
+def test_the_paths_a_map_names_are_the_ones_the_check_would_look_up():
+    lines = [
+        "invariant 1: a.py:3, b.py:2 (c, d)",
+        "brief: x -> tests/t.py:4",
+        f"invariant 2: {UNSATISFIABLE}",
+    ]
+    assert referenced_paths(lines) == {"a.py", "b.py", "tests/t.py"}

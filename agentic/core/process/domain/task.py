@@ -31,7 +31,7 @@ from typing import (
     get_type_hints,
 )
 
-from .presubmit import CheckResult
+from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate
 from .reaping import ReapedProcess
 
 Status = Literal[
@@ -269,6 +269,39 @@ def first[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[
     return {**(update or {}), **(current or {})}
 
 
+class FlakeRecord(TypedDict):
+    """One flake of a task (ADR-0066): a check that went red and then green on its one rerun,
+    at a head, seen by a gate. `tests` are the ids `failed_ids` parsed from the first failure,
+    empty when it named none. No other free text: it feeds a tracker comment."""
+
+    check: str
+    head: str
+    gate: FlakeGate
+    tests: list[str]
+
+
+def _flake_key(record: FlakeRecord) -> tuple[str, str, str]:
+    return (record["check"], record["head"], record["gate"])
+
+
+def add_flakes(existing: list[FlakeRecord], new: list[FlakeRecord]) -> list[FlakeRecord]:
+    """The flakes of `existing` and `new` as one list: one record per `(check, head, gate)`,
+    its `tests` the two sides' ids as a sorted set capped at `FAILED_IDS_MAX` (sorted, because
+    first-seen order would differ with the side that arrives first), the output sorted by key.
+    Idempotent and commutative, so parallel branches that saw the same flake merge to one
+    record, whichever lands first. The only way `flakes` is ever written."""
+    joined: dict[tuple[str, str, str], FlakeRecord] = {}
+    for record in (*existing, *new):
+        key = _flake_key(record)
+        if key not in joined:
+            joined[key] = {**record, "tests": []}
+        known = joined[key]["tests"]
+        known.extend(t for t in record["tests"] if t not in known)
+    for record in joined.values():
+        record["tests"] = sorted(record["tests"])[:FAILED_IDS_MAX]
+    return [joined[key] for key in sorted(joined)]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -338,6 +371,11 @@ class Failure(TypedDict):
     # Why the attempt failed, from the closed set (`FailureReason`); absent on a
     # failure recorded before this field existed.
     reason: NotRequired[FailureReason]
+    # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
+    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
+    # only a wait hint, never the reason. Absent on any other failure and on one recorded
+    # before this field existed.
+    resets_at: NotRequired[str]
     # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
     # absent on a failure recorded before this field existed.
     slug: NotRequired[str]
@@ -727,6 +765,9 @@ class FailurePauseEntry(TypedDict):
     kind: Literal["failure"]
     value: FailureReason
     section: str
+    # The failure's `resets_at`, copied by `rules.logged` only when it has one; absent on an
+    # entry written before this field existed (`rules.auto_resumable` never requires it).
+    resets_at: NotRequired[str]
 
 
 class LapsePauseEntry(TypedDict):
@@ -773,6 +814,10 @@ class LandingEntry(TypedDict, total=False):
     # Resume children actually spawned for this entry, and when the last one was.
     resume_spawns: int
     resume_spawned_at: str
+    # True on the `fix_important` entry the pass writes before the pull request exists
+    # (GH-354): no reader that assumes a pull request treats such an entry as one
+    # (`rules.before_pr`). Absent everywhere else.
+    before_pr: NotRequired[bool]
     # Diagnose entries only (GH-257): `delivered` is written before anything else once the
     # Landing Diagnoser delivered; `failure` is the reason an attempt that did not deliver
     # failed with, which the retry calendar reads. Both optional: a document without them
@@ -848,6 +893,12 @@ class FullCheckEntry(TypedDict):
     # True when the system took the pass from a stored one instead of running the check
     # (ADR-0065); absent on a check that ran.
     reused: NotRequired[bool]
+    # True when the check was red and green on its one rerun (ADR-0066): a flake passes, and
+    # the record says `flake`, never plain passed. Absent on every other check.
+    flake: NotRequired[bool]
+    # Seconds the check ran, as `check_durations` summed them (GH-365); absent when the check
+    # has no sample (a reused pass, or no result).
+    duration_s: NotRequired[float]
 
 
 class FullChecksRecord(TypedDict):
@@ -866,6 +917,10 @@ class FullChecksRecord(TypedDict):
     failed_step: NotRequired[str]
     # The gate's wait and run apart (GH-361); absent on a record written before it.
     gate: NotRequired[GateRecord]
+    # The checks that took longer than their declared budget (GH-365): a declared name and two
+    # numbers, written by the system only, and only on a passed run that had a breach. It
+    # returns and blocks nothing.
+    over_budget: NotRequired[list[BudgetBreach]]
 
 
 class TaskState(TaskInput, total=False):
@@ -936,6 +991,11 @@ class TaskState(TaskInput, total=False):
     # `PerfScenario` dumped; absent or empty when not convened. The only source of
     # "convened": never the branch's stack.
     performance: list[dict[str, Any]]
+    # The CI check names the plan says the issue's done criteria need green on the pull
+    # request head, and the paths of which the integrated diff must touch one (GH-371).
+    # Absent in a document written before, which reads as empty.
+    ci_required: list[str]
+    required_paths: list[str]
     # What the plan says has to be done to make the subtasks work together beyond
     # merging them; empty when merging is enough and no integrator runs.
     integration_brief: str
@@ -967,6 +1027,10 @@ class TaskState(TaskInput, total=False):
     # (GH-204): saved before the push so it stays recoverable, cleared by every plan that
     # does not replace (`rules.replace_record`).
     replaced_remote_tip: str | None
+    # The approved head a stopped run still owes the task branch and the pull request
+    # (GH-373, "publicación debida"): written only by `resuming.prepare` (a sha or `None`
+    # on every resume), cleared only by `deliver`'s single exit. Read with `.get`.
+    publish_owed: NotRequired[str | None]
     # The full sha `deliver` pushed and when (GH-216): the anchor of the CI wait, read with
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str
@@ -1047,6 +1111,10 @@ class TaskState(TaskInput, total=False):
     # docstring): every lead's remark and every consolidation observation, read with
     # `.get("design_items", [])` since a document written before this task has none.
     design_items: Annotated[list[DesignItemRecord], operator.add]
+    # The flakes this task observed (ADR-0066), `add_flakes`: deduplicated on
+    # `(check, head, gate)` so parallel branches merge their observations without repeating
+    # them. Read with `.get("flakes", [])`: a document written before this field has none.
+    flakes: Annotated[list[FlakeRecord], add_flakes]
 
 
 def _reducers() -> dict[str, object]:
@@ -1111,6 +1179,15 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
         elif reducer is first:
             if added := {k: v for k, v in value.items() if k not in old}:
                 patch[key] = added
+        elif reducer is add_flakes:
+            old_tests = {_flake_key(r): r["tests"] for r in old}
+            if grown := [
+                r
+                for r in value
+                if _flake_key(r) not in old_tests
+                or any(t not in old_tests[_flake_key(r)] for t in r["tests"])
+            ]:
+                patch[key] = grown
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
                 patch[key] = changed

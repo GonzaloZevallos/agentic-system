@@ -34,7 +34,7 @@ from ..domain.performance import Limit, Result, Run, Scenario
 from ..domain.roles import PAIR_QA_PERFORMANCE_TECH_LEAD, QA_PERFORMANCE
 from ..domain.schemas import PerfScenario
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .perf import PerfRefused, measure_at
 from .ports import Ports
 from .run_role import finish, run_role, with_context
@@ -69,7 +69,7 @@ async def qa_performance(state: TaskState, cfg: Configuration, ports: Ports) -> 
     if runner is None or lock is None:
         raise RuntimeError("QA Performance needs a PerfRunner and a PerfLock in the ports")
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(QA_PERFORMANCE), ports)
     head = ports.workspace.full_head(task.path)

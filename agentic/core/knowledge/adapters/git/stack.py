@@ -9,6 +9,7 @@ import yaml
 
 from ....process.domain.design import Design
 from ....process.domain.performance import Scenario
+from ....process.domain.presubmit import RerunForm
 from ....process.domain.suppressions import Forbidden
 from ...domain import stack
 
@@ -48,6 +49,28 @@ class GitStack:
     def delivery_checks(self, revision: str) -> tuple[str, ...]:
         data, source = self._declaration(revision)
         return stack.delivery_checks(data, source)
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        data, source = self._declaration(revision)
+        return stack.rerun_checks(data, source)
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        data, source = self._declaration(revision)
+        return stack.check_budgets(data, source)
+
+    def merge_inert(self, revision: str) -> tuple[str, ...]:
+        """The globs master may gain without a recorded pass going stale. A revision that
+        cannot be read -- not fetched, no file, YAML that does not parse, not a mapping, a
+        key the system does not know -- reads `()`, never raises and never falls back to
+        another revision: what cannot be read is not covered. A key that is there but
+        broken still raises `ValueError`, as it does for every other key."""
+        try:
+            data, source = self._declaration(revision)
+        except (ValueError, yaml.YAMLError):
+            return ()
+        if not isinstance(data, dict) or any(key not in stack.KEYS for key in data):
+            return ()
+        return stack.merge_inert(data, source)
 
     def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
         data, source = self._declaration(revision)

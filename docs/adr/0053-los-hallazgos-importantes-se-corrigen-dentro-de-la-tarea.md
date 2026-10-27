@@ -86,3 +86,92 @@ hace falta un `bl-*` nuevo al mergear.
    comentario `Auto-merged:` puede quedar repetido.
 5. **Carrera de la etiqueta.** Si dos aterrizajes crean `needs-triage` a la vez, el segundo
    degrada a comentario. Con más de 1000 etiquetas, `create` falla y también degrada.
+
+## Enmienda (GH-354): el pase corre antes de abrir el pull request
+
+**Qué cambia.** El pase de `fix_important` ya no espera al pull request. Cuando la revisión
+final aprueba (la de `integration`, o la de la única subtarea si no hay integración) y quedan
+abiertas filas `important` de alcance `owned` o `plan`, ninguna rebajada
+(`reported_severity`), y el pase de la tarea no está gastado, `after_integrate` manda a un
+nodo del sistema, `fix_important`, antes de `full_checks` y de `deliver`. El nodo reabre las
+unidades dueñas con `landing_sync.reopen(..., "returned")`; la siguiente ola las reconstruye,
+la integración se revisa de nuevo y solo entonces corren `full_checks` y `deliver`: la suite
+corre una vez, sobre el head que se entrega. Las garantías de arriba no cambian: dentro de la
+tarea, un solo pase (`LANDING_IMPORTANT_PASSES_MAX = 1`, antes o después del pull request),
+ningún issue de seguimiento para trabajo dentro del alcance.
+
+**Por qué esta palanca y no un pase por subtarea.** Las filas que quedan abiertas al final son
+de dos clases que una subtarea no puede ver: las de alcance `plan` y las que levanta la
+revisión de `integration`. Una revisión por subtarea más estricta no las alcanza, y un pase
+dentro de cada subtarea tampoco. El lector `agentic eval findings` separa el origen de cada
+fila (revisión de la dueña, de la integración o re-revisión del aterrizaje) y su alcance
+(`owned`/`plan`/`outside`); es la fuente de esa separación y de las cifras de éxito.
+
+Salida de `agentic eval findings --product apostrophe --since 2026-10-13 --until 2026-10-27`
+(100 documentos cerrados en la ventana, ids impresos por el lector; filas `important`, sumadas
+por origen y alcance):
+
+| Origen | `owned` | `plan` | `outside` |
+|---|---|---|---|
+| Revisión de la dueña | 131 | 136 | 2 |
+| Revisión de la integración | 30 | 26 | 2 |
+| Re-revisión del aterrizaje | 15 | 8 | 2 |
+| Total | 176 | 170 | 6 |
+
+Cifras de la misma salida, línea de base "antes": 55 % de los PR abren con importantes
+`owned`/`plan` abiertas; 21 % corren `fix_important` después del PR; mediana de PR abierto a
+merge 1,30 h; mediana de inicio de tarea a merge 8,02 h; 145 devoluciones en 290 subtareas
+(0,50 por subtarea). Casi la mitad de las filas son de alcance `plan` (170 de 352): una subtarea no puede
+corregirlas, y eso es lo que descarta el pase dentro de cada subtarea. Las `owned` de la
+revisión de la dueña se corrigen en su mayoría en la subtarea (`fixed_in_subtask`); las que llegan
+al final son las `plan` y las de integración. La cifra gruesa de tareas que corrieron
+`fix_important` mezclaba `outside` con `plan` y no se usa. La cifra "después" se mide con el
+mismo comando sobre las siguientes 10 tareas de apostrophe bajo el nuevo `bl-*`.
+
+**Qué lleva la entrada.** Una entrada de `landing` con `step: "fix_important"`,
+`refusal: "open_findings"`, `before_pr: true`, `at`, `cost_base` y, si se conoce, `head`. La
+razón y la categoría de la primera fila van al `reason` y al `change_category` de la unidad
+reabierta; la entrada del historial lleva el par y `by: "landing"` (`returns.is_return` la
+lee como no-devolución) y `changes_requested` no se toca, así que nunca escala. La resuelve
+el fan-in (`pre_pr_fix.close_pass`) cuando las unidades reabiertas y la integración vuelven a
+estar aprobadas.
+
+**Quién cuenta el pase.** `rules.important_pass_spent` es la única respuesta: la usan la ruta
+previa al pull request, `landing_plan` (`LandingSpent.important_passes`) y
+`MergeFacts.important_pass_done` (con `resolved_only`: el merge lee el pase como hecho solo
+cuando está resuelto). Tras un pase resuelto antes del pull request la tabla del aterrizaje
+salta `fix_important` por sí sola. Las filas que la revisión posterior al pase levanta de
+nuevo aterrizan en "Accepted without a fix", como hoy: por eso la proporción de PR que abren
+con importantes abiertos no llega a cero.
+
+**Lectores de `status: "returned"`** (cada uno, una línea):
+
+- `rules.ready_subtasks` y `rules.landing_open`: solo enrutan (qué unidad se despacha, si hay
+  un pase en vuelo).
+- `rules.full_checks_return`, `review`, `qa_performance`, `final_validation`: escriben la
+  devolución y la cuentan (`changes_requested`).
+- `landing_sync.reopen` y `pre_pr_fix.fix_important`: escriben un reabrir del sistema
+  (`by: "landing"`); no cuentan.
+- `develop` (el delta que lee el Developer): solo enruta.
+- `landing._status_of`: solo enruta (vista de `resume_owed`).
+- `metrics` y `telemetry` (resultado del span): etiquetan, no cuentan devoluciones.
+
+**Lectores de `landing`**, con la marca `before_pr`: `rules.landing_open` (una entrada previa al
+pull request nunca es un pase bajo un pull request; solo enruta), `landing.resume_owed` (por
+eso no se lanza un `resume` por ella; enruta), `landing_plan.spent` y
+`MergeFacts.important_pass_done` (cuentan el presupuesto, antes o después), `rules.closeness`
+(no lee `landing`: la cercanía sigue siendo `delivered` solo con `pull_request`),
+`task_scores._followups` (una entrada previa al pull request no es un aterrizaje que corrió),
+`returns.finding_origin` (solo cuentan los pasos con pull request) y `findings_report`
+(distingue `fixed_before_pr` de `fixed_after_pr`).
+
+**Ruta de las lecciones transversales.** Las lecciones de hallazgos `integration-crosscut`
+van al playbook del planificador (`playbook._owner`, `_PLANNER`) y llegan al Developer solo
+como invariantes del plan. No se agrega ningún almacén; el límite es el de 12 lecciones por
+rol.
+
+**Observabilidad (§7).** Sin métrica, etiqueta ni atributo de span nuevos. Clave opcional
+nueva en las entradas de `landing`: `before_pr` (fila `landing` de `observability/README.md`).
+**Seguridad y costo (§8).** Nada ensancha lo que una entrada puede alcanzar. Costo: a lo sumo
+un pase de Developer más una revisión por tarea, bajo el tope de 10 USD por intento: el mismo
+pase de arriba, ahora antes del pull request.

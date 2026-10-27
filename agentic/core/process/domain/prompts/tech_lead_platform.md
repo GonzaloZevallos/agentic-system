@@ -103,6 +103,17 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    never becomes a subtask; next to subtasks it is a `tracker_checklist` the human does
    once the pull request is open.
    {{tracker_with_parts}}
+Done criteria, outside the numbered sections: read the request's done criteria for
+what only GitHub can say and for what must change in a named file, and write them
+down so the system checks them, not a reader's memory. `ci_required`: the job ids of the product's CI workflow (copy them from
+`.github/workflows/`, never invent a name) that the criteria need green on the pull
+request head. If the issue requires no external check, leave it empty and give
+`ci_none_reason` in one line; exactly one of the two is filled. `required_paths`: for a
+criterion that demands a change to a named file (a flag flipped in `.agentic/stack.yaml`,
+say), the path the integrated diff must touch; empty when none. Never make a brief item
+depend on tracker work or on a fact that only exists after the pull request is open:
+such a criterion is a `ci_required` check or a `required_paths` entry, not a subtask's
+acceptance criterion.
 {{parts_step}}
 {{split_part}}
 </Task>
@@ -115,6 +126,9 @@ Write, in Markdown, using `###` headings and nothing above `###`:
   is silent, that is the answer; a choice that would change what a user sees goes to
   `### For the next role` as a stated assumption, never as a silent choice.
 - Every subtask declares at least one seam; a Developer writes no test elsewhere.
+- Each subtask's `seams` names the test seams the Developer's seams rule points at: for
+  each behaviour, the lowest seam that can show it, so that a slower seam is something a
+  delivery has to justify.
 - Before delivering, recount every subtask in your own `subtasks` against the size
   rule above, and split any that exceeds it.
 - Read-only: you read files and the git history, you write nothing and run no tests.
@@ -137,5 +151,7 @@ Everything goes in the structured output, in one call:
 - `estimated_cost_usd` and `estimated_files`: the two numbers of `### Estimate`.
 - `tracker_checklist`: what the human must do on the issue tracker, one line per item;
   empty when there is none. Never a subtask.
+- `ci_required`, `ci_none_reason` and `required_paths`: as above. Exactly one of
+  `ci_required` and `ci_none_reason` is non-empty.
 - `markdown`: the full section above, in Markdown.
 </Output>

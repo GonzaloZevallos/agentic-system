@@ -84,7 +84,7 @@ from typing import Any
 import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
-from ...application.ports import Presubmit, SchemaGuard
+from ...application.ports import Presubmit, RunStopped, SchemaGuard
 from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
@@ -448,7 +448,14 @@ def _delivery_gate(
                 return _deny(reason)
         if presubmit is not None:
             # The checks are subprocesses: off the event loop that talks to the CLI.
-            reason = await anyio.to_thread.run_sync(presubmit)
+            try:
+                reason = await anyio.to_thread.run_sync(presubmit)
+            except RunStopped:
+                # The run was told to stop (GH-355): the stop is not a verdict, so the SDK
+                # gets no decision -- neither deny nor allow. The cancellation of the
+                # attempt, which the signal is already delivering, ends the wait; the hard
+                # deadline is the net if it never comes.
+                await anyio.sleep_forever()
             if reason:
                 if on_presubmit_denied is not None:
                     on_presubmit_denied()

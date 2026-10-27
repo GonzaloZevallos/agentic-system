@@ -823,3 +823,18 @@ def test_a_closed_pull_request_with_an_owed_resume_is_skipped_before_the_candida
     ports = _stuck()
     ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
     assert _lands(ports, datetime(2026, 10, 14, tzinfo=UTC)) == []
+
+
+def test_a_pass_resolved_before_the_pull_request_is_a_pass_done_for_the_merge():
+    raw = {
+        "subtasks": {"only": {"id": "only", "status": "approved"}},
+        "findings": [_important("subtask")],
+    }
+    before = {
+        "landing": [
+            {"step": "fix_important", "before_pr": True, "resolved_at": "2026-10-27T00:00:00+00:00"}
+        ]
+    }
+    assert _facts_of({**raw, **before}).important_pass_done is True
+    in_flight = {"landing": [{"step": "fix_important", "before_pr": True}]}
+    assert _facts_of({**raw, **in_flight}).important_pass_done is False

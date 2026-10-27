@@ -52,11 +52,17 @@ step outside the set is neither recorded nor spawned, so a refusal whose step is
 as it always did."""
 
 
+ALWAYS_TAKEN: frozenset[LandingStepKind] = frozenset({"escalate"})
+"""Steps taken whatever `live` says (GH-371): `escalate` runs no model, spends nothing and is
+recorded once per head, so it has no rollout to hold back; its executor is
+`landing_fix.escalate_red_on_base`."""
+
+
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
-    """Whether `kind` is a step the system takes now: built (`live`) and not `wait` (the
-    next tick decides again) or `none` (the human's), which are never recorded or spawned
-    whatever `live` says."""
-    return kind in live and kind not in ("wait", "none")
+    """Whether `kind` is a step the system takes now: built (`live`) or one of `ALWAYS_TAKEN`,
+    and not `wait` (the next tick decides again) or `none` (the human's), which are never
+    recorded or spawned whatever `live` says."""
+    return (kind in live or kind in ALWAYS_TAKEN) and kind not in ("wait", "none")
 
 
 def entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
@@ -141,7 +147,9 @@ def spent(
         diagnoses=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True),
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
-        important_passes=count(lambda e: e.get("step") == "fix_important"),
+        important_passes=(
+            landing.LANDING_IMPORTANT_PASSES_MAX if rules.important_pass_spent(raw) else 0
+        ),
         unsynced_for_upstream=(
             count_epoch(lambda e: e.get("lacks") == upstream) if upstream is not None else 0
         ),
@@ -151,6 +159,21 @@ def spent(
         verdict_syncs_for_upstream=verdict_syncs,
         verdict_sync_due=due,
         last_verdict=last_verdict,
+        checks_rerun_on_head=_gate_reran(raw, head),
+    )
+
+
+def _gate_reran(raw: Mapping[str, object], head: str | None) -> bool:
+    """The recorded `merge_checks` is of `head` and holds a red check whose last row is the
+    gate's own rerun (ADR-0066). Tolerant of a record from before the rerun, which has no
+    marker, and of one that is not the shape the merge writes."""
+    record = raw.get("merge_checks")
+    if head is None or not isinstance(record, Mapping) or record.get("head") != head:
+        return False
+    checks = record.get("checks")
+    return isinstance(checks, list) and any(
+        isinstance(entry, Mapping) and entry.get("passed") is False and entry.get("rerun") is True
+        for entry in checks
     )
 
 

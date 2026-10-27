@@ -25,7 +25,7 @@ from ..domain.roles import (
     Interview,
 )
 from ..domain.task import Subtask, TaskState, apply
-from .checkouts import SetupFailed, task_checkout
+from .checkouts import SetupFailed, task_checkout_in_thread
 from .interview import interview
 from .ports import Ports
 from .reflect_run import closed_documents
@@ -49,7 +49,7 @@ _SKIPPED_PROPOSAL = (
 async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     spec = solution_interview(state)
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(spec.author), ports)
     history = cost_history.build(closed_documents(ports))
@@ -210,6 +210,12 @@ def _delivered(
         written["integration_brief"] = output.data["integration"].strip()
         if output.data.get("performance"):
             written["performance"] = output.data["performance"]
+        if output.data.get("ci_required"):
+            # The checks the issue's done criteria need green (GH-371); absent otherwise,
+            # so the document of an old task, or of one with no such check, is unchanged.
+            written["ci_required"] = list(output.data["ci_required"])
+        if output.data.get("required_paths"):
+            written["required_paths"] = list(output.data["required_paths"])
         written["estimate"] = {
             "cost_usd": output.data["estimated_cost_usd"],
             "files": output.data["estimated_files"],

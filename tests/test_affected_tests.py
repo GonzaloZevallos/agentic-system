@@ -420,6 +420,21 @@ ALLOWANCES: tuple[Allowance, ...] = (
     Allowance("tests/test_cli.py", "BRIEF.md", "writes BRIEF.md into a tmp_path product"),
     Allowance(
         "tests/test_affected_tests.py",
+        ".agentic/playbooks/*",
+        "names these paths in the allowances above; it never opens them",
+    ),
+    Allowance(
+        "tests/test_reflect_records.py",
+        ".agentic/playbooks/*",
+        "writes the playbook files under a tmp_path root, the same names as the repo's",
+    ),
+    Allowance(
+        "tests/core/process/application/test_run_role.py",
+        ".agentic/playbooks/*",
+        "writes playbook summaries under a tmp_path checkout, the same names as the repo's",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
         "langgraph.json",
         "writes a langgraph.json into a throwaway repo to provoke a refusal",
     ),

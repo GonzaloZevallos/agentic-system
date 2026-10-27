@@ -15,7 +15,7 @@ from typing import Any
 import anyio
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server, tool
 
-from ...application.ports import CheckTool
+from ...application.ports import CheckTool, RunStopped
 from ...domain.run_check import DESCRIPTION
 from .hooks import HookActivity
 
@@ -33,7 +33,11 @@ def run_check_tool(check: CheckTool, activity: HookActivity | None = None) -> Sd
     @tool(TOOL, DESCRIPTION, {"name": str})
     async def run_check(args: dict[str, Any]) -> dict[str, Any]:
         with activity.running() if activity is not None else nullcontext():
-            text = await anyio.to_thread.run_sync(check, str(args.get("name", "")))
+            try:
+                text = await anyio.to_thread.run_sync(check, str(args.get("name", "")))
+            except RunStopped:
+                # The stop is not a tool result (GH-355): wait for the attempt's cancellation.
+                await anyio.sleep_forever()
         return {"content": [{"type": "text", "text": text}]}
 
     return run_check

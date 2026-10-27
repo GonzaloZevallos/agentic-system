@@ -25,6 +25,7 @@ Parsing is lenient in two ways: surrounding whitespace is stripped and the word
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -163,6 +164,76 @@ def missing_invariants(tool_input: object, count: int) -> str | None:
         "An invariant with no location is work still to do. For example:\n"
         f"{EXAMPLE}"
     )
+
+
+def referenced_paths(lines: object) -> set[str]:
+    """The paths the map's locations name, in `stale_locations`'s own spelling: what a
+    caller must look up before asking it."""
+    return {path for path, _, _ in _locations(lines)}
+
+
+def stale_locations(
+    lines: object, file_lengths: Mapping[str, int], diff_paths: set[str]
+) -> list[str]:
+    """A reason for each location of an `invariant N:` or `brief:` line that cannot be the
+    Developer's own work: the path is not a file (absent from `file_lengths`, the length in
+    lines of each file that exists), a line lies past the end of it, or the path is not in
+    the diff. Unsatisfiable and not-touched lines name no location and are skipped, so are
+    lines `classify` refused. A format check like the rest of this module: a location that
+    passes is still a claim the review verifies. Each reason once, in emitted order."""
+    reasons: list[str] = []
+    for path, first, last in _locations(lines):
+        where = f"{path}:{first}" + (f"-{last}" if last != first else "")
+        length = file_lengths.get(path)
+        if length is None:
+            reason = f"`{where}`: {path} does not exist in your checkout"
+        elif path not in diff_paths:
+            reason = f"`{where}`: {path} is not in your diff"
+        elif first < 1 or last > length:
+            reason = f"`{where}`: {path} has {length} lines"
+        else:
+            continue
+        if reason not in reasons:
+            reasons.append(reason)
+    return reasons
+
+
+def _locations(lines: object) -> list[tuple[str, int, int]]:
+    found: list[tuple[str, int, int]] = []
+    for line in _split(lines):
+        invariant = _INVARIANT.fullmatch(line)
+        if invariant is not None:
+            body = invariant.group(2)
+            if classify(body) != "mapped":
+                continue
+        elif _BRIEF.fullmatch(line):
+            body = line.rpartition("->")[2]
+        else:
+            continue
+        for token in _tokens(body):
+            location = _TOKEN.fullmatch(token)
+            if location is None:
+                continue
+            start = int(location["start"])
+            end = int(location["end"]) if location["end"] else start
+            found.append((location["path"].removeprefix("./"), start, max(start, end)))
+    return found
+
+
+def _tokens(body: str) -> list[str]:
+    """The comma-separated pieces of `body`, commas inside parentheses not separating."""
+    tokens: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in body:
+        depth = max(depth + (char == "(") - (char == ")"), 0)
+        if char == "," and depth == 0:
+            tokens.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    tokens.append("".join(current).strip())
+    return tokens
 
 
 def _quote(refused: list[Rejected]) -> str:

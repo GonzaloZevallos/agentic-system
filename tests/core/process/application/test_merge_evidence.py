@@ -50,16 +50,27 @@ def _record(ports):
 
 
 def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_comment(tmp_path):
-    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "ran\nFAILED x\n")]}))
+    ports = _world(
+        tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "ran\nFAILED x\n")] * 2})
+    )
 
     result, logged = _run(ports, tmp_path)
 
     assert result == merge.MergeResult("refused", "checks_failed")
     record = _record(ports)
     assert record["passed"] is False and record["failed_step"] == "checks"
+    on = record["master"]  # each entry names the master it ran on
+    for entry in record["checks"]:
+        assert isinstance(entry.pop("duration_s"), float)  # a measured figure, never pinned
     assert record["checks"] == [
-        {"name": "lint", "passed": True},
-        {"name": "tests", "passed": False, "tail": ["ran", "FAILED x"]},
+        {"name": "lint", "passed": True, "master": on},
+        {
+            "name": "tests",
+            "passed": False,
+            "tail": ["ran", "FAILED x"],
+            "rerun": True,
+            "master": on,
+        },
     ]
     assert any("Failed: tests" in line for line in logged)
     assert "    FAILED x" in logged
@@ -71,18 +82,18 @@ def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_
 
 
 def test_two_runs_with_different_failing_checks_comment_twice_and_other_tails_once(tmp_path):
-    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "one")]}))
+    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "one")] * 2}))
     _run(ports, tmp_path)
     ports.documents.record_closure("GH-5", {"merge_attempts": {"head": HEAD, "count": 0}})
     ports.documents.record_closure("GH-5", {"merge_checks": {"head": "x", "passed": True}})
-    ports.commands.queues = {"run tests": [CommandResult(1, "another tail")]}
+    ports.commands.queues = {"run tests": [CommandResult(1, "another tail")] * 2}
     _run(ports, tmp_path)
     assert len(ports.tracker.comments) == 1  # same failing checks, other tail: silent
     ports.documents.record_closure("GH-5", {"merge_attempts": {"head": HEAD, "count": 0}})
     ports.documents.record_closure("GH-5", {"merge_checks": {"head": "x", "passed": True}})
     ports.commands.queues = {
-        "run lint": [CommandResult(1, "lint says")],
-        "run tests": [CommandResult(1, "t")],
+        "run lint": [CommandResult(1, "lint says")] * 2,
+        "run tests": [CommandResult(1, "t")] * 2,
     }
     _run(ports, tmp_path)
 
@@ -106,7 +117,9 @@ def test_a_conflict_a_setup_step_and_a_worktree_error_each_record_where_it_stopp
     _, logged = _run(setup, tmp_path)
     record = _record(setup)
     assert record["failed_step"] == "setup" and record["passed"] is False
-    assert record["checks"] == [{"name": "install", "passed": False, "tail": ["E404"]}]
+    assert record["checks"] == [
+        {"name": "install", "passed": False, "tail": ["E404"], "master": record["master"]}
+    ]
     assert [command for _, command in setup.commands.ran] == ["npm i"]  # stops at the first
     assert any("Failed at setup: install" in line for line in logged)
 
@@ -169,7 +182,7 @@ LEFT = "Left for the human to merge."
 
 
 def _failing_world(tmp_path, landing=None):
-    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "FAILED x\n")]}))
+    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "FAILED x\n")] * 2}))
     if landing is not None:
         ports.documents.record_closure("GH-5", {"landing": landing})
     return ports
@@ -188,13 +201,14 @@ def test_a_refusal_whose_step_is_none_is_left_to_the_human(tmp_path):
 def test_a_refusal_with_a_step_is_never_left_to_the_human_and_names_the_step_once(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset({"rerun"}))
+    # The gate reran the red check itself (ADR-0066), so the landing goes straight to a fix.
+    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset({"fix"}))
     ports = _failing_world(tmp_path)
     _run(ports, tmp_path)
     _run(ports, tmp_path)
     texts = [text for _, text in ports.tracker.comments]
     assert not any(LEFT in text for text in texts)
-    assert [t for t in texts if t.startswith("Landing: ")] == [f"Landing: {HEAD} rerun"]
+    assert [t for t in texts if t.startswith("Landing: ")] == [f"Landing: {HEAD} fix"]
 
 
 def test_a_refusal_with_an_unbuilt_step_posts_no_landing_comment_and_no_hand_off(tmp_path):

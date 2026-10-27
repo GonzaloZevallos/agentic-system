@@ -109,6 +109,18 @@ def _since_last_escalated(comments: Sequence[IssueComment]) -> datetime | None:
     return _parse_timestamp(last.created_at) if last is not None else None
 
 
+def _retaken_since_escalated(comments: Sequence[IssueComment]) -> bool:
+    """Whether an `Auto-resumed:` comment follows the last `Escalated:` one: the pause's
+    first retake after its stated reset (`rules.account_limit_due`) was already made."""
+    from .escalate import ESCALATED
+
+    last = -1
+    for i, comment in enumerate(comments):
+        if comment.body.startswith(ESCALATED):
+            last = i
+    return any(c.body.startswith(AUTO_RESUMED) for c in comments[last + 1 :])
+
+
 def _last_non_system_index(
     comments: Sequence[IssueComment], system_comments: tuple[str, ...]
 ) -> int:
@@ -273,12 +285,7 @@ def _merge_facts(
         open_blocking=sum(1 for row in rules.open_findings(raw) if row["severity"] == "blocking"),
         open_important=sum(len(rows) for rows in partition.owned.values()) + len(partition.plan),
         open_outside=len(partition.outside),
-        important_pass_done=any(
-            isinstance(entry, dict)
-            and entry.get("step") == "fix_important"
-            and entry.get("resolved_at")
-            for entry in raw.get("landing", [])
-        ),
+        important_pass_done=rules.important_pass_spent(raw, resolved_only=True),
         pr_state=pull_request.state if pull_request is not None else None,
         pr_head=pr_head,
         in_eval_set=None if eval_set is None else number in eval_set,
@@ -321,6 +328,34 @@ def _seconds_since(anchor: str | None, now: datetime) -> float | None:
     return (now - then).total_seconds()
 
 
+def ci_gate(raw: TaskState, declared: tuple[str, ...]) -> rules.CiGate:
+    """The check names that gate `raw`'s merge (GH-371): the stack's `declared` ones joined
+    with the plan's `ci_required` by `rules.ci_gate_names`, the one place that decides it.
+    Every caller that builds `MergeFacts` asks here, so none rebuilds the list its own way."""
+    plan = raw.get("ci_required")
+    return rules.ci_gate_names(declared, plan if isinstance(plan, list) else [])
+
+
+def with_red_on_base(
+    ports: Ports, facts: rules.MergeFacts, report: ci.CiReport | ci.CiUnreadable | None
+) -> rules.MergeFacts:
+    """`facts` plus `ci_red_on_base` (GH-371): when the head's CI is red, the base branch's
+    latest report is read once and the failing names that are also red there are recorded.
+    Anything else leaves `facts` as they were; an unreadable base report gives `()`."""
+    verdict = facts.ci_verdict
+    if verdict is None or verdict.state != "red" or not isinstance(report, ci.CiReport):
+        return facts
+    if not report.base_ref:
+        return facts
+    base = ports.tracker.branch_ci(report.base_ref)
+    return replace(
+        facts,
+        ci_red_on_base=ci.red_on_base(
+            report, base if isinstance(base, ci.CiReport) else None, facts.ci_required
+        ),
+    )
+
+
 def with_ci(
     facts: rules.MergeFacts,
     raw: TaskState,
@@ -330,21 +365,25 @@ def with_ci(
     now: datetime | None = None,
 ) -> rules.MergeFacts:
     """`facts` plus the CI ones (GH-216), for the product that declares `declared` as its
-    merge gate. `report` is None when none was read: the decision then waits, which is only
-    ever asked after every earlier refusal has been ruled out. The classification is
-    `ci.ci_state`'s and the freshness `ci.ci_fresh`'s: nothing here reads a check."""
-    if not declared:
+    merge gate and the plan that requires `raw`'s `ci_required` (`ci_gate`, GH-371).
+    `report` is None when none was read: the decision then waits, which is only ever asked
+    after every earlier refusal has been ruled out. The classification is `ci.ci_state`'s
+    and the freshness `ci.ci_fresh`'s: nothing here reads a check."""
+    gate = ci_gate(raw, declared)
+    names = gate.names
+    if not names:
         return facts
+    facts = replace(facts, ci_plan_only=gate.plan_only)
     now = now or datetime.now(UTC)
     if report is None:
-        return replace(facts, ci_required=declared)
+        return replace(facts, ci_required=names)
     if isinstance(report, ci.CiUnreadable):
         anchor = ci.ci_wait_anchor(
             raw.get("pushed_head"), raw.get("pushed_at"), facts.pr_head, None
         )
         return replace(
             facts,
-            ci_required=declared,
+            ci_required=names,
             ci_unreadable=report,
             ci_waited_s=_seconds_since(anchor, now),
         )
@@ -353,9 +392,9 @@ def with_ci(
     )
     return replace(
         facts,
-        ci_required=declared,
+        ci_required=names,
         ci_head=report.head_sha,
-        ci_verdict=ci.ci_state(report, declared),
+        ci_verdict=ci.ci_state(report, names),
         ci_fresh=fresh,
         ci_waited_s=_seconds_since(anchor, now),
     )
@@ -371,6 +410,9 @@ def ci_wait_line(
         what = f"unreadable {facts.ci_unreadable.cause}"
     elif facts.ci_verdict is not None and facts.ci_verdict.missing:
         what = f"missing {', '.join(facts.ci_verdict.missing)}"
+        if facts.ci_plan_only and isinstance(report, ci.CiReport):
+            carried = ", ".join(ci.reported_names(report)) or "none"
+            what += f", the report carried {carried}"
     elif facts.ci_verdict is not None and facts.ci_verdict.state == "pending":
         names = (
             ci.pending_names(report, facts.ci_required) if isinstance(report, ci.CiReport) else ()
@@ -465,35 +507,40 @@ def assess_merge(
         declared = ports.stack.ci(task_base(raw, ports))
     except ValueError as exc:
         raise StackUnreadable(str(exc)) from exc
+    gate = ci_gate(raw, declared)
+
+    def gated(candidate: rules.MergeFacts) -> rules.MergeFacts:
+        # What the decision reads before the CI is: the names, so a refusal ahead of the CI
+        # is the same one, and no verdict, so the CI itself is a `wait`.
+        return replace(candidate, ci_required=gate.names, ci_plan_only=gate.plan_only)
+
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
-    decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
-    if facts.pr_head is not None and rules.criteria_probe_wanted(
-        replace(facts, ci_required=declared)
-    ):
+    decision = rules.auto_merge_decision(gated(facts))
+    if facts.pr_head is not None and rules.criteria_probe_wanted(gated(facts)):
         # GH-334: a head that grows a criteria document past its cap is refused before the
         # findings, the conflict and the CI. Git is asked only now, like the conflict probe.
         facts = replace(
             facts, criteria_regressed=read_criteria(ports, facts.pr_head, current_master)
         )
-        decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+        decision = rules.auto_merge_decision(gated(facts))
     unread = False
     source: ConflictSource | None = None
     if (
         facts.pr_head is not None
         and not landing_plan.spent(raw, facts.pr_head, None).unlandable
-        and rules.conflict_probe_wanted(replace(facts, ci_required=declared))
+        and rules.conflict_probe_wanted(gated(facts))
     ):
         # GH-255: a head that does not merge with master is a conflict before it is a CI
         # fact. Git is asked only now, with every git-free refusal ahead of it ruled out.
         conflicts, source = read_conflicts(ports, pull_request, facts.pr_head, current_master)
         unread = conflicts is None
         facts = replace(facts, conflicts=conflicts)
-        decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+        decision = rules.auto_merge_decision(gated(facts))
     report = None
-    if declared and decision.kind != "refuse":
+    if gate.names and decision.kind != "refuse":
         # Every refusal ahead of the CI's is ruled out: only now is the report read.
         report = ports.tracker.ci_report(str(reference))
-        facts = with_ci(facts, raw, declared, report)
+        facts = with_red_on_base(ports, with_ci(facts, raw, declared, report), report)
         decision = rules.auto_merge_decision(facts)
     return MergeAssessment(
         facts, decision, report, pull_request, unread, source if facts.conflicts else None
@@ -747,7 +794,9 @@ def gather_merges(
 def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
     `prior`/`limit` `rules.next_attempt_at` needs, and the `chase_prior`/`ceiling_spent`
-    `rules.resume_exhausted` decides over. A task with no `Escalated:` comment
+    `rules.resume_exhausted` decides over, and for an `account_limit` pause the stated reset
+    (`rules.stated_reset`) and whether it was retaken since (`rules.account_limit_due`'s
+    inputs; ADR-0039, addendum GH-381). A task with no `Escalated:` comment
     at all (its document disagrees with the issue, or it has no issue) is skipped: there
     is no wait to measure `since` from."""
     resumes: list[rules.ResumeCandidate] = []
@@ -773,13 +822,25 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
             # top of a comment `agentic resume`'s own `--yes` would otherwise run over.
             continue
         chase = _prior_auto_resumes(comments)
+        resets_at = None
         if reason == "account_limit":
             prior, ceiling_spent = _account_limit_counts(raw, comments, chase)
+            resets_at = rules.stated_reset(raw)
         else:
             prior, ceiling_spent = chase, False
         limit = rules.auto_resume_limit(raw, reason)
         resumes.append(
-            rules.ResumeCandidate(number, reason, since, prior, limit, chase, ceiling_spent)
+            rules.ResumeCandidate(
+                number,
+                reason,
+                since,
+                prior,
+                limit,
+                chase,
+                ceiling_spent,
+                resets_at,
+                _retaken_since_escalated(comments),
+            )
         )
     return resumes
 
@@ -813,7 +874,8 @@ def escalate_persisted_limits(
             continue
         state = apply(raw, rules.account_limit_persisted_patch())
         ports.documents.save(state)
-        ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
+        if rules.needs_a_human(state):
+            ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
         ports.tracker.comment(task_id, escalate_module.comment(state, cfg, ports))
         lines.append(
             f"agentic: poll: #{r.issue} {rules.ACCOUNT_LIMIT_PERSISTED} -> left to the human"

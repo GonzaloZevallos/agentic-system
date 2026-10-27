@@ -559,3 +559,12 @@ USD" para una revisión de stack.
   saque `AGENTIC_TASK_MAX_BUDGET_USD=1000000` del `.env` de los dos stage0 tras el merge, ese
   valor manda.
 - Ninguna señal se mueve, y `prompts.fingerprint` no se mueve.
+
+## Adenda (2026-10-27): las subtareas ya no son un nodo cada una ni van en olas
+
+GH-364. Dos frases de este ADR quedan superadas por el ADR-0068: "un nodo por subtarea,
+checkpointeado" (el nodo `pipeline` corre ahora un loop propio, y se pierde el checkpoint por
+rama, que reemplazan el documento y `rules.resume_source`) y, en la adenda quinta, "Cuesta una
+barrera por ola" (una subtarea arranca cuando `rules.next_to_start` la habilita, sin esperar
+al resto de su ola). La revisión dentro de la rama, el fan-in del sistema y la vuelta de una
+devolución por `integrate` siguen como se dijeron.

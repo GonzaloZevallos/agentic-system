@@ -29,6 +29,10 @@ REAP_GRACE_S = 5
 REAP_KILL_WAIT_S = 2
 COMMAND_MAX = 120
 
+# Declared, not measured: seconds a stopped run gets to unwind before it reaps every role
+# process it owns and exits.
+STOP_DEADLINE_S = 40
+
 # The task segment of a check's mark (GH-315): no task id is ever `check`.
 CHECK_TASK = "check"
 
