@@ -142,6 +142,8 @@ class AttemptFailed(Exception):
         presubmit_denials: int = 0,
         main_thread_turns: int = 0,
         reaped: Sequence[ReapedProcess] = (),
+        space: SpaceReading | None = None,
+        enospc: bool = False,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -177,6 +179,16 @@ class AttemptFailed(Exception):
         # What the reaper stopped when this attempt's session ended (`RawResult.reaped`'s
         # own docstring); empty at every raise site but the runner's own.
         self.reaped = list(reaped)
+        # What the volumes had left when this attempt broke (GH-391): the lower of the
+        # scratch volume's and `/tmp`'s free bytes and free inodes, read after the
+        # attempt's processes were reaped and before its scratch was removed. `None` at
+        # every raise site but the runner's own, and when it had no scratch to measure.
+        # Stamped here, never classified: a measurement is not a verdict.
+        self.space = space
+        # Whether an `OSError` with `errno.ENOSPC` was raised in the system's own process
+        # during this attempt (a hook, a stream write, the presubmit), caught as the
+        # structured error it is and never by reading text.
+        self.enospc = enospc
 
 
 class Presubmit(Protocol):
