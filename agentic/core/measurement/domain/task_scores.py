@@ -22,6 +22,7 @@ from typing import Any, Literal, get_args, get_origin
 
 from agentic.core.process.domain import roles, rules
 from agentic.core.process.domain.landing import FOLLOWUP_TITLE_PREFIX
+from agentic.core.process.domain.returns import before_pr, is_return
 from agentic.core.process.domain.schemas import TaskType
 from agentic.core.process.domain.task import (
     ChangeCategory,
@@ -278,11 +279,7 @@ def _returns_by_category(document: Mapping[str, Any]) -> dict[str, float]:
     """The categories of `change_history`, without the landing's own reopens (the same
     rule `metrics.changes_by_category` follows), so the parts sum to `returns` whenever
     the history is complete."""
-    history = (
-        e.get("category")
-        for e in _entries(document.get("change_history"))
-        if e.get("by") != "landing"
-    )
+    history = (e.get("category") for e in _entries(document.get("change_history")) if is_return(e))
     return _counts(history, "returns")
 
 
@@ -339,11 +336,17 @@ def _findings_important(document: Mapping[str, Any]) -> float | None:
 
 def _followups(document: Mapping[str, Any]) -> float | None:
     """Follow-ups the landing filed: `1` when `followups_filed` is set, `0` once a
-    `landing` record shows the landing ran and set none, `None` on a document the landing
+    `landing` record written under a pull request shows the landing ran and set none (the
+    pass before the pull request is no landing run), `None` on a document the landing
     never touched (the absence of the flag there is not knowledge)."""
     if document.get("followups_filed") is True:
         return 1.0
-    return 0.0 if document.get("landing") else None
+    entries = document.get("landing")
+    ran = any(
+        isinstance(entry, Mapping) and not before_pr(entry)
+        for entry in (entries if isinstance(entries, list) else [])
+    )
+    return 0.0 if ran else None
 
 
 def _checks_red(document: Mapping[str, Any]) -> float | None:

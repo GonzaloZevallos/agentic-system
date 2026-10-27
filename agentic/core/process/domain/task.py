@@ -31,7 +31,7 @@ from typing import (
     get_type_hints,
 )
 
-from .presubmit import FAILED_IDS_MAX, CheckResult, FlakeGate
+from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate
 from .reaping import ReapedProcess
 
 Status = Literal[
@@ -782,6 +782,10 @@ class LandingEntry(TypedDict, total=False):
     # Resume children actually spawned for this entry, and when the last one was.
     resume_spawns: int
     resume_spawned_at: str
+    # True on the `fix_important` entry the pass writes before the pull request exists
+    # (GH-354): no reader that assumes a pull request treats such an entry as one
+    # (`rules.before_pr`). Absent everywhere else.
+    before_pr: NotRequired[bool]
     # Diagnose entries only (GH-257): `delivered` is written before anything else once the
     # Landing Diagnoser delivered; `failure` is the reason an attempt that did not deliver
     # failed with, which the retry calendar reads. Both optional: a document without them
@@ -860,6 +864,9 @@ class FullCheckEntry(TypedDict):
     # True when the check was red and green on its one rerun (ADR-0066): a flake passes, and
     # the record says `flake`, never plain passed. Absent on every other check.
     flake: NotRequired[bool]
+    # Seconds the check ran, as `check_durations` summed them (GH-365); absent when the check
+    # has no sample (a reused pass, or no result).
+    duration_s: NotRequired[float]
 
 
 class FullChecksRecord(TypedDict):
@@ -876,6 +883,10 @@ class FullChecksRecord(TypedDict):
     results: list[FullCheckEntry]
     witness: dict[str, Any] | None
     failed_step: NotRequired[str]
+    # The checks that took longer than their declared budget (GH-365): a declared name and two
+    # numbers, written by the system only, and only on a passed run that had a breach. It
+    # returns and blocks nothing.
+    over_budget: NotRequired[list[BudgetBreach]]
 
 
 class TaskState(TaskInput, total=False):

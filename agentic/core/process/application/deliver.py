@@ -14,11 +14,11 @@ from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, landing, rules
+from ..domain import document, landing, presubmit, rules
 from ..domain.pull_request import BoundedBody, bounded_body
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import BranchPullRequest, GitError, Ports
 from .preflight import over_cap
 from .release import release_task
@@ -33,7 +33,7 @@ _LOG = logging.getLogger(__name__)
 
 async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
     relative = document.relative_path(state["id"]).as_posix()
@@ -404,9 +404,9 @@ def _bounded(
 
 def _parts(state: TaskState) -> list[tuple[str, str]]:
     """The definition and the plan, as the human reads them before the diff, plus the
-    design branch's own observations (ADR-0040) when there are any -- never when there
-    are none, so a task this branch never touched renders byte for byte as it always
-    has."""
+    design branch's own observations (ADR-0040) and the checks the full run found over their
+    budget (GH-365) when there are any -- never when there are none, so a task this branch
+    never touched renders byte for byte as it always has."""
     sections = state.get("sections", {})
     parts = [(name, sections[name]) for name in (PM.name, TECH_LEAD.name) if name in sections]
     observations = [i for i in state.get("design_items", []) if i["kind"] == "observation"]
@@ -414,4 +414,6 @@ def _parts(state: TaskState) -> list[tuple[str, str]]:
         parts.append(
             ("Observations on the design", rules.design_observations_markdown(observations))
         )
+    if breaches := state.get("full_checks", {}).get("over_budget"):
+        parts.append(("Checks over budget", presubmit.over_budget_markdown(breaches)))
     return parts

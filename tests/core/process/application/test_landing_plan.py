@@ -274,3 +274,11 @@ def _checks(head: str, *entries: dict) -> dict:
 )
 def test_a_red_check_with_a_rerun_row_on_the_head_is_a_fact_of_the_plan(raw, reran):
     assert landing_plan.spent(raw, HEAD, None).checks_rerun_on_head is reran
+
+
+def test_a_pass_written_before_the_pull_request_spends_the_important_budget_and_no_model_pass():
+    raw = {"landing": [{"head": "h", "step": "fix_important", "before_pr": True, "at": "t"}]}
+    spent = landing_plan.spent(raw, "h", None)
+    assert spent.important_passes == landing.LANDING_IMPORTANT_PASSES_MAX
+    assert spent.passes == 0 and spent.syncs == 0 and spent.reruns_on_head == 0
+    assert landing_plan.spent({"landing": [{"step": "fix"}]}, "h", None).important_passes == 0

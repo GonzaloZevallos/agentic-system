@@ -3,7 +3,8 @@ before it counts, checked by the system when the model hands it back, not after.
 
 A delivery is committed code on a clean tree whose product checks pass (`core.knowledge`
 declares them). The presubmit refuses at most `REFUSALS` times per Developer run, its retry
-included: the reason goes
+included, plus one more when the product declares `failed_ids` and the failure is moving
+(`refusal_allowed`): the reason goes
 back to the model inside its turn, which is cheaper than a role failure or a review
 that returns it. Past that it lets the delivery through, and what the checks said is in
 the Developer's section, written by the system, for the reviewer to read. The commit and
@@ -22,6 +23,9 @@ from typing import Literal, NotRequired, TypedDict
 Mode = Literal["affected-only", "full"]
 
 REFUSALS = 2
+# The most refusals one run can reach: the one `REFUSALS` extra, earned only when the failure
+# is moving (`refusal_allowed`).
+MOVING_REFUSALS = REFUSALS + 1
 TAIL_LINES = 30
 # The stack file always forces the full form (ADR-0046): a change to what the checks are
 # can never be measured by the selection that file declares.
@@ -123,6 +127,23 @@ def flake_verdict(first: CheckResult, rerun: CheckResult | None) -> FlakeVerdict
     return "fail"
 
 
+def refusal_allowed(
+    refusals: int,
+    previous_ids: Sequence[str] | None,
+    current_ids: Sequence[str] | None,
+) -> bool:
+    """Whether the gate may refuse once more after `refusals` refusals. Below `REFUSALS`
+    always. At exactly `REFUSALS` only when the product declares `failed_ids` (both lists
+    present: the failed ids of the last two refusals) and they differ as sets, so the Developer
+    is fixing something and the failure is moving. Never beyond `MOVING_REFUSALS`. A product
+    without `failed_ids` passes `None` and gets `REFUSALS` exactly."""
+    if refusals < REFUSALS:
+        return True
+    if refusals >= MOVING_REFUSALS or previous_ids is None or current_ids is None:
+        return False
+    return set(previous_ids) != set(current_ids)
+
+
 def failed_ids(output: str, pattern: str) -> tuple[str, ...]:
     """The test ids a failing check's output names: group 1 of `pattern`, over at most the
     last `FAILED_IDS_TAIL_BYTES` bytes, deduplicated in order, at most `FAILED_IDS_MAX`.
@@ -215,12 +236,21 @@ def refusal(
     if failed:
         parts.append("the product's checks fail on your head; fix them, commit, and deliver again.")
         for r in failed:
-            parts.append(
-                f"`{r['name']}` failed: `{r['command']}`\n\n```text\n{tail(r['output'])}\n```"
-            )
+            parts.append(_failed_text(r))
     if regressions:
         parts.append(_regressions_text(regressions))
     return "\n\n".join(parts) or None
+
+
+def _failed_text(r: CheckResult) -> str:
+    body = f"\n\n```text\n{tail(r['output'])}\n```"
+    if r.get("timed_out", False):
+        # A rerun would spend the same time again: the Developer looks at the check first.
+        return (
+            f"`{r['name']}` timed out: `{r['command']}`; look at why it is slow or hangs, "
+            f"do not just rerun it.{body}"
+        )
+    return f"`{r['name']}` failed: `{r['command']}`{body}"
 
 
 def _regressions_text(regressions: Sequence[str]) -> str:
@@ -281,9 +311,58 @@ def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     return totals
 
 
+def decided_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
+    """Seconds of the run that decided each passing check, by name (GH-365): the duration of
+    the `final_results` row, when it passed and carries one. `check_durations` answers how long
+    this invocation spent on a check, so it skips a reused row and a rerun; this answers how long
+    the run whose verdict stands took: a flake is its green rerun, and a reused pass is its
+    stored `duration_s`, measured on that same tree. A failed or timed-out check has no entry,
+    and neither has a row without a duration: that is never counted as zero."""
+    return {
+        row["name"]: row["duration_s"]
+        for row in final_results(rows)
+        if row["passed"] and "duration_s" in row
+    }
+
+
+class BudgetBreach(TypedDict):
+    """One check that took longer than its declared budget: a declared name and two numbers,
+    never text taken from a command or a role."""
+
+    name: str
+    duration_s: float
+    budget_s: float
+
+
+def budget_breaches(
+    rows: Sequence[CheckResult], budgets: Mapping[str, float]
+) -> list[BudgetBreach]:
+    """The budgeted checks whose decided duration is strictly above their budget, in the
+    budgets' declared order. A pure verdict of recorded rows and declared budgets; an
+    unbudgeted check never appears."""
+    decided = decided_durations(rows)
+    return [
+        BudgetBreach(name=name, duration_s=decided[name], budget_s=budget)
+        for name, budget in budgets.items()
+        if name in decided and decided[name] > budget
+    ]
+
+
+def over_budget_markdown(breaches: Sequence[BudgetBreach]) -> str:
+    """The pull request's `Checks over budget` part: one row per breach of the record in force,
+    and the one sentence on how to read it. Called only with at least one breach."""
+    rows = [f"| {b['name']} | {b['duration_s']} | {b['budget_s']} |" for b in breaches]
+    table = "\n".join(["| Check | Seconds | Budget (s) |", "|---|---|---|", *rows])
+    return (
+        f"{table}\n\nOnly a breach that repeats across tasks means the suite grew; the remedy "
+        "is the budget in `stack.yaml` or a smaller suite."
+    )
+
+
 def refused(reason: str, count: int) -> str:
     """The reason as the model reads it, with how many refusals are left."""
-    return f"The presubmit refused this delivery ({count} of {REFUSALS}): {reason}"
+    limit = REFUSALS if count <= REFUSALS else MOVING_REFUSALS
+    return f"The presubmit refused this delivery ({count} of {limit}): {reason}"
 
 
 def witness_refusal(
@@ -367,10 +446,11 @@ def checks_markdown(
     the gate let through after its refusals still shows what it leaves over the cap."""
     moded = any("mode" in r for r in results)
     if moded:
-        header = "| Check | Command | Mode | Result |\n|---|---|---|---|\n"
+        header = "| Check | Command | Mode | Result | Seconds |\n|---|---|---|---|---|\n"
     else:
-        header = "| Check | Command | Result |\n|---|---|---|\n"
+        header = "| Check | Command | Result | Seconds |\n|---|---|---|---|\n"
     verdicts = outcomes(results)
+    seconds = check_durations(results)
     rows = []
     for r in results:
         outcome = "passed" if r["passed"] else "**failed**"
@@ -383,7 +463,8 @@ def checks_markdown(
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
         if moded:
             cells.append(r.get("mode", "-"))
-        rows.append("| " + " | ".join([*cells, outcome]) + " |")
+        shown = f"{seconds[r['name']]:.1f}" if r["name"] in seconds else "-"
+        rows.append("| " + " | ".join([*cells, outcome, shown]) + " |")
     parts = [
         f"### Checks\n\nRun by the system on `{head}` when the Developer delivered.",
         header + "\n".join(rows),
@@ -488,6 +569,8 @@ def merge_checks_record(
     )
     by_name = {result["name"]: result for result in decided}
     verdicts = outcomes(results or [])
+    # The only place a record's per-check seconds come from; absent where there is no sample.
+    seconds = check_durations(results or [])
     entries: list[dict[str, object]] = []
     for name in declared:
         found = by_name.get(name)
@@ -509,6 +592,8 @@ def merge_checks_record(
             if found.get("rerun"):
                 failed["rerun"] = True
             entries.append(failed)
+        if found is not None and name in seconds:
+            entries[-1]["duration_s"] = round(seconds[name], 1)
     if witness is not None and not witness["passed"]:
         entries.append(
             {"name": _WITNESS_ENTRY, "passed": False, "tail": _tail_of(witness["output"])}

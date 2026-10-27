@@ -30,6 +30,7 @@ inside a wave a branch cannot know that its sister stopped, and that does not ch
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic.shared.configuration import Configuration
@@ -37,7 +38,8 @@ from agentic.shared.configuration import Configuration
 from ..domain import rules
 from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
-from .checkouts import SetupFailed, subtask_checkout, task_base, task_checkout
+from . import pre_pr_fix
+from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base, task_checkout_in_thread
 from .ports import Checkout, Ports
 from .run_role import finish
 
@@ -65,7 +67,7 @@ def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     # runs and a failing one stops the wave before a Developer is dispatched. Inside a
     # branch it could not be told to the human: a branch never routes to the escalation.
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
         patch: TaskState = {"branch": task.branch, "sections": rules.findings_section(state)}
         conflicts = _merge_approved(state, task.path, ports)
         if (integration := _integration(state, conflicts, task)) is not None:
@@ -77,8 +79,16 @@ def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
         if ports.stack.delivery_checks(task_base(state, ports)):
             patch["task_head"] = ports.workspace.full_head(task.path)
         current = apply(state, patch)
+        # The pass before the pull request is closed here, once the units it reopened and the
+        # integration are approved again (GH-354): the one place that sees every branch.
+        if (
+            closed := pre_pr_fix.close_pass(
+                current, datetime.now(UTC).isoformat(timespec="seconds")
+            )
+        ) is not None:
+            patch["landing"] = closed
         for subtask_id in rules.dispatched_subtasks(current):
-            subtask_checkout(current, subtask_id, cfg, ports)
+            await subtask_checkout_in_thread(current, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(DEVELOPER), ports)
     return finish(state, patch, ports)

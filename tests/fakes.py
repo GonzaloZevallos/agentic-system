@@ -13,7 +13,7 @@ from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
+from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, ShellReaper
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
@@ -340,6 +340,7 @@ class MemoryStack:
         delivery_checks: tuple[str, ...] = (),
         rerun_checks: dict[str, RerunForm] | None = None,
         merge_inert: tuple[str, ...] = (),
+        check_budgets: dict[str, float] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -381,6 +382,8 @@ class MemoryStack:
         self.declared_delivery_checks = delivery_checks
         # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
         self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
+        # Empty is a product with no check budget (GH-365): every verdict of today.
+        self.declared_check_budgets = {} if check_budgets is None else check_budgets
         # Empty is a product that declares no `merge_inert`: the merge gate of today.
         self.declared_merge_inert = merge_inert
         # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
@@ -427,6 +430,10 @@ class MemoryStack:
     def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_rerun_checks
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_check_budgets
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1521,6 +1528,19 @@ class FakePerfRunner:
         return self.script.pop(0) if self.script else Run(None, 0, False, None, None)
 
 
+class FakeStopFlag:
+    """GH-355: the run's stop flag, marked by `set()` and read by `is_set()`."""
+
+    def __init__(self) -> None:
+        self.marked = False
+
+    def is_set(self) -> bool:
+        return self.marked
+
+    def set(self) -> None:
+        self.marked = True
+
+
 class FakePerfLock:
     """GH-318: `acquire` answers `available` and counts; `release` counts."""
 
@@ -2032,7 +2052,9 @@ def ruled(
 def real_commands() -> ShellCommands:
     """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
     nothing: each check reaps its own mark, and no cwd reap can match."""
-    return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))
+    return ShellCommands(
+        "tests", ShellReaper("tests", Path("/nonexistent/worktrees")), NullStopFlag()
+    )
 
 
 # The texts (README.md, 4): Tech Writer writes a plain `CopyDraft`, its review a `CopyReview`.

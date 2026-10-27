@@ -67,7 +67,7 @@ TODAYS_PROMPTS = [
     "b98a4471bb12b37d",
     "1100e9b51ee48d53",
     "05b4da22f14d7947",
-    "25b3c8fc137f9d32",
+    "e632cbbd62d83b5c",
     "27c14992def4ca06",
     "983429e4371d2542",
     "d9a4ed4d5b0d5c62",
@@ -98,7 +98,7 @@ async def test_a_touches_copy_feature_writes_before_the_plan_and_reviews_after_t
     (tmp_path / "WRITING_STANDARDS.md").write_text("# Writing\n\nErrors say what to do next.\n")
     fakes = Fakes()
     fakes.workspace.diff_paths = ("src/x.py",)
-    script = _copy_script([copy_reviewed([copy_finding()])])
+    script = _copy_script([copy_reviewed([copy_finding(scope="outside")])])
     final = await run_graph(script, config, fakes=fakes)
     assert final["status"] == "ready_for_review"
     slugs = script.slugs
@@ -143,7 +143,7 @@ async def test_the_review_follows_the_integration_when_there_are_several_subtask
     script = script_for(
         pm=[verdict("approved", flags=COPY)],
         tech_writer=[copy_draft(TEXTS)],
-        tech_writer_review=[copy_reviewed([copy_finding()])],
+        tech_writer_review=[copy_reviewed([copy_finding(scope="outside")])],
         **technical(
             tech_lead=[planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})],
             developer__api=[delivered("api")],
@@ -324,37 +324,31 @@ async def _delivered(config, tmp_path, script, standards=True):
     return final, fakes, _landing_ports(tmp_path, fakes)
 
 
-async def test_a_copy_important_blocks_the_merge_until_the_owner_fixes_it_and_a_review_settles(
+async def test_a_copy_important_is_fixed_before_the_pull_request_and_a_review_settles(
     config, tmp_path
 ):
+    """GH-354: the final review's `owned` important no longer waits for the pull request:
+    the pre-PR pass reopens the owner, the second review settles it, and the task delivers
+    with nothing open (the landing has no fix left to run)."""
     script = _lifecycle_script(
         [copy_reviewed([copy_finding()]), copy_reviewed(settled=["copy:1.1:src/x.py:12"])]
     )
-    first, fakes, ports = await _delivered(config, tmp_path, script)
-    assert _candidates(ports) == []
-    launcher = FakeLauncher()
-
-    assert _land(ports, tmp_path, launcher).step == "fix_important"
-
-    document = ports.documents.load("GH-1")
-    assert {n: u["status"] for n, u in document["subtasks"].items()} == {"api": "returned"}
-    reason = document["subtasks"]["api"]["reason"]
-    assert "src/x.py:12" in reason and "Could not export. Try again." in reason
-    assert "copy:" not in reason
-    assert document["changes_requested"] == {} or not document.get("changes_requested")
-    final = await _resume_graph(script, config, tmp_path, fakes, ports)
+    final, fakes, ports = await _delivered(config, tmp_path, script)
 
     assert script.slugs.count("tech_writer_review") == 2
     assert script.slugs.count("tech_writer") == 1
-    assert final["sections"]["Tech Writer"] == first["sections"]["Tech Writer"] == TEXTS
+    assert final["sections"]["Tech Writer"] == TEXTS
     (row,) = _settled(final)
     assert row["location"] == "copy:1.1:src/x.py:12"
     assert "copy:1.1:src/x.py:12" in final["settled_findings"]
     assert rules.open_findings(final) == []
-    _on_head(ports, NEW_HEAD)
+    (entry,) = final["landing"]
+    assert (entry["step"], entry["before_pr"]) == ("fix_important", True)
+    assert entry["resolved_at"]
+    assert not final.get("changes_requested")
     assert _candidates(ports) == [1]
     _merge(ports, tmp_path)
-    assert fakes.tracker.merge_calls == [(URL.format(1), NEW_HEAD)]
+    assert fakes.tracker.merge_calls == [(URL.format(1), HEAD)]
     assert not final.get("escalated")
 
 
@@ -371,20 +365,14 @@ async def test_a_review_that_raises_a_new_important_every_pass_costs_one_fix_and
             copy_reviewed([copy_finding(location="src/x.py:14", claim="Yet another")]),
         ]
     )
-    first, fakes, ports = await _delivered(config, tmp_path, script)
+    final, fakes, ports = await _delivered(config, tmp_path, script)
     launcher = FakeLauncher()
-    assert _land(ports, tmp_path, launcher).step == "fix_important"
-
-    final = await _resume_graph(script, config, tmp_path, fakes, ports)
 
     assert script.slugs.count("tech_writer_review") == 2
     assert [r["location"] for r in rules.open_findings(final)] == ["copy:2.1:src/x.py:13"]
-    _on_head(ports, NEW_HEAD)
     assert _candidates(ports) == [1]
     assert _land(ports, tmp_path, launcher).step != "fix_important"
-    assert len(launcher.spawned) == 1
-    _merge(ports, tmp_path)
-    assert fakes.tracker.merge_calls == [(URL.format(1), NEW_HEAD)]
+    assert launcher.spawned == []
     assert not final.get("escalated")
 
 

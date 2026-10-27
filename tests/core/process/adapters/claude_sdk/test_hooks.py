@@ -4,9 +4,11 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
+import anyio
 import pytest
 
 from agentic.core.process.adapters.claude_sdk import hooks
+from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.domain import turn_notice
 from agentic.core.process.domain.roles import (
     DEVELOPER,
@@ -392,3 +394,23 @@ async def test_the_turn_notice_hook_with_no_counter_given_never_fires():
     matchers = hooks.hooks_for(role, CWD, None)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
     assert await call(matchers, "PostToolUse", payload) == [{}]
+
+
+class StoppedPresubmit(FakePresubmit):
+    """The run was told to stop while the gate's checks ran."""
+
+    def __call__(self):
+        self.calls += 1
+        raise RunStopped
+
+
+async def test_a_stop_in_the_gate_returns_no_decision_and_waits_for_the_cancellation():
+    presubmit = StoppedPresubmit()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, presubmit)
+    payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
+    outputs: list = []
+    with anyio.move_on_after(0.3) as scope:
+        outputs = await call(matchers, "PreToolUse", payload)
+    assert scope.cancelled_caught  # never returned: neither a deny nor an allow for the SDK
+    assert outputs == []
+    assert presubmit.calls == 1

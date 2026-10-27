@@ -273,12 +273,7 @@ def _merge_facts(
         open_blocking=sum(1 for row in rules.open_findings(raw) if row["severity"] == "blocking"),
         open_important=sum(len(rows) for rows in partition.owned.values()) + len(partition.plan),
         open_outside=len(partition.outside),
-        important_pass_done=any(
-            isinstance(entry, dict)
-            and entry.get("step") == "fix_important"
-            and entry.get("resolved_at")
-            for entry in raw.get("landing", [])
-        ),
+        important_pass_done=rules.important_pass_spent(raw, resolved_only=True),
         pr_state=pull_request.state if pull_request is not None else None,
         pr_head=pr_head,
         in_eval_set=None if eval_set is None else number in eval_set,

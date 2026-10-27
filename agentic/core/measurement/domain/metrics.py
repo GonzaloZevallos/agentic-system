@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.returns import is_return
 from agentic.core.process.domain.task import (
     ChangesRequested,
     Failure,
@@ -86,7 +87,7 @@ def _returned(state: TaskState) -> list[ChangesRequested]:
     """The return history without the landing's own reopens (`by: "landing"`, GH-239): a
     sync or a re-review is the system moving a pull request, not a role returning work, and
     `returns` does not count it either."""
-    return [e for e in state.get("change_history", []) if e.get("by") != "landing"]
+    return [e for e in state.get("change_history", []) if is_return(e)]
 
 
 def changes_by_category(state: TaskState) -> dict[str, int]:

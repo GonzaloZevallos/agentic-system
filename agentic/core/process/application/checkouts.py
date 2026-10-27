@@ -13,12 +13,14 @@ system says at startup that it cannot promise isolation (`preflight`)."""
 
 from __future__ import annotations
 
+import anyio
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import presubmit, rules
 from ..domain.roles import Role
 from ..domain.task import INTEGRATION, TaskState
-from .ports import Checkout, Ports
+from .ports import Checkout, Ports, RunStopped
 from .release import release_checkout
 
 
@@ -60,6 +62,20 @@ def subtask_checkout(
     return _prepared(made, state, cfg, ports)
 
 
+async def task_checkout_in_thread(state: TaskState, cfg: Configuration, ports: Ports) -> Checkout:
+    """`task_checkout` for a node of the graph: making a checkout runs the product's setup,
+    a command that can last minutes, and the event loop must stay free to hear a signal
+    (GH-355). Nothing else differs."""
+    return await anyio.to_thread.run_sync(task_checkout, state, cfg, ports)
+
+
+async def subtask_checkout_in_thread(
+    state: TaskState, subtask_id: str, cfg: Configuration, ports: Ports
+) -> Checkout:
+    """`subtask_checkout` off the event loop, for the same reason."""
+    return await anyio.to_thread.run_sync(subtask_checkout, state, subtask_id, cfg, ports)
+
+
 def _prepared(checkout: Checkout, state: TaskState, cfg: Configuration, ports: Ports) -> Checkout:
     """The checkout with the product's setup run in it, when this call is the one that
     made it. Asking again gets the one that exists: a subtask that adds a dependency
@@ -72,7 +88,15 @@ def _prepared(checkout: Checkout, state: TaskState, cfg: Configuration, ports: P
     if not checkout.created:
         return checkout
     for step, command in ports.stack.setup(task_base(state, ports)).items():
-        result = ports.commands.run(checkout.path, command, cfg.check_timeout_s)
+        try:
+            result = ports.commands.run(checkout.path, command, cfg.check_timeout_s)
+        except RunStopped:
+            # The run was told to stop mid-setup (GH-355): the checkout is as good as a
+            # failed one, a half-built tree a later `created=False` would take for ready.
+            # Not a `SetupFailed`: nothing escalates, the resume makes it again.
+            release_checkout(ports, checkout.path)
+            ports.workspace.discard(checkout.path)
+            raise
         if not result.passed:
             release_checkout(ports, checkout.path)
             ports.workspace.discard(checkout.path)

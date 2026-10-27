@@ -358,7 +358,7 @@ def test_the_merge_record_marks_a_reused_entry_and_leaves_one_that_ran_unmarked(
     )
     assert record["checks"] == [
         {"name": "tests", "passed": True, "reused": True},
-        {"name": "lint", "passed": True},
+        {"name": "lint", "passed": True, "duration_s": 0.0},
     ]
 
 
@@ -399,7 +399,7 @@ def test_with_a_row_master_every_entry_carries_it_the_reused_one_too():
     record = _run("m2")
     assert record["checks"] == [
         {"name": "tests", "passed": True, "reused": True, "master": "m2"},
-        {"name": "lint", "passed": True, "master": "m2"},
+        {"name": "lint", "passed": True, "duration_s": 0.0, "master": "m2"},
     ]
 
 
@@ -486,7 +486,7 @@ def test_merge_checks_record_passes_a_flake_and_marks_it_and_marks_a_double_red(
         witness=None,
     )
     assert passed["passed"] is True and "failed_step" not in passed
-    assert passed["checks"] == [{"name": "tests", "passed": True, "flake": True}]
+    assert passed["checks"] == [{"name": "tests", "passed": True, "flake": True, "duration_s": 0.0}]
     twice = [
         result("tests", "pytest", False, "first"),
         {**result("tests", "pytest", False, "second"), "rerun": True},
@@ -501,5 +501,196 @@ def test_merge_checks_record_passes_a_flake_and_marks_it_and_marks_a_double_red(
     )
     assert failed["passed"] is False and failed["failed_step"] == "checks"
     assert failed["checks"] == [
-        {"name": "tests", "passed": False, "tail": ["second"], "rerun": True}
+        {"name": "tests", "passed": False, "tail": ["second"], "rerun": True, "duration_s": 0.0}
     ]
+
+
+def test_below_the_budget_a_refusal_is_always_allowed():
+    assert presubmit.refusal_allowed(0, None, None)
+    assert presubmit.refusal_allowed(presubmit.REFUSALS - 1, ("a",), ("a",))
+
+
+def test_without_failed_ids_the_budget_is_today_s_exactly():
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, None, None)
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, ("a",), None)
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, None, ("a",))
+
+
+def test_the_same_failed_ids_stop_at_the_budget():
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, ("a", "b"), ("a", "b"))
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, (), ())
+
+
+def test_changed_failed_ids_earn_one_more_refusal_and_never_two():
+    assert presubmit.refusal_allowed(presubmit.REFUSALS, ("a", "b"), ("a",))
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS + 1, ("a", "b"), ("a",))
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS + 2, ("a",), ("b",))
+
+
+def test_the_order_of_failed_ids_is_not_a_change():
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, ("a", "b"), ("b", "a"))
+
+
+def test_a_timed_out_check_is_refused_saying_it_timed_out_and_not_to_rerun_it():
+    row = result("tests", "pytest", False, "partial\n(timed out after 30 s)")
+    row["timed_out"] = True
+    reason = presubmit.refusal(True, True, [row])
+    assert "`tests` timed out: `pytest`" in reason
+    assert "do not just rerun it" in reason and "partial" in reason
+
+
+def test_a_plain_red_check_keeps_its_wording():
+    reason = presubmit.refusal(True, True, [result("tests", "pytest", False, "boom")])
+    assert "`tests` failed: `pytest`" in reason and "timed out" not in reason
+
+
+def test_the_third_refusal_is_counted_against_the_extended_budget():
+    assert "(1 of 2)" in presubmit.refused("r", 1)
+    assert "(2 of 2)" in presubmit.refused("r", 2)
+    assert "(3 of 3)" in presubmit.refused("r", 3)
+
+
+# -- each check's duration in the records (GH-365) --------------------------------------
+
+
+def _timed(name="tests", seconds=1.0, **more):
+    return {**result(name, "cmd"), "duration_s": seconds, **more}
+
+
+def _timed_record(rows, **more):
+    return presubmit.merge_checks_record(
+        head="h",
+        master="m",
+        duration_s=9.0,
+        declared={"tests": "pytest", "lint": "ruff ."},
+        results=rows,
+        witness=None,
+        **more,
+    )
+
+
+def test_the_merge_record_carries_each_checks_summed_duration_like_check_durations():
+    rows = [
+        {**_timed("tests", 2.04), "mode": "affected-only"},
+        {**_timed("tests", 3.0), "mode": "full"},
+        _timed("lint", 0.26),
+        _timed("lint", 50.0, rerun=True),
+    ]
+    record = _timed_record(rows)
+    sums = presubmit.check_durations(rows)
+    assert [e["duration_s"] for e in record["checks"]] == [round(sums["tests"], 1), 0.3]
+    assert record["checks"][0]["duration_s"] == 5.0
+
+
+def test_a_reused_only_check_and_a_missing_check_have_no_duration():
+    record = _timed_record([_reused("tests")])
+    assert record["checks"] == [
+        {"name": "tests", "passed": True, "reused": True},
+        {"name": "lint", "passed": False},
+    ]
+
+
+def test_a_failing_entry_and_one_with_a_master_carry_the_duration_too():
+    red = _timed("tests", 4.0, passed=False, output="boom")
+    record = _timed_record([red, _timed("lint", 1.0)], row_master="m")
+    assert record["checks"][0]["duration_s"] == 4.0 and record["checks"][0]["tail"] == ["boom"]
+    assert record["checks"][1] == {"name": "lint", "passed": True, "duration_s": 1.0, "master": "m"}
+
+
+def test_the_witness_and_setup_failure_entries_never_carry_a_duration():
+    witness = {"command": "w", "output": "/x", "passed": False}
+    record = _timed_record(
+        [_timed("tests"), _timed("lint")],
+        setup_failure=("setup", "no"),
+    )
+    record_w = presubmit.merge_checks_record(
+        head="h",
+        master="m",
+        duration_s=1.0,
+        declared={"tests": "pytest"},
+        results=[_timed("tests")],
+        witness=witness,
+    )
+    assert "duration_s" not in record["checks"][-1]
+    assert "duration_s" not in record_w["checks"][-1]
+
+
+def test_the_checks_table_has_a_seconds_column_dash_when_there_is_no_sample():
+    rows = [_timed("tests", 12.34), _reused("lint")]
+    text = presubmit.checks_markdown("abc123", rows)
+    assert "| Check | Command | Result | Seconds |" in text
+    assert "| `tests` | `cmd` | passed | 12.3 |" in text
+    assert "| `lint` | `pytest` | passed (reused) | - |" in text
+
+
+def test_the_seconds_column_is_in_the_mode_table_too():
+    rows = [{**_timed("tests", 2.0), "mode": "full"}]
+    text = presubmit.checks_markdown("abc123", rows, base="b")
+    assert "| Check | Command | Mode | Result | Seconds |" in text
+    assert "| `tests` | `cmd` | full | passed | 2.0 |" in text
+
+
+# --- decided_durations and budget_breaches (GH-365) -----------------------------------------
+
+
+def test_decided_durations_reads_the_row_that_decided_each_passing_check():
+    rows = [
+        _timed("tests", 7.0, passed=False),
+        _timed("tests", 3.0, rerun=True),
+        _timed("lint", 1.0),
+    ]
+    assert presubmit.decided_durations(rows) == {"tests": 3.0, "lint": 1.0}
+
+
+def test_decided_durations_keeps_a_reused_pass_with_its_stored_duration():
+    assert presubmit.decided_durations([_reused("tests")]) == {"tests": 99.0}
+
+
+def test_decided_durations_drops_a_failed_check_and_a_row_without_duration():
+    rows = [_timed("tests", 5.0, passed=False), result("lint"), _timed("types", 2.0)]
+    assert presubmit.decided_durations(rows) == {"types": 2.0}
+
+
+def test_decided_durations_differs_from_check_durations_on_the_same_rows():
+    rows = [_timed("tests", 7.0, passed=False), _timed("tests", 3.0, rerun=True), _reused("lint")]
+    assert presubmit.check_durations(rows) == {"tests": 7.0}
+    assert presubmit.decided_durations(rows) == {"tests": 3.0, "lint": 99.0}
+
+
+def test_a_first_green_run_over_budget_breaches_and_one_at_the_budget_does_not():
+    rows = [_timed("tests", 10.5), _timed("lint", 5.0)]
+    assert presubmit.budget_breaches(rows, {"tests": 10.0, "lint": 5.0}) == [
+        {"name": "tests", "duration_s": 10.5, "budget_s": 10.0}
+    ]
+
+
+def test_a_flake_is_judged_on_its_green_rerun_not_on_the_red_first_run():
+    rows = [_timed("tests", 500.0, passed=False), _timed("tests", 4.0, rerun=True)]
+    assert presubmit.budget_breaches(rows, {"tests": 10.0}) == []
+    slow = [_timed("tests", 5.0, passed=False), _timed("tests", 40.0, rerun=True)]
+    assert presubmit.budget_breaches(slow, {"tests": 10.0}) == [
+        {"name": "tests", "duration_s": 40.0, "budget_s": 10.0}
+    ]
+
+
+def test_a_failed_or_timed_out_check_never_breaches():
+    rows = [
+        _timed("tests", 900.0, passed=False, timed_out=True),
+        _timed("lint", 900.0, passed=False),
+    ]
+    assert presubmit.budget_breaches(rows, {"tests": 10.0, "lint": 10.0}) == []
+
+
+def test_a_reused_pass_over_budget_breaches_and_one_without_duration_does_not():
+    assert presubmit.budget_breaches([_reused("tests")], {"tests": 10.0}) == [
+        {"name": "tests", "duration_s": 99.0, "budget_s": 10.0}
+    ]
+    bare = {**result("tests"), "reused": True}
+    assert presubmit.budget_breaches([bare], {"tests": 10.0}) == []
+
+
+def test_an_unbudgeted_check_never_appears_and_breaches_follow_the_budget_order():
+    rows = [_timed("tests", 50.0), _timed("lint", 50.0), _timed("types", 50.0)]
+    found = presubmit.budget_breaches(rows, {"types": 1.0, "tests": 1.0})
+    assert [b["name"] for b in found] == ["types", "tests"]
+    assert presubmit.budget_breaches(rows, {}) == []

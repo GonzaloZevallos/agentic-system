@@ -1170,6 +1170,7 @@ def test_exported_graph_uses_the_default_ports():
         "pipeline",
         "integrate",
         "full_checks",
+        "fix_important",
         "copy_review",
         "final_validation",
         "qa_performance",
@@ -1486,7 +1487,7 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     saved table. This is the one existing test edited for the loop: it asserted the order
     the barrier used to impose."""
     remark = {
-        **finding(severity="important", claim="counts subscriptions twice", scope="plan"),
+        **finding(severity="important", claim="counts subscriptions twice", scope="outside"),
         "location": "revenue.py:12",
     }
     plan = planned(

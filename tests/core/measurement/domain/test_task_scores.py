@@ -530,3 +530,10 @@ def test_cost_by_model_sums_every_run_into_its_family_and_a_run_without_it_adds_
 def test_a_document_without_cost_by_model_emits_no_model_score():
     got = by_name(ts.task_scores(document(runs=[run(), run(cost_by_model={})])))
     assert not [n for n in got if n.startswith("cost_usd.model.")]
+
+
+def test_a_pass_written_before_the_pull_request_is_no_landing_run_for_the_followups_score():
+    before = document(landing=[{"step": "fix_important", "before_pr": True}])
+    assert "followups" not in by_name(ts.task_scores(before))
+    both = document(landing=[{"step": "fix_important", "before_pr": True}, {"step": "merge"}])
+    assert by_name(ts.task_scores(both))["followups"].value == 0.0

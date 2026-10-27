@@ -32,7 +32,7 @@ from agentic.shared.configuration import Configuration, experiment_snapshot
 from ..domain import ci, presubmit, rules
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import SetupFailed, subtask_checkout, task_base
+from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Ports
 from .presubmit import declared_checks
@@ -53,7 +53,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     )
     reviewer = reviewer_for(checks, subtask_id, mode=cfg.review_mode, affected=forms or None)
     try:
-        checkout = subtask_checkout(state, subtask_id, cfg, ports)
+        checkout = await subtask_checkout_in_thread(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(TECH_LEAD), ports)
     pair = pair_for(subtask_id)

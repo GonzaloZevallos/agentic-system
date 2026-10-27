@@ -54,6 +54,10 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.rerun_checks(data, source)
 
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        data, source = self._declaration(revision)
+        return stack.check_budgets(data, source)
+
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         """The globs master may gain without a recorded pass going stale. A revision that
         cannot be read -- not fetched, no file, YAML that does not parse, not a mapping, a

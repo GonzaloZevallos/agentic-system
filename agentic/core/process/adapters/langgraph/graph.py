@@ -60,6 +60,7 @@ from ...application.integrate import integrate, integrate_turn
 from ...application.limits import RunLimits
 from ...application.plan import plan
 from ...application.ports import Ports
+from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
 from ...application.review import review
@@ -328,6 +329,10 @@ def build_graph(
     # `after_integrate`, only for a product that declares `delivery_checks`, and always back to
     # the fan-in.
     graph.add_node("full_checks", _system_node(full_checks, shared))
+    # The task's one important pass, before the pull request (GH-354): reached through
+    # `rules.pre_pr_important_due` from `after_integrate`, no role and no model cost, always
+    # back to the fan-in, which sends the reopened units to their Developers.
+    graph.add_node("fix_important", _system_node(fix_important, shared))
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node("split", _system_node(split, shared))
@@ -382,6 +387,7 @@ def build_graph(
         _route(rules.after_integrate),
         [
             PIPELINE,
+            "fix_important",
             "full_checks",
             "copy_review",
             "final_validation",
@@ -393,6 +399,9 @@ def build_graph(
     )
     graph.add_conditional_edges(
         "full_checks", _route(rules.after_full_checks), [INTEGRATE, ESCALATE]
+    )
+    graph.add_conditional_edges(
+        "fix_important", _route(rules.after_fix_important), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges(
         "copy_review", _route(rules.after_copy_review), [INTEGRATE, ESCALATE]

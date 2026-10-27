@@ -122,9 +122,11 @@ LANDING_VERDICT_SYNCS_MAX = 1
 `LandingSpent.verdict_syncs_for_upstream`; declared, not measured. A second diagnosis for the
 same sha reads as `unlandable`: the verdict is a guess, and it is trusted once."""
 
-LANDING_IMPORTANT_PASSES_MAX = 1
-"""`fix_important` passes per task (GH-294), counted in `LandingSpent.important_passes` and
-charged to `LANDING_PASSES_MAX` not at all; declared, not measured."""
+LANDING_IMPORTANT_PASSES_MAX = rules.LANDING_IMPORTANT_PASSES_MAX
+"""`fix_important` passes per task (GH-294), before or after the pull request, read as
+`LandingSpent.important_passes` (`rules.important_pass_spent`) and charged to
+`LANDING_PASSES_MAX` not at all; declared, not measured. Re-exported from `rules`, which
+owns the budget and the question of whether it is spent."""
 
 LANDING_SYNCS_MAX = 6
 """`sync_master` of every kind per task, clean, conflicting or following a verdict, counted in
@@ -798,6 +800,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out[VERDICT_KEY] = verdict
     if isinstance(delivered := raw.get("delivered"), bool):
         out["delivered"] = delivered
+    if raw.get("before_pr") is True:
+        out["before_pr"] = True
     if isinstance(passed := raw.get("checks_passed"), bool):
         out["checks_passed"] = passed
     if isinstance(work := raw.get("integration_work"), bool):
