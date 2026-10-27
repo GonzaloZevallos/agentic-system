@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 6
-summarised: 60
+summaries: 7
+summarised: 70
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -277,3 +277,5 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-353
+  GH-354@review:
+    cost_usd: 0.1246

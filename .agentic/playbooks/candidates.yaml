@@ -683,3 +683,23 @@ candidates:
   - finding
   - return
   added_at: '2026-10-26T16:38:52.546+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: Before you deliver, run the full non-llm suite, not only your own tests. A new test that reads many repo files can trip a repo-wide guard such as the read-coverage check, so run that guard too.
+  confidence: medium
+  seen_in:
+  - GH-354
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T07:16:54.503+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: When a module you integrate fails the type check, fix the type at its source. Never wrap the value in cast to get the checker to pass, because the engineering standards forbid it.
+  confidence: medium
+  seen_in:
+  - GH-354
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T07:16:54.503+00:00'
