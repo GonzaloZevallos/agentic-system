@@ -30,7 +30,9 @@ from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
 from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
+from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
+from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
@@ -189,6 +191,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
         perf_runner=PerfShellRunner(product_key, reaper),
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
         check_results=FilesystemCheckResults(cfg.check_results_dir),
+        scratch=FilesystemScratch(cfg.product_dir),
+        free_space=StatvfsFreeSpace(),
     )
 
 

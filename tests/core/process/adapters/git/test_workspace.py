@@ -149,6 +149,43 @@ def test_what_a_resume_checks_against_git(product):
     assert ws.subtask_checkout("GH-12", "api") == api and api.path.is_dir()
 
 
+def test_scratch_and_kept_stay_out_of_status_and_are_added_once_to_an_older_repo(product):
+    # GH-391: a product repo that predates the scratch lines gets them on its first run,
+    # from any hand-out of a checkout, existing or new, and exactly once.
+    exclude_file = product / ".git/info/exclude"
+    exclude_file.parent.mkdir(exist_ok=True)
+    exclude_file.write_text("# mine\n.agentic/worktrees/")  # no trailing newline, no scratch lines
+    ws = GitWorkspace(product, IDENTITY)
+    first = ws.task_checkout("GH-12")
+    again = ws.task_checkout("GH-12")  # an existing checkout still repairs the file
+    ws.subtask_checkout("GH-12", "api")
+    assert again.path == first.path
+    lines = exclude_file.read_text().splitlines()
+    assert lines[:2] == ["# mine", ".agentic/worktrees/"]
+    assert lines.count(".agentic/tmp/") == 1
+    assert lines.count(".agentic/kept/") == 1
+    assert lines.count(".agentic/worktrees/") == 1
+    (product / ".agentic/tmp/GH-12").mkdir(parents=True)
+    (product / ".agentic/tmp/GH-12/c-01234567").mkdir()
+    (product / ".agentic/tmp/GH-12/c-01234567/file").write_text("x")
+    (product / ".agentic/kept/GH-12").mkdir(parents=True)
+    (product / ".agentic/kept/GH-12/capture.png").write_text("x")
+    assert git("status", "--porcelain", cwd=product) == ""
+
+
+def test_an_existing_checkout_of_an_older_repo_is_repaired_without_being_recreated(product):
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12")
+    exclude_file = product / ".git/info/exclude"
+    exclude_file.write_text(
+        "\n".join(line for line in exclude_file.read_text().splitlines() if "tmp" not in line)
+        + "\n"
+    )
+    assert ".agentic/tmp/" not in exclude_file.read_text()
+    assert ws.task_checkout("GH-12").created is False
+    assert ".agentic/tmp/" in exclude_file.read_text().splitlines()
+
+
 def test_the_checkpointer_file_stays_out_of_the_products_status(product, tmp_path):
     ws = GitWorkspace(product, IDENTITY)
     ws.exclude_system_files()

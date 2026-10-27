@@ -311,3 +311,18 @@ def test_perf_lock_path_defaults_under_xdg_state_home_outside_every_product(monk
     assert Configuration.from_sources(PRODUCT, {}).perf_lock_path == Path(
         "/home/t/.local/state/agentic/perf.lock"
     )
+
+
+def test_the_scratch_floor_defaults_to_2048_mb_and_reads_its_environment():
+    # GH-391: the free space under which the poller starts nothing.
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.scratch_floor_mb == 2048
+    assert cfg.scratch_floor_bytes == 2048 * 1024 * 1024
+    raised = Configuration.from_sources(PRODUCT, {"AGENTIC_SCRATCH_FLOOR_MB": "512"})
+    assert raised.scratch_floor_bytes == 512 * 1024 * 1024
+
+
+@pytest.mark.parametrize("bad", ["-1", "lots"])
+def test_the_scratch_floor_must_be_a_non_negative_number_of_mb(bad):
+    with pytest.raises(ValueError):
+        Configuration.from_sources(PRODUCT, {"AGENTIC_SCRATCH_FLOOR_MB": bad})

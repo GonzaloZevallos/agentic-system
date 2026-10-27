@@ -1,0 +1,148 @@
+"""`FilesystemScratch`: the owner record is written before the directory and removed after
+it, on every way out (GH-391). Real files under `tmp_path`; the boot id and the clock are
+faked."""
+
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
+from agentic.core.process.domain.scratch import OwnerRecord
+
+NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+TOKEN = "0123456789abcdef"
+
+
+def scratch_at(product: Path) -> FilesystemScratch:
+    return FilesystemScratch(product, boot_id=lambda: "boot-a", clock=lambda: NOW)
+
+
+def test_open_gives_the_directory_the_path_for_names(tmp_path):
+    with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
+        assert directory == tmp_path.resolve() / ".agentic/tmp/GH-391/c-01234567"
+        assert directory.is_dir()
+
+
+def test_the_record_holds_pid_boot_slug_kind_and_time(tmp_path):
+    with scratch_at(tmp_path).open("GH-391", "r", TOKEN, "developer") as directory:
+        record = OwnerRecord.from_json(Path(f"{directory}.json").read_text())
+    assert record == OwnerRecord(os.getpid(), "boot-a", "developer", "r", NOW)
+
+
+def test_the_record_exists_before_the_directory_is_made(tmp_path, monkeypatch):
+    seen: list[bool] = []
+    real_mkdir = Path.mkdir
+
+    def mkdir(self, *args, **kwargs):
+        if self.name == "c-01234567":
+            seen.append(self.with_name(self.name + ".json").is_file())
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests"):
+        pass
+    assert seen == [True]
+
+
+def test_the_record_never_shows_half_written(tmp_path, monkeypatch):
+    # Written to a temp name and renamed: the only name `<owner>.json` can ever have is
+    # a whole record, so the rename is what puts it there.
+    renamed: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def replace(source, target):
+        renamed.append((Path(source).name, Path(target).name))
+        assert json.loads(Path(source).read_text())["slug"] == "tests"
+        return real_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", replace)
+    with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests"):
+        pass
+    assert len(renamed) == 1
+    assert renamed[0][1] == "c-01234567.json" and renamed[0][0] != renamed[0][1]
+
+
+def test_after_the_context_neither_the_directory_nor_the_record_remains(tmp_path):
+    with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
+        (directory / "deep").mkdir()
+        (directory / "deep" / "file").write_text("x")
+    parent = tmp_path / ".agentic/tmp/GH-391"
+    assert list(parent.iterdir()) == []
+
+
+def test_after_an_exception_neither_remains_and_the_exception_propagates(tmp_path):
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory,
+    ):
+        (directory / "file").write_text("x")
+        raise RuntimeError("boom")
+    assert list((tmp_path / ".agentic/tmp/GH-391").iterdir()) == []
+
+
+def test_the_record_is_removed_after_the_directory(tmp_path, monkeypatch):
+    # Invariant: the record outlives the directory, so a crash between the two leaves a
+    # record that still names an owner, never an ownerless directory.
+    import shutil
+
+    seen: list[bool] = []
+    real_rmtree = shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        seen.append(Path(f"{path}.json").is_file())
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", rmtree)
+    with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests"):
+        pass
+    assert seen == [True]
+
+
+def test_a_directory_that_cannot_be_made_leaves_no_record(tmp_path, monkeypatch):
+    real_mkdir = Path.mkdir
+
+    def mkdir(self, *args, **kwargs):
+        if self.name == "c-01234567":
+            raise OSError("no")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    with pytest.raises(OSError, match="no"), scratch_at(tmp_path).open("GH-391", "c", TOKEN, "t"):
+        pass
+    assert list((tmp_path / ".agentic/tmp/GH-391").iterdir()) == []
+
+
+def test_no_task_goes_under_untasked(tmp_path):
+    with scratch_at(tmp_path).open(None, "c", TOKEN, "tests") as directory:
+        assert directory.parent.name == "_untasked"
+
+
+def test_two_owners_of_one_task_do_not_share_a_directory(tmp_path):
+    scratch = scratch_at(tmp_path)
+    with (
+        scratch.open("GH-1", "c", "a" * 16, "x") as first,
+        scratch.open("GH-1", "c", "b" * 16, "x") as second,
+    ):
+        assert first != second
+        assert first.is_dir() and second.is_dir()
+    assert not first.exists() and not second.exists()
+
+
+def test_ensure_kept_creates_the_folder_and_never_removes_it(tmp_path):
+    scratch = scratch_at(tmp_path)
+    kept = scratch.ensure_kept("GH-391")
+    assert kept == tmp_path.resolve() / ".agentic/kept/GH-391" and kept.is_dir()
+    (kept / "capture.png").write_text("x")
+    assert scratch.ensure_kept("GH-391") == kept  # idempotent
+    with scratch.open("GH-391", "r", TOKEN, "developer"):
+        pass
+    assert (kept / "capture.png").read_text() == "x"
+
+
+def test_the_default_boot_id_is_the_kernels(tmp_path):
+    with FilesystemScratch(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
+        record = OwnerRecord.from_json(Path(f"{directory}.json").read_text())
+    assert record is not None and record.pid == os.getpid()

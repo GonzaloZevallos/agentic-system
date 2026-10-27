@@ -261,3 +261,15 @@ def test_a_markable_flag_passed_to_the_composition_reaches_the_commands(tmp_path
     stop.set()
     with pytest.raises(RunStopped):
         ports.commands.run(product, "echo hi", timeout_s=10)
+
+
+def test_the_composition_builds_the_scratch_and_free_space_adapters(tmp_path, monkeypatch):
+    # GH-391: both ports are wired for later subtasks to use; the scratch is on the
+    # product's own disk.
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    assert ports.scratch is not None and ports.free_space is not None
+    with ports.scratch.open("GH-1", "c", "0123456789abcdef", "tests") as directory:
+        assert directory.is_relative_to(product.resolve() / ".agentic/tmp")
+    assert ports.free_space.read(product).free_bytes > 0

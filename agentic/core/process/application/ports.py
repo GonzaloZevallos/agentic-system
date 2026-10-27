@@ -23,6 +23,7 @@ from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
+from ..domain.scratch import OwnerKind, SpaceReading
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -1519,6 +1520,31 @@ class PerfLock(Protocol):
         ...
 
 
+class Scratch(Protocol):
+    """A directory on the disk for one check or role attempt, so what it writes never
+    lands on the RAM-backed `/tmp` (GH-391, ADR-0069)."""
+
+    def open(
+        self, task_key: str | None, kind: OwnerKind, token: str, slug: str
+    ) -> AbstractContextManager[Path]:
+        """The directory of one owner, under the product's `.agentic/tmp/<task>/`. Its
+        owner record is written before the directory is created; on the way out the
+        directory is removed, then the record, however the block ended. `token` is the
+        one the owner's processes are marked with."""
+        ...
+
+    def ensure_kept(self, task_key: str | None) -> Path:
+        """The task's evidence folder, `.agentic/kept/<task>/`, created if missing and
+        never removed by this port."""
+        ...
+
+
+class FreeSpace(Protocol):
+    """What is left on the volume a path lives on (GH-391)."""
+
+    def read(self, path: Path) -> SpaceReading: ...
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -1545,3 +1571,8 @@ class Ports:
     # The machine's store of passing check results (ADR-0065). `None` stores and reuses
     # nothing, which is how every checkout ran before it existed.
     check_results: CheckResults | None = None
+    # Where a check or a role attempt's temporary files go, and how much room the volumes
+    # have (GH-391, ADR-0069). `None` leaves everything on the inherited `TMPDIR`, which is
+    # how every checkout ran before.
+    scratch: Scratch | None = None
+    free_space: FreeSpace | None = None
