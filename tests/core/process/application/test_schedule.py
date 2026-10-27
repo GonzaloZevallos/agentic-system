@@ -213,6 +213,24 @@ async def test_the_turn_runs_once_per_completion(cfg):
     assert h.turns == 3
 
 
+async def test_branches_finishing_in_one_wake_up_each_get_their_own_turn(cfg):
+    h = Harness(["a", "b", "c"])
+    h.turn_sleep_s = 0.1
+    run = h.loop(task(sub("a"), sub("b"), sub("c")), 3, cfg)
+    await h.started_("a", "b", "c")
+
+    h.gates["a"].set()
+    await h.settle(1)
+    # `b` and `c` both end while the turn after `a` runs, so they are found done together.
+    h.gates["b"].set()
+    h.gates["c"].set()
+    await asyncio.wait_for(run, WAIT_S)
+
+    assert h.turns == 3
+    assert h.turn_max_active == 1
+    assert h.events.count("turn") == 3
+
+
 async def test_nothing_starts_while_a_turn_runs_and_turns_never_overlap(cfg):
     h = Harness(["a", "b", "c", "d"])
     h.turn_sleep_s = 0.1

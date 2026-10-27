@@ -165,9 +165,9 @@ async def run_subtasks(
 
     `next_to_start` is asked with the folded state, the ids in flight and `limit`; each id it
     names starts as its own asyncio task over a copy of the folded state with `subtask_id`
-    set. Whenever branches finish, their deltas are folded in and the turn runs, alone, in a
-    thread; only then is the rule asked again, so a returned subtask restarts after the turn
-    that prepared it.
+    set. Each branch that finishes has its delta folded in and is followed by one turn, alone,
+    in a thread; only after them is the rule asked again, so a returned subtask restarts after
+    the turn that prepared it.
 
     Once `escalated` is in the folded state nothing new starts and what runs is drained, never
     cancelled. A branch (or the turn) that raises stops the starts, lets the others drain, and
@@ -188,18 +188,20 @@ async def run_subtasks(
                 break
             await asyncio.wait(running.values(), return_when=asyncio.FIRST_COMPLETED)
             finished = [subtask_id for subtask_id, task in running.items() if task.done()]
+            # One turn per completion, even when several finished in this wake-up: each
+            # termination is folded and followed by its own turn.
             for subtask_id in finished:
                 try:
                     documents.complete(subtask_id, running.pop(subtask_id).result())
                 except (Exception, asyncio.CancelledError) as error:
                     failure = failure or error
-            if failure is None:
-                try:
-                    patch = await asyncio.to_thread(turn, documents.folded, cfg, turn_ports)
-                except Exception as error:
-                    failure = error
-                else:
-                    documents.fold(patch)
+                if failure is None:
+                    try:
+                        patch = await asyncio.to_thread(turn, documents.folded, cfg, turn_ports)
+                    except Exception as error:
+                        failure = error
+                    else:
+                        documents.fold(patch)
     finally:
         for task in running.values():
             task.cancel()
