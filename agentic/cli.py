@@ -47,6 +47,7 @@ from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.application import dashboards as dashboards_app
 from .core.measurement.domain import (
     evaluation,
+    parallel_factor,
     playbook_window,
     role_usage,
     scorecard,
@@ -2622,6 +2623,19 @@ def _print_role_usage(
         )
 
 
+def _print_parallel_factor(
+    product: str, baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]
+) -> None:
+    """How many Developer sessions ran at once over one baseline's tasks (GH-364): the
+    recorded attempts' time over the wall time they occupied, summed over the tasks. One
+    line, `n/a` when no run of the baseline carries both timestamps. Not the transcript
+    figure the issue quotes (ADR-0067); nothing is recorded for it."""
+    factor = parallel_factor.aggregate({"runs": figures.runs} for _, figures in tasks)
+    print(
+        f"parallel factor -- {product} / {baseline}: {'n/a' if factor is None else f'{factor:.4f}'}"
+    )
+
+
 async def _eval_compare(
     cfg: Configuration, ports: Ports, frm: str, to: str, system_repo: str | None
 ) -> None:
@@ -2655,6 +2669,8 @@ async def _eval_compare(
     _print_scorecard(product, to, to_sc)
     v = scorecard.verdict(frm_sc, frm, to_sc, to)
     print(f"verdict: {v.outcome} ({v.reason})")
+    _print_parallel_factor(product, frm, buckets[frm])
+    _print_parallel_factor(product, to, buckets[to])
     _print_role_usage(product, frm, buckets[frm])
     _print_role_usage(product, to, buckets[to])
 

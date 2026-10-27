@@ -5285,6 +5285,65 @@ async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scoreca
     assert "1.5000" in rows[1] and rows[1].split()[1] == "2"
 
 
+def timed_run(role: str, section: str, start: str, end: str) -> dict:
+    return {
+        **compare_run(role.lower(), 0.1),
+        "role": role,
+        "section": section,
+        "started_at": f"2026-10-20T{start}.000Z",
+        "ended_at": f"2026-10-20T{end}.000Z",
+    }
+
+
+@pytest.mark.anyio
+async def test_eval_compare_prints_the_parallel_factor_of_each_baseline(tmp_path, capsys):
+    root = eval_root(tmp_path, eval_set=None)
+    # bl-a: two Developers overlapping for 5 of their 10 minutes each -> 20 min over 15.
+    write_compare_document(
+        root,
+        "GH-1",
+        "bl-a",
+        [
+            timed_run("Developer", "Developer: a", "10:00:00", "10:10:00"),
+            timed_run("Developer", "Developer: b", "10:05:00", "10:15:00"),
+        ],
+    )
+    # bl-b: one Developer, then its review, strictly serial -> 1.0 for the task; a second
+    # task with no timestamps adds nothing to either side of the ratio.
+    write_compare_document(
+        root,
+        "GH-2",
+        "bl-b",
+        [timed_run("Developer", "Developer: a", "10:00:00", "10:10:00")],
+    )
+    write_compare_document(root, "GH-3", "bl-b", [compare_run("developer", 1.0)])
+    cfg = Configuration(product_dir=root)
+
+    await cli._eval_compare(cfg, memory_ports(), "bl-a", "bl-b", None)
+
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.startswith("parallel factor")]
+    assert lines == [
+        "parallel factor -- product / bl-a: 1.3333",
+        "parallel factor -- product / bl-b: 1.0000",
+    ]
+    # It sits after the verdict, beside the other per-baseline reads, never inside a scorecard.
+    assert out.index("verdict:") < out.index(lines[0])
+
+
+@pytest.mark.anyio
+async def test_eval_compare_says_n_a_when_a_baseline_has_no_timed_runs(tmp_path, capsys):
+    root = eval_root(tmp_path, eval_set=None)
+    write_compare_document(root, "GH-1", "bl-a", [compare_run("developer", 1.0)])
+    write_compare_document(root, "GH-2", "bl-b", [compare_run("developer", 1.0)])
+
+    await cli._eval_compare(Configuration(product_dir=root), memory_ports(), "bl-a", "bl-b", None)
+
+    out = capsys.readouterr().out
+    assert "parallel factor -- product / bl-a: n/a" in out
+    assert "parallel factor -- product / bl-b: n/a" in out
+
+
 # --- GH-295: criteria documents past the line cap are said, never refused -----------
 
 

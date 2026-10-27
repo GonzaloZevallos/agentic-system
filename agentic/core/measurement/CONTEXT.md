@@ -65,6 +65,11 @@ nuestra y no de nadie más. Los fallos anteriores al commit que separó esos mot
 _Avoid_: KPI, north star, índice
 _Campo_: scorecard — Kaplan y Norton; la lectura como orden lexicográfico es propia
 
+**Factor paralelo**:
+El tiempo de Developer de una tarea (las corridas del Developer y del integrador, cada una de su `started_at` a su `ended_at`) sobre el largo de la unión de esos intervalos y los de las revisiones de subtarea. 1.0 es todo en serie; 2.0, de a dos todo el tiempo. Los huecos sin ninguna corrida, las pausas entre invocaciones y la espera de cupo quedan fuera de todo intervalo. Sobre varias tareas es la suma de numeradores sobre la suma de denominadores. Es una lectura de los documentos (`agentic eval compare` la imprime), no un atributo, métrica ni etiqueta; y no es comparable 1:1 con la cifra de las transcripciones de sesión del issue #364 (1.26), que mide otra cosa.
+_Avoid_: paralelismo, speedup
+_Campo_: parallelism / speedup — la definición es la de la ley de Amdahl sobre tiempo ocupado, sin el tiempo de la corrida en serie
+
 **Brazo**:
 La configuración de experimento bajo la que corrió una tarea: el valor de cada interruptor
 declarado (`review_mode`, `skip_ephemeral`, `reviewer_model`), o `default` cuando ninguno se
