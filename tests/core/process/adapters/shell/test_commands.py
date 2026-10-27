@@ -316,18 +316,27 @@ def test_a_stop_between_the_look_and_the_launch_reaps_the_check_it_just_started(
     nothing, and the command would otherwise run on."""
     pidfile = checkout / "pid"
     commands = _stoppable(worktrees, _FlipsAfterFirstLook())
-    with pytest.raises(RunStopped):
-        commands.run(checkout, f"echo $$ > {pidfile}; exec {SLEEP} 300", timeout_s=60)
-    if pidfile.exists() and pidfile.read_text().strip():
-        try:
-            fd = os.pidfd_open(int(pidfile.read_text()))
-        except ProcessLookupError:
-            return
-        try:
-            assert _gone(fd, 5)
-        finally:
-            _kill(fd)
-            os.close(fd)
+    # The timeout is far longer than the wait below: only the second look can end the call
+    # in time. Without it `communicate` would sit on the `sleep` until the timeout.
+    thread, box = _in_thread(commands, checkout, f"echo $$ > {pidfile}; exec {SLEEP} 300", 120)
+    try:
+        thread.join(timeout=15)
+        assert not thread.is_alive(), "the call went on past the stop: no look after the Popen"
+        assert len(box) == 1 and isinstance(box[0], RunStopped)
+        if pidfile.exists() and pidfile.read_text().strip():  # bash may be killed before it wrote
+            try:
+                fd = os.pidfd_open(int(pidfile.read_text()))
+            except ProcessLookupError:
+                return
+            try:
+                assert _gone(fd, 5)
+            finally:
+                _kill(fd)
+                os.close(fd)
+    finally:
+        if thread.is_alive() and pidfile.exists() and pidfile.read_text().strip():
+            os.kill(int(pidfile.read_text()), signal.SIGKILL)  # let the failing test end
+            thread.join(timeout=10)
 
 
 def test_a_stop_that_meets_the_timeout_is_a_stop_not_a_timed_out_result(worktrees, checkout):
