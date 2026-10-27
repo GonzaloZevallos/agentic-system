@@ -221,11 +221,11 @@ class Stopped(MemoryCommands):
         self.stops = stops
         self.threads: list[str] = []
 
-    def run(self, cwd, command, timeout_s):
+    def run(self, cwd, command, timeout_s, *, env=None):
         self.threads.append(threading.current_thread().name)
         if command == self.stops:
             raise RunStopped
-        return super().run(cwd, command, timeout_s)
+        return super().run(cwd, command, timeout_s, env=env)
 
 
 async def test_a_stop_during_the_checks_propagates_restores_the_tree_and_returns_no_patch():
