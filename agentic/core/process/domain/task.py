@@ -988,6 +988,10 @@ class TaskState(TaskInput, total=False):
     # (GH-204): saved before the push so it stays recoverable, cleared by every plan that
     # does not replace (`rules.replace_record`).
     replaced_remote_tip: str | None
+    # The approved head a stopped run still owes the task branch and the pull request
+    # (GH-373, "publicación debida"): written only by `resuming.prepare` (a sha or `None`
+    # on every resume), cleared only by `deliver`'s single exit. Read with `.get`.
+    publish_owed: NotRequired[str | None]
     # The full sha `deliver` pushed and when (GH-216): the anchor of the CI wait, read with
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str

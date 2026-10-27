@@ -158,6 +158,9 @@ def render(
             if (replaced := state.get("replaced_remote_tip"))
             else {}
         ),
+        # The approved head still owed to the remote (GH-373), written only when set, so a
+        # document without one is byte-identical to one written before.
+        **({"publish_owed": owed} if (owed := state.get("publish_owed")) else {}),
         # Where the CI wait is measured from (GH-216): written only when a delivery set
         # them, so a document without them is byte-identical to one written before.
         **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),

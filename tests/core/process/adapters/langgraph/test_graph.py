@@ -1652,3 +1652,83 @@ async def test_a_failed_delivery_of_a_platform_task_resumes_to_deliver_at_no_cos
     first, second = fakes.tracker.attempted_bodies
     assert first == second
     assert fakes.workspace.cleaned == ["GH-1"]
+
+
+# --- GH-373: a run stopped after its approved integration and full checks ----------------------
+
+OWED_HEAD = "f08dfc738de2" + "0" * 28
+OWED_REMOTE = "6269eea" + "0" * 33
+PRE_MERGE_PULL_REQUEST = "https://github.com/o/r/pull/370"
+
+
+def _stopped_before_publishing() -> dict:
+    """GH-361 as its document says: integration approved at H, full checks passed on H, a
+    pull request from an earlier delivery, and status `developing`."""
+    return {
+        **TASK,
+        "type": "feature",
+        "status": "developing",
+        "current_role": "Tech Lead",
+        "branch": "agentic/GH-1",
+        "pull_request": PRE_MERGE_PULL_REQUEST,
+        "task_head": OWED_HEAD,
+        "full_checks": {
+            "version": 1,
+            "head": OWED_HEAD,
+            "passed": True,
+            "duration_s": 1.0,
+            "declared": {"tests": "pytest"},
+            "results": [{"name": "tests", "passed": True}],
+            "witness": {"passed": True},
+        },
+        "cost_usd": 20.0,
+        "runs": [],
+        "subtasks": {
+            "api": {
+                "id": "api",
+                "status": "approved",
+                "branch": "agentic/GH-1.api",
+                "base": "b1",
+                "reviewed_head": "a2",
+            },
+            "integration": {
+                "id": "integration",
+                "status": "approved",
+                "branch": "agentic/GH-1",
+                "base": "b0",
+                "reviewed_head": OWED_HEAD,
+            },
+        },
+    }
+
+
+async def test_a_run_stopped_after_its_approved_checked_head_publishes_it_without_any_role(
+    config, tmp_path
+):
+    fakes = Fakes()
+    fakes.workspace.existing_branches["agentic/GH-1"] = (OWED_HEAD[:7], "b0")
+    fakes.workspace.existing_branches["agentic/GH-1.api"] = ("a2", "b1")
+    # The remote still holds the pre-merge tip, which the branch contains: the push cell.
+    fakes.workspace.remote_tips["agentic/GH-1"] = OWED_REMOTE
+    fakes.workspace.ancestors = {OWED_REMOTE}
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save(_stopped_before_publishing())
+    ports = replace(memory_ports(), documents=documents, workspace=fakes.workspace)
+    state = resume.from_document("GH-1", ports)
+    r = resume.prepare("GH-1", state, "document", Configuration(product_dir=tmp_path), ports)
+    assert r.target == "deliver"
+
+    script = ScriptedRunner()  # every role fails if it is called
+    stack = MemoryStack(checks={"tests": "pytest"}, delivery_checks=("tests",))
+    app = compiled(script, fakes=fakes, stack=stack)
+    await app.aupdate_state(config, r.paused, as_node="escalate")
+    final = await app.ainvoke(Command(resume={"decision": None}), config=config)
+
+    assert script.calls == []
+    assert fakes.workspace.pushed == ["agentic/GH-1"]
+    assert fakes.tracker.pull_requests == []  # the pull request from before is kept
+    assert final["status"] == "ready_for_review"
+    assert final["pull_request"] == PRE_MERGE_PULL_REQUEST
+    assert final["pushed_head"]
+    assert not final.get("publish_owed")
+    assert "publish_owed" not in (documents.load("GH-1") or {})
