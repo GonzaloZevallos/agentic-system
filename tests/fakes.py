@@ -649,6 +649,11 @@ class MemoryWorkspace:
         self.merge_heads: dict[Path, str] = {}
         self.merge_head_error: str | None = None
         self.abort_error: str | None = None
+        # GH-392: the checkouts a test declares mid-merge (or conflicted) for `merge_in_progress`,
+        # each ask in order, and a text that makes it raise `GitError` instead of answering.
+        self.merges_in_progress: set[Path] = set()
+        self.merge_in_progress_asks: list[Path] = []
+        self.merge_in_progress_error: str | None = None
         self.aborted: list[Path] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
@@ -891,6 +896,12 @@ class MemoryWorkspace:
             paths = self.conflict_paths.get(branch, ("x.py",))
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
+
+    def merge_in_progress(self, path: Path) -> bool:
+        self.merge_in_progress_asks.append(path)
+        if self.merge_in_progress_error is not None:
+            raise GitError(self.merge_in_progress_error)
+        return path in self.merges_in_progress or path in self.merge_heads
 
     def merge_head(self, path: Path) -> str | None:
         if self.merge_head_error is not None:
