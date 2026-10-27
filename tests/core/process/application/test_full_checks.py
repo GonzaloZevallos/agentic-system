@@ -243,3 +243,42 @@ async def test_the_record_holds_each_checks_duration_as_a_number():
     rows = patch["full_checks"]["results"]
     assert [row["name"] for row in rows] == ["tests", "lint"]
     assert all(isinstance(row["duration_s"], float) and row["duration_s"] >= 0 for row in rows)
+
+
+# -- the budget finding: a record and a sentence, never a return (GH-365) --------------------
+
+OVER = -1.0  # the fake stack does not validate; any real duration is above it
+ROOMY = 10_000.0
+
+
+async def test_a_green_run_over_a_budget_records_the_breach_and_still_passes():
+    ports = ports_of(check_budgets={"tests": OVER, "lint": ROOMY})
+    patch = await full_checks(state_of(), CFG, ports)
+    record = patch["full_checks"]
+    assert record["passed"] is True
+    [breach] = record["over_budget"]
+    assert breach["name"] == "tests"
+    assert breach["budget_s"] == OVER
+    tests_row = next(r for r in record["results"] if r["name"] == "tests")
+    assert breach["duration_s"] == tests_row["duration_s"]
+    assert not {"findings", "changes_requested", "subtasks", "status"} & patch.keys()
+    section = patch["sections"]["Full checks"]
+    assert section.startswith("Passed on `base`: tests, lint.")
+    assert section.endswith(f" Over budget: tests {breach['duration_s']}s / {OVER}s.")
+
+
+async def test_a_run_within_budget_or_with_no_budgets_writes_no_over_budget_and_the_same_text():
+    plain = await full_checks(state_of(), CFG, ports_of())
+    roomy = await full_checks(state_of(), CFG, ports_of(check_budgets={"tests": ROOMY}))
+    for patch in (plain, roomy):
+        assert "over_budget" not in patch["full_checks"]
+        assert patch["sections"]["Full checks"] == "Passed on `base`: tests, lint."
+
+
+async def test_a_red_run_is_not_compared_with_the_budgets():
+    commands = MemoryCommands(pytest=[CommandResult(1, "boom")] * 2)
+    ports = ports_of(commands, check_budgets={"lint": OVER})
+    patch = await full_checks(state_of(), CFG, ports)
+    assert patch["full_checks"]["passed"] is False
+    assert "over_budget" not in patch["full_checks"]
+    assert "Over budget" not in patch["sections"]["Full checks"]

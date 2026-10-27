@@ -62,6 +62,46 @@ async def test_an_observation_item_lands_in_its_own_pr_section_blocking_items_do
     assert "never here" not in body
 
 
+# --- GH-365: the checks over budget, only when the full run recorded some ---------------
+
+
+def _full_checks(**more):
+    return {
+        "version": 1,
+        "head": "abc",
+        "passed": True,
+        "duration_s": 9.0,
+        "declared": {"tests": "pytest", "lint": "ruff check ."},
+        "results": [{"name": "tests", "passed": True}, {"name": "lint", "passed": True}],
+        "witness": None,
+        **more,
+    }
+
+
+async def test_the_body_lists_the_checks_over_budget_exactly_when_the_record_in_force_has_some(cfg):
+    breaches = [
+        {"name": "tests", "duration_s": 61.5, "budget_s": 60.0},
+        {"name": "lint", "duration_s": 9.0, "budget_s": 5.0},
+    ]
+    ports = memory_ports()
+    await deliver({**TASK, "full_checks": _full_checks(over_budget=breaches)}, cfg, ports)
+    body = ports.tracker.pull_requests[0][2]
+    assert "## Checks over budget" in body
+    assert "| Check | Seconds | Budget (s) |" in body
+    assert "| tests | 61.5 | 60.0 |" in body
+    assert "| lint | 9.0 | 5.0 |" in body
+    assert "repeats across tasks" in body and "`stack.yaml`" in body
+
+
+async def test_a_record_without_over_budget_leaves_the_body_as_it_was(cfg):
+    plain = memory_ports()
+    await deliver(TASK, cfg, plain)
+    within = memory_ports()
+    await deliver({**TASK, "full_checks": _full_checks()}, cfg, within)
+    assert within.tracker.pull_requests[0][2] == plain.tracker.pull_requests[0][2]
+    assert "budget" not in within.tracker.pull_requests[0][2].lower()
+
+
 # --- GH-203: the body always fits, and a delivery that fails says so ---------------
 
 GITHUB_LIMIT = 65_536

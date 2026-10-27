@@ -80,6 +80,12 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         flaked = {entry["name"] for entry in record["results"] if entry.get("flake")}
         shown = [_shown(name, reused, flaked) for name in declared]
         text = f"Passed on `{head}`: {', '.join(shown)}."
+        if breaches := presubmit.budget_breaches(gate.results, ports.stack.check_budgets(base)):
+            # A record and a sentence, never a return: a slow suite is not a failed one.
+            record["over_budget"] = [
+                {**b, "duration_s": round(b["duration_s"], 1)} for b in breaches
+            ]
+            text += f" {_over_budget_sentence(record['over_budget'])}"
     else:
         patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
         text = text or f"Failed on `{head}`: no check output was recorded."
@@ -105,6 +111,15 @@ def _record(
     if not record["passed"]:
         record["failed_step"] = str(merged["failed_step"])
     return record
+
+
+def _over_budget_sentence(breaches: list[presubmit.BudgetBreach]) -> str:
+    """`Over budget: <name> <N>s / <M>s, ...`: declared names and numbers only."""
+    return (
+        "Over budget: "
+        + ", ".join(f"{b['name']} {b['duration_s']}s / {b['budget_s']}s" for b in breaches)
+        + "."
+    )
 
 
 def _shown(name: str, reused: set[str], flaked: set[str]) -> str:

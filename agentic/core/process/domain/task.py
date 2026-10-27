@@ -31,7 +31,7 @@ from typing import (
     get_type_hints,
 )
 
-from .presubmit import FAILED_IDS_MAX, CheckResult, FlakeGate
+from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate
 from .reaping import ReapedProcess
 
 Status = Literal[
@@ -883,6 +883,10 @@ class FullChecksRecord(TypedDict):
     results: list[FullCheckEntry]
     witness: dict[str, Any] | None
     failed_step: NotRequired[str]
+    # The checks that took longer than their declared budget (GH-365): a declared name and two
+    # numbers, written by the system only, and only on a passed run that had a breach. It
+    # returns and blocks nothing.
+    over_budget: NotRequired[list[BudgetBreach]]
 
 
 class TaskState(TaskInput, total=False):

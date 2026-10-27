@@ -348,6 +348,17 @@ def budget_breaches(
     ]
 
 
+def over_budget_markdown(breaches: Sequence[BudgetBreach]) -> str:
+    """The pull request's `Checks over budget` part: one row per breach of the record in force,
+    and the one sentence on how to read it. Called only with at least one breach."""
+    rows = [f"| {b['name']} | {b['duration_s']} | {b['budget_s']} |" for b in breaches]
+    table = "\n".join(["| Check | Seconds | Budget (s) |", "|---|---|---|", *rows])
+    return (
+        f"{table}\n\nOnly a breach that repeats across tasks means the suite grew; the remedy "
+        "is the budget in `stack.yaml` or a smaller suite."
+    )
+
+
 def refused(reason: str, count: int) -> str:
     """The reason as the model reads it, with how many refusals are left."""
     limit = REFUSALS if count <= REFUSALS else MOVING_REFUSALS
