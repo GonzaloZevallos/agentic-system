@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
+from . import rules
 from .rules import review_section
 from .task import INTEGRATION, FindingRecord, TaskState
 
@@ -71,7 +72,7 @@ def _moment(text: object) -> datetime | None:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
-def before_pr(entry: Mapping[str, object]) -> bool:
-    """Whether a `landing` entry was written before the pull request existed (the pre-PR
-    important pass): such an entry says nothing about a pull request."""
-    return bool(entry.get("before_pr"))
+before_pr = rules.before_pr
+"""Whether a `landing` entry was written before the pull request existed (the pre-PR
+important pass): such an entry says nothing about a pull request. Re-exported from `rules`,
+which owns the reading."""
