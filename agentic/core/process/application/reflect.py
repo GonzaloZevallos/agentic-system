@@ -31,6 +31,7 @@ from ..domain import playbook as pb
 from ..domain import playbook_candidates as pc
 from ..domain import rules
 from ..domain.document import HUMAN
+from ..domain.returns import is_return
 from ..domain.roles import PM_FINAL, REFLECTOR, prompt_hash
 from ..domain.task import INTEGRATION, TaskState
 from .ports import GitError, Ports
@@ -145,7 +146,7 @@ def _return_facts(document: Mapping[str, Any], task_type: str) -> list[Fact]:
     seen: dict[str, int] = {}
     out: list[Fact] = []
     for order, entry in enumerate(document.get("change_history") or []):
-        if not isinstance(entry, Mapping) or entry.get("by") == "landing":
+        if not isinstance(entry, Mapping) or not is_return(entry):
             continue  # a landing return has no review delivery of its own
         pair = str(entry.get("pair") or "")
         seen[pair] = seen.get(pair, 0) + 1
