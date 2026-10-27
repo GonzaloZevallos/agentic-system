@@ -202,6 +202,23 @@ En el código es `rules.holds_launches` (qué `Deferred` la abre) y `rules.LandW
 _Avoid_: reserva, bloqueo, cola de aterrizaje
 _Campo_: sin término de arte
 
+**Espejo del tablero**:
+Lo que el poller mantiene en el GitHub Project para que el dueño vea en un solo lugar en qué está cada issue de ambos productos: una Tarjeta por issue, escrita desde hechos que el poller ya calculó. Es una salida: ninguna decisión del sistema lee el valor de un campo del Project, sólo sus ids de nodo. Lleva la memoria de lo enviado y solo envía lo que cambió, así que una vuelta ociosa no llama al Project. Sin `AGENTIC_BOARD_PROJECT` no existe. El sistema nunca escribe Bloque ni Hito y nunca borra un ítem (ADR-0069).
+En el código es `domain/board.py` y el puerto `Board`.
+_Avoid_: dashboard, sincronización, tablero de verdad
+_Campo_: sin término de arte
+
+**Etapa**:
+El estado de una Tarjeta, uno de seis: Corriendo, Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano.
+_Avoid_: estado, status, columna
+_Campo_: `Status` de GitHub Projects (renombrado Etapa)
+
+**Tarjeta**:
+Los cinco valores que el Espejo del tablero escribe para un issue: Etapa, Bloqueo, Costo USD, Inicio y Fin. Su huella (un hash de los cinco) es lo que la memoria de lo enviado compara para saber si hay algo que enviar.
+En el código es `board.Card`.
+_Avoid_: ítem, fila, entrada
+_Campo_: ítem de GitHub Projects
+
 **Cercanía**:
 Qué tan cerca de aterrizar está una tarea: el orden en que el poller arranca lo que cuenta contra el tope en una vuelta (reanudaciones, retomas y aterrizajes con modelo; el lanzamiento va último). Se ordena launch < definition < plan < development < review < delivered < land: una tarea con pull request está en `delivered`, una sin ella está en la fase más avanzada que alcanzó una de sus corridas (la más lejana, no la última), y una sin corridas está en `definition`. En el código es `rules.closeness`, un índice en `rules.CLOSENESS`; a igual cercanía decide el número de issue.
 _Avoid_: prioridad, urgencia, proximidad
