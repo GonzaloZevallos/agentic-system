@@ -291,3 +291,13 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-355
+  GH-364@review:
+    cost_usd: 0.079
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-364

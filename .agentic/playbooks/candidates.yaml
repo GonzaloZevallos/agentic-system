@@ -730,3 +730,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-27T10:21:47.869+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you change a mechanism, run the existing tests that touch it several times, each alone, and fix any order-dependent one before delivering. Never claim the suite passes unedited from one green run.
+  confidence: medium
+  seen_in:
+  - GH-364
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T10:59:58.030+00:00'
