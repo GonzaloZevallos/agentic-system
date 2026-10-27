@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -2634,7 +2634,7 @@ def increment_patch(state: TaskState) -> TaskState:
     if unit is None:
         raise ValueError("a task with no reviewed unit has no increment to review")
     sub = state["subtasks"][unit]
-    return {"subtasks": {unit: {**sub, "status": "delivered"}}}
+    return cast(TaskState, {"subtasks": {unit: {**sub, "status": "delivered"}}})
 
 
 # The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller

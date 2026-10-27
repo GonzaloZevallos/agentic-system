@@ -19,7 +19,11 @@ def state(**more):
         "escalation_class": "failure",
         "branch": rules.task_branch(TASK),
         "subtasks": {
-            "api": {"status": "approved", "reviewed_head": "1" * 40, "branch": "agentic/GH-373.api"},
+            "api": {
+                "status": "approved",
+                "reviewed_head": "1" * 40,
+                "branch": "agentic/GH-373.api",
+            },
             "integration": {
                 "status": "approved",
                 "reviewed_head": H,
@@ -86,7 +90,9 @@ def test_any_other_condition_failing_refuses_a_descendant(more):
 @pytest.mark.parametrize(
     "more",
     [
-        pytest.param({"escalated": None, "escalation_class": None}, id="stopped-without-escalating"),
+        pytest.param(
+            {"escalated": None, "escalation_class": None}, id="stopped-without-escalating"
+        ),
         pytest.param({"escalation_class": "failure"}, id="role-failure"),
     ],
 )

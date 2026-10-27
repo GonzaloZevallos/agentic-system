@@ -140,7 +140,9 @@ def test_another_approved_subtask_that_moved_keeps_todays_line(cfg):
 
 def test_a_task_waiting_on_questions_is_not_an_increment_case(cfg):
     ports = world(document=stopped(escalation_class="questions", questions_for_human=["which?"]))
-    assert lines(refusal(ports, cfg)) == [f"- integration: approved at {H}, but `{BRANCH}` is at {X}"]
+    assert lines(refusal(ports, cfg)) == [
+        f"- integration: approved at {H}, but `{BRANCH}` is at {X}"
+    ]
 
 
 def test_a_unit_not_on_the_task_branch_keeps_todays_line_without_asking_ancestry(cfg):

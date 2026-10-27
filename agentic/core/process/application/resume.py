@@ -185,7 +185,9 @@ def seed_increment(task_id: str, cfg: Configuration, ports: Ports) -> Seed:
             descends = ports.workspace.is_ancestor(cfg.product_dir, approved, head)
         except (GitError, ValueError) as failed:
             unreadable = failed
-    verdict = "refuse" if unreadable else rules.integration_increment(state, task_id, head, descends)
+    verdict = (
+        "refuse" if unreadable else rules.integration_increment(state, task_id, head, descends)
+    )
     if verdict != "increment":
         problems = disagreements(state, ports.workspace)
         today = f"{unit}: approved at {approved}, but `{branch}` is at {head}"
@@ -504,9 +506,7 @@ def _increment_lines(r: Resumption) -> list[str]:
         f"descendant: reviewing the increment {inc.approved}..{inc.head}"
     ]
     if inc.dirty:
-        lines.append(
-            f"uncommitted files in `{inc.checkout}` will be committed into the increment"
-        )
+        lines.append(f"uncommitted files in `{inc.checkout}` will be committed into the increment")
     return lines
 
 
