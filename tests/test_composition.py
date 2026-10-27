@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from agentic import composition
+from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
 from agentic.core.process.application.ports import RunStopped
@@ -272,4 +273,4 @@ def test_the_composition_builds_the_scratch_and_free_space_adapters(tmp_path, mo
     assert ports.scratch is not None and ports.free_space is not None
     with ports.scratch.open("GH-1", "c", "0123456789abcdef", "tests") as directory:
         assert directory.is_relative_to(product.resolve() / ".agentic/tmp")
-    assert ports.free_space.read(product).free_bytes > 0
+    assert isinstance(ports.free_space, StatvfsFreeSpace)

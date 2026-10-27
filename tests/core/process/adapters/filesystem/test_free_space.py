@@ -21,6 +21,17 @@ def test_bytes_are_what_an_unprivileged_user_may_write_and_inodes_the_available_
     assert StatvfsFreeSpace().read(tmp_path) == SpaceReading(free_bytes=25 * 4096, free_inodes=7)
 
 
-def test_a_directory_not_made_yet_is_read_through_its_nearest_existing_parent(tmp_path):
+def test_a_directory_not_made_yet_is_read_through_its_nearest_existing_parent(
+    tmp_path, monkeypatch
+):
+    asked: list[object] = []
+    fake = os.statvfs_result((4096, 4096, 100, 90, 25, 20, 9, 7, 0, 255))
+
+    def statvfs(path: object) -> os.statvfs_result:
+        asked.append(path)
+        return fake
+
+    monkeypatch.setattr(os, "statvfs", statvfs)
     reading = StatvfsFreeSpace().read(tmp_path / "not" / "yet" / "made")
-    assert reading == StatvfsFreeSpace().read(tmp_path)
+    assert asked == [tmp_path]
+    assert reading == SpaceReading(free_bytes=25 * 4096, free_inodes=7)
