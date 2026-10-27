@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Literal
 
 from .rules import review_section
 from .task import INTEGRATION, FindingRecord, TaskState
@@ -22,7 +22,7 @@ LANDING = "landing"
 Origin = Literal["owner_review", "integration_review", "landing_review"]
 
 
-def is_return(entry: Mapping[str, Any]) -> bool:
+def is_return(entry: Mapping[str, object]) -> bool:
     """Whether `entry` is a real return: it names a pair and the landing did not write it."""
     return bool(entry.get("pair")) and entry.get("by") != LANDING
 
@@ -47,7 +47,7 @@ def _first_after_pr(state: TaskState) -> datetime | None:
     stamps = [
         moment
         for entry in state.get("landing", [])
-        if not entry.get("before_pr")
+        if not before_pr(entry)
         if (moment := _moment(entry.get("at"))) is not None
     ]
     return min(stamps, default=None)
@@ -69,3 +69,9 @@ def _moment(text: object) -> datetime | None:
         return None
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
+
+
+def before_pr(entry: Mapping[str, object]) -> bool:
+    """Whether a `landing` entry was written before the pull request existed (the pre-PR
+    important pass): such an entry says nothing about a pull request."""
+    return bool(entry.get("before_pr"))
