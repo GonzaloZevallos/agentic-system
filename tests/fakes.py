@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from agentic.core.process.application.ports import (
     CommandResult,
     Commands,
     FlagVocabulary,
+    FreeSpace,
     GitError,
     Inbox,
     IssueComment,
@@ -43,6 +45,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
     SampleApp,
     SampleAppHandle,
+    Scratch,
     TaskDocuments,
     Tracker,
     Upstream,
@@ -51,6 +54,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
+from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.performance import Run, Scenario
@@ -59,6 +63,7 @@ from agentic.core.process.domain.presubmit import CheckResult, RerunForm
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
+from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -1557,6 +1562,77 @@ class FakePerfLock:
         self.released += 1
 
 
+class MemoryScratch:
+    """GH-391: `open` hands out the path `scratch.path_for` names under `root` without
+    touching a disk, and records who opened it (`opened`, as `(task, kind, token, slug)`),
+    which directories are open now (`live`) and which task folders were asked for
+    (`kept`). The directory is "removed" when the block ends, however it ends."""
+
+    def __init__(self, root: Path = Path("/scratch-root")) -> None:
+        self.root = root
+        self.opened: list[tuple[str | None, str, str, str]] = []
+        self.live: set[Path] = set()
+        self.kept: list[Path] = []
+        # What a sweep sees on the "disk", and every decision it was asked to carry out.
+        self.tasks: list[str] = []
+        self.owners: list[scratch_domain.OwnerEntry] = []
+        self.kept_on_disk: list[tuple[str, datetime]] = []
+        self.swept: list[scratch_domain.SweepDecision] = []
+
+    @contextmanager
+    def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
+        directory = self.root / scratch_domain.path_for(task_key, scratch_domain.owner(kind, token))
+        self.opened.append((task_key, kind, token, slug))
+        self.live.add(directory)
+        try:
+            yield directory
+        finally:
+            self.live.discard(directory)
+
+    def ensure_kept(self, task_key: str | None) -> Path:
+        kept = self.root / scratch_domain.kept_path_for(task_key)
+        self.kept.append(kept)
+        return kept
+
+    def listing(self) -> scratch_domain.ScratchListing:
+        """The `tasks` and `owners` a test put on the "disk" (no disk is read)."""
+        return scratch_domain.ScratchListing(tuple(self.tasks), tuple(self.owners))
+
+    def kept_folders(self) -> list[tuple[str, datetime]]:
+        return list(self.kept_on_disk)
+
+    def sweep(self, decision: scratch_domain.SweepDecision) -> None:
+        """Records the decision and takes what it names off the "disk", as the adapter does."""
+        self.swept.append(decision)
+        self.tasks = [t for t in self.tasks if t not in decision.tasks]
+        self.owners = [o for o in self.owners if o.task not in decision.tasks]
+        gone = {(r.task, r.name) for r in decision.owners if r.directory and r.record}
+        self.owners = [o for o in self.owners if (o.task, o.name) not in gone]
+        self.kept_on_disk = [k for k in self.kept_on_disk if k[0] not in decision.kept]
+
+
+class FakeFreeSpace:
+    """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
+    every path, ample by default (a terabyte and ten million inodes), or the reading of
+    the longest path in `by_path` that contains the one asked, and records what was asked."""
+
+    AMPLE = SpaceReading(free_bytes=10**12, free_inodes=10**7)
+
+    def __init__(
+        self, reading: SpaceReading = AMPLE, by_path: Mapping[Path, SpaceReading] | None = None
+    ) -> None:
+        self.reading = reading
+        self.by_path = dict(by_path or {})
+        self.asked: list[Path] = []
+
+    def read(self, path: Path) -> SpaceReading:
+        self.asked.append(path)
+        containing = [p for p in self.by_path if path == p or p in path.parents]
+        if not containing:
+            return self.reading
+        return self.by_path[max(containing, key=lambda p: len(p.parts))]
+
+
 class FakeReaper:
     """GH-282: records every reap it was asked for, as `(scope, task_id, run, token)`, and
     answers the tuple it was configured with, the same for every scope, never touching a
@@ -1649,6 +1725,8 @@ def memory_ports(
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
     check_results: CheckResults | None = None,
+    scratch: Scratch | None = None,
+    free_space: FreeSpace | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -1667,6 +1745,8 @@ def memory_ports(
         perf_runner=perf_runner,
         perf_lock=perf_lock,
         check_results=check_results,
+        scratch=scratch,
+        free_space=free_space,
     )
 
 

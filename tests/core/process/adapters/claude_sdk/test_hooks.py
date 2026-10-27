@@ -414,3 +414,102 @@ async def test_a_stop_in_the_gate_returns_no_decision_and_waits_for_the_cancella
     assert scope.cancelled_caught  # never returned: neither a deny nor an allow for the SDK
     assert outputs == []
     assert presubmit.calls == 1
+
+
+# -- the attempt's own scratch and its task's evidence folder (GH-391) -----------------
+
+
+class _Layout:
+    """A product root with an attempt's worktree, scratch and kept folder on a real disk."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.cwd = root / ".agentic/worktrees/GH-1.b"
+        self.scratch = root / ".agentic/tmp/GH-1/r-aaaaaaaa"
+        self.kept = root / ".agentic/kept/GH-1"
+        self.store = root / ".agentic/check-results"
+        for directory in (self.cwd, self.scratch, self.kept, self.store):
+            directory.mkdir(parents=True)
+
+    @property
+    def allowed(self) -> tuple[Path, Path]:
+        return (self.scratch, self.kept)
+
+
+@pytest.fixture
+def layout(tmp_path) -> _Layout:
+    return _Layout(tmp_path / "product")
+
+
+def test_path_denial_allows_the_scratch_and_the_evidence_folder_it_is_given(layout):
+    for path in (layout.kept / "GH-1.b-home.png", layout.scratch / "y", layout.scratch / "a/b/c"):
+        assert hooks.path_denial(str(path), layout.cwd, allowed=layout.allowed) is None
+    # Relative to where the call runs, as a path in the checkout is.
+    assert (
+        hooks.path_denial("../../tmp/GH-1/r-aaaaaaaa/z", layout.cwd, allowed=layout.allowed) is None
+    )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".agentic/kept/GH-2/x.png",
+        ".agentic/kept/GH-1x/x.png",
+        ".agentic/tmp/GH-1/r-bbbbbbbb/y",
+        ".agentic/tmp/GH-1/r-aaaaaaaa.json",
+        ".agentic/tmp/GH-2/r-aaaaaaaa/y",
+        ".agentic/worktrees/GH-1.other/x.py",
+        ".agentic/tmp/GH-1/r-aaaaaaaa/../r-bbbbbbbb/y",
+        ".agentic/kept/GH-1/../GH-2/x.png",
+        "other.py",
+    ],
+)
+def test_path_denial_still_refuses_everything_else_outside_the_checkout(layout, relative):
+    reason = hooks.path_denial(str(layout.root / relative), layout.cwd, allowed=layout.allowed)
+    assert reason and hooks.OUTSIDE_PATH in reason
+
+
+def test_path_denial_refuses_a_symlink_that_leaves_the_allowed_directory(layout):
+    (layout.scratch / "out").symlink_to(layout.root / ".agentic/kept")
+    (layout.kept / "back").symlink_to(layout.cwd)
+    for path in (layout.scratch / "out/GH-2/x.png", layout.kept / "back/f"):
+        reason = hooks.path_denial(str(path), layout.cwd, allowed=layout.allowed)
+        assert reason and hooks.OUTSIDE_PATH in reason
+
+
+def test_path_denial_without_an_allowance_is_the_guard_it_always_was(layout):
+    for path in (layout.scratch / "y", layout.kept / "x.png"):
+        assert hooks.OUTSIDE_PATH in str(hooks.path_denial(str(path), layout.cwd))
+        assert hooks.OUTSIDE_PATH in str(hooks.path_denial(str(path), layout.cwd, allowed=()))
+    assert hooks.path_denial("app/x.py", layout.cwd, allowed=layout.allowed) is None
+
+
+def test_git_internals_stay_denied_inside_an_allowed_directory(layout):
+    reason = hooks.path_denial(str(layout.kept / ".git/config"), layout.cwd, allowed=layout.allowed)
+    assert reason and hooks.GIT_PATH in reason
+
+
+async def test_the_edit_hook_allows_exactly_the_allowance_and_the_store_still_wins(layout):
+    matchers = hooks.hooks_for(
+        DEVELOPER, layout.cwd, None, store=layout.store, allowed=layout.allowed
+    )
+
+    async def edit(tool, path):
+        payload = {
+            "tool_name": tool,
+            "tool_input": {"file_path": str(path), "content": "x", "new_string": "x"},
+            "cwd": str(layout.cwd),
+        }
+        return denied(await call(matchers, "PreToolUse", payload))
+
+    for tool in ("Write", "Edit"):
+        assert await edit(tool, layout.kept / "x.png") == []
+        assert await edit(tool, layout.scratch / "y") == []
+        assert hooks.OUTSIDE_PATH in (await edit(tool, layout.root / ".agentic/kept/GH-2/x.png"))[0]
+        assert await edit(tool, layout.root / ".agentic/worktrees/GH-1.o/x.py")
+    # A store that lives inside an allowed directory is still not ours to touch.
+    inside = layout.kept / "results"
+    inside.mkdir()
+    matchers = hooks.hooks_for(DEVELOPER, layout.cwd, None, store=inside, allowed=layout.allowed)
+    reasons = await edit("Write", inside / "k.json")
+    assert reasons and all(hooks.STORE_PATH in reason for reason in reasons)

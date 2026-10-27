@@ -112,7 +112,10 @@ ChangeCategory = FindingCategory | CopyCategory | Literal["definition"]
 # facts covers (narrowed by `account_limit`, `upstream` and `network`, ADR-0029), `other`
 # the residual nothing else names, `stall` an attempt that hung with nothing to wait for
 # and was killed by the watchdog (`domain/stall.py`, ADR-0057): a reason of its own, not
-# an external one, so the poller never retakes it by itself.
+# an external one, so the poller never retakes it by itself, `disk_full` an attempt that
+# broke with the disk it writes to full, derived from what was measured (free bytes and
+# inodes, an `ENOSPC` caught as structured data), never from the error's text (GH-391,
+# ADR-0069): external, because the machine, not the role, failed.
 FailureReason = Literal[
     "schema",
     "check",
@@ -121,6 +124,7 @@ FailureReason = Literal[
     "account_limit",
     "upstream",
     "network",
+    "disk_full",
     "sdk",
     "stall",
     "other",
