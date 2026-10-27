@@ -371,6 +371,11 @@ class Failure(TypedDict):
     # Why the attempt failed, from the closed set (`FailureReason`); absent on a
     # failure recorded before this field existed.
     reason: NotRequired[FailureReason]
+    # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
+    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
+    # only a wait hint, never the reason. Absent on any other failure and on one recorded
+    # before this field existed.
+    resets_at: NotRequired[str]
     # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
     # absent on a failure recorded before this field existed.
     slug: NotRequired[str]
@@ -736,6 +741,9 @@ class FailurePauseEntry(TypedDict):
     kind: Literal["failure"]
     value: FailureReason
     section: str
+    # The failure's `resets_at`, copied by `rules.logged` only when it has one; absent on an
+    # entry written before this field existed (`rules.auto_resumable` never requires it).
+    resets_at: NotRequired[str]
 
 
 class LapsePauseEntry(TypedDict):

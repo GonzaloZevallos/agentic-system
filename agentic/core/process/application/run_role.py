@@ -62,7 +62,16 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import cost_history, document, plan_view, playbook, rules, schemas, turn_notice
+from ..domain import (
+    account_reset,
+    cost_history,
+    document,
+    plan_view,
+    playbook,
+    rules,
+    schemas,
+    turn_notice,
+)
 from ..domain.document import HUMAN
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import (
@@ -510,6 +519,9 @@ async def run_with_retry(
                 ended_at = _now_iso()
         except AttemptFailed as exc:
             limits.record(exc.cost_usd)
+            resets_at = (
+                account_reset.reset_at(str(exc), _now()) if exc.reason == "account_limit" else None
+            )
             failures.append(
                 {
                     "role": role.name,
@@ -528,8 +540,13 @@ async def run_with_retry(
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
                     **({"reaped": exc.reaped} if exc.reaped else {}),
+                    **({"resets_at": resets_at.isoformat()} if resets_at else {}),
                 }
             )
+            if exc.reason == "account_limit" and attempt == 1:
+                # A retry against a limit that cannot clear before its reset fails the same
+                # way and only counts a second failure (ADR-0039, addendum GH-381).
+                break
             continue
         limits.record(output.cost_usd)
         output.failures = failures
@@ -582,10 +599,15 @@ def _stale_session(resume: str | None, failures: list[Failure], cold_prompt: str
     )
 
 
+def _now() -> datetime:
+    """The run's clock: the one place this module reads the time, so a test sets it."""
+    return datetime.now(UTC)
+
+
 def _now_iso() -> str:
     """ISO-8601 UTC, millisecond precision: the format `RoleRun.started_at` and
     `.ended_at` share."""
-    return datetime.now(UTC).isoformat(timespec="milliseconds")
+    return _now().isoformat(timespec="milliseconds")
 
 
 def _retry_input(

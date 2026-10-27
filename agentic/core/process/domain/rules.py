@@ -2599,6 +2599,14 @@ RETAKE_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 # (ADR-0039, 2026-10-05 addendum). Never read off the API's "resets at" prose.
 ACCOUNT_LIMIT_SCHEDULE: tuple[int, ...] = (15,) * 24
 
+# The provider's session window: a stated reset further away than this is not a session
+# reset (ADR-0039, addendum GH-381; `account_reset.reset_at`).
+SESSION_WINDOW = timedelta(hours=5)
+
+# Clock skew between this machine and the provider, added to the window so a reset the
+# provider states at the window's edge is not refused (ADR-0039, addendum GH-381).
+SESSION_WINDOW_MARGIN = timedelta(minutes=10)
+
 # Backstop for a loop the per-window count cannot see: a cheap role keeps delivering
 # runs (each one opens a fresh window) while another role keeps hitting a per-model
 # 429. Compared against the whole-chase count a delivered run never resets, only a
@@ -2611,6 +2619,17 @@ ACCOUNT_LIMIT_CHASE_MAX = 96
 # Never read off the API's "resets at" prose (ADR-0029).
 ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
+
+
+def _failure_entry(failure: Failure) -> FailurePauseEntry:
+    """The `pause_log` entry of one failed attempt; `resets_at` is copied only when the
+    failure has one, so an entry without a stated reset has no such key."""
+    entry = FailurePauseEntry(
+        kind="failure", value=failure.get("reason", "other"), section=failure.get("section", "")
+    )
+    if "resets_at" in failure:
+        entry["resets_at"] = failure["resets_at"]
+    return entry
 
 
 def logged(
@@ -2628,12 +2647,7 @@ def logged(
     about its own cause must never read as `account_limit` and ease into an automatic
     retry. `lapses` (GH-342) are bookkeeping steps that failed after the work was done, one
     `"lapse"` entry each, after the failures: no reader of the epoch counts them."""
-    entries: list[PauseEntry] = [
-        FailurePauseEntry(
-            kind="failure", value=f.get("reason", "other"), section=f.get("section", "")
-        )
-        for f in failures
-    ]
+    entries: list[PauseEntry] = [_failure_entry(f) for f in failures]
     if (cls := patch.get("escalation_class")) is not None:
         entries.append(EscalationPauseEntry(kind="escalation", value=cls))
     entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)
@@ -2677,6 +2691,19 @@ def auto_resumable(state: TaskState) -> FailureReason | None:
     if not all(f["value"] in EXTERNAL_REASONS for f in failures):
         return None
     return failures[-1]["value"]
+
+
+def stated_reset(state: TaskState) -> datetime | None:
+    """The latest `resets_at` among the current epoch's `account_limit` failure entries
+    (ADR-0039, addendum GH-381), the latest by time whatever order they were logged in;
+    entries without one, or with one that is not ISO-8601 with an offset, are ignored.
+    `None` when none states a reset: the pause then follows its calendar as ever."""
+    stated = [
+        _instant(entry.get("resets_at"))
+        for entry in _current_epoch(state)
+        if entry["kind"] == "failure" and entry["value"] == "account_limit"
+    ]
+    return max((t for t in stated if t is not None), default=None)
 
 
 def schedule_for(reason: FailureReason, chase_prior: int = 0) -> tuple[int, ...]:
@@ -3193,6 +3220,42 @@ class ResumeCandidate:
     # spent: appended with defaults so a candidate built without them stays valid.
     chase_prior: int = 0
     ceiling_spent: bool = False
+    # An `account_limit` pause's stated reset (ADR-0039, addendum GH-381): the latest
+    # `resets_at` of the current epoch's failures, and whether a retake was already made
+    # after the `Escalated:` comment that followed it. Read only by `account_limit_due`.
+    resets_at: datetime | None = None
+    retaken: bool = False
+
+
+def account_limit_due(
+    since: datetime,
+    prior: int,
+    limit: int,
+    now: datetime,
+    *,
+    schedule: tuple[int, ...],
+    resets_at: datetime | None,
+    retaken: bool,
+) -> datetime | None:
+    """The one place an `account_limit` pause's due time is decided (ADR-0039, addendum
+    GH-381), only once due like `next_attempt_at`: the stated reset `resets_at` for the
+    first retake after the `Escalated:` comment that followed it (never before it, with no
+    margin, and whatever `prior` and `limit` say: the slots before the reset are neither
+    run nor counted); `next_attempt_at(since, prior, limit, now, schedule)` otherwise --
+    no stated reset, or a retake already made (`retaken`) -- so a later retake keeps its
+    spacing and its exhaustion. Reads no clock: `now` arrives as an argument."""
+    if resets_at is not None and not retaken:
+        return resets_at if resets_at <= now else None
+    return next_attempt_at(since, prior, limit, now, schedule=schedule)
+
+
+def _governing_reset(r: ResumeCandidate) -> datetime | None:
+    """The stated reset that decides `r`'s due time, `None` when none does: only an
+    `account_limit` pause that is not yet retaken and has not spent the persisted week
+    (`account_limit_persisted` escalates it, whatever the hint says)."""
+    if r.reason != "account_limit" or r.retaken or account_limit_persisted(r):
+        return None
+    return r.resets_at
 
 
 def retake_calendar(
@@ -3218,15 +3281,26 @@ def retake_due(r: ResumeCandidate, now: datetime) -> datetime | None:
     """The candidate's next automatic attempt, only once due (`next_attempt_at` on the
     calendar `_calendar` names)."""
     schedule, prior, limit = _calendar(r)
-    return next_attempt_at(r.since, prior, limit, now, schedule=schedule)
+    return account_limit_due(
+        r.since,
+        prior,
+        limit,
+        now,
+        schedule=schedule,
+        resets_at=_governing_reset(r),
+        retaken=r.retaken,
+    )
 
 
 def resume_exhausted(r: ResumeCandidate) -> bool:
     """Whether a resume candidate needs a human now: its own calendar is spent
     (`limit` counts window slots only, `0` is just an empty calendar; an `account_limit`
     past `ACCOUNT_LIMIT_CHASE_MAX` has the hourly week) or an interview's ceiling is
-    spent. The one exhaustion decision `poll_plan` takes over a resume."""
+    spent. The one exhaustion decision `poll_plan` takes over a resume. A pause a stated
+    reset governs (`_governing_reset`) is not exhausted by the calendar it skips."""
     schedule, prior, limit = _calendar(r)
+    if _governing_reset(r) is not None:
+        return r.ceiling_spent
     return _schedule_exhausted(prior, limit, schedule=schedule) or r.ceiling_spent
 
 
@@ -3252,6 +3326,19 @@ def account_limit_persisted_patch() -> dict[str, Any]:
         reason="other",
     )
     return logged({**escalation("failure", ACCOUNT_LIMIT_PERSISTED)}, [failure])
+
+
+def needs_a_human(state: TaskState) -> bool:
+    """Whether a pause or escalation adds the `needs-human` label (GH-381): the one
+    decision every site that labels calls. False only for a pause the poller retakes on
+    its own because the account limit alone caused it (`auto_resumable` reads
+    `account_limit`) and that has not spent the hourly week (`ACCOUNT_LIMIT_PERSISTED`,
+    the escalation that is left to the human). Everything else keeps the label: an
+    `upstream` or `network` pause, a mixed set of external and own failures, an
+    escalation that is not a failure."""
+    if state.get("escalated") == ACCOUNT_LIMIT_PERSISTED:
+        return True
+    return auto_resumable(state) != "account_limit"
 
 
 @dataclass(frozen=True)

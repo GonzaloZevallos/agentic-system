@@ -298,7 +298,8 @@ def _escalate(context: LandingContext, reason: str, cls: EscalationClass = "fail
         return
     escalated = apply(current, state_from(rules.logged(dict(rules.escalation(cls, reason)))))
     context.ports.documents.save(escalated)
-    context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
+    if rules.needs_a_human(escalated):
+        context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
     context.ports.tracker.comment(
         context.task_id, escalate.comment(escalated, context.cfg, context.ports)
     )

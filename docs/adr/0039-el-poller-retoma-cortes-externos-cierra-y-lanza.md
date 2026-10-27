@@ -629,3 +629,52 @@ humano corrió `agentic resume`.
 Cada retoma repite solo el nodo que cayó (reanuda desde el checkpoint) y ocupa una plaza de
 `available_slots`: el peor caso son 6 repeticiones por comentario humano, independiente de los
 merges. El poller no corre nada nuevo en una vuelta sin huellas.
+
+## Adenda (2026-10-27): un 429 de la cuenta que dice cuándo se levanta se espera hasta esa hora, sin `needs-human` (GH-381)
+
+### Evidencia
+
+El documento de GH-373 de apostrophe tenía 10 ciclos `resumed → failure(account_limit) ×2 →
+escalation(failure)`: cinco con "resets 5:40am" y cinco con "resets 10:40am". El motivo ya era
+`account_limit` (lo decide solo el estado HTTP 429, ADR-0029) y el poller ya lo retomaba por
+`ACCOUNT_LIMIT_SCHEDULE`; el problema eran tres cosas: cada retoma antes de la hora se gastaba
+en vano (una plaza, el label `needs-human` y un comentario), `run_with_retry` reintentaba
+contra un límite que no se levanta hasta la hora (cada pausa contaba 2 fallos) y nada ataba la
+retoma a la hora dicha.
+
+### Decisión
+
+- **Reemplaza la cláusula descartada** de "Considerados y descartados" ("Esperar hasta la hora
+  que dice 'resets 7:30pm'"): ahora se espera, pero la hora es solo una pista de espera, nunca
+  decide el motivo. `account_reset.reset_at` la lee solo del texto `resets <h>[:mm]am|pm (<zona
+  IANA>)` y la guarda como `resets_at` (ISO-8601 con offset, clave opcional de `Failure` y de
+  la entrada `failure` del `pause_log`).
+- **Cotas y respaldo**: la hora vale solo si cae después de la observación y a no más de
+  `SESSION_WINDOW` (5 h) más `SESSION_WINDOW_MARGIN` (10 min). Si no parsea o cae fuera, no hay
+  pista y el sistema se comporta como antes: el calendario plano de 15 minutos.
+- **Primera retoma**: cae en la primera vuelta del poller en o después de la hora dicha, sin
+  margen extra. Solo esa primera retoma usa la pista; las siguientes de la misma pausa siguen
+  `next_attempt_at`, así que el espaciado y el agotamiento siguen valiendo.
+- **Sin reintento dentro del turno**: `run_with_retry` no reintenta tras un primer fallo
+  `account_limit`; `upstream` y `network` siguen reintentando una vez.
+- **Sin `needs-human`**: una pausa causada solo por el límite de la cuenta (y no persistida,
+  `ACCOUNT_LIMIT_PERSISTED`) ya no lleva el label. El comentario `Escalated:` y el registro
+  `escalation(failure)` quedan: son la pausa y su reloj. `rules.needs_a_human` es la única
+  decisión, y la llaman los tres sitios que ponen el label (`escalate.escalate`, el
+  diagnóstico fallido del aterrizaje y la persistencia del límite); `resume.announce` solo
+  quita el label cuando esa misma decisión lo habría puesto.
+
+### Costos aceptados
+
+- Un 429 por modelo o por gasto que traiga una cláusula "resets" retiene los lanzamientos y los
+  aterrizajes de modelo del producto hasta 5 h 10 min.
+- Una retoma a la hora dicha puede encontrar el límite sin levantar: cuesta una sonda de ~0 USD
+  y luego cae al calendario de 15 minutos.
+- Cuántas veces la lectura cae al respaldo no lo cuenta ninguna métrica; si el proveedor cambia
+  el texto, el sistema vuelve en silencio al calendario de antes.
+- Una pausa que ya tenía el label de antes de este cambio lo conserva al retomarse.
+
+### Riesgo conocido
+
+Como en ADR-0045: el 429 de otro producto de la misma cuenta no se ve; el costo es casi nulo
+porque el 429 llega en el primer turno.

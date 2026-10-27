@@ -40,12 +40,13 @@ def sub(id_, status="pending", **more):
 
 
 async def test_run_role_logs_each_failure_then_the_escalation(cfg):
-    # classify's own PjM run is `run_role`'s own call: two account_limit failures hit
-    # `run_role.escalation`'s own `cls="failure"` path.
+    # classify's own PjM run is `run_role`'s own call: an upstream cut, then an account_limit
+    # one (which is not retried, so it ends the run), hit `run_role.escalation`'s own
+    # `cls="failure"` path.
     ports = memory_ports(
         ScriptedRunner(
             pjm=[
-                AttemptFailed("429 once", reason="account_limit"),
+                AttemptFailed("502 once", reason="upstream"),
                 AttemptFailed("429 twice", reason="account_limit"),
             ]
         )
@@ -53,7 +54,7 @@ async def test_run_role_logs_each_failure_then_the_escalation(cfg):
     patch = await classify(TASK, cfg, ports)
     assert patch["escalation_class"] == "failure"
     assert patch["pause_log"] == [
-        {"kind": "failure", "value": "account_limit", "section": "PjM"},
+        {"kind": "failure", "value": "upstream", "section": "PjM"},
         {"kind": "failure", "value": "account_limit", "section": "PjM"},
         {"kind": "escalation", "value": "failure"},
     ]
