@@ -205,9 +205,9 @@ def _utc_now() -> str:
 
 def _failure_class(error: ValueError) -> TrackerFailureClass | None:
     """The closed class of a `gh` failure by the type of the error, never by its text;
-    `None` for what is not a GitHub failure (a missing `gh`), which a best-effort write
-    does not absorb. A plain `ValueError` caused by a non-zero exit is a refusal: with no
-    retry policy `run_gh` keeps its original `ValueError` (ADR-0050)."""
+    `None` for what is not one of those (a missing `gh`, or the plain `ValueError` `run_gh`
+    raises on a refusal when there is no retry policy, ADR-0050), which a best-effort write
+    does not absorb."""
     if isinstance(error, TrackerTimedOut):
         return "timed_out"
     if isinstance(error, TrackerUnreachable):
@@ -216,9 +216,7 @@ def _failure_class(error: ValueError) -> TrackerFailureClass | None:
         return "transient"
     if isinstance(error, TrackerRateLimited):
         return "rate_limited"
-    if isinstance(error, TrackerRefused) or isinstance(
-        error.__cause__, subprocess.CalledProcessError
-    ):
+    if isinstance(error, TrackerRefused):
         return "refused"
     return None
 

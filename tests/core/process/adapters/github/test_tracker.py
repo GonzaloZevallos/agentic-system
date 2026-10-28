@@ -1500,11 +1500,6 @@ def test_a_note_that_lands_returns_none_and_makes_the_same_gh_call_as_comment_an
             ),
             id="a refusal under a policy",
         ),
-        pytest.param(
-            "refused",
-            lambda: (Outcomes(_failed_gh("could not resolve to an Issue " + _SECRET)), None),
-            id="a refusal with no policy, still a ValueError of gh's own",
-        ),
     ],
 )
 @pytest.mark.parametrize("target", ["comment", "label"])
@@ -1524,7 +1519,9 @@ def test_a_note_that_failed_returns_the_class_of_the_error_never_its_text(target
 
 def test_a_failed_note_writes_one_log_line_naming_the_call_and_the_class():
     lines: list[str] = []
-    tracker = GhTracker(Path("/p"), Outcomes(_failed_gh("no auth")), lines.append)
+    tracker = GhTracker(
+        Path("/p"), Outcomes(_failed_gh("no auth")), lines.append, retry=_quiet_policy()
+    )
 
     assert tracker.note("GH-12", "x") is not None
 
@@ -1549,3 +1546,14 @@ def test_a_note_on_a_task_with_no_issue_calls_nothing(target):
         "label": lambda t: t.drop_label("T-abc", "x"),
     }[target]
     assert note(GhTracker(Path("/p"), run)) is None and run.calls == []
+
+
+@pytest.mark.parametrize("target", ["comment", "label"])
+@pytest.mark.parametrize("code", [1, 4])
+def test_a_refusal_with_no_policy_is_a_plain_value_error_and_raises_from_a_note(target, code):
+    """Only the hierarchy and `TrackerRefused` are absorbed: with no policy `run_gh` keeps
+    its plain `ValueError` (ADR-0050), an authentication failure (exit 4) included."""
+    run = Outcomes(_failed_gh("no auth " + _SECRET, code))
+    with pytest.raises(ValueError) as raised:
+        _NOTES[target](GhTracker(Path("/p"), run, lambda line: None))
+    assert type(raised.value) is ValueError
