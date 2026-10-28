@@ -29,6 +29,8 @@ sequenceDiagram
         Land->>Land: spawn resume --from-document when the technical stage reopens
     else file_followups_and_land
         Land->>GitHub: open follow-up issues, merge
+    else adr_number_taken
+        Land->>GitHub: renumber when the rule can decide, else escalate_adr asks the human once, then none
     else budget spent, ledger only
         Land->>GitHub: escalate_ledger asks the human once, then none
     else budget spent, a clean slice exists
@@ -55,7 +57,7 @@ sequenceDiagram
    hacer en vez de* mergear. El paso queda en la lista `landing` del documento antes de
    ejecutarse, y cada tipo de paso tiene su brazo en
    `agentic/core/process/application/landing.py:_dispatch`.
-4. **Los pasos.** `LandingStepKind` tiene 14 tipos
+4. **Los pasos.** `LandingStepKind` tiene 15 tipos
    (`agentic/core/process/domain/landing.py:LandingStepKind`), cada uno con su brazo en
    `_dispatch`. Con modelo o con el upstream: traer el upstream (`sync_master`), volver a
    revisar (`re_review`), corregir (`fix`), el pase final sobre los importantes propios
@@ -63,7 +65,8 @@ sequenceDiagram
    que quedó fuera de alcance y mergear (`file_followups_and_land`), renumerar el ADR cuyo
    número ya tomó master (`renumber`), aterrizar por tramos (`land_slice`) y diagnosticar
    (`diagnose`). Sin gastar modelo: esperar (`wait`), escribir lo que la aprobación vigente de
-   PM cubre (`settle`), preguntarle una vez al humano por lo que no cubre (`escalate_ledger`),
+   PM cubre (`settle`), preguntarle una vez al humano por lo que no cubre (`escalate_ledger`) o por una colisión de
+   números de ADR que la regla no puede decidir (`escalate_adr`),
    escalar (`escalate`) y no hacer nada (`none`). Los brazos están en
    `agentic/core/process/application/landing_sync.py`,
    `agentic/core/process/application/landing_fix.py` y
@@ -82,3 +85,6 @@ sequenceDiagram
    `agentic/core/process/domain/landing.py:after_diagnosis` lo convierte en una sincronización
    más (`sync_master`), un reinicio (`restart`) o un escalado (`escalate`). El reinicio es el
    último recurso: avisa en el issue con el motivo y el costo hasta ese momento.
+   El rechazo `adr_number_taken` no pasa por `exhausted()`: es `renumber` cuando la regla decide
+   la colisión y quedan renumeraciones (`LANDING_RENUMBERS_MAX`); si no, una sola `escalate_adr`
+   por (cabeza, rechazo), y después `none`. Nunca `diagnose` ni `restart` (ADR-0049, adenda GH-412).

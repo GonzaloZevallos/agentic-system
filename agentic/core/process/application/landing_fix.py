@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from ..domain import ci, plan_settlement, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.copy import copy_location_parts
 from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import (
@@ -365,6 +366,73 @@ def escalate_ledger(context: LandingContext) -> None:
         "questions",
         [question],
     )
+
+
+WAY_OUT_ADR = "renumber the colliding ADRs by hand and push"
+
+
+def _moves_lines(moves: Sequence[tuple[str, str]]) -> str:
+    return "\n".join(f"- {old} -> {new}" for old, new in moves)
+
+
+def adr_collision_reason(found: Renaming | Ambiguous, cap: int) -> str:
+    """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
+    numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
+    is a number two own ADRs share (nothing was calculated); one with moves names each move
+    the rule chose, its closed reason and the path and line to fix by hand; a `Renaming` is
+    here only because `cap` renumbers were spent and master kept taking the numbers they
+    chose. Every case ends with the way out."""
+    if isinstance(found, Ambiguous) and not found.moves:
+        what = (
+            f"The branch has ADR files that share a number ({found.reason}): {found.detail}. "
+            "No number was calculated, so there is nothing to apply."
+        )
+    elif isinstance(found, Ambiguous):
+        what = (
+            "The branch's ADR numbers collide with master's and the renumbering cannot rewrite "
+            f"every reference without guessing (`{found.reason}`). The numbers the rule chose:\n"
+            f"{_moves_lines(found.moves)}\n"
+            f"Fix by hand: {found.detail}."
+        )
+    else:
+        what = (
+            f"{cap} renumbers were spent and master still holds the numbers they chose. "
+            f"The moves that kept losing to master:\n{_moves_lines(found.moves)}"
+        )
+    return (
+        f"{what}\nNo model was run and the task was not restarted. To go on, {WAY_OUT_ADR}, "
+        "or decide on this issue. A new head goes through the landing table again; a reply "
+        "without a new head does not ask again."
+    )
+
+
+def escalate_adr(context: LandingContext) -> None:
+    """The one question the landing asks about an ADR collision `renumber` cannot settle
+    (GH-412, ADR-0049): class `questions`, never a restart. The entry is resolved only after
+    the escalation is saved and its comment posted, so a comment that fails leaves it open and
+    the next round asks again."""
+    found = context.facts.adr_collision
+    if found is None:
+        context.log(f"agentic: land: {context.task_id}: escalate_adr: no collision to ask about")
+        return
+    cap = landing_rules.LANDING_RENUMBERS_MAX
+    _escalate(
+        context,
+        "ADR number collision with master the renumbering cannot settle",
+        "questions",
+        [adr_collision_reason(found, cap)],
+    )
+    document = context.ports.documents.load(context.task_id)
+    if document is None:
+        return
+    cost = document.get("cost_usd", 0.0)
+    resolved = landing_rules.resolve_open(
+        landing_plan.all_entries(document),
+        (context.clock or _now)(),
+        cost if isinstance(cost, int | float) else 0.0,
+    )
+    context.ports.documents.save({**state_from(document), "landing": resolved})
+    landing_sync.record_landing(context, resolved)
 
 
 def escalate_failed_diagnosis(context: LandingContext) -> None:

@@ -213,7 +213,7 @@ def test_after_a_sync_masters_own_0049_stays_and_only_the_branchs_is_renumbered(
     assert "0049-theirs.md" in _tree(ports)
 
 
-def test_a_master_that_takes_the_next_number_on_every_tick_ends_in_diagnose_after_three_pushes(
+def test_a_master_that_takes_the_next_number_on_every_tick_asks_the_human_after_three_pushes(
     tmp_path,
 ):
     ports, _ = _world(tmp_path)
@@ -226,7 +226,7 @@ def test_a_master_that_takes_the_next_number_on_every_tick_ends_in_diagnose_afte
 
     result = _land(tmp_path, ports)
 
-    assert (result.kind, result.step) == ("skipped", "diagnose")
+    assert result.step == "escalate_adr"
     assert len(ports.workspace.pushes) == landing_cap
     assert len(ports.workspace.path_commits) == landing_cap
     assert [e["step"] for e in ports.documents.load("GH-5")["landing"]] == ["renumber"] * 3

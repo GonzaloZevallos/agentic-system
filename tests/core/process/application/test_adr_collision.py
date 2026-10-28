@@ -7,9 +7,11 @@ from dataclasses import replace
 
 from agentic.core.process.application import adr_collision, merge
 from agentic.core.process.application.ports import GitError, Upstream
+from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.adr_numbers import Ambiguous, Renaming
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import URL, _pr, _ready
+from tests.core.process.domain.test_landing import _facts, _spent
 from tests.fakes import MemoryTracker, memory_ports
 
 MINE = "docs/adr/0049-mine.md"
@@ -181,3 +183,59 @@ def test_a_git_failure_reading_the_collision_stops_the_verb_instead_of_escaping(
     assert result.kind == "stopped"
     assert (result.reason or "").startswith("adr_unreadable")
     assert ports.commands.ran == []
+
+
+GH384_OWN = [f"docs/adr/{n:04d}-gh384-{n}.md" for n in range(54, 61)]
+GH384_MASTER = "docs/adr/0054-local-checks-and-ci-run-one-list-enforced-by-a-test.md"
+GH384_MOVES = ((GH384_OWN[0], "docs/adr/0061-gh384-54.md"),)
+GH384_LINES = (
+    "| 0054 | configuration per business |",
+    "numbers 0054–0060",
+    "ADR-0054…ADR-0060",
+    "ADRs 0054, 0055",
+)
+
+
+def _gh384(lines: tuple[str, ...]):
+    """GH-384's shape built the way landing builds it: the branch's own commits add ADRs
+    0054-0060, master gained its own 0054 meanwhile, and `adr_collision` reads that history."""
+    ports = _ports()
+    base = ports.workspace.master_sha
+    ports.workspace.advance_master(GH384_MASTER)
+    head = ports.workspace.add_branch_commit(
+        adds=tuple(GH384_OWN),
+        lines=tuple(("docs/notes.md", line) for line in lines),
+        master=base,
+    )
+    for path in GH384_OWN:
+        _text(ports, head, path, f"# {path}\n")
+    _text(ports, head, "docs/notes.md", "\n".join(lines) + "\n")
+    return adr_collision.adr_collision(ports, ports.workspace.master_sha, head), head
+
+
+def _gh384_step(found, head: str, *, escalated: bool = False) -> landing_rules.LandingStep:
+    return landing_rules.landing_step(
+        "adr_number_taken",
+        _facts(pr_head=head, adr_collision=found),
+        _spent(),
+        (),
+        adr_escalated=escalated,
+    )
+
+
+def test_gh384_shape_escalates_with_the_moves_and_is_never_a_restart():
+    found, head = _gh384(GH384_LINES)
+    assert isinstance(found, Ambiguous)
+    assert found.moves == GH384_MOVES
+
+    step = _gh384_step(found, head)
+    assert step.kind == "escalate_adr"
+    assert step.kind not in ("restart", "diagnose", "land_slice")
+    assert _gh384_step(found, head, escalated=True).kind == "none"
+
+
+def test_gh384_shape_with_only_the_listed_citations_renumbers_just_the_colliding_adr():
+    found, head = _gh384(("ADRs 0054, 0055", "ADR-0054"))
+    assert isinstance(found, Renaming)
+    assert found.moves == GH384_MOVES
+    assert _gh384_step(found, head).kind == "renumber"

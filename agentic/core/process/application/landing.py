@@ -469,6 +469,8 @@ def _dispatch(context: LandingContext) -> None:
             landing_fix.settle(context)
         case "escalate_ledger":
             landing_fix.escalate_ledger(context)
+        case "escalate_adr":
+            landing_fix.escalate_adr(context)
         case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:

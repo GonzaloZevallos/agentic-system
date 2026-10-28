@@ -226,6 +226,105 @@ def test_a_moved_path_without_a_text_is_refused_loudly():
         _rewrite({OLD: NEW}, {}, [])
 
 
+# -- GH-384: seven branch ADRs, master gained its own 0054 -------------------------------
+
+GH384_OWN = [
+    OwnAdr(f"{ADR}{_adr(f'{n:04d}', 'mine')}", "c1") for n in range(54, 61)
+]  # 0054-mine.md .. 0060-mine.md
+
+
+def test_gh_384_only_the_colliding_adr_moves_and_the_rest_stay_in_place():
+    moved = adr_numbers.collisions([_adr("0053"), _adr("0054", "theirs")], GH384_OWN)
+    assert moved == {f"{ADR}0054-mine.md": f"{ADR}0061-mine.md"}
+
+
+def test_master_gaining_two_numbers_moves_both_in_one_call():
+    master = [_adr("0053"), _adr("0054", "theirs"), _adr("0055", "theirs")]
+    assert adr_numbers.collisions(master, GH384_OWN) == {
+        f"{ADR}0054-mine.md": f"{ADR}0061-mine.md",
+        f"{ADR}0055-mine.md": f"{ADR}0062-mine.md",
+    }
+
+
+def test_a_second_collision_after_the_first_renumbering_takes_the_next_free_number():
+    # Round 1 moved 0054 to 0061; master has since gained a 0055 of its own.
+    own = [OwnAdr(f"{ADR}{_adr(f'{n:04d}', 'mine')}", "c1") for n in range(55, 62)]
+    master = [_adr("0053"), _adr("0054", "theirs"), _adr("0055", "theirs")]
+    assert adr_numbers.collisions(master, own) == {f"{ADR}0055-mine.md": f"{ADR}0062-mine.md"}
+
+
+GH384_MOVES = {f"{ADR}0054-mine.md": f"{ADR}0061-mine.md"}
+
+
+def _gh384(line: str, own: bool = True):
+    texts = {f"{ADR}0054-mine.md": (None, "x\n"), "d.md": ("", f"{line}\n")}
+    return _rewrite(GH384_MOVES, texts, [_line("d.md", line)] if own else [])
+
+
+@pytest.mark.parametrize("line", ["ADRs 0054, 0055", "ADR-0054", "ADR 0054 and 0055"])
+def test_the_grammar_the_rule_decides_is_rewritten_on_own_lines(line):
+    result = _gh384(line)
+    assert isinstance(result, Renaming)
+    assert result.texts["d.md"] == line.replace("0054", "0061") + "\n"
+
+
+@pytest.mark.parametrize(
+    ("line", "reason"),
+    [
+        ("ADR-0054…ADR-0060", "range"),
+        ("ADR-0054...ADR-0060", "range"),
+        ("numbers 0054–0060", "range"),
+        ("numbers 0054 — 0060", "range"),
+        ("numbers 0054-0060", "range"),
+        ("ADR-0054 to ADR-0060", "range"),
+        ("ADR 0054 through 0060", "range"),
+        ("0050 a ADR 0054", "range"),
+        ("ADR-0050..ADR-0054", "range"),
+        ("| 0054 | configuration per business |", "unclassified_token"),
+    ],
+)
+def test_a_line_the_rule_cannot_decide_is_ambiguous_and_carries_the_moves(line, reason):
+    result = _gh384(line)
+    assert isinstance(result, Ambiguous)
+    assert result.reason == reason
+    assert "d.md:1" in result.detail and line in result.detail
+    assert result.moves == tuple(sorted(GH384_MOVES.items()))
+
+
+def test_a_range_between_numbers_that_do_not_move_is_no_range_of_ours():
+    result = _gh384("ADR-0010…ADR-0020 and ADR-0054")
+    assert isinstance(result, Renaming)
+    assert result.texts["d.md"] == "ADR-0010…ADR-0020 and ADR-0061\n"
+
+
+def test_a_range_on_a_line_the_branch_did_not_add_is_left_untouched():
+    result = _gh384("ADR-0054…ADR-0060", own=False)
+    assert isinstance(result, Renaming)
+    assert "d.md" not in result.texts
+
+
+def test_the_hyphen_of_a_full_file_name_is_not_a_range():
+    result = _gh384("see 0054-mine.md and docs/adr/0054-mine.md")
+    assert isinstance(result, Renaming)
+    assert result.texts["d.md"] == "see 0061-mine.md and docs/adr/0061-mine.md\n"
+
+
+def test_a_double_move_carries_the_moves_in_its_ambiguity():
+    moves = {f"{ADR}0054-a.md": f"{ADR}0061-a.md", f"{ADR}0054-b.md": f"{ADR}0062-b.md"}
+    texts = {f"{ADR}0054-a.md": (None, "a\n"), f"{ADR}0054-b.md": (None, "b\n")}
+    result = _rewrite(moves, texts, [])
+    assert isinstance(result, Ambiguous)
+    assert result.reason == "duplicate_own_number"
+    assert result.moves == tuple(sorted(moves.items()))
+
+
+def test_a_duplicate_own_number_found_by_collisions_carries_no_moves():
+    own = [OwnAdr(f"{ADR}{_adr('0049', 'a')}", "c1"), OwnAdr(f"{ADR}{_adr('0049', 'b')}", "c2")]
+    result = adr_numbers.collisions([], own)
+    assert isinstance(result, Ambiguous)
+    assert result.moves == ()
+
+
 # -- the acceptance: two tasks on one base both add "the next" ADR -----------------------
 
 BASE = {
