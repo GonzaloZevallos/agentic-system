@@ -16,7 +16,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
     Upstream,
 )
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import document, rules
 from agentic.core.process.domain.landing import LandingStepKind
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import (
@@ -838,3 +838,51 @@ def test_a_pass_resolved_before_the_pull_request_is_a_pass_done_for_the_merge():
     assert _facts_of({**raw, **before}).important_pass_done is True
     in_flight = {"landing": [{"step": "fix_important", "before_pr": True}]}
     assert _facts_of({**raw, **in_flight}).important_pass_done is False
+
+
+DOCS_HEAD = "d" * 40
+
+
+def _docs_pr() -> PullRequest:
+    return PullRequest(
+        state="OPEN",
+        created_at="2026-10-05T00:00:00Z",
+        merged_at=None,
+        commits=(),
+        head_oid=DOCS_HEAD,
+    )
+
+
+def _reloaded(**more):
+    """A delivered task's document as the poller reads it: rendered to disk text and parsed
+    back, so a key the frontmatter drops would show here."""
+    raw = {
+        "id": "GH-5",
+        "title": "t",
+        "description": "d",
+        "sections": {},
+        "status": "ready_for_review",
+        "type": "feature",
+        "subtasks": {"only": {"id": "only", "status": "approved", "reviewed_head": HEAD}},
+        **more,
+    }
+    return document.parse(document.render(raw))
+
+
+def _decision(raw):
+    facts = poll._merge_facts("GH-5", raw, _docs_pr(), frozenset(), 5, MASTER)
+    return rules.auto_merge_decision(facts)
+
+
+def test_the_close_docs_commit_read_back_from_the_document_is_a_reviewed_head():
+    record = {"parent": HEAD, "head": DOCS_HEAD, "paths": ["docs/product/dashboard.md"]}
+    covered = _decision(_reloaded(close_docs=record))
+    assert covered.reason != "head_not_reviewed"
+    assert _decision(_reloaded()) == rules.MergeDecision("refuse", "head_not_reviewed")
+
+
+def test_a_close_docs_record_with_a_foreign_parent_or_other_paths_is_not_covered():
+    foreign = {"parent": "c" * 40, "head": DOCS_HEAD, "paths": ["docs/product/dashboard.md"]}
+    assert _decision(_reloaded(close_docs=foreign)).reason == "head_not_reviewed"
+    outside = {"parent": HEAD, "head": DOCS_HEAD, "paths": ["agentic/core/x.py"]}
+    assert _decision(_reloaded(close_docs=outside)).reason == "head_not_reviewed"
