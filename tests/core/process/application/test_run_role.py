@@ -1,5 +1,6 @@
 """Retry semantics and delivery of one role, against a scripted runner."""
 
+import dataclasses
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast, get_args
@@ -1603,3 +1604,89 @@ async def test_the_flat_cap_keeps_its_class_and_text_when_both_are_reached(tmp_p
     assert patch["escalation_class"] == "cap"
     assert patch["escalated"] == "PjM stopped by the task cap: 90.00 of 50.00 USD spent"
     assert "proposed_estimate" not in patch
+
+
+class _UnreadablePrompts:
+    """A `Prompts` whose snapshot of the role's file could not be read (GH-409)."""
+
+    def __init__(self, error: Exception | None = None, playbook_error: Exception | None = None):
+        self.error = error
+        self.playbook_error = playbook_error
+
+    def playbook(self, role):
+        if self.playbook_error:
+            raise self.playbook_error
+        return Playbook(slug=role.slug)
+
+    def raw(self, role):
+        if self.error:
+            raise self.error
+        return "Role prompt.", Path(f"/memory/{role.slug}.md")
+
+
+async def _run_pjm_with(prompts, tmp_path):
+    runner = ScriptedRunner(pjm=[OK])
+    ports = memory_ports(runner)
+    ports = dataclasses.replace(ports, prompts=prompts)
+    result = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        PJM,
+        Configuration(product_dir=tmp_path),
+        ports,
+        product="x",
+    )
+    return result, runner
+
+
+async def test_a_prompt_with_a_placeholder_nobody_fills_escalates_as_a_render_failure(tmp_path):
+    ports = memory_ports(ScriptedRunner(pjm=[OK]))
+    ports.prompts.overrides["pjm"] = "Hello {{nobody_passes_this}}"
+    runner = cast(ScriptedRunner, ports.runner)
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        PJM,
+        Configuration(product_dir=tmp_path),
+        ports,
+        product="x",
+    )
+    assert output is None and runner.calls == []
+    assert patch["status"] == "waiting_on_human"
+    assert patch["escalation_class"] == "failure"
+    assert patch["escalated"].startswith("prompt of PjM cannot be rendered: ")
+    assert "{{nobody_passes_this}}" in patch["escalated"]
+    [failure] = patch["failures"]
+    assert failure["reason"] == "render"
+    assert failure["cost_usd"] == 0.0 and failure["session_id"] == ""
+    assert patch["cost_usd"] == 0.0
+    assert patch["current_role"] == "PjM"
+    assert "prompts" not in patch and "sections" not in patch and "runs" not in patch
+
+
+@pytest.mark.parametrize(
+    "error", [OSError("disk gone"), UnicodeDecodeError("utf-8", b"", 0, 1, "x")]
+)
+async def test_a_prompt_the_snapshot_could_not_read_escalates_as_a_render_failure(tmp_path, error):
+    (output, patch), runner = await _run_pjm_with(_UnreadablePrompts(error=error), tmp_path)
+    assert output is None and runner.calls == []
+    assert patch["escalated"].startswith("prompt of PjM cannot be rendered: ")
+    assert [f["reason"] for f in patch["failures"]] == ["render"]
+    assert "prompts" not in patch
+
+
+async def test_an_error_reading_the_playbook_is_not_a_render_failure(tmp_path):
+    with pytest.raises(OSError, match="playbook gone"):
+        await _run_pjm_with(_UnreadablePrompts(playbook_error=OSError("playbook gone")), tmp_path)
+
+
+def test_load_prompt_still_raises_the_render_error_to_its_callers(tmp_path):
+    ports = memory_ports(ScriptedRunner())
+    ports.prompts.overrides["pjm"] = "Hello {{nobody_passes_this}}"
+    with pytest.raises(ValueError, match=r"no value for placeholder \{\{nobody_passes_this\}\}"):
+        load_prompt(PJM, Configuration(product_dir=tmp_path), ports, {})
+
+
+def test_render_is_a_failure_reason_of_our_own():
+    from agentic.core.process.domain.rules import EXTERNAL_REASONS
+
+    assert "render" in get_args(FailureReason)
+    assert "render" not in EXTERNAL_REASONS
