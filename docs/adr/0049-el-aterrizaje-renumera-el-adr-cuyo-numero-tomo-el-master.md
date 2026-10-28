@@ -104,3 +104,35 @@ una lectura de diff por tarea lista y tick.
    cuando el CI la vuelva a correr (apagado por billing).
 5. La subtarea `renumber` es grande a propósito: los archivos que chocaron en el PR #237
    pertenecen a la ola 2.
+
+## Adenda (GH-412)
+
+Enmienda la sección «Ambiguous va a diagnose»: ahí donde dice que `Ambiguous` va a `diagnose`,
+ahora va a `escalate_adr`.
+
+- **Una colisión `Ambiguous`, o un `Renaming` con `LANDING_RENUMBERS_MAX` renumeraciones
+  gastadas, es `escalate_adr`**, nunca `diagnose` ni `restart`. Se pregunta una sola vez por
+  (cabeza, rechazo) y en esa cabeza el paso siguiente es `none`. Ningún Developer elige un
+  número de ADR, y un reinicio chocaría con el mismo número. La entrada cuenta como preguntada
+  sólo cuando el documento se guardó y el comentario se publicó (`resolved_at`): un comentario
+  que falla se vuelve a preguntar. El mensaje (`landing_fix.adr_collision_reason`) nombra los
+  movimientos que eligió la regla, el motivo cerrado y la línea a corregir a mano; la salida es
+  renumerar a mano y empujar (una cabeza nueva vuelve a la tabla) o decidir en el issue; una
+  respuesta sin cabeza nueva no vuelve a preguntar. El caso GH-384 (la rama con 0054–0060 y un
+  0054 propio del master) mueve sólo el 0054 al siguiente libre, no los siete.
+- **Motivo nuevo `range`.** Un número movido en cualquiera de los extremos de un rango
+  (`ADR-0054…ADR-0060`, `0054–0060`) vuelve el resultado `Ambiguous("range")`; antes se
+  reescribía en silencio a `ADR-0061…ADR-0060`. Los separadores cerrados son `…`, `...`, `..`, `–`, `—`, un
+  `-` pegado a un dígito, `to`, `through` y `a`. `Ambiguous` lleva los `moves` que la regla calculó.
+- **Reservar los números al sincronizar con el master, rechazado.** Ahorraría una ronda de
+  chequeos por colisión, pero obligaría a tocar `landing_sync`, el único que escribe
+  `reviewed_head`, y a mezclar dos políticas con su propio lease y presupuesto.
+- **§7.** Dos valores cerrados nuevos: `escalate_adr` (`LandingStepKind`, que ya lleva el
+  atributo `agentic.landing.*`) y `range` (`AmbiguityReason`). Ninguna métrica, etiqueta,
+  atributo ni clase de escalado nuevo: se usa `questions`, la de `escalate_ledger`.
+- **Riesgos conocidos.** (1) Si GH-384 pasó por `checks_failed` y `poll._adr_collision` tragó un
+  `GitError`, esta adenda no lo cubre: es un seguimiento. (2) Un rango implícito
+  (`0052–0056` con el 0054 adentro sin nombrarse) no lo ve la regla. (3) Más escalados: las
+  ramas llenas de tablas y rangos ahora preguntan en vez de reiniciar; ampliar la gramática a
+  celdas de tabla es un seguimiento. (4) La guarda de `escalate_ledger` cuenta entradas sin
+  mirar `resolved_at`; este cambio no lo corrige y queda como seguimiento.
