@@ -210,6 +210,12 @@ def _delivered(
         written["integration_brief"] = output.data["integration"].strip()
         if output.data.get("performance"):
             written["performance"] = output.data["performance"]
+        if output.data.get("ci_required"):
+            # The checks the issue's done criteria need green (GH-371); absent otherwise,
+            # so the document of an old task, or of one with no such check, is unchanged.
+            written["ci_required"] = list(output.data["ci_required"])
+        if output.data.get("required_paths"):
+            written["required_paths"] = list(output.data["required_paths"])
         written["estimate"] = {
             "cost_usd": output.data["estimated_cost_usd"],
             "files": output.data["estimated_files"],

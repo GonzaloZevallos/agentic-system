@@ -201,6 +201,11 @@ class Configuration(BaseModel):
         owner, _, number = self.board_project.partition("/")
         return owner, int(number)
 
+    # The free space, in MB, under which a volume holding scratch (the product's disk, or
+    # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
+    # Declared, not measured: a few parallel runs' worth of build and test scratch.
+    scratch_floor_mb: int = Field(default=2048, ge=0)
+
     @model_validator(mode="after")
     def _parallel_within_role_slots(self) -> Configuration:
         if (
@@ -244,6 +249,10 @@ class Configuration(BaseModel):
         if slug in self.model_overrides:
             return self.model_overrides[slug]
         return self.actor_model if kind == "actor" else self.verifier_model
+
+    @property
+    def scratch_floor_bytes(self) -> int:
+        return self.scratch_floor_mb * 1024 * 1024
 
     @property
     def agentic_dir(self) -> Path:

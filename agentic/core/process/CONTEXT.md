@@ -273,6 +273,11 @@ La corrida de todos los `checks` del producto, sin forma afectada, una sola vez 
 En el código se llama `full_checks`, el nodo y el registro del frontmatter.
 _Avoid_: suite final, gate completo
 
+**Chequeo exigido por el plan**:
+Un nombre de chequeo del CI que los criterios de hecho del issue necesitan en verde sobre la cabeza del pull request. Lo declara el plan (`ci_required`) y es distinto del `ci` del stack. Es condición necesaria de un merge, nunca suficiente: un CI verde que cubre sólo chequeos exigidos por el plan no decide el merge, lo deciden los chequeos locales (ADR-0045, adenda GH-371).
+En el código se llama `ci_required`, `ci_plan_only` y `ci_gate_names`.
+_Avoid_: chequeo declarado (eso es el `ci` del stack), criterio de CI
+
 **Presupuesto de chequeo**:
 Los segundos que un producto declara para un chequeo suyo. Se compara una sola vez, en el *Chequeo completo de la tarea*, contra la duración de la fila que decidió el veredicto de ese chequeo (la del reintento verde si fue un Flake; un pase reutilizado cuenta con la duración guardada; un chequeo que agotó su tiempo nunca se compara), y nunca en la puerta de entrega, la de merge ni el aterrizaje. Si un chequeo lo pasa, el sistema escribe el exceso en el registro del chequeo completo; no devuelve ni bloquea nada, y no es una fila de la tabla de hallazgos. Un producto sin presupuestos se comporta como antes.
 En el código se llama `check_budgets`, la clave del stack, y `over_budget`, el campo del registro `full_checks`.
@@ -404,7 +409,7 @@ _Avoid_: subtarea (esas las construye un Developer), tarea de tracker
 _Campo_: sin término de arte
 
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe, o una parte no cabe (ADR-0054). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado).
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe, o una parte no cabe (ADR-0054). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado). Una pausa causada solo por un disco lleno (`disk_full`) también es externa: el poller la retoma por su calendario, solo cuando el piso de espacio libre lo deja arrancar, y conserva `needs-human` (ADR-0069). Una pausa causada solo por el límite de la cuenta (y no persistida) no lleva `needs-human`: el poller la retoma a la hora de reinicio que dijo el mensaje, o por su calendario si no la dijo (ADR-0039, adenda de GH-381).
 _Avoid_: causa, pausa, bloqueo, espera
 _Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph): frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
 
@@ -429,6 +434,16 @@ Una corrida que terminó sin cierre ni escalado porque su proceso murió. No esp
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
 _Campo_: sin término de arte
 
+**Directorio temporal**:
+El directorio en el disco, bajo `.agentic/tmp/<tarea raíz>/`, que cada chequeo, cada setup y cada intento de rol recibe como `TMPDIR` y que se borra cuando termina, salga bien o mal. Lo compone una sola función y lo respalda un registro de dueño escrito antes de crearlo y borrado después de borrarlo; lo que cae en `/tmp` queda fuera de este control. Las capturas que una tarea cita no viven acá sino en la carpeta de evidencia de la tarea (`.agentic/kept/<tarea>/`), que se conserva 14 días tras el cierre (ADR-0069).
+_Avoid_: temporales, `/tmp`, caché
+_Campo_: scratch directory; `Scratch` y `path_for` en el código
+
+**Piso de espacio libre**:
+El espacio libre, en megabytes, bajo el cual el poller no arranca nada: se mide en el volumen del directorio temporal y en `/tmp`, y la ronda solo cierra tareas hasta que ambos lo superan. Por defecto 2048 (`AGENTIC_SCRATCH_FLOOR_MB`). Se mira al arrancar, no durante una corrida. El mismo piso, junto con un mínimo de inodos libres, es lo que convierte un intento fallido en `disk_full` (ADR-0069).
+_Avoid_: cuota, límite de disco
+_Campo_: free-space floor (disk watermark en almacenamiento); `space_holds` y `AGENTIC_SCRATCH_FLOOR_MB` en el código
+
 **Arranque**:
 Un encendido de la máquina, identificado por el id de arranque del kernel. Un registro de lock o de corridas vivas escrito en otro arranque está muerto, diga lo que diga su pid: el sistema operativo pudo haber reutilizado ese número para un proceso ajeno. Un registro sin id de arranque (anterior a este cambio, o una máquina sin `/proc`) no afirma nada: lo decide el sistema operativo, como siempre.
 _Avoid_: reinicio (es el acto, no el período), sesión
@@ -445,7 +460,7 @@ _Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para
 _Campo_: `InvocationKind` (`run` | `resume`) en el código; sin término de arte compartido — los frameworks hablan de resume/invoke sin nombrar la llamada suelta
 
 **Fallo de rol**:
-El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite. Un intento estancado es uno de sus motivos (`stall`).
+El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite. Un intento estancado es uno de sus motivos (`stall`), y un disco lleno otro (`disk_full`): externo, como el límite de la cuenta, porque falló la máquina y no el rol.
 _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro término)
 _Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
 

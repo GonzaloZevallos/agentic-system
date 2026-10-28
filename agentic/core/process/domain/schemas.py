@@ -514,6 +514,34 @@ class TechPlan(RoleOutput):
         "next to subtasks. Empty when there is none",
     )
 
+    ci_required: list[str] = Field(
+        description="The job/check names the issue's done criteria need green on the pull "
+        "request head, copied from the job ids of the product's CI workflow; empty when the "
+        "issue requires no external check (then `ci_none_reason` says why)"
+    )
+    ci_none_reason: str = Field(
+        description="When `ci_required` is empty: one line saying why the issue requires no "
+        "external check. An empty string when `ci_required` is not empty"
+    )
+    required_paths: list[str] = Field(
+        default_factory=list,
+        description="Paths of which the integrated diff must touch at least one (for "
+        "example `.agentic/stack.yaml` when the issue asks for a change in it). Empty when "
+        "the issue names none",
+    )
+
+    @model_validator(mode="after")
+    def _ci_named_or_excused(self) -> TechPlan:
+        for name in self.ci_required:
+            _one_line(name, "a required CI check name")
+        for path in self.required_paths:
+            _one_line(path, "a required path")
+        if self.ci_required and self.ci_none_reason.strip():
+            raise ValueError("ci_none_reason must be empty when ci_required names checks")
+        if not self.ci_required:
+            _one_line(self.ci_none_reason, "ci_none_reason, when ci_required is empty,")
+        return self
+
     @model_validator(mode="after")
     def _scenarios_once(self) -> TechPlan:
         names = [s.name for s in self.performance]

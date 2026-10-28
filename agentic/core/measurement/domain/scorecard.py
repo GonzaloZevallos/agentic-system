@@ -36,12 +36,12 @@ from . import metrics
 # el límite de la cuenta del proveedor; `upstream`, su caída; y `network`, la red del
 # lado del sistema caída, nunca leída de la prosa del error) y quedan adentro los
 # nuestros, el tope por intento (`limit`) incluido". That entry is the statement this
-# tuple is a copy of; nothing here restates its reasoning, only its three members. A
+# tuple is a copy of; nothing here restates its reasoning, only its members. A
 # separate copy from `core.process.domain.rules.EXTERNAL_REASONS`, never imported: the
-# two tuples read the same three literals on purpose, so a document's own `FailureReason`
+# two tuples read the same literals on purpose, so a document's own `FailureReason`
 # string decides each independently, with no import between the two contexts' rule
 # modules.
-EXTERNAL_FAILURE_REASONS = ("account_limit", "upstream", "network")
+EXTERNAL_FAILURE_REASONS = ("account_limit", "upstream", "network", "disk_full")
 
 # "Tareas terminadas" (ADR-0008, 2026-09-18 second addendum): a Corrida that reached a
 # terminal status, whether or not a human has judged its pull request yet. Own failures

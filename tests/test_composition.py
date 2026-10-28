@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 import subprocess
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,12 +14,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from agentic import composition
+from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
 from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
 from agentic.core.process.domain.task import TaskState
 from agentic.shared.configuration import Configuration
+from tests.fakes import MemoryCommands
 
 pytestmark = pytest.mark.anyio
 
@@ -261,3 +264,44 @@ def test_a_markable_flag_passed_to_the_composition_reaches_the_commands(tmp_path
     stop.set()
     with pytest.raises(RunStopped):
         ports.commands.run(product, "echo hi", timeout_s=10)
+
+
+def test_the_composition_builds_the_scratch_and_free_space_adapters(tmp_path, monkeypatch):
+    # GH-391: both ports are wired for later subtasks to use; the scratch is on the
+    # product's own disk.
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    assert ports.scratch is not None and ports.free_space is not None
+    with ports.scratch.open("GH-1", "c", "0123456789abcdef", "tests") as directory:
+        assert directory.is_relative_to(product.resolve() / ".agentic/tmp")
+    assert isinstance(ports.free_space, StatvfsFreeSpace)
+
+
+def test_the_checks_of_a_task_bound_to_it_file_their_scratch_under_its_root_key(
+    tmp_path, monkeypatch
+):
+    # GH-391, invariant 1: `<task>` is the root task key, `_untasked` only with no task.
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    print_tmpdir = "python3 -c 'import tempfile; print(tempfile.gettempdir())'"
+    scratch_root = product.resolve() / ".agentic/tmp"
+
+    unbound = Path(ports.commands.run(product, print_tmpdir, timeout_s=30).output.strip())
+    bound_ports = composition.bind_task(ports, "GH-7")
+    bound = Path(bound_ports.commands.run(product, print_tmpdir, timeout_s=30).output.strip())
+
+    assert unbound.parent == scratch_root / "_untasked"
+    assert bound.parent == scratch_root / "GH-7"
+    assert not bound.exists()
+
+
+def test_ports_whose_commands_are_not_the_shells_are_bound_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    ports = replace(
+        composition.default_ports(Configuration(product_dir=product), NullStopFlag()),
+        commands=MemoryCommands(),
+    )
+    assert composition.bind_task(ports, "GH-7") is ports

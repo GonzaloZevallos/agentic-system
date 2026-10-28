@@ -24,6 +24,7 @@ from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
+from ..domain.scratch import OwnerKind, ScratchListing, SpaceReading, SweepDecision
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -142,6 +143,8 @@ class AttemptFailed(Exception):
         presubmit_denials: int = 0,
         main_thread_turns: int = 0,
         reaped: Sequence[ReapedProcess] = (),
+        space: SpaceReading | None = None,
+        enospc: bool = False,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -177,6 +180,16 @@ class AttemptFailed(Exception):
         # What the reaper stopped when this attempt's session ended (`RawResult.reaped`'s
         # own docstring); empty at every raise site but the runner's own.
         self.reaped = list(reaped)
+        # What the volumes had left when this attempt broke (GH-391): the lower of the
+        # scratch volume's and `/tmp`'s free bytes and free inodes, read after the
+        # attempt's processes were reaped and before its scratch was removed. `None` at
+        # every raise site but the runner's own, and when it had no scratch to measure.
+        # Stamped here, never classified: a measurement is not a verdict.
+        self.space = space
+        # Whether an `OSError` with `errno.ENOSPC` was raised in the system's own process
+        # during this attempt (a hook, a stream write, the presubmit), caught as the
+        # structured error it is and never by reading text.
+        self.enospc = enospc
 
 
 class Presubmit(Protocol):
@@ -1520,6 +1533,47 @@ class PerfLock(Protocol):
         ...
 
 
+class Scratch(Protocol):
+    """A directory on the disk for one check or role attempt, so what it writes never
+    lands on the RAM-backed `/tmp` (GH-391, ADR-0069)."""
+
+    def open(
+        self, task_key: str | None, kind: OwnerKind, token: str, slug: str
+    ) -> AbstractContextManager[Path]:
+        """The directory of one owner, under the product's `.agentic/tmp/<task>/`. Its
+        owner record is written before the directory is created; on the way out the
+        directory is removed, then the record, however the block ended. `token` is the
+        one the owner's processes are marked with."""
+        ...
+
+    def ensure_kept(self, task_key: str | None) -> Path:
+        """The task's evidence folder, `.agentic/kept/<task>/`, created if missing and
+        never removed by this port."""
+        ...
+
+    def listing(self) -> ScratchListing:
+        """What is on the disk under `.agentic/tmp/`: each task folder and each owner in
+        it, with the mtimes and the liveness of its record already read (the poller's
+        sweep decides on these facts; it touches no filesystem itself)."""
+        ...
+
+    def kept_folders(self) -> Sequence[tuple[str, datetime]]:
+        """Each `.agentic/kept/<task>/` with its mtime, which stands in for the close time of
+        a task whose document cannot say."""
+        ...
+
+    def sweep(self, decision: SweepDecision) -> None:
+        """Removes what `decision` names: for an owner its directory, then its record. A path
+        already gone is not an error."""
+        ...
+
+
+class FreeSpace(Protocol):
+    """What is left on the volume a path lives on (GH-391)."""
+
+    def read(self, path: Path) -> SpaceReading: ...
+
+
 @dataclass(frozen=True)
 class IssueRow:
     """One issue as the board mirror reads it off the tracker: `state` is `open` or `closed`,
@@ -1620,3 +1674,8 @@ class Ports:
     # nothing and makes no call, which is how every round ran before they existed.
     board: Board | None = None
     board_sent: BoardSent | None = None
+    # Where a check or a role attempt's temporary files go, and how much room the volumes
+    # have (GH-391, ADR-0069). `None` leaves everything on the inherited `TMPDIR`, which is
+    # how every checkout ran before.
+    scratch: Scratch | None = None
+    free_space: FreeSpace | None = None

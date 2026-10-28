@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
     CheckResults,
     Commands,
     FlagVocabulary,
+    FreeSpace,
     Inbox,
     Launcher,
     PerfLock,
@@ -33,6 +34,7 @@ from agentic.core.process.application.ports import (
     RoleRunner,
     RunRegistry,
     SampleApp,
+    Scratch,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -41,6 +43,7 @@ from agentic.core.process.application.ports import (
 from tests.fakes import (
     FakeBoard,
     FakeBoardSent,
+    FakeFreeSpace,
     FakeLauncher,
     FakePerfLock,
     FakePerfRunner,
@@ -55,6 +58,7 @@ from tests.fakes import (
     MemoryPrompts,
     MemoryRunRegistry,
     MemorySampleApp,
+    MemoryScratch,
     MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
@@ -78,6 +82,8 @@ _launcher: Launcher = FakeLauncher()
 _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
 _perf_lock: PerfLock = FakePerfLock()
+_scratch: Scratch = MemoryScratch()
+_free_space: FreeSpace = FakeFreeSpace()
 _stop_flag: StopFlag = FakeStopFlag()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
@@ -99,6 +105,8 @@ def ports_of_doubles() -> Ports:
         reaper=_reaper,
         limits=RunLimits(),
         check_results=_check_results,
+        scratch=_scratch,
+        free_space=_free_space,
     )
 
 
@@ -121,6 +129,8 @@ COVERED: dict[str, type] = {
     "ProcessReaper": FakeReaper,
     "PerfRunner": FakePerfRunner,
     "PerfLock": FakePerfLock,
+    "Scratch": MemoryScratch,
+    "FreeSpace": FakeFreeSpace,
     "StopFlag": FakeStopFlag,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,

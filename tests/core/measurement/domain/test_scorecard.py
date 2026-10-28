@@ -117,8 +117,13 @@ def test_task_figures_defaults_absent_closure_fields_to_none_not_zero():
 # --- EXTERNAL_FAILURE_REASONS: the one enumeration in this diff, with a rejecting case ---
 
 
-def test_external_failure_reasons_excludes_account_limit_upstream_and_network():
-    assert set(scorecard.EXTERNAL_FAILURE_REASONS) == {"account_limit", "upstream", "network"}
+def test_external_failure_reasons_excludes_account_limit_upstream_network_and_disk_full():
+    assert set(scorecard.EXTERNAL_FAILURE_REASONS) == {
+        "account_limit",
+        "upstream",
+        "network",
+        "disk_full",
+    }
 
 
 def test_own_failures_excludes_the_external_reasons_but_keeps_limit_and_sdk():
@@ -177,6 +182,27 @@ def test_own_failures_excludes_the_external_reasons_but_keeps_limit_and_sdk():
     # from the count of terminated documents itself.
     assert built.own_failures_per_task.value == pytest.approx(2.0)
     assert built.own_failures_per_task.denominator == 1
+
+
+def _failure(reason: str | None, attempt: int = 1) -> dict:
+    failure = {"role": "R", "attempt": attempt, "error": "e", "cost_usd": 0.0, "session_id": ""}
+    return {**failure, "reason": reason} if reason is not None else failure
+
+
+def test_a_disk_full_failure_is_not_an_own_failure():
+    # GH-391: the machine's disk, not the role, broke the attempt. The same document with a
+    # `schema` failure instead does count, which is the input this test rejects.
+    full = scorecard.build([scorecard.task_figures(doc(failures=[_failure("disk_full")]))])
+    own = scorecard.build([scorecard.task_figures(doc(failures=[_failure("schema")]))])
+    assert full.own_failures_per_task.value == pytest.approx(0.0)
+    assert own.own_failures_per_task.value == pytest.approx(1.0)
+
+
+def test_own_failures_of_a_document_with_no_disk_full_are_what_they_were():
+    # Documents written before GH-391 have no `disk_full`: their count is unchanged.
+    legacy = doc(failures=[_failure("limit"), _failure(None, 2), _failure("upstream", 3)])
+    built = scorecard.build([scorecard.task_figures(legacy)])
+    assert built.own_failures_per_task.value == pytest.approx(2.0)
 
 
 # --- build: denominators, exclusions, n/a on an empty denominator ---

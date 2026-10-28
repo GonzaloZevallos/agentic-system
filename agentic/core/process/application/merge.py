@@ -30,9 +30,11 @@ from .poll import (
     AUTO_MERGED,
     LANDING,
     _merge_facts,
+    ci_gate,
     read_conflicts,
     read_criteria,
     with_ci,
+    with_red_on_base,
 )
 from .ports import (
     CommandResult,
@@ -126,9 +128,10 @@ def merge_task(
         except GitError as exc:
             return MergeResult("stopped", f"adr_unreadable: {exc}")
     declared = ports.stack.ci(base)
+    names = ci_gate(raw, declared).names
     report: ci.CiReport | ci.CiUnreadable | None = None
     fresh: bool | None = None
-    if declared:
+    if names:
         report = ports.tracker.ci_report(str(reference))
         if isinstance(report, ci.CiReport) and head is not None:
             fresh = ci.ci_fresh(report.base_sha, master, ports.workspace.contains(head, master))
@@ -150,6 +153,7 @@ def merge_task(
             report,
             fresh,
         )
+        facts = with_red_on_base(ports, facts, report)
         # GH-334: the criteria caps, read once on this one master and only when no refusal
         # ahead of them has already ruled the pull request out.
         if head is not None and (criteria or rules.criteria_probe_wanted(facts)):
@@ -179,13 +183,15 @@ def merge_task(
         if decision.reason == "merge_conflict":
             log(f"agentic: merge: {task_id}: {head} conflicts with master {master} (github)")
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
-        return _refuse(task_id, head, decision.reason, ports, failure=failure, facts=facts)
+        return _refuse(
+            task_id, head, decision.reason, ports, failure=failure, facts=facts, report=report
+        )
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
     # A check that failed on this head, was rerun by the landing and now passes is flaky.
     landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
     landing_flakes.file_task_flakes(ports, task_id, raw, log)
-    relied = _ci_links(report, declared) if _merges_on_ci(facts) else None
+    relied = _ci_links(report, facts.ci_required) if _merges_on_ci(facts) else None
     inert_from = _inert_from(raw, master) if facts.masters_covered is True else None
     return _merge(
         task_id,
@@ -197,7 +203,7 @@ def merge_task(
         clock,
         log,
         relied,
-        bool(declared),
+        bool(names),
         pull_request,
         inert_from,
     )
@@ -276,11 +282,11 @@ def _gain(ports: Ports, row_master: str, master: str) -> tuple[str, ...] | None:
 
 
 def _merges_on_ci(facts: rules.MergeFacts) -> bool:
-    """The `merge` rested on the CI alone: declared, green on this head and fresh. The
-    same four facts `rules.auto_merge_decision` merges on before it looks at any local
-    check."""
+    """The `merge` rested on the CI alone: declared by the stack (a name only the plan
+    required is never enough, GH-371), green on this head and fresh. The same four facts
+    `rules.auto_merge_decision` merges on before it looks at any local check."""
     return (
-        bool(facts.ci_required)
+        bool(set(facts.ci_required) - set(facts.ci_plan_only))
         and facts.ci_verdict is not None
         and facts.ci_verdict.state == "green"
         and facts.ci_fresh is True
@@ -584,7 +590,9 @@ def _after_failure(
     return MergeResult("stopped", "ambiguous")
 
 
-def _ci_evidence(reason: str, facts: rules.MergeFacts) -> str:
+def _ci_evidence(
+    reason: str, facts: rules.MergeFacts, report: ci.CiReport | ci.CiUnreadable | None = None
+) -> str:
     """What a CI refusal says, from structured facts only: one line per failing check
     (name, conclusion, link) with no tail, the declared names never reported, or `gh` and
     the cause class of an unreadable report."""
@@ -596,7 +604,12 @@ def _ci_evidence(reason: str, facts: rules.MergeFacts) -> str:
         )
     if reason == "ci_missing" and verdict is not None:
         if verdict.missing:
-            return f"CI did not report: {', '.join(verdict.missing)}"
+            text = f"CI did not report: {', '.join(verdict.missing)}"
+            if facts.ci_plan_only and isinstance(report, ci.CiReport):
+                # A plan-required name (GH-371): say what the head's report did carry, so the
+                # human sees a misspelt or renamed check at once.
+                text += f"; the report carried: {', '.join(ci.reported_names(report)) or 'none'}"
+            return text
         return f"CI checks still pending: {', '.join(facts.ci_required)}"
     cause = facts.ci_unreadable.cause if facts.ci_unreadable is not None else "gh_unreadable"
     return f"`gh` could not read the CI report ({cause})"
@@ -643,6 +656,7 @@ def _refuse(
     ports: Ports,
     failure: rules.MergeFailure | None = None,
     facts: rules.MergeFacts | None = None,
+    report: ci.CiReport | ci.CiUnreadable | None = None,
 ) -> MergeResult:
     """Comments a refusal the human can act on, once per (head, reason): the last
     `Auto-merge refused:` comment naming the same head and reason is enough. A
@@ -670,7 +684,7 @@ def _refuse(
             text = "\n\n".join(part for part in (first, _adr_evidence(facts), closing) if part)
         if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
             text = "\n\n".join(
-                part for part in (first, _ci_evidence(reason, facts), closing) if part
+                part for part in (first, _ci_evidence(reason, facts, report), closing) if part
             )
         if facts is not None and reason == "perf_unverified":
             text = "\n\n".join(part for part in (first, _perf_evidence(facts), closing) if part)

@@ -112,7 +112,10 @@ ChangeCategory = FindingCategory | CopyCategory | Literal["definition"]
 # facts covers (narrowed by `account_limit`, `upstream` and `network`, ADR-0029), `other`
 # the residual nothing else names, `stall` an attempt that hung with nothing to wait for
 # and was killed by the watchdog (`domain/stall.py`, ADR-0057): a reason of its own, not
-# an external one, so the poller never retakes it by itself.
+# an external one, so the poller never retakes it by itself, `disk_full` an attempt that
+# broke with the disk it writes to full, derived from what was measured (free bytes and
+# inodes, an `ENOSPC` caught as structured data), never from the error's text (GH-391,
+# ADR-0069): external, because the machine, not the role, failed.
 FailureReason = Literal[
     "schema",
     "check",
@@ -121,6 +124,7 @@ FailureReason = Literal[
     "account_limit",
     "upstream",
     "network",
+    "disk_full",
     "sdk",
     "stall",
     "other",
@@ -371,6 +375,11 @@ class Failure(TypedDict):
     # Why the attempt failed, from the closed set (`FailureReason`); absent on a
     # failure recorded before this field existed.
     reason: NotRequired[FailureReason]
+    # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
+    # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
+    # only a wait hint, never the reason. Absent on any other failure and on one recorded
+    # before this field existed.
+    resets_at: NotRequired[str]
     # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
     # absent on a failure recorded before this field existed.
     slug: NotRequired[str]
@@ -736,6 +745,9 @@ class FailurePauseEntry(TypedDict):
     kind: Literal["failure"]
     value: FailureReason
     section: str
+    # The failure's `resets_at`, copied by `rules.logged` only when it has one; absent on an
+    # entry written before this field existed (`rules.auto_resumable` never requires it).
+    resets_at: NotRequired[str]
 
 
 class LapsePauseEntry(TypedDict):
@@ -957,6 +969,11 @@ class TaskState(TaskInput, total=False):
     # `PerfScenario` dumped; absent or empty when not convened. The only source of
     # "convened": never the branch's stack.
     performance: list[dict[str, Any]]
+    # The CI check names the plan says the issue's done criteria need green on the pull
+    # request head, and the paths of which the integrated diff must touch one (GH-371).
+    # Absent in a document written before, which reads as empty.
+    ci_required: list[str]
+    required_paths: list[str]
     # What the plan says has to be done to make the subtasks work together beyond
     # merging them; empty when merging is enough and no integrator runs.
     integration_brief: str

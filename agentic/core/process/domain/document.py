@@ -199,6 +199,9 @@ def render(
         # only when there are some, so a document of a plan that convenes none is
         # byte-identical to one written before.
         **({"performance": p} if (p := state.get("performance")) else {}),
+        # The checks and paths the plan requires (GH-371), written only when there are some.
+        **({"ci_required": c} if (c := state.get("ci_required")) else {}),
+        **({"required_paths": r} if (r := state.get("required_paths")) else {}),
         # Every finding of every review, raw: the `Tech Lead: findings` section below is
         # the folded, open half of this, which is what the next role reads (issue #42).
         "findings": state.get("findings", []),

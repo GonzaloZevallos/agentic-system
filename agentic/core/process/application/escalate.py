@@ -31,7 +31,8 @@ async def escalate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     if not reason:
         return {}
     ports.documents.save(state)
-    ports.tracker.label(state["id"], NEEDS_HUMAN)
+    if rules.needs_a_human(state):
+        ports.tracker.label(state["id"], NEEDS_HUMAN)
     ports.tracker.comment(state["id"], comment(state, cfg, ports))
     return {}
 

@@ -52,11 +52,17 @@ step outside the set is neither recorded nor spawned, so a refusal whose step is
 as it always did."""
 
 
+ALWAYS_TAKEN: frozenset[LandingStepKind] = frozenset({"escalate"})
+"""Steps taken whatever `live` says (GH-371): `escalate` runs no model, spends nothing and is
+recorded once per head, so it has no rollout to hold back; its executor is
+`landing_fix.escalate_red_on_base`."""
+
+
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
-    """Whether `kind` is a step the system takes now: built (`live`) and not `wait` (the
-    next tick decides again) or `none` (the human's), which are never recorded or spawned
-    whatever `live` says."""
-    return kind in live and kind not in ("wait", "none")
+    """Whether `kind` is a step the system takes now: built (`live`) or one of `ALWAYS_TAKEN`,
+    and not `wait` (the next tick decides again) or `none` (the human's), which are never
+    recorded or spawned whatever `live` says."""
+    return (kind in live or kind in ALWAYS_TAKEN) and kind not in ("wait", "none")
 
 
 def entries(raw: Mapping[str, object]) -> list[dict[str, object]]:

@@ -115,6 +115,8 @@ async def test_plan_repairs_a_markdown_missing_the_subtasks_heading(cfg):
             "integration": "",
             "estimated_cost_usd": 20.0,
             "estimated_files": 5,
+            "ci_required": [],
+            "ci_none_reason": "The issue requires no external check.",
         },
         0.3,
         2,
@@ -1345,3 +1347,27 @@ async def test_a_review_records_the_full_head_it_reviewed(cfg):
     )
     patch = await review(state, cfg, ports)
     assert patch["subtasks"]["api"]["reviewed_head"] == _ShortAndFullHeads.FULL
+
+
+async def test_escalate_does_not_label_an_account_limit_only_pause_but_comments(cfg):
+    log = [
+        {"kind": "failure", "value": "account_limit", "section": "Developer"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    state = {**TASK, "escalated": "Developer failed 1 times: 429", "pause_log": log}
+    ports = memory_ports()
+    assert await escalate(state, cfg, ports) == {}
+    assert ports.tracker.labels == []
+    assert ports.tracker.comments[0][1].startswith("Escalated: Developer failed")
+    assert ports.documents.last == state  # the pause and its clock are still written
+
+
+async def test_escalate_labels_a_pause_the_predicate_keeps_for_a_human(cfg):
+    # Rejected input for the no-label rule: an upstream pause and a mixed set both label.
+    for reasons in (["upstream"], ["account_limit", "sdk"]):
+        log = [{"kind": "failure", "value": r, "section": "Developer"} for r in reasons]
+        log.append({"kind": "escalation", "value": "failure"})
+        state = {**TASK, "escalated": "Developer failed", "pause_log": log}
+        ports = memory_ports()
+        await escalate(state, cfg, ports)
+        assert ports.tracker.labels == [("GH-12", "needs-human")]
