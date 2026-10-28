@@ -983,6 +983,8 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         Computed(),
         "list of globs whose change forces the full form of every check",
     ),
+    # Computed, not DependsOn("checks"): the reader returns `()` whenever the key is absent
+    # (no tiers), whatever `checks` holds.
     KeyReference(
         "delivery_checks",
         delivery_checks,
