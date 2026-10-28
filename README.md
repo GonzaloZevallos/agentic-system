@@ -514,7 +514,7 @@ Uno por tarea. **Nunca codea, siempre delega.**
    un componente, un contrato entre módulos, el modelo de datos o un flujo clave), el plan
    pone la actualización de `docs/architecture/` (vistas C4 y secuencias en Mermaid) y de las
    secciones técnicas de `docs/README.md` en la subtarea que hace el cambio, como con los
-   ADR; la escribe un Developer, nunca Tech Lead (ADR-0071).
+   ADR; la escribe un Developer, nunca Tech Lead (ADR-0074).
 6. Informa a PjM: plan de subtareas, Developers asignados, QAs convocados.
 
 **Ejecución**
@@ -536,7 +536,7 @@ Uno por tarea. **Nunca codea, siempre delega.**
   categoría. Una objeción que no reprodujo es una observación. El veredicto no lo escribe:
   devuelve si y solo si hay un hallazgo bloqueante sobre la subtarea. Un chequeo entero no
   lo repite: lo corrió la puerta de entrega y está en la sección del Developer.
-- **Revisa la documentación técnica** cuando el producto declara `docs:` (ADR-0071): un
+- **Revisa la documentación técnica** cuando el producto declara `docs:` (ADR-0074): un
   límite cambiado sin actualización bajo `docs/architecture/` ni `docs/README.md` en la misma
   subtarea es un hallazgo bloqueante; una afirmación sin referencia a un archivo o símbolo, o
   prosa que no está en español, es `important`, y ambas se juzgan sólo sobre las líneas que el
