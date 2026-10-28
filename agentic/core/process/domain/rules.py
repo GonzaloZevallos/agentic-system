@@ -2735,22 +2735,55 @@ def integration_increment(
         return "refuse"
     if head_reviewed(approved, state.get("close_docs"), branch_head):
         return "agree"  # the reviewed head, or the close-time docs commit made right on it
-    if not descends or sub is None or sub.get("branch") != task_branch(task_id):
+    if not _open_to_a_resume(state, task_id, descends):
         return "refuse"
-    if state.get("pull_request"):
-        return "refuse"
-    if state.get("escalation_class") not in (None, "failure"):
-        return "refuse"
-    if state.get("questions_for_human") or state.get("fit_question"):
-        return "refuse"
-    if state.get("escalated") and state.get("escalation_class") is None:
-        return "refuse"  # a document older than the class: what it asked is not known
-    others = [s.get("status") for name, s in state.get("subtasks", {}).items() if name != unit]
+    others = _other_statuses(state)
     if all(status == "approved" for status in others):
         return "increment"
     if all(status in ("approved", "returned") for status in others):
         return "refuse" if refused_commit(state, commits) else "reintegrate"
     return "refuse"
+
+
+def refused_reintegration(
+    state: TaskState, task_id: str, descends: bool, commits: Sequence[Commit]
+) -> str | None:
+    """For a task branch past the approved head that `integration_increment` refuses only for
+    its commits, which one and why (`refused_commit`, GH-408); `None` when the state fails a
+    condition of a reintegration other than the commits, so the refusal keeps its own line."""
+    unit = reviewed_unit_name(state)
+    sub = state.get("subtasks", {}).get(unit) if unit else None
+    if not sub or sub.get("status") != "approved" or not sub.get("reviewed_head"):
+        return None
+    if not _open_to_a_resume(state, task_id, descends):
+        return None
+    others = _other_statuses(state)
+    if "returned" not in others or any(s not in ("approved", "returned") for s in others):
+        return None
+    return refused_commit(state, commits)
+
+
+def _other_statuses(state: TaskState) -> list[str | None]:
+    unit = reviewed_unit_name(state)
+    return [s.get("status") for name, s in state.get("subtasks", {}).items() if name != unit]
+
+
+def _open_to_a_resume(state: TaskState, task_id: str, descends: bool) -> bool:
+    """What an increment and a reintegration both need besides the status of the other units:
+    the head descends from the approved one, the reviewed unit is on the task branch, there is
+    no pull request, and the pause is one no human has anything to decide in."""
+    unit = reviewed_unit_name(state)
+    sub = state.get("subtasks", {}).get(unit) if unit else None
+    if not descends or sub is None or sub.get("branch") != task_branch(task_id):
+        return False
+    if state.get("pull_request"):
+        return False
+    if state.get("escalation_class") not in (None, "failure"):
+        return False
+    if state.get("questions_for_human") or state.get("fit_question"):
+        return False
+    # A document older than the class: what it asked is not known.
+    return not (state.get("escalated") and state.get("escalation_class") is None)
 
 
 def reintegrate_patch(state: TaskState) -> dict[str, Any]:

@@ -25,7 +25,7 @@ from ..domain.playbook import Playbook
 from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
-from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
+from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
 from ..domain.scratch import (
     OwnerKind,
     PartitionListing,
@@ -1014,6 +1014,13 @@ class Workspace(Protocol):
         `GitError` for anything else `git merge-base --is-ancestor` answers beside its
         own two documented exit codes (0: is an ancestor, 1: is not): that is a git
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
+        ...
+
+    def first_parent_commits(self, older: str, newer: str) -> tuple[Commit, ...]:
+        """The commits on the first-parent line from `older` (excluded) to `newer` (included),
+        oldest first, each with the ids of its parents, the first parent first (GH-408: what a
+        resume reads to tell merges of approved subtasks from anything else). Read only.
+        Raises `GitError` when git cannot answer, an unknown ref included."""
         ...
 
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:

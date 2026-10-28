@@ -286,4 +286,140 @@ def test_a_resume_without_an_increment_emits_the_same_comment_as_before(cfg):
 
 def test_the_rule_is_the_domain_s_alone(cfg):
     # The seed decides nothing the rule does not: the same facts through the rule agree.
-    assert rules.integration_increment(stopped(), "GH-12", X, True) == "increment"
+    assert rules.integration_increment(stopped(), "GH-12", X, True, ()) == "increment"
+
+
+# --- GH-408: merges of approved subtasks while others are returned ------------------------------
+
+PICKED = "p1"  # the reviewed head of the approved subtask whose branch was merged
+MERGE = "m1"
+RETURNED = ("sheets-expenses", "sheets-stock-entries", "sheets-varieties", "touch-varieties")
+
+
+def gh373(**more):
+    """GH-373's shape: eight approved subtasks, four returned, the integration approved at H."""
+    subtasks = {
+        f"s{n}": sub("approved", f"agentic/GH-12.s{n}", reviewed_head=f"r{n}") for n in range(1, 9)
+    }
+    subtasks["touch-home"] = sub("approved", "agentic/GH-12.touch-home", reviewed_head=PICKED)
+    subtasks.update({name: sub("returned", f"agentic/GH-12.{name}") for name in RETURNED})
+    subtasks["integration"] = sub("approved", BRANCH, "b0", reviewed_head=H)
+    return stopped(subtasks=subtasks, **more)
+
+
+def gh373_world(document=None, commits=(rules.Commit(MERGE, (H, PICKED)),), head=MERGE):
+    document = document or gh373()
+    ports = world(head=head, document=document)
+    for name, s in document["subtasks"].items():
+        if name != "integration":
+            ports.workspace.existing_branches[s["branch"]] = (s.get("reviewed_head", "t1"), "b1")
+    ports.workspace.first_parent_line = commits
+    return ports
+
+
+def test_the_gh373_shape_seeds_the_integration_back_to_pending_and_dispatches_the_returned(cfg):
+    ports = gh373_world()
+    seed = resume.seed_increment("GH-12", cfg, ports)
+    assert seed.increment is None  # nothing to review as an increment: the unit is not delivered
+    unit = seed.state["subtasks"]["integration"]
+    assert (unit["status"], unit["reviewed_head"]) == ("pending", H)
+    assert unit["depends_on"] == list(RETURNED)
+    assert ports.workspace.first_parent_asks == [(H, MERGE)]
+    assert rules.dispatched_subtasks(seed.state) == list(RETURNED)
+    # Once the returned subtasks are approved, the integrator is what is left to run.
+    done = {
+        **seed.state,
+        "subtasks": {
+            name: {**s, "status": "approved"} if s["status"] == "returned" else s
+            for name, s in seed.state["subtasks"].items()
+        },
+    }
+    assert rules.dispatched_subtasks(done) == ["integration"]
+    # Nothing but the integration moved.
+    before = gh373()
+    assert {k: v for k, v in seed.state.items() if k != "subtasks"} == {
+        k: v for k, v in before.items() if k != "subtasks"
+    }
+    assert {n: s for n, s in seed.state["subtasks"].items() if n != "integration"} == {
+        n: s for n, s in before["subtasks"].items() if n != "integration"
+    }
+
+
+def test_the_reintegration_resumes_into_the_fan_in_with_the_returned_subtasks(cfg):
+    ports = gh373_world()
+    seed = resume.seed_increment("GH-12", cfg, ports)
+    r = resume.prepare("GH-12", seed.state, "document", cfg, ports, increment=seed.increment)
+    assert r.target == "integrate"
+    assert r.increment is None
+
+
+def test_a_plain_commit_on_the_merge_is_refused_naming_the_commit(cfg):
+    ports = gh373_world(commits=(rules.Commit(MERGE, (H, PICKED)), rules.Commit("p2", (MERGE,))))
+    (line,) = lines(refusal(ports, cfg))
+    assert line == (
+        f"- integration: `{BRANCH}` moved past the approved head {H} but not only by merges of "
+        "approved subtasks while others are returned: p2 is not a merge."
+    )
+    assert "reset" not in line and "branch -f" not in line
+
+
+def test_a_merge_of_a_returned_branch_is_refused_naming_the_commit(cfg):
+    ports = gh373_world(commits=(rules.Commit(MERGE, (H, "t1")),))
+    (line,) = lines(refusal(ports, cfg))
+    assert f"{MERGE} merges t1, which is not the reviewed head of an approved subtask" in line
+
+
+def test_an_unreadable_line_says_to_retry(cfg):
+    ports = gh373_world()
+    ports.workspace.first_parent_error = "bad object"
+    (line,) = lines(refusal(ports, cfg))
+    assert "bad object" in line and "retry the resume" in line
+
+
+def test_a_task_with_questions_keeps_todays_line_with_returned_subtasks(cfg):
+    ports = gh373_world(document=gh373(escalation_class="questions", questions_for_human=["?"]))
+    assert lines(refusal(ports, cfg)) == [
+        f"- integration: approved at {H}, but `{BRANCH}` is at {MERGE}"
+    ]
+
+
+def test_a_dirty_checkout_refuses_a_reintegration_with_its_own_line(cfg):
+    ports = gh373_world()
+    with_checkout(ports, dirty=True)
+    (line,) = lines(refusal(ports, cfg))
+    assert line == (
+        f"- the integration checkout `{CHECKOUT}` has uncommitted changes the stopped run left: "
+        f"inspect them with `git -C {CHECKOUT} status`, commit or discard them by hand, then "
+        "`agentic resume --issue 12 --from-document`."
+    )
+    assert ports.workspace.commits == []
+
+
+def test_a_merge_in_progress_refuses_a_reintegration_with_the_merge_line(cfg):
+    ports = gh373_world()
+    with_checkout(ports)
+    ports.workspace.merges_in_progress.add(CHECKOUT)
+    (line,) = lines(refusal(ports, cfg))
+    assert "holds an unfinished merge or conflicts" in line
+
+
+def test_a_clean_checkout_seeds_a_reintegration_and_commits_nothing(cfg):
+    ports = gh373_world()
+    with_checkout(ports)
+    seed = resume.seed_increment("GH-12", cfg, ports)
+    assert seed.increment is None
+    assert ports.workspace.commits == []
+
+
+def test_a_dirty_checkout_still_goes_into_the_increment_when_every_unit_is_approved(cfg):
+    ports = world()
+    with_checkout(ports, dirty=True)
+    seed = resume.seed_increment("GH-12", cfg, ports)
+    assert seed.increment == Increment(H, X, BRANCH, CHECKOUT, True)
+
+
+def test_unreadable_commits_do_not_stop_an_increment_every_unit_approved_needs_none_of(cfg):
+    ports = world()
+    ports.workspace.first_parent_error = "bad object"
+    seed = resume.seed_increment("GH-12", cfg, ports)
+    assert seed.increment == Increment(H, X, BRANCH, None, False)

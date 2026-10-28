@@ -300,3 +300,21 @@ def test_the_reintegration_patch_names_a_pending_sibling_too_and_skips_approved_
     }
     patch = rules.reintegrate_patch(state(subtasks=subtasks))
     assert patch["subtasks"]["integration"]["depends_on"] == ["b", "c"]
+
+
+def test_the_refusal_names_a_commit_only_when_the_commits_are_all_that_is_wrong():
+    s = returned_siblings()
+    plain = (commit(M1, H),)
+    assert rules.refused_reintegration(s, TASK, True, plain) == f"{M1} is not a merge"
+    assert rules.refused_reintegration(s, TASK, True, (merge_of_api(),)) is None
+    assert rules.refused_reintegration(state(), TASK, True, plain) is None  # all approved
+    assert rules.refused_reintegration(s, TASK, False, plain) is None
+    assert (
+        rules.refused_reintegration(returned_siblings(pull_request="u"), TASK, True, plain) is None
+    )
+    assert (
+        rules.refused_reintegration(
+            returned_siblings(escalation_class="questions"), TASK, True, plain
+        )
+        is None
+    )
