@@ -36,3 +36,13 @@ def test_the_set_is_the_four_system_directories():
         ".agentic/logs/",
         ".agentic/worktrees/",
     )
+
+
+def test_only_the_tasks_own_document_is_archivable():
+    assert rules.archivable_document(".agentic/tasks/GH-1.md", "GH-1")
+    # Another task's document, a nested path, another directory, a lookalike name.
+    assert not rules.archivable_document(".agentic/tasks/GH-2.md", "GH-1")
+    assert not rules.archivable_document(".agentic/tasks/GH-1.md.bak", "GH-1")
+    assert not rules.archivable_document(".agentic/tasks/sub/GH-1.md", "GH-1")
+    assert not rules.archivable_document(".agentic/runs/GH-1.md", "GH-1")
+    assert not rules.archivable_document("README.md", "GH-1")

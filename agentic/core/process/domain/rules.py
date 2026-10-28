@@ -17,7 +17,7 @@ from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
-from .document import HUMAN, demote
+from .document import HUMAN, demote, relative_path
 from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
     DEVELOPER,
@@ -103,6 +103,12 @@ def unstageable(relative: str) -> bool:
     while path.startswith("./"):
         path = path[2:]
     return any(path.startswith(prefix) or path == prefix.rstrip("/") for prefix in UNSTAGEABLE)
+
+
+def archivable_document(relative: str, task_id: str) -> bool:
+    """Whether `relative` is exactly the task's own document, `.agentic/tasks/<id>.md`: the one
+    path under `UNSTAGEABLE` that archiving may commit, onto an archived ref and nowhere else."""
+    return relative == relative_path(task_id).as_posix()
 
 
 def remaining_changes(state: TaskState, pair: Pair, limit: int) -> int:
