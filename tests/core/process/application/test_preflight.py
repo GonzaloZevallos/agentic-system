@@ -17,11 +17,11 @@ from agentic.core.process.application.preflight import (
     ScratchInARepository,
     declared_stack,
     declared_stack_of,
+    nearest_existing,
     no_forbidden,
     no_setup,
     preflight,
     product_name,
-    nearest_existing,
     refuse_scratch_in_a_repository,
     unfixed_stage0,
 )

@@ -57,8 +57,8 @@ class ScratchInARepository(ValueError):
 
 
 def preflight(cfg: Configuration, ports: Ports) -> None:
-    """The run's own checkout first, then the scratch root, then the product's stack and its name, then the
-    vocabulary and every role's prompt rendered: a product that declares no stack, no
+    """The run's own checkout first, then the scratch root, then the product's stack and its
+    name, then the vocabulary and every role's prompt rendered: a product that declares no stack, no
     name, a bad flags file or an overlay with a stray placeholder fails here, not in the
     middle of a task."""
     refuse_its_own_checkout(cfg, ports)
