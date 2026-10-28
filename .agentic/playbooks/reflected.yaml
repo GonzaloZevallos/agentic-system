@@ -405,3 +405,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-389
+  GH-403@review:
+    cost_usd: 0.039
