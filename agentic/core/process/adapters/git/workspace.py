@@ -566,9 +566,7 @@ class GitWorkspace:
         if against is None:
             return tuple(kept)
         return tuple(
-            name
-            for name in kept
-            if self._blob(path, head, name) != self._blob(path, against, name)
+            name for name in kept if self._blob(path, head, name) != self._blob(path, against, name)
         )
 
     def _blob(self, path: Path, ref: str, name: str) -> str | None:

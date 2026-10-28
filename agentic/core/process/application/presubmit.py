@@ -282,8 +282,7 @@ class CheckoutPresubmit:
             )
         except GitError as exc:
             self.unstageable_note = (
-                f"The system's paths in this delivery could not be read, so none was "
-                f"checked: {exc}"
+                f"The system's paths in this delivery could not be read, so none was checked: {exc}"
             )
             return None
         reason = presubmit.unstageable_refusal(introduced)
