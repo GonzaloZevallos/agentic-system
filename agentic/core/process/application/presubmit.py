@@ -188,6 +188,10 @@ class CheckoutPresubmit:
         # What the witness said the last time it ran, for `markdown()`; None when no
         # witness is declared, or none has run yet.
         self.witness_result: WitnessResult | None = None
+        # What the last call's unstageable-paths look wrote for the gate result (GH-420): a
+        # line when it let paths through for want of refusals, or could not read them; None
+        # when it saw nothing to say.
+        self.unstageable_note: str | None = None
         # Every invocation that actually ran the checks, in order: what
         # `agentic.presubmit.checks` and `.duration` read, one set of samples per
         # invocation with only the last one `final` (a Developer run may deliver,
@@ -238,6 +242,11 @@ class CheckoutPresubmit:
         # one fails the backstop anyway, and the record must hold what the head holds.
         # The witness sits inside this same branch, first, so no command is ever
         # spawned on a call that refuses for a missing commit or an unclean tree.
+        self.unstageable_note = None
+        if moved and clean and self.before:
+            # Before the witness and the checks: a delivery that is not one yet costs no run.
+            if (refused := self._refuse_unstageable(head)) is not None:
+                return refused
         witness_reason = None
         if moved and clean:
             witness_reason = self._run_holding_a_share(head)
@@ -260,6 +269,31 @@ class CheckoutPresubmit:
             return None
         self.refusals += 1
         self._refused_ids.append(self._failed_ids())
+        return presubmit.refused(reason, self.refusals)
+
+    def _refuse_unstageable(self, head: str) -> str | None:
+        """The refusal for the system's own paths this delivery introduces (GH-420), on the
+        same budget as the checks' own, or None. A git failure is no refusal; it is written
+        in the gate result. A spent budget lets the delivery through, with a line saying so."""
+        workspace = self.ports.workspace
+        try:
+            introduced = workspace.introduced_paths(
+                self.path, self.before, head, workspace.fetched_upstream()
+            )
+        except GitError as exc:
+            self.unstageable_note = (
+                f"The system's paths in this delivery could not be read, so none was "
+                f"checked: {exc}"
+            )
+            return None
+        reason = presubmit.unstageable_refusal(introduced)
+        if reason is None:
+            return None
+        if not presubmit.refusal_allowed(self.refusals, None, None):
+            self.unstageable_note = f"Unstageable paths, let through (refusals spent): {reason}"
+            return None
+        self.refusals += 1
+        self._refused_ids.append(None)
         return presubmit.refused(reason, self.refusals)
 
     def _run_holding_a_share(self, head: str) -> str | None:
@@ -442,9 +476,10 @@ class CheckoutPresubmit:
         if self.results is None or self.head is None:
             return None
         base = self.affected.base if self.affected is not None else None
-        return presubmit.checks_markdown(
+        text = presubmit.checks_markdown(
             self.head, self.results, self.witness_result, base=base, regressions=self.regressions
         )
+        return f"{text}\n\n{self.unstageable_note}" if self.unstageable_note else text
 
     def _criteria_regressions(self, head: str) -> list[str]:
         """What this head adds past the criteria caps, against the base this gate was given.

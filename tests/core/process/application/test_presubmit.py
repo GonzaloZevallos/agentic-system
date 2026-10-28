@@ -138,3 +138,72 @@ def test_a_git_error_while_reading_the_documents_reports_no_regression():
     """The merge decision is the guarantee; the early warning never blocks on a failed read."""
     gate, _ = criteria_gate(UnreadableWorkspace())
     assert gate() is None
+
+
+# -- paths the delivery introduces that the system never versions (GH-420) ----------
+
+DOC = ".agentic/tasks/GH-1.md"
+
+
+def test_the_cleanup_shape_passes_and_the_gate_read_against_the_fetched_upstream():
+    workspace = MemoryWorkspace()
+    workspace.moved.add(PATH)
+    workspace.introduced = ()  # `git rm --cached` only deletes: the view never returns it
+    gate, _ = presubmit(MemoryCommands(), workspace)
+    assert gate() is None
+    assert workspace.introduced_reads == [("base", "head1", "upstream-tip")]
+    assert gate.markdown() is not None and "nstageable" not in gate.markdown()
+
+
+def test_an_added_document_is_refused_with_its_path_before_any_check_runs():
+    workspace = MemoryWorkspace()
+    workspace.moved.add(PATH)
+    workspace.introduced = ("src/app.py", DOC)
+    commands = MemoryCommands()
+    gate, _ = presubmit(commands, workspace)
+    reason = gate()
+    assert reason is not None and f"`{DOC}`" in reason and "git rm --cached" in reason
+    assert "(1 of 2)" in reason and "src/app.py" not in reason
+    assert gate.invocations == [] and commands.ran == []
+
+
+def test_a_document_past_the_refusal_budget_passes_with_a_line_in_the_gate_result():
+    workspace = MemoryWorkspace()
+    workspace.moved.add(PATH)
+    workspace.introduced = (DOC,)
+    gate, _ = presubmit(MemoryCommands(), workspace)
+    assert gate() is not None and gate() is not None
+    assert gate() is None
+    assert len(gate.invocations) == 1  # the checks ran once the budget was spent
+    markdown = gate.markdown()
+    assert markdown is not None and "Unstageable paths" in markdown and f"`{DOC}`" in markdown
+
+
+def test_a_git_error_from_the_view_is_no_refusal_and_is_written_in_the_gate_result():
+    workspace = MemoryWorkspace()
+    workspace.moved.add(PATH)
+    workspace.introduced_error = "git diff base...head1 failed: bad object"
+    gate, _ = presubmit(MemoryCommands(), workspace)
+    assert gate() is None
+    markdown = gate.markdown()
+    assert markdown is not None and "could not be read" in markdown and "bad object" in markdown
+
+
+def test_a_gate_with_nothing_before_it_never_asks_what_it_introduced():
+    """The merge and full-checks gates start from no commit (`before=""`): nothing is
+    "introduced" against nothing."""
+    workspace = MemoryWorkspace()
+    workspace.introduced = (DOC,)
+    ports = type(
+        "Ports",
+        (),
+        {
+            "workspace": workspace,
+            "commands": MemoryCommands(),
+            "check_scheduler": FakeCheckScheduler(),
+        },
+    )()
+    gate = CheckoutPresubmit(
+        ports, PATH, "", {"tests": "pytest"}, 30.0, priority=CheckPriority.LAND
+    )
+    assert gate() is None and workspace.introduced_reads == []
