@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import functools
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal, assert_never, get_args
@@ -77,6 +77,12 @@ RETAKEN = "Retaken after reboot: "
 # into `resume.SYSTEM_COMMENTS` too. Its text after the prefix is `rules.crash_retake_comment`'s,
 # the one function that writes it and `rules.crash_retake_counts` reads it.
 RETAKEN_AFTER_CRASH = "Retaken after crash: "
+
+# How the comment of a retake of a run that left no lock starts (GH-403): registered into
+# `resume.SYSTEM_COMMENTS` too, or it would read as a human's and reset its own cap. Written
+# by `orphaned_comment`, the one function, and read by `_orphan_counts`, which counts it.
+# Neither a prefix of nor prefixed by `RETAKEN` or `RETAKEN_AFTER_CRASH`.
+RETAKEN_ORPHANED = "Retaken with no lock: "
 
 # The two comments the automatic merge posts (GH-178, ADR-0045), both registered into
 # `resume.SYSTEM_COMMENTS` the same way: a refusal the human can act on, and the merge
@@ -1123,6 +1129,17 @@ def _blocked(
     return rules.BlockerReport(tuple(open_), tuple(closed), tuple(unknown))
 
 
+def queue_documents(ports: Ports) -> dict[int, TaskState | None]:
+    """The document of every issue in the bandeja (`Tracker.queue`: open and labelled
+    `agentic`), in queue order, `None` for one with none yet. Loaded once per round and
+    shared by the launch pass (an issue with no document) and the orphan pass (one with a
+    pre-delivery document), so neither reads a file the other already did."""
+    return {
+        number: ports.documents.load(ports.inbox.task_id(number))
+        for number in ports.tracker.queue()
+    }
+
+
 def gather_launches(
     cfg: Configuration,
     ports: Ports,
@@ -1130,6 +1147,7 @@ def gather_launches(
     upstream: Callable[[], Upstream] | None = None,
     reports: list[rules.BlockerReport] | None = None,
     by_issue: dict[int, rules.BlockerReport] | None = None,
+    documents: Mapping[int, TaskState | None] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -1138,13 +1156,15 @@ def gather_launches(
     now has a document clears its own stale attempt record (`registry.clear_launch`):
     it is no longer a candidate at all. Each candidate's `BlockerReport` is appended to
     `reports` when given (GH-344), for the queue-blocked line, and set in `by_issue` under
-    its issue number when given (GH-375), for the board mirror."""
+    its issue number when given (GH-375), for the board mirror. `documents` (GH-403) is
+    `queue_documents`' answer, shared with the orphan pass so each queue document is loaded
+    once per round; without it this function reads it itself."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
-    for number in ports.tracker.queue():
-        task_id = ports.inbox.task_id(number)
-        if ports.documents.load(task_id) is not None:
+    queued = documents if documents is not None else queue_documents(ports)
+    for number, loaded in queued.items():
+        if loaded is not None:
             registry.clear_launch(product, number)
             continue
         report = _blocked(cfg, ports, number, upstream)
@@ -1159,6 +1179,103 @@ def gather_launches(
             rules.LaunchCandidate(number, bool(report), since, prior, len(rules.LAUNCH_SCHEDULE))
         )
     return launches
+
+
+def orphaned_comment(counted: int) -> str:
+    """The comment an orphan retake posts: `RETAKEN_ORPHANED` and which retake of the cap it
+    is, `counted` being the ones that ran nothing before it. The one function that writes it;
+    `_orphan_counts` reads the prefix."""
+    return f"{RETAKEN_ORPHANED}retake {counted + 1} of {rules.ORPHANED_RETAKE_MAX}"
+
+
+def _orphan_counts(raw: TaskState, comments: Sequence[IssueComment]) -> tuple[int, datetime | None]:
+    """`(counted, last_own_at)` of an orphan: its own retake comments after the last comment
+    that is not the system's (a human comment resets them) that no later `runs[]` entry
+    followed (`rules.orphaned_retake_count`), and when the last own one was posted."""
+    from .resume import SYSTEM_COMMENTS
+
+    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
+    own = [
+        _parse_timestamp(c.created_at)
+        for c in comments[last_non_system + 1 :]
+        if c.body.startswith(RETAKEN_ORPHANED)
+    ]
+    starts = [run.get("started_at") for run in raw.get("runs", [])]
+    return rules.orphaned_retake_count(own, starts), max(own, default=None)
+
+
+def gather_orphans(
+    ports: Ports,
+    lock: RunLock,
+    documents: Mapping[int, TaskState | None],
+    busy: Collection[str],
+    taken: Collection[int],
+    now: datetime,
+) -> tuple[dict[int, int], list[str]]:
+    """The orphan retakes of this round (GH-403, `rules.orphaned_run`) and the lines for the
+    orphans it cannot retake now. `documents` is `queue_documents`' answer, so only an issue in
+    the bandeja is ever judged; `taken` are the issues this round already acts on. Each task goes
+    through the cheapest check first, and stops at the first that rules it out: its document's
+    own fields (the rule itself, with nothing else known), a live run in `busy` or on its
+    lock (`RunLock.refusal`), a lock record (`RunLock.read`, an unreadable one is a line, never
+    the round's end), whether the document was written inside `rules.ORPHANED_QUIET` (one
+    `ids_touched_since` for the whole round) and, only for what is left, the issue's comments.
+    Returns `{issue: counted}` in issue order, `counted` being the retakes that ran nothing."""
+    orphans: dict[int, int] = {}
+    lines: list[str] = []
+    touched: set[str] | None = None
+    for number in sorted(documents):
+        raw = documents[number]
+        if raw is None or number in taken:
+            continue
+        task_id = ports.inbox.task_id(number)
+        fields_only = rules.orphaned_run(
+            raw, live=False, has_lock=False, quiet=True, prior=0, last_own_at=None, now=now
+        )
+        if fields_only == "none":
+            continue
+        if task_id in busy or lock.refusal(task_id) is not None:
+            continue
+        try:
+            record = lock.read(task_id)
+        except (ValueError, OSError, KeyError) as exc:
+            lines.append(
+                rules.orphaned_line(number, "lock_unreadable", str(exc) or type(exc).__name__)
+            )
+            continue
+        if record is not None:
+            continue
+        if touched is None:
+            touched = set(ports.documents.ids_touched_since(now - rules.ORPHANED_QUIET))
+        if task_id in touched:
+            minutes = int(rules.ORPHANED_QUIET.total_seconds() // 60)
+            lines.append(rules.orphaned_line(number, "quiet", f"{minutes} min"))
+            continue
+        counted, last_own_at = _orphan_counts(raw, ports.tracker.timestamped_comments(task_id))
+        verdict = rules.orphaned_run(
+            raw,
+            live=False,
+            has_lock=False,
+            quiet=True,
+            prior=counted,
+            last_own_at=last_own_at,
+            now=now,
+        )
+        match verdict:
+            case "retake":
+                orphans[number] = counted
+            case "calendar":
+                assert last_own_at is not None  # the rule's own: a calendar needs a last retake
+                due = rules.orphaned_due(last_own_at, counted).astimezone(UTC)
+                lines.append(rules.orphaned_line(number, "calendar", due.strftime("%H:%M UTC")))
+            case "cap_spent":
+                spent = f"{counted} of {rules.ORPHANED_RETAKE_MAX}"
+                lines.append(rules.orphaned_line(number, "cap_spent", spent))
+            case "none" | "quiet":
+                continue
+            case _:
+                assert_never(verdict)
+    return orphans, lines
 
 
 def reflect_lines(cfg: Configuration, ports: Ports, launcher: Launcher, argv0: str) -> list[str]:
@@ -1198,9 +1315,12 @@ def _spawn_resume(
     register_timeout_s: float,
     sleep: Callable[[float], None],
     crash: CrashRetake | None = None,
+    orphan_prior: int | None = None,
 ) -> list[str]:
     """What a `resume` and a `retake` share (GH-176): a detached `agentic resume --issue N
-    --yes --detach` child, the system comment (`comment`, `AUTO_RESUMED` or `RETAKEN`
+    --yes --detach` child (plus `--from-document` for an orphan retake, GH-403: `orphan_prior`
+    is the retakes of it that ran nothing, counted by `gather_orphans`, and the one place
+    that argv is built), the system comment (`comment`, `AUTO_RESUMED` or `RETAKEN`
     plus its reason) posted only once `spawn` returned a pid, and the wait for the child
     to register. A retake that never registered says so, with which of its tries it was:
     it is the only case where the wait ends with the registry flock held for nothing.
@@ -1210,6 +1330,8 @@ def _spawn_resume(
     task_id = ports.inbox.task_id(number)
     if crash is not None:
         prior, cap = crash.prior_at_version, rules.CRASH_RETAKE_PER_VERSION_MAX
+    elif orphan_prior is not None:
+        prior, cap = orphan_prior, rules.ORPHANED_RETAKE_MAX
     else:
         prior = (
             _prior_retakes(ports.tracker.timestamped_comments(task_id))
@@ -1217,7 +1339,8 @@ def _spawn_resume(
             else 0
         )
         cap = rules.RETAKE_AFTER_REBOOT_MAX
-    argv = _argv(argv0, "resume", number, product_dir, "--yes", "--detach")
+    document = ("--from-document",) if orphan_prior is not None else ()
+    argv = _argv(argv0, "resume", number, product_dir, "--yes", "--detach", *document)
     try:
         pid = launcher.spawn(argv)
     except OSError as exc:
@@ -1249,6 +1372,7 @@ def execute(
     land_kinds: Mapping[int, rules.RunKind] | None = None,
     crash_retakes: Mapping[int, CrashRetake] | None = None,
     reruns: frozenset[int] = frozenset(),
+    orphan_retakes: Mapping[int, int] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -1273,7 +1397,9 @@ def execute(
     `gather_retakes` and never here; a reboot retake is as it was. A `launch` of an issue in
     `reruns` (a task whose slices landed with work left, GH-334) is a fresh run, `run
     --fresh`: the same archive-and-start-over the landing's restart spawns, on the launch's
-    own calendar."""
+    own calendar. A `retake` whose `reason` is `orphaned` (GH-403) resumes `--from-document` and
+    posts `RETAKEN_ORPHANED` with `orphaned_comment`, from the count `orphan_retakes[issue]`
+    that `gather_orphans` made."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -1321,6 +1447,20 @@ def execute(
                 register_timeout_s,
                 sleep,
                 crash,
+            )
+        elif action.kind == "retake" and action.reason == "orphaned":
+            counted = (orphan_retakes or {})[action.issue]
+            lines += _spawn_resume(
+                action,
+                ports,
+                registry,
+                launcher,
+                argv0,
+                product_dir,
+                orphaned_comment(counted),
+                register_timeout_s,
+                sleep,
+                orphan_prior=counted,
             )
         elif action.kind == "retake":
             lines += _spawn_resume(
@@ -1518,8 +1658,9 @@ def run_once(
         upstream = functools.cache(ports.workspace.upstream)
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
+        queued = queue_documents(ports)
         launches = gather_launches(
-            cfg, ports, registry, upstream, blocker_reports, blockers_by_issue
+            cfg, ports, registry, upstream, blocker_reports, blockers_by_issue, queued
         )
         merges: list[int] = []
         merge_lines: list[str] = []
@@ -1553,6 +1694,21 @@ def run_once(
                     len(rules.LAUNCH_SCHEDULE),
                 )
             )
+        # GH-403: after every other gatherer, so an issue they already act on is left out; a held
+        # round starts nothing, and asking the tracker for its comments would be for nothing.
+        orphans: dict[int, int] = {}
+        orphan_lines: list[str] = []
+        if not held:
+            acting = {
+                *retakes,
+                *crash_retakes,
+                *(r.issue for r in resumes),
+                *merges,
+                *(c.issue for c in lands),
+                *reruns,
+            }
+            orphans, orphan_lines = gather_orphans(ports, lock, queued, busy, acting, now)
+            ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
         own_key = rules.root_key(str(tasks_root))
         waits, wait_notes = registry.land_waits(now)
@@ -1582,6 +1738,7 @@ def run_once(
             others_landing=others_landing,
             earlier_land_wait=rules.land_queued_behind(previous, own_key, others),
             held=held,
+            orphan_retakes=sorted(orphans),
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.
@@ -1606,8 +1763,12 @@ def run_once(
             {c.issue: c.kind for c in lands},
             crash_retakes,
             frozenset(reruns),
+            orphans,
         )
-        deferral_lines = [deferred_line(d) for d in plan.deferred]
+        deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
+        orphan_lines += [
+            rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"
+        ]
     # GH-375: the board mirror, outside the exclusive section (it takes no slot and a Project
     # call may be slow). Its notes go with the others, so `nothing to do` is unaffected.
     notes += board_sync.mirror(
@@ -1623,5 +1784,9 @@ def run_once(
     if not held:
         lines += reflect_lines(cfg, ports, launcher, argv0)
     lines = [*swept, *hold_lines, *human_lines, *merge_lines, *lines, *deferral_lines]
-    idle = rules.queue_blocked_line(blocker_reports) or "agentic: poll: nothing to do this round"
-    return [*notes, *(lines or [idle])]
+    blocked = rules.queue_blocked_line(blocker_reports)
+    if lines:
+        return [*notes, *lines, *orphan_lines]
+    if orphan_lines:  # GH-403: never `nothing to do` beside an orphan; the blocked queue stays
+        return [*notes, *orphan_lines, *([blocked] if blocked else [])]
+    return [*notes, blocked or "agentic: poll: nothing to do this round"]
