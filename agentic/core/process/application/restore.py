@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from ..domain import document, plan_settlement, rules
 from ..domain import landing as landing_rules
@@ -90,9 +90,9 @@ def restore_task(
     the landing asks. Raises `GitError` for a git failure that is not a refusal."""
     seen = _observe(task_id, archive_prefix, ports, product_dir)
     plan = rules.restore_steps(seen.observed)
-    if plan.refusal is not None:
-        return RestoreResult(refusal=plan.refusal)
-    archived = cast(TaskState, seen.observed.state)
+    archived = seen.observed.state
+    if plan.refusal is not None or archived is None:
+        return RestoreResult(refusal=plan.refusal or "no_document")
     taken: list[rules.RestoreStep] = []
     for step in plan.steps:
         if step == "archive_live":
@@ -108,7 +108,7 @@ def restore_task(
             except GitError as exc:
                 return RestoreResult(refusal="push_refused", steps=tuple(taken), detail=str(exc))
         elif step == "reopen":
-            if (refused := _reopen(seen, ports)) is not None:
+            if (refused := _reopen(archived, seen, ports)) is not None:
                 return RestoreResult(refusal=refused[0], steps=tuple(taken), detail=refused[1])
         if step != "settle":  # it runs last, over the document the steps above wrote
             taken.append(step)
@@ -127,7 +127,7 @@ def _observe(task_id: str, prefix: str, ports: Ports, product_dir: Path) -> _See
     )
     state = _parsed(text, task_id)
     live = _live_document(task_id, ports)
-    held = [row for row in (live or {}).get("restorations", []) if isinstance(row, dict)]
+    held = _restorations((live or {}).get("restorations"))
     live_heads = {
         name: head
         for name in rules.branches_of_task(workspace.branches(branch), task_id)
@@ -145,7 +145,7 @@ def _observe(task_id: str, prefix: str, ports: Ports, product_dir: Path) -> _See
         archive=prefix,
         archived=refs,
         state=state,
-        held=cast(list[Restoration], held),
+        held=held,
         live_heads=live_heads,
         reachable=reachable,
         remote_head=workspace.remote_tip(product_dir, branch),
@@ -156,6 +156,34 @@ def _observe(task_id: str, prefix: str, ports: Ports, product_dir: Path) -> _See
         settled=current is None or not plan_settlement.pending(current),
     )
     return _Seen(observed, live, pull_request, _number(reference), workspace.upstream().sha)
+
+
+def _restorations(raw: object) -> list[Restoration]:
+    """The rows of a live document's `restorations` that have the shape of a `Restoration`;
+    anything else in the list is not a restoration and is left out."""
+    rows: list[Restoration] = []
+    for row in raw if isinstance(raw, list) else []:
+        if not isinstance(row, dict):
+            continue
+        cut = row.get("landing_cut")
+        if (
+            isinstance(row.get("archive"), str)
+            and isinstance(row.get("head"), str)
+            and isinstance(row.get("upstream"), str)
+            and isinstance(row.get("at"), str)
+            and isinstance(cut, int)
+            and not isinstance(cut, bool)
+        ):
+            rows.append(
+                Restoration(
+                    archive=row["archive"],
+                    head=row["head"],
+                    upstream=row["upstream"],
+                    at=row["at"],
+                    landing_cut=cut,
+                )
+            )
+    return rows
 
 
 def _parsed(text: str | None, task_id: str) -> TaskState | None:
@@ -241,15 +269,15 @@ def _restored(archived: TaskState, seen: _Seen, prefix: str, at: str) -> TaskSta
         patch["landing_restarts"] = restarts
     if carried:
         patch["landing_cost_carried"] = carried
-    return cast(TaskState, {**restored, **patch})
+    return apply(restored, state_from(patch))
 
 
-def _reopen(seen: _Seen, ports: Ports) -> tuple[Refusal, str] | None:
+def _reopen(archived: TaskState, seen: _Seen, ports: Ports) -> tuple[Refusal, str] | None:
     """Reopen the pull request; a refusal of the platform is read, never retried: a merged
     pull request is `pr_merged`, a text that speaks of the base branch is `pr_base_gone`. Any
     other failure (a timeout, a rate limit) is not a refusal about the task: it is raised as it
     came, and a retry finishes from what is observed."""
-    reference = cast(TaskState, seen.observed.state).get("pull_request", "")
+    reference = archived.get("pull_request", "")
     if seen.number is None:
         return "not_delivered", f"no pull request number in {reference!r}"
     try:
