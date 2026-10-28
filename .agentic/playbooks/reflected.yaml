@@ -457,3 +457,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-415
+  GH-412@review:
+    cost_usd: 0.0687
