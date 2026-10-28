@@ -1346,7 +1346,18 @@ def test_first_parent_commits_lists_the_line_oldest_first_limited_to_the_range(p
     ws.commit_all(api.path, "GH-12.api: api")
     api_head = git("rev-parse", "HEAD", cwd=api.path)
     approved = git("rev-parse", "HEAD", cwd=task.path)
-    git("merge", "--no-ff", "-m", "merge api", "agentic/GH-12.api", cwd=task.path)
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "merge",
+        "--no-ff",
+        "-m",
+        "merge api",
+        "agentic/GH-12.api",
+        cwd=task.path,
+    )
     merge = git("rev-parse", "HEAD", cwd=task.path)
     (task.path / "later.py").write_text("y\n")
     ws.commit_all(task.path, "GH-12: later")
