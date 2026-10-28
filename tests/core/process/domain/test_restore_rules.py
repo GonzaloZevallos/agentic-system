@@ -255,9 +255,7 @@ def test_restore_heads_of_the_gh374_shape_take_the_integration_branch_from_its_d
 
 def test_restore_heads_of_a_single_unit_on_the_task_branch_is_only_the_task_branch():
     state = _document(
-        subtasks={
-            "api": {"id": "api", "status": "approved", "branch": TASK, "reviewed_head": HEAD}
-        }
+        subtasks={"api": {"id": "api", "status": "approved", "branch": TASK, "reviewed_head": HEAD}}
     )
 
     assert rules.restore_heads(state, "GH-9") == {TASK: HEAD}
