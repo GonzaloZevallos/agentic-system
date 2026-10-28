@@ -9,15 +9,18 @@ Developer's word."""
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic.shared.stage0 import CHECKOUT
 
 from ..domain import check_results as reuse_rules
 from ..domain import presubmit
+from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
 from ..domain.presubmit import (
     AffectedPlan,
     CheckResult,
@@ -26,10 +29,15 @@ from ..domain.presubmit import (
     RerunForm,
     WitnessResult,
 )
-from ..domain.task import FlakeRecord, TaskState
+from ..domain.task import FlakeRecord, GateRecord, TaskState
 from .checkouts import task_base
-from .ports import GitError, Ports
+from .ports import CheckRequest, GitError, Grant, Ports
 from .preflight import criteria_regressed, product_name
+
+# The delivery hook's own guard budget (`hooks.GUARD_TIMEOUT_S`, pinned equal by a test): a
+# share is held that much past the checks' timeout, so the ledger never drops it before the
+# hook gives up.
+HOLD_MARGIN_S = 30.0
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
@@ -103,6 +111,8 @@ class CheckoutPresubmit:
         checks: dict[str, str],
         check_timeout_s: float,
         *,
+        priority: CheckPriority,
+        wait_max_s: float = WAIT_MAX_S,
         witness: str | None = None,
         parallel: bool = False,
         affected: AffectedPlan | None = None,
@@ -121,6 +131,16 @@ class CheckoutPresubmit:
         # checkout). Keyword-only with this default so every existing construction
         # site compiles untouched.
         self.witness = witness
+        # How close to done this gate is (GH-361): required, so no construction site can
+        # forget to say, and with no default so none can fall back to a wrong one.
+        self.priority = priority
+        # The most the gate waits for a share over its whole life, `check_wait_max_s`.
+        self._wait_max_s = wait_max_s
+        # What the scheduler gave the last time the gate ran: `None` until one did. The
+        # first `enqueued_at` and the token stay with the instance, so a gate refused and
+        # retried keeps one place in the queue (ADR-0070); `waited_s` is the total wait.
+        self.grant: Grant | None = None
+        self.waited_s = 0.0
         # The product's `parallel_checks`: run the declared checks concurrently. False
         # (the default) is the serial gate of before, byte for byte; keyword-only so
         # every existing construction site compiles untouched.
@@ -173,6 +193,12 @@ class CheckoutPresubmit:
         # invocation with only the last one `final` (a Developer run may deliver,
         # get refused, and try again more than once).
         self.invocations: list[list[CheckResult]] = []
+        # The wait and the run of each of those invocations, apart (GH-361): one record per
+        # entry of `invocations`, in the same order.
+        self.gates: list[GateRecord] = []
+        # The declared command behind each command a row ran, `{workers}` still in it: what
+        # a stored pass is keyed by, so the share never splits the store.
+        self._declared: dict[tuple[str, str], str] = {}
 
     @property
     def timeout_s(self) -> float:
@@ -193,6 +219,17 @@ class CheckoutPresubmit:
         base = self.check_timeout_s * max(len(self.checks), 1)
         return base + reruns + (self.check_timeout_s if self.witness else 0)
 
+    @property
+    def wait_max_s(self) -> float:
+        """The configured wait for a share. Not part of `timeout_s`: the checks' clock
+        starts after the grant, and the delivery hook adds this on its own."""
+        return self._wait_max_s
+
+    @property
+    def gate(self) -> GateRecord | None:
+        """The record of the last invocation that ran the checks, or None when none did."""
+        return self.gates[-1] if self.gates else None
+
     def __call__(self) -> str | None:
         workspace = self.ports.workspace
         head = workspace.head(self.path)
@@ -203,21 +240,7 @@ class CheckoutPresubmit:
         # spawned on a call that refuses for a missing commit or an unclean tree.
         witness_reason = None
         if moved and clean:
-            self._prepare_reuse()
-            if self.witness is not None:
-                witness_reason = self._run_witness(self.witness)
-            plan = self.affected
-            if plan is None:
-                results = self._run_unplanned()
-            else:
-                results = self._run_under_plan(plan, self._modes(plan, head))
-            self.head, self.results = head, results
-            self.regressions = self._criteria_regressions(head)
-            self.invocations.append(self.results)
-            # A pass is stored only after the witness had its say in this same call: a
-            # checkout the witness doubts proves nothing about the tree.
-            if self.witness is None or witness_reason is None:
-                self._store_passes(results)
+            witness_reason = self._run_holding_a_share(head)
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
         # stay for the checks alone, so a bad witness declaration cannot spend the
         # budget the working gate needs. The checks below still ran either way.
@@ -238,6 +261,72 @@ class CheckoutPresubmit:
         self.refusals += 1
         self._refused_ids.append(self._failed_ids())
         return presubmit.refused(reason, self.refusals)
+
+    def _run_holding_a_share(self, head: str) -> str | None:
+        """The witness and the checks, under a share of the machine's cores. `__call__` is
+        its only caller; the acquire itself is `_share`, the one place that asks the
+        scheduler (ADR-0070). The time spent waiting for the share is over before any
+        command starts, so it is never part of a check's timeout."""
+        asked_at = datetime.now(UTC).isoformat(timespec="milliseconds")
+        with self._share() as grant:
+            granted = time.monotonic()
+            self._prepare_reuse()
+            witness_reason = None
+            if self.witness is not None:
+                witness_reason = self._run_witness(self.witness)
+            plan = self.affected
+            if plan is None:
+                results = self._run_unplanned()
+            else:
+                results = self._run_under_plan(plan, self._modes(plan, head))
+            self.head, self.results = head, results
+            self.regressions = self._criteria_regressions(head)
+            self.invocations.append(self.results)
+            self.gates.append(
+                {
+                    "started_at": asked_at,
+                    "wait_s": round(grant.wait_s, 3),
+                    "run_s": round(time.monotonic() - granted, 3),
+                    "share": grant.share,
+                    "peers": grant.peers,
+                    "priority": self.priority.value,
+                    "overdue": grant.overdue,
+                }
+            )
+            # A pass is stored only after the witness had its say in this same call: a
+            # checkout the witness doubts proves nothing about the tree.
+            if self.witness is None or witness_reason is None:
+                self._store_passes(results)
+            return witness_reason
+
+    @contextmanager
+    def _share(self, *, fresh: bool = False) -> Iterator[Grant]:
+        """Hold a share of the machine's cores, given back whatever happens inside. The only
+        method that calls the `CheckScheduler` port. A gate keeps its first `enqueued_at`
+        and token across the calls it is refused and retried in, and the seconds it already
+        waited count against its ceiling. `fresh` is for a one-off check the Developer asked
+        for through `run_check`: a new place in the queue (an old `enqueued_at` would age it
+        into `land`), its own full wait, and the gate's grant is back as it was afterwards."""
+        previous = self.grant
+        keep = previous is not None and not fresh
+        request = CheckRequest(
+            self.priority,
+            wait_max_s=max(self._wait_max_s - (0.0 if fresh else self.waited_s), 0.0),
+            expires_after_s=self.timeout_s + HOLD_MARGIN_S,
+            enqueued_at=previous.enqueued_at if keep and previous else None,
+            token=previous.token if keep and previous else None,
+        )
+        scheduler = self.ports.check_scheduler
+        grant = scheduler.acquire(request)
+        self.grant = grant
+        if not fresh:
+            self.waited_s += grant.wait_s
+        try:
+            yield grant
+        finally:
+            scheduler.release(grant)
+            if fresh:
+                self.grant = previous
 
     def _failed_ids(self) -> tuple[str, ...] | None:
         """The test ids the failing checks of this look name, or None when the product declares
@@ -297,6 +386,7 @@ class CheckoutPresubmit:
         check already failed in full on this instance."""
         rows: list[CheckResult] = []
         if mode == "affected-only" and name not in self.stuck_full:
+            # `{base}` first, then `{workers}`: the order the substitution is defined in.
             form = presubmit.affected_command(plan.commands[name], plan.base)
             first = self._run(name, form, "affected-only")
             rows.append(first)
@@ -369,7 +459,10 @@ class CheckoutPresubmit:
 
     def _run_witness(self, command: str) -> str | None:
         checkout = self.path.resolve()
-        result = self.ports.commands.run(self.path, command, self.check_timeout_s)
+        # The witness gets the grant's environment but its command is never substituted.
+        result = self.ports.commands.run(
+            self.path, command, self.check_timeout_s, env=self._grant_env()
+        )
         reason = presubmit.witness_refusal(
             command, result.output, result.exit_code, result.timed_out, checkout
         )
@@ -379,6 +472,18 @@ class CheckoutPresubmit:
             "passed": reason is None,
         }
         return reason
+
+    def _grant_env(self) -> dict[str, str] | None:
+        """The worker count of the share held, as the environment of every command; None
+        without a grant, which is the call of before."""
+        return None if self.grant is None else presubmit.workers_env(self.grant.share)
+
+    def _sized(self, command: str) -> str:
+        """`{workers}` in a declared command, sized to the share held; the command as it is
+        without a grant or without the placeholder."""
+        if self.grant is None:
+            return command
+        return presubmit.workers_command(command, self.grant.share)
 
     def _prepare_reuse(self, eligible: bool = True) -> None:
         """Decide, once per call, what this clean tree may read from and write to the store.
@@ -435,7 +540,10 @@ class CheckoutPresubmit:
         if store is None:
             return
         for row in results:
-            key = self._key(row["name"], row["command"])
+            # Keyed by the command as declared, `{workers}` and all, the same as the lookup in
+            # `_stored`: a pass at a share of 6 is the pass of the check at a share of 12.
+            declared = self._declared.get((row["name"], row["command"]), row["command"])
+            key = self._key(row["name"], declared)
             if key is None or not row["passed"] or row.get("reused") or row.get("rerun"):
                 continue
             try:
@@ -451,7 +559,11 @@ class CheckoutPresubmit:
 
     def _execute(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
         started = time.monotonic()
-        result = self.ports.commands.run(self.path, command, self.check_timeout_s)
+        declared, command = command, self._sized(command)
+        self._declared[(name, command)] = declared
+        result = self.ports.commands.run(
+            self.path, command, self.check_timeout_s, env=self._grant_env()
+        )
         duration_s = time.monotonic() - started
         output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
         row: CheckResult = {

@@ -272,6 +272,17 @@ def _maximal_patch() -> dict:
         "tokens": {"input": 10, "output": 20},
         "tool_calls": {"Read": 2, "Bash": 1},
         "cold_fallback": True,
+        "gates": [
+            {
+                "started_at": "2026-10-26T10:00:00.000+00:00",
+                "wait_s": 1.5,
+                "run_s": 20.0,
+                "share": 6,
+                "peers": 1,
+                "priority": "subtask",
+                "overdue": False,
+            }
+        ],
     }
     failure = {
         "role": "Developer",

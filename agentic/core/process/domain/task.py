@@ -436,6 +436,26 @@ class Failure(TypedDict):
     reaped: NotRequired[list[ReapedProcess]]
 
 
+class GateRecord(TypedDict, total=False):
+    """One invocation of a check gate that ran its checks (GH-361, ADR-0070): the wait for a
+    share of the machine's cores kept apart from the run. `started_at` is the UTC ISO time the
+    gate asked for its share; `wait_s` what this call spent waiting for it and `run_s` what
+    the witness and the checks took after the grant, so a check's `duration_s` stays pure run
+    time; `share` the cores it was given, `peers` how many gates held a share beside it (a
+    debugging aid, never the figure "other gates alongside", which `overlap_peers` computes
+    from intervals), `priority` the closed `CheckPriority` value and `overdue` whether the
+    wait ran out. Every key is optional on read (ADR-0041): a document
+    written before this record carries none. No free text in any field."""
+
+    started_at: str
+    wait_s: float
+    run_s: float
+    share: int
+    peers: int
+    priority: str
+    overdue: bool
+
+
 class RoleRun(TypedDict):
     """One successful run of a role. `section` is what it wrote (a role may write
     several: one per subtask, one per interview); `version` numbers the deliveries of
@@ -473,6 +493,10 @@ class RoleRun(TypedDict):
     # `cache_read`, `cache_write`): `agentic.role.tokens` groups on this key. Absent on
     # a run recorded before this field existed.
     tokens: NotRequired[dict[str, int]]
+    # One record per invocation of the Developer's delivery gate that ran the checks, in
+    # order (GH-361): the wait for a share apart from the run. Absent on a run recorded
+    # before this field existed, and on a run that never ran a gate.
+    gates: NotRequired[list[GateRecord]]
     # Calls to the model in this run: one per `AssistantMessage` the runner saw before
     # the delivery (`ClaudeSdkRunner.run_once`'s own count). Absent on a run recorded
     # before this field existed.
@@ -907,6 +931,8 @@ class FullChecksRecord(TypedDict):
     results: list[FullCheckEntry]
     witness: dict[str, Any] | None
     failed_step: NotRequired[str]
+    # The gate's wait and run apart (GH-361); absent on a record written before it.
+    gate: NotRequired[GateRecord]
     # The checks that took longer than their declared budget (GH-365): a declared name and two
     # numbers, written by the system only, and only on a passed run that had a breach. It
     # returns and blocks nothing.

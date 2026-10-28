@@ -12,6 +12,7 @@ import pytest
 
 from agentic.core.process.application import merge
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryCommands, MemoryStack, MemoryTracker, memory_ports
@@ -496,7 +497,15 @@ def test_a_merge_gate_on_a_tree_a_developer_gate_already_passed_reuses_that_pass
     ports.workspace.moved.add(developer)
     ports.workspace.record_setup_tree(developer)
     reuse = reuse_of(ports, "base")
-    CheckoutPresubmit(ports, developer, "base", dict(CHECKS), cfg.check_timeout_s, reuse=reuse)()
+    CheckoutPresubmit(
+        ports,
+        developer,
+        "base",
+        dict(CHECKS),
+        cfg.check_timeout_s,
+        priority=CheckPriority.SUBTASK,
+        reuse=reuse,
+    )()
     assert len(commands.ran) == 2
     ports.documents.save({"id": "GH-7", "status": "ready_for_review"})
     ports.workspace.trees[merged] = "tree:integrated"

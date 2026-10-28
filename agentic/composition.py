@@ -30,6 +30,7 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
+from .core.process.adapters.filesystem.check_ledger import FilesystemCheckLedger
 from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
 from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
@@ -49,6 +50,7 @@ from .core.process.application.ports import Ports, StopFlag
 from .core.process.application.preflight import refuse_its_own_checkout
 from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
+from .core.process.domain.check_schedule import Limits
 from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
 
@@ -171,6 +173,13 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
     # `Ports` (which reaps on release): a mark is only found by the key it was built with.
     product_key = reaping.product_key(str(cfg.product_dir.resolve()))
     reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
+    limits = Limits(
+        cores=cfg.check_cores,
+        share_min=cfg.check_share_min,
+        share_max=cfg.check_share_max,
+        share_max_subtask=cfg.check_share_max_subtask,
+        wait_max_s=cfg.check_wait_max_s,
+    )
     # One scratch and one reader of free space for the runner (which gives each attempt its
     # directory) and for `Ports` (GH-391).
     scratch = FilesystemScratch(cfg.product_dir)
@@ -208,6 +217,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
         commands=ShellCommands(product_key, reaper, stop_flag, scratch=scratch),
         sample_app=ShellSampleApp(),
         reaper=reaper,
+        check_scheduler=FilesystemCheckLedger(cfg.check_ledger_dir, product_key, reaper, limits),
         perf_runner=PerfShellRunner(product_key, reaper),
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
         check_results=FilesystemCheckResults(cfg.check_results_dir),

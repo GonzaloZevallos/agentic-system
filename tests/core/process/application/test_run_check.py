@@ -4,11 +4,20 @@ runs, reports and stores. Every figure it returns comes from `CheckoutPresubmit.
 import time
 from pathlib import Path
 
-from agentic.core.process.application.ports import CommandResult
+import pytest
+
+from agentic.core.process.application.ports import CommandResult, Grant
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
 from agentic.core.process.application.run_check import RunCheck
 from agentic.core.process.domain import check_results
-from tests.fakes import MemoryCheckResults, MemoryCommands, MemoryWorkspace, memory_ports
+from agentic.core.process.domain.check_schedule import CheckPriority
+from tests.fakes import (
+    FakeCheckScheduler,
+    MemoryCheckResults,
+    MemoryCommands,
+    MemoryWorkspace,
+    memory_ports,
+)
 
 PATH = Path("/memory/worktrees/GH-1.api")
 SETUP = ["uv sync"]
@@ -38,6 +47,7 @@ def tool(
         "base",
         {"tests": "pytest", "lint": "ruff"},
         30.0,
+        priority=CheckPriority.SUBTASK,
         witness=witness,
         reuse=Reuse("shop", tuple(SETUP), stage0),
     )
@@ -148,8 +158,9 @@ def test_a_failed_comparison_of_trees_is_not_recorded_and_never_raises():
 
 def test_the_timeout_of_one_call_covers_every_declared_check_and_the_witness():
     handler, _, _, _ = tool(witness="witness")
-    # Two checks and the witness, and the one rerun each check may take (ADR-0066).
-    assert handler.timeout_s == 30.0 * (2 + 1 + 2)
+    # Two checks and the witness, the one rerun each check may take (ADR-0066), and the wait
+    # for a share (ADR-0070).
+    assert handler.timeout_s == 30.0 * (2 + 1 + 2) + handler.gate.wait_max_s
 
 
 def gate_over(ports, **kwargs) -> CheckoutPresubmit:
@@ -160,6 +171,7 @@ def gate_over(ports, **kwargs) -> CheckoutPresubmit:
         "base",
         {"tests": "pytest"},
         30.0,
+        priority=CheckPriority.SUBTASK,
         reuse=Reuse("shop", tuple(SETUP), STAGE0),
         **kwargs,
     )
@@ -205,3 +217,67 @@ def test_a_store_that_cannot_be_written_is_reported_and_never_raises():
     handler, _, _, _ = tool(store=Full())
     run = handler.run("tests")
     assert run.passed and run.unrecorded == "the store could not be written"
+
+
+# -- under a share of the machine's cores (GH-361, ADR-0070) --------------------------
+
+
+def scheduled_tool(commands, scheduler, store=None, check="pytest -n {workers}"):
+    workspace = MemoryWorkspace()
+    workspace.moved.add(PATH)
+    workspace.record_setup_tree(PATH)
+    store = store if store is not None else MemoryCheckResults()
+    ports = memory_ports(
+        workspace=workspace, commands=commands, check_results=store, check_scheduler=scheduler
+    )
+    gate = CheckoutPresubmit(
+        ports,
+        PATH,
+        "base",
+        {"tests": check},
+        30.0,
+        priority=CheckPriority.SUBTASK,
+        reuse=Reuse("shop", tuple(SETUP), STAGE0),
+    )
+    return RunCheck(gate, clock=lambda: NOW), store, ports
+
+
+def test_a_check_asked_for_by_hand_holds_a_share_sized_into_its_workers_and_gives_it_back():
+    scheduler = FakeCheckScheduler(6)
+    commands = MemoryCommands()
+    handler, _, _ = scheduled_tool(commands, scheduler)
+    handler.run("tests")
+    assert [command for _, command in commands.ran] == ["pytest -n 6"]
+    assert [r.priority for r in scheduler.requests] == [CheckPriority.SUBTASK]
+    assert len(scheduler.released) == 1
+
+
+def test_every_call_of_the_tool_takes_a_new_place_in_the_queue_apart_from_the_gates():
+    scheduler = FakeCheckScheduler(6)
+    handler, _, _ = scheduled_tool(MemoryCommands(), scheduler)
+    handler.gate.grant = Grant(6, 0.0, 0, False, 123.0, "gate-token")  # the gate's own place
+    handler.run("tests")
+    handler.run("tests")
+    assert [(r.enqueued_at, r.token) for r in scheduler.requests] == [(None, None), (None, None)]
+    assert handler.gate.grant is not None and handler.gate.grant.token == "gate-token"
+    assert handler.gate.waited_s == 0.0  # its wait is not the gate's
+
+
+def test_the_share_is_given_back_when_the_check_raises():
+    scheduler = FakeCheckScheduler(6)
+    commands = MemoryCommands(raises={"pytest -n 6"})
+    handler, _, _ = scheduled_tool(commands, scheduler)
+    with pytest.raises(RuntimeError):
+        handler.run("tests")
+    assert len(scheduler.released) == 1
+
+
+def test_a_pass_stored_at_one_share_is_read_at_another_the_key_is_the_declared_command():
+    store = MemoryCheckResults()
+    first, _, _ = scheduled_tool(MemoryCommands(), FakeCheckScheduler(6), store)
+    first.clock = time.time  # the lookup reads at the real time
+    assert first.run("tests").passed
+    commands = MemoryCommands()
+    second, _, _ = scheduled_tool(commands, FakeCheckScheduler(12), store)
+    row = second.run("tests")
+    assert row.reused and commands.ran == []

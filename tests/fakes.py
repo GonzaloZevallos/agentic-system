@@ -21,12 +21,15 @@ from agentic.core.process.application.ports import (
     AddedLine,
     BranchPullRequest,
     Checkout,
+    CheckRequest,
     CheckResults,
+    CheckScheduler,
     CommandResult,
     Commands,
     FlagVocabulary,
     FreeSpace,
     GitError,
+    Grant,
     Inbox,
     IssueComment,
     IssueState,
@@ -490,6 +493,8 @@ class MemoryCommands:
     ) -> None:
         self.queues = {k: list(v) for k, v in queues.items()}
         self.ran: list[tuple[Path, str]] = []
+        # The `env` each run received, parallel to `ran`: None when the caller passed none.
+        self.envs: list[Mapping[str, str] | None] = []
         self.holds = holds or {}
         self.raises = raises or set()
         self.in_flight = 0
@@ -502,9 +507,17 @@ class MemoryCommands:
         with self._changed:
             return self._changed.wait_for(predicate, timeout_s)
 
-    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
+    def run(
+        self,
+        cwd: Path,
+        command: str,
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandResult:
         with self._changed:
             self.ran.append((cwd, command))
+            self.envs.append(env)
             self.in_flight += 1
             self.high_water = max(self.high_water, self.in_flight)
             self._changed.notify_all()
@@ -1562,6 +1575,29 @@ class FakePerfLock:
         self.released += 1
 
 
+class FakeCheckScheduler:
+    """GH-361: grants at once and never waits. `share` is what every grant holds; `overdue`
+    and `wait_s` are what it reports. `requests` and `released` record, in order, every
+    `acquire` and every `release`. The grant keeps the request's first `enqueued_at` and
+    token, so a gate that passes them back is seen to do so."""
+
+    def __init__(self, share: int = 4, *, overdue: bool = False, wait_s: float = 0.0) -> None:
+        self.share = share
+        self.overdue = overdue
+        self.wait_s = wait_s
+        self.requests: list[CheckRequest] = []
+        self.released: list[Grant] = []
+
+    def acquire(self, request: CheckRequest) -> Grant:
+        self.requests.append(request)
+        enqueued_at = 0.0 if request.enqueued_at is None else request.enqueued_at
+        token = request.token or f"fake-{len(self.requests)}"
+        return Grant(self.share, self.wait_s, 0, self.overdue, enqueued_at, token)
+
+    def release(self, grant: Grant) -> None:
+        self.released.append(grant)
+
+
 class MemoryScratch:
     """GH-391: `open` hands out the path `scratch.path_for` names under `root` without
     touching a disk, and records who opened it (`opened`, as `(task, kind, token, slug)`),
@@ -1721,6 +1757,7 @@ def memory_ports(
     commands: Commands | None = None,
     sample_app: SampleApp | None = None,
     reaper: ProcessReaper | None = None,
+    check_scheduler: CheckScheduler | None = None,
     limits: RunLimits | None = None,
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
@@ -1741,6 +1778,7 @@ def memory_ports(
         commands=commands if commands is not None else MemoryCommands(),
         sample_app=sample_app if sample_app is not None else MemorySampleApp(),
         reaper=reaper if reaper is not None else FakeReaper(),
+        check_scheduler=check_scheduler if check_scheduler is not None else FakeCheckScheduler(),
         **({} if limits is None else {"limits": limits}),
         perf_runner=perf_runner,
         perf_lock=perf_lock,
