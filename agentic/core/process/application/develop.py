@@ -71,7 +71,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 paths = list(dep_state.marked_paths)
             handled_deps.append((dep, branch))
             conflicted_paths = [*conflicted_paths, *(p for p in paths if p not in conflicted_paths)]
-            notices.append(rules.merge_notice(dep, branch, paths))
+            notices.append(
+                rules.merge_notice(dep, branch, paths, ports.stack.docs(task_base(state, ports)))
+            )
     # The plan named this subtask's screens (ADR-0040): look at the comparisons before
     # delivering, the product's own declared command when there is a `design` block,
     # or the plain names when there is not (`rules.screens_notice`'s own two shapes).

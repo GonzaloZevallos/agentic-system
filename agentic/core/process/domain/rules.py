@@ -16,6 +16,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
+from .docs import Docs, conflict_line
 from .document import HUMAN, demote
 from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
@@ -603,14 +604,17 @@ def dependency_unresolved_reason(dep_state: DependencyState) -> str:
     return "the dependency is still not on the branch."
 
 
-def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) -> str:
+def merge_notice(
+    dependency: str, branch: str, conflicted_paths: Sequence[str], docs: Docs | None = None
+) -> str:
     """The per-case text a Developer reads when its dependency does not apply clean
     (gym #16's own two escalations, a hunk a human deleted in one turn): what carries
     markers, how to take one side of a file without the strategy the cage denies
     outright (`git checkout --theirs`, `hooks.SWITCH`), and what never to reach for
     instead — `-s ours`, `-X ours` and `-X theirs` decide a whole file or a whole
     merge by strategy, never the conflicting lines a hand resolution keeps both
-    intents over."""
+    intents over. A product that declares `docs` gains `conflict_line`: its generated files
+    are regenerated, never merged by hand."""
     listed = "\n".join(f"- `{p}`" for p in conflicted_paths) or "(none reported)"
     return (
         f"The dependency `{dependency}` (`{branch}`) does not apply clean on top of "
@@ -623,7 +627,7 @@ def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) 
         "side of the merge by strategy, and this one is resolved file by file, keeping "
         "both intents, the way a human already did for this exact shape of conflict. "
         "The conflicted paths and the diff against the dependency branch will be "
-        "written into your section for the review to check."
+        "written into your section for the review to check." + conflict_line(docs)
     )
 
 
@@ -1771,7 +1775,9 @@ def needs_integration(state: TaskState) -> bool:
     return INTEGRATION not in subtasks and len(subtasks) > 1 and all_approved(state)
 
 
-def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subtask:
+def integration_subtask(
+    brief: str = "", conflicts: Sequence[str] = (), docs: Docs | None = None
+) -> Subtask:
     """The integration as the fan-in adds it.
 
     `pending` when there is something for the integrator to do: a merge the system could
@@ -1779,7 +1785,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     the incremental merge was the whole job (README.md, 13), so the branch goes straight
     to its review with no Developer paid for a merge already done. Either way the
     integration review reads the whole branch, which is the only review that does."""
-    work = integration_work(brief, conflicts)
+    work = integration_work(brief, conflicts, docs)
     return {
         "id": INTEGRATION,
         "title": "Integration",
@@ -1790,7 +1796,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     }
 
 
-def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
+def integration_work(brief: str, conflicts: Sequence[str], docs: Docs | None = None) -> Subtask:
     """The part of the integration subtask a wave can change: what is left to do and
     which branches are still out. Recomputed on every wave, so an integration the review
     sent back is not still telling its Developer there was nothing to do."""
@@ -1799,7 +1805,9 @@ def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
         line
         for line in (
             brief.strip(),
-            f"Merge into the task branch what the system could not: {listed}." if listed else "",
+            f"Merge into the task branch what the system could not: {listed}." + conflict_line(docs)
+            if listed
+            else "",
         )
         if line
     ]
@@ -2652,6 +2660,54 @@ def resume_target(state: TaskState) -> str | None:
         return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate"}.get(status)
+
+
+def integration_increment(
+    state: TaskState, task_id: str, branch_head: str, descends: bool
+) -> Literal["agree", "increment", "refuse"]:
+    """Whether the task branch at `branch_head` is the head the integration review approved
+    (`agree`), a strict descendant of it that nobody reviewed (`increment`: a later subtask
+    merge, a commit a stopped run left), or something a resume must not go on over
+    (`refuse`). `descends` is the ancestry fact -- whether the approved head is an ancestor of
+    `branch_head` -- read by the caller, so this stays pure and is the one place the rule lives.
+
+    An increment needs all of: the reviewed unit approved at a head, on the task branch; every
+    other unit approved; no pull request (its branch moving is the landing's, not a resume's);
+    and a pause no human has anything to decide in -- a role failure or a run that stopped
+    without escalating, since `resumed` clears exactly that and nothing else stands in the way
+    (pending questions, a pair at its limit, an estimate or a cap are decisions)."""
+    unit = reviewed_unit_name(state)
+    sub = state.get("subtasks", {}).get(unit) if unit else None
+    approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
+    if approved is None:
+        return "refuse"
+    if same_commit(branch_head, approved):
+        return "agree"
+    if not descends or sub is None or sub.get("branch") != task_branch(task_id):
+        return "refuse"
+    others = (s for name, s in state.get("subtasks", {}).items() if name != unit)
+    if any(s.get("status") != "approved" for s in others) or state.get("pull_request"):
+        return "refuse"
+    if state.get("escalation_class") not in (None, "failure"):
+        return "refuse"
+    if state.get("questions_for_human") or state.get("fit_question"):
+        return "refuse"
+    if state.get("escalated") and state.get("escalation_class") is None:
+        return "refuse"  # a document older than the class: what it asked is not known
+    return "increment"
+
+
+def increment_patch(state: TaskState) -> dict[str, Any]:
+    """The patch that sends the reviewed unit back to review on an increment: its status is
+    `delivered`, and its `reviewed_head` stays the approved head the next review is incremental
+    from. The reducer replaces a subtask whole, so the unit goes back with all its keys. Nothing
+    else is written: not `task_head`, not `full_checks`, not the findings table."""
+    unit = reviewed_unit_name(state)
+    if unit is None:
+        raise ValueError("a task with no reviewed unit has no increment to review")
+    sub = state["subtasks"][unit]
+    patch: dict[str, Any] = {"subtasks": {unit: {**sub, "status": "delivered"}}}
+    return patch
 
 
 # The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller

@@ -74,6 +74,17 @@ change the pass, and the merge reuses it (ADR-0045, amendment). Each entry goes 
 `master_gain.glob_refusal` at load, which refuses a glob that would whitelist everything. Absent
 it reads as `()`: the merge gate of today. Present and empty, or a wrong shape, fails at load.
 
+**`docs`**: optional. A mapping of `generate`, the one-line command that rewrites every generated
+doc artifact, and `paths`, the non-empty list of globs it owns. With it the system adds one check,
+`docs`, last in `checks` (and in `delivery_checks` when that is declared): it runs `generate`,
+fails when that leaves anything changed or untracked under the owned paths, and puts them back as
+HEAD has them on every exit, pass or fail. The name is reserved: a declared check called `docs`
+fails at load. Every path is validated, because the check deletes what it matches: not absolute,
+no `..` or `.` segment, not starting with `:`, a non-empty literal prefix (the text before the
+first `*?[`), and no overlap, in either direction, with `docs/adr`, `.agentic` or `.git`. With
+`parallel_checks: true`, no declared command may name an owned path's literal prefix. The command
+is built here and nowhere else (`docs_command`). Absent it reads as `None`: every answer as before.
+
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
 into a run with no name, and a rename mid-task would split one task's samples across two
@@ -86,6 +97,7 @@ from __future__ import annotations
 
 import importlib
 import re
+import shlex
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol, TypeGuard
@@ -93,6 +105,7 @@ from typing import Any, Protocol, TypeGuard
 from agentic.core.process.domain import master_gain
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.presubmit import FlakeGate as FlakeGate
 from agentic.core.process.domain.presubmit import RerunForm
 from agentic.core.process.domain.suppressions import Forbidden
@@ -119,7 +132,17 @@ KEYS = (
     "rerun_checks",
     "check_budgets",
     "merge_inert",
+    "docs",
 )
+# The reserved name of the check a `docs` block adds to `checks`: no other module builds it.
+DOCS_CHECK = "docs"
+# Every sub-key `docs` may declare, and the roots no owned path may overlap: the written
+# ADRs, the system's own files and git's.
+DOCS_KEYS = ("generate", "paths")
+DOCS_PROTECTED_ROOTS = ("docs/adr", ".agentic", ".git")
+GLOB_CHARACTERS = "*?["
+# The line the docs check prints before the files a regeneration changed.
+DOCS_STALE = "docs stale: commit these"
 # The token an affected-only command carries where the task's base sha goes (ADR-0046).
 BASE_TOKEN = "{base}"
 # What a key that is declared but empty is told, after its source and its key (ADR-0046,
@@ -172,7 +195,147 @@ def product(data: object, source: object) -> str:
 def checks(data: object, source: object) -> dict[str, str]:
     """Check name -> command, in the file's order. A product that declares no check has
     declared nothing, which is an error, not the default."""
-    return _commands(_declared(data, source), source, "checks")
+    found = _commands(_declared(data, source), source, "checks")
+    block = docs(data, source)
+    if block is None:
+        return found
+    if DOCS_CHECK in found:
+        raise ValueError(
+            f"{source}: a check named `{DOCS_CHECK}` is declared under `checks`, but with a "
+            f"`docs` block `{DOCS_CHECK}` is reserved for the check the system builds from it"
+        )
+    return {**found, DOCS_CHECK: docs_command(block)}
+
+
+def docs(data: object, source: object) -> Docs | None:
+    """The optional `docs` block: the one-line `generate` command that rewrites every
+    generated doc artifact and the `paths` it owns, validated at load.
+
+    Absent is `None`, a product that declares no generated docs. Present, it is a mapping of
+    exactly `generate` and `paths`; every owned path goes through `_path_refusal`, because the
+    docs check removes and restores what it matches, and `parallel_checks` is refused when a
+    declared command reads an owned path, which the restore could race with."""
+    declared = _declared(data, source)
+    if "docs" not in declared:
+        return None
+    found = _declared_nonempty(declared, source, "docs")
+    if not isinstance(found, dict):
+        raise ValueError(f"{source}: expected `docs`, a mapping of {DOCS_KEYS}")
+    if unknown := [key for key in found if key not in DOCS_KEYS]:
+        raise ValueError(
+            f"{source}: unknown key(s) {', '.join(sorted(map(str, unknown)))} under `docs`; "
+            f"expected {DOCS_KEYS}"
+        )
+    generate = found.get("generate")
+    if not isinstance(generate, str) or not generate.strip() or "\n" in generate.strip():
+        raise ValueError(
+            f"{source}: expected `generate` under `docs`, a non-blank one-line command"
+        )
+    entries = found.get("paths")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"{source}: expected `paths` under `docs`, a non-empty list of globs")
+    if not all(isinstance(entry, str) and entry.strip() for entry in entries):
+        raise ValueError(f"{source}: expected `paths` under `docs` to hold non-blank strings")
+    paths = tuple(entry.strip() for entry in entries)
+    for path in paths:
+        if reason := _path_refusal(path):
+            raise ValueError(f"{source}: {path!r} under `docs` `paths` is refused: {reason}")
+    if parallel_checks(data, source):
+        _refuse_readers_of(paths, declared, source)
+    return Docs(generate=generate.strip(), paths=paths)
+
+
+def docs_command(block: Docs) -> str:
+    """The shell command of the reserved `docs` check, the only place that builds it (POSIX
+    `sh`, every argument quoted, the owned paths as `:(glob)` pathspecs).
+
+    It runs `generate` in a subshell, reads `git status --porcelain` over the owned paths,
+    and then puts those paths back as HEAD has them, on every exit: unstaged, tracked files
+    restored one pathspec at a time (a pathspec that matches no tracked file yet is not an
+    error), untracked files removed. It exits 1 when `generate` failed or anything under the
+    owned paths changed or appeared, printing `DOCS_STALE` and the porcelain lines."""
+    specs = " ".join(shlex.quote(f":(glob){path}") for path in block.paths)
+    restores = "\n".join(
+        f"git checkout -q -- {shlex.quote(f':(glob){path}')} 2>/dev/null" for path in block.paths
+    )
+    return f"""(
+{block.generate}
+)
+generated=$?
+stale=$(git status --porcelain --untracked-files=all -- {specs})
+inspected=$?
+git reset -q HEAD -- {specs} 2>/dev/null
+{restores}
+git clean -fdq -- {specs}
+if [ "$generated" -ne 0 ]; then echo "docs generate exited $generated"; fi
+if [ "$inspected" -ne 0 ]; then echo "docs: git status failed"; fi
+if [ -n "$stale" ]; then echo {shlex.quote(DOCS_STALE)}; echo "$stale"; fi
+if [ "$generated" -ne 0 ] || [ "$inspected" -ne 0 ] || [ -n "$stale" ]; then exit 1; fi
+exit 0
+"""
+
+
+def _literal_prefix(path: str) -> str:
+    """The text of an owned path before its first glob character."""
+    for position, character in enumerate(path):
+        if character in GLOB_CHARACTERS:
+            return path[:position]
+    return path
+
+
+def _path_refusal(path: str) -> str | None:
+    """Why an owned path may not be one, or None: the docs check deletes and restores what
+    it matches, so an entry that could reach outside the docs, or the written ADRs, the
+    system's files or git's, is refused. Judged on the literal prefix, both directions."""
+    segments = path.split("/")
+    if path.startswith("/"):
+        return "it is absolute"
+    if ".." in segments:
+        return "it has a `..` segment"
+    if "." in segments:
+        return "it has a `.` segment; write the path without it"
+    if path.startswith(":"):
+        return "it starts with `:`, a pathspec magic of git's"
+    prefix = _literal_prefix(path)
+    if not prefix:
+        return "it has an empty literal prefix: it would match the whole repository"
+    for root in DOCS_PROTECTED_ROOTS:
+        if prefix.startswith(root) or root.startswith(prefix):
+            return f"its literal prefix {prefix!r} overlaps `{root}`, which is not generated"
+    return None
+
+
+def _refuse_readers_of(paths: tuple[str, ...], declared: dict[str, Any], source: object) -> None:
+    """Under `parallel_checks`, no declared command may name an owned path: the docs check
+    restores those paths while the others run. Reads the raw declaration, tolerating any
+    shape, because the malformed ones are the business of their own loaders."""
+    rerun = declared.get("rerun_checks")
+    forms = {
+        name: body.get("command")
+        for name, body in (rerun.items() if isinstance(rerun, dict) else ())
+        if isinstance(body, dict)
+    }
+    for key, group in (
+        ("checks", declared.get("checks")),
+        ("affected_checks", declared.get("affected_checks")),
+        ("rerun_checks", forms),
+    ):
+        for name, command in group.items() if isinstance(group, dict) else ():
+            if not isinstance(command, str):
+                continue
+            for path in paths:
+                if (prefix := _literal_prefix(path)) in command:
+                    raise ValueError(
+                        f"{source}: {name!r} under `{key}` reads the owned path {path!r} "
+                        f"(it contains {prefix!r}), and with `parallel_checks` the `docs` check "
+                        "restores that path while it runs"
+                    )
+
+
+def _known_checks(data: object, source: object) -> dict[str, str]:
+    """Every check the product has, the declared ones and the reserved `docs`: the mapping
+    each name validator reads."""
+    return checks(data, source)
 
 
 def setup(data: object, source: object) -> dict[str, str]:
@@ -277,7 +440,7 @@ def affected_checks(data: object, source: object) -> dict[str, str]:
         return {}
     _declared_nonempty(declared, source, "affected_checks")
     found = _commands(declared, source, "affected_checks")
-    known = _commands(declared, source, "checks")
+    known = _known_checks(data, source)
     for name, command in found.items():
         if name not in known:
             raise ValueError(
@@ -333,7 +496,7 @@ def delivery_checks(data: object, source: object) -> tuple[str, ...]:
         if not isinstance(item, str) or not item.strip():
             raise ValueError(f"{source}: expected non-blank check names under `delivery_checks`")
         names.append(item.strip())
-    known = _commands(declared, source, "checks")
+    known = _known_checks(data, source)
     for position, name in enumerate(names):
         if name in names[:position]:
             raise ValueError(f"{source}: {name!r} is declared twice under `delivery_checks`")
@@ -342,6 +505,8 @@ def delivery_checks(data: object, source: object) -> tuple[str, ...]:
                 f"{source}: {name!r} under `delivery_checks` is not a check declared under "
                 f"`checks`; expected one of {', '.join(known)}"
             )
+    if docs(data, source) is not None and DOCS_CHECK not in names:
+        names.append(DOCS_CHECK)
     return tuple(names)
 
 
@@ -362,7 +527,7 @@ def rerun_checks(data: object, source: object) -> dict[str, RerunForm]:
             f"{source}: `rerun_checks` requires `delivery_checks`: a form skips tests, and "
             "only the full run on the integrated head that tier guarantees covers them"
         )
-    known = _commands(declared, source, "checks")
+    known = _known_checks(data, source)
     forms: dict[str, RerunForm] = {}
     for name, body in found.items():
         if name not in known:
@@ -393,7 +558,7 @@ def check_budgets(data: object, source: object) -> dict[str, float]:
             f"{source}: `check_budgets` requires `delivery_checks`: a budget is compared only "
             "on the once-per-task full run on the integrated head that tiers create"
         )
-    known = _commands(declared, source, "checks")
+    known = _known_checks(data, source)
     budgets: dict[str, float] = {}
     for name, seconds in found.items():
         if name not in known:

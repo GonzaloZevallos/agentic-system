@@ -11,13 +11,15 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
+from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.presubmit import CheckResult, RerunForm
@@ -501,6 +503,14 @@ class ProductStack(Protocol):
         product that has not handed the human a prototype yet -- never an error."""
         ...
 
+    def docs(self, revision: str) -> Docs | None:
+        """The optional `docs` block (`core.knowledge`): the
+        command that regenerates every generated doc artifact and the paths it owns, as the
+        commit `revision` declares them. `None` when the product declares none, which is
+        every product until it adopts generated docs -- never an error. Its reserved
+        check is already in `checks`; this is the block itself, for the prompts."""
+        ...
+
     def performance(self, revision: str) -> dict[str, Scenario]:
         """Scenario name -> its `seed`, `measure`, volume and limits (`core.knowledge`,
         GH-318, ADR-0059), as the commit `revision` declares them, in file order. Empty when
@@ -853,6 +863,14 @@ class Workspace(Protocol):
     def merge_head(self, path: Path) -> str | None:
         """The full sha of `MERGE_HEAD` in the checkout at `path`, or `None` when no merge
         is in progress; read-only."""
+        ...
+
+    def merge_in_progress(self, path: Path) -> bool:
+        """Whether the checkout at `path` holds an unfinished merge or a conflict (GH-392):
+        `MERGE_HEAD` exists, or `git status --porcelain` lists an unmerged entry (UU, AA, DD,
+        AU, UA, DU, UD). Read-only; a resume asks it before committing what a stopped run
+        left, so it never commits over a merge a human is resolving. Raises `GitError` when
+        git answers neither way."""
         ...
 
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
@@ -1626,6 +1644,76 @@ class FreeSpace(Protocol):
 
 
 @dataclass(frozen=True)
+class IssueRow:
+    """One issue as the board mirror reads it off the tracker: `state` is `open` or `closed`,
+    `closed_at` the UTC day it closed (`None` while open)."""
+
+    number: int
+    state: Literal["open", "closed"]
+    labels: frozenset[str]
+    closed_at: date | None
+
+
+@dataclass(frozen=True)
+class SentEntry:
+    """What was last sent for one issue: the card's fingerprint and the fields that carried
+    a value, so a field that later has none knows there is something to clear."""
+
+    fingerprint: str
+    present: frozenset[Field]
+
+
+@dataclass(frozen=True)
+class SentMemory:
+    """The mirror's memory of what it sent (ADR-0073): never read from the board. Bound to
+    the Project's node id; `failed_at` is the last whole-call failure; `unreadable` is set
+    by a load that found a file it could not parse (one log line, then it reads as empty)."""
+
+    project_id: str | None = None
+    failed_at: datetime | None = None
+    issues: Mapping[int, SentEntry] = field(default_factory=dict)
+    unreadable: bool = False
+
+
+class Board(Protocol):
+    """The GitHub Project the poller mirrors state to (GH-375, ADR-0073). Write-only as far
+    as state goes: the only things read from the Project are node ids. Every method may raise
+    `TrackerCallFailed` or `ValueError`."""
+
+    def project_id(self) -> str:
+        """The Project's node id, resolving (once per process) the field and option ids the
+        writes need. `ValueError` naming what is missing when a field or option is."""
+        ...
+
+    def open_issues(self) -> list[IssueRow]:
+        """Every open issue of the product's repo."""
+        ...
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        """Every issue, open and closed, and whether the read reached its limit (more exist)."""
+        ...
+
+    def issue(self, number: int) -> IssueRow:
+        """One issue, open or closed."""
+        ...
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        """Adds each issue to the Project and writes its fields. Returns the issues whose every
+        mutation came back without error: an issue not in the set is not recorded as sent."""
+        ...
+
+
+class BoardSent(Protocol):
+    """The mirror's memory on disk, one per product."""
+
+    def load(self) -> SentMemory:
+        """The memory, empty when the file is missing or unreadable (`unreadable` then set)."""
+        ...
+
+    def save(self, memory: SentMemory) -> None: ...
+
+
+@dataclass(frozen=True)
 class CheckRequest:
     """A gate asking for a share of the machine's cores (GH-361, ADR-0070). `enqueued_at`
     and `token` are `None` on the gate's first call and are the grant's on every later one,
@@ -1697,6 +1785,10 @@ class Ports:
     # The machine's store of passing check results (ADR-0065). `None` stores and reuses
     # nothing, which is how every checkout ran before it existed.
     check_results: CheckResults | None = None
+    # The GitHub Project board mirror (GH-375, ADR-0073) and its memory. `None` mirrors
+    # nothing and makes no call, which is how every round ran before they existed.
+    board: Board | None = None
+    board_sent: BoardSent | None = None
     # Where a check or a role attempt's temporary files go, and how much room the volumes
     # have (GH-391, ADR-0069). `None` leaves everything on the inherited `TMPDIR`, which is
     # how every checkout ran before.

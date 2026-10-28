@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from agentic import composition
 from agentic.composition import default_ports
@@ -301,3 +302,181 @@ async def test_a_pm_final_with_no_definitions_leaves_the_head_and_the_record_alo
     assert not final.get("close_docs")
     assert commands_run(commands).count("playwright") == 1
     assert rules.approved_head(final) == final["task_head"]
+
+
+def increment_world(tmp_path):
+    """GH-373's shape (GH-392): `api` approved, the integration approved at `APPROVED`, the task
+    branch at `MOVED`, a descendant, and the run stopped by a role failure. Returns the document
+    ports the resume seeds from and the configuration."""
+    from agentic.core.process.domain import rules
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    api = {
+        "id": "api",
+        "title": "api",
+        "brief": "b",
+        "seams": ["s"],
+        "depends_on": [],
+        "status": "approved",
+        "branch": "agentic/GH-1.api",
+        "base": "base",
+        "reviewed_head": "1" * 40,
+    }
+    integration = {
+        **api,
+        "id": "integration",
+        "branch": rules.task_branch("GH-1"),
+        "reviewed_head": APPROVED,
+        "depends_on": ["api"],
+    }
+    stopped = {
+        **TASK,
+        "type": "feature",
+        "status": "waiting_on_human",
+        "escalated": "Developer failed: no space left on device",
+        "escalation_class": "failure",
+        "branch": rules.task_branch("GH-1"),
+        "subtasks": {"api": api, "integration": integration},
+    }
+    ports = memory_ports()
+    ports.documents.save(stopped)
+    ports.workspace.existing_branches.update(
+        {rules.task_branch("GH-1"): (MOVED, "base"), "agentic/GH-1.api": ("1" * 40, "base")}
+    )
+    ports.workspace.ancestors.add(APPROVED)
+    return ports, Configuration(product_dir=tmp_path)
+
+
+APPROVED = "a" * 40
+MOVED = "b" * 40
+
+
+def watch_the_reviews(fakes, script, monkeypatch):
+    """The integrated checkout answers `MOVED`, and the order of the review and the push is kept."""
+    monkeypatch.setattr(fakes.workspace, "full_head", lambda path: MOVED)
+    run_once = script.run_once
+
+    async def spy(role, prompt, **kwargs):
+        fakes.workspace.events.append(f"role:{role.slug}")
+        return await run_once(role, prompt, **kwargs)
+
+    monkeypatch.setattr(script, "run_once", spy)
+
+
+def only_the_integration_review(script, fakes, final, commands):
+    assert final["status"] == "ready_for_review"
+    # Only the integration review ran: no Developer, no other role, and it was incremental.
+    assert [c["slug"] for c in script.calls] == ["tech_lead_review"]
+    review = script.calls[0]["system_prompt"]
+    assert "This is an incremental review." in review
+    assert f"from the commit `{APPROVED}`" in review
+    assert final["subtasks"]["integration"]["status"] == "approved"
+    # The full suite ran on the head the fan-in stamped, before the one push.
+    assert final["task_head"] == MOVED
+    assert final["full_checks"]["head"] == MOVED
+    # The review covered the increment: the head it records is the moved one, over base H.
+    assert final["subtasks"]["integration"]["reviewed_head"] == MOVED
+    assert commands_run(commands) == ["pytest", "ruff", "playwright"]
+    events = fakes.workspace.events
+    assert events.count("push") == 1
+    assert events.index("role:tech_lead_review") < events.index("push")  # nothing pushed before
+    assert final["findings"] == []
+
+
+async def test_an_increment_on_a_tiered_product_is_reviewed_checked_on_its_head_then_delivered(
+    config, tmp_path, monkeypatch
+):
+    """GH-392: the resume sends only the integration back to an incremental review from the
+    approved head; the fan-in stamps `task_head`, and the full suite runs before `deliver`."""
+    from agentic.core.process.application import resume
+
+    commands = MemoryCommands()
+    stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
+    graph, fakes, script = build(
+        script_for(tech_lead_review=[reviewed("approved")]), stack, commands
+    )
+    watch_the_reviews(fakes, script, monkeypatch)
+    ports, cfg = increment_world(tmp_path)
+    seed = resume.seed_increment("GH-1", cfg, ports)
+    r = resume.prepare("GH-1", seed.state, "document", cfg, ports, increment=seed.increment)
+    assert r.target == "integrate"
+
+    await graph.aupdate_state(config, r.paused, as_node="escalate")
+    final = await graph.ainvoke(Command(resume=r.answer()), config=config)
+
+    only_the_integration_review(script, fakes, final, commands)
+
+
+async def test_resume_from_the_document_reviews_the_increment_through_the_cli(
+    monkeypatch, config, tmp_path
+):
+    """GH-373 through `agentic resume --from-document --yes`: the shape that was refused."""
+    from types import SimpleNamespace
+
+    from agentic import cli
+    from tests.test_cli import FakeLock, in_memory
+
+    commands = MemoryCommands()
+    stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
+    app, fakes, script = build(script_for(tech_lead_review=[reviewed("approved")]), stack, commands)
+    watch_the_reviews(fakes, script, monkeypatch)
+    monkeypatch.setattr(cli, "graph", SimpleNamespace(compile=lambda checkpointer: app))
+    monkeypatch.setattr(cli, "_configurable", lambda task_id, log_file: config["configurable"])
+    ports, cfg = increment_world(tmp_path)
+
+    await cli._resume(
+        "GH-1",
+        cfg,
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    final = (await app.aget_state(config)).values
+    only_the_integration_review(script, fakes, final, commands)
+    assert f"{APPROVED}..{MOVED}" in ports.tracker.comments[0][1]
+    assert ports.workspace.commits == []  # a clean (absent) checkout: nothing to commit
+
+
+async def test_a_dry_run_of_an_increment_prints_the_plan_and_writes_nothing(
+    monkeypatch, config, tmp_path, capsys
+):
+    """GH-392: `--dry-run` shows the increment and the commit it would make, and makes none:
+    no commit, no comment, no label change, and the thread is not seeded."""
+    from types import SimpleNamespace
+
+    from agentic import cli
+    from tests.test_cli import FakeLock, in_memory
+
+    stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
+    app, fakes, script = build(
+        script_for(tech_lead_review=[reviewed("approved")]), stack, MemoryCommands()
+    )
+    monkeypatch.setattr(cli, "graph", SimpleNamespace(compile=lambda checkpointer: app))
+    monkeypatch.setattr(cli, "_configurable", lambda task_id, log_file: config["configurable"])
+    ports, cfg = increment_world(tmp_path)
+    checkout = Path("/p/.agentic/worktrees/GH-1")
+    ports.workspace.checkouts = [checkout]
+    ports.workspace.dirty.add(checkout)
+
+    await cli._resume(
+        "GH-1",
+        cfg,
+        ports,
+        from_document=True,
+        dry_run=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    shown = capsys.readouterr().out
+    assert f"reviewing the increment {APPROVED}..{MOVED}" in shown
+    assert f"uncommitted files in `{checkout}` will be committed into the increment" in shown
+    assert ports.workspace.commits == []
+    assert ports.tracker.comments == [] and ports.tracker.unlabeled == []
+    assert script.calls == [] and fakes.workspace.events == []
+    assert ports.workspace.events == []  # the workspace the resume used was only read
+    assert not (await app.aget_state(config)).values  # the thread was never seeded

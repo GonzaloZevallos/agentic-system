@@ -19,6 +19,8 @@ from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
     AddedLine,
+    Board,
+    BoardSent,
     BranchPullRequest,
     Checkout,
     CheckRequest,
@@ -32,6 +34,7 @@ from agentic.core.process.application.ports import (
     Grant,
     Inbox,
     IssueComment,
+    IssueRow,
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
@@ -49,6 +52,7 @@ from agentic.core.process.application.ports import (
     SampleApp,
     SampleAppHandle,
     Scratch,
+    SentMemory,
     TaskDocuments,
     Tracker,
     Upstream,
@@ -58,8 +62,10 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
 from agentic.core.process.domain import scratch as scratch_domain
+from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import CheckResult, RerunForm
@@ -350,6 +356,7 @@ class MemoryStack:
         rerun_checks: dict[str, RerunForm] | None = None,
         merge_inert: tuple[str, ...] = (),
         check_budgets: dict[str, float] | None = None,
+        docs: Docs | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -366,6 +373,8 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # None is a product that declares no `docs` block: no generated docs, today's gate.
+        self.declared_docs = docs
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
@@ -469,6 +478,10 @@ class MemoryStack:
     def design(self, revision: str) -> Design | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_design
+
+    def docs(self, revision: str) -> Docs | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_docs
 
 
 class MemoryCommands:
@@ -663,6 +676,12 @@ class MemoryWorkspace:
         self.merge_heads: dict[Path, str] = {}
         self.merge_head_error: str | None = None
         self.abort_error: str | None = None
+        # GH-392: the checkouts a test declares mid-merge (or conflicted) for `merge_in_progress`,
+        # each ask in order, and a text that makes it raise `GitError` instead of answering.
+        self.merges_in_progress: set[Path] = set()
+        self.merge_in_progress_asks: list[Path] = []
+        self.merge_in_progress_error: str | None = None
+        self.commit_all_error: str | None = None
         self.aborted: list[Path] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
@@ -912,6 +931,12 @@ class MemoryWorkspace:
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
 
+    def merge_in_progress(self, path: Path) -> bool:
+        self.merge_in_progress_asks.append(path)
+        if self.merge_in_progress_error is not None:
+            raise GitError(self.merge_in_progress_error)
+        return path in self.merges_in_progress or path in self.merge_heads
+
     def merge_head(self, path: Path) -> str | None:
         if self.merge_head_error is not None:
             raise GitError(self.merge_head_error)
@@ -934,6 +959,8 @@ class MemoryWorkspace:
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
     def commit_all(self, path: Path, message: str) -> str | None:
+        if self.commit_all_error is not None:
+            raise GitError(self.commit_all_error)
         self.commits.append((path, message))
         return "c1"
 
@@ -1790,6 +1817,78 @@ class FakeLauncher:
         return self.pid
 
 
+class FakeBoard:
+    """GH-375: the Project board, in memory. Records every call as `(name, argument)`.
+    `open` and `closed` are the issues it reads; `fail` (an exception) is raised by every
+    method named in `fail_on` (all of them when empty); `unwritten` are issues `write`
+    leaves out of the set it returns, as a partially failed batch would."""
+
+    def __init__(
+        self,
+        open: Sequence[IssueRow] = (),
+        closed: Sequence[IssueRow] = (),
+        *,
+        project: str = "PVT_1",
+        fail: Exception | None = None,
+        fail_on: Collection[str] = (),
+        unwritten: Collection[int] = (),
+        limit_reached: bool = False,
+    ) -> None:
+        self.open = list(open)
+        self.closed = list(closed)
+        self.project = project
+        self.fail = fail
+        self.fail_on = set(fail_on)
+        self.unwritten = set(unwritten)
+        self.limit_reached = limit_reached
+        self.calls: list[tuple[str, object]] = []
+        self.written: list[FieldWrite] = []
+
+    def _enter(self, name: str, argument: object = None) -> None:
+        self.calls.append((name, argument))
+        if self.fail is not None and (not self.fail_on or name in self.fail_on):
+            raise self.fail
+
+    def project_id(self) -> str:
+        self._enter("project_id")
+        return self.project
+
+    def open_issues(self) -> list[IssueRow]:
+        self._enter("open_issues")
+        return list(self.open)
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        self._enter("all_issues")
+        return [*self.open, *self.closed], self.limit_reached
+
+    def issue(self, number: int) -> IssueRow:
+        self._enter("issue", number)
+        for row in [*self.open, *self.closed]:
+            if row.number == number:
+                return row
+        raise ValueError(f"no issue #{number}")
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        self._enter("write", list(writes))
+        self.written.extend(writes)
+        return frozenset(w.issue for w in writes) - self.unwritten
+
+
+class FakeBoardSent:
+    """GH-375: the mirror's memory, in memory. `saved` keeps every memory it was given."""
+
+    def __init__(self, memory: SentMemory | None = None) -> None:
+        self.memory = memory if memory is not None else SentMemory()
+        self.saved: list[SentMemory] = []
+
+    def load(self) -> SentMemory:
+        return self.memory
+
+    def save(self, memory: SentMemory) -> None:
+        self.saved.append(memory)
+        self.memory = memory
+
+
 def memory_ports(
     runner: RoleRunner | None = None,
     *,
@@ -1809,6 +1908,8 @@ def memory_ports(
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
     check_results: CheckResults | None = None,
+    board: Board | None = None,
+    board_sent: BoardSent | None = None,
     scratch: Scratch | None = None,
     free_space: FreeSpace | None = None,
 ) -> Ports:
@@ -1830,6 +1931,8 @@ def memory_ports(
         perf_runner=perf_runner,
         perf_lock=perf_lock,
         check_results=check_results,
+        board=board,
+        board_sent=board_sent,
         scratch=scratch,
         free_space=free_space,
     )

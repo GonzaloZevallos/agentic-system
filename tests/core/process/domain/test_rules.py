@@ -9,6 +9,7 @@ from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import ci, document, roles, rules, schemas, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
+from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     FINDINGS,
@@ -918,6 +919,16 @@ def test_merge_notice_names_the_paths_and_forbids_whole_side_strategies():
     assert "-s ours" in notice and "-X ours" in notice and "-X theirs" in notice
     assert "checks" in notice and "commit" in notice
     assert "section" in notice  # the conflicted paths and the diff land there
+
+
+def test_merge_notice_gains_the_docs_conflict_line_only_when_the_product_declares_docs():
+    args = ("domain", "agentic/GH-1.domain", ["docs/architecture/generated/a.md"])
+    bare = rules.merge_notice(*args)
+    assert rules.merge_notice(*args, None) == bare
+    docs = Docs("make docs", ("docs/architecture/generated/**",))
+    declared = rules.merge_notice(*args, docs)
+    assert declared == bare + conflict_line(docs)
+    assert "make docs" in declared and "do not merge them by hand" in declared
 
 
 def test_resumed_after_unmergeable_says_why_and_what_may_already_be_done():
@@ -4104,3 +4115,14 @@ def test_poll_plan_retakes_a_disk_full_pause_on_the_retake_calendar():
         closes=[], resumes=[due, early], launches=[], available_slots=2, now=NOW
     ).actions
     assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_the_integration_brief_gains_the_docs_conflict_line_only_when_the_product_declares_docs():
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    without = rules.integration_work("Wire it.", ["agentic/GH-1.api"])
+    assert rules.integration_work("Wire it.", ["agentic/GH-1.api"], None) == without
+    declared = rules.integration_work("Wire it.", ["agentic/GH-1.api"], docs)
+    assert declared["brief"] == without["brief"] + conflict_line(docs)
+    assert "run `make docs` and commit its output" in declared["brief"]
+    assert rules.integration_work("", [], docs) == rules.integration_work("", [])
+    assert rules.integration_subtask("", ["b"], docs)["brief"].endswith(conflict_line(docs))

@@ -7,6 +7,7 @@ import pytest
 
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.domain.docs import Docs
 
 
 def git(*args, cwd: Path) -> str:
@@ -243,3 +244,27 @@ def test_a_malformed_performance_key_at_the_revision_raises(product):
     with pytest.raises(ValueError, match="curl"):
         GitStack(product).performance(base)
     assert GitStack(product).checks(base) == {"tests": "pytest"}
+
+
+def test_a_product_without_docs_declares_none_and_its_checks_are_unchanged(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).docs(base) is None
+    assert GitStack(product).checks(base) == {"tests": "pytest"}
+
+
+def test_a_declared_docs_block_is_read_at_the_base_and_adds_the_check(product):
+    block = "docs:\n  generate: sh gen.sh\n  paths: [docs/architecture/generated/**]\n"
+    base = commit_stack(product, f"checks:\n  tests: pytest\n{block}")
+    commit_stack(product, "checks:\n  tests: pytest\n")  # after the base: not this task's
+    found = GitStack(product).docs(base)
+    assert found == Docs("sh gen.sh", ("docs/architecture/generated/**",))
+    assert list(GitStack(product).checks(base)) == ["tests", "docs"]
+    assert GitStack(product).docs("HEAD") is None
+
+
+def test_an_unsafe_docs_path_fails_when_the_stack_is_read(product):
+    base = commit_stack(
+        product, "checks:\n  tests: pytest\ndocs:\n  generate: x\n  paths: [docs/]\n"
+    )
+    with pytest.raises(ValueError, match="overlaps `docs/adr`"):
+        GitStack(product).docs(base)

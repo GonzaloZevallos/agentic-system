@@ -8,10 +8,18 @@ import pytest
 from agentic.core.process.application.plan import plan
 from agentic.core.process.application.ports import RawResult
 from agentic.core.process.application.run_role import context_for
+from agentic.core.process.domain.docs import Docs, plan_text
 from agentic.core.process.domain.plan_view import NOTE_WRITTEN
 from agentic.core.process.domain.roles import SOLUTION_INTERVIEW, TECH_LEAD
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryWorkspace, ScriptedRunner, memory_ports, planned, questions
+from tests.fakes import (
+    MemoryStack,
+    MemoryWorkspace,
+    ScriptedRunner,
+    memory_ports,
+    planned,
+    questions,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -117,3 +125,13 @@ async def test_skip_ephemeral_unset_still_runs_the_interview(tmp_path):
     patch = await plan(TASK, cfg, memory_ports(runner))
     assert runner.slugs == ["tech_lead_ephemeral", "tech_lead"]
     assert not patch.get("experiment")
+
+
+async def test_a_product_with_docs_plans_with_the_docs_rules_and_one_without_does_not(cfg):
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    declared = ScriptedRunner(tech_lead=[planned()])
+    await plan(TASK, cfg, memory_ports(declared, stack=MemoryStack(docs=docs)))
+    assert plan_text(docs).strip() in declared.calls[0]["system_prompt"]
+    plain = ScriptedRunner(tech_lead=[planned()])
+    await plan(TASK, cfg, memory_ports(plain))
+    assert "docs/architecture" not in plain.calls[0]["system_prompt"]

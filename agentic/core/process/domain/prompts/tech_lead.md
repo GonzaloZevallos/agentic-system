@@ -113,7 +113,7 @@ depend on tracker work or on a fact that only exists after the pull request is o
 such a criterion is a `ci_required` check or a `required_paths` entry, not a subtask's
 acceptance criterion.
 {{parts_step}}
-{{split_part}}
+{{split_part}}{{docs_plan}}
 </Task>
 
 <Hard Limits>

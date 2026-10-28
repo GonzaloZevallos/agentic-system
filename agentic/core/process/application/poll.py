@@ -37,6 +37,7 @@ from ..domain.landing import LandingStepKind
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
 from . import (
     adr_collision,
+    board_sync,
     ci_ref_sweep,
     close_issues,
     landing_plan,
@@ -1128,6 +1129,7 @@ def gather_launches(
     registry: RunRegistry,
     upstream: Callable[[], Upstream] | None = None,
     reports: list[rules.BlockerReport] | None = None,
+    by_issue: dict[int, rules.BlockerReport] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -1135,7 +1137,8 @@ def gather_launches(
     launch that never registered a run does not relaunch every round. An issue that
     now has a document clears its own stale attempt record (`registry.clear_launch`):
     it is no longer a candidate at all. Each candidate's `BlockerReport` is appended to
-    `reports` when given (GH-344), for the queue-blocked line."""
+    `reports` when given (GH-344), for the queue-blocked line, and set in `by_issue` under
+    its issue number when given (GH-375), for the board mirror."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
@@ -1147,6 +1150,8 @@ def gather_launches(
         report = _blocked(cfg, ports, number, upstream)
         if reports is not None:
             reports.append(report)
+        if by_issue is not None:
+            by_issue[number] = report
         attempt = registry.launch_attempts(product, number)
         since = attempt.since if attempt is not None else None
         prior = attempt.prior if attempt is not None else 0
@@ -1404,6 +1409,29 @@ def deferred_line(deferred: rules.Deferred) -> str:
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
+_LIVE_ACTIONS: frozenset[rules.PollActionKind] = frozenset(
+    {"launch", "resume", "retake", "merge", "land"}
+)
+
+
+def _live_issues(
+    ports: Ports, registry: RunRegistry, actions: Sequence[rules.PollAction]
+) -> frozenset[int]:
+    """The issues with a live process for the board mirror (GH-375): this product's
+    registered runs, read fresh after `execute`, and the issues a run, resume, retake, merge
+    or land was just ordered for, whose child may not have registered yet. A `close` is not
+    one. Nothing is read when no board is configured."""
+    if ports.board is None:
+        return frozenset()
+    product = ports.stack.product()
+    running = {
+        issue
+        for r in registry.live()
+        if r.product == product and (issue := ports.inbox.issue_of(r.task_id)) is not None
+    }
+    return frozenset(running | {a.issue for a in actions if a.kind in _LIVE_ACTIONS})
+
+
 def run_once(
     cfg: Configuration,
     ports: Ports,
@@ -1439,7 +1467,9 @@ def run_once(
     cap (`rules.LAND_HEADROOM`, GH-270): `land_slots` is computed here from the same `live`
     and nothing else. One line per `PollPlan.deferred` item ends the
     round's output, and `nothing to do this round` is printed only when there is nothing
-    at all to say. `system_version` (GH-308) is the non-memoising read of the stage0 version
+    at all to say. The GH-375 board mirror (`board_sync.mirror`) runs last, outside the
+    exclusive section, and its notes join the others; with no board in `ports` it makes no
+    call and says nothing. `system_version` (GH-308) is the non-memoising read of the stage0 version
     that keys the count of crash retakes, injected by `cli` and called only when some lock
     record carries a crash mark. The GH-344 issue sweep (`close_issues.sweep`) runs first,
     right after the closes are gathered and outside `registry.exclusive()`: its `issue
@@ -1487,7 +1517,10 @@ def run_once(
             pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
         upstream = functools.cache(ports.workspace.upstream)
         blocker_reports: list[rules.BlockerReport] = []
-        launches = gather_launches(cfg, ports, registry, upstream, blocker_reports)
+        blockers_by_issue: dict[int, rules.BlockerReport] = {}
+        launches = gather_launches(
+            cfg, ports, registry, upstream, blocker_reports, blockers_by_issue
+        )
         merges: list[int] = []
         merge_lines: list[str] = []
         lands: list[rules.LandCandidate] = []
@@ -1575,6 +1608,15 @@ def run_once(
             frozenset(reruns),
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred]
+    # GH-375: the board mirror, outside the exclusive section (it takes no slot and a Project
+    # call may be slow). Its notes go with the others, so `nothing to do` is unaffected.
+    notes += board_sync.mirror(
+        ports,
+        now,
+        live_issues=_live_issues(ports, registry, plan.actions),
+        blockers=blockers_by_issue,
+        eval_set=eval_set,
+    )
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
     # A held round starts no child at all, and the reflect child is one.
