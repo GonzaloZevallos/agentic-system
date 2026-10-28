@@ -798,3 +798,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-28T02:58:56.511+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: Before you deliver, check that no decision rests on a listing or state read before the action it guards. Re-check at the moment of acting, or make the check and action atomic.
+  confidence: low
+  seen_in:
+  - GH-397
+  sources:
+  - finding
+  added_at: '2026-10-28T03:04:17.176+00:00'

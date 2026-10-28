@@ -348,3 +348,5 @@ tasks:
     cost_usd: 0.0897
   GH-395@review:
     cost_usd: 0.0705
+  GH-397@review:
+    cost_usd: 0.0677
