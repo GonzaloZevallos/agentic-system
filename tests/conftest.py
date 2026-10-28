@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -6,6 +7,13 @@ import pytest
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+def git_ceiling(base: Path, previous: str | None) -> str:
+    """The `GIT_CEILING_DIRECTORIES` value that stops git's upward search at the parent of
+    `base` (pytest's base temporary directory), keeping what `previous` already held."""
+    ceiling = str(base.resolve().parent)
+    return ceiling if not previous else f"{previous}{os.pathsep}{ceiling}"
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -16,11 +24,8 @@ def git_stops_at_the_temporary_directory(tmp_path_factory):
     repository" and of "runs on its own checkout" would fail for a reason that is not the
     code's. `GIT_CEILING_DIRECTORIES` stops git's upward search at pytest's base directory;
     a repository a test creates inside its own `tmp_path` is still found."""
-    ceiling = str(tmp_path_factory.getbasetemp().resolve().parent)
     previous = os.environ.get("GIT_CEILING_DIRECTORIES")
-    os.environ["GIT_CEILING_DIRECTORIES"] = (
-        ceiling if not previous else f"{previous}{os.pathsep}{ceiling}"
-    )
+    os.environ["GIT_CEILING_DIRECTORIES"] = git_ceiling(tmp_path_factory.getbasetemp(), previous)
     yield
     if previous is None:
         os.environ.pop("GIT_CEILING_DIRECTORIES", None)
