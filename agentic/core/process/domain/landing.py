@@ -383,13 +383,16 @@ def after_diagnosis(
     spent: LandingSpent,
     restart_depth: int,
     ledger_only: bool = False,
+    restored: bool = False,
 ) -> Literal["sync_master", "restart", "escalate"]:
     """What a delivered diagnosis leads to, the only place a verdict becomes an action
     (GH-330): `sync_master` for a `sync` verdict while the sha's verdict-sync budget and the
     task-wide and unsynced ones last; otherwise `restart` while `restart_depth` is under
     `RESTART_DEPTH_MAX`, else `escalate`. `unlandable` and a missing verdict (a document
     written before verdicts) take the second path. A `ledger_only` refusal (GH-374) never
-    restarts: no code change resolves ledger state, so it escalates."""
+    restarts: no code change resolves ledger state, so it escalates. Neither does a `restored`
+    task (`rules.restored`, GH-406): bringing it back from its archive is the human choosing not
+    to start over, so what is not a sync is the human's again."""
     if (
         verdict == VERDICT_SYNC
         and spent.verdict_sync_due
@@ -398,7 +401,7 @@ def after_diagnosis(
         and spent.unsynced_for_upstream < LANDING_UNSYNCED_MAX
     ):
         return "sync_master"
-    if ledger_only:
+    if ledger_only or restored:
         return "escalate"
     return "restart" if restart_depth < RESTART_DEPTH_MAX else "escalate"
 
@@ -886,16 +889,18 @@ def verdict_of(value: object) -> DiagnosisVerdict | None:
     return None
 
 
+def live_entries(raw: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """The document's `landing` entries of the run now living (GH-406): `rules.live_landing`,
+    under the landing's own name. What came before a restoration is not among them. The
+    readers of a terminal, idempotency or in-flight fact take their entries here."""
+    return rules.live_landing(raw)
+
+
 def diagnose_attempts(raw: Mapping[str, object]) -> list[LandingEntry]:
-    """The diagnose entries of the document's `landing` list that never delivered, after the
-    last one that did or that a human's decision released (`released_at`, GH-328): the
-    attempts the retry calendar counts, oldest first."""
-    entries = raw.get("landing")
-    kept = (
-        [entry_of(e) for e in entries if isinstance(e, Mapping)]
-        if isinstance(entries, list)
-        else []
-    )
+    """The diagnose entries of the document's live `landing` entries that never delivered,
+    after the last one that did or that a human's decision released (`released_at`, GH-328):
+    the attempts the retry calendar counts, oldest first."""
+    kept = [entry_of(e) for e in live_entries(raw)]
     diagnoses = [e for e in kept if e.get("step") == "diagnose"]
     closed = [i for i, e in enumerate(diagnoses) if e.get("delivered") or e.get("released_at")]
     after = diagnoses[closed[-1] + 1 :] if closed else diagnoses
@@ -1005,10 +1010,7 @@ class Commented(Protocol):
 
 
 def _diagnose_entries(raw: Mapping[str, object]) -> list[Mapping[str, object]]:
-    entries = raw.get("landing")
-    if not isinstance(entries, list):
-        return []
-    return [e for e in entries if isinstance(e, Mapping) and e.get("step") == "diagnose"]
+    return [e for e in live_entries(raw) if e.get("step") == "diagnose"]
 
 
 def diagnose_at(raw: Mapping[str, object]) -> object:
@@ -1138,14 +1140,11 @@ def _status_of(value: object) -> SubtaskStatus | None:
 
 def _landing_view(raw: Mapping[str, object]) -> TaskState:
     """The part of the document `rules.landing_open` reads -- the `landing` entries and each
-    subtask's status -- as a `TaskState`, so the one definition of an open landing is reused."""
+    subtask's status -- as a `TaskState`, so the one definition of an open landing is reused.
+    The entries are the live ones (`rules.live_landing`): what came before a restoration is
+    not part of the view, so neither `landing_open` nor `resume_owed` reads it."""
     state: TaskState = {"id": "", "title": "", "description": ""}
-    entries = raw.get("landing")
-    state["landing"] = (
-        [entry_of(entry) for entry in entries if isinstance(entry, Mapping)]
-        if isinstance(entries, list)
-        else []
-    )
+    state["landing"] = [entry_of(entry) for entry in rules.live_landing(raw)]
     units = raw.get("subtasks")
     subtasks: dict[str, Subtask] = {}
     for name, unit in units.items() if isinstance(units, Mapping) else []:

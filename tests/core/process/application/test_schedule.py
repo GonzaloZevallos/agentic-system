@@ -19,6 +19,7 @@ from agentic.core.process.domain.task import (
     REDUCERS,
     add,
     add_flakes,
+    add_restorations,
     add_tracker_failures,
     apply,
     first,
@@ -402,6 +403,18 @@ def value_for(key: str, branch: str, n: int):
         # row that differed by branch would depend on which branch landed first.
         target = "comment" if n % 2 else "label"
         return [{"target": target, "cls": "transient", "at": f"{target}-at"}]
+    if reducer is add_restorations:
+        # One row per archive, its cut a function of the archive alone: the first row seen
+        # wins, so a row that differed by branch would depend on which branch landed first.
+        return [
+            {
+                "archive": f"archive/run{n % 3}-aaaaaaa",
+                "head": "h",
+                "upstream": "u",
+                "at": "t",
+                "landing_cut": n % 3,
+            }
+        ]
     if reducer is last:
         return f"{branch}:{key}:{n}"
     return f"{branch}:{key}:{n}"
@@ -417,6 +430,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             merge,
             first,
             add_flakes,
+            add_restorations,
             add_tracker_failures,
             last,
         ), key

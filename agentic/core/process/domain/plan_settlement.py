@@ -95,12 +95,35 @@ def approved_green(facts: rules.MergeFacts) -> bool:
     )
 
 
+def settleable(facts: rules.MergeFacts, restored: bool) -> bool:
+    """Whether the `PM: final validation` rows may be settled on these facts: the one predicate
+    behind `ledger_only` and behind `agentic restore`'s own settlement (GH-406). A task never
+    restored needs `approved_green`, as before. A restored one waives the CI part: the
+    reviewed unit is approved, `pr_head` is a full id and `rules.head_reviewed` holds, whether
+    or not the reopened pull request has a CI verdict (GitHub runs none on a head that
+    conflicts with its base, and the archived run's CI does not speak for it any more).
+
+    The waiver is safe only because settling is not merging: `rules.auto_merge_decision` checks
+    the findings gate before `_ci_gate`, so after the rows close the same decision goes on to
+    ask for the CI and refuses `ci_missing`, `ci_failed` or `ci_blocked_by_conflict` until it is
+    green on this head. A reorder of `auto_merge_decision` that put `_ci_gate` ahead of the
+    findings gate, or let a merge skip it, meets this waiver (ADR-0048, addendum)."""
+    if not restored:
+        return approved_green(facts)
+    return bool(
+        facts.reviewed_unit_approved
+        and rules.full_commit_id(facts.pr_head)
+        and rules.head_reviewed(facts.reviewed_head, facts.close_docs, facts.pr_head)
+    )
+
+
 def ledger_only(refusal: rules.MergeRefusal, facts: rules.MergeFacts, state: TaskState) -> bool:
-    """Whether `refusal` is nothing but `PM: final validation` ledger state on an approved,
-    green head: `open_findings_blocking`, `approved_green`, and every open blocking row of
-    `rules.open_findings` a `plan` row at that location. No code change resolves it, so the
-    landing settles or escalates and never fixes or restarts (the only reader of this fact)."""
-    if refusal != "open_findings_blocking" or not approved_green(facts):
+    """Whether `refusal` is nothing but `PM: final validation` ledger state on an approved
+    head: `open_findings_blocking`, `settleable` (green where the product declares a CI,
+    unless the task was restored) and every open blocking row of `rules.open_findings` a `plan`
+    row at that location. No code change resolves it, so the landing settles or escalates and
+    never fixes or restarts (the only reader of this fact)."""
+    if refusal != "open_findings_blocking" or not settleable(facts, rules.restored(state)):
         return False
     blocking = [row for row in rules.open_findings(state) if row["severity"] == "blocking"]
     return bool(blocking) and all(

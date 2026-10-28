@@ -348,6 +348,31 @@ def add_tracker_failures(
     return list(joined.values())[:TRACKER_FAILURES_MAX]
 
 
+class Restoration(TypedDict):
+    """One `agentic restore` of an archived, approved task (GH-406, ADR-0048 addendum):
+    `archive` the prefix it came from, `head` the approved head it put back, `upstream` the
+    base sha the pull request had then, `at` when, and `landing_cut` the length of the
+    `landing` list at that moment -- the entries before it belong to the run that was
+    archived, and `rules.live_landing` hides them. The record lives beside `landing`, never
+    inside it."""
+
+    archive: str
+    head: str
+    upstream: str
+    at: str
+    landing_cut: int
+
+
+def add_restorations(existing: list[Restoration], new: list[Restoration]) -> list[Restoration]:
+    """The restorations of `existing` and `new` as one list: append-only, one row per
+    `archive` (a retry of the same restore adds nothing), the first seen kept whole. The
+    only way `restorations` is ever written."""
+    joined: dict[str, Restoration] = {}
+    for row in (*existing, *new):
+        joined.setdefault(row["archive"], row)
+    return list(joined.values())
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -1218,6 +1243,11 @@ class TaskState(TaskInput, total=False):
     # per `(target, cls)`, at most ten, never `gh`'s text. Read with
     # `.get("tracker_failures", [])`: a document written before this field has none.
     tracker_failures: Annotated[list[TrackerFailureRecord], add_tracker_failures]
+    # The restorations of an archived task (GH-406), `add_restorations`: one row per archive
+    # it was brought back from, each with the `landing` length at that moment. Read with
+    # `.get("restorations", [])` -- only through `rules.live_landing` and `rules.restored`;
+    # a document written before this field has none.
+    restorations: Annotated[list[Restoration], add_restorations]
 
 
 def _reducers() -> dict[str, object]:
@@ -1294,6 +1324,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
         elif reducer is add_tracker_failures:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
+                patch[key] = fresh
+        elif reducer is add_restorations:
+            held = {r["archive"] for r in old}
+            if fresh := [r for r in value if r["archive"] not in held]:
                 patch[key] = fresh
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:

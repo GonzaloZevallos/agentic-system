@@ -68,10 +68,23 @@ def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> boo
     return (kind in live or kind in ALWAYS_TAKEN) and kind not in ("wait", "none")
 
 
-def entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
-    """The document's `landing` list, tolerant of its absence or a malformed value."""
+def all_entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
+    """The document's whole `landing` list, tolerant of its absence or a malformed value:
+    for the budget counters that a restoration never hands back (`passes`, `renumbers`) and for
+    the writers, which rewrite the list by index. A reader of a terminal, idempotency or
+    in-flight fact takes `live_entries` instead (GH-406)."""
     value = raw.get("landing")
     return [e for e in value if isinstance(e, dict)] if isinstance(value, list) else []
+
+
+entries = all_entries
+"""The name the suites written before GH-406 call `all_entries` by; no code reads it."""
+
+
+def live_entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
+    """The `landing` entries of the run now living (`landing.live_entries`), as the plain
+    dicts the counters read."""
+    return [e for e in landing.live_entries(raw) if isinstance(e, dict)]
 
 
 def _conflicting(entry: Mapping[str, object]) -> bool:
@@ -130,11 +143,16 @@ def spent(
     are 0. All of them and the diagnoses' readings (`last_verdict`, `verdict_sync_due`) count
     only the entries after the last resolved `land_slice` (`landing.sync_epoch`, GH-297);
     `passes` never reset. `important_passes` counts the `fix_important` entries (GH-294)."""
-    done = entries(raw)
-    epoch = landing.sync_epoch(done)
+    done = all_entries(raw)
+    live = live_entries(raw)
+    epoch = landing.sync_epoch(live)
 
     def count(predicate: Callable[[dict[str, object]], bool]) -> int:
+        """The budgets a restoration never hands back, over the whole list."""
         return sum(1 for entry in done if predicate(entry))
+
+    def count_live(predicate: Callable[[dict[str, object]], bool]) -> int:
+        return sum(1 for entry in live if predicate(entry))
 
     def count_epoch(predicate: Callable[[Mapping[str, object]], bool]) -> int:
         return sum(1 for entry in epoch if predicate(entry))
@@ -146,8 +164,8 @@ def spent(
     return landing.LandingSpent(
         passes=count(lambda e: e.get("step") in ("re_review", "fix")),
         syncs=count_epoch(lambda e: e.get("step") == "sync_master"),
-        reruns_on_head=count(lambda e: e.get("step") == "rerun" and e.get("head") == head),
-        diagnoses=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True),
+        reruns_on_head=count_live(lambda e: e.get("step") == "rerun" and e.get("head") == head),
+        diagnoses=count_live(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True),
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
         important_passes=(
@@ -174,12 +192,34 @@ def spent(
     )
 
 
+def _after_restoration(written: object, restored_at: str | None) -> bool:
+    """Whether a record dated `written` is of the run now living (GH-406): it carries an aware
+    time that is not before the restoration's. A record with no time, or with one that cannot
+    be read, is the archived run's -- `merge.run_checks` stamps `at` on the records of a
+    restored task only."""
+    stamp, restored = _aware(written), _aware(restored_at)
+    return stamp is not None and restored is not None and stamp >= restored
+
+
+def _aware(value: object) -> datetime | None:
+    """`value` as an aware datetime, `None` when it is not an ISO string with an offset."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+
+
 def _gate_reran(raw: Mapping[str, object], head: str | None) -> bool:
     """The recorded `merge_checks` is of `head` and holds a red check whose last row is the
     gate's own rerun (ADR-0066). Tolerant of a record from before the rerun, which has no
     marker, and of one that is not the shape the merge writes."""
     record = raw.get("merge_checks")
     if head is None or not isinstance(record, Mapping) or record.get("head") != head:
+        return False
+    if rules.restored(raw) and not _after_restoration(record.get("at"), rules.restored_at(raw)):
         return False
     checks = record.get("checks")
     return isinstance(checks, list) and any(
@@ -217,7 +257,7 @@ def escalation_recorded(raw: Mapping[str, object], head: str | None, refusal: st
         entry.get("step") == "escalate_ledger"
         and entry.get("head") == head
         and entry.get("refusal") == refusal
-        for entry in entries(raw)
+        for entry in live_entries(raw)
     )
 
 
@@ -259,7 +299,7 @@ def slice_inputs(
         for name, unit in subtasks.items()
         if unit.get("status") == "approved" and name != INTEGRATION
     )
-    refused = landing.refused_slices(entries(raw))
+    refused = landing.refused_slices(live_entries(raw))
     blocking = frozenset(landing.blocking_owners(raw))
     names = [unit.name for unit in approved]
     try:
@@ -389,7 +429,9 @@ def pending(
         return None
     gate = diagnose_gate(raw, step.kind, now)
     if (gate == "skip" and not (released and step.kind == "diagnose")) or (
-        landing.already_dispatched(entries(raw), facts.pr_head, step.kind, facts.current_master)
+        landing.already_dispatched(
+            live_entries(raw), facts.pr_head, step.kind, facts.current_master
+        )
     ):
         return None
     return step

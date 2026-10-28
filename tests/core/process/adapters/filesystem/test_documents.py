@@ -491,3 +491,30 @@ def test_record_closure_adds_tracker_failures_to_a_document_that_had_none(tmp_pa
     documents.record_closure("T-1", {"tracker_failures": [_failure()]})
 
     assert documents.load("T-1")["tracker_failures"] == [_failure()]
+
+
+def _restoration(cut=3, archive="archive/run1-93e1891"):
+    return {
+        "archive": archive,
+        "head": "a" * 40,
+        "upstream": "b" * 40,
+        "at": "2026-10-28T10:00:00Z",
+        "landing_cut": cut,
+    }
+
+
+def test_restorations_round_trip_with_their_cut(tmp_path):
+    """GH-406: the marker survives the document, `landing_cut` an int."""
+    documents = FilesystemTaskDocuments(tmp_path)
+    rows = [_restoration(), _restoration(5, "archive/run2-8e8d229")]
+    documents.save({"id": "T-1", "title": "t", "description": "d", "restorations": rows})
+
+    assert documents.load("T-1")["restorations"] == rows
+
+
+def test_a_document_without_restorations_writes_none_and_loads_as_empty(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path)
+    path = documents.save({"id": "T-1", "title": "t", "description": "d", "restorations": []})
+
+    assert "restorations" not in path.read_text(encoding="utf-8")
+    assert documents.load("T-1").get("restorations", []) == []

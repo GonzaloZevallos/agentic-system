@@ -5825,6 +5825,7 @@ COMMAND_PATHS = [
     ("close",),
     ("merge",),
     ("land",),
+    ("restore",),
     ("eval",),
     ("eval", "run"),
     ("eval", "score"),
@@ -6083,3 +6084,70 @@ async def test_a_runtime_error_inside_a_node_leaves_a_record_the_poller_retakes(
         {"status": "developing"}, facts, 0, version_key=rules.crash_version_key("def456")
     )
     assert verdict == "retake_crash"
+
+
+# --- agentic restore (GH-406) --------------------------------------------------------------
+
+
+def test_restore_takes_the_issue_and_the_archive_prefix_and_runs_the_restore(monkeypatch, tmp_path):
+    root = product(tmp_path, "restoring")
+    asked: list[object] = []
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: memory_ports())
+    monkeypatch.setattr(cli.anyio, "run", lambda func, *args: asked.append(args[0]))
+    argv = ["agentic", "restore", "--issue", "374", "--from", "archive/run1-93e1891"]
+    monkeypatch.setattr("sys.argv", [*argv, "--product-dir", str(root)])
+
+    cli.main()
+
+    (work,) = asked
+    assert work.func is cli._restore
+    assert work.args[:2] == ("GH-374", "archive/run1-93e1891")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["restore", "--from", "archive/run1-93e1891"],
+        ["restore", "--issue", "374"],
+        ["restore", "--issue", "374", "--from", "agentic/GH-374"],
+        ["restore", "--issue", "374", "--from", "archive/run1-"],
+    ],
+    ids=["no issue", "no prefix", "not an archive prefix", "no commit"],
+)
+def test_restore_refuses_a_missing_or_malformed_argument_before_touching_anything(
+    monkeypatch, tmp_path, argv
+):
+    root = product(tmp_path, "restoring")
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: memory_ports())
+    monkeypatch.setattr("sys.argv", ["agentic", *argv, "--product-dir", str(root)])
+
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+async def test_restore_prints_the_refusal_and_exits_like_any_command_that_cannot_start(
+    tmp_path, capsys
+):
+    root = product(tmp_path, "restoring")
+    cfg = Configuration(product_dir=root)
+
+    with pytest.raises(cli.CannotStart, match="GH-374 refused: no_archive") as info:
+        await cli._restore("GH-374", "archive/run1-93e1891", cfg, memory_ports())
+
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+async def test_restore_of_a_task_whose_lock_is_held_refuses_task_live(tmp_path):
+    root = product(tmp_path, "restoring")
+    cfg = Configuration(product_dir=root)
+    lock = cli._lock_for(cfg)
+    lock.acquire("GH-374", "agentic run --issue 374")
+    try:
+        with pytest.raises(cli.CannotStart, match="GH-374 refused: task_live"):
+            await cli._restore("GH-374", "archive/run1-93e1891", cfg, memory_ports())
+    finally:
+        lock.release("GH-374")

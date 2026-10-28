@@ -61,7 +61,7 @@ def _stamp(context: LandingContext, **keys: object) -> dict[str, object]:
     """Writes `keys` on the open `land_slice` entry of this head through `record_closure`,
     from the document as it is now, and answers that entry."""
     loaded = context.ports.documents.load(context.task_id) or {}
-    written = [dict(entry) for entry in landing_plan.entries(loaded)]
+    written = [dict(entry) for entry in landing_plan.all_entries(loaded)]
     entry = open_entry(written, context.head)
     if entry is None:
         return {}
@@ -93,7 +93,7 @@ def _complete(context: LandingContext, entry: Mapping[str, object], units: tuple
     at = (context.clock or _now)()
     cost = loaded.get("cost_usd", 0.0)
     resolved = landing_rules.resolve_open(
-        landing_plan.entries(loaded), at, cost if isinstance(cost, int | float) else 0.0
+        landing_plan.all_entries(loaded), at, cost if isinstance(cost, int | float) else 0.0
     )
     landed = loaded.get("landed_slices")
     record: dict[str, object] = {"units": list(units), "at": at}
@@ -322,7 +322,7 @@ def land_slice(context: LandingContext) -> None:
     the decision; one without builds, checks, pushes and opens first."""
     ports = context.ports
     loaded = ports.documents.load(context.task_id) or {}
-    entry = open_entry(landing_plan.entries(loaded), context.head)
+    entry = open_entry(landing_plan.live_entries(loaded), context.head)
     master = context.upstream.sha
     if entry is None or master is None:
         context.log(f"agentic: land: {context.task_id}: land_slice: nothing open")
@@ -344,14 +344,14 @@ def land_slice(context: LandingContext) -> None:
         return
     reference = entry.get("slice_pull_request")
     if not isinstance(reference, str) or not reference:
-        k = sum(1 for e in landing_plan.entries(loaded) if e.get("step") == "land_slice")
+        k = sum(1 for e in landing_plan.all_entries(loaded) if e.get("step") == "land_slice")
         branch = f"{rules.task_branch(context.task_id)}.slice-{k}"
         reference = _open(context, raw, units, branch, master)
         if reference is None:
             return
         entry = (
             open_entry(
-                landing_plan.entries(ports.documents.load(context.task_id) or {}), context.head
+                landing_plan.live_entries(ports.documents.load(context.task_id) or {}), context.head
             )
             or entry
         )

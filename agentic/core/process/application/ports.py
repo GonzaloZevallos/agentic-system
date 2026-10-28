@@ -1003,6 +1003,13 @@ class Workspace(Protocol):
         and `old` does not -- the idempotent case a retried archive relies on."""
         ...
 
+    def create_branch(self, name: str, sha: str) -> None:
+        """`git branch name sha`: the restoring verb. A copy, never a rename, and never
+        forced. A no-op when `name` already points at `sha` (`sha` may be short or full),
+        the idempotent case a retried restore relies on; raises `GitError` when `name`
+        already points elsewhere, and when `sha` is not a commit of this repository."""
+        ...
+
     def is_ignored(self, root: Path, relative: str) -> bool:
         """Whether the product's own `.gitignore` under `root` ignores `relative`
         (ADR-0011, sixth addendum): archiving commits the task document with
@@ -1238,6 +1245,14 @@ class Tracker(Protocol):
         replaces the system's own pull request with a fresh one. Raises `ValueError` for
         a reference that is not a pull request URL, before any call, and when the
         platform refuses."""
+        ...
+
+    def reopen_pull_request(self, number: int) -> None:
+        """Reopens the pull request `number` (the restoring verb, the inverse of
+        `close_pull_request`). Does nothing when it is already open. Raises `ValueError`
+        when the platform refuses (a merged pull request, or a deleted base branch) or
+        cannot be reached; a restore reads the refusal, never retries it. Not a note to
+        the tracker: it changes no comment, label or issue state."""
         ...
 
     def changed_files(self, pull_request: str) -> int:

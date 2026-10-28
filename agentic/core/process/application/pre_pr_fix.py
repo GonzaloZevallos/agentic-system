@@ -53,7 +53,7 @@ async def fix_important(state: TaskState, cfg: Configuration, ports: Ports) -> T
             name: unit for name, unit in reopened["subtasks"].items() if unit != before.get(name)
         },
         "change_history": reopened["change_history"][len(kept) :],
-        "landing": [*(landing_rules.entry_of(e) for e in landing_plan.entries(state)), entry],
+        "landing": [*(landing_rules.entry_of(e) for e in landing_plan.all_entries(state)), entry],
     }
     return finish(state, patch, ports)
 
@@ -63,8 +63,9 @@ def close_pass(state: TaskState, at: str) -> list[LandingEntry] | None:
     close: the last entry is this pass, still open, and every unit is approved again (the
     integration reviewed after the units it was reopened under). The cost is the task's
     spend since the entry was written."""
-    entries = landing_plan.entries(state)
-    last = entries[-1] if entries else None
+    entries = landing_plan.all_entries(state)
+    live = landing_plan.live_entries(state)
+    last = live[-1] if live else None
     if (
         last is None
         or last.get("step") != rules.FIX_IMPORTANT
