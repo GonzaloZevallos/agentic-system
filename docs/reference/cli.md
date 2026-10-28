@@ -5,10 +5,11 @@ Generada por `scripts/docs/generate.py` recorriendo `agentic.cli.build_parser()`
 ## `agentic`
 
 ```text
-usage: agentic [-h] {run,resume,close,merge,land,eval,stack,scores,dashboards,poll,reflect,perf} ...
+usage: agentic [-h]
+               {run,resume,close,merge,land,restore,eval,stack,scores,dashboards,poll,reflect,perf} ...
 
 positional arguments:
-  {run,resume,close,merge,land,eval,stack,scores,dashboards,poll,reflect,perf}
+  {run,resume,close,merge,land,restore,eval,stack,scores,dashboards,poll,reflect,perf}
     run                 run one task through the feature path
     resume              resume the task of issue N where it paused
     close               record the human's verdict on a task's pull request and close it
@@ -17,6 +18,9 @@ positional arguments:
                         else needs to
     land                take the landing step for a task's approved pull request that the automatic
                         merge refused (GH-239, ADR-0048); the poller spawns it, nobody else needs to
+    restore             bring an archived, approved task back from its archive/run<N>-<sha> refs --
+                        branches, document and pull request -- so it can land without a fresh run
+                        (GH-406)
     eval                drive or score README.md 9's fixed five-task evaluation set
     stack               the product's own stack (ADR-0034)
     scores              a task's numbers as Langfuse scores (GH-273)
@@ -121,6 +125,20 @@ options:
   --run-kind {land_checks,land_model}
                         the kind this child registers under, set by the poller at spawn: land_checks
                         for a step that runs no model, land_model (the default) for any other
+```
+
+## `agentic restore`
+
+```text
+usage: agentic restore [-h] --issue N --from archive/run<N>-<sha> [--product-dir PRODUCT_DIR]
+
+options:
+  -h, --help            show this help message and exit
+  --issue N
+  --from archive/run<N>-<sha>
+                        the prefix the archived run's branches live under
+  --product-dir PRODUCT_DIR
+                        root of the product repo (AGENTIC_PRODUCT_DIR)
 ```
 
 ## `agentic eval`

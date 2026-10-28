@@ -161,6 +161,8 @@ classDiagram
   }
   class release {
   }
+  class restore {
+  }
   class resume {
   }
   class review {
@@ -414,6 +416,9 @@ classDiagram
   reflect_run --> release
   registration --> ports
   release --> ports
+  restore --> merge
+  restore --> ports
+  restore --> resume
   resume --> archive
   resume --> deliver
   resume --> discard
