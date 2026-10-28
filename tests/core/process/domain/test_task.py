@@ -64,6 +64,7 @@ def test_reducers_are_read_from_the_annotations():
         "pause_log",
         "design_items",
         "flakes",
+        "tracker_failures",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
     assert REDUCERS["experiment"] is last
