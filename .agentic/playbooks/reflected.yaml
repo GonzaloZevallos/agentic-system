@@ -447,3 +447,13 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-409
+  GH-415@review:
+    cost_usd: 0.0416
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-415
