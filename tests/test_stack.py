@@ -27,7 +27,7 @@ import copy
 import re
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import yaml
 
@@ -836,3 +836,74 @@ def test_floor_lock_disagreements_rejects_a_floor_with_no_matching_lock_entry():
     deps = ["claude-agent-sdk>=0.2.159"]
     violations = floor_lock_disagreements(deps, {}, names=("claude-agent-sdk",))
     assert violations and "resolves no version" in violations[0]
+
+
+# `KEY_REFERENCE` (GH-400, subtask `entry-points`): the table the generated stack-yaml
+# reference is written from. It is checked against the readers it describes.
+MINIMAL = {"product": "p", "checks": {"tests": "pytest"}}
+SUB_KEYS = {
+    "docs": stack.DOCS_KEYS,
+    "design": stack.DESIGN_KEYS,
+    "performance": stack.PERFORMANCE_KEYS,
+    "rerun_checks": stack.RERUN_KEYS,
+}
+# A valid declaration of each key a default may depend on.
+DECLARED = {"docs": {"generate": "echo hi", "paths": ["docs/generated/**"]}}
+
+
+def _default_mismatch(entry: stack.KeyReference) -> str | None:
+    """Why `entry.default` does not describe what its reader does on a minimal stack, or None."""
+    assert entry.reader is not None
+    answer = entry.reader(MINIMAL, "stack.yaml")
+    match entry.default:
+        case stack.Disabled():
+            return None if answer is None else f"{entry.name} is Disabled but reads {answer!r}"
+        case stack.Computed():
+            return f"{entry.name} is Computed but reads None" if answer is None else None
+        case stack.DependsOn(key):
+            changed = entry.reader({**MINIMAL, key: DECLARED[key]}, "stack.yaml")
+            return None if changed != answer else f"{entry.name} does not change with {key}"
+        case None:
+            return f"{entry.name} has no default"
+    return None
+
+
+def test_key_reference_lists_every_key_in_order_with_its_sub_keys():
+    assert tuple(entry.name for entry in stack.KEY_REFERENCE) == stack.KEYS
+    for entry in stack.KEY_REFERENCE:
+        assert entry.sub_keys == SUB_KEYS.get(entry.name, ()), entry.name
+        assert entry.description.strip(), entry.name
+
+
+def test_every_reader_declares_its_return_type():
+    for entry in stack.KEY_REFERENCE:
+        assert entry.reader is not None, entry.name
+        assert "return" in get_type_hints(entry.reader), entry.name
+
+
+def test_required_keys_have_no_default_and_the_others_have_one():
+    required = {entry.name for entry in stack.KEY_REFERENCE if entry.default is None}
+    assert required == {"product", "checks"}
+
+
+def test_each_default_describes_what_its_reader_does_on_a_minimal_stack():
+    for entry in stack.KEY_REFERENCE:
+        if entry.default is not None:
+            assert _default_mismatch(entry) is None, entry.name
+
+
+def test_a_depends_on_default_is_met_by_a_reader_that_changes_with_its_key():
+    # No key of the contract reads differently when another is absent today, so the
+    # branch is proved on `checks`, which gains the reserved `docs` check with a block.
+    entry = stack.KeyReference("checks", stack.checks, (), stack.DependsOn("docs"), "x")
+    assert _default_mismatch(entry) is None
+
+
+def test_a_default_that_contradicts_its_reader_is_reported():
+    for wrong in (stack.Disabled(), stack.DependsOn("docs")):
+        entry = stack.KeyReference("setup", stack.setup, (), wrong, "x")
+        assert _default_mismatch(entry) is not None
+    assert _default_mismatch(
+        stack.KeyReference("witness", stack.witness, (), stack.Computed(), "x")
+    )
+    assert _default_mismatch(stack.KeyReference("product", stack.product, (), None, "x"))
