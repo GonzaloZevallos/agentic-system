@@ -273,3 +273,26 @@ def test_a_command_run_straight_on_the_event_loop_is_still_stopped_by_the_signal
     assert seconds < BOUND_S
     assert _gone(made.pins["check"])
     _assert_left_nothing(made, before)
+
+
+def test_a_signal_during_qa_performance_stops_the_measure_and_leaves_no_worktree_or_lock(
+    child, product, tmp_path
+):
+    """GH-385: the node measures in a thread, the runner and the lock hear the run's stop and
+    the stop reaps the perf command by its mark. The process ends by the SystemExit the guard
+    raises (its report exists), not by the hard deadline's `os._exit`, and does not wait for it."""
+    before = _snapshot(product)
+    made = child("perf")
+    made.pin("perf")
+
+    code, seconds = _stop(made)
+
+    assert code == 1
+    assert seconds < PROMPT_S
+    assert (made.workdir / "report.json").exists(), "ended by the hard deadline, not the stop"
+    assert _gone(made.pins["perf"])
+    _assert_left_nothing(made, before)
+    worktrees = product / ".agentic" / "worktrees"
+    assert not list(worktrees.glob("perf-*")), "the throwaway checkout was left behind"
+    assert "perf-" not in _git(product, "worktree", "list")
+    assert not (tmp_path / "xdg-state" / "agentic" / "perf.lock").exists(), "perf lock still held"
