@@ -94,7 +94,7 @@ def facts(state: dict, **over) -> rules.MergeFacts:
 
 
 def step(state: dict, **over) -> LandingStep:
-    """The landing's answer: the refusal of `rules.auto_merge_decision` over the facts, then the step."""
+    """The step for the refusal `rules.auto_merge_decision` gives over the facts."""
     f = facts(state, **over)
     decision = rules.auto_merge_decision(f)
     assert decision.reason is not None
