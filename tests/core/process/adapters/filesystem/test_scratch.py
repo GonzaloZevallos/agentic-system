@@ -5,13 +5,20 @@ it, on every way out (GH-391). Real files under `tmp_path`: the scratch root is
 
 import json
 import os
-from datetime import UTC, datetime
+import shutil
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
-from agentic.core.process.domain.scratch import OwnerRecord, Removal, ScratchListing, SweepDecision
+from agentic.core.process.domain.scratch import (
+    OwnerRecord,
+    Removal,
+    ScratchListing,
+    SweepDecision,
+    orphan_partitions,
+)
 
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 TOKEN = "0123456789abcdef"
@@ -248,3 +255,156 @@ def test_listing_and_sweep_touch_only_this_products_partition(tmp_path):
 def test_a_product_key_that_is_not_a_plain_segment_builds_no_scratch(tmp_path, key):
     with pytest.raises(ValueError, match="product key"):
         FilesystemScratch(tmp_path / "root", key, tmp_path / "product")
+
+
+# GH-397: partitions of other products under the same root, the orphan sweep and the retry.
+OTHER = "ffffffffffff"
+LATER = datetime(2026, 10, 27, 13, 0, tzinfo=UTC)
+
+
+def _age(path: Path, when: datetime) -> None:
+    os.utime(path, (when.timestamp(), when.timestamp()))
+
+
+def _age_tree(path: Path, when: datetime) -> None:
+    for child in sorted(path.rglob("*"), reverse=True):
+        _age(child, when)
+    _age(path, when)
+
+
+def _partition_of(base: Path, key: str) -> Path:
+    return base / "root" / key
+
+
+def test_partitions_lists_every_product_with_its_facts_and_the_swept_leftovers(tmp_path):
+    _make_owner(tmp_path, "GH-1", "c-mine0000", _record(os.getpid()))
+    _make_owner(tmp_path, "GH-2", "c-their000", _record(1, "boot-b"), key=OTHER)
+    (_partition_of(tmp_path, OTHER) / "GH-2" / ".c-their001.json.tmp").write_text("{")
+    leftover = tmp_path / "root" / f".{OTHER}.swept-abc123"
+    leftover.mkdir()
+    (tmp_path / "root" / "stray-file").write_text("x")  # not a partition, not a leftover
+    listing = scratch_at(tmp_path).partitions()
+    assert [p.name for p in listing.partitions] == [KEY, OTHER]
+    theirs = listing.partitions[1]
+    ((task,),) = [theirs.tasks]
+    assert task.name == "GH-2" and task.mtime.tzinfo is not None
+    assert [e.name for e in task.owners] == ["c-their000"]
+    assert task.owners[0].record is not None and task.owners[0].record.alive is False
+    # directory, record and the hidden temp name all show as children
+    assert len(task.child_mtimes) == 3
+    assert [x.name for x in listing.leftovers] == [f".{OTHER}.swept-abc123"]
+
+
+def test_partitions_of_a_root_that_does_not_exist_is_empty(tmp_path):
+    assert scratch_at(tmp_path).partitions() == scratch_at(tmp_path / "nope").partitions()
+    assert scratch_at(tmp_path).partitions().partitions == ()
+
+
+def _orphans_of(scratch: FilesystemScratch, now: datetime = LATER):
+    return orphan_partitions(scratch.partitions(), KEY, now)
+
+
+def test_one_products_sweep_leaves_another_products_live_partition_alone(tmp_path):
+    mine = _make_owner(tmp_path, "GH-1", "c-mine0000", _record(1, "boot-b"))
+    live = _make_owner(tmp_path, "GH-1", "c-live0000", _record(os.getpid()), key=OTHER)
+    dead_key = "eeeeeeeeeeee"
+    dead = _make_owner(tmp_path, "GH-1", "c-dead0000", _record(1, "boot-b"), key=dead_key)
+    for path in (_partition_of(tmp_path, OTHER), _partition_of(tmp_path, dead_key)):
+        _age_tree(path, NOW)
+    scratch = scratch_at(tmp_path)
+    orphans = _orphans_of(scratch)
+    assert orphans.partitions == (dead_key,)
+    scratch.sweep(SweepDecision(tasks=("GH-1",), partitions=orphans.partitions))
+    assert not mine.exists()  # its own sweep, as before
+    assert live.is_dir() and live.with_name("c-live0000.json").is_file()
+    assert not _partition_of(tmp_path, dead_key).exists() and not dead.exists()
+    assert [p.name for p in scratch.partitions().leftovers] == []
+
+
+def test_a_partition_inside_the_grace_or_holding_only_a_hidden_temp_record_is_not_returned(
+    tmp_path,
+):
+    young = _make_owner(tmp_path, "GH-1", "c-young000", _record(1, "boot-b"), key=OTHER)
+    _age_tree(_partition_of(tmp_path, OTHER), NOW)
+    _age(young, LATER)  # a directory touched a minute ago
+    hidden_key = "eeeeeeeeeeee"
+    task = _partition_of(tmp_path, hidden_key) / "GH-1"
+    task.mkdir(parents=True)
+    (task / ".c-temp0000.json.tmp").write_text("{")
+    _age_tree(_partition_of(tmp_path, hidden_key), NOW)
+    _age(task / ".c-temp0000.json.tmp", LATER)
+    assert _orphans_of(scratch_at(tmp_path)).partitions == ()
+
+
+def test_an_orphan_is_renamed_aside_and_then_removed_and_a_failed_removal_leaves_a_leftover(
+    tmp_path, monkeypatch
+):
+    _make_owner(tmp_path, "GH-1", "c-dead0000", _record(1, "boot-b"), key=OTHER)
+    _age_tree(_partition_of(tmp_path, OTHER), NOW)
+    scratch = scratch_at(tmp_path)
+    decision = SweepDecision(partitions=(OTHER,))
+    real_rmtree = shutil.rmtree
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)  # removal that never finishes
+    scratch.sweep(decision)
+    monkeypatch.setattr(shutil, "rmtree", real_rmtree)
+    root = tmp_path / "root"
+    assert not _partition_of(tmp_path, OTHER).exists()  # renamed away at once
+    (leftover,) = [p for p in root.iterdir() if ".swept-" in p.name]
+    assert leftover.name.startswith(f".{OTHER}.swept-") and (leftover / "GH-1").is_dir()
+    # Inside the grace it is kept; past it, the rule returns it and rmtree alone removes it.
+    _age_tree(leftover, NOW)
+    assert _orphans_of(scratch, NOW + timedelta(minutes=1)).leftovers == ()
+    orphans = _orphans_of(scratch)
+    assert orphans.leftovers == (leftover.name,)
+    scratch.sweep(SweepDecision(leftovers=orphans.leftovers))
+    assert not leftover.exists()
+
+
+def test_sweeping_an_orphan_that_is_already_gone_is_not_an_error(tmp_path):
+    scratch_at(tmp_path).sweep(SweepDecision(partitions=(OTHER,), leftovers=(".x.swept-1",)))
+
+
+def test_a_decision_cannot_name_a_path_outside_the_root_or_the_own_partition(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    own = _make_owner(tmp_path, "GH-1", "c-mine0000", _record(os.getpid()))
+    scratch = scratch_at(tmp_path)
+    for bad in ("../outside", "..", "a/b", KEY):
+        scratch.sweep(SweepDecision(partitions=(bad,), leftovers=(bad,)))
+    assert outside.is_dir() and own.is_dir()
+
+
+def test_open_succeeds_when_its_partition_is_renamed_away_between_record_and_mkdir(
+    tmp_path, monkeypatch
+):
+    real_mkdir = Path.mkdir
+    raced: list[bool] = []
+
+    def mkdir(self, *args, **kwargs):
+        if self.name == "c-01234567" and not raced:
+            raced.append(True)
+            shutil.rmtree(partition(tmp_path))  # a sweep took the whole partition away
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
+        assert directory.is_dir()
+        assert Path(f"{directory}.json").is_file()  # the record is back before the directory
+    assert raced == [True]
+    assert not directory.exists()
+
+
+def test_open_retries_only_once(tmp_path, monkeypatch):
+    real_mkdir = Path.mkdir
+
+    def mkdir(self, *args, **kwargs):
+        if self.name == "c-01234567":
+            raise FileNotFoundError("gone again")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    with (
+        pytest.raises(FileNotFoundError, match="gone again"),
+        scratch_at(tmp_path).open("GH-391", "c", TOKEN, "t"),
+    ):
+        pass

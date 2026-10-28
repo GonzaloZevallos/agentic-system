@@ -9,13 +9,20 @@ end a round: a listing or a volume that cannot be read is a line, and the round 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
-from ..domain.scratch import INODE_FLOOR, KeptFolder, SpaceReading, sweep_decision
+from ..domain.scratch import (
+    INODE_FLOOR,
+    KeptFolder,
+    SpaceReading,
+    orphan_partitions,
+    sweep_decision,
+)
 from .ports import Ports
 
 TMP_ROOT = Path("/tmp")
@@ -78,7 +85,12 @@ def sweep(ports: Ports, now: datetime) -> list[str]:
         kept = [
             KeptFolder(task, _closed_at(ports, task, mtime, mtime)) for task, mtime in kept_entries
         ]
-        decision = sweep_decision(listing, closed, kept, now)
+        orphans = orphan_partitions(ports.scratch.partitions(), ports.scratch.product_key, now)
+        decision = replace(
+            sweep_decision(listing, closed, kept, now),
+            partitions=orphans.partitions,
+            leftovers=orphans.leftovers,
+        )
         if not decision:
             return []
         ports.scratch.sweep(decision)
@@ -88,6 +100,12 @@ def sweep(ports: Ports, now: datetime) -> list[str]:
         "agentic: poll: scratch swept: "
         f"{len(decision.tasks)} closed task(s), {len(decision.owners)} owner(s), "
         f"{len(decision.kept)} kept folder(s)"
+        + (
+            f", {len(decision.partitions)} orphan partition(s), "
+            f"{len(decision.leftovers)} leftover(s)"
+            if decision.partitions or decision.leftovers
+            else ""
+        )
     ]
 
 
@@ -103,8 +121,8 @@ def _describe(name: str, reading: SpaceReading, floor_bytes: int) -> str:
 
 
 def hold_line(held: tuple[str, ...], readings: Mapping[str, SpaceReading], floor: int) -> str:
-    """`held: /tmp 1400 MB < floor 2048 MB (scratch 380000 MB ok, product 380000 MB ok)`: each volume under the
-    floor with its figures, then the others."""
+    """`held: /tmp 1400 MB < floor 2048 MB (scratch 380000 MB ok, product 380000 MB ok)`: each
+    volume under the floor with its figures, then the others."""
     under = ", ".join(_describe(name, readings[name], floor) for name in held)
     fine = ", ".join(_describe(name, r, floor) for name, r in readings.items() if name not in held)
     return f"agentic: poll: held: {under}" + (f" ({fine})" if fine else "")

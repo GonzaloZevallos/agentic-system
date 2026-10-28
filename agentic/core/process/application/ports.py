@@ -24,7 +24,13 @@ from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
-from ..domain.scratch import OwnerKind, ScratchListing, SpaceReading, SweepDecision
+from ..domain.scratch import (
+    OwnerKind,
+    PartitionListing,
+    ScratchListing,
+    SpaceReading,
+    SweepDecision,
+)
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -1588,14 +1594,28 @@ class Scratch(Protocol):
         (the poller's sweep decides on these facts; it touches no filesystem itself)."""
         ...
 
+    @property
+    def product_key(self) -> str:
+        """The key of this product's partition: the one `partitions` never judges."""
+        ...
+
+    def partitions(self) -> PartitionListing:
+        """Every product's partition under the scratch root, each with its mtime, its task
+        folders' mtimes and every child's (hidden temp names included), the owners' record
+        facts already read, and the `.<key>.swept-<token>` leftovers as their own kind. The
+        orphan rule decides on these facts; this port only reads."""
+        ...
+
     def kept_folders(self) -> Sequence[tuple[str, datetime]]:
         """Each `.agentic/kept/<task>/` with its mtime, which stands in for the close time of
         a task whose document cannot say."""
         ...
 
     def sweep(self, decision: SweepDecision) -> None:
-        """Removes what `decision` names: for an owner its directory, then its record. A path
-        already gone is not an error."""
+        """Removes what `decision` names: for an owner its directory, then its record; an orphan
+        partition is renamed aside at once, then removed, and a leftover is only removed (never
+        this product's own partition, never a name that is not one plain segment of the root).
+        A path already gone is not an error."""
         ...
 
 

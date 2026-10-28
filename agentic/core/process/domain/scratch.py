@@ -51,6 +51,7 @@ _KINDS = get_args(OwnerKind)
 TOKEN_CHARS = 8
 _WORD = re.compile(r"[0-9A-Za-z]+")
 _PARTITION = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]*")
+_SWEPT = re.compile(r"\.[0-9A-Za-z][0-9A-Za-z_-]*\.swept-[0-9A-Za-z]+")
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,16 @@ def _segment(task_key: str | None) -> str:
     if not task_key or "/" in task_key or "\\" in task_key or ".." in task_key:
         raise ValueError(f"not a valid task key for a scratch path: {task_key!r}")
     return task_key
+
+
+def is_partition_name(name: str) -> bool:
+    """Whether `name` could be the folder of a product's partition under the scratch root."""
+    return _PARTITION.fullmatch(name) is not None
+
+
+def is_swept_name(name: str) -> bool:
+    """Whether `name` is a partition renamed aside (`.<key>.swept-<token>`)."""
+    return _SWEPT.fullmatch(name) is not None
 
 
 def partition(product_key: str) -> PurePosixPath:

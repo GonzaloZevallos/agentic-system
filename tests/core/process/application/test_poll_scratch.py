@@ -319,3 +319,39 @@ def test_a_held_round_starts_no_retake_merge_or_reflect_child_and_an_open_one_st
     _, open_ = _round(tmp_path, build(_free(tmp_path)), _Locks(_dead_lock("GH-30")))
     kinds = {argv[1] for argv in open_.spawned}
     assert {"merge", "resume", "reflect"} <= kinds
+
+
+# GH-397: the same round also removes what the orphan rule returns.
+def _folder(key, *, mtime, alive=False):
+    owner = scratch.OwnerEntry("GH-1", "r-00000001", mtime, scratch.RecordFact(mtime, alive))
+    task = scratch.TaskFolder("GH-1", mtime, (owner,), (mtime, mtime))
+    return scratch.PartitionFolder(key, mtime, (task,))
+
+
+def test_the_round_removes_a_dead_old_partition_and_an_old_leftover_and_keeps_a_live_one():
+    ports = memory_ports(scratch=MemoryScratch(), free_space=FakeFreeSpace())
+    disk = _disk(ports)
+    old = NOW - timedelta(hours=1)
+    disk.other_partitions = [
+        _folder("deadkey00000", mtime=old),
+        _folder("livekey00000", mtime=old, alive=True),
+        _folder("youngkey0000", mtime=NOW - timedelta(minutes=1)),
+    ]
+    disk.leftovers = [
+        scratch.Leftover(".deadkey00000.swept-abc", old),
+        scratch.Leftover(".youngkey0000.swept-def", NOW),
+    ]
+    lines = scratch_sweep.sweep(ports, NOW)
+    assert lines == [
+        "agentic: poll: scratch swept: 0 closed task(s), 0 owner(s), 0 kept folder(s), "
+        "1 orphan partition(s), 1 leftover(s)"
+    ]
+    assert [p.name for p in disk.other_partitions] == ["livekey00000", "youngkey0000"]
+    assert [x.name for x in disk.leftovers] == [".youngkey0000.swept-def"]
+
+
+def test_the_own_partition_is_never_an_orphan_to_the_round():
+    ports = memory_ports(scratch=MemoryScratch(), free_space=FakeFreeSpace())
+    disk = _disk(ports)
+    disk.other_partitions = [_folder(disk.product_key, mtime=NOW - timedelta(hours=1))]
+    assert scratch_sweep.sweep(ports, NOW) == []

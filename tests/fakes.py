@@ -1648,6 +1648,9 @@ class MemoryScratch:
         self.owners: list[scratch_domain.OwnerEntry] = []
         self.kept_on_disk: list[tuple[str, datetime]] = []
         self.swept: list[scratch_domain.SweepDecision] = []
+        # Other products' partitions and leftovers on the "disk" (GH-397).
+        self.other_partitions: list[scratch_domain.PartitionFolder] = []
+        self.leftovers: list[scratch_domain.Leftover] = []
 
     @contextmanager
     def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
@@ -1669,6 +1672,10 @@ class MemoryScratch:
         """The `tasks` and `owners` a test put on the "disk" (no disk is read)."""
         return scratch_domain.ScratchListing(tuple(self.tasks), tuple(self.owners))
 
+    def partitions(self) -> scratch_domain.PartitionListing:
+        """The `other_partitions` and `leftovers` a test put on the "disk"."""
+        return scratch_domain.PartitionListing(tuple(self.other_partitions), tuple(self.leftovers))
+
     def kept_folders(self) -> list[tuple[str, datetime]]:
         return list(self.kept_on_disk)
 
@@ -1680,6 +1687,10 @@ class MemoryScratch:
         gone = {(r.task, r.name) for r in decision.owners if r.directory and r.record}
         self.owners = [o for o in self.owners if (o.task, o.name) not in gone]
         self.kept_on_disk = [k for k in self.kept_on_disk if k[0] not in decision.kept]
+        self.other_partitions = [
+            p for p in self.other_partitions if p.name not in decision.partitions
+        ]
+        self.leftovers = [x for x in self.leftovers if x.name not in decision.leftovers]
 
 
 class FakeFreeSpace:
