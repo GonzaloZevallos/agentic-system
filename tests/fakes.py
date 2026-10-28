@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,15 +19,22 @@ from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
     AddedLine,
+    Board,
+    BoardSent,
     BranchPullRequest,
     Checkout,
+    CheckRequest,
     CheckResults,
+    CheckScheduler,
     CommandResult,
     Commands,
     FlagVocabulary,
+    FreeSpace,
     GitError,
+    Grant,
     Inbox,
     IssueComment,
+    IssueRow,
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
@@ -41,8 +49,12 @@ from agentic.core.process.application.ports import (
     RawResult,
     RoleRunner,
     RunRegistration,
+    RunStopped,
     SampleApp,
     SampleAppHandle,
+    Scratch,
+    SentMemory,
+    StopFlag,
     TaskDocuments,
     Tracker,
     Upstream,
@@ -51,14 +63,18 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
+from agentic.core.process.domain import scratch as scratch_domain
+from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import CheckResult, RerunForm
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
+from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -292,7 +308,8 @@ class MemoryKnowledge:
         self.definitions.update(definitions)
         self.terms.update(terms)
         self.consolidated_in = root
-        return [Path(f"/memory/docs/product/{slug}.md") for slug in definitions]
+        base = root or Path("/memory")
+        return [base / "docs" / "product" / f"{slug}.md" for slug in definitions]
 
 
 class MemoryPrompts:
@@ -342,6 +359,7 @@ class MemoryStack:
         rerun_checks: dict[str, RerunForm] | None = None,
         merge_inert: tuple[str, ...] = (),
         check_budgets: dict[str, float] | None = None,
+        docs: Docs | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -358,6 +376,8 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # None is a product that declares no `docs` block: no generated docs, today's gate.
+        self.declared_docs = docs
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
@@ -462,6 +482,10 @@ class MemoryStack:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_design
 
+    def docs(self, revision: str) -> Docs | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_docs
+
 
 class MemoryCommands:
     """Answers each command from its queue, green when the queue is empty or missing;
@@ -486,6 +510,8 @@ class MemoryCommands:
     ) -> None:
         self.queues = {k: list(v) for k, v in queues.items()}
         self.ran: list[tuple[Path, str]] = []
+        # The `env` each run received, parallel to `ran`: None when the caller passed none.
+        self.envs: list[Mapping[str, str] | None] = []
         self.holds = holds or {}
         self.raises = raises or set()
         self.in_flight = 0
@@ -498,9 +524,17 @@ class MemoryCommands:
         with self._changed:
             return self._changed.wait_for(predicate, timeout_s)
 
-    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
+    def run(
+        self,
+        cwd: Path,
+        command: str,
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandResult:
         with self._changed:
             self.ran.append((cwd, command))
+            self.envs.append(env)
             self.in_flight += 1
             self.high_water = max(self.high_water, self.in_flight)
             self._changed.notify_all()
@@ -645,6 +679,12 @@ class MemoryWorkspace:
         self.merge_heads: dict[Path, str] = {}
         self.merge_head_error: str | None = None
         self.abort_error: str | None = None
+        # GH-392: the checkouts a test declares mid-merge (or conflicted) for `merge_in_progress`,
+        # each ask in order, and a text that makes it raise `GitError` instead of answering.
+        self.merges_in_progress: set[Path] = set()
+        self.merge_in_progress_asks: list[Path] = []
+        self.merge_in_progress_error: str | None = None
+        self.commit_all_error: str | None = None
         self.aborted: list[Path] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
@@ -702,6 +742,12 @@ class MemoryWorkspace:
         self.remote_tips: dict[str, str] = {}
         self.remote_tip_error: str | None = None
         self.remote_tip_calls: list[tuple[Path, str]] = []
+        # GH-376: `ci_refs` is the sha each `agentic-ci/` ref holds on the fake remote;
+        # `ci_ref_calls` is every `publish_ci_ref` / `remote_refs` / `delete_remote_ref`
+        # as `(verb, argument)`, and `ci_ref_error` makes each of them raise `GitError`.
+        self.ci_refs: dict[str, str] = {}
+        self.ci_ref_calls: list[tuple[str, str]] = []
+        self.ci_ref_error: str | None = None
         # `(path, relatives, message)` of every `commit_paths`, and `events`: that call and
         # every `push`, in order, so a test says which came first (GH-203).
         self.path_commits: list[tuple[Path, tuple[str, ...], str]] = []
@@ -888,6 +934,12 @@ class MemoryWorkspace:
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
 
+    def merge_in_progress(self, path: Path) -> bool:
+        self.merge_in_progress_asks.append(path)
+        if self.merge_in_progress_error is not None:
+            raise GitError(self.merge_in_progress_error)
+        return path in self.merges_in_progress or path in self.merge_heads
+
     def merge_head(self, path: Path) -> str | None:
         if self.merge_head_error is not None:
             raise GitError(self.merge_head_error)
@@ -910,6 +962,8 @@ class MemoryWorkspace:
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
     def commit_all(self, path: Path, message: str) -> str | None:
+        if self.commit_all_error is not None:
+            raise GitError(self.commit_all_error)
         self.commits.append((path, message))
         return "c1"
 
@@ -970,6 +1024,26 @@ class MemoryWorkspace:
         if self.remote_tip_error is not None:
             raise GitError(self.remote_tip_error)
         return self.remote_tips.get(branch)
+
+    def publish_ci_ref(self, path: Path, ref: str) -> None:
+        self.ci_ref_calls.append(("publish", ref))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        self.ci_refs[ref] = self.head(path)
+
+    def remote_refs(self, prefix: str) -> tuple[str, ...]:
+        self.ci_ref_calls.append(("list", prefix))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        return tuple(ref for ref in self.ci_refs if ref.startswith(prefix))
+
+    def delete_remote_ref(self, ref: str) -> None:
+        self.ci_ref_calls.append(("delete", ref))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        if ref not in self.ci_refs:
+            raise GitError(f"git push origin --delete {ref} failed: no such ref")
+        del self.ci_refs[ref]
 
     def show(self, ref: str, relative: str) -> str | None:
         if (ref, relative) in self.files or not self.track_commits:
@@ -1533,15 +1607,19 @@ class MemoryRunRegistry:
 
 class FakePerfRunner:
     """GH-318: records each `run` as `(checkout, command, extra_env, timeout_s)` and answers
-    the next `Run` of `script`, or a clean empty one; never starts a process."""
+    the next `Run` of `script`, or a clean empty one; never starts a process. With a `stop` flag
+    that is set it raises `RunStopped` and records nothing, as the real runner does (GH-385)."""
 
-    def __init__(self, script: Sequence[Run] = ()) -> None:
+    def __init__(self, script: Sequence[Run] = (), stop: StopFlag | None = None) -> None:
         self.script = list(script)
+        self.stop = stop
         self.calls: list[tuple[Path, str, dict[str, str], float]] = []
 
     def run(
         self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
     ) -> Run:
+        if self.stop is not None and self.stop.is_set():
+            raise RunStopped
         self.calls.append((checkout, command, dict(extra_env), timeout_s))
         return self.script.pop(0) if self.script else Run(None, 0, False, None, None)
 
@@ -1560,19 +1638,137 @@ class FakeStopFlag:
 
 
 class FakePerfLock:
-    """GH-318: `acquire` answers `available` and counts; `release` counts."""
+    """GH-318: `acquire` answers `available` and counts; `release` counts. With a `stop` flag
+    that is set, `acquire` raises `RunStopped` and takes nothing (GH-385)."""
 
-    def __init__(self, available: bool = True) -> None:
+    def __init__(self, available: bool = True, stop: StopFlag | None = None) -> None:
         self.available = available
+        self.stop = stop
         self.acquired: list[float] = []
         self.released = 0
 
     def acquire(self, wait_s: float) -> bool:
+        if self.stop is not None and self.stop.is_set():
+            raise RunStopped
         self.acquired.append(wait_s)
         return self.available
 
     def release(self) -> None:
         self.released += 1
+
+
+class FakeCheckScheduler:
+    """GH-361: grants at once and never waits. `share` is what every grant holds; `overdue`
+    and `wait_s` are what it reports. `requests` and `released` record, in order, every
+    `acquire` and every `release`. The grant keeps the request's first `enqueued_at` and
+    token, so a gate that passes them back is seen to do so."""
+
+    def __init__(self, share: int = 4, *, overdue: bool = False, wait_s: float = 0.0) -> None:
+        self.share = share
+        self.overdue = overdue
+        self.wait_s = wait_s
+        self.requests: list[CheckRequest] = []
+        self.released: list[Grant] = []
+
+    def acquire(self, request: CheckRequest) -> Grant:
+        self.requests.append(request)
+        enqueued_at = 0.0 if request.enqueued_at is None else request.enqueued_at
+        token = request.token or f"fake-{len(self.requests)}"
+        return Grant(self.share, self.wait_s, 0, self.overdue, enqueued_at, token)
+
+    def release(self, grant: Grant) -> None:
+        self.released.append(grant)
+
+
+class MemoryScratch:
+    """GH-391: `open` hands out the path `scratch.path_for` names under `root` (the evidence
+    folder under `product_dir`) without touching a disk, and records who opened it (`opened`,
+    as `(task, kind, token, slug)`), which directories are open now (`live`) and which task
+    folders were asked for (`kept`). The directory is "removed" when the block ends, however
+    it ends."""
+
+    def __init__(
+        self,
+        root: Path = Path("/scratch-root"),
+        product_key: str = "memorykey000",
+        product_dir: Path = Path("/product"),
+    ) -> None:
+        self.root = root
+        self.product_key = product_key
+        self.product_dir = product_dir
+        self.opened: list[tuple[str | None, str, str, str]] = []
+        self.live: set[Path] = set()
+        self.kept: list[Path] = []
+        # What a sweep sees on the "disk", and every decision it was asked to carry out.
+        self.tasks: list[str] = []
+        self.owners: list[scratch_domain.OwnerEntry] = []
+        self.kept_on_disk: list[tuple[str, datetime]] = []
+        self.swept: list[scratch_domain.SweepDecision] = []
+        # Other products' partitions and leftovers on the "disk" (GH-397).
+        self.other_partitions: list[scratch_domain.PartitionFolder] = []
+        self.leftovers: list[scratch_domain.Leftover] = []
+
+    @contextmanager
+    def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
+        owner = scratch_domain.owner(kind, token)
+        directory = self.root / scratch_domain.path_for(self.product_key, task_key, owner)
+        self.opened.append((task_key, kind, token, slug))
+        self.live.add(directory)
+        try:
+            yield directory
+        finally:
+            self.live.discard(directory)
+
+    def ensure_kept(self, task_key: str | None) -> Path:
+        kept = self.product_dir / scratch_domain.kept_path_for(task_key)
+        self.kept.append(kept)
+        return kept
+
+    def listing(self) -> scratch_domain.ScratchListing:
+        """The `tasks` and `owners` a test put on the "disk" (no disk is read)."""
+        return scratch_domain.ScratchListing(tuple(self.tasks), tuple(self.owners))
+
+    def partitions(self) -> scratch_domain.PartitionListing:
+        """The `other_partitions` and `leftovers` a test put on the "disk"."""
+        return scratch_domain.PartitionListing(tuple(self.other_partitions), tuple(self.leftovers))
+
+    def kept_folders(self) -> list[tuple[str, datetime]]:
+        return list(self.kept_on_disk)
+
+    def sweep(self, decision: scratch_domain.SweepDecision) -> None:
+        """Records the decision and takes what it names off the "disk", as the adapter does."""
+        self.swept.append(decision)
+        self.tasks = [t for t in self.tasks if t not in decision.tasks]
+        self.owners = [o for o in self.owners if o.task not in decision.tasks]
+        gone = {(r.task, r.name) for r in decision.owners if r.directory and r.record}
+        self.owners = [o for o in self.owners if (o.task, o.name) not in gone]
+        self.kept_on_disk = [k for k in self.kept_on_disk if k[0] not in decision.kept]
+        self.other_partitions = [
+            p for p in self.other_partitions if p.name not in decision.partitions
+        ]
+        self.leftovers = [x for x in self.leftovers if x.name not in decision.leftovers]
+
+
+class FakeFreeSpace:
+    """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
+    every path, ample by default (a terabyte and ten million inodes), or the reading of
+    the longest path in `by_path` that contains the one asked, and records what was asked."""
+
+    AMPLE = SpaceReading(free_bytes=10**12, free_inodes=10**7)
+
+    def __init__(
+        self, reading: SpaceReading = AMPLE, by_path: Mapping[Path, SpaceReading] | None = None
+    ) -> None:
+        self.reading = reading
+        self.by_path = dict(by_path or {})
+        self.asked: list[Path] = []
+
+    def read(self, path: Path) -> SpaceReading:
+        self.asked.append(path)
+        containing = [p for p in self.by_path if path == p or p in path.parents]
+        if not containing:
+            return self.reading
+        return self.by_path[max(containing, key=lambda p: len(p.parts))]
 
 
 class FakeReaper:
@@ -1649,6 +1845,78 @@ class FakeLauncher:
         return self.pid
 
 
+class FakeBoard:
+    """GH-375: the Project board, in memory. Records every call as `(name, argument)`.
+    `open` and `closed` are the issues it reads; `fail` (an exception) is raised by every
+    method named in `fail_on` (all of them when empty); `unwritten` are issues `write`
+    leaves out of the set it returns, as a partially failed batch would."""
+
+    def __init__(
+        self,
+        open: Sequence[IssueRow] = (),
+        closed: Sequence[IssueRow] = (),
+        *,
+        project: str = "PVT_1",
+        fail: Exception | None = None,
+        fail_on: Collection[str] = (),
+        unwritten: Collection[int] = (),
+        limit_reached: bool = False,
+    ) -> None:
+        self.open = list(open)
+        self.closed = list(closed)
+        self.project = project
+        self.fail = fail
+        self.fail_on = set(fail_on)
+        self.unwritten = set(unwritten)
+        self.limit_reached = limit_reached
+        self.calls: list[tuple[str, object]] = []
+        self.written: list[FieldWrite] = []
+
+    def _enter(self, name: str, argument: object = None) -> None:
+        self.calls.append((name, argument))
+        if self.fail is not None and (not self.fail_on or name in self.fail_on):
+            raise self.fail
+
+    def project_id(self) -> str:
+        self._enter("project_id")
+        return self.project
+
+    def open_issues(self) -> list[IssueRow]:
+        self._enter("open_issues")
+        return list(self.open)
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        self._enter("all_issues")
+        return [*self.open, *self.closed], self.limit_reached
+
+    def issue(self, number: int) -> IssueRow:
+        self._enter("issue", number)
+        for row in [*self.open, *self.closed]:
+            if row.number == number:
+                return row
+        raise ValueError(f"no issue #{number}")
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        self._enter("write", list(writes))
+        self.written.extend(writes)
+        return frozenset(w.issue for w in writes) - self.unwritten
+
+
+class FakeBoardSent:
+    """GH-375: the mirror's memory, in memory. `saved` keeps every memory it was given."""
+
+    def __init__(self, memory: SentMemory | None = None) -> None:
+        self.memory = memory if memory is not None else SentMemory()
+        self.saved: list[SentMemory] = []
+
+    def load(self) -> SentMemory:
+        return self.memory
+
+    def save(self, memory: SentMemory) -> None:
+        self.saved.append(memory)
+        self.memory = memory
+
+
 def memory_ports(
     runner: RoleRunner | None = None,
     *,
@@ -1663,10 +1931,15 @@ def memory_ports(
     commands: Commands | None = None,
     sample_app: SampleApp | None = None,
     reaper: ProcessReaper | None = None,
+    check_scheduler: CheckScheduler | None = None,
     limits: RunLimits | None = None,
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
     check_results: CheckResults | None = None,
+    board: Board | None = None,
+    board_sent: BoardSent | None = None,
+    scratch: Scratch | None = None,
+    free_space: FreeSpace | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -1681,10 +1954,15 @@ def memory_ports(
         commands=commands if commands is not None else MemoryCommands(),
         sample_app=sample_app if sample_app is not None else MemorySampleApp(),
         reaper=reaper if reaper is not None else FakeReaper(),
+        check_scheduler=check_scheduler if check_scheduler is not None else FakeCheckScheduler(),
         **({} if limits is None else {"limits": limits}),
         perf_runner=perf_runner,
         perf_lock=perf_lock,
         check_results=check_results,
+        board=board,
+        board_sent=board_sent,
+        scratch=scratch,
+        free_space=free_space,
     )
 
 
@@ -1971,16 +2249,18 @@ def final_validation(
     reason: str = "r",
     blocking: Sequence[object] | None = None,
     cost: float = 0.2,
+    definitions: Sequence[object] | None = None,
 ) -> RawResult:
     """PM's early, UI-only final validation (ADR-0040): same `verdict`/`reason` shape,
-    `blocking` in place of `definitions`/`observations` -- one-line claims the
-    integration review must settle, empty on `approved`."""
+    `blocking` -- one-line claims the integration review must settle, empty on `approved` --
+    and the close-time `definitions` (capability files), empty when none changed."""
     return RawResult(
         {
             "markdown": f"### Verdict\n\n{kind}\n\n{reason}",
             "verdict": kind,
             "reason": reason,
             "blocking": list(blocking or []),
+            "definitions": list(definitions or []),
         },
         cost,
     )

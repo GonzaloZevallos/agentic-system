@@ -87,6 +87,8 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
   touch `git config`.
 - Do not push, do not delete branches, do not touch the subtask worktrees.
 - You have at most {{max_turns}} turns and a money cap for this run.
+- Scratch goes to `$TMPDIR`; captures you cite go to `$TASK_EVIDENCE_DIR`, named with your
+  subtask key as prefix; never write to a literal `/tmp/...` path.
 </Hard Limits>
 
 <Output>

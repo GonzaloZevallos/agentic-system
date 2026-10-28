@@ -17,6 +17,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import check_results as reuse_rules
 from ..domain import coverage, presubmit, rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
@@ -70,7 +71,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 paths = list(dep_state.marked_paths)
             handled_deps.append((dep, branch))
             conflicted_paths = [*conflicted_paths, *(p for p in paths if p not in conflicted_paths)]
-            notices.append(rules.merge_notice(dep, branch, paths))
+            notices.append(
+                rules.merge_notice(dep, branch, paths, ports.stack.docs(task_base(state, ports)))
+            )
     # The plan named this subtask's screens (ADR-0040): look at the comparisons before
     # delivering, the product's own declared command when there is a `design` block,
     # or the plain names when there is not (`rules.screens_notice`'s own two shapes).
@@ -105,6 +108,8 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         before,
         fast,
         cfg.check_timeout_s,
+        priority=CheckPriority.SUBTASK,
+        wait_max_s=cfg.check_wait_max_s,
         witness=ports.stack.witness(task_base(state, ports)),
         parallel=ports.stack.parallel_checks(task_base(state, ports)),
         affected=plan,
@@ -127,6 +132,8 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 before,
                 checks,
                 cfg.check_timeout_s,
+                priority=CheckPriority.SUBTASK,
+                wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 reuse=reuse,
             )
@@ -225,6 +232,13 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         # Measurement only (like `subtask_id`): read once by the adapter for
         # `agentic.presubmit.checks`/`.duration`, never persisted.
         patch["presubmit_checks"] = delivery_presubmit.invocations
+    if delivery_presubmit.gates and patch.get("runs"):
+        # The wait for a share apart from the run (GH-361): persisted on the run this
+        # delivery wrote, one record per invocation that ran the checks.
+        patch["runs"] = [
+            *patch["runs"][:-1],
+            {**patch["runs"][-1], "gates": list(delivery_presubmit.gates)},
+        ]
     if flakes := delivery_presubmit.flakes():
         # ADR-0066: the checks that went red and then passed on the gate's one rerun. A
         # persisted key, merged by `add_flakes` at the fan-in so a re-delivery of the same head

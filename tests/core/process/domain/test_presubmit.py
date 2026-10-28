@@ -179,6 +179,13 @@ def test_the_prefix_is_the_literal_text_before_the_base_token_right_stripped():
     assert presubmit.affected_prefix("pytest --base={base}") == "pytest --base="
 
 
+def test_the_prefix_stops_at_a_workers_token_that_comes_before_the_base():
+    # The rule must match what runs, and `{workers}` is a number by then (GH-361).
+    assert presubmit.affected_prefix("pytest -n {workers} --since {base}") == "pytest -n"
+    assert presubmit.affected_prefix("pytest --since {base} -n {workers}") == "pytest --since"
+    assert presubmit.affected_prefix("pytest -n {workers}") == "pytest -n {workers}"
+
+
 def test_a_red_affected_row_then_a_green_full_row_leaves_a_passing_final_row():
     rows = [
         result("tests", "pytest -k x", False, "boom"),

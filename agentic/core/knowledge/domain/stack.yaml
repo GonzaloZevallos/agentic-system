@@ -119,6 +119,22 @@ checks:
 #
 # ci: [check]
 #
+# `docs`: optional. The generated half of the product's technical docs. `generate` is the
+# one-line command that rewrites every generated artifact (diagrams, reference pages);
+# `paths` are the globs it owns. With it the system adds a check named `docs` (reserved)
+# to `checks`, and to `delivery_checks` when you declare it: it runs `generate` and fails
+# if anything under the owned paths changed or appeared, so commit what `generate` writes.
+# On every exit it puts the owned paths back as HEAD has them. Rules the loader enforces:
+# a path is relative, has no `..`, does not start with `:`, has a literal prefix (the text
+# before the first `*`, `?` or `[`) that is not empty and overlaps neither `docs/adr`,
+# `.agentic` nor `.git`; with `parallel_checks: true` no other check may name an owned path.
+# What the product owes, and the system cannot check: `generate` is deterministic (a pinned
+# tool, no timestamps, a stable order, nothing that depends on TMPDIR or the absolute path).
+#
+# docs:
+#   generate: uv run python scripts/generate_docs.py
+#   paths: [docs/architecture/generated/**]
+#
 # `performance`: optional (GH-318, ADR-0059). Scenarios `agentic perf <product>` measures
 # against absolute limits, with a realistic data volume. They never join `checks`: the
 # presubmit, `affected_checks`, `ci` and the merge gate do not see them. `seed` and

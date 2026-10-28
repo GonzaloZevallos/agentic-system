@@ -11,9 +11,11 @@ import pytest
 from agentic.core.process.application.perf import (
     PerfExit,
     PerfRefused,
+    measure_at,
     measure_scenarios,
     perf,
 )
+from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.domain.performance import Limit, Measurement, Result, Run, Scenario
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakePerfLock, FakePerfRunner, FakeReaper, MemoryStack, memory_ports
@@ -290,3 +292,28 @@ def test_a_ref_typed_as_the_revision_is_reported_as_the_sha_the_checkout_resolve
     _, report = perf("shop", None, "v1.2", (), ports, runner, FakePerfLock(), cfg)
     assert report.code_sha == "c0ffee" * 6 + "abcd"
     assert report.harness_sha == "base"
+
+
+def test_a_stopped_lock_wait_propagates_and_makes_no_checkout(tmp_path):
+    class Stopped(FakePerfLock):
+        def acquire(self, wait_s):
+            raise RunStopped()
+
+    workspace = Workspace()
+    lock = Stopped()
+    ports = ports_for(scenario(), workspace=workspace)
+    with pytest.raises(RunStopped):
+        measure_at(
+            "head",
+            [scenario()],
+            {},
+            (),
+            1.0,
+            2,
+            ports,
+            FakePerfRunner(),
+            lock,
+            Configuration(product_dir=tmp_path),
+        )
+    assert workspace.detached == [] and workspace.removed_checkouts == []
+    assert lock.released == 0

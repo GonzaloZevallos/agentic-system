@@ -31,7 +31,7 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import ci, presubmit, rules
+from ..domain import ci, docs, presubmit, rules
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
@@ -93,6 +93,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         remaining_changes=remaining,
         invariants=rules.invariants_markdown(state),
         checks=presubmit.describe_checks(checks, affected=plan),
+        docs_review=docs.review_text(ports.stack.docs(base)),
     )
     if output is None:
         return finish(state, patch, ports)

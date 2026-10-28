@@ -149,6 +149,43 @@ def test_what_a_resume_checks_against_git(product):
     assert ws.subtask_checkout("GH-12", "api") == api and api.path.is_dir()
 
 
+def test_scratch_and_kept_stay_out_of_status_and_are_added_once_to_an_older_repo(product):
+    # GH-391: a product repo that predates the scratch lines gets them on its first run,
+    # from any hand-out of a checkout, existing or new, and exactly once.
+    exclude_file = product / ".git/info/exclude"
+    exclude_file.parent.mkdir(exist_ok=True)
+    exclude_file.write_text("# mine\n.agentic/worktrees/")  # no trailing newline, no scratch lines
+    ws = GitWorkspace(product, IDENTITY)
+    first = ws.task_checkout("GH-12")
+    again = ws.task_checkout("GH-12")  # an existing checkout still repairs the file
+    ws.subtask_checkout("GH-12", "api")
+    assert again.path == first.path
+    lines = exclude_file.read_text().splitlines()
+    assert lines[:2] == ["# mine", ".agentic/worktrees/"]
+    assert lines.count(".agentic/tmp/") == 1
+    assert lines.count(".agentic/kept/") == 1
+    assert lines.count(".agentic/worktrees/") == 1
+    (product / ".agentic/tmp/GH-12").mkdir(parents=True)
+    (product / ".agentic/tmp/GH-12/c-01234567").mkdir()
+    (product / ".agentic/tmp/GH-12/c-01234567/file").write_text("x")
+    (product / ".agentic/kept/GH-12").mkdir(parents=True)
+    (product / ".agentic/kept/GH-12/capture.png").write_text("x")
+    assert git("status", "--porcelain", cwd=product) == ""
+
+
+def test_an_existing_checkout_of_an_older_repo_is_repaired_without_being_recreated(product):
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12")
+    exclude_file = product / ".git/info/exclude"
+    exclude_file.write_text(
+        "\n".join(line for line in exclude_file.read_text().splitlines() if "tmp" not in line)
+        + "\n"
+    )
+    assert ".agentic/tmp/" not in exclude_file.read_text()
+    assert ws.task_checkout("GH-12").created is False
+    assert ".agentic/tmp/" in exclude_file.read_text().splitlines()
+
+
 def test_the_checkpointer_file_stays_out_of_the_products_status(product, tmp_path):
     ws = GitWorkspace(product, IDENTITY)
     ws.exclude_system_files()
@@ -1224,3 +1261,78 @@ def test_gain_paths_of_an_unknown_sha_raises_git_error(product):
         ws.gain_paths("0" * 40, head)
     with pytest.raises(GitError, match="git diff"):
         ws.gain_paths(head, "no-such-ref")
+
+
+# -- publish_ci_ref, remote_refs and delete_remote_ref against a real bare origin ---------
+
+
+def _remote_heads(product: Path) -> list[str]:
+    out = git("for-each-ref", "--format=%(refname)", "refs/heads", cwd=_remote(product))
+    return out.splitlines()
+
+
+def test_publish_ci_ref_creates_the_ref_on_origin_at_head_of_the_checkout(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = _commit_on(ws, task.path, "one")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    assert git("rev-parse", "refs/heads/agentic-ci/GH-12", cwd=_remote(product)) == head
+    # Only the CI ref was written: the task's own branch is the delivery's to publish.
+    assert f"refs/heads/{task.branch}" not in _remote_heads(product)
+
+
+def test_publish_ci_ref_moves_the_ref_to_a_different_sha_by_force(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    _commit_on(ws, task.path, "one")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    git("reset", "-q", "--hard", "HEAD~1", cwd=task.path)
+    other = _commit_on(ws, task.path, "other")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    assert git("rev-parse", "refs/heads/agentic-ci/GH-12", cwd=_remote(product)) == other
+
+
+def test_publish_ci_ref_against_a_missing_remote_raises(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="push"):
+        ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+
+
+def test_remote_refs_lists_only_the_branches_under_the_prefix_without_refs_heads(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-13")
+    assert sorted(ws.remote_refs("agentic-ci/")) == ["agentic-ci/GH-12", "agentic-ci/GH-13"]
+    assert ws.remote_refs("agentic-ci/GH-13") == ("agentic-ci/GH-13",)
+    assert ws.remote_refs("nothing/") == ()
+
+
+def test_remote_refs_against_a_missing_remote_raises_and_never_reads_empty(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="ls-remote"):
+        ws.remote_refs("agentic-ci/")
+
+
+def test_delete_remote_ref_removes_that_ref_and_leaves_the_others(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-13")
+    ws.delete_remote_ref("agentic-ci/GH-12")
+    assert ws.remote_refs("agentic-ci/") == ("agentic-ci/GH-13",)
+    assert f"refs/heads/{task.branch}" in _remote_heads(product)
+
+
+def test_delete_remote_ref_of_a_missing_ref_or_remote_raises(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    with pytest.raises(GitError, match="push"):
+        ws.delete_remote_ref("agentic-ci/GH-99")
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="push"):
+        ws.delete_remote_ref("agentic-ci/GH-12")

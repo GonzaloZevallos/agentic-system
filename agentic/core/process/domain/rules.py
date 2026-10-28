@@ -16,6 +16,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
+from .docs import Docs, conflict_line
 from .document import HUMAN, demote
 from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
@@ -48,12 +49,14 @@ from .roles import (
     pair_for,
 )
 from .schemas import FitDecision, TaskType
+from .scratch import INODE_FLOOR, SpaceReading
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
     Carried,
     ChangeCategory,
     ChangesRequested,
+    CloseDocs,
     DependencyState,
     DesignItemRecord,
     EscalationClass,
@@ -228,6 +231,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     approved = _approved_versions(state)
     qa_approved = qa_approved_version(state)
     green = full_checks_green_version(state)
+    plan_settled = _plan_settled_versions(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -247,6 +251,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
                 _covered(record, key, approved)
                 or qa_settles(record, qa_approved)
                 or full_checks_settles(record, green)
+                or (key in plan_settled and record["version"] < plan_settled[key])
                 for record in open_records[key]
             )
         )
@@ -299,6 +304,17 @@ def full_checks_settles(record: FindingRecord, green_version: int) -> bool:
     return _norm(record["location"]).startswith(FULL_CHECKS_PREFIX) and (
         record["version"] < green_version
     )
+
+
+def _plan_settled_versions(state: TaskState) -> dict[tuple[str, str], int]:
+    """The highest `plan_settled` version per normalised (location, claim): a record below it
+    is settled by the `PM: final validation` run that wrote the row (GH-374). Written only by
+    `plan_settlement`, which is that fold writer's one decision; `{}` on a document without it."""
+    settled: dict[tuple[str, str], int] = {}
+    for item in state.get("plan_settled", []):
+        key = (_norm(item["location"]), _norm(item["claim"]))
+        settled[key] = max(settled.get(key, 0), item["version"])
+    return settled
 
 
 def _approved_versions(state: TaskState) -> dict[tuple[str, tuple[str, str]], int]:
@@ -365,6 +381,11 @@ def _norm(text: str) -> str:
     """Two reviews of the same objection do not write the same string; a trailing space
     or a capital must not split one row into two."""
     return " ".join(text.split()).casefold()
+
+
+def finding_key(location: str, claim: str) -> tuple[str, str]:
+    """The key the table folds a record by: its normalised location and claim."""
+    return (_norm(location), _norm(claim))
 
 
 def open_findings(state: TaskState) -> list[FindingRecord]:
@@ -583,14 +604,17 @@ def dependency_unresolved_reason(dep_state: DependencyState) -> str:
     return "the dependency is still not on the branch."
 
 
-def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) -> str:
+def merge_notice(
+    dependency: str, branch: str, conflicted_paths: Sequence[str], docs: Docs | None = None
+) -> str:
     """The per-case text a Developer reads when its dependency does not apply clean
     (gym #16's own two escalations, a hunk a human deleted in one turn): what carries
     markers, how to take one side of a file without the strategy the cage denies
     outright (`git checkout --theirs`, `hooks.SWITCH`), and what never to reach for
     instead — `-s ours`, `-X ours` and `-X theirs` decide a whole file or a whole
     merge by strategy, never the conflicting lines a hand resolution keeps both
-    intents over."""
+    intents over. A product that declares `docs` gains `conflict_line`: its generated files
+    are regenerated, never merged by hand."""
     listed = "\n".join(f"- `{p}`" for p in conflicted_paths) or "(none reported)"
     return (
         f"The dependency `{dependency}` (`{branch}`) does not apply clean on top of "
@@ -603,7 +627,7 @@ def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) 
         "side of the merge by strategy, and this one is resolved file by file, keeping "
         "both intents, the way a human already did for this exact shape of conflict. "
         "The conflicted paths and the diff against the dependency branch will be "
-        "written into your section for the review to check."
+        "written into your section for the review to check." + conflict_line(docs)
     )
 
 
@@ -677,6 +701,21 @@ def _pair_returns(state: TaskState, pair_key: str) -> int:
 
 def _run_count(state: TaskState, section: str) -> int:
     return sum(1 for r in state.get("runs", []) if r.get("section", r["role"]) == section)
+
+
+def pm_final_approved_version(state: TaskState) -> int:
+    """The `version` of the latest `PM: final validation` run while it stands as the live
+    approval, `0` otherwise (GH-374). A run is the live approval exactly when the PM->Tech
+    Lead returns of `change_history` have not caught up with how many times PM ran, the
+    return-matches-run counting `_lead_satisfied` uses. The only reader of that fact: nothing
+    else counts PM runs against PM->Tech Lead returns."""
+    if _pair_returns(state, PAIR_PM_TECH_LEAD.key) >= _run_count(state, PM_FINAL.name):
+        return 0
+    latest = 0
+    for run in state.get("runs", []):
+        if run.get("section", run["role"]) == PM_FINAL.name:
+            latest = run.get("version", 1)
+    return latest
 
 
 def _lead_satisfied(
@@ -957,6 +996,25 @@ def failure_reason(report: ReportedFailure) -> FailureReason:
     if report.terminal_reason == "api_error" and report.api_error_status is None:
         return "network"
     return "sdk"
+
+
+def space_narrowed(
+    reason: FailureReason, space: SpaceReading | None, floor_bytes: int, enospc: bool
+) -> FailureReason:
+    """`reason` narrowed to `disk_full` when the disk, not the role, broke the attempt
+    (GH-391, ADR-0069): an `ENOSPC` caught as structured data in the system's own process
+    (`enospc`), or a reading taken after the attempt broke that shows free bytes under
+    `floor_bytes` or free inodes under `INODE_FLOOR`. Derived only from those measured
+    facts, never from the error's text. `limit` is our own per-attempt cap, a fact about
+    our configuration that no disk reading outranks: it is returned unchanged, as is any
+    reason when there is no reading and no `ENOSPC`."""
+    if reason == "limit":
+        return reason
+    if enospc:
+        return "disk_full"
+    if space is not None and (space.free_bytes < floor_bytes or space.free_inodes < INODE_FLOOR):
+        return "disk_full"
+    return reason
 
 
 def max_turns_motive(max_turns: int, report: ReportedFailure) -> str:
@@ -1487,6 +1545,31 @@ def task_branch(task_id: str) -> str:
     return f"agentic/{task_id}"
 
 
+CI_REF_PREFIX = "agentic-ci/"
+
+
+def ci_ref(task_id: str) -> str:
+    """The ref `full_checks` publishes the integrated head to so GitHub CI runs on it
+    (GH-376). Apart from `task_branch`: `deliver` is the only writer of `agentic/<id>`."""
+    return f"{CI_REF_PREFIX}{task_id}"
+
+
+def stale_ci_refs(
+    refs: Sequence[str], live_ids: Collection[str], ended_ids: Collection[str]
+) -> tuple[str, ...]:
+    """The CI refs among `refs` the poller may delete, in input order: under the CI prefix,
+    whose task id has no live run AND whose task ended. An escalated task is neither live
+    nor ended and an orphan is unknown to both: both are kept, as is any ref outside the
+    prefix."""
+    return tuple(
+        ref
+        for ref in refs
+        if ref.startswith(CI_REF_PREFIX)
+        and (task_id := ref.removeprefix(CI_REF_PREFIX)) not in live_ids
+        and task_id in ended_ids
+    )
+
+
 def subtask_branch(task_id: str, subtask_id: str) -> str:
     # A dot, not a slash: git cannot hold `agentic/GH-12` and `agentic/GH-12/api` at once.
     return f"{task_branch(task_id)}.{subtask_id}"
@@ -1692,7 +1775,9 @@ def needs_integration(state: TaskState) -> bool:
     return INTEGRATION not in subtasks and len(subtasks) > 1 and all_approved(state)
 
 
-def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subtask:
+def integration_subtask(
+    brief: str = "", conflicts: Sequence[str] = (), docs: Docs | None = None
+) -> Subtask:
     """The integration as the fan-in adds it.
 
     `pending` when there is something for the integrator to do: a merge the system could
@@ -1700,7 +1785,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     the incremental merge was the whole job (README.md, 13), so the branch goes straight
     to its review with no Developer paid for a merge already done. Either way the
     integration review reads the whole branch, which is the only review that does."""
-    work = integration_work(brief, conflicts)
+    work = integration_work(brief, conflicts, docs)
     return {
         "id": INTEGRATION,
         "title": "Integration",
@@ -1711,7 +1796,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     }
 
 
-def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
+def integration_work(brief: str, conflicts: Sequence[str], docs: Docs | None = None) -> Subtask:
     """The part of the integration subtask a wave can change: what is left to do and
     which branches are still out. Recomputed on every wave, so an integration the review
     sent back is not still telling its Developer there was nothing to do."""
@@ -1720,7 +1805,9 @@ def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
         line
         for line in (
             brief.strip(),
-            f"Merge into the task branch what the system could not: {listed}." if listed else "",
+            f"Merge into the task branch what the system could not: {listed}." + conflict_line(docs)
+            if listed
+            else "",
         )
         if line
     ]
@@ -1967,8 +2054,7 @@ def final_validation_due(state: TaskState) -> bool:
     final_idx = _latest_index(state, PM_FINAL.name)
     if final_idx is None or final_idx < review_idx:
         return True
-    still_approving = _pair_returns(state, PAIR_PM_TECH_LEAD.key) < _run_count(state, PM_FINAL.name)
-    return not still_approving
+    return pm_final_approved_version(state) == 0
 
 
 def copy_review_due(state: TaskState) -> bool:
@@ -2475,20 +2561,26 @@ def landing_open(state: TaskState) -> bool:
 
 
 def approved_head(state: TaskState) -> str | None:
-    """The head the task may publish (GH-373): the one its last review approved. On a tiered
-    product (the fan-in stamped `task_head`) that is `task_head`, only if the reviewed unit's
-    `reviewed_head` is the same commit and `full_checks` passed on it; without tiers it is the
-    reviewed unit's `reviewed_head`. `None` when there is none, and for a head the task moved
-    after its review (a heal, a landing pass): nobody approved that one."""
+    """The head the task may publish (GH-373): the one its last review approved, or the
+    close-time capability commit made right on top of it (`head_reviewed`). On a tiered
+    product (the fan-in stamped `task_head`) that is `task_head`, only if `head_reviewed`
+    covers it and `full_checks` passed on it; without tiers it is `close_docs.head` when the
+    record is covered, else the reviewed unit's `reviewed_head`. `None` when there is none,
+    and for a head the task moved after its review (a heal, a landing pass): nobody approved
+    that one."""
     name = reviewed_unit_name(state)
     reviewed = state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
     if not reviewed:
         return None
+    close_docs = state.get("close_docs")
     task_head = state.get("task_head")
     if not task_head:
+        docs_head = close_docs.get("head") if close_docs else None
+        if docs_head and head_reviewed(reviewed, close_docs, docs_head):
+            return docs_head
         return reviewed
     recorded = state.get("full_checks")
-    if not same_commit(reviewed, task_head):
+    if not head_reviewed(reviewed, close_docs, task_head):
         return None
     if not (recorded and recorded["passed"] and same_commit(recorded["head"], task_head)):
         return None
@@ -2570,6 +2662,54 @@ def resume_target(state: TaskState) -> str | None:
     return {"defined": "validate"}.get(status)
 
 
+def integration_increment(
+    state: TaskState, task_id: str, branch_head: str, descends: bool
+) -> Literal["agree", "increment", "refuse"]:
+    """Whether the task branch at `branch_head` is the head the integration review approved
+    (`agree`), a strict descendant of it that nobody reviewed (`increment`: a later subtask
+    merge, a commit a stopped run left), or something a resume must not go on over
+    (`refuse`). `descends` is the ancestry fact -- whether the approved head is an ancestor of
+    `branch_head` -- read by the caller, so this stays pure and is the one place the rule lives.
+
+    An increment needs all of: the reviewed unit approved at a head, on the task branch; every
+    other unit approved; no pull request (its branch moving is the landing's, not a resume's);
+    and a pause no human has anything to decide in -- a role failure or a run that stopped
+    without escalating, since `resumed` clears exactly that and nothing else stands in the way
+    (pending questions, a pair at its limit, an estimate or a cap are decisions)."""
+    unit = reviewed_unit_name(state)
+    sub = state.get("subtasks", {}).get(unit) if unit else None
+    approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
+    if approved is None:
+        return "refuse"
+    if head_reviewed(approved, state.get("close_docs"), branch_head):
+        return "agree"  # the reviewed head, or the close-time docs commit made right on it
+    if not descends or sub is None or sub.get("branch") != task_branch(task_id):
+        return "refuse"
+    others = (s for name, s in state.get("subtasks", {}).items() if name != unit)
+    if any(s.get("status") != "approved" for s in others) or state.get("pull_request"):
+        return "refuse"
+    if state.get("escalation_class") not in (None, "failure"):
+        return "refuse"
+    if state.get("questions_for_human") or state.get("fit_question"):
+        return "refuse"
+    if state.get("escalated") and state.get("escalation_class") is None:
+        return "refuse"  # a document older than the class: what it asked is not known
+    return "increment"
+
+
+def increment_patch(state: TaskState) -> dict[str, Any]:
+    """The patch that sends the reviewed unit back to review on an increment: its status is
+    `delivered`, and its `reviewed_head` stays the approved head the next review is incremental
+    from. The reducer replaces a subtask whole, so the unit goes back with all its keys. Nothing
+    else is written: not `task_head`, not `full_checks`, not the findings table."""
+    unit = reviewed_unit_name(state)
+    if unit is None:
+        raise ValueError("a task with no reviewed unit has no increment to review")
+    sub = state["subtasks"][unit]
+    patch: dict[str, Any] = {"subtasks": {unit: {**sub, "status": "delivered"}}}
+    return patch
+
+
 # The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller
 # of stage 5 will do the search"). First slice: retake a pause an external API cut
 # caused, close a task whose pull request merged, and launch the next unblocked issue,
@@ -2577,13 +2717,14 @@ def resume_target(state: TaskState) -> str | None:
 # and every fact it decides over arrive as arguments (README.md, 14), never a port, a
 # `subprocess` or a `Path`.
 
-# The three `FailureReason`s a pause never needed a human for (ADR-0029, extended by
-# issue #137's own `network`): the account's own quota, the provider's own server, or
-# the network down. `rules.auto_resumable` is the only reader of this tuple; the
-# scorecard's own exclusion (`core.measurement.domain.scorecard.EXTERNAL_FAILURE_
-# REASONS`) is a separate copy of the same three literals -- hexagonal keeps
-# `core.process.domain` from importing `core.measurement`, so nothing here imports it.
-EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network")
+# The four `FailureReason`s a pause never needed a human for (ADR-0029, extended by
+# issue #137's own `network` and GH-391's `disk_full`): the account's own quota, the
+# provider's own server, the network down, or the disk full. `rules.auto_resumable` is the
+# only reader of this tuple; the scorecard's own exclusion (`core.measurement.domain.
+# scorecard.EXTERNAL_FAILURE_REASONS`) is a separate copy of the same literals --
+# hexagonal keeps `core.process.domain` from importing `core.measurement`, so nothing
+# here imports it.
+EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network", "disk_full")
 
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
 # addendum, issue #137): never read off an API's own "resets 7:30pm" prose. Indexed by
@@ -3493,6 +3634,25 @@ def account_paused(resumes: Sequence[ResumeCandidate], now: datetime) -> bool:
     )
 
 
+SCRATCH_VOLUME = "scratch"
+PRODUCT_VOLUME = "product"
+TMP_VOLUME = "/tmp"
+_VOLUME_ORDER = (SCRATCH_VOLUME, PRODUCT_VOLUME, TMP_VOLUME)
+
+
+def space_holds(readings: Mapping[str, SpaceReading], floor_bytes: int) -> tuple[str, ...]:
+    """The names (`SCRATCH_VOLUME`, `PRODUCT_VOLUME`, `TMP_VOLUME`) among `readings` of the volumes
+    under the floor (GH-391, GH-397): fewer free bytes than `floor_bytes`, or fewer free inodes than
+    `INODE_FLOOR`, in a stable order whatever the order of the mapping. Empty means the round may
+    start children; anything else is what `poll_plan` takes as `held`."""
+    return tuple(
+        name
+        for name in _VOLUME_ORDER
+        if name in readings
+        and (readings[name].free_bytes < floor_bytes or readings[name].free_inodes < INODE_FLOOR)
+    )
+
+
 def poll_plan(
     *,
     closes: Sequence[int],
@@ -3510,6 +3670,7 @@ def poll_plan(
     closeness: Mapping[int, int] = {},
     others_landing: bool = False,
     earlier_land_wait: bool = False,
+    held: Sequence[str] = (),
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -3583,8 +3744,15 @@ def poll_plan(
     if `paced_launch_fits` says so, counting this round's retakes and resumes as live
     runs (a launch after one on an empty machine is the second run) against a ceiling of
     `pace.live_runs` plus the `available_slots` received. Closes, retakes and resumes
-    are never gated, and a waiting pause still blocks every launch."""
+    are never gated, and a waiting pause still blocks every launch.
+
+    `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
+    not empty the plan is the closes alone: no launch, resume, retake, land or merge starts,
+    because a start would write scratch to a disk that is almost full. It defers nothing, so
+    it opens no Espera de aterrizaje."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
+    if held:
+        return PollPlan(actions, [])
     received_slots = available_slots
 
     due_resumes = [r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None]
@@ -3756,6 +3924,35 @@ def same_commit(a: str | None, b: str | None) -> bool:
     )
 
 
+CAPABILITY_DIR = "docs/product/"
+
+
+def _capability_path(path: str) -> bool:
+    """A capability file's path as `close_docs.paths` records it: under `docs/product/`, a
+    Markdown file, and no `..` step that walks out of it."""
+    return path.startswith(CAPABILITY_DIR) and path.endswith(".md") and ".." not in path.split("/")
+
+
+def head_reviewed(
+    reviewed_head: str | None, close_docs: CloseDocs | None, head: str | None
+) -> bool:
+    """Whether `head` is a head Tech Lead's review covers: the unit's `reviewed_head`, or the
+    close-time capability commit (`close_docs`) made directly on it -- its `parent` is the
+    reviewed head, `head` is its commit and every path it holds is a capability file
+    (`docs/product/*.md`). The one comparison of a pull request head, or `task_head`, with a
+    reviewed one; no reader adds its own id test. A foreign parent, a stale record or a path
+    outside `docs/product/` covers nothing."""
+    if same_commit(reviewed_head, head):
+        return True
+    return bool(
+        close_docs
+        and close_docs.get("paths")
+        and same_commit(close_docs.get("parent"), reviewed_head)
+        and same_commit(head, close_docs.get("head"))
+        and all(_capability_path(path) for path in close_docs["paths"])
+    )
+
+
 MergeRefusal = Literal[
     "not_ready",
     "pr_not_open",
@@ -3777,6 +3974,7 @@ MergeRefusal = Literal[
     "ci_failed",
     "ci_missing",
     "ci_unreadable",
+    "ci_blocked_by_conflict",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -3825,6 +4023,9 @@ MergeRefusal = Literal[
   after the push.
 - `ci_unreadable`: the CI report could not be read for `ci.CI_WAIT_MAX_S` after the push
   (`gh` missing or its answer unreadable), which says nothing about any product check.
+- `ci_blocked_by_conflict` (GH-395): GitHub reads the head as conflicting with its base and
+  no required check has a result on it; GitHub runs no CI on such a head, so none will come.
+  Decided in the same round with no wait; the landing syncs master instead.
 """
 
 
@@ -3871,7 +4072,10 @@ class MergeFacts:
     the masters the recorded check rows ran on: `True` every one is the current master or
     only behind by an inert gain, `False` something is in doubt, and `None` (what a
     `MergeFacts` built without it reads, the poller's) leaves the recorded `checks_master`
-    to be compared with `current_master`, exactly as before."""
+    to be compared with `current_master`, exactly as before. `github_conflicting` (GH-395) is
+    `rules.github_conflicting`'s reading: GitHub reads `CONFLICTING` on the head, whatever the
+    base. Only `ci_never_coming` reads it. `close_docs` is the document's record of the
+    close-time capability commit (`head_reviewed` reads it), `None` when there is none."""
 
     task_id: str
     status: str | None
@@ -3910,6 +4114,8 @@ class MergeFacts:
     criteria_regressed: tuple[str, ...] | None = ()
     ci_plan_only: tuple[str, ...] = ()
     ci_red_on_base: tuple[str, ...] = ()
+    github_conflicting: bool = False
+    close_docs: CloseDocs | None = None
 
 
 @dataclass(frozen=True)
@@ -4016,7 +4222,9 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
     product declares its CI or the plan requires checks (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and
-    `ci_missing`, a green and fresh CI being the `merge` itself when it covers a name the stack
+    `ci_missing` -- or, when GitHub reads the head as conflicting and no required check has a
+    result (`ci_never_coming`), `ci_blocked_by_conflict` at once instead of the wait (GH-395),
+    a green and fresh CI being the `merge` itself when it covers a name the stack
     declares (a green stale one, or one that covers only the plan's names -- `ci_plan_only` --
     goes on to the checks, GH-371);
     then `checks_failed` (only when the recorded checks cover this head on this master;
@@ -4042,7 +4250,10 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "adr_number_taken")
     if not facts.reviewed_unit_approved:
         return MergeDecision("refuse", "not_approved")
-    if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
+    if not (
+        full_commit_id(facts.pr_head)
+        and head_reviewed(facts.reviewed_head, facts.close_docs, facts.pr_head)
+    ):
         return MergeDecision("refuse", "head_not_reviewed")
     if facts.perf_convened and not (
         facts.perf_verdict == "approved"
@@ -4117,6 +4328,37 @@ def merge_conflicts_from(
     return probe
 
 
+def github_conflicting(pull_request: PullRequest | None, pr_head: str | None) -> bool:
+    """Whether GitHub reads the pull request as `CONFLICTING` on `pr_head`, whatever base it
+    was read against (GH-395). The only other reader of `mergeable` besides
+    `merge_conflicts_from`: GitHub runs no `pull_request` workflow on such a head, so it is
+    the fact that explains a required check that never reports. It is not a definite
+    conflict with the current master; a base read behind it still gets the probe's word."""
+    return (
+        pull_request is not None
+        and pull_request.mergeable == "CONFLICTING"
+        and same_commit(pull_request.head_oid, pr_head)
+    )
+
+
+def ci_never_coming(facts: MergeFacts) -> bool:
+    """Whether the CI will never report on this head (GH-395): its report was read, is of the
+    head being decided (full sha, `same_commit`), none of the required names has any result
+    (all of them are in `CiVerdict.missing`), and GitHub reads the head as conflicting, so it
+    runs no CI on it. Anything else -- unreadable, another head, a red or a partly reported
+    CI, no required name -- is not decided here."""
+    verdict = facts.ci_verdict
+    return (
+        facts.github_conflicting
+        and bool(facts.ci_required)
+        and facts.ci_unreadable is None
+        and verdict is not None
+        and full_commit_id(facts.ci_head)
+        and same_commit(facts.ci_head, facts.pr_head)
+        and set(facts.ci_required) <= set(verdict.missing)
+    )
+
+
 def conflict_probe_wanted(facts: MergeFacts) -> bool:
     """Whether the conflict probe is worth running for `facts`: the only answer to that
     question, derived from the order of `auto_merge_decision` and never from a list of
@@ -4176,6 +4418,8 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     if verdict.state == "red":
         return MergeDecision("refuse", "ci_failed")
     if verdict.state == "pending":
+        if ci_never_coming(facts):
+            return MergeDecision("refuse", "ci_blocked_by_conflict")
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
     declared = set(facts.ci_required) - set(facts.ci_plan_only)
     if declared and facts.ci_fresh is True and facts.ci_untrusted is False:

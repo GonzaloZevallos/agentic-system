@@ -16,6 +16,7 @@ import os
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -29,11 +30,16 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
+from .core.process.adapters.filesystem.board_sent import FilesystemBoardSent
+from .core.process.adapters.filesystem.check_ledger import FilesystemCheckLedger
 from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
+from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
+from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
+from .core.process.adapters.github.board import GhBoard
 from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
@@ -48,9 +54,13 @@ from .core.process.adapters.shell import (
 )
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
 from .core.process.application.ports import Ports, StopFlag
-from .core.process.application.preflight import refuse_its_own_checkout
+from .core.process.application.preflight import (
+    refuse_its_own_checkout,
+    refuse_scratch_in_a_repository,
+)
 from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
+from .core.process.domain.check_schedule import Limits
 from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
 
@@ -144,17 +154,31 @@ def default_ports(
     # door all of them share. The refusal is the application's; the root only asks
     # (issue #44).
     refuse_its_own_checkout(cfg, ports)
+    refuse_scratch_in_a_repository(cfg, ports)
     return ports
+
+
+def bind_task(ports: Ports, task_key: str) -> Ports:
+    """`ports` with the checks and setup it runs filed under `task_key`'s scratch directory
+    (`<scratch_dir>/<product key>/<task>/`, GH-391, GH-397) instead of `_untasked`: the one
+    place that says which task a check belongs to, called by whoever knows the root task -- the
+    graph per node (its thread id) and the CLI's verbs that run checks. Ports whose commands
+    are not the shell's own (a double) come back unchanged."""
+    if not isinstance(ports.commands, ShellCommands):
+        return ports
+    return replace(ports, commands=ports.commands.for_task(task_key))
 
 
 def perf_runner(cfg: Configuration, ports: Ports) -> PerfShellRunner:
     """`agentic perf`'s runner (GH-318): its processes carry the product's own key, so the
-    reaper the ports hold finds them."""
-    return PerfShellRunner(reaping.product_key(str(cfg.product_dir.resolve())), ports.reaper)
+    reaper the ports hold finds them. The verb has no run to stop, so its flag never sets."""
+    return PerfShellRunner(
+        reaping.product_key(str(cfg.product_dir.resolve())), ports.reaper, NullStopFlag()
+    )
 
 
 def perf_lock(cfg: Configuration) -> FilesystemPerfLock:
-    return FilesystemPerfLock(cfg.perf_lock_path)
+    return FilesystemPerfLock(cfg.perf_lock_path, NullStopFlag())
 
 
 def system_repo() -> SystemRepo:
@@ -174,6 +198,19 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
     # `Ports` (which reaps on release): a mark is only found by the key it was built with.
     product_key = reaping.product_key(str(cfg.product_dir.resolve()))
     reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
+    project = cfg.board_owner_and_number
+    stack = GitStack(cfg.product_dir)
+    limits = Limits(
+        cores=cfg.check_cores,
+        share_min=cfg.check_share_min,
+        share_max=cfg.check_share_max,
+        share_max_subtask=cfg.check_share_max_subtask,
+        wait_max_s=cfg.check_wait_max_s,
+    )
+    # One scratch and one reader of free space for the runner (which gives each attempt its
+    # directory) and for `Ports` (GH-391).
+    scratch = FilesystemScratch(cfg.scratch_dir, product_key, cfg.product_dir)
+    free_space = StatvfsFreeSpace()
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -187,6 +224,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
             product_key=product_key,
             stall_timeout_s=cfg.stall_timeout_s,
             check_results_dir=cfg.check_results_dir,
+            scratch=scratch,
+            free_space=free_space,
         ),
         documents=FilesystemTaskDocuments(
             cfg.product_dir,
@@ -206,14 +245,32 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
                 retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
             )
         ),
-        stack=GitStack(cfg.product_dir),
-        commands=ShellCommands(product_key, reaper, stop_flag),
+        stack=stack,
+        # No task yet: a port is built per node, before a task is known, so the scratch of
+        # a check is filed under `_untasked` until `bind_task` names the task.
+        commands=ShellCommands(product_key, reaper, stop_flag, scratch=scratch),
         sample_app=ShellSampleApp(),
         reaper=reaper,
-        perf_runner=PerfShellRunner(product_key, reaper),
-        perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
+        check_scheduler=FilesystemCheckLedger(cfg.check_ledger_dir, product_key, reaper, limits),
+        perf_runner=PerfShellRunner(product_key, reaper, stop_flag),
+        perf_lock=FilesystemPerfLock(cfg.perf_lock_path, stop_flag),
         check_results=FilesystemCheckResults(cfg.check_results_dir),
+        # GH-375: the Project mirror exists only when a project is configured; its memory
+        # sits beside the run registry, one file per product.
+        board=None if project is None else GhBoard(cfg.product_dir, *project),
+        board_sent=None
+        if project is None
+        else FilesystemBoardSent(
+            cfg.run_registry_dir.parent / "board" / f"{_file_name(stack.product())}.json"
+        ),
+        scratch=scratch,
+        free_space=free_space,
     )
+
+
+def _file_name(product: str) -> str:
+    """A product name as a file name: nothing but letters, digits, `-`, `_` and `.`."""
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in product)
 
 
 @asynccontextmanager
@@ -273,4 +330,4 @@ def _arm_for(cfg: Configuration) -> str:
     return arm_label({"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)})
 
 
-graph = build_graph(default_ports, telemetry, arm_for=_arm_for)
+graph = build_graph(default_ports, telemetry, arm_for=_arm_for, for_task=bind_task)

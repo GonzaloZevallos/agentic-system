@@ -37,6 +37,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
+from ..domain.docs import Docs
 from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
 from . import pre_pr_fix
@@ -76,7 +77,10 @@ def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
         task = task_checkout(state, cfg, ports)
         patch: TaskState = {"branch": task.branch, "sections": rules.findings_section(state)}
         conflicts = _merge_approved(state, task.path, ports)
-        if (integration := _integration(state, conflicts, task)) is not None:
+        # Read only when a merge left something for the integrator: the conflict text is the
+        # one place the block's `generate` reaches this stage.
+        declared = ports.stack.docs(task_base(state, ports)) if conflicts else None
+        if (integration := _integration(state, conflicts, task, declared)) is not None:
             patch = apply(patch, {"subtasks": {INTEGRATION: integration}})
         # A product that declares tiers is told the head the whole suite must cover (GH-358):
         # stamped on every pass, a resumed one included, after the merges and before the
@@ -100,7 +104,9 @@ def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     return finish(state, patch, ports)
 
 
-def _integration(state: TaskState, conflicts: list[str], task: Checkout) -> Subtask | None:
+def _integration(
+    state: TaskState, conflicts: list[str], task: Checkout, docs: Docs | None
+) -> Subtask | None:
     """The integration subtask as this wave leaves it, or None when nothing about it
     changed. It enters once every subtask is approved and there is more than one, whether
     or not a Developer has anything to do on it: the whole branch is reviewed either way,
@@ -118,11 +124,14 @@ def _integration(state: TaskState, conflicts: list[str], task: Checkout) -> Subt
         # merges were the whole job no Developer runs on it, and the review, the
         # delivery and a resume checked against git all read it off the subtask.
         return {
-            **rules.integration_subtask(state.get("integration_brief", ""), conflicts),
+            **rules.integration_subtask(state.get("integration_brief", ""), conflicts, docs),
             "branch": task.branch,
             "base": task.base,
         }
-    wanted = {**existing, **rules.integration_work(state.get("integration_brief", ""), conflicts)}
+    wanted = {
+        **existing,
+        **rules.integration_work(state.get("integration_brief", ""), conflicts, docs),
+    }
     return None if wanted == existing else wanted
 
 

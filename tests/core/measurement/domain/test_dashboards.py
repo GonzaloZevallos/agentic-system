@@ -459,9 +459,10 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 # `ChangeCategory`, so the Tech Writer roles and the copy categories add their score names.
 # Re-pinned by GH-321: QA Performance joins `ROLES`, so its role-cost score names join the row.
 # Re-pinned by GH-358: the `system_delivery` escalation class joins the escalations row.
+# Re-pinned by GH-391: the `disk_full` failure reason joins the failure-reason row.
 UNCHANGED_ROWS = {
-    "agentic-system": "ae2bd7039fcbdf3210613823a9856778f6505c91f02a694ba1a26e59f9929fc8",
-    "apostrophe": "d7d8e7ffde1f18c2c43ce45ecac498aa86064ec0b797510406357c5d81b236de",
+    "agentic-system": "7668178eb6735df80683a5db22e929a0b9f969d5e3679e05e2387fc08a648c84",
+    "apostrophe": "dc9cac394297022cc9f76cbe21df145deaa9cc86d262ef64b6b1814ceb8d99f6",
 }
 
 

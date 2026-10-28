@@ -389,6 +389,12 @@ class FinalValidation(RoleOutput):
         description="On `returned`, one-line claims the integration review must settle, "
         "each checkable on the diff alone. Empty on `approved`"
     )
+    # The close-time capability pass: PM returns the knowledge, the system writes it.
+    definitions: list[CapabilityFile] = Field(
+        description="On `approved`, the complete file of each capability the task changed, "
+        "reconciled with the delivered diff and the final reports, each opening with its "
+        "`## Jobs`. Empty when no capability changed, and always empty on `returned`"
+    )
 
 
 class PerfBudget(BaseModel):

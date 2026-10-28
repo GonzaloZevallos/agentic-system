@@ -10,9 +10,10 @@ import pytest
 
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application.presubmit import CheckoutPresubmit
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.core.process.domain.presubmit import AffectedPlan
 from agentic.shared.configuration import Configuration
-from tests.fakes import real_commands
+from tests.fakes import FakeCheckScheduler, real_commands
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -44,6 +45,7 @@ def repo(tmp_path):
         {
             "workspace": GitWorkspace(work, Configuration(product_dir=work).git_identity),
             "commands": real_commands(),
+            "check_scheduler": FakeCheckScheduler(),
         },
     )()
     return ports, work, base, tmp_path
@@ -57,7 +59,15 @@ def plan_for(base: str, out: Path, fallback: tuple[str, ...] = ()) -> AffectedPl
 def test_the_affected_command_gets_the_real_task_base_and_the_full_form_runs_after_it(repo):
     ports, work, base, out = repo
     checks = {"tests": f"echo full >> {out}/order"}
-    gate = CheckoutPresubmit(ports, work, base, checks, 20.0, affected=plan_for(base, out))
+    gate = CheckoutPresubmit(
+        ports,
+        work,
+        base,
+        checks,
+        20.0,
+        affected=plan_for(base, out),
+        priority=CheckPriority.SUBTASK,
+    )
     assert gate() is None  # the full rerun passed and decides
     assert (out / "base").read_text() == base
     assert (out / "order").read_text().split() == ["affected", "full"]
@@ -72,7 +82,9 @@ def test_a_changed_path_matching_a_fallback_glob_runs_only_the_full_form_for_rea
     ports, work, base, out = repo
     checks = {"tests": f"echo full >> {out}/order"}
     plan = plan_for(base, out, fallback=("*.py",))
-    gate = CheckoutPresubmit(ports, work, base, checks, 20.0, affected=plan)
+    gate = CheckoutPresubmit(
+        ports, work, base, checks, 20.0, affected=plan, priority=CheckPriority.SUBTASK
+    )
     assert gate() is None
     assert (out / "order").read_text().split() == ["full"]
     assert not (out / "base").exists()
@@ -81,7 +93,13 @@ def test_a_changed_path_matching_a_fallback_glob_runs_only_the_full_form_for_rea
 def test_a_full_form_that_fails_refuses_for_real(repo):
     ports, work, base, out = repo
     gate = CheckoutPresubmit(
-        ports, work, base, {"tests": "echo broken; exit 1"}, 20.0, affected=plan_for(base, out)
+        ports,
+        work,
+        base,
+        {"tests": "echo broken; exit 1"},
+        20.0,
+        affected=plan_for(base, out),
+        priority=CheckPriority.SUBTASK,
     )
     reason = gate()
     assert reason is not None and "broken" in reason

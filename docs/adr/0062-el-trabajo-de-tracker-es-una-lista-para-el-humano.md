@@ -147,3 +147,10 @@ tiene checklist: el reintento repetía el plan y la tarea escalaba.
 - **Límites conocidos:** un issue bloqueado solo por la relación nativa de GitHub no se
   detecta (lo cubren los ítems del Tech Lead); `open_issues` es un `gh issue list` acotado, y
   un repo con más issues abiertos que ese tope puede ocultar uno bloqueado.
+
+## Addendum (GH-375): el tablero del Proyecto
+
+El §2 ("el código del sistema toca el tracker solo por el puerto `Tracker`") se refiere a
+issues, PRs, comentarios y etiquetas. El GitHub Project que espeja el estado no pasa por
+`Tracker`: tiene su propio puerto, `Board`, y es una salida que nunca se lee como entrada de
+una decisión. Lo registra ADR-0073.

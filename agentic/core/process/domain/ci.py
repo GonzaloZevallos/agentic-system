@@ -11,6 +11,9 @@ from typing import Any, Literal
 # The module, not the name: `rules` imports this one too, and reads it at call time.
 from . import rules
 
+# Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
+from .task import FallbackCause as FallbackCause
+
 # How long a pending, missing or unreadable CI is waited for before the merge gate refuses.
 # A declared value, not a measured one: nobody has measured a product's CI duration yet.
 CI_WAIT_MAX_S = 3600
@@ -169,6 +172,62 @@ def ci_wait_anchor(
 
 
 CI_CATEGORY = "process-suite-red"
+
+# How often the full tier reads the CI of the integrated head while it waits (GH-376).
+CI_POLL_S = 30
+
+# A conclusion of a job that never ran any code: GitHub could not start it or it was
+# cancelled. Every red run of this kind reads as "CI not usable", not as a failing suite.
+_NOT_STARTED = frozenset({"STARTUP_FAILURE", "CANCELLED"})
+
+
+@dataclass(frozen=True)
+class FullTierVerdict:
+    """What the full tier concludes from the CI of the integrated head. `failing` is the
+    red runs of the declared jobs in declared order, `pending` the declared names with no
+    decided run, `cause` is set only for `unreachable`."""
+
+    state: Literal["green", "red", "waiting", "timed_out", "unreachable"]
+    failing: tuple[CiCheck, ...]
+    pending: tuple[str, ...]
+    cause: FallbackCause | None
+
+
+def full_tier_verdict(
+    read: CiReport | CiUnreadable,
+    head: str,
+    names: tuple[str, ...],
+    elapsed_s: float,
+    timeout_s: float,
+) -> FullTierVerdict:
+    """The verdict of one read of the CI over the declared job `names`, `elapsed_s` into
+    a wait bounded by `timeout_s`. A report of another commit than `head` counts as no run
+    on `head` (the only place that comparison lives for the full tier). Red wins over the
+    bound; a job that never started, alone, says the CI is unusable, not that the suite
+    failed; nothing is inferred from a skip (`SKIPPED` is red, as in `ci_state`)."""
+    at_bound = elapsed_s >= timeout_s
+    if isinstance(read, CiUnreadable):
+        if at_bound:
+            return FullTierVerdict("unreachable", (), (), read.cause)
+        return FullTierVerdict("waiting", (), tuple(dict.fromkeys(names)), None)
+    if not rules.same_commit(read.head_sha, head):
+        if at_bound:
+            return FullTierVerdict("unreachable", (), (), "no_run")
+        return FullTierVerdict("waiting", (), tuple(dict.fromkeys(names)), None)
+    verdict = ci_state(read, names)
+    waiting_on = set(verdict.missing) | set(pending_names(read, names))
+    pending = tuple(name for name in dict.fromkeys(names) if name in waiting_on)
+    if verdict.failing:
+        if all(check.conclusion in _NOT_STARTED for check in verdict.failing):
+            return FullTierVerdict("unreachable", verdict.failing, pending, "not_started")
+        return FullTierVerdict("red", verdict.failing, pending, None)
+    if verdict.state == "green":
+        return FullTierVerdict("green", (), (), None)
+    if not at_bound:
+        return FullTierVerdict("waiting", (), pending, None)
+    if len(verdict.missing) == len(set(names)):
+        return FullTierVerdict("unreachable", (), pending, "no_run")
+    return FullTierVerdict("timed_out", (), pending, None)
 
 
 def _first_red(report: CiReport, name: str) -> CiCheck | None:

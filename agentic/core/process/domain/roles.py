@@ -457,6 +457,10 @@ PM_FINAL = replace(
     name="PM: final validation",
     slug="pm_final",
     schema=FinalValidation,
+    # Reads the whole checkout of the task (no writes) to reconcile its `definitions` with
+    # the delivered diff: `git diff <base>..<head>` is in the rules `READ_CODE_RULES` holds.
+    tools=READ_CODE,
+    allowed=READ_KNOWLEDGE_RULES + READ_CODE_RULES,
     reads=(
         ORIGINAL,
         PRD_INTERVIEW,

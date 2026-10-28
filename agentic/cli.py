@@ -39,7 +39,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from . import composition
-from .composition import GhWait, default_ports, graph
+from .composition import GhWait, bind_task, default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
@@ -90,6 +90,7 @@ from .core.process.application.preflight import (
     PLACEHOLDERS,
     declared_stack,
     declared_stack_of,
+    docs_placeholders_missing,
     no_forbidden,
     no_setup,
     over_cap,
@@ -181,6 +182,13 @@ def brief_refusal(ports: Ports) -> str | None:
     return None if text is None else knowledge.brief_refusal(text)
 
 
+def _warn_docs_prompts(ports: Ports, revision: str) -> None:
+    """Say, on stderr, each Tech Lead prompt that lacks the placeholder of the written-docs
+    rules while the product declares `docs`. Never a refusal."""
+    for message in docs_placeholders_missing(ports, revision):
+        print(f"agentic: {message}", file=sys.stderr)
+
+
 def _warn_over_cap(ports: Ports, revision: str) -> None:
     """Say, on stderr, each criteria document past the line cap at `revision` (GH-295,
     ADR-0055). Never a refusal, and an unreadable revision says nothing: the stack read
@@ -229,8 +237,7 @@ _LEGACY_DISAGREEMENT_CAUSE = (
 
 
 def _legacy_crashed_message(task_id: str, ports: Ports) -> str:
-    number = ports.inbox.issue_of(task_id)
-    flag = f"--issue {number}" if number is not None else f"--issue N  # {task_id}"
+    flag = resuming.issue_flag(task_id, ports)
     return (
         f"{task_id}'s checkpoint {legacy_names.RENAME_CAUSE}, and it crashed rather "
         f"than paused: resume it with `agentic resume {flag} --from-document`."
@@ -624,6 +631,7 @@ def main() -> None:
                 if (warning := no_forbidden(ports, "HEAD")) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
                 _warn_over_cap(ports, "HEAD")
+                _warn_docs_prompts(ports, "HEAD")
                 # A malformed Brief refuses `run` outright (ADR-0025): an
                 # absent one is `no_brief`'s fact above, never this one's.
                 if (problem := brief_refusal(ports)) is not None:
@@ -640,10 +648,12 @@ def main() -> None:
         stop: StopCause | None = None
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
+            ports = bind_task(ports, task_id)
             base = declared_stack_of(task_id, ports)
             if (warning := no_forbidden(ports, base)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
             _warn_over_cap(ports, base)
+            _warn_docs_prompts(ports, base)
             # A malformed Brief only prints on `resume` and the run
             # proceeds: a human's edit to his own file must never strand every paused
             # task at the boot gate with no task named (ADR-0003; ADR-0025).
@@ -671,9 +681,11 @@ def main() -> None:
                 task_id = ports.inbox.task_id(args.issue)
                 work = partial(_close, task_id, cfg, ports)
         elif args.command == "merge":
-            work = partial(_merge, ports.inbox.task_id(args.issue), args.issue, cfg, ports)
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_merge, task_id, args.issue, cfg, bind_task(ports, task_id))
         elif args.command == "land":
-            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports, args.run_kind)
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_land, task_id, cfg, bind_task(ports, task_id), args.run_kind)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -752,7 +764,7 @@ def main() -> None:
                 _run,
                 task,
                 cfg,
-                ports,
+                bind_task(ports, task["id"]),
                 args.fresh,
                 log_file=log_file,
                 detach=args.detach,
@@ -932,7 +944,8 @@ async def _signal_guarded(
     anyio receiver, so the signal also gets a Python handler, which runs on the main
     thread whatever the loop is doing. It is idempotent: the first signal starts one
     daemon thread that marks the run's stop flag (so the commands of the run raise
-    `RunStopped`), reaps the run's CHECKS (never a role's processes: the runner closes
+    `RunStopped`), reaps the run's CHECKS and PERFORMANCE commands (`reaping.RUN_SCOPED`,
+    one after the other; never a role's processes: the runner closes
     those as the cancellation unwinds it) and waits `deadline_s`. If the process is still
     alive then, it reaps the roles too, settles the lock, flushes the telemetry briefly
     and `hard_exit`s. A second signal does none of it again.
@@ -955,7 +968,8 @@ async def _signal_guarded(
         if cause.reaper is not None:
             if held is not None:
                 cause.reaper.reap_run(held[1], pid)
-            cause.reaper.reap_run(reaping.CHECK_TASK, pid)
+            for scoped in reaping.RUN_SCOPED:
+                cause.reaper.reap_run(scoped, pid)
         if held is not None:
             cause.settle_lock(*held)
         flusher = threading.Thread(target=flush, daemon=True)
@@ -967,7 +981,8 @@ async def _signal_guarded(
         if cause.flag is not None:
             cause.flag.set()
         if cause.reaper is not None:
-            cause.reaper.reap_run(reaping.CHECK_TASK, os.getpid())
+            for scoped in reaping.RUN_SCOPED:
+                cause.reaper.reap_run(scoped, os.getpid())
         if not finished.wait(deadline_s):
             hard_stop(cause)
 
@@ -1555,8 +1570,16 @@ async def _resume(
         snapshot = await app.aget_state(config)
         try:
             if from_document or not snapshot.values:
-                paused = resuming.from_document(task_id, ports)
-                r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
+                seeded = resuming.seed_increment(task_id, cfg, ports)
+                r = resuming.prepare(
+                    task_id,
+                    seeded.state,
+                    "document",
+                    cfg,
+                    ports,
+                    estimate=estimate,
+                    increment=seeded.increment,
+                )
             elif not snapshot.next:
                 status = snapshot.values.get("status", "open")
                 raise CannotStart(f"{task_id} is not paused: its run ended ({status})")
@@ -1567,7 +1590,7 @@ async def _resume(
                 # Paused: take the document branch exactly as `--from-document` does,
                 # never `aupdate_state` with translated values on this existing thread.
                 try:
-                    paused = resuming.from_document(task_id, ports)
+                    seeded = resuming.seed_increment(task_id, cfg, ports)
                 except ValueError as exc:
                     prefix = f"the document of {task_id} and git disagree:"
                     message = str(exc)
@@ -1575,15 +1598,32 @@ async def _resume(
                         listed = message[len(prefix) :].lstrip("\n")
                         raise ValueError(f"{_LEGACY_DISAGREEMENT_CAUSE}\n{listed}") from exc
                     raise
-                r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
+                r = resuming.prepare(
+                    task_id,
+                    seeded.state,
+                    "document",
+                    cfg,
+                    ports,
+                    estimate=estimate,
+                    increment=seeded.increment,
+                )
             elif not snapshot.interrupts and (
                 rules.resume_source(snapshot.next, crashed=True) == "document"
             ):
                 # A crash with the pipeline pending (GH-364): its branches leave no checkpoint
                 # of their own, so the state is rebuilt from the document -- checked against
                 # git as every document seed is -- and prepared as the crash it is.
-                paused = resuming.from_document(task_id, ports)
-                r = resuming.prepare(task_id, paused, "document", cfg, ports, (PIPELINE,), estimate)
+                seeded = resuming.seed_increment(task_id, cfg, ports)
+                r = resuming.prepare(
+                    task_id,
+                    seeded.state,
+                    "document",
+                    cfg,
+                    ports,
+                    (PIPELINE,),
+                    estimate,
+                    increment=seeded.increment,
+                )
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
                 pending = () if snapshot.interrupts else tuple(snapshot.next)

@@ -21,6 +21,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import adr_numbers, ci, master_gain, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.task import PullRequest, TaskState, add_flakes, add_tracker_failures
 from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
@@ -147,7 +148,12 @@ def merge_task(
         # probe is the last look's, immediately before the merge call.
         github = rules.merge_conflicts_from(pull_request, head, master, None)
         facts = with_ci(
-            replace(base_facts, adr_collision=collision, conflicts=github),
+            replace(
+                base_facts,
+                adr_collision=collision,
+                conflicts=github,
+                github_conflicting=rules.github_conflicting(pull_request, head),
+            ),
             document,
             declared,
             report,
@@ -378,6 +384,8 @@ def run_checks(
                 _NOTHING_BEFORE,
                 checks,
                 cfg.check_timeout_s,
+                priority=CheckPriority.LAND,
+                wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 parallel=ports.stack.parallel_checks(base),
                 reuse=reuse_of(ports, base),
@@ -401,6 +409,7 @@ def run_checks(
         witness=gate.witness_result if gate is not None else None,
         failed_step=failed_step,
         setup_failure=setup_failure,
+        gate=gate.gate if gate is not None else None,
         row_master=master,
     )
     previous = raw.get("merge_checks")

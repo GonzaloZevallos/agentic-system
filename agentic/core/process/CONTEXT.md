@@ -22,7 +22,7 @@ _Avoid_: Lead, orquestador
 _Campo_: de la organización de software humana; el patrón agéntico es supervisor (LangGraph) u orchestrator (Microsoft Agent Framework)
 
 **PM** (Product Manager):
-Dueño del PRD y del conocimiento de producto, que destila al aprobar.
+Dueño del PRD y del conocimiento de producto, que destila al aprobar el PRD y, en una feature con UI, otra vez en su validación final, conciliando las capacidades con el diff entregado (ADR-0075). El sistema escribe y commitea lo que PM devuelve; Tech Lead no revisa esa prosa. El commit queda en `close_docs`, y el predicado `rules.head_reviewed` lo acepta como cabeza revisada solo si su padre es la cabeza revisada y todas sus rutas están bajo `docs/product/`.
 _Campo_: de la organización de software humana
 
 **Pensador**:
@@ -78,6 +78,11 @@ _Campo_: reflector — ACE, Agentic Context Engineering (Zhang et al., 2025), qu
 Por dónde una tarea cerrada entra a una reflexión (ADR-0056). `Gate` es `review` o `decision`; `Door` es un documento con su gate. `review` admite toda entrega que aterrizó (`merged`, `merged_with_changes`, `auto_merged`) y cuenta desde su `closed_at`; `decision` admite solo las decisiones humanas de una tarea que terminó sin entrega (descartada, dividida, PR cerrado, escalada con el issue cerrado) y cuenta desde el fin de la tarea. Cada puerta cuenta desde `started_at` del ledger; sin ledger, desde `first_pass_floor`: la N-ésima más reciente de las dos puertas, con N = `reflect_max_tasks_per_run`.
 _Avoid_: filtro de elegibilidad, cola
 _Campo_: sin término de arte
+
+**Cupo de chequeo**:
+Los núcleos que una puerta de entrega tiene reservados mientras corre sus chequeos, anotados en un ledger compartido por toda la máquina (ADR-0070). Una cuarta parte de los núcleos es una reserva que sólo usan las puertas más cercanas a terminar (aterrizaje e integración); una puerta de subtarea nunca la toca. Cuando la espera se agota, la puerta toma el cupo mínimo y queda marcada como vencida: se anota por encima de la cota, sin quitarle nada a la reserva. Lo que espera un cupo no cuenta contra el timeout de los chequeos.
+_Avoid_: slot, permiso, cuota
+_Campo_: semáforo contando entre procesos (Dijkstra) con prioridades y envejecimiento; la reserva es la de un scheduler de lotes (Slurm, `reserved cores`)
 
 **Playbook**:
 Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Lo que `keep` no deja pasar espera en `candidates.yaml`, y lo que dejó de aplicar se archiva en `archived.yaml` sin borrarse. Con un playbook vacío el prompt y su hash son los de siempre.
@@ -202,6 +207,23 @@ En el código es `rules.holds_launches` (qué `Deferred` la abre) y `rules.LandW
 _Avoid_: reserva, bloqueo, cola de aterrizaje
 _Campo_: sin término de arte
 
+**Espejo del tablero**:
+Lo que el poller mantiene en el GitHub Project para que el dueño vea en un solo lugar en qué está cada issue de ambos productos: una Tarjeta por issue, escrita desde hechos que el poller ya calculó. Es una salida: ninguna decisión del sistema lee el valor de un campo del Project, sólo sus ids de nodo. Lleva la memoria de lo enviado y solo envía lo que cambió, así que una vuelta ociosa no llama al Project. Sin `AGENTIC_BOARD_PROJECT` no existe. El sistema nunca escribe Bloque ni Hito y nunca borra un ítem (ADR-0073).
+En el código es `domain/board.py` y el puerto `Board`.
+_Avoid_: dashboard, sincronización, tablero de verdad
+_Campo_: sin término de arte
+
+**Etapa**:
+El estado de una Tarjeta, uno de siete: Corriendo, En PR (aprobada, esperando CI y merge), Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano.
+_Avoid_: estado, status, columna
+_Campo_: `Status` de GitHub Projects (renombrado Etapa)
+
+**Tarjeta**:
+Los cinco valores que el Espejo del tablero escribe para un issue: Etapa, Bloqueo, Costo USD, Inicio y Fin. Su huella (un hash de los cinco) es lo que la memoria de lo enviado compara para saber si hay algo que enviar.
+En el código es `board.Card`.
+_Avoid_: ítem, fila, entrada
+_Campo_: ítem de GitHub Projects
+
 **Cercanía**:
 Qué tan cerca de aterrizar está una tarea: el orden en que el poller arranca lo que cuenta contra el tope en una vuelta (reanudaciones, retomas y aterrizajes con modelo; el lanzamiento va último). Se ordena launch < definition < plan < development < review < delivered < land: una tarea con pull request está en `delivered`, una sin ella está en la fase más avanzada que alcanzó una de sus corridas (la más lejana, no la última), y una sin corridas está en `definition`. En el código es `rules.closeness`, un índice en `rules.CLOSENESS`; a igual cercanía decide el número de issue.
 _Avoid_: prioridad, urgencia, proximidad
@@ -252,7 +274,7 @@ _Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 _Campo_: presubmit check — Software Engineering at Google, cap. 20: "an analysis that blocks committing a pending code change". required status check en GitHub, gated commit en Azure DevOps, admission control (validating, no mutating) en Kubernetes
 
 **Chequeo completo de la tarea**:
-La corrida de todos los `checks` del producto, sin forma afectada, una sola vez sobre la cabeza integrada y antes de abrir el pull request, para un producto que declara `delivery_checks` (ADR-0064). La hace el sistema, sin rol ni costo de modelo, en el checkout de la tarea, que exige limpio y deja limpio. Una corrida roja reabre la integración con una fila por chequeo fallido; una verde la asienta. La entrega empuja sólo con una corrida pasada de esta cabeza (o de una que difiere sólo en el documento de la tarea): sin ella no empuja y vuelve a correr.
+La corrida de todos los `checks` del producto, sin forma afectada, una sola vez sobre la cabeza integrada y antes de abrir el pull request, para un producto que declara `delivery_checks` (ADR-0064). La hace el sistema, sin rol ni costo de modelo, en el checkout de la tarea, que exige limpio y deja limpio. Una corrida roja reabre la integración con una fila por chequeo fallido; una verde la asienta. La entrega empuja sólo con una corrida pasada de esta cabeza (o de una que difiere sólo en el documento de la tarea): sin ella no empuja y vuelve a correr. Si el producto declara `ci:`, el chequeo completo es el CI de GitHub sobre la cabeza integrada (ref `agentic-ci/<id>`) y no corre `checks` en local; si el CI no se puede usar, corre el nivel local y escribe la causa del retroceso (ADR-0064, adenda GH-376).
 En el código se llama `full_checks`, el nodo y el registro del frontmatter.
 _Avoid_: suite final, gate completo
 
@@ -319,7 +341,7 @@ Revisión que arranca del head revisado en el pase anterior, no de la base de la
 _Campo_: sin término de arte; GitHub lo ofrece sin nombrarlo, como "changes since your last review"
 
 **Head revisado**:
-El commit hasta donde llegó la última revisión de una subtarea. Se guarda como el id completo del commit; uno anterior puede estar abreviado, y se compara con `same_commit`, nunca por igualdad de texto.
+El commit hasta donde llegó la última revisión de una subtarea. Se guarda como el id completo del commit; uno anterior puede estar abreviado, y se compara con `same_commit`, nunca por igualdad de texto. Un resume desde el documento que encuentra la rama de la tarea en un descendiente estricto del head revisado de la integración, sin pull request, toma los commits posteriores como un incremento y manda solo la integración de vuelta a una revisión incremental; cualquier otro head movido se rechaza (`rules.integration_increment`).
 _Campo_: sin término de arte
 
 **Integración incremental**:
@@ -337,7 +359,7 @@ _Avoid_: comentario, issue
 _Campo_: finding — de auditoría y seguridad de nube (AWS Security Finding Format), no de code review: SARIF dice result, que es el dato, y GitHub dice alert, que es la presentación
 
 **Tabla de hallazgos**:
-Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La única excepción es la aprobación: aprobar una subtarea cierra los bloqueantes previos de esa misma subtarea que la revisión no vuelve a levantar (ADR-0015, adenda de GH-201); la otra es una corrida aprobatoria de QA Performance, que asienta las filas abiertas de su propia ubicación, porque ninguna revisión posterior las vuelve a levantar (ADR-0060); la tercera es una corrida pasada del chequeo completo de la tarea, de versión mayor, que asienta las filas de ubicación `full_checks:<chequeo>` (ADR-0015, adenda de GH-358). La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
+Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La única excepción es la aprobación: aprobar una subtarea cierra los bloqueantes previos de esa misma subtarea que la revisión no vuelve a levantar (ADR-0015, adenda de GH-201); la otra es una corrida aprobatoria de QA Performance, que asienta las filas abiertas de su propia ubicación, porque ninguna revisión posterior las vuelve a levantar (ADR-0060); la tercera es una corrida pasada del chequeo completo de la tarea, de versión mayor, que asienta las filas de ubicación `full_checks:<chequeo>` (ADR-0015, adenda de GH-358); la cuarta es una corrida de `PM: final validation`: aprobar asienta las filas abiertas de su ubicación de versión menor, y devolver asienta las anteriores que no vuelve a levantar, porque su validación no es incremental y relee la tarea entera (ADR-0071). La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
 _Avoid_: backlog, lista de issues, deuda
 _Campo_: sin término de arte; lo más cerca es la lista de alerts de GitHub code scanning, que vive en el repositorio y no muere con el cambio que la abrió
 
@@ -398,7 +420,7 @@ _Avoid_: subtarea (esas las construye un Developer), tarea de tracker
 _Campo_: sin término de arte
 
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe, o una parte no cabe (ADR-0054). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado). Una pausa causada solo por el límite de la cuenta (y no persistida) no lleva `needs-human`: el poller la retoma a la hora de reinicio que dijo el mensaje, o por su calendario si no la dijo (ADR-0039, adenda de GH-381).
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe, o una parte no cabe (ADR-0054). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado). Una pausa causada solo por un disco lleno (`disk_full`) también es externa: el poller la retoma por su calendario, solo cuando el piso de espacio libre lo deja arrancar, y conserva `needs-human` (ADR-0069). Una pausa causada solo por el límite de la cuenta (y no persistida) no lleva `needs-human`: el poller la retoma a la hora de reinicio que dijo el mensaje, o por su calendario si no la dijo (ADR-0039, adenda de GH-381).
 _Avoid_: causa, pausa, bloqueo, espera
 _Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph): frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
 
@@ -423,6 +445,16 @@ Una corrida que terminó sin cierre ni escalado porque su proceso murió. No esp
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
 _Campo_: sin término de arte
 
+**Directorio temporal**:
+El directorio en el disco, bajo `<raíz de scratch>/<clave del producto>/<tarea raíz>/` y fuera de todo repositorio, que cada chequeo, cada setup y cada intento de rol recibe como `TMPDIR` y que se borra cuando termina, salga bien o mal. La raíz es `AGENTIC_SCRATCH_DIR`, por defecto `$XDG_CACHE_HOME/agentic/scratch`; una raíz dentro del repositorio del producto o del de stage0 se rechaza antes de gastar (`ScratchInARepository`). Lo compone una sola función y lo respalda un registro de dueño escrito antes de crearlo y borrado después de borrarlo; lo que cae en `/tmp` queda fuera de este control. Las capturas que una tarea cita no viven acá sino en la carpeta de evidencia de la tarea (`.agentic/kept/<tarea>/`, que sigue en el producto), que se conserva 14 días tras el cierre (ADR-0069, ADR-0072).
+_Avoid_: temporales, `/tmp`, caché
+_Campo_: scratch directory; `Scratch` y `path_for` en el código
+
+**Piso de espacio libre**:
+El espacio libre, en megabytes, bajo el cual el poller no arranca nada: se mide en tres volúmenes, el de la raíz de scratch, el del producto y `/tmp`, y la ronda solo cierra tareas hasta que los tres lo superan. Por defecto 2048 (`AGENTIC_SCRATCH_FLOOR_MB`). Se mira al arrancar, no durante una corrida. El mismo piso, junto con un mínimo de inodos libres, es lo que convierte un intento fallido en `disk_full`, que lee solo el directorio del intento, su checkout y `/tmp` (ADR-0069, ADR-0072).
+_Avoid_: cuota, límite de disco
+_Campo_: free-space floor (disk watermark en almacenamiento); `space_holds` y `AGENTIC_SCRATCH_FLOOR_MB` en el código
+
 **Arranque**:
 Un encendido de la máquina, identificado por el id de arranque del kernel. Un registro de lock o de corridas vivas escrito en otro arranque está muerto, diga lo que diga su pid: el sistema operativo pudo haber reutilizado ese número para un proceso ajeno. Un registro sin id de arranque (anterior a este cambio, o una máquina sin `/proc`) no afirma nada: lo decide el sistema operativo, como siempre.
 _Avoid_: reinicio (es el acto, no el período), sesión
@@ -439,7 +471,7 @@ _Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para
 _Campo_: `InvocationKind` (`run` | `resume`) en el código; sin término de arte compartido — los frameworks hablan de resume/invoke sin nombrar la llamada suelta
 
 **Fallo de rol**:
-El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite. Un intento estancado es uno de sus motivos (`stall`).
+El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite. Un intento estancado es uno de sus motivos (`stall`), y un disco lleno otro (`disk_full`): externo, como el límite de la cuenta, porque falló la máquina y no el rol.
 _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro término)
 _Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
 

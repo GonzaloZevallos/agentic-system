@@ -112,7 +112,10 @@ ChangeCategory = FindingCategory | CopyCategory | Literal["definition"]
 # facts covers (narrowed by `account_limit`, `upstream` and `network`, ADR-0029), `other`
 # the residual nothing else names, `stall` an attempt that hung with nothing to wait for
 # and was killed by the watchdog (`domain/stall.py`, ADR-0057): a reason of its own, not
-# an external one, so the poller never retakes it by itself.
+# an external one, so the poller never retakes it by itself, `disk_full` an attempt that
+# broke with the disk it writes to full, derived from what was measured (free bytes and
+# inodes, an `ENOSPC` caught as structured data), never from the error's text (GH-391,
+# ADR-0069): external, because the machine, not the role, failed.
 FailureReason = Literal[
     "schema",
     "check",
@@ -121,6 +124,7 @@ FailureReason = Literal[
     "account_limit",
     "upstream",
     "network",
+    "disk_full",
     "sdk",
     "stall",
     "other",
@@ -475,6 +479,26 @@ class Failure(TypedDict):
     reaped: NotRequired[list[ReapedProcess]]
 
 
+class GateRecord(TypedDict, total=False):
+    """One invocation of a check gate that ran its checks (GH-361, ADR-0070): the wait for a
+    share of the machine's cores kept apart from the run. `started_at` is the UTC ISO time the
+    gate asked for its share; `wait_s` what this call spent waiting for it and `run_s` what
+    the witness and the checks took after the grant, so a check's `duration_s` stays pure run
+    time; `share` the cores it was given, `peers` how many gates held a share beside it (a
+    debugging aid, never the figure "other gates alongside", which `overlap_peers` computes
+    from intervals), `priority` the closed `CheckPriority` value and `overdue` whether the
+    wait ran out. Every key is optional on read (ADR-0041): a document
+    written before this record carries none. No free text in any field."""
+
+    started_at: str
+    wait_s: float
+    run_s: float
+    share: int
+    peers: int
+    priority: str
+    overdue: bool
+
+
 class RoleRun(TypedDict):
     """One successful run of a role. `section` is what it wrote (a role may write
     several: one per subtask, one per interview); `version` numbers the deliveries of
@@ -512,6 +536,10 @@ class RoleRun(TypedDict):
     # `cache_read`, `cache_write`): `agentic.role.tokens` groups on this key. Absent on
     # a run recorded before this field existed.
     tokens: NotRequired[dict[str, int]]
+    # One record per invocation of the Developer's delivery gate that ran the checks, in
+    # order (GH-361): the wait for a share apart from the run. Absent on a run recorded
+    # before this field existed, and on a run that never ran a gate.
+    gates: NotRequired[list[GateRecord]]
     # Calls to the model in this run: one per `AssistantMessage` the runner saw before
     # the delivery (`ClaudeSdkRunner.run_once`'s own count). Absent on a run recorded
     # before this field existed.
@@ -813,6 +841,18 @@ class SettledRow(TypedDict):
     version: int
 
 
+class PlanSettledRow(TypedDict):
+    """A `PM: final validation` settlement (`plan_settlement`, GH-374): the records at this
+    `location` and `claim` (normalised) with a `version` below this one are settled. `by` says
+    which run decided it: `approved` (PM approved at this version) or `superseded` (a returning
+    PM round did not raise the key again). Per record, never per folded key."""
+
+    location: str
+    claim: str
+    version: int
+    by: Literal["approved", "superseded"]
+
+
 class LandingEntry(TypedDict, total=False):
     """One landing step of the task document's `landing` list (GH-239): the idempotency
     key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
@@ -903,12 +943,24 @@ class PartRecord(TypedDict):
     depends_on: list[int]
 
 
+# Why a `full_checks` run that wanted GitHub CI ran the local full tier instead (GH-376): a
+# closed value decided by the system, never text parsed from `gh`. Lives here, not in `ci`,
+# because the record below needs it and `ci` reaches this module through `rules`; `ci`
+# re-exports it.
+FallbackCause = Literal[
+    "gh_unavailable", "gh_unreadable", "no_run", "publish_failed", "not_started", "untrusted"
+]
+
+
 class FullCheckEntry(TypedDict):
     """One check of a `full_checks` run: its name and whether it passed. Unlike
     `merge_checks`, no `tail`: command output goes only into the `Full checks` section."""
 
     name: str
     passed: bool
+    # The run link `gh` reported for a CI job (GH-376); absent on a locally run check and on
+    # every record written before it.
+    link: NotRequired[str]
     # True when the system took the pass from a stored one instead of running the check
     # (ADR-0065); absent on a check that ran.
     reused: NotRequired[bool]
@@ -918,6 +970,17 @@ class FullCheckEntry(TypedDict):
     # Seconds the check ran, as `check_durations` summed them (GH-365); absent when the check
     # has no sample (a reused pass, or no result).
     duration_s: NotRequired[float]
+
+
+class CloseDocs(TypedDict):
+    """The commit `final_validation` made on the task branch when PM, approving, returned
+    capability files (the close-time pass): `parent` is the reviewed unit's `reviewed_head`
+    the commit was made on, `head` the commit, `paths` what it holds, relative to the
+    checkout. Replaced whole by every `pm_final` run, never accumulated."""
+
+    parent: str
+    head: str
+    paths: list[str]
 
 
 class FullChecksRecord(TypedDict):
@@ -934,10 +997,18 @@ class FullChecksRecord(TypedDict):
     results: list[FullCheckEntry]
     witness: dict[str, Any] | None
     failed_step: NotRequired[str]
+    # The gate's wait and run apart (GH-361); absent on a record written before it.
+    gate: NotRequired[GateRecord]
     # The checks that took longer than their declared budget (GH-365): a declared name and two
     # numbers, written by the system only, and only on a passed run that had a breach. It
     # returns and blocks nothing.
     over_budget: NotRequired[list[BudgetBreach]]
+    # Where the run happened (GH-376): `ci` when the product's GitHub jobs gave the verdict,
+    # `local` when this machine ran the tier. Absent on a record written before it and on a
+    # product without `ci:`.
+    ran_on: NotRequired[Literal["ci", "local"]]
+    # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
+    ci_fallback: NotRequired[FallbackCause]
 
 
 class TaskState(TaskInput, total=False):
@@ -1028,6 +1099,10 @@ class TaskState(TaskInput, total=False):
     # derived from the subtask's status at read time. Applied per record by
     # `rules.findings_rows`, after `settled_findings`.
     approval_settled: Annotated[list[SettledRow], operator.add]
+    # Where a `PM: final validation` run settled its own earlier rows
+    # (`plan_settlement.on_approval` / `on_return`), appended in that run's patch and never
+    # derived from `runs` at read time. Applied per record by `rules.findings_rows`.
+    plan_settled: Annotated[list[PlanSettledRow], operator.add]
     # The head of the task branch the fan-in last integrated (GH-358), stamped only for a
     # product that declares `delivery_checks`; absent otherwise. `rules.full_checks_due`
     # compares the record's head with it. Persisted in the frontmatter.
@@ -1048,6 +1123,10 @@ class TaskState(TaskInput, total=False):
     # (GH-373, "publicación debida"): written only by `resuming.prepare` (a sha or `None`
     # on every resume), cleared only by `deliver`'s single exit. Read with `.get`.
     publish_owed: NotRequired[str | None]
+    # The capability files PM wrote at close, committed on the task branch (`CloseDocs`):
+    # `None` is how a `pm_final` run clears the previous one. Written to the document only
+    # when set, read with `.get`.
+    close_docs: NotRequired[CloseDocs | None]
     # The full sha `deliver` pushed and when (GH-216): the anchor of the CI wait, read with
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str

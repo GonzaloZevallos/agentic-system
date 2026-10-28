@@ -353,7 +353,6 @@ PM_SIDE_SLUGS = (
     "pm_consultant",
     "pm_bug",
     "pm_consolidator",
-    "pm_final",
 )
 # The only paths a PM-side role may read: the knowledge tree, the generated index and the
 # root knowledge files. A mapped product's `CONTEXT.md` files are covered by the one

@@ -12,8 +12,11 @@ task's or a subtask's checkout; write the table into the role's section; run the
 **Verdict**, stored on the run with the sha it measured (`perf_verdict`, `perf_head`):
 `returned` on any `over` budget, any fact or a blocking finding of the role; else `approved`
 when every budget is `within`; else `unverified` (an `inconclusive` alone never blocks and
-never approves). A `PerfInterrupted` propagates: nothing was written before `measure_at`
-returned, so no table and no run exist and `qa_performance_due` stays true.
+never approves). `measure_at` runs in a worker
+thread (GH-385), so the event loop stays free for the run's stop. A `RunStopped` (the run's stop,
+seen from a perf command or the lock wait) propagates: nothing was written before `measure_at`
+returned, so no table and no run exist and `qa_performance_due` stays true; its `finally` has
+already removed the throwaway worktree and released the lock.
 
 On `returned`, `integration` (or the single subtask) is reopened with `returned_by:
 'qa_performance'`, counted on `PAIR_QA_PERFORMANCE_TECH_LEAD`. The claims of the rows the
@@ -23,9 +26,13 @@ the same row keeps its key across returns; an approving run settles them in the 
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
+
+import anyio
+import anyio.to_thread
 
 from agentic.shared.configuration import Configuration
 
@@ -80,17 +87,20 @@ async def qa_performance(state: TaskState, cfg: Configuration, ports: Ports) -> 
     results: list[Result] = []
     if scenarios:
         try:
-            results, _ = measure_at(
-                head,
-                scenarios,
-                ports.stack.setup(head),
-                (),
-                cfg.perf_lock_wait_s,
-                2,
-                ports,
-                runner,
-                lock,
-                cfg,
+            results, _ = await anyio.to_thread.run_sync(
+                functools.partial(
+                    measure_at,
+                    head,
+                    scenarios,
+                    ports.stack.setup(head),
+                    (),
+                    cfg.perf_lock_wait_s,
+                    2,
+                    ports,
+                    runner,
+                    lock,
+                    cfg,
+                )
             )
         except PerfRefused:
             results = [_broken(s, cfg) for s in scenarios]

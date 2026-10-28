@@ -10,9 +10,11 @@ from agentic.core.process.application.develop import develop
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.application.presubmit import CheckoutPresubmit
 from agentic.core.process.domain import presubmit
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.core.process.domain.presubmit import AffectedPlan
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    FakeCheckScheduler,
     MemoryCommands,
     MemoryStack,
     MemoryWorkspace,
@@ -46,9 +48,21 @@ def gate(
     workspace = workspace or MemoryWorkspace()
     workspace.diff_paths = paths
     workspace.moved.add(PATH)
-    ports = type("Ports", (), {"workspace": workspace, "commands": commands})()
+    ports = type(
+        "Ports",
+        (),
+        {"workspace": workspace, "commands": commands, "check_scheduler": FakeCheckScheduler()},
+    )()
     return CheckoutPresubmit(
-        ports, PATH, "base", CHECKS, 30.0, affected=plan, parallel=parallel, witness=witness
+        ports,
+        PATH,
+        "base",
+        CHECKS,
+        30.0,
+        affected=plan,
+        parallel=parallel,
+        witness=witness,
+        priority=CheckPriority.SUBTASK,
     )
 
 

@@ -11,18 +11,28 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.board import Field, FieldWrite
+from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
+from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
+from ..domain.scratch import (
+    OwnerKind,
+    PartitionListing,
+    ScratchListing,
+    SpaceReading,
+    SweepDecision,
+)
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -142,6 +152,8 @@ class AttemptFailed(Exception):
         presubmit_denials: int = 0,
         main_thread_turns: int = 0,
         reaped: Sequence[ReapedProcess] = (),
+        space: SpaceReading | None = None,
+        enospc: bool = False,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -177,14 +189,26 @@ class AttemptFailed(Exception):
         # What the reaper stopped when this attempt's session ended (`RawResult.reaped`'s
         # own docstring); empty at every raise site but the runner's own.
         self.reaped = list(reaped)
+        # What the volumes had left when this attempt broke (GH-391): the lower of the
+        # scratch volume's and `/tmp`'s free bytes and free inodes, read after the
+        # attempt's processes were reaped and before its scratch was removed. `None` at
+        # every raise site but the runner's own, and when it had no scratch to measure.
+        # Stamped here, never classified: a measurement is not a verdict.
+        self.space = space
+        # Whether an `OSError` with `errno.ENOSPC` was raised in the system's own process
+        # during this attempt (a hook, a stream write, the presubmit), caught as the
+        # structured error it is and never by reading text.
+        self.enospc = enospc
 
 
 class Presubmit(Protocol):
     """Asked when a role hands back its delivery, before the delivery counts: a reason
     refuses it, and the model gets the reason and delivers again (glossary: Puerta de
-    entrega). Blocking: it may run the product's checks, within `timeout_s`."""
+    entrega). Blocking: it may run the product's checks, within `timeout_s`, after waiting
+    at most `wait_max_s` for a share of the machine's cores (GH-361)."""
 
     timeout_s: float
+    wait_max_s: float
 
     def __call__(self) -> str | None: ...
 
@@ -480,6 +504,14 @@ class ProductStack(Protocol):
         product that has not handed the human a prototype yet -- never an error."""
         ...
 
+    def docs(self, revision: str) -> Docs | None:
+        """The optional `docs` block (`core.knowledge`): the
+        command that regenerates every generated doc artifact and the paths it owns, as the
+        commit `revision` declares them. `None` when the product declares none, which is
+        every product until it adopts generated docs -- never an error. Its reserved
+        check is already in `checks`; this is the block itself, for the prompts."""
+        ...
+
     def performance(self, revision: str) -> dict[str, Scenario]:
         """Scenario name -> its `seed`, `measure`, volume and limits (`core.knowledge`,
         GH-318, ADR-0059), as the commit `revision` declares them, in file order. Empty when
@@ -526,7 +558,17 @@ class Commands(Protocol):
     anything, or after the command it launched has ended -- and never returns a
     `CommandResult` for a command the stop killed."""
 
-    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult: ...
+    def run(
+        self,
+        cwd: Path,
+        command: str,
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandResult:
+        """`env` is laid over the check's environment (GH-361: the worker count of the
+        gate's share); the system's own marks always win over it."""
+        ...
 
 
 class Inbox(Protocol):
@@ -844,6 +886,14 @@ class Workspace(Protocol):
         is in progress; read-only."""
         ...
 
+    def merge_in_progress(self, path: Path) -> bool:
+        """Whether the checkout at `path` holds an unfinished merge or a conflict (GH-392):
+        `MERGE_HEAD` exists, or `git status --porcelain` lists an unmerged entry (UU, AA, DD,
+        AU, UA, DU, UD). Read-only; a resume asks it before committing what a stopped run
+        left, so it never commits over a merge a human is resolving. Raises `GitError` when
+        git answers neither way."""
+        ...
+
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         """The facts a dependency merge leaves behind, for the pure verdict in
         `domain/rules.py` to decide from with no git call of its own: whether `branch`
@@ -876,6 +926,24 @@ class Workspace(Protocol):
         is fetched into a private ref, never under `refs/heads/`); `None` only when the
         remote has no such branch. A failed read, an unreachable origin or a remote that
         moved between the read and the fetch raises `GitError`: it is never "absent"."""
+        ...
+
+    def publish_ci_ref(self, path: Path, ref: str) -> None:
+        """Force push `HEAD` of the checkout at `path` to `refs/heads/<ref>` on `origin`,
+        with no lease: the ref belongs to the task and the run holds its lock. Only the
+        `agentic-ci/` refs go through here, never `agentic/<id>`, which `push` writes.
+        Raises `GitError` on any failure."""
+        ...
+
+    def remote_refs(self, prefix: str) -> tuple[str, ...]:
+        """The branch names `origin` holds under `refs/heads/<prefix>`, without
+        `refs/heads/`. A failed read or an unreachable origin raises `GitError`: it is
+        never an empty answer. The caller asks for `agentic-ci/` refs only."""
+        ...
+
+    def delete_remote_ref(self, ref: str) -> None:
+        """Delete the branch `ref` from `origin`. Only the `agentic-ci/` refs go through
+        here, never `agentic/<id>`. Raises `GitError`, a ref `origin` lacks included."""
         ...
 
     def show(self, ref: str, relative: str) -> str | None:
@@ -1533,7 +1601,11 @@ class PerfRunner(Protocol):
     """Runs one `seed`, `measure` or `setup` command of a performance scenario (GH-318,
     ADR-0059) in `checkout`, with `extra_env` on top of a scrubbed environment, and returns
     the `Run`. A non-zero exit and a timeout are a `Run` (`timed_out`), never an exception:
-    the verdict reads them."""
+    the verdict reads them.
+
+    With the run's stop flag set (SIGTERM or SIGHUP reached `run`/`resume`, GH-385) `run` raises
+    `RunStopped` before launching anything or after the command ended, and never returns a
+    `Run` for a command the stop killed. It raises only once the command's process has ended."""
 
     def run(
         self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
@@ -1544,11 +1616,183 @@ class PerfLock(Protocol):
     """The machine-wide lock two measurements take so they never share a CPU (GH-318)."""
 
     def acquire(self, wait_s: float) -> bool:
-        """Takes the lock, waiting at most `wait_s` seconds; `False` when it is held."""
+        """Takes the lock, waiting at most `wait_s` seconds; `False` when it is held. With the
+        run's stop flag set it raises `RunStopped` without taking the lock, whether it was
+        asked to or is already waiting."""
         ...
 
     def release(self) -> None:
         """Gives the lock back; harmless when it was never taken."""
+        ...
+
+
+class Scratch(Protocol):
+    """A directory on the disk for one check or role attempt, so what it writes never
+    lands on the RAM-backed `/tmp` (GH-391, ADR-0069)."""
+
+    def open(
+        self, task_key: str | None, kind: OwnerKind, token: str, slug: str
+    ) -> AbstractContextManager[Path]:
+        """The directory of one owner, under `<scratch root>/<product key>/<task>/`, outside every
+        repository. Its
+        owner record is written before the directory is created; on the way out the
+        directory is removed, then the record, however the block ended. `token` is the
+        one the owner's processes are marked with."""
+        ...
+
+    def ensure_kept(self, task_key: str | None) -> Path:
+        """The task's evidence folder, `.agentic/kept/<task>/`, created if missing and
+        never removed by this port."""
+        ...
+
+    def listing(self) -> ScratchListing:
+        """What is on the disk under this product's partition of the scratch root: each task
+        folder and each owner in it, with the mtimes and the liveness of its record already read
+        (the poller's sweep decides on these facts; it touches no filesystem itself)."""
+        ...
+
+    @property
+    def product_key(self) -> str:
+        """The key of this product's partition: the one `partitions` never judges."""
+        ...
+
+    def partitions(self) -> PartitionListing:
+        """Every product's partition under the scratch root, each with its mtime, its task
+        folders' mtimes and every child's (hidden temp names included), the owners' record
+        facts already read, and the `.<key>.swept-<token>` leftovers as their own kind. The
+        orphan rule decides on these facts; this port only reads."""
+        ...
+
+    def kept_folders(self) -> Sequence[tuple[str, datetime]]:
+        """Each `.agentic/kept/<task>/` with its mtime, which stands in for the close time of
+        a task whose document cannot say."""
+        ...
+
+    def sweep(self, decision: SweepDecision) -> None:
+        """Removes what `decision` names: for an owner its directory, then its record; an orphan
+        partition is renamed aside at once, then removed, and a leftover is only removed (never
+        this product's own partition, never a name that is not one plain segment of the root).
+        A path already gone is not an error."""
+        ...
+
+
+class FreeSpace(Protocol):
+    """What is left on the volume a path lives on (GH-391)."""
+
+    def read(self, path: Path) -> SpaceReading: ...
+
+
+@dataclass(frozen=True)
+class IssueRow:
+    """One issue as the board mirror reads it off the tracker: `state` is `open` or `closed`,
+    `closed_at` the UTC day it closed (`None` while open)."""
+
+    number: int
+    state: Literal["open", "closed"]
+    labels: frozenset[str]
+    closed_at: date | None
+
+
+@dataclass(frozen=True)
+class SentEntry:
+    """What was last sent for one issue: the card's fingerprint and the fields that carried
+    a value, so a field that later has none knows there is something to clear."""
+
+    fingerprint: str
+    present: frozenset[Field]
+
+
+@dataclass(frozen=True)
+class SentMemory:
+    """The mirror's memory of what it sent (ADR-0073): never read from the board. Bound to
+    the Project's node id; `failed_at` is the last whole-call failure; `unreadable` is set
+    by a load that found a file it could not parse (one log line, then it reads as empty)."""
+
+    project_id: str | None = None
+    failed_at: datetime | None = None
+    issues: Mapping[int, SentEntry] = field(default_factory=dict)
+    unreadable: bool = False
+
+
+class Board(Protocol):
+    """The GitHub Project the poller mirrors state to (GH-375, ADR-0073). Write-only as far
+    as state goes: the only things read from the Project are node ids. Every method may raise
+    `TrackerCallFailed` or `ValueError`."""
+
+    def project_id(self) -> str:
+        """The Project's node id, resolving (once per process) the field and option ids the
+        writes need. `ValueError` naming what is missing when a field or option is."""
+        ...
+
+    def open_issues(self) -> list[IssueRow]:
+        """Every open issue of the product's repo."""
+        ...
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        """Every issue, open and closed, and whether the read reached its limit (more exist)."""
+        ...
+
+    def issue(self, number: int) -> IssueRow:
+        """One issue, open or closed."""
+        ...
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        """Adds each issue to the Project and writes its fields. Returns the issues whose every
+        mutation came back without error: an issue not in the set is not recorded as sent."""
+        ...
+
+
+class BoardSent(Protocol):
+    """The mirror's memory on disk, one per product."""
+
+    def load(self) -> SentMemory:
+        """The memory, empty when the file is missing or unreadable (`unreadable` then set)."""
+        ...
+
+    def save(self, memory: SentMemory) -> None: ...
+
+
+@dataclass(frozen=True)
+class CheckRequest:
+    """A gate asking for a share of the machine's cores (GH-361, ADR-0070). `enqueued_at`
+    and `token` are `None` on the gate's first call and are the grant's on every later one,
+    so a gate keeps its place in the queue across calls. `wait_max_s` is how long this call
+    may wait; `expires_after_s` is how long the share may be held before the ledger drops
+    it, whatever its holder says."""
+
+    priority: CheckPriority
+    wait_max_s: float
+    expires_after_s: float
+    enqueued_at: float | None = None
+    token: str | None = None
+
+
+@dataclass(frozen=True)
+class Grant:
+    """What a gate holds while it runs checks. `wait_s` is the time this call spent waiting
+    (never part of any check's timeout); `peers` the holders of a share when it was granted;
+    `overdue` that the wait ran out and the share is the minimum, booked beyond the bound."""
+
+    share: int
+    wait_s: float
+    peers: int
+    overdue: bool
+    enqueued_at: float
+    token: str
+
+
+class CheckScheduler(Protocol):
+    """Bounds the CPU demand of the check suites that run at once on this machine, across
+    products and processes. A gate takes a share before it starts and gives it back when it
+    ends."""
+
+    def acquire(self, request: CheckRequest) -> Grant:
+        """Waits for a share, at most `request.wait_max_s`; then takes one anyway, the
+        minimum and marked overdue, rather than never starting."""
+        ...
+
+    def release(self, grant: Grant) -> None:
+        """Gives the share back; harmless when it was already given back."""
         ...
 
 
@@ -1566,6 +1810,8 @@ class Ports:
     commands: Commands
     sample_app: SampleApp
     reaper: ProcessReaper
+    # The machine-wide scheduler of check suites (GH-361): the only way a gate gets cores.
+    check_scheduler: CheckScheduler
     # Not a port: the run as a process, shared by every branch of a fan-out, with
     # nothing outside it to talk to (`limits.py`). It rides here because `Ports` is
     # what a use case receives.
@@ -1578,3 +1824,12 @@ class Ports:
     # The machine's store of passing check results (ADR-0065). `None` stores and reuses
     # nothing, which is how every checkout ran before it existed.
     check_results: CheckResults | None = None
+    # The GitHub Project board mirror (GH-375, ADR-0073) and its memory. `None` mirrors
+    # nothing and makes no call, which is how every round ran before they existed.
+    board: Board | None = None
+    board_sent: BoardSent | None = None
+    # Where a check or a role attempt's temporary files go, and how much room the volumes
+    # have (GH-391, ADR-0069). `None` leaves everything on the inherited `TMPDIR`, which is
+    # how every checkout ran before.
+    scratch: Scratch | None = None
+    free_space: FreeSpace | None = None

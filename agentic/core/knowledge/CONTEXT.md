@@ -30,7 +30,9 @@ _Campo_: job to be done — de innovación y marketing (Christensen); la job sto
 **Destilado**:
 El paso en que PM vuelca lo que una tarea dejó vigente al conocimiento de producto: la
 definición de cada capacidad tocada y los términos del glosario. PM devuelve el texto, el
-sistema escribe. En el código y en los prompts se llama `consolidate`.
+sistema escribe. Ocurre al aprobar el PRD y, en una feature con UI, otra vez en la validación
+final de PM, cuando las capacidades se reconcilian con lo entregado (ADR-0075). Toda la prosa
+va en español rioplatense. En el código y en los prompts se llama `consolidate`.
 _Avoid_: distill (el castellano no confunde, el inglés sí)
 _Campo_: sin término de arte. `distill` está tomado: en ML, knowledge distillation es entrenar un modelo chico contra las salidas de uno grande (Hinton, Vinyals y Dean 2015)
 
@@ -70,9 +72,14 @@ _Avoid_: slug, id de producto, service name (el `service.name` es del sistema, y
 _Campo_: sin término de arte; en observabilidad el vecino es una dimensión o un label
 
 **Stack del producto**:
-Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Son sus chequeos, los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción; su preparación del entorno; su nombre; y, opcionales, sus escenarios de rendimiento (`performance`: comandos `seed` y `measure`, volumen y límites absolutos, que `agentic perf` mide y que nunca son chequeos), sus `delivery_checks` (el nivel de la puerta de entrega: los chequeos que corre cada entrega; el resto corre una vez por tarea sobre la cabeza integrada), sus `check_budgets` (los segundos que admite para cada chequeo, que el chequeo completo compara; glosario de Proceso: Presupuesto de chequeo) y el testigo con que dice dónde vive el código que sus chequeos midieron (glosario de Proceso: Testigo del checkout). El sistema impone las prácticas, nunca la herramienta. Declararlo es obligatorio: un producto que no lo declara no corre, y el sistema no tiene default que una corrida pueda alcanzar.
+Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Son sus chequeos, los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción; su preparación del entorno; su nombre; y, opcionales, sus escenarios de rendimiento (`performance`: comandos `seed` y `measure`, volumen y límites absolutos, que `agentic perf` mide y que nunca son chequeos), sus `delivery_checks` (el nivel de la puerta de entrega: los chequeos que corre cada entrega; el resto corre una vez por tarea sobre la cabeza integrada), sus `check_budgets` (los segundos que admite para cada chequeo, que el chequeo completo compara; glosario de Proceso: Presupuesto de chequeo) el testigo con que dice dónde vive el código que sus chequeos midieron (glosario de Proceso: Testigo del checkout) y `docs` (el comando que regenera la documentación generada y las rutas que posee; suma el chequeo reservado `docs`, ver Documentación técnica). El sistema impone las prácticas, nunca la herramienta. Declararlo es obligatorio: un producto que no lo declara no corre, y el sistema no tiene default que una corrida pueda alcanzar.
 _Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones
 _Campo_: stack — estándar; sus comandos son los presubmit checks del producto
+
+**Documentación técnica**:
+Los documentos que explican cómo funciona un producto, en Markdown y Mermaid dentro de su repo, en español, con cada afirmación citando el archivo o el símbolo en que se apoya. Hay dos clases: la generada (derivada del código por el comando `generate` que el producto declara en `docs:`, bajo `docs/architecture/generated/`, nunca editada a mano y verificada por el chequeo `docs`, que falla si regenerarla cambia algo) y la escrita (vistas C4 y secuencias de flujos clave bajo `docs/architecture/`, planificada por Tech Lead y escrita por un Developer en la subtarea que cambia el límite). `docs/README.md` («Cómo funciona») es el índice y Tech Lead mantiene al día sus secciones técnicas. Opcional: sin `docs:` nada cambia. Ver ADR-0074.
+_Avoid_: wiki, manual, documentación de usuario (esa es de Tech Writer), diagramas (son una parte)
+_Campo_: technical documentation / docs-as-code; la clave se llama `docs` en el archivo
 
 **Diseño del producto**:
 Lo que el producto declara en su stack para que UX y UI Lead vean pantallas: dónde está su prototipo, cómo se levanta su app de muestra y cómo se sacan sus comparaciones. Es opcional, como la preparación del entorno: un producto sin diseño declarado corre igual, pero sin recorrido real ni comparaciones, y el documento de la tarea lo dice.

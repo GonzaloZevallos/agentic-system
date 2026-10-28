@@ -87,7 +87,7 @@ you have. To back an objection, run the product's own commands on the file or te
 finding names, started exactly as the product declares and appended with the target
 (`<command> path::test_name`); nothing else runs:
 
-{{checks}}
+{{checks}}{{docs_review}}
 
 **You report only `blocking` findings, and only with executed evidence.** A claim you
 did not verify by running one of the commands above, or that you cannot cite against

@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from ....process.domain.design import Design
+from ....process.domain.docs import Docs
 from ....process.domain.performance import Scenario
 from ....process.domain.presubmit import RerunForm
 from ....process.domain.suppressions import Forbidden
@@ -86,6 +87,10 @@ class GitStack:
     def design(self, revision: str) -> Design | None:
         data, source = self._declaration(revision)
         return stack.design(data, source)
+
+    def docs(self, revision: str) -> Docs | None:
+        data, source = self._declaration(revision)
+        return stack.docs(data, source)
 
     def performance(self, revision: str) -> dict[str, Scenario]:
         data, source = self._declaration(revision)

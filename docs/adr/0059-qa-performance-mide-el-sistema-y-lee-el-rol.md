@@ -82,3 +82,26 @@ Ningún rol puede alcanzar ninguno de los dos en esta parte.
    humana sobre un commit viejo de apostrophe con un N+1 conocido, y su valor va en el PR.
 5. Un `measure` que imprime segundos bajo una clave `_ms` da un `within` silencioso.
 6. La carga del sistema se lee antes y después de cada corrida y es solo informativa.
+
+## Addendum (GH-385): el stop de la corrida alcanza a perf
+
+Un stop (SIGTERM o SIGHUP) durante QA Performance esperaba al hard deadline y terminaba en
+`os._exit`: `measure_at` corría en el event loop, el runner y el lock de perf no miraban la
+`StopFlag` y nadie reapeaba `PERF_TASK`. Ahora:
+
+- `PerfShellRunner` y `FilesystemPerfLock` reciben la `StopFlag` de la corrida y levantan
+  `RunStopped`; el verbo `agentic perf` les pasa `NullStopFlag()` y no cambia.
+- `stop_run`, `hard_stop` y `release_processes` reapean `reaping.RUN_SCOPED`
+  (`CHECK_TASK` y `PERF_TASK`), nunca un literal.
+- El nodo mide con `measure_at` en un hilo (`anyio.to_thread.run_sync`), así el loop atiende
+  la señal y el `finally` de `measure_at` borra el worktree `perf-*` y libera el lock. El
+  nodo no escribe nada: no hay tabla, ni run, ni `perf_verdict`, y `qa_performance_due`
+  sigue verdadera.
+
+Costo: los reaps son secuenciales y suman a lo sumo
+`|RUN_SCOPED| × (REAP_GRACE_S + REAP_KILL_WAIT_S)` = 2 × 7 s = 14 s antes de que corra el
+reloj del hard deadline (hoy 7 s); es constante y solo ocurre con procesos que ignoran SIGTERM.
+
+Brechas conocidas, fuera de alcance: el hijo con `env -i` y `cd /` sigue sobreviviendo, sin
+cambio; y `FilesystemPerfLock._remove_dead` toma el lock de un dueño muerto sin reapear sus
+hijos perf.

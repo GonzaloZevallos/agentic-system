@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ENV_PREFIX = "AGENTIC_"
 # The legacy, shared checkpointer file, relative to the product root, outside version
@@ -30,6 +31,7 @@ STATE_DIR = Path(".agentic/state")
 # (README.md, 14; issue #33).
 LOGS_DIR = Path(".agentic/logs")
 
+_BOARD_PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[1-9][0-9]*")
 RoleKind = Literal["actor", "verifier"]
 # What `max_parallel_subtasks` resolves to when unset, before the role-slot cap (GH-364).
 DEFAULT_PARALLEL_SUBTASKS = 4
@@ -177,9 +179,51 @@ class Configuration(BaseModel):
     # The machine-wide lock two measurements take so they never share a CPU: outside every
     # product, built like `run_registry_dir`.
     perf_lock_path: Path = Field(default_factory=lambda: _default_perf_lock_path())
+    # The machine-wide scheduler of check suites (GH-361, ADR-0070). `check_cores` is what
+    # the scheduler may book across every product at once: the cores this process may run
+    # on, lowered to leave room for what it does not see (role sessions, lint, types).
+    # A quarter of it is a reserve only `integration` and `land` gates may use. A gate gets
+    # at most `check_share_max` cores (`cores - reserve` when unset) and a `subtask` gate at
+    # most `check_share_max_subtask` (half of that when unset), never less than
+    # `check_share_min`. One waits at most `check_wait_max_s` for a share before it takes the
+    # minimum, marked overdue. The ledger lives outside every product, built like
+    # `run_registry_dir`.
+    check_cores: int = Field(default_factory=lambda: _default_check_cores(), ge=1)
+    check_share_min: int = Field(default=2, ge=1)
+    check_share_max: int | None = Field(default=None, ge=1)
+    check_share_max_subtask: int | None = Field(default=None, ge=1)
+    check_wait_max_s: float = Field(default=1800, ge=0)
+    check_ledger_dir: Path = Field(default_factory=lambda: _default_check_ledger_dir())
     # The machine's store of passing check results (ADR-0065): outside every checkout and
     # shared by every product, built like `run_registry_dir`.
     check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
+    # The GitHub Project the poller mirrors each issue's stage to (GH-375, ADR-0073), as
+    # `<owner>/<number>`. `None` mirrors nothing and makes no call.
+    board_project: str | None = None
+
+    @field_validator("board_project")
+    @classmethod
+    def _board_project_shape(cls, value: str | None) -> str | None:
+        if value is not None and _BOARD_PROJECT.fullmatch(value) is None:
+            raise ValueError(f"board_project must be <owner>/<number>, got {value!r}")
+        return value
+
+    @property
+    def board_owner_and_number(self) -> tuple[str, int] | None:
+        """`board_project` split into the owner login and the project number."""
+        if self.board_project is None:
+            return None
+        owner, _, number = self.board_project.partition("/")
+        return owner, int(number)
+
+    # Where every run's scratch directories live, one partition per product (GH-397): on the
+    # disk, outside every repository, built like `check_results_dir` but from the cache
+    # home, since it is regenerable.
+    scratch_dir: Path = Field(default_factory=lambda: _default_scratch_dir())
+    # The free space, in MB, under which a volume holding scratch (the product's disk, or
+    # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
+    # Declared, not measured: a few parallel runs' worth of build and test scratch.
+    scratch_floor_mb: int = Field(default=2048, ge=0)
 
     @model_validator(mode="after")
     def _parallel_within_role_slots(self) -> Configuration:
@@ -224,6 +268,10 @@ class Configuration(BaseModel):
         if slug in self.model_overrides:
             return self.model_overrides[slug]
         return self.actor_model if kind == "actor" else self.verifier_model
+
+    @property
+    def scratch_floor_bytes(self) -> int:
+        return self.scratch_floor_mb * 1024 * 1024
 
     @property
     def agentic_dir(self) -> Path:
@@ -309,10 +357,31 @@ def _default_check_results_dir() -> Path:
     return root / "agentic" / "check-results"
 
 
+def _default_scratch_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    return root / "agentic" / "scratch"
+
+
 def _default_perf_lock_path() -> Path:
     base = os.environ.get("XDG_STATE_HOME")
     root = Path(base) if base else Path.home() / ".local" / "state"
     return root / "agentic" / "perf.lock"
+
+
+def _default_check_ledger_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "agentic" / "checks"
+
+
+def _default_check_cores() -> int:
+    """The cores this process may run on; `os.cpu_count` where the platform has no
+    affinity call."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        return os.cpu_count() or 1
 
 
 def _from_env(raw: str, annotation: Any) -> Any:

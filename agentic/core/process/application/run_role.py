@@ -405,8 +405,14 @@ async def run_with_retry(
     cold_prompt: str | None = None,
     before_attempt: Callable[[], None] | None = None,
     estimate_stop: Callable[[float], EstimateStop | None] | None = None,
+    floor_bytes: int = 0,
 ) -> Output:
-    """`before_attempt` runs at the top of every attempt, retries included, before the
+    """`floor_bytes` is the free space under which a failed attempt is a full disk and not
+    its own failure (`rules.space_narrowed`, GH-391): the product's scratch floor, read
+    against the reading the runner stamped on the failure, never a fresh one. `0` keeps
+    free bytes out of the decision.
+
+    `before_attempt` runs at the top of every attempt, retries included, before the
     slot is taken: `run_role` hands it the index write, so a retry sees the files its
     failed attempt left in the checkout (GH-292).
 
@@ -519,8 +525,11 @@ async def run_with_retry(
                 ended_at = _now_iso()
         except AttemptFailed as exc:
             limits.record(exc.cost_usd)
+            # Narrowed once, from the facts the runner stamped when the attempt broke: a
+            # reading taken now would measure the disk after its scratch was removed.
+            reason = rules.space_narrowed(exc.reason, exc.space, floor_bytes, exc.enospc)
             resets_at = (
-                account_reset.reset_at(str(exc), _now()) if exc.reason == "account_limit" else None
+                account_reset.reset_at(str(exc), _now()) if reason == "account_limit" else None
             )
             failures.append(
                 {
@@ -529,7 +538,7 @@ async def run_with_retry(
                     "error": str(exc),
                     "cost_usd": exc.cost_usd,
                     "session_id": exc.session_id,
-                    "reason": exc.reason,
+                    "reason": reason,
                     "slug": role.slug,
                     "section": written_as,
                     "cold_fallback": fallback_now,
@@ -543,9 +552,10 @@ async def run_with_retry(
                     **({"resets_at": resets_at.isoformat()} if resets_at else {}),
                 }
             )
-            if exc.reason == "account_limit" and attempt == 1:
+            if reason in ("account_limit", "disk_full") and attempt == 1:
                 # A retry against a limit that cannot clear before its reset fails the same
-                # way and only counts a second failure (ADR-0039, addendum GH-381).
+                # way and only counts a second failure (ADR-0039, addendum GH-381); a full
+                # disk does not empty between two attempts of one run (GH-391).
                 break
             continue
         limits.record(output.cost_usd)
@@ -1002,6 +1012,7 @@ async def run_role(
             cold_prompt=cold_prompt,
             before_attempt=write_index if reads_by_index(role) else None,
             estimate_stop=lambda total: estimate_stop_for(state, role, total, ports),
+            floor_bytes=cfg.scratch_floor_bytes,
         )
     except Escalating as exc:
         # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already

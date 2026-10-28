@@ -13,6 +13,7 @@ from agentic.core.measurement.domain import metrics, scorecard
 from agentic.core.process.application import landing_fix
 from agentic.core.process.domain import (
     boot,
+    check_schedule,
     document,
     landing,
     playbook,
@@ -62,6 +63,7 @@ TYPES = {
     "Aterrizaje": landing,
     "Cercanía": rules.closeness,
     "Espera de aterrizaje": rules.holds_launches,
+    "Cupo de chequeo": check_schedule.Entry,
 }
 
 # Glossary term -> (the domain module, the name of the constant) that models it, for a term a

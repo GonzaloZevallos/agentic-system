@@ -12,13 +12,19 @@ outside mypy's scope, so they are named by file and class, never by line.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from pathlib import Path
 from typing import NamedTuple
 
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
+    Board,
+    BoardSent,
     CheckResults,
+    CheckScheduler,
     Commands,
     FlagVocabulary,
+    FreeSpace,
     Inbox,
     Launcher,
     PerfLock,
@@ -30,13 +36,19 @@ from agentic.core.process.application.ports import (
     Prompts,
     RoleRunner,
     RunRegistry,
+    RunStopped,
     SampleApp,
+    Scratch,
     StopFlag,
     TaskDocuments,
     Tracker,
     Workspace,
 )
 from tests.fakes import (
+    FakeBoard,
+    FakeBoardSent,
+    FakeCheckScheduler,
+    FakeFreeSpace,
     FakeLauncher,
     FakePerfLock,
     FakePerfRunner,
@@ -51,6 +63,7 @@ from tests.fakes import (
     MemoryPrompts,
     MemoryRunRegistry,
     MemorySampleApp,
+    MemoryScratch,
     MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
@@ -74,7 +87,12 @@ _launcher: Launcher = FakeLauncher()
 _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
 _perf_lock: PerfLock = FakePerfLock()
+_check_scheduler: CheckScheduler = FakeCheckScheduler()
+_scratch: Scratch = MemoryScratch()
+_free_space: FreeSpace = FakeFreeSpace()
 _stop_flag: StopFlag = FakeStopFlag()
+_board: Board = FakeBoard()
+_board_sent: BoardSent = FakeBoardSent()
 
 
 def ports_of_doubles() -> Ports:
@@ -91,8 +109,11 @@ def ports_of_doubles() -> Ports:
         commands=_commands,
         sample_app=_sample_app,
         reaper=_reaper,
+        check_scheduler=_check_scheduler,
         limits=RunLimits(),
         check_results=_check_results,
+        scratch=_scratch,
+        free_space=_free_space,
     )
 
 
@@ -115,7 +136,12 @@ COVERED: dict[str, type] = {
     "ProcessReaper": FakeReaper,
     "PerfRunner": FakePerfRunner,
     "PerfLock": FakePerfLock,
+    "CheckScheduler": FakeCheckScheduler,
+    "Scratch": MemoryScratch,
+    "FreeSpace": FakeFreeSpace,
     "StopFlag": FakeStopFlag,
+    "Board": FakeBoard,
+    "BoardSent": FakeBoardSent,
 }
 
 
@@ -161,3 +187,29 @@ UNCOVERED: dict[str, Uncovered] = {
         _INLINE,
     ),
 }
+
+
+def perf_runner_stops_with_the_flag(runner: PerfRunner, stop: StopFlag, checkout: Path) -> None:
+    """The `PerfRunner` contract of the stop (GH-385): with the run's flag set, `run` raises
+    `RunStopped` and never answers a `Run`. `runner` must be built on `stop`. Raises
+    `AssertionError` for a runner that ignores the flag."""
+    extra_env: Mapping[str, str] = {}
+    stop.set()
+    try:
+        runner.run(checkout, "true", extra_env, 10.0)
+    except RunStopped:
+        return
+    raise AssertionError("PerfRunner.run answered with the run's stop flag set")
+
+
+def perf_lock_stops_with_the_flag(lock: PerfLock, stop: StopFlag) -> None:
+    """The `PerfLock` contract of the stop (GH-385): with the run's flag set, `acquire` raises
+    `RunStopped` and does not take the lock. `lock` must be built on `stop`. Raises
+    `AssertionError` for a lock that ignores the flag."""
+    stop.set()
+    try:
+        taken = lock.acquire(0.0)
+    except RunStopped:
+        return
+    lock.release()
+    raise AssertionError(f"PerfLock.acquire answered {taken} with the run's stop flag set")

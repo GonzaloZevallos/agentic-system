@@ -20,9 +20,17 @@ from collections.abc import Callable, Collection, Iterable
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 from agentic.core.process.application.ports import Ports
-from tests.conformance import COVERED, UNCOVERED, Uncovered
-from tests.fakes import memory_ports
+from tests.conformance import (
+    COVERED,
+    UNCOVERED,
+    Uncovered,
+    perf_lock_stops_with_the_flag,
+    perf_runner_stops_with_the_flag,
+)
+from tests.fakes import FakePerfLock, FakePerfRunner, FakeStopFlag, memory_ports
 
 REPO = Path(__file__).resolve().parent.parent
 PORTS = REPO / "agentic" / "core" / "process" / "application" / "ports.py"
@@ -352,3 +360,19 @@ def test_a_change_to_the_ports_the_doubles_or_the_assignments_selects_this_file(
         result = selector.select([path], graph, (), ())
         assert isinstance(result, selector.Selection), path
         assert "tests/test_conformance_scope.py" in result.files, path
+
+
+def test_the_perf_doubles_keep_the_contract_of_the_stop(tmp_path):
+    stop = FakeStopFlag()
+    perf_runner_stops_with_the_flag(FakePerfRunner(stop=stop), stop, tmp_path)
+    other = FakeStopFlag()
+    perf_lock_stops_with_the_flag(FakePerfLock(stop=other), other)
+
+
+def test_the_stop_contract_refuses_a_runner_and_a_lock_that_ignore_the_flag(tmp_path):
+    with pytest.raises(AssertionError, match="PerfRunner.run answered"):
+        perf_runner_stops_with_the_flag(FakePerfRunner(), FakeStopFlag(), tmp_path)
+    lock = FakePerfLock()
+    with pytest.raises(AssertionError, match="PerfLock.acquire answered True"):
+        perf_lock_stops_with_the_flag(lock, FakeStopFlag())
+    assert lock.released == 1  # the contract gives back what the deaf lock took

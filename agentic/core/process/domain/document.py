@@ -164,6 +164,10 @@ def render(
         # The approved head still owed to the remote (GH-373), written only when set, so a
         # document without one is byte-identical to one written before.
         **({"publish_owed": owed} if (owed := state.get("publish_owed")) else {}),
+        # The capability files PM committed at close (`task.CloseDocs`), written only when
+        # set so a document without them is byte-identical to one written before. The merge
+        # gate reads it from here.
+        **({"close_docs": docs} if (docs := state.get("close_docs")) else {}),
         # Where the CI wait is measured from (GH-216): written only when a delivery set
         # them, so a document without them is byte-identical to one written before.
         **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),
@@ -216,6 +220,9 @@ def render(
         # document without one is byte-identical to one written before GH-201. Under its
         # own name, never through `RECORDED_AS`.
         **({"approval_settled": approved} if (approved := state.get("approval_settled")) else {}),
+        # What `PM: final validation` runs settled (`plan_settlement`, GH-374), the same way:
+        # only when non-empty, under its own name.
+        **({"plan_settled": planned} if (planned := state.get("plan_settled")) else {}),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         # The plan's estimate and what follows from it (ADR-0054), written only when the
         # state carries them, so a document from before them is byte-identical.

@@ -6,9 +6,10 @@ the arm's own behaviour is proven instead."""
 import pytest
 
 from agentic.core.process.application.review import review
+from agentic.core.process.domain.docs import Docs, review_text
 from agentic.core.process.domain.task import INTEGRATION
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryWorkspace, ScriptedRunner, memory_ports, reviewed
+from tests.fakes import MemoryStack, MemoryWorkspace, ScriptedRunner, memory_ports, reviewed
 
 pytestmark = pytest.mark.anyio
 
@@ -185,3 +186,15 @@ async def test_the_diff_base_stays_the_reviewed_head_while_the_affected_base_is_
     prompt = runner.calls[0]["system_prompt"]
     assert "pytest --since taskbase1" in prompt
     assert "pytest --since reviewed9" not in prompt
+
+
+async def test_a_product_with_docs_reviews_with_the_docs_rules_and_one_without_does_not():
+    cfg = Configuration(product_dir=MemoryWorkspace.ROOT)
+    state = {**two_delivered(), "subtask_id": "api"}
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    declared = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review(state, cfg, memory_ports(declared, stack=MemoryStack(docs=docs)))
+    assert review_text(docs).strip() in declared.calls[0]["system_prompt"]
+    plain = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review(state, cfg, memory_ports(plain))
+    assert "docs/architecture" not in plain.calls[0]["system_prompt"]

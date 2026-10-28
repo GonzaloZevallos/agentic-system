@@ -4,6 +4,7 @@ import os
 import select
 import shutil
 import signal
+import sys
 import threading
 import time
 from collections.abc import Iterator, Sequence
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
 from agentic.core.process.adapters.shell import (
     EventStopFlag,
     NullStopFlag,
@@ -215,6 +217,32 @@ def test_the_systems_own_virtualenv_does_not_reach_the_command(commands, checkou
     assert "venv=[]" in result.output
 
 
+def test_the_env_given_reaches_the_command_over_what_it_inherited(commands, checkout, monkeypatch):
+    monkeypatch.setenv("CHECK_WORKERS", "99")
+    env = {"CHECK_WORKERS": "6", "PYTEST_XDIST_AUTO_NUM_WORKERS": "6"}
+    result = commands.run(
+        checkout, 'echo "w=$CHECK_WORKERS x=$PYTEST_XDIST_AUTO_NUM_WORKERS"', 10, env=env
+    )
+    assert "w=6 x=6" in result.output
+
+
+def test_a_command_run_without_env_sees_none_of_the_grants_variables(
+    commands, checkout, monkeypatch
+):
+    # The variable may be exported in the caller's own environment (the delivery gate's);
+    # what is asserted is that the adapter adds none of its own.
+    monkeypatch.delenv("CHECK_WORKERS", raising=False)
+    result = commands.run(checkout, 'echo "w=[$CHECK_WORKERS]"', 10)
+    assert "w=[]" in result.output
+
+
+def test_the_reaping_mark_wins_over_a_mark_in_the_env(commands, checkout):
+    forged = {reaping.MARK_NAME: "other/check/1/forged"}
+    result = commands.run(checkout, f'echo "m=${reaping.MARK_NAME}"', 10, env=forged)
+    assert f"m={PRODUCT}/check/{os.getpid()}/" in result.output
+    assert "forged" not in result.output
+
+
 def test_a_command_runs_in_the_checkout_and_keeps_both_streams(commands, checkout):
     (checkout / "marker").write_text("")
     result = commands.run(checkout, "ls && echo oops >&2 && exit 3", timeout_s=10)
@@ -375,3 +403,137 @@ def test_the_null_flag_never_stops_a_check_even_when_set(worktrees, checkout):
     assert result == CommandResult(3, "hi\n", timed_out=False)
     timed_out = _stoppable(worktrees, flag).run(checkout, f"{SLEEP} 30", timeout_s=0.5)
     assert timed_out.timed_out
+
+
+# GH-391: every run has its own TMPDIR on the disk, outside the product, and takes it with it.
+
+PRINT_TMPDIR = "python3 -c 'import tempfile; print(tempfile.gettempdir())'"
+
+
+@pytest.fixture
+def product(tmp_path: Path) -> Path:
+    root = tmp_path / "product"
+    root.mkdir()
+    return root
+
+
+SCRATCH_KEY = "0a1b2c3d4e5f"
+
+
+def _scratch_root(product: Path) -> Path:
+    """The scratch root of these tests (GH-397): beside the product, never in it."""
+    return product.parent / "scratch-root"
+
+
+def _scratch_of(product: Path) -> FilesystemScratch:
+    return FilesystemScratch(_scratch_root(product), SCRATCH_KEY, product)
+
+
+def _with_scratch(worktrees: Path, product: Path, task_key: str | None = None) -> ShellCommands:
+    return ShellCommands(
+        PRODUCT,
+        ShellReaper(PRODUCT, worktrees),
+        NullStopFlag(),
+        scratch=_scratch_of(product),
+        task_key=task_key,
+    )
+
+
+def _left_in(product: Path) -> list[str]:
+    """Every entry under the product's partition of the scratch root, directories and owner
+    records."""
+    root = _scratch_root(product) / SCRATCH_KEY
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*")) if root.exists() else []
+
+
+def _seen_tmpdir(result: CommandResult, product: Path) -> Path:
+    seen = Path(result.output.strip().splitlines()[-1])
+    assert seen.is_relative_to((_scratch_root(product) / SCRATCH_KEY).resolve()), seen
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("command", "passes"), [(PRINT_TMPDIR, True), (f"{PRINT_TMPDIR}; exit 1", False)]
+)
+def test_a_check_sees_a_tmpdir_on_the_disk_that_is_gone_when_it_returns(
+    worktrees, checkout, product, command, passes
+):
+    result = _with_scratch(worktrees, product).run(checkout, command, timeout_s=30)
+    seen = _seen_tmpdir(result, product)
+    assert result.passed is passes
+    assert seen.parent.name == "_untasked"
+    assert not seen.exists()
+    assert _left_in(product) == ["_untasked"]  # the task's folder, empty
+
+
+def test_the_tmpdir_of_a_check_that_times_out_is_gone_too(worktrees, checkout, product):
+    command = f"{PRINT_TMPDIR}; exec {SLEEP} 300"
+    result = _with_scratch(worktrees, product).run(checkout, command, timeout_s=3)
+    assert result.timed_out
+    assert not _seen_tmpdir(result, product).exists()
+    assert _left_in(product) == ["_untasked"]
+
+
+def test_the_scratch_lives_under_the_task_the_command_is_composed_with(
+    worktrees, checkout, product
+):
+    result = _with_scratch(worktrees, product, "GH-7").run(checkout, PRINT_TMPDIR, timeout_s=30)
+    assert _seen_tmpdir(result, product).parent.name == "GH-7"
+
+
+def test_two_runs_get_two_directories(worktrees, checkout, product):
+    commands = _with_scratch(worktrees, product)
+    first = _seen_tmpdir(commands.run(checkout, PRINT_TMPDIR, timeout_s=30), product)
+    second = _seen_tmpdir(commands.run(checkout, PRINT_TMPDIR, timeout_s=30), product)
+    assert first != second
+
+
+def test_a_pytest_tmp_path_resolves_under_the_checks_directory(worktrees, checkout, product):
+    (checkout / "test_tmp.py").write_text(
+        "def test_it(tmp_path):\n    print('TMP', tmp_path)\n    assert tmp_path.is_dir()\n"
+    )
+    command = f"{sys.executable} -m pytest -q -s -p no:cacheprovider test_tmp.py"
+    result = _with_scratch(worktrees, product).run(checkout, command, timeout_s=60)
+    assert result.passed, result.output
+    printed = next(line for line in result.output.splitlines() if "TMP " in line)
+    scratch_root = (_scratch_root(product) / SCRATCH_KEY).resolve()
+    assert Path(printed.split("TMP ", 1)[1]).is_relative_to(scratch_root)
+    assert _left_in(product) == ["_untasked"]
+
+
+class _SeesTheDirectory(_NoopReaper):
+    """Notes, when the reaper is asked to stop the check's marked processes, whether the
+    scratch directory and its record are still there."""
+
+    def __init__(self, product: Path) -> None:
+        self._product = product
+        self.at_reap: list[list[str]] = []
+
+    def reap_attempt(self, task_id: str, run: int, token: str) -> tuple[ReapedProcess, ...]:
+        self.at_reap.append(_left_in(self._product))
+        return ()
+
+
+def test_the_marked_processes_are_reaped_before_the_directory_is_removed(
+    worktrees, checkout, product
+):
+    reaper = _SeesTheDirectory(product)
+    commands = ShellCommands(
+        PRODUCT, reaper, NullStopFlag(), scratch=_scratch_of(product), task_key="GH-7"
+    )
+    commands.run(checkout, "true", timeout_s=30)
+    assert reaper.at_reap, "the check was never reaped"
+    assert all(len(seen) == 3 for seen in reaper.at_reap)  # the task dir, the owner dir, its record
+    assert _left_in(product) == ["GH-7"]
+
+
+def test_a_run_stopped_after_the_launch_removes_its_directory(worktrees, checkout, product):
+    commands = ShellCommands(
+        PRODUCT,
+        ShellReaper(PRODUCT, worktrees),
+        _FlipsAfterFirstLook(),
+        scratch=_scratch_of(product),
+    )
+    with pytest.raises(RunStopped):
+        commands.run(checkout, f"exec {SLEEP} 300", timeout_s=120)
+    assert _left_in(product) == ["_untasked"]

@@ -39,6 +39,10 @@ CHECK_TASK = "check"
 # The task segment of a performance command's mark (GH-318): no task id is ever `perf`.
 PERF_TASK = "perf"
 
+# The marks a run's own commands carry besides its roles' (GH-385): what a stop or a release
+# of the run reaps, in this order, so none of the sites spells the list on its own.
+RUN_SCOPED = (CHECK_TASK, PERF_TASK)
+
 DELETED_SUFFIX = " (deleted)"
 
 ReapOutcome = Literal["term", "kill", "survived", "error"]

@@ -46,9 +46,9 @@ class RunCheck:
         """The longest one call may take: every declared check could be asked for, and the
         witness runs before it (ADR-0065's `MCP_TOOL_TIMEOUT` assumption), plus the one
         rerun the gate's own allowance gives each declared check (ADR-0066), so the harness
-        never kills a call that is inside one."""
+        never kills a call that is inside one, plus the wait for a share (ADR-0070)."""
         checks = len(self.gate.checks)
-        return self.gate.check_timeout_s * (checks + 1 + checks)
+        return self.gate.check_timeout_s * (checks + 1 + checks) + self.gate.wait_max_s
 
     def __call__(self, name: str) -> str:
         return run_check.render(self.run(name))
@@ -65,10 +65,14 @@ class RunCheck:
         # never again below; on a dirty or uncommitted tree it clears whatever an earlier
         # call left, so nothing is read or written for a tree that is not the head's.
         gate._prepare_reuse(committed and clean)
-        # The witness runs before the check, in this same call: its agreement is what lets
-        # the pass be stored. A disagreement does not stop the check, as at the gate.
-        witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
-        row = gate._run(name, command)
+        # The witness and the check run under a share of the machine's cores, like the gate's
+        # (ADR-0070): without one a `{workers}` in the command would reach the shell as text.
+        # Its place in the queue is its own, apart from the delivery gate's.
+        with gate._share(fresh=True):
+            # The witness runs before the check, in this same call: its agreement is what
+            # lets the pass be stored. A disagreement does not stop the check, as at the gate.
+            witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
+            row = gate._run(name, command)
         passed, reused = row["passed"], bool(row.get("reused", False))
         key = gate._key(name, command)
         store = gate.ports.check_results

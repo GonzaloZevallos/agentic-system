@@ -11,7 +11,9 @@ sends it a real SIGTERM from outside:
 - `setup`: the real `subtask_checkout_in_thread`, whose product setup is the sleep;
 - `escapes`: a check that ignores SIGTERM and leaves a grandchild outside its process group,
   beside a fake role that keeps a marked child and ignores the cancellation;
-- `blocked`: a node that runs a command straight on the event loop, no thread.
+- `blocked`: a node that runs a command straight on the event loop, no thread;
+- `perf`: the real `qa_performance` node (GH-385) over the real `PerfShellRunner` and
+  `FilesystemPerfLock` that `default_ports` wires, whose `measure` is the sleep.
 
 Invoked as `python -m tests.stop_signal_child <mode> <scenario> <product> <workdir> <deadline>`.
 Mode `run` is the process under test; mode `resume` is the resume the stop must leave possible:
@@ -43,12 +45,16 @@ from agentic.core.process.adapters.shell import EventStopFlag
 from agentic.core.process.application.checkouts import subtask_checkout, subtask_checkout_in_thread
 from agentic.core.process.application.ports import Ports
 from agentic.core.process.application.presubmit import CheckoutPresubmit
+from agentic.core.process.application.qa_performance import qa_performance
 from agentic.core.process.domain import reaping
+from agentic.core.process.domain.check_schedule import CheckPriority
+from agentic.core.process.domain.performance import Limit, Scenario
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryStack
+from tests.fakes import FakeCheckScheduler, MemoryStack
 
 TASK = "GH-1"
 SUBTASKS = ("api", "ui")
+PERF_METRIC = "list_ms"
 
 
 def _pidfile_check(workdir: Path) -> str:
@@ -72,6 +78,13 @@ def _stack(scenario: str, workdir: Path, resuming: bool) -> MemoryStack:
             checks={}, setup={"install": f"touch {workdir}/setup.ran" if resuming else sleeping}
         )
     slow = "true" if resuming else sleeping
+    if scenario == "perf":
+        limits = {PERF_METRIC: Limit(100, "ms")}
+        measure = f"echo $$ > {workdir}/perf.pid; exec sleep 300"
+        return MemoryStack(
+            checks={},
+            performance={"list": Scenario("list", "true", measure, 1, "rows", limits)},
+        )
     if scenario == "full_checks":
         return MemoryStack(checks={"fast": "true", "slow": slow}, delivery_checks=("fast",))
     return MemoryStack(checks={"slow": slow})
@@ -99,7 +112,13 @@ def _state(**extra: Any) -> dict[str, Any]:
 
 def _parts(scenario: str, product: Path, workdir: Path, resuming: bool, flag: EventStopFlag) -> Any:
     cfg = Configuration(product_dir=product)
-    ports = replace(default_ports(cfg, flag), stack=_stack(scenario, workdir, resuming))
+    # The gate's share comes from a fake: this test is about the stop signal, and the real
+    # ledger is one file per machine (GH-361) that a test never touches.
+    ports = replace(
+        default_ports(cfg, flag),
+        stack=_stack(scenario, workdir, resuming),
+        check_scheduler=FakeCheckScheduler(),
+    )
     return cfg, ports
 
 
@@ -120,7 +139,9 @@ def _graph(ports: Ports) -> Any:
 async def _run_gate(ports: Ports, workdir: Path, box: dict[str, Any]) -> None:
     """What a role's delivery does: the hook the SDK calls, over the real presubmit."""
     task = ports.workspace.task_checkout(TASK)
-    gate = CheckoutPresubmit(ports, task.path, "", ports.stack.checks("HEAD"), 600)
+    gate = CheckoutPresubmit(
+        ports, task.path, "", ports.stack.checks("HEAD"), 600, priority=CheckPriority.SUBTASK
+    )
     box["gate"] = gate
     hook = hooks._delivery_gate(None, gate)
     await hook(cast(Any, {}), None, cast(Any, None))
@@ -168,6 +189,18 @@ async def _scenario(
         await subtask_checkout_in_thread(_state(), SUBTASKS[0], cfg, ports)
     elif scenario == "full_checks":
         await _run_graph(cfg, ports, product, box)
+    elif scenario == "perf":
+        ports.workspace.task_checkout(TASK)
+        plan = {
+            "name": "list",
+            "volume": 1,
+            "volume_unit": "rows",
+            "basis": "b",
+            "budgets": [
+                {"metric": PERF_METRIC, "limit": 100, "unit": "ms", "source": "issue", "basis": "b"}
+            ],
+        }
+        await qa_performance(_state(performance=[plan]), cfg, ports)
     else:
         raise SystemExit(f"unknown scenario {scenario}")
 

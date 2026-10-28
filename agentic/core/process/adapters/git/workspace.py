@@ -44,6 +44,7 @@ from ...application.ports import AddedAdr, AddedLine, Checkout, Upstream, Upstre
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.ci import Containment
+from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
 from ...domain.task import DependencyState, MergeOutcome
 
 WORKTREES = Path(".agentic/worktrees")
@@ -53,7 +54,17 @@ WORKTREES = Path(".agentic/worktrees")
 # The knowledge index a role reads is written here on every attempt and never committed
 # (ADR-0001 of the knowledge module); `core.knowledge`'s builder names the same directory.
 INDEX_DIR = ".agentic/index"
-EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{STATE_DIR}/", f"{LOGS_DIR}/", f"{INDEX_DIR}/")
+# The scratch an older run left in the product (it lives outside every repository now,
+# GH-397), and the evidence a task keeps (GH-391).
+EXCLUDES = (
+    f"{WORKTREES}/",
+    f"{STATE_FILE}*",
+    f"{STATE_DIR}/",
+    f"{LOGS_DIR}/",
+    f"{INDEX_DIR}/",
+    f"{LEGACY_SCRATCH_DIR}/",
+    f"{KEPT_DIR}/",
+)
 
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
 # network blinking must cost a run a fallback and a note, never a hang.
@@ -69,6 +80,8 @@ LOCK_TIMEOUT_MS = 5000
 # How many times one of those calls is retried when git still reports a lock, waiting
 # `LOCK_BACKOFF_S * 2**attempt` seconds before each retry.
 LOCK_RETRIES = 4
+# The two-letter codes `git status --porcelain` gives a path with an unresolved merge conflict.
+UNMERGED_CODES = frozenset({"UU", "AA", "DD", "AU", "UA", "DU", "UD"})
 LOCK_BACKOFF_S = 0.25
 _LOCK_OPTIONS = (
     "-c",
@@ -299,6 +312,15 @@ class GitWorkspace:
         sha = found.stdout.strip()
         return sha if found.returncode == 0 and sha else None
 
+    def merge_in_progress(self, path: Path) -> bool:
+        if self.merge_head(path) is not None:
+            return True
+        # Raw output: `_git` strips it, and the first column of a line is part of its code.
+        status = self._run("status", "--porcelain", cwd=path)
+        if status.returncode != 0:
+            raise GitError(f"git status --porcelain failed: {status.stderr.strip()}")
+        return any(line[:2] in UNMERGED_CODES for line in status.stdout.splitlines())
+
     def abort_merge(self, path: Path) -> None:
         if self.merge_head(path) is None:
             return
@@ -361,6 +383,18 @@ class GitWorkspace:
                 f"remote {branch} moved between ls-remote ({observed}) and fetch ({fetched})"
             )
         return fetched
+
+    def publish_ci_ref(self, path: Path, ref: str) -> None:
+        # No lease: the ref is the task's own and the run holds the task's lock.
+        self._git("push", "--force", "origin", f"HEAD:refs/heads/{ref}", cwd=path)
+
+    def remote_refs(self, prefix: str) -> tuple[str, ...]:
+        listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{prefix}*")
+        heads = "refs/heads/"
+        return tuple(line.split()[1][len(heads) :] for line in listed.splitlines() if line.strip())
+
+    def delete_remote_ref(self, ref: str) -> None:
+        self._git("push", "origin", "--delete", ref)
 
     def show(self, ref: str, relative: str) -> str | None:
         result = self._run("show", f"{ref}:{relative}")

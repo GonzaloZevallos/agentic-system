@@ -13,6 +13,11 @@ that both find the same dead record may both unlink it: the second unlink can ta
 the first waiter has just written. The record is re-read right before the unlink to keep that
 window to a few instructions; it is not closed, and the cost of the rare double take is two
 measurements on one CPU, which the load averages in the table show.
+
+With the run's stop flag set (SIGTERM or SIGHUP reached `run`/`resume`, GH-385) `acquire` raises
+`RunStopped` and takes nothing: it looks at the flag on entry, before every create and before
+every sleep, so a waiter behind a live holder leaves within one `POLL_INTERVAL_S` instead of
+after `wait_s`. A lock already taken is the caller's to `release`.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from ...application.ports import RunStopped, StopFlag
 from .liveness import current_boot_id, is_alive
 
 # Declared, not measured: how often a waiter looks at a held lock again.
@@ -37,11 +43,13 @@ class FilesystemPerfLock:
     def __init__(
         self,
         path: Path,
+        stop: StopFlag,
         boot_id: Callable[[], str | None] = current_boot_id,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._path = path
+        self._stop = stop
         self._boot_id = boot_id
         self._clock = clock
         self._sleep = sleep
@@ -50,6 +58,8 @@ class FilesystemPerfLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         deadline = self._clock() + wait_s
         while True:
+            if self._stop.is_set():
+                raise RunStopped
             if self._create():
                 return True
             if not self._holder_alive():
@@ -57,6 +67,8 @@ class FilesystemPerfLock:
                 continue
             if self._clock() >= deadline:
                 return False
+            if self._stop.is_set():
+                raise RunStopped
             self._sleep(POLL_INTERVAL_S)
 
     def release(self) -> None:

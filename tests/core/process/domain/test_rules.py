@@ -9,6 +9,7 @@ from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import ci, document, roles, rules, schemas, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
+from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     FINDINGS,
@@ -22,6 +23,7 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD_EPHEMERAL,
 )
 from agentic.core.process.domain.schemas import FitDecision, TaskType
+from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
 from agentic.core.process.domain.task import INTEGRATION, Carried
 
 PAIR = PAIR_PM_PA
@@ -917,6 +919,16 @@ def test_merge_notice_names_the_paths_and_forbids_whole_side_strategies():
     assert "-s ours" in notice and "-X ours" in notice and "-X theirs" in notice
     assert "checks" in notice and "commit" in notice
     assert "section" in notice  # the conflicted paths and the diff land there
+
+
+def test_merge_notice_gains_the_docs_conflict_line_only_when_the_product_declares_docs():
+    args = ("domain", "agentic/GH-1.domain", ["docs/architecture/generated/a.md"])
+    bare = rules.merge_notice(*args)
+    assert rules.merge_notice(*args, None) == bare
+    docs = Docs("make docs", ("docs/architecture/generated/**",))
+    declared = rules.merge_notice(*args, docs)
+    assert declared == bare + conflict_line(docs)
+    assert "make docs" in declared and "do not merge them by hand" in declared
 
 
 def test_resumed_after_unmergeable_says_why_and_what_may_already_be_done():
@@ -3968,3 +3980,149 @@ def test_a_persisted_account_limit_is_not_governed_by_a_hint():
     )
     assert rules.account_limit_persisted(persisted)
     assert _reset_plan(persisted, RESET_0540).actions == []
+
+
+# GH-391: the free-space floor and what a held round plans.
+_AMPLE = SpaceReading(free_bytes=10**12, free_inodes=10**7)
+_FLOOR = 2048 * 1024 * 1024
+
+
+def _readings(**by_name: SpaceReading) -> dict[str, SpaceReading]:
+    """All three volumes ample, except the ones named by `scratch`, `product` and `tmp`."""
+    names = {
+        "scratch": rules.SCRATCH_VOLUME,
+        "product": rules.PRODUCT_VOLUME,
+        "tmp": rules.TMP_VOLUME,
+    }
+    readings = {name: _AMPLE for name in names.values()}
+    readings.update({names[key]: reading for key, reading in by_name.items()})
+    return readings
+
+
+def test_space_holds_names_each_volume_under_the_byte_floor_or_the_inode_floor():
+    low_bytes = SpaceReading(free_bytes=_FLOOR - 1, free_inodes=10**7)
+    low_inodes = SpaceReading(free_bytes=10**12, free_inodes=INODE_FLOOR - 1)
+    assert rules.PRODUCT_VOLUME == "product"
+    assert rules.space_holds(_readings(), _FLOOR) == ()
+    assert rules.space_holds(_readings(tmp=low_bytes), _FLOOR) == ("/tmp",)
+    assert rules.space_holds(_readings(scratch=low_inodes), _FLOOR) == ("scratch",)
+    assert rules.space_holds(_readings(product=low_bytes), _FLOOR) == ("product",)
+    assert rules.space_holds(_readings(product=low_inodes), _FLOOR) == ("product",)
+
+
+def test_space_holds_names_every_volume_under_the_floor_in_a_stable_order():
+    low = SpaceReading(free_bytes=0, free_inodes=0)
+    everything = _readings(tmp=low, product=low, scratch=low)
+    assert rules.space_holds(everything, _FLOOR) == ("scratch", "product", "/tmp")
+    # The order is the rule's, not the mapping's.
+    reversed_ = dict(reversed(list(everything.items())))
+    assert rules.space_holds(reversed_, _FLOOR) == ("scratch", "product", "/tmp")
+
+
+def test_space_holds_at_exactly_the_floor_is_not_a_hold():
+    exact = SpaceReading(free_bytes=_FLOOR, free_inodes=INODE_FLOOR)
+    assert (
+        rules.space_holds({rules.SCRATCH_VOLUME: exact, rules.PRODUCT_VOLUME: exact}, _FLOOR) == ()
+    )
+
+
+def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:
+    return rules.poll_plan(
+        closes=[9, 4],
+        resumes=[],
+        launches=[rules.LaunchCandidate(5, False, None, 0, 3)],
+        available_slots=6,
+        now=datetime(2026, 10, 27, tzinfo=UTC),
+        retakes=[6],
+        crash_retakes=[7],
+        merges=[8],
+        lands=[rules.LandCandidate(10, "land_model"), rules.LandCandidate(11, "land_checks")],
+        held=held,
+    )
+
+
+def test_a_held_plan_is_the_closes_alone_and_defers_nothing():
+    open_plan = _busy_plan(())
+    assert {a.kind for a in open_plan.actions} >= {"close", "launch", "retake", "merge", "land"}
+    held = _busy_plan(("/tmp",))
+    assert held.actions == [rules.PollAction("close", 4), rules.PollAction("close", 9)]
+    assert held.deferred == []
+
+
+# --- GH-391: `disk_full`, the external reason a measured full disk narrows a failure to ---
+
+FLOOR = 2 * 1024**3
+AMPLE = SpaceReading(free_bytes=FLOOR * 10, free_inodes=INODE_FLOOR * 100)
+
+
+def test_space_narrowed_names_a_disk_under_the_byte_floor():
+    low = SpaceReading(free_bytes=FLOOR - 1, free_inodes=AMPLE.free_inodes)
+    assert rules.space_narrowed("schema", low, FLOOR, False) == "disk_full"
+
+
+def test_space_narrowed_names_a_disk_under_the_inode_floor():
+    low = SpaceReading(free_bytes=AMPLE.free_bytes, free_inodes=INODE_FLOOR - 1)
+    assert rules.space_narrowed("other", low, FLOOR, False) == "disk_full"
+
+
+def test_space_narrowed_names_an_enospc_caught_as_data_whatever_the_reading_says():
+    assert rules.space_narrowed("sdk", AMPLE, FLOOR, True) == "disk_full"
+    assert rules.space_narrowed("sdk", None, FLOOR, True) == "disk_full"
+
+
+def test_space_narrowed_keeps_the_reason_when_space_is_ample_or_unread():
+    assert rules.space_narrowed("schema", AMPLE, FLOOR, False) == "schema"
+    assert rules.space_narrowed("schema", None, FLOOR, False) == "schema"
+    exactly = SpaceReading(free_bytes=FLOOR, free_inodes=INODE_FLOOR)
+    assert rules.space_narrowed("schema", exactly, FLOOR, False) == "schema"
+
+
+def test_space_narrowed_never_narrows_limit_whatever_it_is_given():
+    # Rejected input: our own per-attempt cap, with a full disk and an ENOSPC beside it.
+    low = SpaceReading(free_bytes=0, free_inodes=0)
+    assert rules.space_narrowed("limit", low, FLOOR, True) == "limit"
+    assert rules.space_narrowed("limit", low, FLOOR, False) == "limit"
+
+
+def test_disk_full_is_an_external_reason_a_pause_is_retaken_for():
+    assert "disk_full" in rules.EXTERNAL_REASONS
+    state = _paused_by(_failure_entry("disk_full"), _escalation_entry("failure"))
+    assert rules.auto_resumable(state) == "disk_full"
+
+
+def test_a_disk_full_pause_keeps_the_label_and_follows_the_retake_calendar():
+    state = _paused_by(_failure_entry("disk_full"), _escalation_entry("failure"))
+    assert rules.needs_a_human(cast(Any, state))
+    assert rules.schedule_for("disk_full") == rules.RETAKE_SCHEDULE
+
+
+def test_a_disk_full_beside_an_own_failure_is_not_auto_resumable():
+    # Rejected input: the epoch also holds a failure of the role's own.
+    state = _paused_by(
+        _failure_entry("disk_full"), _failure_entry("schema"), _escalation_entry("failure")
+    )
+    assert rules.auto_resumable(state) is None
+
+
+def test_poll_plan_retakes_a_disk_full_pause_on_the_retake_calendar():
+    due = rules.ResumeCandidate(
+        issue=5, reason="disk_full", since=NOW - timedelta(minutes=16), prior=0, limit=6
+    )
+    early = rules.ResumeCandidate(
+        issue=6, reason="disk_full", since=NOW - timedelta(minutes=5), prior=0, limit=6
+    )
+    actions = rules.poll_plan(
+        closes=[], resumes=[due, early], launches=[], available_slots=2, now=NOW
+    ).actions
+    assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_the_integration_brief_gains_the_docs_conflict_line_only_when_the_product_declares_docs():
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    without = rules.integration_work("Wire it.", ["agentic/GH-1.api"])
+    assert rules.integration_work("Wire it.", ["agentic/GH-1.api"], None) == without
+    declared = rules.integration_work("Wire it.", ["agentic/GH-1.api"], docs)
+    assert declared["brief"] == without["brief"] + conflict_line(docs)
+    assert "run `make docs` and commit its output" in declared["brief"]
+    assert rules.integration_work("", [], docs) == rules.integration_work("", [])
+    assert rules.integration_subtask("", ["b"], docs)["brief"].endswith(conflict_line(docs))
