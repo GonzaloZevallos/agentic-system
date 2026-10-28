@@ -56,6 +56,9 @@ WORKTREES = Path(".agentic/worktrees")
 # (ADR-0001 of the knowledge module); `core.knowledge`'s builder names the same directory.
 INDEX_DIR = ".agentic/index"
 TASKS_DIR = ".agentic/tasks"
+# The only path `commit_archived_document` takes, and the namespace of the only refs it writes.
+_TASK_DOCUMENT = re.compile(r"\.agentic/tasks/[^/]+\.md")
+_ARCHIVE_NAMESPACE = "archive/"
 # The scratch an older run left in the product (it lives outside every repository now,
 # GH-397), and the evidence a task keeps (GH-391).
 EXCLUDES = (
@@ -373,6 +376,58 @@ class GitWorkspace:
         # With a pathspec `git commit` takes those paths only, whatever else is staged.
         self._git("commit", "-q", "-m", message, "--", *relatives, cwd=path)
         return self.head(path)
+
+    def commit_archived_document(
+        self, ref: str, relative: str, text: str, message: str
+    ) -> str | None:
+        """Plumbing only (`hash-object`, a private index, `write-tree`, `commit-tree`,
+        `update-ref`): no worktree, no checkout's index and no `HEAD` is read or written, so
+        the one staging of a path under `rules.UNSTAGEABLE` cannot reach a live branch."""
+        branch = ref.removeprefix("refs/heads/")
+        if not branch.startswith(_ARCHIVE_NAMESPACE):
+            raise GitError(
+                f"{ref} is not an archived ref: a task document is committed under archive/"
+            )
+        if not _TASK_DOCUMENT.fullmatch(relative):
+            raise GitError(f"{relative} is not a task document (.agentic/tasks/<id>.md)")
+        full = f"refs/heads/{branch}"
+        tip = self._git("rev-parse", "--verify", "-q", f"{full}^{{commit}}")
+        blob = self._plumbing("hash-object", "-w", "--stdin", stdin=text)
+        held = self._run("rev-parse", "--verify", "-q", f"{tip}:{relative}")
+        if held.returncode == 0 and held.stdout.strip() == blob:
+            return None  # the idempotent case: a retried archive already committed this text
+        index = (
+            Path(self._git("rev-parse", "--absolute-git-dir"))
+            / f"agentic-archive-index-{uuid.uuid4().hex}"
+        )
+        try:
+            env = {"GIT_INDEX_FILE": str(index)}
+            self._plumbing("read-tree", tip, env=env)
+            self._plumbing(
+                "update-index", "--add", "--cacheinfo", f"100644,{blob},{relative}", env=env
+            )
+            tree = self._plumbing("write-tree", env=env)
+        finally:
+            index.unlink(missing_ok=True)
+        new = self._git("commit-tree", tree, "-p", tip, "-m", message)
+        # The old value is the lease: a ref that moved since `tip` was read fails here.
+        self._git("update-ref", full, new, tip)
+        return new
+
+    def _plumbing(
+        self, *args: str, stdin: str | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=self.product_dir,
+            env={**os.environ, **self.identity, **(env or {})},
+            input=stdin,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout.strip()
 
     def _has_staged_changes(self, path: Path, relatives: Sequence[str] = ()) -> bool:
         """`git diff --cached --quiet`: exit 0 is nothing staged, 1 is something; any other

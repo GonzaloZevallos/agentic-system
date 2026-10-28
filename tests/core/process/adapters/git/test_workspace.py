@@ -1516,3 +1516,106 @@ def test_the_task_documents_are_excluded_once_and_never_through_the_gitignore(pr
     (product / DOCUMENT).write_text("doc\n")
     assert git("status", "--porcelain", cwd=product) == ""
     assert not (product / ".gitignore").exists()
+
+
+ARCHIVED = "archive/run1-abc1234/agentic/GH-12"
+
+
+@pytest.fixture
+def archived(product):
+    """A product whose task branch was already renamed under `archive/`, one commit past master."""
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / "code.py").write_text("x\n")
+    assert ws.commit_all(task.path, "GH-12: code") is not None
+    ws.discard(task.path)
+    ws.rename_branch("agentic/GH-12", ARCHIVED)
+    return ws
+
+
+def test_the_archived_document_is_one_added_path_on_the_archived_ref_and_nothing_else_moves(
+    product, archived
+):
+    tip = git("rev-parse", ARCHIVED, cwd=product)
+    head, status = git("rev-parse", "HEAD", cwd=product), git("status", "--porcelain", cwd=product)
+    worktrees = git("worktree", "list", cwd=product)
+    new = archived.commit_archived_document(ARCHIVED, DOCUMENT, "the record\n", "Archive GH-12")
+    assert new is not None
+    assert git("rev-parse", ARCHIVED, cwd=product) == new
+    assert git("rev-parse", f"{new}^", cwd=product) == tip
+    assert git("diff", "--name-status", tip, new, cwd=product) == f"A\t{DOCUMENT}"
+    assert git("show", f"{ARCHIVED}:{DOCUMENT}", cwd=product) == "the record"
+    assert git("log", "-1", "--format=%s", ARCHIVED, cwd=product) == "Archive GH-12"
+    assert git("rev-parse", "HEAD", cwd=product) == head
+    assert git("status", "--porcelain", cwd=product) == status
+    assert git("worktree", "list", cwd=product) == worktrees
+    assert git("ls-files", cwd=product) == "README.md"
+    # The temporary index it used is gone with it.
+    assert not list((product / ".git").glob("agentic-archive-index*"))
+
+
+def test_the_archived_document_given_again_with_the_same_text_commits_nothing(product, archived):
+    first = archived.commit_archived_document(ARCHIVED, DOCUMENT, "the record\n", "Archive GH-12")
+    assert archived.commit_archived_document(ARCHIVED, DOCUMENT, "the record\n", "again") is None
+    assert git("rev-parse", ARCHIVED, cwd=product) == first
+    # Changed text is a new commit on top, one path modified.
+    later = archived.commit_archived_document(ARCHIVED, DOCUMENT, "more\n", "Archive GH-12")
+    assert later is not None
+    assert git("diff", "--name-status", f"{first}", later, cwd=product) == f"M\t{DOCUMENT}"
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "agentic/GH-12",
+        "master",
+        "refs/heads/master",
+        "refs/heads/agentic/GH-12",
+        "HEAD",
+        "archived",
+    ],
+)
+def test_the_archived_document_is_refused_on_a_ref_outside_the_archive(product, archived, ref):
+    master = git("rev-parse", "master", cwd=product)
+    with pytest.raises(GitError):
+        archived.commit_archived_document(ref, DOCUMENT, "doc\n", "no")
+    assert git("rev-parse", "master", cwd=product) == master
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "README.md",
+        "code.py",
+        ".agentic/runs/GH-12.md",
+        ".agentic/tasks/sub/GH-12.md",
+        ".agentic/tasks/GH-12.json",
+        ".agentic/tasks/",
+        ".agentic/tasks/../../README.md",
+    ],
+)
+def test_the_archived_document_is_refused_for_any_path_but_a_task_document(
+    product, archived, relative
+):
+    tip = git("rev-parse", ARCHIVED, cwd=product)
+    with pytest.raises(GitError):
+        archived.commit_archived_document(ARCHIVED, relative, "x\n", "no")
+    assert git("rev-parse", ARCHIVED, cwd=product) == tip
+
+
+def test_the_archived_document_fails_without_moving_the_ref_when_the_tip_moved_meanwhile(
+    product, archived
+):
+    other = git("rev-parse", "master", cwd=product)
+
+    class Racing(GitWorkspace):
+        def _run(self, *args, cwd=None):
+            if args and args[0] == "commit-tree":
+                # Someone else moves the archived ref after the tip was read.
+                git("update-ref", f"refs/heads/{ARCHIVED}", other, cwd=product)
+            return super()._run(*args, cwd=cwd)
+
+    with pytest.raises(GitError):
+        Racing(product, IDENTITY).commit_archived_document(ARCHIVED, DOCUMENT, "doc\n", "race")
+    assert git("rev-parse", ARCHIVED, cwd=product) == other
+    assert not list((product / ".git").glob("agentic-archive-index*"))

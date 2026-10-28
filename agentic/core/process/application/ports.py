@@ -318,6 +318,11 @@ class TaskDocuments(Protocol):
         The path it wrote, or None when the task has no document to write."""
         ...
 
+    def text(self, task_id: str) -> str | None:
+        """The document exactly as it is on disk, or None when the task has none: what archiving
+        commits onto the archived ref, since it never writes into a checkout."""
+        ...
+
     def record_closure(self, task_id: str, values: Mapping[str, object]) -> Path:
         """Line-level edit of the closure's own top-level frontmatter keys
         (`document.record_closure`'s own docstring) into the document already on disk.
@@ -925,6 +930,18 @@ class Workspace(Protocol):
         deleted from the worktree is committed as a deletion, so a rename is the old path
         and the new one together (GH-229). A path under `rules.UNSTAGEABLE` raises
         `UnstageablePath` before any git command runs. Raises `GitError`."""
+        ...
+
+    def commit_archived_document(
+        self, ref: str, relative: str, text: str, message: str
+    ) -> str | None:
+        """The one staging of a path under `rules.UNSTAGEABLE` (GH-420): commit `text` as
+        `relative`, exactly `.agentic/tasks/<id>.md`, on top of the archived branch `ref`
+        (`archive/...`, with or without `refs/heads/`), in plumbing: no worktree, no checkout
+        index and no `HEAD` is touched. Returns the new commit, or `None` when the ref already
+        holds that text there (a retried archive). A ref outside `archive/` or any other path
+        raises `GitError`, and so does a ref that moved while the commit was being made: it
+        is moved with the tip read first as its expected old value."""
         ...
 
     def push(self, branch: str, *, lease: str | None = None) -> None:
