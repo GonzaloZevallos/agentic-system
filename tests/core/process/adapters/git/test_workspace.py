@@ -1425,3 +1425,70 @@ def test_first_parent_commits_raises_git_error_on_an_unknown_ref(product):
     ws = GitWorkspace(product, IDENTITY)
     with pytest.raises(GitError, match="rev-list"):
         ws.first_parent_commits("f" * 40, "e" * 40)
+
+
+# --- GH-420: the poller's read-only view of whether the checkout can fast-forward ------------
+
+
+def _remote_ahead(product: Path, tmp_path: Path, name: str) -> str:
+    """Push `product`, then a second clone adds `name` on top; returns the new upstream sha."""
+    git("push", "-q", "origin", "master", cwd=product)
+    other = tmp_path / "other"
+    git("clone", "-q", str(tmp_path / "remote.git"), str(other), cwd=tmp_path)
+    (other / name).parent.mkdir(parents=True, exist_ok=True)
+    (other / name).write_text("from upstream\n")
+    git("add", "-A", cwd=other)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "up", cwd=other)
+    git("push", "-q", "origin", "master", cwd=other)
+    git("fetch", "-q", "origin", cwd=product)
+    return git("rev-parse", "origin/master", cwd=product)
+
+
+def test_fast_forward_view_names_an_untracked_file_the_upstream_adds(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, ".agentic/tasks/GH-1.md")
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / ".agentic/tasks/GH-1.md").write_text("live copy\n")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.ancestor
+    assert view.changed == frozenset({".agentic/tasks/GH-1.md"})
+    assert ".agentic/tasks/GH-1.md" in view.dirty
+    block = rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty)
+    assert block == rules.FastForwardBlock("would_overwrite", (".agentic/tasks/GH-1.md",))
+    # Read only: the file is as it was and nothing was merged.
+    assert (product / ".agentic/tasks/GH-1.md").read_text() == "live copy\n"
+    assert git("rev-parse", "HEAD", cwd=product) != tip
+
+
+def test_fast_forward_view_ignores_what_info_exclude_hides(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, ".agentic/tasks/GH-1.md")
+    (product / ".git/info/exclude").write_text(".agentic/tasks/*.md\n")
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / ".agentic/tasks/GH-1.md").write_text("live copy\n")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.dirty == frozenset()
+
+
+def test_fast_forward_view_reports_a_local_commit_the_upstream_lacks(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, "other.txt")
+    (product / "local.txt").write_text("local\n")
+    git("add", "-A", cwd=product)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "local", cwd=product)
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert not view.ancestor
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("diverged", ())
+    )
+
+
+def test_fast_forward_view_of_a_clean_checkout_behind_the_upstream_is_not_blocked(
+    product, tmp_path
+):
+    tip = _remote_ahead(product, tmp_path, "other.txt")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.ancestor and view.changed == frozenset({"other.txt"})
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) is None
+
+
+def test_fast_forward_view_raises_git_error_when_git_cannot_answer(tmp_path):
+    with pytest.raises(GitError):
+        GitWorkspace(tmp_path, IDENTITY).fast_forward_view("abc")

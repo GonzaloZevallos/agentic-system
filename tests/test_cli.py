@@ -4499,6 +4499,137 @@ async def test_poll_a_plain_value_error_still_escapes_the_loop(monkeypatch, tmp_
         )
 
 
+# --- GH-420: the poller warns, once per change of state, when the checkout cannot fast-forward
+
+
+async def _poll_rounds(monkeypatch, tmp_path, ports, rounds, between=lambda n: None):
+    """Run `cli._poll` over `ports` for `rounds` rounds (`run_once` stubbed to say nothing);
+    `between(n)` runs after round n, to change what the fake workspace answers."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    monkeypatch.setattr(cli.pollmod, "run_once", lambda *args, **kwargs: [])
+
+    class Stop(Exception):
+        pass
+
+    slept = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        between(len(slept))
+        if len(slept) == rounds:
+            raise Stop()
+
+    with pytest.raises(Stop):
+        await cli._poll(
+            Configuration(product_dir=tmp_path),
+            ports,
+            60.0,
+            run_lock=FakeLock(),
+            registry=MemoryRunRegistry(),
+            launcher=FakeLauncher(),
+            argv0="agentic",
+            sleep=sleep,
+        )
+
+
+def _blocked_ports(**answer):
+    from agentic.core.process.application.ports import FastForwardView, Upstream
+
+    ports = memory_ports()
+    ports.workspace.upstream_answer = Upstream("origin/master", "a" * 40, None)
+    ports.workspace.fast_forward_answer = FastForwardView(**answer)
+    return ports
+
+
+@pytest.mark.anyio
+async def test_poll_warns_once_across_three_blocked_rounds_and_asks_upstream_once_per_round(
+    monkeypatch, tmp_path, capsys
+):
+    ports = _blocked_ports(
+        ancestor=True,
+        changed=frozenset({".agentic/tasks/GH-1.md"}),
+        dirty=frozenset({".agentic/tasks/GH-1.md"}),
+    )
+    await _poll_rounds(monkeypatch, tmp_path, ports, 3)
+    assert capsys.readouterr().out.splitlines() == [
+        "agentic: poll: product checkout cannot fast-forward to aaaaaaa (would_overwrite): "
+        ".agentic/tasks/GH-1.md"
+    ]
+    assert ports.workspace.upstream_calls == 3
+    assert ports.workspace.fast_forward_asks == ["a" * 40] * 3
+
+
+@pytest.mark.anyio
+async def test_poll_says_again_when_the_reason_changes_and_when_the_block_clears(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.application.ports import FastForwardView
+
+    ports = _blocked_ports(ancestor=True, changed=frozenset({"x"}), dirty=frozenset({"x"}))
+    answers = {
+        1: FastForwardView(False, frozenset(), frozenset()),
+        2: FastForwardView(True, frozenset(), frozenset()),
+    }
+
+    def between(n):
+        if n in answers:
+            ports.workspace.fast_forward_answer = answers[n]
+
+    await _poll_rounds(monkeypatch, tmp_path, ports, 4, between)
+    assert capsys.readouterr().out.splitlines() == [
+        "agentic: poll: product checkout cannot fast-forward to aaaaaaa (would_overwrite): x",
+        "agentic: poll: product checkout cannot fast-forward to aaaaaaa (diverged)",
+        "agentic: poll: product checkout can fast-forward again",
+    ]
+
+
+@pytest.mark.anyio
+async def test_poll_says_nothing_when_the_upstream_has_a_note_and_keeps_its_memory(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.application.ports import Upstream
+
+    ports = _blocked_ports(ancestor=False, changed=frozenset(), dirty=frozenset())
+    noted = Upstream("HEAD", "b" * 40, "fetch failed")
+
+    def between(n):
+        ports.workspace.upstream_answer = (
+            noted if n == 1 else Upstream("origin/master", "a" * 40, None)
+        )
+
+    await _poll_rounds(monkeypatch, tmp_path, ports, 3, between)
+    # Round 1 warned; round 2 (a note) said nothing and kept the memory; round 3 is the same block.
+    assert capsys.readouterr().out.splitlines() == [
+        "agentic: poll: product checkout cannot fast-forward to aaaaaaa (diverged)"
+    ]
+    assert ports.workspace.fast_forward_asks == ["a" * 40] * 2
+
+
+@pytest.mark.anyio
+async def test_poll_says_nothing_without_a_sha_and_never_for_a_clean_checkout(
+    monkeypatch, tmp_path, capsys
+):
+    ports = memory_ports()
+    await _poll_rounds(monkeypatch, tmp_path, ports, 2)
+    clean = _blocked_ports(ancestor=True, changed=frozenset({"x"}), dirty=frozenset())
+    await _poll_rounds(monkeypatch, tmp_path, clean, 2)
+    assert capsys.readouterr().out == ""
+    assert ports.workspace.fast_forward_asks == []
+
+
+@pytest.mark.anyio
+async def test_poll_prints_a_git_failure_once_and_the_round_goes_on(monkeypatch, tmp_path, capsys):
+    ports = _blocked_ports(ancestor=True, changed=frozenset(), dirty=frozenset())
+    ports.workspace.fast_forward_error = "not a repository"
+    await _poll_rounds(monkeypatch, tmp_path, ports, 3)
+    assert capsys.readouterr().out.splitlines() == [
+        "agentic: poll: could not read the product checkout against the upstream: not a repository"
+    ]
+    assert ports.workspace.upstream_calls == 3
+
+
 # --- GH-273: a task's scores, written at the finish of a run and at its close -----------
 
 

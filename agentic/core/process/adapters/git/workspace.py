@@ -40,7 +40,14 @@ from pathlib import Path, PurePosixPath
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
-from ...application.ports import AddedAdr, AddedLine, Checkout, Upstream, UpstreamMerge
+from ...application.ports import (
+    AddedAdr,
+    AddedLine,
+    Checkout,
+    FastForwardView,
+    Upstream,
+    UpstreamMerge,
+)
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.ci import Containment
@@ -529,6 +536,18 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def fast_forward_view(self, sha: str) -> FastForwardView:
+        ancestor = self.is_ancestor(self.product_dir, "HEAD", sha)
+        changed = self._git("diff", "--name-only", "HEAD", sha)
+        status = self._run("status", "--porcelain", "-uall", "-z")
+        if status.returncode != 0:
+            raise GitError(f"git status --porcelain failed: {status.stderr.strip()}")
+        return FastForwardView(
+            ancestor,
+            frozenset(line for line in changed.splitlines() if line),
+            _dirty_paths(status.stdout),
+        )
+
     def first_parent_commits(self, older: str, newer: str) -> tuple[rules.Commit, ...]:
         result = self._run(
             "rev-list", "--first-parent", "--parents", "--reverse", f"{older}..{newer}"
@@ -867,6 +886,20 @@ class GitWorkspace:
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
+
+
+def _dirty_paths(porcelain_z: str) -> frozenset[str]:
+    """The paths of a `git status --porcelain -z` output. A rename or a copy carries its
+    source as one more field, which is skipped: only the path that exists now can clash."""
+    fields = iter(porcelain_z.split("\0"))
+    paths: set[str] = set()
+    for entry in fields:
+        if len(entry) < 4:
+            continue
+        paths.add(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            next(fields, None)
+    return frozenset(paths)
 
 
 def _patch_additions(log: str) -> list[AddedLine]:

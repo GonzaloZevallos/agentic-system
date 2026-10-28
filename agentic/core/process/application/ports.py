@@ -722,6 +722,18 @@ class Upstream:
 
 
 @dataclass(frozen=True)
+class FastForwardView:
+    """What `Workspace.fast_forward_view` reads of the product checkout against a tip
+    (GH-420): `ancestor` is whether its HEAD is an ancestor of the tip, `changed` the paths
+    that differ between HEAD and the tip, `dirty` the paths of its untracked and modified
+    files that git does not ignore. `rules.fast_forward_blocked` decides from these."""
+
+    ancestor: bool
+    changed: frozenset[str]
+    dirty: frozenset[str]
+
+
+@dataclass(frozen=True)
 class UpstreamMerge:
     """What `Workspace.merge_upstream_into` reports (GH-239, the landing's sync): `clean`
     says the upstream is now in the checkout's history and committed; otherwise
@@ -1021,6 +1033,11 @@ class Workspace(Protocol):
         `GitError` for anything else `git merge-base --is-ancestor` answers beside its
         own two documented exit codes (0: is an ancestor, 1: is not): that is a git
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
+        ...
+
+    def fast_forward_view(self, sha: str) -> FastForwardView:
+        """The product checkout's own facts against the fetched tip `sha` (GH-420), read
+        only: no merge, no checkout, no fetch. Raises `GitError` when git cannot answer."""
         ...
 
     def first_parent_commits(self, older: str, newer: str) -> tuple[Commit, ...]:
