@@ -957,6 +957,10 @@ def test_a_plan_that_does_not_fit_as_subtasks_is_judged_the_same_as_parts():
 
 
 def test_parts_that_fit_by_their_own_bucket_then_subtasks_that_do_not_are_both_refused():
+    # The one order where the two refusals differ in kind (brief case b): with nothing pinned,
+    # parts are judged at their own count and the subtasks that follow at their own, and the
+    # two buckets disagree on this estimate. No rule can know the subtask count before it is
+    # written; from the second output on the bucket is pinned (see the run's Decisions).
     check = schemas.plan_check_for(_two_bucket_history(), 0.0)
     with pytest.raises(ValueError, match=r"\bfits\b"):
         check(_split(38.0, 21))
@@ -980,9 +984,9 @@ def test_an_invalid_output_does_not_pin_the_bucket():
     check = schemas.plan_check_for(_two_bucket_history(), 0.0)
     with pytest.raises(ValueError, match="at least one file"):
         check(_estimated(38.0, 0, *SEVEN, "h", "i"))
-    check(_estimated(38.0, 21, "a", "b"))  # judged on its own bucket (2): fits
+    check(_estimated(38.0, 21, "a", "b", "c"))  # judged on its own bucket (3): fits
     with pytest.raises(ValueError, match=r"\bfits\b"):
-        check(_split(38.0, 21))  # the pin is 2, not 9
+        check(_split(38.0, 21))  # the pin is 3, not 9
 
 
 def test_the_does_not_fit_refusal_gives_the_action_first_and_the_fixed_sentence():
