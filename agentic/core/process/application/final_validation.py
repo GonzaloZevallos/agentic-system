@@ -21,6 +21,7 @@ the same channel any other plan-scoped finding already travels."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -58,11 +59,27 @@ async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -
         state = apply(state, design_patch)
         patch = apply(patch, design_patch)
 
-        output, pm_patch = await run_role(state, PM_FINAL, cfg, ports, cwd=task.path)
+        # Every run starts without the previous run's record: the capability files it
+        # committed are replaced, never accumulated, and a failed run leaves none claimed.
+        patch = apply(patch, {"close_docs": None})
+        reviewed = _reviewed_head(state)
+        prompt = with_context(
+            state, PM_FINAL, ports, task.path, _diff_facts(state, ports, reviewed)
+        )
+        output, pm_patch = await run_role(
+            state,
+            PM_FINAL,
+            cfg,
+            ports,
+            check=_without_definitions_on_return(ports.knowledge.clarification_check()),
+            cwd=task.path,
+            prompt=prompt,
+        )
         patch = apply(patch, pm_patch)
         if output is None:
             return finish(state, patch, ports)
         patch = apply(patch, _verdict_patch(state, cfg, output.data))
+        patch = apply(patch, _close_docs_patch(state, ports, task.path, output.data, reviewed))
         return finish(state, patch, ports)
     finally:
         if not isinstance(started, str) and started is not None:
@@ -130,6 +147,69 @@ async def _ui_lead_final(
     facts = "\n\n".join(filter(None, [design_facts(design_block), compare_facts(design_block)]))
     prompt = with_context(state, widened, ports, cwd, facts) if facts else None
     return await run_role(state, widened, cfg, ports, cwd=cwd, prompt=prompt)
+
+
+def _reviewed_head(state: TaskState) -> str | None:
+    """The `reviewed_head` of the reviewed unit: the commit PM's approval sits on, and the
+    `parent` a close-time commit is made on."""
+    name = rules.reviewed_unit_name(state)
+    return state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
+
+
+def _diff_facts(state: TaskState, ports: Ports, reviewed: str | None) -> str:
+    """What PM needs to read the delivered diff itself: the base the task started from and
+    the head its approval sits on. Nothing to read when no review recorded a head."""
+    if not reviewed:
+        return "No reviewed head is recorded: there is no delivered diff to reconcile."
+    return (
+        f"The delivered diff is `git diff {task_base(state, ports)}..{reviewed}`: read it to "
+        "reconcile the capability files you return with what shipped."
+    )
+
+
+def _without_definitions_on_return(
+    base: Callable[[dict[str, Any]], None],
+) -> Callable[[dict[str, Any]], None]:
+    """The knowledge rules for `definitions` (`clarification_check`), plus this node's own:
+    a `returned` verdict writes nothing, so a non-empty list there is a mistake PM fixes
+    inside its turn rather than a file the system silently drops."""
+
+    def check(data: dict[str, Any]) -> None:
+        if data["verdict"] == "returned" and data["definitions"]:
+            raise ValueError(
+                "returned with `definitions`: capability files are written only on `approved`; "
+                "return an empty list"
+            )
+        base(data)
+
+    return check
+
+
+def _relative_paths(written: list[Path], root: Path) -> list[str]:
+    """The files `consolidate` wrote, as paths relative to the checkout they were written in
+    (what `commit_paths` takes and `close_docs.paths` records): the one place they are
+    converted."""
+    return [path.relative_to(root).as_posix() for path in written]
+
+
+def _close_docs_patch(
+    state: TaskState, ports: Ports, root: Path, data: dict[str, Any], reviewed: str | None
+) -> TaskState:
+    """The close-time pass: on `approved`, the capability files PM returned are written into
+    the task checkout and committed there, and `close_docs` records that commit. Nothing is
+    written when PM returned none or no head was reviewed, and nothing is recorded when the
+    files were already what the checkout held (no commit). `paths` is what was committed."""
+    if data["verdict"] != "approved" or not data["definitions"] or not reviewed:
+        return {}
+    written = ports.knowledge.consolidate(
+        {"definitions": data["definitions"], "glossary": []}, root
+    )
+    relative = _relative_paths(written, root)
+    message = f"{state['id']}: capability files at close"
+    head = ports.workspace.commit_paths(root, relative, message)
+    if head is None:
+        return {}
+    return {"close_docs": {"parent": reviewed, "head": head, "paths": relative}}
 
 
 def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -> TaskState:

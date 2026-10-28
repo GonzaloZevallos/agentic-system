@@ -52,6 +52,7 @@ pytestmark = pytest.mark.anyio
 
 # sha256[:16] of every prompt this scenario hands its roles (the product directory
 # replaced by TMP), measured at 2e8b7d9, before the Tech Writer: the rendering today.
+# The last (`pm_final`) was re-pinned when it gained the delivered-diff fact (close-time pass).
 TODAYS_PROMPTS = [
     "0e6577edeacb6edb",
     "72d73d6fa29dc6d8",
@@ -70,7 +71,7 @@ TODAYS_PROMPTS = [
     "e632cbbd62d83b5c",
     "27c14992def4ca06",
     "983429e4371d2542",
-    "d9a4ed4d5b0d5c62",
+    "7cc6dc3e35498fca",
 ]
 
 COPY = {"touches_ui": False, "touches_copy": True}
