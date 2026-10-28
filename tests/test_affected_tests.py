@@ -327,10 +327,10 @@ def test_an_adr_selects_the_test_that_lists_the_adr_directory_and_nothing_else()
     assert _files(result) == ("tests/test_adr_numbers.py",)
 
 
-def test_a_doc_outside_the_adr_directory_and_the_ignored_ones_is_refused():
-    sources = _walker_sources() | {"tests/test_adr_numbers.py": ""}
+def test_a_doc_outside_the_adr_directory_and_the_ignored_ones_selects_the_docs_test():
+    sources = _walker_sources() | {"tests/test_adr_numbers.py": "", "tests/test_docs.py": ""}
     result = _select(["docs/x.md"], sources, script.TABLE, script.IGNORE)
-    assert isinstance(result, script.Refusal)
+    assert _files(result) == ("tests/test_docs.py",)
 
 
 def test_a_test_that_loads_code_by_a_computed_name_joins_the_agentic_trigger():
@@ -387,6 +387,17 @@ class Allowance(NamedTuple):
 
 
 ALLOWANCES: tuple[Allowance, ...] = (
+    Allowance(
+        "tests/*",
+        "docs/architecture/generated/*",
+        "tests name these as the string globs of a `docs:` block in a throwaway repo; none "
+        "reads the files, which the docs check deletes and restores (GH-400, ADR-0076)",
+    ),
+    Allowance(
+        "tests/*",
+        "docs/reference/*",
+        "same: the second owned glob of this repo's `docs:` block, named and never read",
+    ),
     Allowance(
         "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
         "BRIEF.md",
@@ -705,7 +716,8 @@ def test_the_stack_declares_the_affected_form_and_keeps_the_other_checks_full():
     forms = stack.affected_checks(data, STACK_YAML)
     assert list(forms) == ["tests"]
     assert forms["tests"].startswith("uv run python scripts/affected_tests.py {base}")
-    assert set(stack.checks(data, STACK_YAML)) == {"tests", "lint", "format", "types"}
+    # `docs` is the reserved check the `docs:` block adds (ADR-0074); CI runs it as check.py.
+    assert set(stack.checks(data, STACK_YAML)) == {"tests", "lint", "format", "types", "docs"}
     assert _declared_fallback() == (
         "pyproject.toml",
         "uv.lock",

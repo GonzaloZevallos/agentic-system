@@ -44,6 +44,9 @@ STANDARDS = REPO / "CODING_STANDARDS.md"
 def _declared_commands() -> list[str]:
     data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
     declared = stack.checks(data, STACK_YAML)
+    # The reserved `docs` check is a generated command; CI runs it through `check.py`, which
+    # `tests/test_docs.py` pins as a step of the job.
+    declared.pop("docs", None)
     declared.update(stack.setup(data, STACK_YAML))
     return list(declared.values())
 
@@ -96,8 +99,17 @@ def test_every_mypy_file_exists():
 # under `tests/` is checked, so nothing else is admitted.
 MYPY_TEST_ENTRIES = frozenset({"tests/fakes.py", "tests/conformance.py"})
 # The scripts the scope admits: the read-only poller-journal measure (GH-362) and the gate
-# duration by concurrency table (GH-361). Other scripts are not checked, so none is admitted.
-MYPY_SCRIPT_ENTRIES = frozenset({"scripts/poll_waits.py", "scripts/gate_concurrency.py"})
+# duration by concurrency table (GH-361), and the pure renderer and the stale check of the
+# docs generator (GH-400; `generate.py` imports `render` by name and stays out). Other scripts
+# are not checked, so none is admitted.
+MYPY_SCRIPT_ENTRIES = frozenset(
+    {
+        "scripts/poll_waits.py",
+        "scripts/gate_concurrency.py",
+        "scripts/docs/render.py",
+        "scripts/docs/check.py",
+    }
+)
 
 
 def _outside_scope(entries: list[str]) -> list[str]:
@@ -178,10 +190,11 @@ def test_the_declared_parallel_checks_is_a_bool_the_gate_can_read():
     assert "ADR-0044" in STACK_YAML.read_text(encoding="utf-8")
 
 
-def test_the_declared_delivery_checks_are_this_repos_four_checks_in_order():
-    """This repo's own fast tier, read through the domain exactly as `GitStack` would."""
+def test_the_declared_delivery_checks_are_this_repos_four_checks_and_docs_in_order():
+    """This repo's own fast tier, read through the domain exactly as `GitStack` would; the
+    reserved `docs` check joins it last because the stack declares `docs:` (ADR-0074)."""
     data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
-    assert stack.delivery_checks(data, STACK_YAML) == ("tests", "lint", "format", "types")
+    assert stack.delivery_checks(data, STACK_YAML) == ("tests", "lint", "format", "types", "docs")
 
 
 def unknown_ci_names(declared: tuple[str, ...], workflow: dict[str, Any]) -> list[str]:
