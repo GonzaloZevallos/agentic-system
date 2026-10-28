@@ -371,3 +371,21 @@ tasks:
       tasks:
       - GH-375
     decisions: 1
+  GH-392@review:
+    cost_usd: 0.0845
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-392
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-392
+    decisions: 2

@@ -817,3 +817,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-28T04:16:31.268+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan states an invariant such as a required message prefix, grep every raise or exit site in the change and route each through the shared helper, then assert the invariant in a test per path.
+  confidence: medium
+  seen_in:
+  - GH-392
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T04:22:28.646+00:00'
