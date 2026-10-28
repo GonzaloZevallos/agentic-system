@@ -146,9 +146,7 @@ class CutDocuments(MemoryDocuments):
 class World:
     """The fakes of one restore, typed: a test reads what each port recorded."""
 
-    def __init__(
-        self, archived: dict | None = None, *, live: dict | None = None, pr=None
-    ) -> None:
+    def __init__(self, archived: dict | None = None, *, live: dict | None = None, pr=None) -> None:
         self.workspace = CutWorkspace()
         self.tracker = CutTracker()
         self.documents = CutDocuments()
