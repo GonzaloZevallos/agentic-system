@@ -1568,7 +1568,11 @@ class PerfRunner(Protocol):
     """Runs one `seed`, `measure` or `setup` command of a performance scenario (GH-318,
     ADR-0059) in `checkout`, with `extra_env` on top of a scrubbed environment, and returns
     the `Run`. A non-zero exit and a timeout are a `Run` (`timed_out`), never an exception:
-    the verdict reads them."""
+    the verdict reads them.
+
+    With the run's stop flag set (SIGTERM or SIGHUP reached `run`/`resume`, GH-385) `run` raises
+    `RunStopped` before launching anything or after the command ended, and never returns a
+    `Run` for a command the stop killed. It raises only once the command's process has ended."""
 
     def run(
         self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
@@ -1579,7 +1583,9 @@ class PerfLock(Protocol):
     """The machine-wide lock two measurements take so they never share a CPU (GH-318)."""
 
     def acquire(self, wait_s: float) -> bool:
-        """Takes the lock, waiting at most `wait_s` seconds; `False` when it is held."""
+        """Takes the lock, waiting at most `wait_s` seconds; `False` when it is held. With the
+        run's stop flag set it raises `RunStopped` without taking the lock, whether it was
+        asked to or is already waiting."""
         ...
 
     def release(self) -> None:

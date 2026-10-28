@@ -17,9 +17,18 @@ inside the checkout, at the moment of the reap. A child that drops the environme
 (`env -i`) and leaves the checkout (`cd /`) is neither, and survives the verb: a known gap
 the tests pin and ADR-0059 lists.
 
-**What comes back.** A `Run`, always: a non-zero exit and a timeout are fields of it, never
-an exception. A timed-out command has no measurement (its output is cut). The one-minute
-load average is read before and after, `None` where the machine has none.
+**What comes back.** A `Run`, except when the run was told to stop: a non-zero exit and a
+timeout are fields of it, never an exception. A timed-out command has no measurement (its
+output is cut). The one-minute load average is read before and after, `None` where the machine
+has none.
+
+**The stop.** With the run's stop flag set (SIGTERM or SIGHUP reached `run`/`resume`, GH-385)
+`run` raises `RunStopped` and never returns a `Run` for a command the stop killed or that was
+never launched, the contract `ShellCommands` has: before it makes the scratch or launches
+anything, right after the launch (the stop's own reap ran before this `Popen` and could not see
+the command, so the runner kills and reaps it), when `communicate` returned, and when a timeout
+met a stop. The `finally` runs for it too: the group is killed, the mark and the checkout are
+reaped and the scratch is removed before the exception leaves.
 """
 
 from __future__ import annotations
@@ -35,7 +44,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
-from ...application.ports import ProcessReaper
+from ...application.ports import ProcessReaper, RunStopped, StopFlag
 from ...domain import performance, reaping
 
 # How long to wait for the output of a command already killed.
@@ -45,15 +54,18 @@ _EXTRA_ENV = ("PERF_VOLUME", "PERF_VOLUME_UNIT")
 
 
 class PerfShellRunner:
-    def __init__(self, product_key: str, reaper: ProcessReaper) -> None:
+    def __init__(self, product_key: str, reaper: ProcessReaper, stop: StopFlag) -> None:
         self._product = product_key
         self._reaper = reaper
+        self._stop = stop
 
     def run(
         self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
     ) -> performance.Run:
         if refused := [name for name in extra_env if name not in _EXTRA_ENV]:
             raise ValueError(f"a perf command's environment may only add {_EXTRA_ENV}: {refused}")
+        if self._stop.is_set():
+            raise RunStopped
         token = uuid4().hex
         scratch = Path(tempfile.mkdtemp(prefix="perf-home-"))
         process: subprocess.Popen[str] | None = None
@@ -71,16 +83,19 @@ class PerfShellRunner:
                 errors="replace",  # output is read, and only one line of it parsed
                 start_new_session=True,
             )
+            if self._stop.is_set():
+                # The reap of the stop ran before this `Popen` and could not see the command.
+                self._kill_and_drain(process, token, checkout)
+                raise RunStopped
             try:
                 output, _ = process.communicate(timeout=timeout_s)
             except subprocess.TimeoutExpired:
-                self._stop(process, token, checkout)
-                try:
-                    process.communicate(timeout=_DRAIN_S)
-                except subprocess.TimeoutExpired:
-                    # A descendant that left the group still holds the pipes: give up on it.
-                    process.kill()
+                self._kill_and_drain(process, token, checkout)
+                if self._stop.is_set():
+                    raise RunStopped from None
                 return performance.Run(None, process.returncode or -1, True, before, _load())
+            if self._stop.is_set():
+                raise RunStopped
             return performance.Run(
                 performance.parse_line(output or ""), process.returncode, False, before, _load()
             )
@@ -109,9 +124,16 @@ class PerfShellRunner:
         env[reaping.MARK_NAME] = reaping.mark(self._product, reaping.PERF_TASK, os.getpid(), token)
         return env
 
-    def _stop(self, process: subprocess.Popen[str], token: str, checkout: Path) -> None:
+    def _kill_and_drain(self, process: subprocess.Popen[str], token: str, checkout: Path) -> None:
+        """Stops the command's whole group and what carries its mark. On return its process
+        has ended, unless a descendant outside the group still holds the pipes."""
         _kill_group(process.pid)
         self._reap(token, checkout)
+        try:
+            process.communicate(timeout=_DRAIN_S)
+        except subprocess.TimeoutExpired:
+            # A descendant that left the group still holds the pipes: give up on it.
+            process.kill()
 
     def _reap(self, token: str, checkout: Path) -> None:
         """What still carries the command's mark, then what is unmarked with its cwd in the

@@ -49,10 +49,12 @@ from agentic.core.process.application.ports import (
     RawResult,
     RoleRunner,
     RunRegistration,
+    RunStopped,
     SampleApp,
     SampleAppHandle,
     Scratch,
     SentMemory,
+    StopFlag,
     TaskDocuments,
     Tracker,
     Upstream,
@@ -1587,15 +1589,19 @@ class MemoryRunRegistry:
 
 class FakePerfRunner:
     """GH-318: records each `run` as `(checkout, command, extra_env, timeout_s)` and answers
-    the next `Run` of `script`, or a clean empty one; never starts a process."""
+    the next `Run` of `script`, or a clean empty one; never starts a process. With a `stop` flag
+    that is set it raises `RunStopped` and records nothing, as the real runner does (GH-385)."""
 
-    def __init__(self, script: Sequence[Run] = ()) -> None:
+    def __init__(self, script: Sequence[Run] = (), stop: StopFlag | None = None) -> None:
         self.script = list(script)
+        self.stop = stop
         self.calls: list[tuple[Path, str, dict[str, str], float]] = []
 
     def run(
         self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
     ) -> Run:
+        if self.stop is not None and self.stop.is_set():
+            raise RunStopped
         self.calls.append((checkout, command, dict(extra_env), timeout_s))
         return self.script.pop(0) if self.script else Run(None, 0, False, None, None)
 
@@ -1614,14 +1620,18 @@ class FakeStopFlag:
 
 
 class FakePerfLock:
-    """GH-318: `acquire` answers `available` and counts; `release` counts."""
+    """GH-318: `acquire` answers `available` and counts; `release` counts. With a `stop` flag
+    that is set, `acquire` raises `RunStopped` and takes nothing (GH-385)."""
 
-    def __init__(self, available: bool = True) -> None:
+    def __init__(self, available: bool = True, stop: StopFlag | None = None) -> None:
         self.available = available
+        self.stop = stop
         self.acquired: list[float] = []
         self.released = 0
 
     def acquire(self, wait_s: float) -> bool:
+        if self.stop is not None and self.stop.is_set():
+            raise RunStopped
         self.acquired.append(wait_s)
         return self.available
 

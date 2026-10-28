@@ -268,6 +268,37 @@ def test_a_markable_flag_passed_to_the_composition_reaches_the_commands(tmp_path
         ports.commands.run(product, "echo hi", timeout_s=10)
 
 
+def test_a_markable_flag_passed_to_the_composition_reaches_the_perf_runner_and_lock(
+    tmp_path, monkeypatch
+):
+    """GH-385: the run's flag is what stops a measurement; this fails if either perf adapter is
+    built on a flag of its own."""
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    cfg = Configuration(product_dir=product, perf_lock_path=tmp_path / "perf.lock")
+    flag = EventStopFlag()
+    ports = composition.default_ports(cfg, flag)
+    assert ports.perf_runner is not None and ports.perf_lock is not None
+    flag.set()
+    with pytest.raises(RunStopped):
+        ports.perf_runner.run(product, f"touch {product}/started", {}, 10)
+    with pytest.raises(RunStopped):
+        ports.perf_lock.acquire(0)
+    assert not (product / "started").exists()
+    assert not cfg.perf_lock_path.exists()
+
+
+def test_the_perf_verbs_builders_pass_a_flag_that_never_sets(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    cfg = Configuration(product_dir=product, perf_lock_path=tmp_path / "perf.lock")
+    ports = composition.default_ports(cfg, NullStopFlag())
+    runner, lock = composition.perf_runner(cfg, ports), composition.perf_lock(cfg)
+    assert runner.run(product, "true", {}, 10).exit_code == 0
+    assert lock.acquire(0) is True
+    lock.release()
+
+
 def test_the_composition_builds_the_scratch_and_free_space_adapters(tmp_path, monkeypatch):
     # GH-391: both ports are wired for later subtasks to use; the scratch is on the
     # root outside the product (GH-397), in this product's partition.

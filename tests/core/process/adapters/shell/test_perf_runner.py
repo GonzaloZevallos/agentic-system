@@ -6,18 +6,23 @@ import os
 import select
 import shutil
 import signal
+import subprocess
 import tempfile
+import threading
+import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agentic.core.process.adapters.shell import ShellReaper
+from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag, ShellReaper
 from agentic.core.process.adapters.shell import perf_runner as perf_runner_module
 from agentic.core.process.adapters.shell.perf_runner import PerfShellRunner
+from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.reaping import ReapedProcess
+from tests.conformance import perf_runner_stops_with_the_flag
 
 PRODUCT = "tperf"
 SLEEP = shutil.which("sleep") or "sleep"
@@ -68,7 +73,7 @@ def reaper(worktrees: Path) -> Recording:
 
 @pytest.fixture
 def runner(reaper: Recording) -> PerfShellRunner:
-    return PerfShellRunner(PRODUCT, reaper)
+    return PerfShellRunner(PRODUCT, reaper, NullStopFlag())
 
 
 def _gone(fd: int, within_s: float = 0.0) -> bool:
@@ -312,3 +317,137 @@ def test_a_child_that_cds_away_and_drops_the_environment_survives_the_known_gap(
         signal.pidfd_send_signal(fd, signal.SIGKILL)
         assert _gone(fd, 5)
         os.close(fd)
+
+
+# The checks of `PerfShellRunner.run`, in the order it makes them, as the 0-based index of the
+# `is_set()` call that reads them: index 0 is the one before anything is made, then right after
+# `Popen`, then (whichever branch the command took) after `communicate` returned or timed out.
+_AFTER_POPEN = 1
+_AFTER_COMMUNICATE = 2
+
+
+class CountingFlag:
+    """A flag clear for the first `set_from` looks and set from then on: the stop that arrives
+    between two of the runner's checks, with no thread and no timing."""
+
+    def __init__(self, set_from: int) -> None:
+        self.set_from = set_from
+        self.looks = 0
+
+    def is_set(self) -> bool:
+        self.looks += 1
+        return self.looks > self.set_from
+
+    def set(self) -> None:
+        raise AssertionError("the runner never sets the flag")
+
+
+def test_a_stop_before_the_call_raises_and_launches_nothing(reaper, checkout, monkeypatch):
+    stop = EventStopFlag()
+    stop.set()
+    made: list[str] = []
+    real = tempfile.mkdtemp
+
+    def recording(*args: Any, **kwargs: Any) -> str:
+        made.append(real(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(perf_runner_module.tempfile, "mkdtemp", recording)
+    with pytest.raises(RunStopped):
+        PerfShellRunner(PRODUCT, reaper, stop).run(
+            checkout, f"touch {checkout}/started", VOLUME, timeout_s=10
+        )
+    assert not (checkout / "started").exists()
+    assert made == []  # no scratch was made, so none is left
+    assert reaper.attempts == []
+
+
+def test_a_stop_right_after_popen_kills_the_command_the_stops_own_reap_could_not_see(
+    reaper, checkout, monkeypatch
+):
+    """The reap of a stop ran just before this `Popen` and found nothing: the runner must kill
+    and reap what it just launched, and answer `RunStopped`, never a `Run`."""
+    real = subprocess.Popen
+    launched: list[subprocess.Popen[str]] = []
+    envs: list[dict[str, str]] = []
+
+    def recording(*args: Any, **kwargs: Any) -> subprocess.Popen[str]:
+        process = real(*args, **kwargs)
+        launched.append(process)
+        envs.append(kwargs["env"])
+        return process
+
+    monkeypatch.setattr(perf_runner_module.subprocess, "Popen", recording)
+    runner = PerfShellRunner(PRODUCT, reaper, CountingFlag(set_from=_AFTER_POPEN))
+    with pytest.raises(RunStopped):
+        runner.run(checkout, f"{SLEEP} 300", VOLUME, timeout_s=60)
+    (process,) = launched
+    assert process.poll() is not None
+    parsed = reaping.parse_mark(envs[0][reaping.MARK_NAME])
+    assert parsed is not None
+    assert reaper.attempts[0] == (reaping.PERF_TASK, os.getpid(), parsed.token)
+    assert [checkout] in reaper.within
+    assert _survivors(checkout) == []
+
+
+def test_a_stop_while_the_command_runs_ends_run_with_run_stopped_not_a_run(
+    reaper, checkout, worktrees
+):
+    pidfile = checkout / "pid"
+    stop = EventStopFlag()
+    real_reaper = ShellReaper(PRODUCT, worktrees)
+
+    def stop_then_reap() -> None:
+        deadline = time.monotonic() + 10
+        while not pidfile.exists() or not pidfile.read_text().strip():
+            assert time.monotonic() < deadline, "the command never started"
+            time.sleep(0.05)
+        stop.set()  # the signal handler's own order: the flag, then the reap
+        real_reaper.reap_run(reaping.PERF_TASK, os.getpid())
+
+    thread = threading.Thread(target=stop_then_reap)
+    runner = PerfShellRunner(PRODUCT, reaper, stop)
+    started = time.monotonic()
+    thread.start()
+    try:
+        with pytest.raises(RunStopped):
+            runner.run(checkout, f"echo $$ > {pidfile}; {SLEEP} 30", VOLUME, timeout_s=60)
+    finally:
+        thread.join(10)
+    assert time.monotonic() - started < 5
+    assert not _alive_in_proc(_read_pid(pidfile))
+    assert _survivors(checkout) == []
+
+
+def test_a_command_that_ended_is_not_a_run_when_the_stop_came_meanwhile(reaper, checkout):
+    runner = PerfShellRunner(PRODUCT, reaper, CountingFlag(set_from=_AFTER_COMMUNICATE))
+    with pytest.raises(RunStopped):
+        runner.run(checkout, f"echo '{LINE}'", VOLUME, timeout_s=10)
+    assert len(reaper.attempts) == 1  # the `finally` still reaped
+
+
+def test_a_timeout_that_meets_a_stop_is_run_stopped_not_a_timed_out_run(reaper, checkout):
+    runner = PerfShellRunner(PRODUCT, reaper, CountingFlag(set_from=_AFTER_COMMUNICATE))
+    with pytest.raises(RunStopped):
+        runner.run(checkout, f"{SLEEP} 300", VOLUME, timeout_s=0.5)
+    assert _survivors(checkout) == []
+
+
+def test_the_scratch_home_is_gone_when_the_run_is_stopped(reaper, checkout, monkeypatch):
+    made: list[Path] = []
+    real = tempfile.mkdtemp
+
+    def recording(*args: Any, **kwargs: Any) -> str:
+        made.append(Path(real(*args, **kwargs)))
+        return str(made[-1])
+
+    monkeypatch.setattr(perf_runner_module.tempfile, "mkdtemp", recording)
+    runner = PerfShellRunner(PRODUCT, reaper, CountingFlag(set_from=_AFTER_POPEN))
+    with pytest.raises(RunStopped):
+        runner.run(checkout, "true", VOLUME, timeout_s=10)
+    assert len(made) == 1 and not made[0].exists()
+
+
+def test_the_real_runner_keeps_the_perf_runner_contract_of_the_stop(reaper, checkout):
+    stop = EventStopFlag()
+    perf_runner_stops_with_the_flag(PerfShellRunner(PRODUCT, reaper, stop), stop, checkout)
