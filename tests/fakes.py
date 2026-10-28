@@ -28,6 +28,7 @@ from agentic.core.process.application.ports import (
     CheckScheduler,
     CommandResult,
     Commands,
+    FastForwardView,
     FlagVocabulary,
     FreeSpace,
     GitError,
@@ -802,6 +803,11 @@ class MemoryWorkspace:
         # needs it" is a count.
         self.upstream_answer = Upstream("HEAD", None, None)
         self.upstream_calls = 0
+        # GH-420: what `fast_forward_view` answers (a clean checkout by default), the shas it
+        # was asked about, and a message that makes it raise `GitError`.
+        self.fast_forward_answer = FastForwardView(True, frozenset(), frozenset())
+        self.fast_forward_asks: list[str] = []
+        self.fast_forward_error: str | None = None
         self.checkouts: list[Path] = []
         # GH-297: `build_slice`'s and `integration_paths`'s scripts and their calls.
         self.slice_conflicts: set[str] = set()
@@ -1288,6 +1294,12 @@ class MemoryWorkspace:
     def upstream(self) -> Upstream:
         self.upstream_calls += 1
         return self.upstream_answer
+
+    def fast_forward_view(self, sha: str) -> FastForwardView:
+        self.fast_forward_asks.append(sha)
+        if self.fast_forward_error is not None:
+            raise GitError(self.fast_forward_error)
+        return self.fast_forward_answer
 
 
 class MemoryTracker:

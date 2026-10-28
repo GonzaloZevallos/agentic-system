@@ -40,7 +40,14 @@ from pathlib import Path, PurePosixPath
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
-from ...application.ports import AddedAdr, AddedLine, Checkout, Upstream, UpstreamMerge
+from ...application.ports import (
+    AddedAdr,
+    AddedLine,
+    Checkout,
+    FastForwardView,
+    Upstream,
+    UpstreamMerge,
+)
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...application.ports import UnstageablePath as UnstageablePath
 from ...domain import rules
@@ -642,6 +649,16 @@ class GitWorkspace:
         except (GitError, OSError, subprocess.SubprocessError):
             return None
 
+    def fast_forward_view(self, sha: str) -> FastForwardView:
+        ancestor = self.is_ancestor(self.product_dir, "HEAD", sha)
+        changed = self._read_z("diff", "--name-only", "-z", "HEAD", sha)
+        status = self._read_z("status", "--porcelain", "-uall", "-z")
+        return FastForwardView(
+            ancestor,
+            frozenset(name for name in changed.split("\0") if name),
+            _dirty_paths(status),
+        )
+
     def first_parent_commits(self, older: str, newer: str) -> tuple[rules.Commit, ...]:
         result = self._run(
             "rev-list", "--first-parent", "--parents", "--reverse", f"{older}..{newer}"
@@ -980,11 +997,33 @@ class GitWorkspace:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
 
+    def _read_z(self, *args: str) -> str:
+        """The raw stdout of a NUL-separated git read: never stripped, so no path loses a
+        leading or trailing space."""
+        result = self._run(*args)
+        if result.returncode != 0:
+            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout
+
     def _git(self, *args: str, cwd: Path | None = None) -> str:
         result = self._run(*args, cwd=cwd)
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
+
+
+def _dirty_paths(porcelain_z: str) -> frozenset[str]:
+    """The paths of a `git status --porcelain -z` output. A rename or a copy carries its
+    source as one more field, which is skipped: only the path that exists now can clash."""
+    fields = iter(porcelain_z.split("\0"))
+    paths: set[str] = set()
+    for entry in fields:
+        if len(entry) < 4:
+            continue
+        paths.add(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            next(fields, None)
+    return frozenset(paths)
 
 
 def _patch_additions(log: str) -> list[AddedLine]:

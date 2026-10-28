@@ -650,6 +650,19 @@ def test_a_branch_with_commits_the_upstream_lacks_starts_from_the_upstream_and_n
     assert found.note is not None and local in found.note
 
 
+def test_a_diverged_clone_warns_diverged_from_the_upstream_the_workspace_itself_reads(remote):
+    """GH-420: the left-out note comes with a fetched tip, so the poller still judges against it."""
+    remote.merge_on_origin()
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    found = ws.upstream()
+    assert found.note and found.sha and found.ref != "HEAD"
+    view = ws.fast_forward_view(found.sha)
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("diverged", ())
+    )
+
+
 def test_the_left_out_commits_are_capped_at_ten_and_the_rest_counted(remote):
     for i in range(12):
         _commit(remote.clone, f"l{i}.txt", "l\n", f"local {i}")
@@ -1619,3 +1632,90 @@ def test_the_archived_document_fails_without_moving_the_ref_when_the_tip_moved_m
         Racing(product, IDENTITY).commit_archived_document(ARCHIVED, DOCUMENT, "doc\n", "race")
     assert git("rev-parse", ARCHIVED, cwd=product) == other
     assert not list((product / ".git").glob("agentic-archive-index*"))
+
+
+# --- GH-420: the poller's read-only view of whether the checkout can fast-forward ------------
+
+
+def _remote_ahead(product: Path, tmp_path: Path, name: str) -> str:
+    """Push `product`, then a second clone adds `name` on top; returns the new upstream sha."""
+    git("push", "-q", "origin", "master", cwd=product)
+    other = tmp_path / "other"
+    git("clone", "-q", str(tmp_path / "remote.git"), str(other), cwd=tmp_path)
+    (other / name).parent.mkdir(parents=True, exist_ok=True)
+    (other / name).write_text("from upstream\n")
+    git("add", "-A", cwd=other)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "up", cwd=other)
+    git("push", "-q", "origin", "master", cwd=other)
+    git("fetch", "-q", "origin", cwd=product)
+    return git("rev-parse", "origin/master", cwd=product)
+
+
+def test_fast_forward_view_names_an_untracked_file_the_upstream_adds(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, ".agentic/tasks/GH-1.md")
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / ".agentic/tasks/GH-1.md").write_text("live copy\n")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.ancestor
+    assert view.changed == frozenset({".agentic/tasks/GH-1.md"})
+    assert ".agentic/tasks/GH-1.md" in view.dirty
+    block = rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty)
+    assert block == rules.FastForwardBlock("would_overwrite", (".agentic/tasks/GH-1.md",))
+    # Read only: the file is as it was and nothing was merged.
+    assert (product / ".agentic/tasks/GH-1.md").read_text() == "live copy\n"
+    assert git("rev-parse", "HEAD", cwd=product) != tip
+
+
+def test_fast_forward_view_ignores_what_info_exclude_hides(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, ".agentic/tasks/GH-1.md")
+    (product / ".git/info/exclude").write_text(".agentic/tasks/*.md\n")
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / ".agentic/tasks/GH-1.md").write_text("live copy\n")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.dirty == frozenset()
+
+
+def test_fast_forward_view_reports_a_local_commit_the_upstream_lacks(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, "other.txt")
+    (product / "local.txt").write_text("local\n")
+    git("add", "-A", cwd=product)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "local", cwd=product)
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert not view.ancestor
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("diverged", ())
+    )
+
+
+def test_fast_forward_view_of_a_clean_checkout_behind_the_upstream_is_not_blocked(
+    product, tmp_path
+):
+    tip = _remote_ahead(product, tmp_path, "other.txt")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.ancestor and view.changed == frozenset({"other.txt"})
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) is None
+
+
+def test_fast_forward_view_raises_git_error_when_git_cannot_answer(tmp_path):
+    with pytest.raises(GitError):
+        GitWorkspace(tmp_path, IDENTITY).fast_forward_view("abc")
+
+
+def test_fast_forward_view_reads_a_rename_and_a_path_with_unicode_by_its_real_name(
+    product, tmp_path
+):
+    tip = _remote_ahead(product, tmp_path, "ñandú.txt")
+    (product / "ñandú.txt").write_text("mine\n")
+    git("mv", "README.md", "LEEME.md", cwd=product)
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.changed == frozenset({"ñandú.txt"})
+    assert view.dirty == frozenset({"ñandú.txt", "LEEME.md"})
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("would_overwrite", ("ñandú.txt",))
+    )
+
+
+def test_fast_forward_view_raises_git_error_when_the_diff_fails(product):
+    """The tip exists as a name but not as an object `diff` can read: the error is git's."""
+    with pytest.raises(GitError):
+        GitWorkspace(product, IDENTITY).fast_forward_view("not-a-revision")

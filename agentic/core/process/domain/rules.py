@@ -5430,3 +5430,35 @@ def close_after_merge(document: Mapping[str, object]) -> bool:
         return True
     slices = document.get("closed_by_slices")
     return isinstance(slices, list) and bool(slices)
+
+
+# --- GH-420 poller warning ---
+# When the product checkout cannot fast-forward to its fetched upstream, the stack the system
+# reads from it is stale. The one place that says why is `fast_forward_blocked`.
+
+MAX_BLOCK_PATHS = 5
+
+
+@dataclass(frozen=True)
+class FastForwardBlock:
+    """Why `git merge --ff-only <tip>` would fail in the product checkout: `diverged` (HEAD
+    is not an ancestor of the tip) or `would_overwrite` (an untracked or modified file would
+    be replaced by the tip). `paths` are the files git would name, sorted and capped at
+    `MAX_BLOCK_PATHS`; empty when diverged."""
+
+    reason: Literal["diverged", "would_overwrite"]
+    paths: tuple[str, ...]
+
+
+def fast_forward_blocked(
+    ancestor: bool, changed: frozenset[str], dirty: frozenset[str]
+) -> FastForwardBlock | None:
+    """`ancestor`: HEAD is an ancestor of the tip. `changed`: the paths that differ between
+    HEAD and the tip. `dirty`: the untracked or modified paths of the checkout. None when a
+    fast-forward would succeed."""
+    if not ancestor:
+        return FastForwardBlock("diverged", ())
+    clash = sorted(changed & dirty)
+    if clash:
+        return FastForwardBlock("would_overwrite", tuple(clash[:MAX_BLOCK_PATHS]))
+    return None

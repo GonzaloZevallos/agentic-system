@@ -1429,8 +1429,14 @@ async def _poll(
     real_launcher = launcher if launcher is not None else SpawnLauncher(cfg)
     executable = argv0 if argv0 is not None else _self_executable()
     with _locked(lock, pollmod.LOCK_KEY):
+        said: FastForwardMemory = None
         while True:
             try:
+                # The round's one `upstream()` (GH-420): the warning and the eval set read it.
+                upstream = ports.workspace.upstream()
+                said, notice = _fast_forward_notice(ports, upstream, said)
+                for line in notice:
+                    print(line, flush=True)
                 for line in pollmod.run_once(
                     cfg,
                     ports,
@@ -1440,7 +1446,7 @@ async def _poll(
                     executable,
                     lock=lock,
                     current_boot=liveness.current_boot_id(),
-                    eval_set=_round_eval_set(ports),
+                    eval_set=_round_eval_set(ports, upstream),
                     system_version=telemetry.fresh_system_version,
                 ):
                     print(line, flush=True)
@@ -1961,12 +1967,47 @@ def _upstream_eval_set(ports: Ports, upstream: Upstream) -> frozenset[int] | Non
         return None
 
 
-def _round_eval_set(ports: Ports) -> frozenset[int] | None:
-    """What one poll round hands `poll.run_once`: read (one upstream fetch) only when some
-    delivered task awaits a merge at all, the empty set otherwise, which nothing reads."""
+def _round_eval_set(ports: Ports, upstream: Upstream) -> frozenset[int] | None:
+    """What one poll round hands `poll.run_once`: read from the round's `upstream` only when
+    some delivered task awaits a merge at all, the empty set otherwise, which nothing reads."""
     if not pollmod.awaiting_merge(ports):
         return frozenset()
-    return _upstream_eval_set(ports, ports.workspace.upstream())
+    return _upstream_eval_set(ports, upstream)
+
+
+# What the poller last said about the product checkout's fast-forward (GH-420): the block it
+# reported, the text of a git failure it reported, or None when it said nothing or recovered.
+FastForwardMemory = rules.FastForwardBlock | str | None
+
+
+def _fast_forward_notice(
+    ports: Ports, upstream: Upstream, said: FastForwardMemory
+) -> tuple[FastForwardMemory, list[str]]:
+    """The lines one round says about the product checkout against the round's `upstream`
+    (GH-420), and what to remember for the next: a line only when the state changes, since
+    one every five minutes is noise nobody reads. A stale stack is read from that checkout
+    whenever it cannot fast-forward. The note does not matter (a checkout with local commits
+    always carries the left-out one, and that is the `diverged` case); what matters is a tip:
+    with no sha, or `HEAD` itself as the ref (no remote, detached, a failed fetch with no
+    tip), there is nothing to judge against, so nothing is said and the memory stays. Read
+    only (ADR-0002): never a merge or a write."""
+    if upstream.sha is None or upstream.ref == "HEAD":
+        return said, []
+    try:
+        view = ports.workspace.fast_forward_view(upstream.sha)
+    except GitError as exc:
+        failure = f"agentic: poll: could not read the product checkout against the upstream: {exc}"
+        return (failure, []) if said == failure else (failure, [failure])
+    block = rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty)
+    if block is None:
+        recovered = isinstance(said, rules.FastForwardBlock)
+        line = "agentic: poll: product checkout can fast-forward again"
+        return None, [line] if recovered else []
+    if block == said:
+        return said, []
+    where = f": {', '.join(block.paths)}" if block.paths else ""
+    cannot = f"cannot fast-forward to {upstream.sha[:7]} ({block.reason}){where}"
+    return block, [f"agentic: poll: product checkout {cannot}"]
 
 
 async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> None:
