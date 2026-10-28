@@ -116,4 +116,4 @@ corrida recursiva y conviene medirlo antes de culpar a otra cosa.
 - CLAUDE.md dice la regla nueva y nombra a `stage0`.
 - El adaptador de README §8 se puede extraer ahora: hay dos productos.
 
-**Adenda (2026-10-28):** el párrafo de `.gitignore` de arriba (`.agentic/tasks/` sí se commitea) lo supersede [ADR-0077](0077-el-documento-de-tarea-nunca-se-versiona-en-una-rama-de-entrega.md).
+**Adenda (2026-10-28):** el párrafo de `.gitignore` de arriba (`.agentic/tasks/` sí se commitea) lo supersede [ADR-0078](0078-el-documento-de-tarea-nunca-se-versiona-en-una-rama-de-entrega.md).
