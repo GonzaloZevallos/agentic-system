@@ -3373,20 +3373,39 @@ def blocker_resolved(state_reason: str | None, merged_into_checkout: bool) -> bo
 # does, `poll._blocker_numbers` included.
 
 _BLOCKED_BY_LINE = re.compile(r"^Blocked by:\s*(#\d+(?:\s*,\s*#\d+)*)\s*$", re.IGNORECASE)
+_FENCE_OPENER = re.compile(r"^(`{3,}|~{3,})")
 
 
 def blockers_from_body(body: str) -> tuple[int, ...]:
-    """The issue's own `Blocked by: #N[, #M]` line (the issue-tracker doc's fallback,
-    ADR-0034): the first non-empty line of the body, matched whole -- never a loose
-    search anywhere in the text, which could catch an unrelated mention in the
-    description. Empty when the body has no such line, or no body at all."""
+    """The issue's own `Blocked by: #N[, #M]` lines (the issue-tracker doc's fallback,
+    ADR-0034, GH-415): every line of the body, wherever it sits, that is a whole
+    `Blocked by:` line once stripped -- never a loose search inside a sentence, which
+    could catch an unrelated mention in the description. A `> quote` or `**bold**` form
+    does not match, an indented line does.
+
+    Lines inside a fenced code block are skipped. A fence opens on a stripped line that
+    starts with 3 or more backticks or 3 or more tildes, and closes on a stripped line
+    made only of the same character, at least as long as the opener; the other character
+    never closes it, and an unclosed fence hides the rest of the body.
+
+    The result is the union of all matching lines, in order of first appearance and
+    without duplicates. Empty when the body has no such line, or no body at all."""
+    found: list[int] = []
+    fence = ""
     for line in body.splitlines():
         stripped = line.strip()
-        if not stripped:
+        if fence:
+            if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):
+                fence = ""
+            continue
+        opener = _FENCE_OPENER.match(stripped)
+        if opener:
+            fence = opener.group(1)
             continue
         match = _BLOCKED_BY_LINE.match(stripped)
-        return tuple(int(n) for n in re.findall(r"\d+", match.group(1))) if match else ()
-    return ()
+        if match:
+            found.extend(int(n) for n in re.findall(r"\d+", match.group(1)))
+    return tuple(dict.fromkeys(found))
 
 
 def blocker_numbers(native: tuple[int, ...] | None, body: Callable[[], str]) -> tuple[int, ...]:
@@ -5094,8 +5113,9 @@ _PARTS_REMEDY = (
 # its placeholder sits on.
 TRACKER_WITH_PARTS = (
     "When you split, tracker work for this task stays in `tracker_checklist` and the split\n"
-    "   posts it on this issue. The system itself lists every open issue whose first line says\n"
-    "   `Blocked by: #<this issue>`, with the part to re-point it to, so do not write those\n"
+    "   posts it on this issue. The system itself lists every open issue whose body has a line,\n"
+    "   outside a code fence, saying `Blocked by: #<this issue>`, with the part to re-point it\n"
+    "   to, so do not write those\n"
     "   items. Add only other tracker work, such as native blockers you know about. A part's own\n"
     "   tracker work goes in that part's body."
 )
@@ -5154,8 +5174,9 @@ def split_tracker_items(
     last_parts: Sequence[int],
 ) -> list[str]:
     """The checklist items the system itself derives for a split (GH-350, ADR-0062): one per
-    open issue, other than the parts, whose first line says `Blocked by:` the task's own
-    issue -- the task ends `split` and never closes, so that issue would wait for ever.
+    open issue, other than the parts, whose body has a line, outside a code fence, saying
+    `Blocked by:` the task's own issue -- the task ends `split` and never closes, so that
+    issue would wait for ever.
     The human closes the task's issue or re-points the blocked one to the last part(s)
     (`last_parts`, 1-based numbers into `part_urls`); the system edits no issue.
 

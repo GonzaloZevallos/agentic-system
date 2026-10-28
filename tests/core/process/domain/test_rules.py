@@ -2076,8 +2076,67 @@ def test_blocker_numbers_never_calls_the_body_thunk_when_native_is_not_empty():
     assert rules.blocker_numbers((3,), _raising) == (3,)
 
 
-def test_blocker_numbers_reads_only_the_first_non_empty_line_of_the_body():
-    assert rules.blocker_numbers((), lambda: "intro\n\nBlocked by: #7") == ()
+def test_blocker_numbers_reads_a_blocked_by_line_below_other_text():
+    assert rules.blocker_numbers((), lambda: "intro\n\nBlocked by: #7") == (7,)
+
+
+def _line_22(line: str) -> str:
+    return "\n".join([f"text {n}" for n in range(1, 22)] + [line, "tail"])
+
+
+def test_blockers_from_body_reads_a_line_far_below_the_first():
+    assert rules.blockers_from_body(_line_22("Blocked by: #460")) == (460,)
+
+
+def test_blockers_from_body_unites_every_line_in_order_without_duplicates():
+    body = "Blocked by: #1\nmiddle\nBlocked by: #2, #1"
+    assert rules.blockers_from_body(body) == (1, 2)
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~", "````", "~~~~~"])
+def test_blockers_from_body_ignores_a_line_inside_a_fence(fence):
+    assert rules.blockers_from_body(f"text\n{fence}\nBlocked by: #5\n{fence}\n") == ()
+
+
+def test_blockers_from_body_ignores_a_fence_with_an_info_string():
+    assert rules.blockers_from_body("```text\nBlocked by: #5\n```") == ()
+
+
+def test_blockers_from_body_closes_a_four_backtick_fence_only_with_four_or_more():
+    body = "````\nBlocked by: #1\n```\nBlocked by: #2\n````\nBlocked by: #3"
+    assert rules.blockers_from_body(body) == (3,)
+
+
+def test_blockers_from_body_does_not_close_a_backtick_fence_with_tildes_or_the_reverse():
+    assert rules.blockers_from_body("```\n~~~\nBlocked by: #1\n```\nBlocked by: #2") == (2,)
+    assert rules.blockers_from_body("~~~\n```\nBlocked by: #1\n~~~\nBlocked by: #2") == (2,)
+
+
+def test_blockers_from_body_reads_the_line_right_after_a_closed_fence():
+    assert rules.blockers_from_body("```\ncode\n```\nBlocked by: #8") == (8,)
+
+
+def test_blockers_from_body_ignores_everything_after_an_unclosed_fence():
+    assert rules.blockers_from_body("Blocked by: #1\n```\nBlocked by: #2") == (1,)
+
+
+def test_blockers_from_body_reads_a_crlf_body_and_an_indented_line():
+    assert rules.blockers_from_body("intro\r\nBlocked by: #4\r\n") == (4,)
+    assert rules.blockers_from_body("intro\n  Blocked by: #4") == (4,)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "see Blocked by: #5 above",
+        "> Blocked by: #5",
+        "**Blocked by:** #5",
+        "Blocked by: #5 and more",
+        "",
+    ],
+)
+def test_blockers_from_body_ignores_prose_quote_and_bold_mentions(body):
+    assert rules.blockers_from_body(body) == ()
 
 
 def test_blocker_numbers_reads_several_blockers_off_one_line():
@@ -2981,9 +3040,14 @@ def test_split_tracker_items_is_empty_when_no_open_issue_is_blocked_by_the_task(
     issues = [
         _issue(7, "Blocked by: #6"),
         _issue(8, "Fix the thing"),
-        _issue(9, "x\nBlocked by: #5"),
+        _issue(9, "x\n```\nBlocked by: #5\n```"),
     ]
     assert rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2]) == []
+
+
+def test_split_tracker_items_lists_an_issue_whose_line_sits_below_other_text():
+    items = rules.split_tracker_items(5, [_issue(9, "x\nBlocked by: #5")], SPLIT_PART_URLS, [2])
+    assert len(items) == 1 and items[0].startswith("#9 is blocked by #5")
 
 
 def test_split_tracker_items_names_each_blocked_issue_and_the_last_part_ordered_by_number():
@@ -3046,6 +3110,7 @@ def test_tracker_with_parts_states_where_the_work_goes():
     text = rules.TRACKER_WITH_PARTS
     assert "tracker_checklist" in text and "Blocked by:" in text
     assert "do not write" in text and "part's own" in text
+    assert "first line" not in text and "outside a code fence" in text
 
 
 def test_split_is_an_end_with_nothing_to_resume():

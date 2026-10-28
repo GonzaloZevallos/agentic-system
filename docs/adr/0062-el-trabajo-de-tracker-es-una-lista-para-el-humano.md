@@ -154,3 +154,7 @@ El §2 ("el código del sistema toca el tracker solo por el puerto `Tracker`") s
 issues, PRs, comentarios y etiquetas. El GitHub Project que espeja el estado no pasa por
 `Tracker`: tiene su propio puerto, `Board`, y es una salida que nunca se lee como entrada de
 una decisión. Lo registra ADR-0073.
+
+Addendum (GH-415, 2026-10-28): el alcance de "cuya primera línea diga `Blocked by:`" del
+addendum de GH-350 pasó a ser cualquier línea completa fuera de un bloque de código; ver el
+addendum de GH-415 en ADR-0039.
