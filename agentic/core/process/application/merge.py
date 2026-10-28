@@ -21,7 +21,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import adr_numbers, ci, master_gain, presubmit, rules
 from ..domain import landing as landing_rules
-from ..domain.task import PullRequest, TaskState, add_flakes
+from ..domain.task import PullRequest, TaskState, add_flakes, add_tracker_failures
 from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
@@ -520,8 +520,21 @@ def _merge(
         )
     if accepted := _accepted_without_a_fix(ports.documents.load(task_id) or {}):
         text += "\n\nAccepted without a fix:\n" + accepted
-    ports.tracker.comment(task_id, text)
+    _note(task_id, text, ports)
     return MergeResult("merged", method=method)
+
+
+def _note(task_id: str, text: str, ports: Ports) -> None:
+    """Posts an informative comment of the merge (GH-389). A GitHub error that outlasts the
+    retries does not turn a merge or a refusal into a crash: the failure goes to the
+    document as a `tracker_failures` row. The merge child has no state owner, so the row
+    is applied to the stored list with the state's own reducer and written with
+    `record_closure`, the only line-level write the child ever makes."""
+    if (failure := ports.tracker.note(task_id, text)) is None:
+        return
+    stored = (ports.documents.load(task_id) or {}).get("tracker_failures")
+    rows = add_tracker_failures(stored if isinstance(stored, list) else [], [failure.record()])
+    ports.documents.record_closure(task_id, {"tracker_failures": rows})
 
 
 def _accepted_without_a_fix(document: TaskState) -> str:
@@ -708,7 +721,7 @@ def _refuse(
             or refused[-1].splitlines()[0] != first
             or (reason == "checks_failed" and _summary_line(refused[-1]) != summary)
         ):
-            ports.tracker.comment(task_id, text)
+            _note(task_id, text, ports)
         # Announced only when the system will take it: an inert step says nothing.
         if step is not None and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
             line = f"{LANDING}{head} {step.kind}"
@@ -724,5 +737,5 @@ def _refuse(
             if not taken and not any(
                 body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)
             ):
-                ports.tracker.comment(task_id, line)
+                _note(task_id, line, ports)
     return MergeResult("refused", reason)
