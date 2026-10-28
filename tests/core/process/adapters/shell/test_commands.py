@@ -226,7 +226,11 @@ def test_the_env_given_reaches_the_command_over_what_it_inherited(commands, chec
     assert "w=6 x=6" in result.output
 
 
-def test_a_command_run_without_env_sees_none_of_the_grants_variables(commands, checkout):
+def test_a_command_run_without_env_sees_none_of_the_grants_variables(
+    commands, checkout, monkeypatch
+):
+    # A gate that runs this suite exports the grant itself; the command must add none of its own.
+    monkeypatch.delenv("CHECK_WORKERS", raising=False)
     result = commands.run(checkout, 'echo "w=[$CHECK_WORKERS]"', 10)
     assert "w=[]" in result.output
 
