@@ -37,6 +37,8 @@ BOARD_TIMEOUT_S: float = 30
 """Each Project call's own bound (the tracker's is `GH_TIMEOUT_S`, 60)."""
 BATCH = 25
 LIST_LIMIT = 1000
+ERROR_SUMMARY_CHARS = 300
+ERRORS_SHOWN = 2
 
 _FIELD_NAMES: dict[Field, str] = {
     "etapa": "Etapa",
@@ -53,8 +55,10 @@ _FIELD_TYPES: dict[Field, str] = {
     "fin": "DATE",
 }
 # What each field's variable is declared as, and the key `ProjectV2FieldValue` takes it under.
+# The declared type is the one the key's argument takes, not the type of the id it carries:
+# `singleSelectOptionId` takes `String`, so the option id travels as `String!`.
 _VALUE: dict[Field, tuple[str, str]] = {
-    "etapa": ("ID!", "singleSelectOptionId"),
+    "etapa": ("String!", "singleSelectOptionId"),
     "bloqueo": ("String!", "text"),
     "costo": ("Float!", "number"),
     "inicio": ("Date!", "date"),
@@ -219,8 +223,10 @@ class GhBoard:
             batch = {n: by_issue[n] for n in numbers[start : start + BATCH]}
             try:
                 done |= self._batch(ids, batch)
-            except (ValueError, OSError):
-                self.log("agentic: a board batch failed; its issues are not recorded as sent")
+            except (ValueError, OSError) as exc:
+                self.log(
+                    f"agentic: a board batch failed; its issues are not recorded as sent: {exc}"
+                )
                 break
         return frozenset(done)
 
@@ -236,25 +242,58 @@ class GhBoard:
                 items[number] = item["id"]
         if not items:
             return frozenset()
-        _, bad_writes = self._send(*_fields(ids, {n: batch[n] for n in items}, items))
-        return frozenset(items) - bad_writes
+        data, bad_writes = self._send(*_fields(ids, {n: batch[n] for n in items}, items))
+        return frozenset(
+            number
+            for number in items
+            if number not in bad_writes
+            and all(data.get(_alias(number, write.field)) is not None for write in batch[number])
+        )
 
     def _send(
         self, query: str, variables: Mapping[str, object]
     ) -> tuple[dict[str, Any], frozenset[int]]:
-        """The response's `data` and the issues an error names. An error with no usable path,
-        or a response that is not parseable, fails the whole request: `ValueError`."""
+        """The response's `data` and the issues an error names, anywhere in its path. An error
+        that names none, or a response that is not parseable, fails the whole request:
+        `ValueError` carrying the summary, which `write` logs. When every error blames an
+        issue, the summary is logged here, once."""
         body = self._graphql(query, variables)
         data = body.get("data")
         errors = body.get("errors") or []
         bad: set[int] = set()
         for error in errors:
-            path = error.get("path") if isinstance(error, dict) else None
-            match = _ALIAS.fullmatch(str(path[0])) if isinstance(path, list) and path else None
-            if match is None:
-                raise ValueError("a board response carried an error with no issue to blame")
-            bad.add(int(match.group(1)))
+            blamed = _blamed(error)
+            if not blamed:
+                raise ValueError(_summary(errors))
+            bad |= blamed
+        if errors:
+            self.log(f"agentic: board: the response carried errors: {_summary(errors)}")
         return (data if isinstance(data, dict) else {}), frozenset(bad)
+
+
+def _blamed(error: object) -> set[int]:
+    path = error.get("path") if isinstance(error, dict) else None
+    if not isinstance(path, list):
+        return set()
+    matches = (_ALIAS.fullmatch(str(part)) for part in path)
+    return {int(match.group(1)) for match in matches if match is not None}
+
+
+def _describe(error: object) -> str:
+    """One error as GitHub described it: only `message`, `extensions.code` and `path`."""
+    if not isinstance(error, dict):
+        return "unreadable error"
+    extensions = error.get("extensions")
+    code = extensions.get("code") if isinstance(extensions, dict) else None
+    return f"{error.get('message')} (code={code}, path={error.get('path')})"
+
+
+def _summary(errors: object) -> str:
+    items = errors if isinstance(errors, list) else [errors]
+    text = "; ".join(_describe(error) for error in items[:ERRORS_SHOWN])
+    if len(items) > ERRORS_SHOWN:
+        text += f"; +{len(items) - ERRORS_SHOWN} more"
+    return " ".join(text.split())[:ERROR_SUMMARY_CHARS]
 
 
 def _identity_of(body: Mapping[str, Any], name: str) -> _Identity:

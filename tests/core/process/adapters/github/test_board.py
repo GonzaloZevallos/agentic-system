@@ -82,12 +82,18 @@ class FakeGh:
         return subprocess.CompletedProcess(args, 0, self.listing, "")
 
 
-def board(gh) -> GhBoard:
-    return GhBoard(Path("/p"), "GonzaloZevallos", 3, gh, log=lambda _line: None)
+def board(gh, log=lambda _line: None) -> GhBoard:
+    return GhBoard(Path("/p"), "GonzaloZevallos", 3, gh, log=log)
 
 
 def added(*numbers: int) -> dict:
     return {"data": {f"i{n}_add": {"item": {"id": f"PVTI_{n}"}} for n in numbers}}
+
+
+def wrote(writes) -> dict:
+    """What GitHub answers to a field request that succeeded: each written alias maps to the
+    mutation's payload."""
+    return {"data": {f"i{w.issue}_{w.field}": {"clientMutationId": None} for w in writes}}
 
 
 def issue_node(number: int, **extra) -> dict:
@@ -243,7 +249,7 @@ def test_a_project_that_is_not_there_is_a_value_error():
 
 
 def test_a_batch_is_two_requests_with_every_value_a_typed_variable():
-    gh = FakeGh([identity(), added(7), {"data": {}}])
+    gh = FakeGh([identity(), added(7), wrote(WRITES)])
     b = board(gh)
     prime(gh, b, 7)
     assert b.write(WRITES) == frozenset({7})
@@ -254,14 +260,14 @@ def test_a_batch_is_two_requests_with_every_value_a_typed_variable():
     assert "$i7_bloqueo: String!" in query and variables["i7_bloqueo"] == "#3"
     assert "$i7_costo: Float!" in query and variables["i7_costo"] == 1.5
     assert "$i7_inicio: Date!" in query and variables["i7_inicio"] == "2026-10-20"
-    assert "$i7_etapa: ID!" in query and variables["i7_etapa"] == "O_2"
+    assert "$i7_etapa: String!" in query and variables["i7_etapa"] == "O_2"
     assert "i7_fin: clearProjectV2ItemFieldValue" in query and "i7_fin" not in variables
     assert variables["i7_item"] == "PVTI_7" and variables["f_etapa"] == "F_etapa"
     assert not any(k in variables for k in ("f_bloque", "f_hito"))
 
 
 def test_a_batch_declares_only_the_field_ids_its_writes_use():
-    gh = FakeGh([identity(), added(7), {"data": {}}])
+    gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", "En cola")])])
     b = board(gh)
     prime(gh, b, 7)
     assert b.write([FieldWrite(7, "etapa", "En cola")]) == frozenset({7})
@@ -271,7 +277,7 @@ def test_a_batch_declares_only_the_field_ids_its_writes_use():
 
 
 def test_only_aliases_of_the_fixed_form_are_in_the_query_text():
-    gh = FakeGh([identity(), added(7), {"data": {}}])
+    gh = FakeGh([identity(), added(7), wrote(WRITES)])
     b = board(gh)
     prime(gh, b, 7)
     b.write(WRITES)
@@ -283,16 +289,21 @@ def test_only_aliases_of_the_fixed_form_are_in_the_query_text():
 
 def test_a_reason_that_looks_like_graphql_arrives_intact_as_a_variable():
     reason = '"} mutation { x'
-    gh = FakeGh([identity(), added(7), {"data": {}}])
+    writes = [FieldWrite(7, "etapa", "Trabada"), FieldWrite(7, "bloqueo", reason)]
+    gh = FakeGh([identity(), added(7), wrote(writes)])
     b = board(gh)
     prime(gh, b, 7)
-    b.write([FieldWrite(7, "etapa", "Trabada"), FieldWrite(7, "bloqueo", reason)])
+    b.write(writes)
     assert gh.bodies[2]["variables"]["i7_bloqueo"] == reason
     assert "mutation { x" not in gh.bodies[2]["query"]
 
 
 def test_an_error_on_one_alias_mid_batch_excludes_exactly_that_issue():
-    fail = {"errors": [{"message": "boom", "path": ["i8_bloqueo"]}], "data": {"i8_bloqueo": None}}
+    ok = wrote([FieldWrite(n, "etapa", "En cola") for n in (7, 9)])["data"]
+    fail = {
+        "errors": [{"message": "boom", "path": ["i8_bloqueo"]}],
+        "data": {**ok, "i8_bloqueo": None},
+    }
     gh = FakeGh([identity(), added(7, 8, 9), fail])
     b = board(gh)
     prime(gh, b, 7, 8, 9)
@@ -304,7 +315,7 @@ def test_an_error_on_one_alias_mid_batch_excludes_exactly_that_issue():
 def test_an_error_on_an_add_keeps_that_issue_out_of_the_field_request():
     data = {"i8_add": None, **added(7)["data"]}
     err = {"errors": [{"message": "nope", "path": ["i8_add"]}], "data": data}
-    gh = FakeGh([identity(), err, {"data": {}}])
+    gh = FakeGh([identity(), err, wrote([FieldWrite(7, "etapa", "En cola")])])
     b = board(gh)
     prime(gh, b, 7, 8)
     writes = [FieldWrite(n, "etapa", "En cola") for n in (7, 8)]
@@ -313,7 +324,8 @@ def test_an_error_on_an_add_keeps_that_issue_out_of_the_field_request():
 
 
 def test_the_body_gh_prints_with_exit_one_still_attributes_the_error():
-    fail = {"errors": [{"message": "boom", "path": ["i8_etapa"]}], "data": {}}
+    ok = wrote([FieldWrite(7, "etapa", "En cola")])["data"]
+    fail = {"errors": [{"message": "boom", "path": ["i8_etapa"]}], "data": ok}
     gh = FakeGh([identity(), added(7, 8), fail])
     b = board(gh)
     prime(gh, b, 7, 8)
@@ -357,15 +369,18 @@ def test_a_transport_failure_ends_the_write_with_nothing_recorded():
 def test_issues_go_in_batches_of_25_two_requests_each():
     numbers = list(range(1, 31))
     first, rest = numbers[:25], numbers[25:]
-    gh = FakeGh([identity(), added(*first), {"data": {}}, added(*rest), {"data": {}}])
+    writes = [FieldWrite(n, "etapa", "En cola") for n in numbers]
+    first_ok = wrote([w for w in writes if w.issue in first])
+    rest_ok = wrote([w for w in writes if w.issue in rest])
+    gh = FakeGh([identity(), added(*first), first_ok, added(*rest), rest_ok])
     b = board(gh)
     prime(gh, b, *numbers)
-    got = b.write([FieldWrite(n, "etapa", "En cola") for n in numbers])
+    got = b.write(writes)
     assert got == frozenset(numbers) and len(gh.bodies) == 5
 
 
 def test_an_issue_not_read_this_process_has_its_node_looked_up():
-    gh = FakeGh([identity(), added(7), {"data": {}}])
+    gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", "En cola")])])
     b = board(gh)
     gh.listing = json.dumps(issue_node(7))
     assert b.write([FieldWrite(7, "etapa", "En cola")]) == frozenset({7})
@@ -402,3 +417,223 @@ def test_the_default_run_is_bounded_to_thirty_seconds(monkeypatch):
     monkeypatch.setattr(board_module, "bounded_run", bounded)
     GhBoard(Path("/p"), "o", 1).open_issues()
     assert seen["timeout_s"] == 30
+
+
+# -- GH-425: declared types, blame anywhere in the path, sent only when `data` confirms ------
+
+SCHEMA = json.loads((Path(__file__).parent / "fixtures" / "project_v2_schema.json").read_text())
+FIELD_VALUE = SCHEMA["ProjectV2FieldValue"]
+ISSUE_ERROR = {
+    "message": "Type mismatch on variable $i406_etapa and argument singleSelectOptionId "
+    "(ID! / String)",
+    "path": ["mutation", "i406_etapa", "input", "value", "singleSelectOptionId"],
+    "extensions": {"code": "variableMismatch"},
+}
+ALL_FIVE = [
+    FieldWrite(7, "etapa", "Trabada"),
+    FieldWrite(7, "bloqueo", "#3"),
+    FieldWrite(7, "costo", 1.5),
+    FieldWrite(7, "inicio", date(2026, 10, 20)),
+    FieldWrite(7, "fin", date(2026, 10, 21)),
+]
+
+
+def schema_type(argument: str) -> str:
+    if argument in FIELD_VALUE:
+        return FIELD_VALUE[argument]["type"]
+    found = {t[argument]["type"] for n, t in SCHEMA.items() if n != "_source" and argument in t}
+    assert len(found) == 1, f"{argument}: the input types disagree {found}"
+    return found.pop()
+
+
+def mismatches(query: str) -> tuple[list[str], dict[str, str]]:
+    """The declared variable types the schema fixture rejects, and each variable's argument.
+    The argument of a variable is read from the emitted text only."""
+    head, _, rest = query.partition(") {")
+    declared = dict(re.findall(r"\$(\w+): ([\w!]+)", head))
+    arguments: dict[str, str] = {}
+    for key, var in re.findall(r"value: \{(\w+): \$(\w+)\}", rest):
+        arguments[var] = key
+    for key, var in re.findall(r"(projectId|itemId|fieldId|contentId): \$(\w+)", rest):
+        arguments[var] = key
+    problems = []
+    for var, type_name in declared.items():
+        if var not in arguments:
+            problems.append(f"${var} is declared and no argument takes it")
+            continue
+        takes = schema_type(arguments[var])
+        base_ok = type_name.rstrip("!") == takes.rstrip("!")
+        bang_ok = type_name.endswith("!") or not takes.endswith("!")
+        if not (base_ok and bang_ok):
+            problems.append(f"${var}: {type_name} but {arguments[var]} takes {takes}")
+    return problems, arguments
+
+
+def emitted(writes, numbers=(7,)):
+    ids = board_module._identity_of(identity(), "o/3")
+    batch = {n: [w for w in writes if w.issue == n] for n in numbers}
+    items = {n: f"PVTI_{n}" for n in numbers}
+    return board_module._fields(ids, batch, items)[0], board_module._adds(
+        ids, batch, {n: f"I_{n}" for n in numbers}
+    )[0]
+
+
+def test_every_declared_variable_has_the_type_its_argument_takes():
+    fields, adds = emitted(ALL_FIVE)
+    problems, arguments = mismatches(fields)
+    assert problems == []
+    assert arguments == {
+        "i7_etapa": "singleSelectOptionId",
+        "i7_bloqueo": "text",
+        "i7_costo": "number",
+        "i7_inicio": "date",
+        "i7_fin": "date",
+        "f_etapa": "fieldId",
+        "f_bloqueo": "fieldId",
+        "f_costo": "fieldId",
+        "f_inicio": "fieldId",
+        "f_fin": "fieldId",
+        "project": "projectId",
+        "i7_item": "itemId",
+    }
+    problems, arguments = mismatches(adds)
+    assert problems == []
+    assert arguments == {"project": "projectId", "i7_item": "contentId"}
+
+
+def test_the_type_check_rejects_an_id_variable_on_single_select_option_id():
+    control = (
+        "mutation($x: ID!) { a: updateProjectV2ItemFieldValue("
+        "input: {value: {singleSelectOptionId: $x}}) { clientMutationId } }"
+    )
+    problems, _ = mismatches(control)
+    assert problems == ["$x: ID! but singleSelectOptionId takes String"]
+    assert mismatches(control.replace("ID!", "String!"))[0] == []
+    assert mismatches(control.replace("ID!", "String"))[0] == []
+    assert mismatches("mutation($x: String) { a: f(input: {itemId: $x}) { id } }")[0] != []
+    assert mismatches("mutation($x: ID!) { a: f(input: {itemId: $y}) { id } }")[0] != []
+
+
+def test_each_field_is_written_under_the_key_its_type_takes():
+    keys = {
+        "etapa": "singleSelectOptionId",
+        "bloqueo": "text",
+        "costo": "number",
+        "inicio": "date",
+        "fin": "date",
+    }
+    fields, _ = emitted(ALL_FIVE)
+    for field, key in keys.items():
+        assert f"i7_{field}: updateProjectV2ItemFieldValue(" in fields
+        assert re.search(rf"value: \{{{key}: \$i7_{field}\}}", fields), field
+
+
+def test_only_the_single_select_option_id_type_is_observed_and_it_rejects_id():
+    observed = {
+        name
+        for table in SCHEMA.values()
+        for name, entry in table.items()
+        if isinstance(entry, dict) and entry.get("evidence") == "observed"
+    }
+    assert observed == {"singleSelectOptionId"}
+    assert FIELD_VALUE["singleSelectOptionId"] == {
+        "type": "String",
+        "evidence": "observed",
+        "cite": "#425",
+    }
+
+
+def error_response(*errors, data=None, **extra) -> dict:
+    return {"errors": list(errors), "data": data, **extra}
+
+
+def test_an_error_whose_alias_is_deep_in_the_path_blames_that_issue():
+    gh = FakeGh([error_response(ISSUE_ERROR)])
+    data, blamed = board(gh)._send("mutation { x }", {})
+    assert blamed == frozenset({406}) and data == {}
+
+
+def test_a_validation_response_records_no_issue_as_sent():
+    gh = FakeGh([identity(), added(406, 407), error_response(ISSUE_ERROR)])
+    b = board(gh)
+    prime(gh, b, 406, 407)
+    writes = [FieldWrite(n, "etapa", "En cola") for n in (406, 407)]
+    assert b.write(writes) == frozenset()
+
+
+def test_an_issue_whose_alias_is_missing_or_null_in_data_is_not_sent():
+    writes = [FieldWrite(n, "etapa", "En cola") for n in (7, 8, 9)]
+    data = {"i7_etapa": {"clientMutationId": None}, "i8_etapa": None}
+    gh = FakeGh([identity(), added(7, 8, 9), {"data": data}])
+    b = board(gh)
+    prime(gh, b, 7, 8, 9)
+    assert b.write(writes) == frozenset({7})
+
+
+def test_an_issue_is_sent_only_when_each_alias_it_wrote_is_in_data():
+    writes = [FieldWrite(7, "etapa", "En cola"), FieldWrite(7, "fin", None)]
+    short = {"data": {"i7_etapa": {"clientMutationId": None}}}
+    gh = FakeGh([identity(), added(7), short])
+    b = board(gh)
+    prime(gh, b, 7)
+    assert b.write(writes) == frozenset()
+
+
+def logged_write(response, writes=None):
+    lines: list[str] = []
+    gh = FakeGh([identity(), added(7), response])
+    b = board(gh, log=lines.append)
+    prime(gh, b, 7)
+    done = b.write(writes or [FieldWrite(7, "etapa", "En cola")])
+    return done, lines, gh
+
+
+def test_an_error_with_no_alias_is_logged_once_with_its_summary_by_write():
+    error = {"message": "rate limited", "path": ["mutation"], "extensions": {"code": "RATE"}}
+    done, lines, _ = logged_write(error_response(error))
+    summary = board_module._summary([error])
+    assert done == frozenset()
+    assert "rate limited" in summary and "RATE" in summary
+    assert "\n".join(lines).count(summary) == 1
+
+
+def test_an_error_that_blames_an_issue_is_logged_once_with_its_summary_by_send():
+    done, lines, _ = logged_write(
+        error_response(ISSUE_ERROR, data={"i7_etapa": {"clientMutationId": None}})
+    )
+    summary = board_module._summary([ISSUE_ERROR])
+    assert done == frozenset({7})  # the error blames 406, not 7
+    assert "\n".join(lines).count(summary) == 1
+    assert not any("batch failed" in line for line in lines)
+
+
+@pytest.mark.parametrize("path", [["mutation"], ["i7_bloqueo"]])
+def test_a_request_variable_and_other_body_keys_never_reach_the_log(path):
+    sentinel = "SENTINEL-bloqueo-value"
+    leak = "SENTINEL-body-field"
+    error = {"message": "boom", "path": path, "extensions": {"code": "X", "leak": leak}}
+    response = error_response(error, data=None, leak=leak, extensions={"leak": leak})
+    writes = [FieldWrite(7, "etapa", "En cola"), FieldWrite(7, "bloqueo", sentinel)]
+    done, lines, gh = logged_write(response, writes)
+    assert gh.bodies[2]["variables"]["i7_bloqueo"] == sentinel
+    text = "\n".join(lines)
+    assert text and sentinel not in text and leak not in text and done == frozenset()
+
+
+def test_a_summary_has_two_errors_a_count_of_the_rest_and_at_most_300_characters():
+    errors = [{"message": f"m{i}\n  spaced", "path": ["a", i]} for i in range(5)]
+    summary = board_module._summary(errors)
+    assert "m0" in summary and "m1" in summary and "m2" not in summary
+    assert "+3 more" in summary and "\n" not in summary and "  " not in summary
+    assert len(board_module._summary([{"message": "x" * 1000}])) == 300
+
+
+def test_a_batch_with_an_error_naming_no_issue_ends_the_write_after_the_first_batch():
+    numbers = list(range(1, 52))
+    writes = [FieldWrite(n, "etapa", "En cola") for n in numbers]
+    first = wrote(writes[:25])
+    gh = FakeGh([identity(), added(*numbers[:25]), first, {"errors": [{"message": "no alias"}]}])
+    b = board(gh)
+    prime(gh, b, *numbers)
+    assert b.write(writes) == frozenset(numbers[:25])
+    assert len(gh.bodies) == 4
