@@ -196,6 +196,7 @@ def test_a_shorter_recorded_head_still_names_the_merged_parent():
         pytest.param((commit(M1, H, API, "2" * 40),), id="octopus"),
         pytest.param((commit(M1, H, "3" * 40),), id="second-parent-past-reviewed-head"),
         pytest.param((commit(M1, H, "1" * 12 + "f" * 28),), id="second-parent-off-reviewed-head"),
+        pytest.param((commit(M1, H, "0" * 40),), id="second-parent-ancestor-of-reviewed-head"),
         pytest.param((commit(M1, H, "9" * 40),), id="unknown-branch"),
         pytest.param((merge_of_api(first="f" * 40),), id="approved-head-off-the-first-parent-line"),
         pytest.param((merge_of_api(), commit(M2, "f" * 40, API)), id="later-merge-off-the-line"),
