@@ -1507,6 +1507,31 @@ def task_branch(task_id: str) -> str:
     return f"agentic/{task_id}"
 
 
+CI_REF_PREFIX = "agentic-ci/"
+
+
+def ci_ref(task_id: str) -> str:
+    """The ref `full_checks` publishes the integrated head to so GitHub CI runs on it
+    (GH-376). Apart from `task_branch`: `deliver` is the only writer of `agentic/<id>`."""
+    return f"{CI_REF_PREFIX}{task_id}"
+
+
+def stale_ci_refs(
+    refs: Sequence[str], live_ids: Collection[str], ended_ids: Collection[str]
+) -> tuple[str, ...]:
+    """The CI refs among `refs` the poller may delete, in input order: under the CI prefix,
+    whose task id has no live run AND whose task ended. An escalated task is neither live
+    nor ended and an orphan is unknown to both: both are kept, as is any ref outside the
+    prefix."""
+    return tuple(
+        ref
+        for ref in refs
+        if ref.startswith(CI_REF_PREFIX)
+        and (task_id := ref.removeprefix(CI_REF_PREFIX)) not in live_ids
+        and task_id in ended_ids
+    )
+
+
 def subtask_branch(task_id: str, subtask_id: str) -> str:
     # A dot, not a slash: git cannot hold `agentic/GH-12` and `agentic/GH-12/api` at once.
     return f"{task_branch(task_id)}.{subtask_id}"

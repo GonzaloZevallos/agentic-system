@@ -226,7 +226,12 @@ def test_the_env_given_reaches_the_command_over_what_it_inherited(commands, chec
     assert "w=6 x=6" in result.output
 
 
-def test_a_command_run_without_env_sees_none_of_the_grants_variables(commands, checkout):
+def test_a_command_run_without_env_sees_none_of_the_grants_variables(
+    commands, checkout, monkeypatch
+):
+    # The variable may be exported in the caller's own environment (the delivery gate's);
+    # what is asserted is that the adapter adds none of its own.
+    monkeypatch.delenv("CHECK_WORKERS", raising=False)
     result = commands.run(checkout, 'echo "w=[$CHECK_WORKERS]"', 10)
     assert "w=[]" in result.output
 

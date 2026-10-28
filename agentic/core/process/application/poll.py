@@ -37,6 +37,7 @@ from ..domain.landing import LandingStepKind
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
 from . import (
     adr_collision,
+    ci_ref_sweep,
     close_issues,
     landing_plan,
     preflight,
@@ -1448,6 +1449,8 @@ def run_once(
     # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
     # read, so a round that frees room starts its children in the same round.
     swept = [*scratch_sweep.sweep(ports, now), *swept]
+    # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
+    swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}
