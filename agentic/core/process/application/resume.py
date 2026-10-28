@@ -37,6 +37,7 @@ from .poll import (
     RESTARTED_BY_LANDING,
     RETAKEN,
     RETAKEN_AFTER_CRASH,
+    RETAKEN_ORPHANED,
 )
 from .ports import GitError, Ports, Workspace
 from .run_role import task_cap
@@ -57,6 +58,7 @@ SYSTEM_COMMENTS = (
     AUTO_RESUMED,
     RETAKEN,
     RETAKEN_AFTER_CRASH,
+    RETAKEN_ORPHANED,
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
     LANDING,

@@ -327,10 +327,10 @@ def test_an_adr_selects_the_test_that_lists_the_adr_directory_and_nothing_else()
     assert _files(result) == ("tests/test_adr_numbers.py",)
 
 
-def test_a_doc_outside_the_adr_directory_and_the_ignored_ones_is_refused():
-    sources = _walker_sources() | {"tests/test_adr_numbers.py": ""}
+def test_a_doc_outside_the_adr_directory_and_the_ignored_ones_selects_the_docs_test():
+    sources = _walker_sources() | {"tests/test_adr_numbers.py": "", "tests/test_docs.py": ""}
     result = _select(["docs/x.md"], sources, script.TABLE, script.IGNORE)
-    assert isinstance(result, script.Refusal)
+    assert _files(result) == ("tests/test_docs.py",)
 
 
 def test_a_test_that_loads_code_by_a_computed_name_joins_the_agentic_trigger():
@@ -387,6 +387,71 @@ class Allowance(NamedTuple):
 
 
 ALLOWANCES: tuple[Allowance, ...] = (
+    Allowance(
+        "tests/core/process/domain/test_rules.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/domain/test_docs.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_landing_sync.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_review_arm.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_plan_skip_ephemeral.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_preflight.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_technical_stage.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/adapters/git/test_stack.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/domain/test_stack_docs_check.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/domain/test_stack.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/domain/test_stack_docs_check.py",
+        "docs/reference/*",
+        "names the second owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "docs/architecture/generated/*",
+        "names the owned globs in this very table; it never reads the files",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "docs/reference/*",
+        "names the owned globs in this very table; it never reads the files",
+    ),
     Allowance(
         "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
         "BRIEF.md",
@@ -468,6 +533,21 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "tests/test_language.py",
         "tests/*__init__.py",
         "checks `agentic/core/*/__init__.py` exist; the same name under tests/ is not read",
+    ),
+    Allowance(
+        "tests/core/process/domain/test_master_gain.py",
+        "docs/README.md",
+        "its `docs/*.md` is a glob it feeds to the matcher as a string; it reads no page",
+    ),
+    Allowance(
+        "tests/core/process/domain/test_roles.py",
+        "docs/README.md",
+        "names `docs/**` as a string of a `docs:` block; it never reads the page",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "docs/README.md",
+        "its `docs/*` strings are inputs to the selector under test, not reads of the page",
     ),
 )
 
@@ -705,7 +785,8 @@ def test_the_stack_declares_the_affected_form_and_keeps_the_other_checks_full():
     forms = stack.affected_checks(data, STACK_YAML)
     assert list(forms) == ["tests"]
     assert forms["tests"].startswith("uv run python scripts/affected_tests.py {base}")
-    assert set(stack.checks(data, STACK_YAML)) == {"tests", "lint", "format", "types"}
+    # `docs` is the reserved check the `docs:` block adds (ADR-0074); CI runs it as check.py.
+    assert set(stack.checks(data, STACK_YAML)) == {"tests", "lint", "format", "types", "docs"}
     assert _declared_fallback() == (
         "pyproject.toml",
         "uv.lock",

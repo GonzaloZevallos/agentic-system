@@ -23,6 +23,7 @@ agentic = "agentic.cli:main"
 dev = [
     "langgraph-cli[inmem]>=0.4.31",
     "mypy>=1.13",
+    "pylint==4.1.3",
     "pytest>=8.0",
     "ruff>=0.6",
 ]
@@ -88,6 +89,8 @@ files = [
     "agentic/core/process/application/pre_pr_fix.py",
     "scripts/poll_waits.py",
     "scripts/gate_concurrency.py",
+    "scripts/docs/render.py",
+    "scripts/docs/check.py",
     "tests/fakes.py",
     "tests/conformance.py",
 ]

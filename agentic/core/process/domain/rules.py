@@ -3421,6 +3421,101 @@ def interrupted_run(
     return "human"
 
 
+# --- GH-403: Corrida huérfana --------------------------------------------------------
+# A task in the tray with a pre-delivery document and no lock record at all: a run stopped
+# by a signal that is not a shutdown releases its lock (cli.py), so `interrupted_run` never
+# sees it and the launch path skips it for having a document. Everything this rule decides
+# is here; the poller only collects the facts.
+
+# How long the document must have gone unwritten before an orphan is retaken: a run that is
+# between two writes is not orphaned, and a retake the poller just made is given the time
+# to write its first line.
+ORPHANED_QUIET = timedelta(hours=1)
+
+# How many consecutive retakes that ran nothing the poller makes of one orphan, counted from
+# the last human comment. A judgement, not a measurement: the `RETAKE_AFTER_REBOOT_MAX` shape.
+ORPHANED_RETAKE_MAX = 3
+
+# The statuses of a task that has not been delivered, escalated or ended: the only ones a run
+# can still be missing from.
+ORPHANED_STATUSES = ("open", "defined", "returned", "definition_ready", "planned", "developing")
+
+OrphanVerdict = Literal["retake", "none", "quiet", "calendar", "cap_spent"]
+OrphanWhy = Literal["quiet", "calendar", "no_slot", "cap_spent", "lock_unreadable"]
+
+
+def orphaned_retake_count(
+    comment_times: Sequence[datetime], run_starts: Sequence[str | None | object]
+) -> int:
+    """How many own orphan-retake comments (`comment_times`, already cut after the last
+    comment that is not the system's) count against `ORPHANED_RETAKE_MAX`: those no
+    `runs[]` entry follows, that is, none whose `started_at` reads as a later instant. A
+    retake that started a run did something; one the next run never followed ran nothing.
+    An entry with a missing or unreadable `started_at` proves nothing, so the retake counts."""
+    started = [t for t in (_instant(value) for value in run_starts) if t is not None]
+    return sum(1 for posted in comment_times if not any(start > posted for start in started))
+
+
+def orphaned_due(last_own_at: datetime, prior: int) -> datetime:
+    """When the retake after `prior` counted ones is due: `RETAKE_SCHEDULE[prior]` minutes
+    after the last own comment. The one place the calendar is read for an orphan."""
+    return last_own_at + timedelta(minutes=RETAKE_SCHEDULE[prior])
+
+
+def orphaned_run(
+    raw: TaskState,
+    *,
+    live: bool,
+    has_lock: bool,
+    quiet: bool,
+    prior: int,
+    last_own_at: datetime | None,
+    now: datetime,
+) -> OrphanVerdict:
+    """Whether the poller retakes a task in the tray whose run is gone and left no lock
+    record (GH-403). In order:
+
+    - `none`: a truthy `closed_at`, `escalated` or `pull_request`; a `status` that is
+      missing or not in `ORPHANED_STATUSES`; a live run or a lock record (the lock is
+      `interrupted_run`'s, whose verdicts do not change);
+    - `quiet`: the document was written inside `ORPHANED_QUIET` (`quiet` is False);
+    - `cap_spent`: `prior` retakes that ran nothing already reached `ORPHANED_RETAKE_MAX`;
+    - `calendar`: a retake was made (`prior > 0`) and `RETAKE_SCHEDULE[prior]` minutes have
+      not passed since `last_own_at`;
+    - `retake` otherwise. The first one waits only for the quiet hour."""
+    if raw.get("closed_at") or raw.get("escalated") or raw.get("pull_request"):
+        return "none"
+    if raw.get("status") not in ORPHANED_STATUSES:
+        return "none"
+    if live or has_lock:
+        return "none"
+    if not quiet:
+        return "quiet"
+    if prior >= ORPHANED_RETAKE_MAX:
+        return "cap_spent"
+    if prior > 0 and last_own_at is not None and now < orphaned_due(last_own_at, prior):
+        return "calendar"
+    return "retake"
+
+
+def orphaned_line(number: int, why: OrphanWhy, detail: str = "") -> str:
+    """The poll line for an orphan the round did not retake. `detail` is the variable part
+    of the text: the quiet window in minutes (`quiet`), the time the next retake is due
+    (`calendar`), the retakes spent (`cap_spent`) or the error (`lock_unreadable`); `no_slot`
+    takes none. A held orphan says how to stop the retake, a spent or unreadable one says
+    what the human runs."""
+    hold = "remove the agentic label to hold it"
+    human = f"left to the human: agentic resume --issue {number} --from-document"
+    text, advice = {
+        "quiet": (f"not quiet yet (document written within {detail})", hold),
+        "calendar": (f"due at {detail}", hold),
+        "no_slot": ("no slot free", hold),
+        "cap_spent": (f"retake cap spent ({detail})", human),
+        "lock_unreadable": (f"lock unreadable ({detail})", human),
+    }[why]
+    return f"agentic: poll: #{number} orphaned (no lock): {text}; {advice}"
+
+
 # Spend-paced concurrency (GH-177, ADR-0039 addendum): another run launches only while
 # the account's trailing spend is under a sustainable pace. Everything below is pure:
 # the caller reads the documents and the clock and hands over plain values.
@@ -3561,9 +3656,10 @@ class PollAction:
 
     kind: PollActionKind
     issue: int
-    # Why a `retake` was ordered: the run a reboot cut, or one that raised under the graph
-    # (the caller writes a different comment for each). Other kinds leave the default.
-    reason: Literal["reboot", "crash"] = "reboot"
+    # Why a `retake` was ordered: the run a reboot cut, one that raised under the graph, or
+    # one that left no lock at all (the caller writes a different comment for each). Other
+    # kinds leave the default.
+    reason: Literal["reboot", "crash", "orphaned"] = "reboot"
 
 
 @dataclass(frozen=True)
@@ -3757,15 +3853,16 @@ class LandCandidate:
 
 @dataclass(frozen=True)
 class Deferred:
-    """A merge or land `poll_plan` held back this round, and why: `no_slot` (a `land_model`
-    child needs a slot and none is left, headroom included), `exempt_busy` (the one exempt
+    """A merge, land or orphan retake `poll_plan` held back this round, and why: `no_slot` (a
+    `land_model` child or an `orphan` retake needs a slot and none is left, headroom included),
+    `exempt_busy` (the one exempt
     child the machine allows is already live, or this round already starts one),
     `pause_waiting` (a `land_model` land while this product has an `account_limit` pause
     still waiting out its calendar: the land would spend the session the pause protects) or
     `land_queued` (a `land_model` land with a slot to start in, yielding to another product's
     land whose wait began earlier: first come, first landed, GH-362)."""
 
-    kind: Literal["merge", "land"]
+    kind: Literal["merge", "land", "orphan"]
     issue: int
     reason: Literal["no_slot", "land_queued", "exempt_busy", "pause_waiting"]
 
@@ -3894,6 +3991,7 @@ def poll_plan(
     others_landing: bool = False,
     earlier_land_wait: bool = False,
     held: Sequence[str] = (),
+    orphan_retakes: Sequence[int] = (),
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -3969,6 +4067,11 @@ def poll_plan(
     `pace.live_runs` plus the `available_slots` received. Closes, retakes and resumes
     are never gated, and a waiting pause still blocks every launch.
 
+    `orphan_retakes` (GH-403, `orphaned_run`) are the issues whose run left no lock: they are
+    retakes in every respect (the same cap, the same closeness order, the same holds), with
+    `reason="orphaned"`. One that finds no slot is `Deferred("orphan", issue, "no_slot")`, the
+    only source of its line; a round held by `others_landing` or `held` defers nothing.
+
     `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
     not empty the plan is the closes alone: no launch, resume, retake, land or merge starts,
     because a start would write scratch to a disk that is almost full. It defers nothing, so
@@ -3988,12 +4091,17 @@ def poll_plan(
 
     # Rank order: the nearest to merge first; at a tie a retake goes before a resume, then
     # the lowest issue (crash before reboot only when the same issue is both).
+    retake_whys: list[tuple[int, Literal["reboot", "crash", "orphaned"]]] = [
+        *((i, "reboot") for i in retakes),
+        *((i, "crash") for i in crash_retakes),
+        *((i, "orphaned") for i in orphan_retakes),
+    ]
     starts: list[tuple[tuple[int, int, int, str], PollAction]] = [
         (
             (-closeness.get(issue, 0), 0, issue, why),
-            PollAction("retake", issue, reason="crash" if why == "crash" else "reboot"),
+            PollAction("retake", issue, reason=why),
         )
-        for issue, why in [(i, "reboot") for i in retakes] + [(i, "crash") for i in crash_retakes]
+        for issue, why in retake_whys
     ]
     starts += [
         ((-closeness.get(r.issue, 0), 1, r.issue, ""), PollAction("resume", r.issue))
@@ -4011,12 +4119,15 @@ def poll_plan(
         )
     plain_for_starts = max(received_slots - (1 if land_plain else 0), 0)
     started = 0
+    unslotted_orphans: list[int] = []
     for _, action in sorted(starts, key=lambda start: start[0]):
         if action.kind == "land":
             actions.append(action)
         elif started < plain_for_starts:
             actions.append(action)
             started += 1
+        elif action.reason == "orphaned":
+            unslotted_orphans.append(action.issue)
     slots_left = max(received_slots - started - (1 if land_plain else 0), 0)
 
     deferred: list[Deferred] = []
@@ -4029,6 +4140,7 @@ def poll_plan(
         deferred.append(Deferred("land", model_lands[0], "land_queued"))
         model_lands = model_lands[1:]
     deferred.extend(Deferred("land", issue, "no_slot") for issue in model_lands)
+    deferred.extend(Deferred("orphan", issue, "no_slot") for issue in sorted(unslotted_orphans))
 
     some_resume_still_waiting = any(
         not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
