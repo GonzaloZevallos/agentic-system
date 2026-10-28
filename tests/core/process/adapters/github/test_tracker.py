@@ -1049,6 +1049,41 @@ def test_close_pull_request_rejects_a_non_pull_request_reference_before_any_gh_c
     assert run.calls == []
 
 
+def test_reopen_pull_request_reopens_by_number_and_is_not_a_note():
+    run = Recorder()
+    GhTracker(Path("/p"), run).reopen_pull_request(7)
+    assert run.calls == [["gh", "pr", "reopen", "7"]]  # no comment, label or issue verb
+
+
+def test_reopen_pull_request_on_an_open_pull_request_is_a_no_op_for_the_caller():
+    """`gh pr reopen` answers "already open" on stderr and exits 0: nothing to raise."""
+
+    class AlreadyOpen(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            return subprocess.CompletedProcess(args, 0, "", "! Pull request #7 is already open")
+
+    run = AlreadyOpen()
+    assert GhTracker(Path("/p"), run).reopen_pull_request(7) is None
+    assert len(run.calls) == 1
+
+
+def test_reopen_pull_request_refused_by_the_platform_raises_once_and_never_retries():
+    """A merged pull request, or one whose base branch is gone: `gh` exits non-zero."""
+    run = Recorder(fail=True)
+    with pytest.raises(ValueError, match="gh pr reopen failed"):
+        GhTracker(Path("/p"), run).reopen_pull_request(7)
+    assert len(run.calls) == 1
+
+
+def test_reopen_pull_request_calls_gh_exactly_once_on_a_502():
+    policy, slept = _policy()
+    run = Flaky(failing=9)
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), run, lambda line: None, retry=policy).reopen_pull_request(7)
+    assert len(run.calls) == 1 and slept == []
+
+
 def test_open_issue_sends_the_label_only_when_one_is_given():
     run = Recorder()
     GhTracker(Path("/p"), run).open_issue("t", "b", label="agentic")

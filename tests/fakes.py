@@ -764,6 +764,8 @@ class MemoryWorkspace:
         self.existing_branches: dict[str, tuple[str, str]] = {}
         # `rename_branch` calls, oldest first.
         self.renamed: list[tuple[str, str]] = []
+        # `create_branch` calls `(name, sha)`, oldest first, the refused ones included.
+        self.created: list[tuple[str, str]] = []
         # Paths (as `is_ignored`'s own `relative` argument) a test declares ignored by
         # the product's `.gitignore`; empty is a product that ignores nothing.
         self.ignored: set[str] = set()
@@ -1192,6 +1194,17 @@ class MemoryWorkspace:
         if old in self.existing_branches:
             self.existing_branches[new] = self.existing_branches.pop(old)
 
+    def create_branch(self, name: str, sha: str) -> None:
+        """`git branch name sha`, as the adapter: recorded, a no-op at the same head,
+        `GitError` when `name` points elsewhere (never moved). The base is the product
+        head, `"base"`, as `head` answers for an unmoved path."""
+        self.created.append((name, sha))
+        if name in self.existing_branches:
+            if self.existing_branches[name][0] != sha:
+                raise GitError(f"git branch {name} {sha} failed: {name} already points elsewhere")
+            return
+        self.existing_branches[name] = (sha, "base")
+
     def is_ignored(self, root: Path, relative: str) -> bool:
         self.ignored_checks.append((root, relative))
         return relative in self.ignored
@@ -1262,6 +1275,10 @@ class MemoryTracker:
         self.failed_runs: list[str] = []
         self.rerun_error: str | None = None
         self.closed_pull_requests: list[str] = []
+        # The restoring verb: every number `reopen_pull_request` reopened (an open one is
+        # not recorded twice) and the `ValueError` text that makes it refuse instead.
+        self.reopened_pull_requests: list[int] = []
+        self.reopen_error: str | None = None
         # GH-137: the poller's own candidate pool, and the structured facts per issue
         # number a test scripts with `states`.
         self._queue: list[int] = []
@@ -1411,6 +1428,16 @@ class MemoryTracker:
         pull_request_number(reference)
         self.events.append("close_pull_request")
         self.closed_pull_requests.append(reference)
+
+    def reopen_pull_request(self, number: int) -> None:
+        """The restoring verb. `reopen_error` makes it raise `ValueError` (a merged pull
+        request, a deleted base), recording nothing; reopening twice is the no-op the
+        adapter's `gh` answers, so the number is recorded once."""
+        self.events.append("reopen_pull_request")
+        if self.reopen_error is not None:
+            raise ValueError(self.reopen_error)
+        if number not in self.reopened_pull_requests:
+            self.reopened_pull_requests.append(number)
 
     def changed_files(self, pull_request: str) -> int:
         pull_request_number(pull_request)

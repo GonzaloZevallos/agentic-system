@@ -5,7 +5,10 @@ builds on, so this is where a wrong signature would first show."""
 
 from pathlib import Path
 
-from tests.fakes import MemoryDocuments, MemoryWorkspace, memory_ports
+import pytest
+
+from agentic.core.process.application.ports import GitError
+from tests.fakes import MemoryDocuments, MemoryTracker, MemoryWorkspace, memory_ports
 
 
 def test_ports_accepts_the_fakes_with_the_new_verbs():
@@ -30,6 +33,35 @@ def test_rename_branch_moves_the_recorded_head_and_base_and_is_recorded():
     assert "agentic/GH-1" not in workspace.existing_branches
     assert workspace.existing_branches["archive/run1-abc/agentic/GH-1"] == ("h1", "b0")
     assert workspace.renamed == [("agentic/GH-1", "archive/run1-abc/agentic/GH-1")]
+
+
+def test_create_branch_copies_a_head_in_and_is_idempotent_at_the_same_sha():
+    workspace = MemoryWorkspace()
+    workspace.existing_branches["archive/run1-abc/agentic/GH-1"] = ("h1", "b0")
+    workspace.create_branch("agentic/GH-1", "h1")
+    workspace.create_branch("agentic/GH-1", "h1")
+    assert workspace.branch_head("agentic/GH-1") == "h1"
+    assert "archive/run1-abc/agentic/GH-1" in workspace.existing_branches  # not renamed
+    assert workspace.created == [("agentic/GH-1", "h1"), ("agentic/GH-1", "h1")]
+
+
+def test_create_branch_raises_when_the_ref_points_elsewhere_and_leaves_it():
+    workspace = MemoryWorkspace()
+    workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
+    with pytest.raises(GitError):
+        workspace.create_branch("agentic/GH-1", "h2")
+    assert workspace.branch_head("agentic/GH-1") == "h1"
+
+
+def test_reopen_pull_request_records_a_number_once_and_raises_when_scripted_to_refuse():
+    tracker = MemoryTracker()
+    tracker.reopen_pull_request(7)
+    tracker.reopen_pull_request(7)
+    assert tracker.reopened_pull_requests == [7]
+    tracker.reopen_error = "gh pr reopen failed: merged"
+    with pytest.raises(ValueError, match="merged"):
+        tracker.reopen_pull_request(8)
+    assert tracker.reopened_pull_requests == [7]
 
 
 def test_is_ignored_answers_false_by_default_and_records_the_call():
