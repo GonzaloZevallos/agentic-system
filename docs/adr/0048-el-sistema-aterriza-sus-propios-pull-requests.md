@@ -484,3 +484,28 @@ y está acotado por las 6 sincronizaciones por tarea.
 
 **Sin reescritura.** Los conteos se recalculan desde la lista `landing`; ningún documento se reescribe. Una
 entrada `diagnose` sin `verdict`, o una `sync_master` sin `upstream`, se lee exactamente como antes.
+
+## Adenda (GH-406): una tarea restaurada aterriza sobre su propia corrida
+
+`agentic restore` trae de vuelta una tarea archivada, aprobada y entregada. El documento guarda la
+restauración en `restorations` (nunca dentro de `landing`) con `landing_cut`, el largo de la lista en ese
+momento, y `rules.live_landing` es la única función que aplica el corte.
+
+- **Los diagnósticos son terminales solo dentro de su restauración.** Todo lector que decide un hecho
+  terminal, de idempotencia o de aterrizaje en curso toma las entradas de `live_landing`
+  (`landing.live_entries`): un `diagnose` entregado antes del corte ya no deja la tarea en `none`, ni
+  `already_dispatched` bloquea un `fix` o `diagnose` previo para el mismo head. Los contadores de
+  presupuesto del modelo (`passes`, `renumbers`, `important_pass_spent`) leen la lista entera a propósito:
+  restaurar no devuelve presupuesto.
+- **Una tarea restaurada nunca reinicia.** `after_diagnosis(..., restored=True)` devuelve `sync_master`
+  cuando el veredicto lo permite y `escalate` en cualquier otro caso. Es deliberado: restaurar es el
+  humano eligiendo no empezar de nuevo.
+- **La exención de CI en `settleable`.** Para una tarea restaurada, `plan_settlement.settleable` no pide
+  CI verde para cerrar las filas `PM: final validation`: basta la unidad revisada aprobada, un `pr_head`
+  completo y `rules.head_reviewed`. Es seguro solo porque `rules.auto_merge_decision` evalúa `_ci_gate`
+  después del gate de hallazgos: cerradas las filas, la misma decisión sigue y rechaza `ci_missing`,
+  `ci_failed` o `ci_blocked_by_conflict` hasta que el CI esté verde en ese head. Reordenar
+  `auto_merge_decision` de modo que `_ci_gate` quede antes del gate de hallazgos, o que un merge lo
+  salte, rompe esta exención.
+- **Sin señales nuevas.** Ninguna medición ni `agentic.landing.step` cambia; un documento sin
+  `restorations` devuelve exactamente lo de antes.

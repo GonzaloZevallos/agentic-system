@@ -443,6 +443,54 @@ def test_renaming_a_branch_onto_a_live_destination_raises(product):
         ws.rename_branch("agentic/GH-12", "agentic/GH-13")
 
 
+def test_create_branch_points_a_new_branch_at_the_sha_and_leaves_the_source_alone(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / "x").write_text("x\n")
+    head = ws.commit_all(task.path, "GH-12: x")
+    ws.cleanup("GH-12")
+    ws.rename_branch("agentic/GH-12", "archive/run1-abc/agentic/GH-12")
+
+    ws.create_branch("agentic/GH-12", head)
+
+    assert ws.branch_head("agentic/GH-12") == head
+    assert ws.branch_head("archive/run1-abc/agentic/GH-12") == head  # copied, never renamed
+
+
+def test_create_branch_is_idempotent_when_the_ref_already_points_at_the_sha(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / "x").write_text("x\n")
+    head = ws.commit_all(task.path, "GH-12: x")
+    full = git("rev-parse", head, cwd=product)
+
+    ws.create_branch("agentic/GH-12", head)  # no error, no-op
+    ws.create_branch("agentic/GH-12", full)  # a short and a full id name the same commit
+
+    assert ws.branch_head("agentic/GH-12") == head
+
+
+def test_create_branch_raises_and_never_forces_when_the_ref_points_elsewhere(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / "x").write_text("x\n")
+    head = ws.commit_all(task.path, "GH-12: x")
+    other = git("rev-parse", "HEAD", cwd=product)
+    assert not other.startswith(head)
+
+    with pytest.raises(GitError):
+        ws.create_branch("agentic/GH-12", other)
+
+    assert ws.branch_head("agentic/GH-12") == head
+
+
+def test_create_branch_raises_for_a_sha_the_repository_does_not_have(product):
+    ws = GitWorkspace(product, IDENTITY)
+    with pytest.raises(GitError):
+        ws.create_branch("agentic/GH-12", "0" * 40)
+    assert ws.branch_head("agentic/GH-12") is None
+
+
 def test_is_ignored_answers_the_products_own_gitignore(product):
     ws = GitWorkspace(product, IDENTITY)
     (product / ".gitignore").write_text("*.secret\n")

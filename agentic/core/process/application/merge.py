@@ -333,6 +333,19 @@ def _facts(
     )
 
 
+def settlement_facts(
+    task_id: str,
+    raw: TaskState,
+    pull_request: PullRequest | None,
+    number: int,
+    master: str | None,
+) -> rules.MergeFacts:
+    """The facts `merge_task` starts from before it reads any diff, a worktree or the CI --
+    the builder `agentic restore` asks `plan_settlement.settleable` over, so a settlement
+    and a merge never read a document two ways. No eval set is read (`in_eval_set` is `None`)."""
+    return _merge_facts(task_id, raw, pull_request, None, number, master)
+
+
 def run_checks(
     task_id: str,
     raw: TaskState,
@@ -412,6 +425,10 @@ def run_checks(
         gate=gate.gate if gate is not None else None,
         row_master=master,
     )
+    if rules.restored(raw):
+        # Dated only on a restored task, so the landing can tell this run's record from the
+        # archived one's (`landing_plan._gate_reran`); any other document is written as before.
+        record["at"] = _now()
     previous = raw.get("merge_checks")
     if only is not None and isinstance(previous, Mapping):
         # Only the failed checks ran: the rest stay as the earlier run recorded them.
@@ -738,7 +755,7 @@ def _refuse(
             # the key, and not when the comment is already on the issue (the step may not
             # have been recorded yet).
             taken = landing_rules.already_dispatched(
-                landing_plan.entries(ports.documents.load(task_id) or {}),
+                landing_plan.live_entries(ports.documents.load(task_id) or {}),
                 head,
                 step.kind,
                 facts.current_master if facts is not None else None,

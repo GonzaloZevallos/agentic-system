@@ -330,6 +330,11 @@ class GhTracker:
     def close_pull_request(self, reference: str) -> None:
         self._gh("pr", "close", str(pull_request_number(reference)))
 
+    def reopen_pull_request(self, number: int) -> None:
+        # `gh pr reopen` on an open pull request prints "already open" and exits 0, which
+        # is the no-op; no retry, so a refusal (merged, base gone) reaches the caller once.
+        self._gh("pr", "reopen", str(number))
+
     def changed_files(self, pull_request: str) -> int:
         raw = self._gh_read(
             "pr", "view", str(pull_request_number(pull_request)), "--json", "changedFiles"

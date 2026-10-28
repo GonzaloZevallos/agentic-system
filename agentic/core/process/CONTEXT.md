@@ -180,6 +180,11 @@ Lo que el sistema hace con lo que dejó la corrida anterior de una tarea cuando 
 _Avoid_: borrado, limpieza (el archivado no borra), backup
 _Campo_: sin término de arte
 
+**Restauración**:
+Lo que `agentic restore --issue N --from archive/run<N>-<commit>` hace para traer de vuelta una tarea archivada que ya estaba entregada y aprobada, sin una corrida nueva: copia las ramas desde el prefijo del archivo en los commits que el documento registra (la de tarea en el que su revisión aprobó, cada una de subtarea en su `reviewed_head`), escribe el documento con un registro en `restorations` que corta la lista `landing` (lo anterior al corte es de la corrida archivada y no decide nada), reabre el pull request y salda las filas de plan de `PM: final validation` por la misma regla que el aterrizaje. No renombra ni borra ramas del archivo, no empuja un commit que el pull request no llevara ya y no toca etiquetas ni el estado del issue. Una por tarea (otro prefijo se rechaza: `already_restored`), y una tarea restaurada nunca se reinicia: el aterrizaje sincroniza con master o escala. Un reintento termina lo que falte desde lo observado.
+_Avoid_: desarchivado, rescate
+_Campo_: sin término de arte
+
 **Corrida**:
 Una ejecución del sistema sobre una tarea, desde que entra hasta el cierre o el escalado.
 _Avoid_: run, ejecución

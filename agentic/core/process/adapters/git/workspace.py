@@ -455,6 +455,14 @@ class GitWorkspace:
             return  # the idempotent case: a previous, interrupted archive did this already
         self._git("branch", "-m", old, new)
 
+    def create_branch(self, name: str, sha: str) -> None:
+        target = self._git("rev-parse", "--verify", f"{sha}^{{commit}}")
+        if self._branch_exists(name):
+            if self._git("rev-parse", f"refs/heads/{name}") == target:
+                return  # the idempotent case: a retried restore made this ref already
+            raise GitError(f"git branch {name} {sha} failed: {name} already points elsewhere")
+        self._git("branch", name, target)  # never `-f`: a ref is created, not moved
+
     def is_ignored(self, root: Path, relative: str) -> bool:
         result = self._run("check-ignore", "-q", relative, cwd=root)
         return result.returncode == 0

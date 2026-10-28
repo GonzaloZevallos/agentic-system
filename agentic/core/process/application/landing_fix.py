@@ -109,7 +109,7 @@ def _reopen_and_resume(
     then the resume. `landing_sync.reopen` leaves `changes_requested` alone."""
     reopened = landing_sync.reopen(raw, context.step.units, reason, category, "returned")
     marked = landing_rules.with_cost_base(
-        landing_plan.entries(raw), context.head, context.step.kind, raw.get("cost_usd", 0.0)
+        landing_plan.all_entries(raw), context.head, context.step.kind, raw.get("cost_usd", 0.0)
     )
     context.ports.documents.save({**reopened, "landing": marked})
     landing_sync.record_landing(context, marked)
@@ -167,7 +167,7 @@ def _remember_rerun(context: LandingContext, checks: list[str]) -> None:
     """Writes the names of the checks this rerun covers into its own `landing` entry, so
     the merge that follows a green can file one flake issue per name."""
     raw = context.ports.documents.load(context.task_id) or {}
-    entries = [dict(entry) for entry in landing_plan.entries(raw)]
+    entries = [dict(entry) for entry in landing_plan.all_entries(raw)]
     for entry in entries:
         if entry.get("step") == "rerun" and entry.get("head") == context.head:
             entry["checks"] = checks
@@ -282,7 +282,7 @@ def _stamp(context: LandingContext, **keys: object) -> None:
     `record_closure` only, from the document as it is now: never a `save` of an earlier
     snapshot of the `landing` list."""
     loaded = context.ports.documents.load(context.task_id) or {}
-    entries = [dict(entry) for entry in landing_plan.entries(loaded)]
+    entries = [dict(entry) for entry in landing_plan.all_entries(loaded)]
     marked = [e for e in entries if e.get("step") == "diagnose" and e.get("head") == context.head]
     if not marked:
         return
@@ -328,7 +328,7 @@ def settle(context: LandingContext) -> None:
     patch = state_from({"plan_settled": rows})
     cost = document.get("cost_usd", 0.0)
     resolved = landing_rules.resolve_open(
-        landing_plan.entries(document),
+        landing_plan.all_entries(document),
         (context.clock or _now)(),
         cost if isinstance(cost, int | float) else 0.0,
     )
@@ -456,7 +456,7 @@ def _restart_notice(saved: TaskState, reason: str, carried: float) -> str:
     integrator's paths blocked the slice), the diagnoser's reason, what the task has cost so
     far and the slices already landed. It keeps the `RESTARTED_BY_LANDING` prefix; a document
     without the closed reason reads as before, plus the cost."""
-    diagnoses = [e for e in landing_plan.entries(saved) if e.get("step") == "diagnose"]
+    diagnoses = [e for e in landing_plan.all_entries(saved) if e.get("step") == "diagnose"]
     entry = diagnoses[-1] if diagnoses else {}
     why = entry.get("restart_why")
     label = ""
@@ -510,7 +510,9 @@ def diagnose(context: LandingContext) -> None:
     stamped = context.ports.documents.load(context.task_id) or {}
     spent = landing_plan.spent(stamped, context.head, None, context.upstream.sha)
     ledger = plan_settlement.ledger_only(context.step.refusal, context.facts, state_from(stamped))
-    action = landing_rules.after_diagnosis(verdict, spent, depth, ledger_only=ledger)
+    action = landing_rules.after_diagnosis(
+        verdict, spent, depth, ledger_only=ledger, restored=rules.restored(stamped)
+    )
     if action == "sync_master":
         context.log(
             f"agentic: land: {context.task_id}: diagnose: verdict {verdict}, "
