@@ -288,7 +288,7 @@ def test_a_swept_leftover_is_returned_once_older_than_the_grace_whoever_it_was_o
     mine = scratch.Leftover(f".{MINE}.swept-def456", OLD)
     young = scratch.Leftover(f".{THEIRS}.swept-fff000", YOUNG)
     assert _orphans(leftovers=[old, mine, young]) == scratch.Orphans(
-        leftovers=(old.name, mine.name)
+        leftovers=(mine.name, old.name)
     )
 
 
