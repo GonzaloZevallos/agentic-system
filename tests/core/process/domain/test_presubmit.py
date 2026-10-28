@@ -701,3 +701,27 @@ def test_an_unbudgeted_check_never_appears_and_breaches_follow_the_budget_order(
     found = presubmit.budget_breaches(rows, {"types": 1.0, "tests": 1.0})
     assert [b["name"] for b in found] == ["types", "tests"]
     assert presubmit.budget_breaches(rows, {}) == []
+
+
+# -- paths the delivery introduces that the system never versions (GH-420) ----------
+
+
+def test_nothing_introduced_under_the_system_paths_is_no_refusal():
+    assert presubmit.unstageable_refusal([]) is None
+    assert presubmit.unstageable_refusal(["src/app.py", "docs/.agentic/tasks/x.md"]) is None
+
+
+def test_a_task_document_is_refused_with_its_path_and_the_way_out():
+    reason = presubmit.unstageable_refusal(["src/app.py", ".agentic/tasks/GH-1.md"])
+    assert reason is not None
+    assert "`.agentic/tasks/GH-1.md`" in reason and "src/app.py" not in reason
+    assert "git rm --cached" in reason and "commit" in reason
+
+
+def test_every_system_path_is_refused_sorted_and_at_most_five_are_named():
+    names = [f".agentic/runs/r{n}.json" for n in range(8, 0, -1)]
+    reason = presubmit.unstageable_refusal([*names, ".agentic/logs/a", ".agentic/worktrees/w"])
+    assert reason is not None
+    assert reason.index(".agentic/logs/a") < reason.index(".agentic/runs/r1.json")
+    assert ".agentic/runs/r4.json" in reason and ".agentic/runs/r5.json" not in reason
+    assert "5 more" in reason
