@@ -789,3 +789,12 @@ candidates:
   - finding
   - return
   added_at: '2026-10-28T01:45:59.134+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: For each new branch or text the plan promises, trace the caller's conditions to confirm it is reachable, and add a test through the declared seam that produces its output.
+  confidence: medium
+  seen_in:
+  - GH-395
+  sources:
+  - finding
+  added_at: '2026-10-28T02:58:56.511+00:00'
