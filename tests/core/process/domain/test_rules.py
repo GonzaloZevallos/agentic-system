@@ -9,6 +9,7 @@ from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import ci, document, roles, rules, schemas, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
+from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     FINDINGS,
@@ -4079,3 +4080,14 @@ def test_poll_plan_retakes_a_disk_full_pause_on_the_retake_calendar():
         closes=[], resumes=[due, early], launches=[], available_slots=2, now=NOW
     ).actions
     assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_the_integration_brief_gains_the_docs_conflict_line_only_when_the_product_declares_docs():
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    without = rules.integration_work("Wire it.", ["agentic/GH-1.api"])
+    assert rules.integration_work("Wire it.", ["agentic/GH-1.api"], None) == without
+    declared = rules.integration_work("Wire it.", ["agentic/GH-1.api"], docs)
+    assert declared["brief"] == without["brief"] + conflict_line(docs)
+    assert "run `make docs` and commit its output" in declared["brief"]
+    assert rules.integration_work("", [], docs) == rules.integration_work("", [])
+    assert rules.integration_subtask("", ["b"], docs)["brief"].endswith(conflict_line(docs))

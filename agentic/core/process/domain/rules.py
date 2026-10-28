@@ -16,6 +16,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
+from .docs import Docs, conflict_line
 from .document import HUMAN, demote
 from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
@@ -1737,7 +1738,9 @@ def needs_integration(state: TaskState) -> bool:
     return INTEGRATION not in subtasks and len(subtasks) > 1 and all_approved(state)
 
 
-def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subtask:
+def integration_subtask(
+    brief: str = "", conflicts: Sequence[str] = (), docs: Docs | None = None
+) -> Subtask:
     """The integration as the fan-in adds it.
 
     `pending` when there is something for the integrator to do: a merge the system could
@@ -1745,7 +1748,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     the incremental merge was the whole job (README.md, 13), so the branch goes straight
     to its review with no Developer paid for a merge already done. Either way the
     integration review reads the whole branch, which is the only review that does."""
-    work = integration_work(brief, conflicts)
+    work = integration_work(brief, conflicts, docs)
     return {
         "id": INTEGRATION,
         "title": "Integration",
@@ -1756,7 +1759,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     }
 
 
-def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
+def integration_work(brief: str, conflicts: Sequence[str], docs: Docs | None = None) -> Subtask:
     """The part of the integration subtask a wave can change: what is left to do and
     which branches are still out. Recomputed on every wave, so an integration the review
     sent back is not still telling its Developer there was nothing to do."""
@@ -1765,7 +1768,9 @@ def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
         line
         for line in (
             brief.strip(),
-            f"Merge into the task branch what the system could not: {listed}." if listed else "",
+            f"Merge into the task branch what the system could not: {listed}." + conflict_line(docs)
+            if listed
+            else "",
         )
         if line
     ]

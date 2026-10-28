@@ -90,6 +90,7 @@ from .core.process.application.preflight import (
     PLACEHOLDERS,
     declared_stack,
     declared_stack_of,
+    docs_placeholders_missing,
     no_forbidden,
     no_setup,
     over_cap,
@@ -172,6 +173,13 @@ def brief_refusal(ports: Ports) -> str | None:
     layer, next to `no_forbidden`'s own split."""
     text = ports.knowledge.brief()
     return None if text is None else knowledge.brief_refusal(text)
+
+
+def _warn_docs_prompts(ports: Ports, revision: str) -> None:
+    """Say, on stderr, each Tech Lead prompt that lacks the placeholder of the written-docs
+    rules while the product declares `docs`. Never a refusal."""
+    for message in docs_placeholders_missing(ports, revision):
+        print(f"agentic: {message}", file=sys.stderr)
 
 
 def _warn_over_cap(ports: Ports, revision: str) -> None:
@@ -602,6 +610,7 @@ def main() -> None:
                 if (warning := no_forbidden(ports, "HEAD")) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
                 _warn_over_cap(ports, "HEAD")
+                _warn_docs_prompts(ports, "HEAD")
                 # A malformed Brief refuses `run` outright (ADR-0025): an
                 # absent one is `no_brief`'s fact above, never this one's.
                 if (problem := brief_refusal(ports)) is not None:
@@ -623,6 +632,7 @@ def main() -> None:
             if (warning := no_forbidden(ports, base)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
             _warn_over_cap(ports, base)
+            _warn_docs_prompts(ports, base)
             # A malformed Brief only prints on `resume` and the run
             # proceeds: a human's edit to his own file must never strand every paused
             # task at the boot gate with no task named (ADR-0003; ADR-0025).

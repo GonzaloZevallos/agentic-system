@@ -19,3 +19,63 @@ class Docs:
 
     generate: str
     paths: tuple[str, ...]
+
+
+def _owned(docs: Docs) -> str:
+    return ", ".join(f"`{path}`" for path in docs.paths)
+
+
+def plan_text(docs: Docs | None) -> str:
+    """What the planning Tech Lead is told when the product declares `docs`, empty when it
+    declares none. It starts with its own newline: the prompt places the placeholder at the
+    end of a line, so the empty text leaves the prompt exactly as it was, no blank line."""
+    if docs is None:
+        return ""
+    return (
+        "\nThis product declares technical docs (`docs:` in `.agentic/stack.yaml`). When a "
+        "subtask changes architecture (a container, a component, a contract between modules, "
+        "the data model or a key flow), that same subtask updates the written docs: the C4 "
+        "context, container and component views and the sequence diagrams of key flows, in "
+        "Mermaid, under `docs/architecture/`, and the technical sections of `docs/README.md` "
+        "(architecture, API or CLI reference, ADR index). If `docs/README.md` does not exist "
+        "at the base, the first architecture subtask creates it. Generated files under "
+        f"{_owned(docs)} are never edited by hand: the brief has the Developer regenerate "
+        f"them by running `{docs.generate}`. The prose is in Spanish (Rioplatense); code, "
+        "identifiers and diagram names stay in English; every claim cites the file or symbol "
+        "it rests on. You never write the files; the Developer of the subtask does."
+    )
+
+
+def review_text(docs: Docs | None) -> str:
+    """What the reviewing Tech Lead is told when the product declares `docs`, empty when it
+    declares none. It starts with its own blank line, like `plan_text` with its newline."""
+    if docs is None:
+        return ""
+    return (
+        "\n\nThis product declares technical docs (`docs:`). Review `docs/architecture/` and "
+        "`docs/README.md` against the code, on the diff:\n\n"
+        "- A boundary changed in the diff (a container, a component, a contract between "
+        "modules, the data model or a key flow) with no change under `docs/architecture/` or "
+        "`docs/README.md` in the same subtask is a `blocking` finding. Its evidence is the "
+        "cited import, signature or model line plus an empty `git diff --stat <base> -- "
+        "docs/architecture docs/README.md`.\n"
+        "- A claim with no file or symbol reference, and prose not in Spanish, are "
+        "`important` findings, judged only on the lines the diff adds or changes under those "
+        "targets. Anything else in a doc the diff touches is scope `outside`.\n"
+        "- A stale `docs/README.md` is raised only when the file exists at the base. A "
+        "missing one is never `blocking` by itself; it is `important` only when the plan said "
+        "to create it and the subtask did not.\n"
+        f"- Generated files under {_owned(docs)} belong to the `docs` check: never ask for a "
+        f"hand edit, the fix is to run `{docs.generate}`."
+    )
+
+
+def conflict_line(docs: Docs | None) -> str:
+    """The sentence a merge-conflict text gains when the product declares `docs`, empty when
+    it declares none: generated files are regenerated, never merged by hand."""
+    if docs is None:
+        return ""
+    return (
+        f" For conflicted files under {_owned(docs)}, do not merge them by hand: take either "
+        f"side, run `{docs.generate}` and commit its output."
+    )
