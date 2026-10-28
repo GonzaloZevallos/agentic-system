@@ -7,12 +7,13 @@ repo, which the docs check deletes and restores while pytest runs (invariants 2 
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -227,3 +228,218 @@ def test_ci_check_job_runs_the_docs_check_through_check_py() -> None:
     workflow = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
     steps = workflow["jobs"]["check"]["steps"]
     assert "uv run python scripts/docs/check.py" in [step.get("run") for step in steps]
+
+
+# --- The written pages (ADR-0074): Spanish prose, Mermaid diagrams, links and citations ---
+
+WRITTEN_PAGES = (
+    "docs/README.md",
+    "docs/architecture/contexto.md",
+    "docs/architecture/contenedores.md",
+    "docs/architecture/componentes.md",
+    "docs/architecture/flujos/de-issue-a-merge.md",
+    "docs/architecture/flujos/aterrizaje.md",
+    "docs/architecture/flujos/reanudacion.md",
+)
+DIAGRAM_KEYWORDS = (
+    "flowchart",
+    "graph",
+    "sequenceDiagram",
+    "C4Context",
+    "C4Container",
+    "C4Component",
+    "classDiagram",
+)
+SPANISH_WORDS = frozenset(
+    "el la los las de del que y en un una por con para se es al lo como su más no".split()
+)
+_FENCE_LINE = re.compile(r"^```")
+_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)")
+_CODE = re.compile(r"`([^`\n]+)`")
+_CITATION = re.compile(r"^((?:[\w.-]+/)+[\w.-]+\.(?:py|md|yaml|yml|sh|toml|in|json))(?::([\w.]+))?")
+
+
+def _owned(relative: str) -> bool:
+    """Whether `relative` falls under a `docs:` glob of this repo's stack."""
+    declared = yaml.safe_load((REPO / ".agentic" / "stack.yaml").read_text())["docs"]["paths"]
+    return any(fnmatch.fnmatch(relative, pattern) for pattern in declared)
+
+
+def _prose(text: str) -> str:
+    """`text` without its fenced blocks."""
+    kept, inside = [], False
+    for line in text.splitlines():
+        if _FENCE_LINE.match(line):
+            inside = not inside
+        elif not inside:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def broken_links(page: str, text: str, generated: frozenset[str]) -> list[str]:
+    """The relative links of `text`, a page at `page`, that resolve to nothing: a target
+    under the owned paths must be one the generator writes, any other must exist. Anchors
+    and external URLs are ignored."""
+    broken = []
+    for target in _LINK.findall(_prose(text)):
+        if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
+            continue
+        path = target.split("#", 1)[0]
+        relative = os.path.normpath(os.path.join(os.path.dirname(page), path)).replace(os.sep, "/")
+        found = relative in generated if _owned(relative) else (REPO / relative).exists()
+        if not found:
+            broken.append(f"{page}: {target}")
+    return broken
+
+
+def diagram_problems(page: str, text: str, limits: Callable[[str], None]) -> list[str]:
+    """What is wrong with the Mermaid blocks of `text`: an unbalanced fence, a block that
+    opens with no known diagram keyword, a block over the limits. Not a full parse."""
+    problems = []
+    fences = [line for line in text.splitlines() if _FENCE_LINE.match(line)]
+    if len(fences) % 2:
+        problems.append(f"{page}: unbalanced code fences")
+    for number, block in enumerate(re.findall(r"```mermaid\n(.*?)```", text, re.DOTALL), 1):
+        first = next((line.split()[0] for line in block.splitlines() if line.strip()), "")
+        if first.rstrip(";") not in DIAGRAM_KEYWORDS:
+            problems.append(f"{page}: block {number} opens with {first!r}")
+        try:
+            limits(block)
+        except ValueError as error:
+            problems.append(f"{page}: block {number}: {error}")
+    return problems
+
+
+def citations(text: str) -> list[tuple[str, str | None]]:
+    """Each `path` or `path:symbol` the prose cites in backticks."""
+    found = []
+    for code in _CODE.findall(text):
+        if match := _CITATION.match(code):
+            found.append((match.group(1), match.group(2)))
+    return found
+
+
+def citation_problems(page: str, text: str) -> list[str]:
+    """A citation outside the owned paths must name a file that exists and, when it names
+    a symbol, a symbol that file mentions; a page with no such citation is a problem."""
+    checked, problems = 0, []
+    for path, symbol in citations(text):
+        if _owned(path):
+            continue
+        file = REPO / path
+        if not file.is_file():
+            problems.append(f"{page}: cites {path}, which does not exist")
+            continue
+        checked += 1
+        if symbol and symbol.split(".")[-1] not in file.read_text(encoding="utf-8"):
+            problems.append(f"{page}: {path} has no {symbol}")
+    if not checked:
+        problems.append(f"{page}: cites no repo path")
+    return problems
+
+
+def spanish_share(text: str) -> float:
+    """The share of the words of the prose of `text` that are common Spanish words."""
+    words = re.findall(r"[a-záéíóúñü]+", _prose(text).lower())
+    return sum(word in SPANISH_WORDS for word in words) / max(len(words), 1)
+
+
+def _pages() -> dict[str, str]:
+    return {page: (REPO / page).read_text(encoding="utf-8") for page in WRITTEN_PAGES}
+
+
+@pytest.fixture(scope="module")
+def generated_files(scripts: tuple[ModuleType, ModuleType], full_run: Path) -> frozenset[str]:
+    render, _ = scripts
+    classes = [
+        Path(name).stem.removeprefix("classes-") for name in _tree(full_run) if "/classes-" in name
+    ]
+    return frozenset(render.outputs(classes))
+
+
+def test_every_written_page_exists_and_is_not_under_the_owned_paths() -> None:
+    for page in WRITTEN_PAGES:
+        assert (REPO / page).is_file(), page
+        assert not _owned(page), page
+
+
+def test_every_relative_link_of_the_written_pages_resolves(generated_files: frozenset[str]) -> None:
+    problems = [
+        problem
+        for page, text in _pages().items()
+        for problem in broken_links(page, text, generated_files)
+    ]
+    assert problems == []
+    linked = {t for text in _pages().values() for t in _LINK.findall(text)}
+    assert any("generated/role-graph.md" in target for target in linked)
+
+
+def test_a_link_to_nothing_is_refused(generated_files: frozenset[str]) -> None:
+    text = (
+        "[gone](missing.md) [kept](../README.md#a) [web](https://example.com) [self](#x) "
+        "[stale](generated/role-graf.md) [fresh](generated/role-graph.md)"
+    )
+    assert broken_links("docs/architecture/x.md", text, generated_files) == [
+        "docs/architecture/x.md: missing.md",
+        "docs/architecture/x.md: generated/role-graf.md",
+    ]
+
+
+def test_every_mermaid_block_of_the_written_pages_is_a_diagram_within_the_limits(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = _pages()
+    problems = [
+        problem
+        for page, text in pages.items()
+        for problem in diagram_problems(page, text, render.mermaid_limits)
+    ]
+    assert problems == []
+    assert sum(text.count("```mermaid") for text in pages.values()) >= 4
+
+
+def test_a_bad_fence_is_refused(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    page = "docs/architecture/x.md"
+    assert (
+        diagram_problems(
+            page, "```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n", render.mermaid_limits
+        )
+        == []
+    )
+    assert diagram_problems(
+        page, "```mermaid\nsequenceDiagram\n  A->>B: hi\n", render.mermaid_limits
+    ) == [f"{page}: unbalanced code fences"]
+    assert diagram_problems(page, "```mermaid\nnonsense\n```\n", render.mermaid_limits) == [
+        f"{page}: block 1 opens with 'nonsense'"
+    ]
+    huge = "graph TD;\n" + "\n".join(f"a{n} --> b{n};" for n in range(render.MAX_EDGES + 1))
+    (problem,) = diagram_problems(page, f"```mermaid\n{huge}\n```\n", render.mermaid_limits)
+    assert "edges" in problem
+
+
+def test_every_written_page_cites_files_and_symbols_that_exist() -> None:
+    problems = [
+        problem for page, text in _pages().items() for problem in citation_problems(page, text)
+    ]
+    assert problems == []
+
+
+def test_a_citation_of_nothing_is_refused() -> None:
+    page = "docs/architecture/x.md"
+    good = "`agentic/composition.py:graph` and `agentic/cli.py:build_parser`"
+    assert citation_problems(page, good) == []
+    assert citation_problems(page, "`agentic/nada.py:graph`") == [
+        f"{page}: cites agentic/nada.py, which does not exist",
+        f"{page}: cites no repo path",
+    ]
+    absent = citation_problems(page, "`agentic/cli.py:no_such_symbol_anywhere_x`")
+    assert absent == [f"{page}: agentic/cli.py has no no_such_symbol_anywhere_x"]
+    assert citation_problems(page, "sin citas") == [f"{page}: cites no repo path"]
+
+
+def test_every_written_page_is_in_spanish() -> None:
+    low = {page: share for page, text in _pages().items() if (share := spanish_share(text)) < 0.15}
+    assert low == {}
+    assert spanish_share("The system reads the task from the issue and then runs the roles.") < 0.05
