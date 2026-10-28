@@ -1,5 +1,6 @@
 """`run.bounded_run` and `run.run_gh` (GH-266, ADR-0050)."""
 
+import json
 import os
 import signal
 import subprocess
@@ -10,7 +11,11 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.github.run import GH_DRAIN_S, bounded_run, run_gh
-from agentic.core.process.application.ports import TrackerTimedOut, TrackerUnreachable
+from agentic.core.process.application.ports import (
+    TrackerCallFailed,
+    TrackerTimedOut,
+    TrackerUnreachable,
+)
 
 
 def _gh(run, *args, log=None, cwd=Path(".")):
@@ -252,3 +257,237 @@ def test_a_stalled_call_whose_child_left_the_group_is_still_bounded(tmp_path):
                 os.kill(int(pidfile.read_text()), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+# --- run_gh with a retry policy (GH-389) -------------------------------------------------
+
+BAD_GATEWAY = 'gh issue comment failed: non-200 OK status code: 502 Bad Gateway body: "<html>"'
+RATE_LIMITED = "gh: API rate limit exceeded for user ID 1. (HTTP 403)"
+
+
+class _Clock:
+    """A clock the injected `sleep` moves, so no test waits for real."""
+
+    def __init__(self, start: float = 1_000.0):
+        self.t = start
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+class _Stop:
+    def __init__(self, after: int | None = None, clock: _Clock | None = None):
+        self.after, self.clock = after, clock
+
+    def is_set(self) -> bool:
+        return self.after is not None and len(self.clock.sleeps) >= self.after
+
+    def set(self) -> None:  # pragma: no cover - the policy only reads it
+        raise AssertionError
+
+
+def _script(*outcomes):
+    """A fake `run`: each call plays the next outcome (an exception is raised, a string is
+    the stdout); the argv of every call is kept."""
+    calls: list[list[str]] = []
+    queue = list(outcomes)
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        outcome = queue.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return subprocess.CompletedProcess(argv, 0, stdout=outcome, stderr="")
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
+def _failed(stderr, code=1):
+    return subprocess.CalledProcessError(code, ["gh"], output="", stderr=stderr)
+
+
+def _policy(clock, *, cap=900, stop=None):
+    from agentic.core.process.adapters.github.run import GhRetry
+
+    return GhRetry(max_wait_s=cap, sleep=clock.sleep, now=clock.now, stop=stop)
+
+
+def _retrying(run, clock, *, cap=900, stop=None, read=False, args=("issue", "comment", "7")):
+    lines: list[str] = []
+    call = lambda: run_gh(  # noqa: E731
+        run,
+        args,
+        cwd=Path("."),
+        not_installed="no gh",
+        failed=lambda stderr: f"failed: {stderr}",
+        log=lines.append,
+        retry=_policy(clock, cap=cap, stop=stop),
+        retry_timeouts=read,
+    )
+    return call, lines
+
+
+def test_a_502_then_success_returns_the_stdout_after_the_backoff():
+    clock = _Clock()
+    run = _script(_failed(BAD_GATEWAY), " ok\n")
+    call, lines = _retrying(run, clock)
+    assert call() == "ok"
+    assert len(run.calls) == 2
+    assert sum(clock.sleeps) == 2
+    assert len(lines) == 1 and "gh issue comment" in lines[0] and "502" not in lines[0]
+
+
+def test_a_persistent_502_is_transient_after_three_attempts_and_names_no_stderr():
+    from agentic.core.process.application.ports import TrackerTransient
+
+    clock = _Clock()
+    run = _script(*[_failed(BAD_GATEWAY)] * 3)
+    call, lines = _retrying(run, clock)
+    with pytest.raises(TrackerTransient) as raised:
+        call()
+    assert len(run.calls) == 3
+    assert sum(clock.sleeps) == 2 + 8
+    assert "Bad Gateway" not in str(raised.value) and "3 attempts" in str(raised.value)
+    assert isinstance(raised.value, ValueError)
+    assert len(lines) == 2 and all("Bad Gateway" not in line for line in lines)
+
+
+def test_an_unrecognised_failure_is_refused_at_once_and_never_retried():
+    from agentic.core.process.application.ports import TrackerRefused
+
+    clock = _Clock()
+    run = _script(_failed("HTTP 404: Not Found"))
+    call, lines = _retrying(run, clock)
+    with pytest.raises(TrackerRefused, match="failed: HTTP 404"):
+        call()
+    assert len(run.calls) == 1 and clock.sleeps == [] and lines == []
+
+
+def test_an_auth_failure_is_never_retried_even_with_a_marker_in_it():
+    clock = _Clock()
+    run = _script(_failed("error connecting to api.github.com", code=4))
+    call, _ = _retrying(run, clock)
+    with pytest.raises(ValueError, match="failed:"):
+        call()
+    assert len(run.calls) == 1 and clock.sleeps == []
+
+
+def test_an_unreachable_github_retries_under_the_policy_and_ends_unreachable():
+    clock = _Clock()
+    run = _script(*[_failed("error connecting to api.github.com")] * 3)
+    call, _ = _retrying(run, clock)
+    with pytest.raises(TrackerUnreachable):
+        call()
+    assert len(run.calls) == 3
+
+
+def test_a_missing_gh_is_never_retried():
+    clock = _Clock()
+    run = _script(FileNotFoundError("gh"))
+    call, _ = _retrying(run, clock)
+    with pytest.raises(ValueError, match="no gh") as raised:
+        call()
+    assert type(raised.value) is ValueError and clock.sleeps == []
+
+
+def test_a_read_timeout_is_retried_and_a_write_timeout_is_not():
+    expired = subprocess.TimeoutExpired(["gh"], 60)
+    clock = _Clock()
+    read = _script(expired, "[]")
+    call, _ = _retrying(read, clock, read=True, args=("issue", "list"))
+    assert call() == "[]" and len(read.calls) == 2
+
+    write = _script(expired, "never")
+    call, lines = _retrying(write, _Clock(), read=False)
+    with pytest.raises(TrackerTimedOut, match="timed out after 60 s"):
+        call()
+    assert len(write.calls) == 1
+    assert lines == [
+        "agentic: gh issue comment timed out after 60 s; this read fails and the next round retries"
+    ]
+
+
+def test_a_rate_limit_waits_until_the_reset_the_api_gives():
+    clock = _Clock(1_000)
+    limits = json.dumps(
+        {
+            "resources": {
+                "core": {"remaining": 0, "reset": 1_040},
+                "graphql": {"remaining": 0, "reset": 1_090},
+                "search": {"remaining": 30, "reset": 5_000},
+            }
+        }
+    )
+    run = _script(_failed(RATE_LIMITED), limits, "done")
+    call, lines = _retrying(run, clock)
+    assert call() == "done"
+    assert run.calls[1] == ["gh", "api", "rate_limit"]
+    assert sum(clock.sleeps) == pytest.approx(90)
+    assert all(step <= 1 for step in clock.sleeps)
+    assert len(lines) == 1 and "rate limit" in lines[0]
+
+
+def test_the_rate_limit_read_has_no_policy_of_its_own():
+    # The read answers a rate limit too: it must fall back to the backoff, not recurse.
+    clock = _Clock()
+    run = _script(_failed(RATE_LIMITED), _failed(RATE_LIMITED), "done")
+    call, _ = _retrying(run, clock)
+    assert call() == "done"
+    assert [c for c in run.calls if c[1:] == ["api", "rate_limit"]] == [["gh", "api", "rate_limit"]]
+    assert sum(clock.sleeps) == 2
+
+
+def test_a_rate_limit_with_no_resource_at_zero_uses_the_backoff():
+    clock = _Clock()
+    run = _script(_failed(RATE_LIMITED), '{"resources": {"core": {"remaining": 5, "reset": 1}}}', "x")
+    call, _ = _retrying(run, clock)
+    assert call() == "x" and sum(clock.sleeps) == 2
+
+
+def test_a_reset_over_the_cap_raises_rate_limited_without_sleeping():
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    clock = _Clock(1_000)
+    run = _script(_failed(RATE_LIMITED), '{"resources": {"core": {"remaining": 0, "reset": 1100}}}')
+    call, _ = _retrying(run, clock, cap=60)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert clock.sleeps == [] and "60 s" in str(raised.value)
+    assert "API rate limit" not in str(raised.value)
+
+
+def test_a_stop_flag_set_during_a_wait_ends_it_early_with_the_original_class():
+    from agentic.core.process.application.ports import TrackerTransient
+
+    clock = _Clock()
+    stop = _Stop(after=1, clock=clock)
+    run = _script(_failed(BAD_GATEWAY), "never")
+    call, _ = _retrying(run, clock, stop=stop)
+    with pytest.raises(TrackerTransient):
+        call()
+    assert len(run.calls) == 1
+    assert sum(clock.sleeps) == 1
+
+
+def test_a_wait_never_exceeds_the_cap():
+    clock = _Clock()
+    run = _script(*[_failed(BAD_GATEWAY)] * 3)
+    call, _ = _retrying(run, clock, cap=1.5)
+    with pytest.raises(ValueError):
+        call()
+    assert sum(clock.sleeps) == pytest.approx(3.0)  # two waits of at most the cap
+
+
+def test_without_a_policy_a_502_is_the_same_value_error_and_writes_no_line():
+    call, lines = _gh(_raising(_failed(BAD_GATEWAY)), "issue", "comment", "7")
+    with pytest.raises(ValueError) as raised:
+        call()
+    assert str(raised.value) == f"failed: {BAD_GATEWAY}"
+    assert not isinstance(raised.value, TrackerCallFailed)
+    assert lines == []

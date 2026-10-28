@@ -631,6 +631,26 @@ class TrackerUnreachable(TrackerCallFailed):
     recognised, never stderr."""
 
 
+class TrackerTransient(TrackerCallFailed):
+    """A `gh` call kept failing with a transient GitHub error (a 502, a reset) until the
+    retries a `GhRetry` allows ran out (GH-389). A write may have been applied after all: a
+    response can be lost after the change. The message names the call and the bound, never
+    stderr."""
+
+
+class TrackerRateLimited(TrackerCallFailed):
+    """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
+    stated is longer than the policy's cap (GH-389). The message names the call and the
+    bound, never stderr."""
+
+
+class TrackerRefused(ValueError):
+    """`gh` ran and exited non-zero with an answer no retry changes (GH-389): the failure a
+    caller's own wording describes. A `ValueError`, so every handler that already treats a
+    failed call as one is unchanged; not a `TrackerCallFailed`, which is the transport's.
+    A missing `gh` is none of these: it stays a plain `ValueError`."""
+
+
 class GitError(RuntimeError):
     """A real git failure -- not a question `Workspace`'s own contract answers some
     other way, like `is_ancestor`'s `False` for an object this checkout does not have
