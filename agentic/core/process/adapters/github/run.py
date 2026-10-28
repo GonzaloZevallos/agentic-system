@@ -250,10 +250,11 @@ def run_gh(
 ) -> str:
     """One `gh <args>` call through `run`, its stdout stripped. Every failure is a
     `ValueError`: `not_installed` when there is no `gh`, `failed(stderr)` when it exits
-    non-zero (each caller keeps its own wording; a `TrackerRefused` under a policy), `TrackerTimedOut` when `run`
-    raised `TimeoutExpired`, `TrackerUnreachable` when `gh` exited saying it could not reach
-    GitHub (`GH_UNREACHABLE_MARKERS`, never exit 4). Each of the last two writes exactly
-    one line through `log` that names the call and nothing `gh` printed.
+    non-zero (each caller keeps its own wording; a `TrackerRefused` under a policy),
+    `TrackerTimedOut` when `run` raised `TimeoutExpired`, `TrackerUnreachable` when `gh`
+    exited saying it could not reach GitHub (`GH_UNREACHABLE_MARKERS`, never exit 4). Each
+    of the last two writes exactly one line through `log` that names the call and nothing
+    `gh` printed.
 
     With no `retry` that is all (ADR-0050). With one (GH-389), a gateway error
     (`GH_TRANSIENT_MARKERS`), an unreachable GitHub, the primary rate limit and, when

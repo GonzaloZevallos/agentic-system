@@ -445,7 +445,9 @@ def test_the_rate_limit_read_has_no_policy_of_its_own():
 
 def test_a_rate_limit_with_no_resource_at_zero_uses_the_backoff():
     clock = _Clock()
-    run = _script(_failed(RATE_LIMITED), '{"resources": {"core": {"remaining": 5, "reset": 1}}}', "x")
+    run = _script(
+        _failed(RATE_LIMITED), '{"resources": {"core": {"remaining": 5, "reset": 1}}}', "x"
+    )
     call, _ = _retrying(run, clock)
     assert call() == "x" and sum(clock.sleeps) == 2
 

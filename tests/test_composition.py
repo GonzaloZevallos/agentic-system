@@ -261,3 +261,31 @@ def test_a_markable_flag_passed_to_the_composition_reaches_the_commands(tmp_path
     stop.set()
     with pytest.raises(RunStopped):
         ports.commands.run(product, "echo hi", timeout_s=10)
+
+
+def _retry_of(tmp_path, monkeypatch, **kwargs):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    return composition.default_ports(Configuration(product_dir=product), **kwargs).tracker._retry
+
+
+def test_the_tracker_has_no_retry_policy_unless_the_caller_asks(tmp_path, monkeypatch):
+    # The poller, `inbox`, `close` and every other verb build their ports like this.
+    assert _retry_of(tmp_path, monkeypatch) is None
+    assert composition.system_repo().tracker._retry is None
+
+
+def test_run_and_resume_retry_with_the_long_cap_and_their_stop_flag(tmp_path, monkeypatch):
+    from agentic.core.process.adapters.github.run import GH_RATE_WAIT_MAX_S
+
+    stop = EventStopFlag()
+    retry = _retry_of(tmp_path, monkeypatch, stop_flag=stop, gh_retry="run")
+    assert retry.max_wait_s == GH_RATE_WAIT_MAX_S == 900
+    assert retry.stop is stop
+
+
+def test_the_merge_and_land_children_retry_with_the_one_minute_cap(tmp_path, monkeypatch):
+    from agentic.core.process.adapters.github.run import GH_EXEMPT_WAIT_MAX_S
+
+    retry = _retry_of(tmp_path, monkeypatch, gh_retry="exempt")
+    assert retry.max_wait_s == GH_EXEMPT_WAIT_MAX_S == 60

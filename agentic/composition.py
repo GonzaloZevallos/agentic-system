@@ -17,7 +17,7 @@ import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -34,6 +34,11 @@ from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
+from .core.process.adapters.github.run import (
+    GH_EXEMPT_WAIT_MAX_S,
+    GH_RATE_WAIT_MAX_S,
+    GhRetry,
+)
 from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import (
     NullStopFlag,
@@ -117,11 +122,23 @@ def widget_data(project_id: str) -> ClickHouseWidgetData | None:
     return ClickHouseWidgetData(url, user, password, project_id)
 
 
-def default_ports(cfg: Configuration, stop_flag: StopFlag | None = None) -> Ports:
+# Who may retry a `gh` call (GH-389, ADR-0050 addendum): the process that owns a task.
+# "run" is `run`/`resume`, whose retry waits are cut by their stop flag; "exempt" is the
+# `merge`/`land` children, which hold a lane the runs exempt from the cap share.
+GhWait = Literal["run", "exempt"]
+_GH_WAIT_CAPS: dict[GhWait, float] = {"run": GH_RATE_WAIT_MAX_S, "exempt": GH_EXEMPT_WAIT_MAX_S}
+
+
+def default_ports(
+    cfg: Configuration, stop_flag: StopFlag | None = None, *, gh_retry: GhWait | None = None
+) -> Ports:
     """The ports of a product. `stop_flag` is the one flag `run`/`resume` can mark when a
     signal stops them (GH-355); every other caller leaves it out and gets one that is never
-    set, so no other verb can have a command raise `RunStopped`."""
-    ports = _ports(cfg, stop_flag if stop_flag is not None else NullStopFlag())
+    set, so no other verb can have a command raise `RunStopped`. `gh_retry` is the wait cap
+    of the tracker's retry policy; left out, the tracker never retries (the poller, `inbox`,
+    `close` and every other verb, ADR-0050)."""
+    flag = stop_flag if stop_flag is not None else NullStopFlag()
+    ports = _ports(cfg, flag, gh_retry)
     # Here and not only in `preflight`, which is the CLI's: `langgraph dev`, Studio and
     # the LangGraph API import the wired graph and never see the CLI, and this is the
     # door all of them share. The refusal is the application's; the root only asks
@@ -147,7 +164,7 @@ def system_repo() -> SystemRepo:
     return SystemRepo(GhTracker(telemetry.REPO), GhInbox(telemetry.REPO))
 
 
-def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
+def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = None) -> Ports:
     # Append mode, line buffered: up to `max_concurrent_roles` nodes hold their own
     # handle on the same path, and whole lines are what makes that safe to interleave
     # (README.md, 14). `None` with no `log_file` -- the `langgraph dev` door -- opens
@@ -181,7 +198,14 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
         flags=FilesystemFlags(cfg.product_dir),
         inbox=GhInbox(cfg.product_dir),
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
-        tracker=GhTracker(cfg.product_dir),
+        tracker=GhTracker(
+            cfg.product_dir,
+            retry=(
+                None
+                if gh_retry is None
+                else GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag)
+            ),
+        ),
         stack=GitStack(cfg.product_dir),
         commands=ShellCommands(product_key, reaper, stop_flag),
         sample_app=ShellSampleApp(),

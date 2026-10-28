@@ -39,7 +39,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from . import composition
-from .composition import default_ports, graph
+from .composition import GhWait, default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
@@ -567,7 +567,22 @@ def main() -> None:
         # Only `run`/`resume` own a flag a signal can mark; every other verb gets the one
         # that never is (composition's default), so none can raise `RunStopped`.
         stop_flag = EventStopFlag() if args.command in ("run", "resume") else None
-        ports = default_ports(cfg) if stop_flag is None else default_ports(cfg, stop_flag)
+        # Only the processes that own a task retry a `gh` call (GH-389): `run`/`resume` wait
+        # at most GH_RATE_WAIT_MAX_S, the `merge`/`land` children a minute. The poller,
+        # `inbox`, `close` and every other verb keep the fast failure of ADR-0050.
+        gh_retry: GhWait | None = (
+            "run"
+            if args.command in ("run", "resume")
+            else "exempt"
+            if args.command in ("merge", "land")
+            else None
+        )
+        # The bare call stays the shape of every verb that owns nothing to wait for.
+        ports = (
+            default_ports(cfg)
+            if gh_retry is None
+            else default_ports(cfg, stop_flag, gh_retry=gh_retry)
+        )
         if args.command not in (
             "close",
             "eval",
