@@ -188,6 +188,58 @@ async def test_a_task_with_a_waived_fit_is_planned_whole_and_never_split(arm, tm
     assert "waived" in patch["failures"][0]["error"]
 
 
+# One estimate, one verdict whatever the shape (GH-462): the history's reference bucket is
+# pinned for the run, so the two attempts of one run never refuse each other's answer.
+
+
+def seven_subtasks(**more):
+    extra = [
+        {"id": f"s{i}", "title": f"S{i}", "brief": "Build it.", "seams": ["GET /x"]}
+        for i in range(6)
+    ]
+    return planned(*extra, estimated_cost_usd=38.0, estimated_files=21, **more)
+
+
+def history_ports(runner, *, seven: float, two: float | None = None):
+    ports = memory_ports(runner)
+    ports.documents.saved.extend(closed(f"S7-{i}", seven, subtasks=7) for i in range(5))
+    if two is not None:
+        ports.documents.saved.extend(closed(f"S2-{i}", two, subtasks=2) for i in range(5))
+    return ports
+
+
+async def test_parts_that_fit_then_subtasks_produce_a_plan_with_subtasks(tmp_path):
+    # The issue's literal case: the estimate fits the bucket of 7, the model still writes
+    # parts, the refusal says to drop them, and the retry is accepted.
+    runner = ScriptedRunner(
+        tech_lead=[planned_parts(estimated_cost_usd=38.0, estimated_files=21), seven_subtasks()]
+    )
+    patch = await plan(TASK, cold(tmp_path), history_ports(runner, seven=10.0))
+
+    assert runner.slugs.count("tech_lead") == 2
+    assert "parts" not in patch and len(patch["subtasks"]) == 7
+    assert "write subtasks and no parts" in patch["failures"][0]["error"]
+    assert rules.after_plan(apply(TASK, patch)) == "integrate"
+
+
+async def test_subtasks_over_the_bucket_then_parts_produce_parts_not_a_loop(tmp_path):
+    # GH-462: the same estimate was refused as 7 subtasks (bucket of 7) and then as 2 parts
+    # (bucket of 2, "fits"). With the bucket pinned, the parts are judged against the bucket
+    # that refused the subtasks, and the run delivers them.
+    runner = ScriptedRunner(
+        tech_lead=[
+            seven_subtasks(),
+            planned_parts(estimated_cost_usd=38.0, estimated_files=21),
+        ]
+    )
+    patch = await plan(TASK, cold(tmp_path), history_ports(runner, seven=200.0, two=10.0))
+
+    assert runner.slugs.count("tech_lead") == 2
+    assert [p["title"] for p in patch["parts"]] == ["Catalogue", "Screens"]
+    assert "does not fit" in patch["failures"][0]["error"]
+    assert "ADR-0054" in patch["failures"][0]["error"]
+
+
 # The tracker-only rule reaches both rendered Tech Lead prompts (GH-336): the plan schema no
 # longer says "every task changes a file", so the prompt is where the rule is taught.
 
