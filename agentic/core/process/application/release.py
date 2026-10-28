@@ -25,8 +25,11 @@ SCRATCH_PREFIXES = ("merge", "slice")
 
 def release_processes(ports: Ports, task_id: str, run: int) -> tuple[ReapedProcess, ...]:
     """What the dead run `run` of `task_id` left alive, stopped: its roles' scope and the
-    checks it ran (GH-315), which carry their own mark."""
-    return ports.reaper.reap_run(task_id, run) + ports.reaper.reap_run(reaping.CHECK_TASK, run)
+    checks and performance commands it ran (GH-315, GH-385), which carry their own marks."""
+    reaped = ports.reaper.reap_run(task_id, run)
+    for scoped in reaping.RUN_SCOPED:
+        reaped += ports.reaper.reap_run(scoped, run)
+    return reaped
 
 
 def release_checkout(ports: Ports, path: Path) -> tuple[ReapedProcess, ...]:
