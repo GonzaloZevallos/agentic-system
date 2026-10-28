@@ -3846,6 +3846,7 @@ MergeRefusal = Literal[
     "ci_failed",
     "ci_missing",
     "ci_unreadable",
+    "ci_blocked_by_conflict",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -3894,6 +3895,9 @@ MergeRefusal = Literal[
   after the push.
 - `ci_unreadable`: the CI report could not be read for `ci.CI_WAIT_MAX_S` after the push
   (`gh` missing or its answer unreadable), which says nothing about any product check.
+- `ci_blocked_by_conflict` (GH-395): GitHub reads the head as conflicting with its base and
+  no required check has a result on it; GitHub runs no CI on such a head, so none will come.
+  Decided in the same round with no wait; the landing syncs master instead.
 """
 
 
@@ -3940,7 +3944,9 @@ class MergeFacts:
     the masters the recorded check rows ran on: `True` every one is the current master or
     only behind by an inert gain, `False` something is in doubt, and `None` (what a
     `MergeFacts` built without it reads, the poller's) leaves the recorded `checks_master`
-    to be compared with `current_master`, exactly as before."""
+    to be compared with `current_master`, exactly as before. `github_conflicting` (GH-395) is
+    `rules.github_conflicting`'s reading: GitHub reads `CONFLICTING` on the head, whatever the
+    base. Only `ci_never_coming` reads it."""
 
     task_id: str
     status: str | None
@@ -3979,6 +3985,7 @@ class MergeFacts:
     criteria_regressed: tuple[str, ...] | None = ()
     ci_plan_only: tuple[str, ...] = ()
     ci_red_on_base: tuple[str, ...] = ()
+    github_conflicting: bool = False
 
 
 @dataclass(frozen=True)
@@ -4085,7 +4092,9 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
     product declares its CI or the plan requires checks (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and
-    `ci_missing`, a green and fresh CI being the `merge` itself when it covers a name the stack
+    `ci_missing` -- or, when GitHub reads the head as conflicting and no required check has a
+    result (`ci_never_coming`), `ci_blocked_by_conflict` at once instead of the wait (GH-395),
+    a green and fresh CI being the `merge` itself when it covers a name the stack
     declares (a green stale one, or one that covers only the plan's names -- `ci_plan_only` --
     goes on to the checks, GH-371);
     then `checks_failed` (only when the recorded checks cover this head on this master;
@@ -4186,6 +4195,37 @@ def merge_conflicts_from(
     return probe
 
 
+def github_conflicting(pull_request: PullRequest | None, pr_head: str | None) -> bool:
+    """Whether GitHub reads the pull request as `CONFLICTING` on `pr_head`, whatever base it
+    was read against (GH-395). The only other reader of `mergeable` besides
+    `merge_conflicts_from`: GitHub runs no `pull_request` workflow on such a head, so it is
+    the fact that explains a required check that never reports. It is not a definite
+    conflict with the current master; a base read behind it still gets the probe's word."""
+    return (
+        pull_request is not None
+        and pull_request.mergeable == "CONFLICTING"
+        and same_commit(pull_request.head_oid, pr_head)
+    )
+
+
+def ci_never_coming(facts: MergeFacts) -> bool:
+    """Whether the CI will never report on this head (GH-395): its report was read, is of the
+    head being decided (full sha, `same_commit`), none of the required names has any result
+    (all of them are in `CiVerdict.missing`), and GitHub reads the head as conflicting, so it
+    runs no CI on it. Anything else -- unreadable, another head, a red or a partly reported
+    CI, no required name -- is not decided here."""
+    verdict = facts.ci_verdict
+    return (
+        facts.github_conflicting
+        and bool(facts.ci_required)
+        and facts.ci_unreadable is None
+        and verdict is not None
+        and full_commit_id(facts.ci_head)
+        and same_commit(facts.ci_head, facts.pr_head)
+        and set(facts.ci_required) <= set(verdict.missing)
+    )
+
+
 def conflict_probe_wanted(facts: MergeFacts) -> bool:
     """Whether the conflict probe is worth running for `facts`: the only answer to that
     question, derived from the order of `auto_merge_decision` and never from a list of
@@ -4245,6 +4285,8 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     if verdict.state == "red":
         return MergeDecision("refuse", "ci_failed")
     if verdict.state == "pending":
+        if ci_never_coming(facts):
+            return MergeDecision("refuse", "ci_blocked_by_conflict")
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
     declared = set(facts.ci_required) - set(facts.ci_plan_only)
     if declared and facts.ci_fresh is True and facts.ci_untrusted is False:
