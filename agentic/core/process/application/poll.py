@@ -1205,12 +1205,16 @@ def _orphan_counts(raw: TaskState, comments: Sequence[IssueComment]) -> tuple[in
 
 
 def gather_orphans(
+    cfg: Configuration,
     ports: Ports,
     lock: RunLock,
     documents: Mapping[int, TaskState | None],
     busy: Collection[str],
     taken: Collection[int],
     now: datetime,
+    upstream: Callable[[], Upstream],
+    reports: list[rules.BlockerReport],
+    by_issue: dict[int, rules.BlockerReport],
 ) -> tuple[dict[int, int], list[str]]:
     """The orphan retakes of this round (GH-403, `rules.orphaned_run`) and the lines for the
     orphans it cannot retake now. `documents` is `queue_documents`' answer, so only an issue in
@@ -1218,8 +1222,11 @@ def gather_orphans(
     through the cheapest check first, and stops at the first that rules it out: its document's
     own fields (the rule itself, with nothing else known), a live run in `busy` or on its
     lock (`RunLock.refusal`), a lock record (`RunLock.read`, an unreadable one is a line, never
-    the round's end), whether the document was written inside `rules.ORPHANED_QUIET` (one
-    `ids_touched_since` for the whole round) and, only for what is left, the issue's comments.
+    the round's end), its blockers (`_blocked`, once per issue; the report goes to `reports`
+    and `by_issue` whether it blocks or not, and one that blocks holds the orphan silently --
+    no slot, no comment, no attempt, no line -- as it holds a fresh launch), whether the
+    document was written inside `rules.ORPHANED_QUIET` (one `ids_touched_since` for the whole
+    round) and, only for what is left, the issue's comments.
     Returns `{issue: counted}` in issue order, `counted` being the retakes that ran nothing."""
     orphans: dict[int, int] = {}
     lines: list[str] = []
@@ -1245,6 +1252,11 @@ def gather_orphans(
             continue
         if record is not None:
             continue
+        report = _blocked(cfg, ports, number, upstream)
+        reports.append(report)
+        by_issue[number] = report
+        if report:
+            continue  # held by an open blocker, as a fresh launch is: no slot, comment or line
         if touched is None:
             touched = set(ports.documents.ids_touched_since(now - rules.ORPHANED_QUIET))
         if task_id in touched:
@@ -1707,7 +1719,18 @@ def run_once(
                 *(c.issue for c in lands),
                 *reruns,
             }
-            orphans, orphan_lines = gather_orphans(ports, lock, queued, busy, acting, now)
+            orphans, orphan_lines = gather_orphans(
+                cfg,
+                ports,
+                lock,
+                queued,
+                busy,
+                acting,
+                now,
+                upstream,
+                blocker_reports,
+                blockers_by_issue,
+            )
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
         own_key = rules.root_key(str(tasks_root))

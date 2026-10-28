@@ -298,3 +298,15 @@ def test_the_retry_wait_is_fifteen_minutes_after_a_whole_failure():
     assert not board.retry_due(now - timedelta(minutes=14), now)
     assert board.retry_due(now - timedelta(minutes=15), now)
     assert not board.retry_due(now + timedelta(minutes=1), now)
+
+
+def test_an_orphan_document_with_open_blockers_is_trabada_with_the_blockers():
+    report = rules.BlockerReport(open=(12,), unknown=(5,))
+    got = board.card(_facts(document=_doc("definition_ready"), blocker=report))
+    assert (got.etapa, got.bloqueo) == ("Trabada", "#5, #12")
+
+
+@pytest.mark.parametrize("report", [rules.BlockerReport(), None])
+def test_an_orphan_document_with_no_blocking_report_keeps_the_neutral_text(report):
+    got = board.card(_facts(document=_doc("definition_ready"), blocker=report))
+    assert (got.etapa, got.bloqueo) == ("Trabada", board.NO_LIVE_PROCESS)

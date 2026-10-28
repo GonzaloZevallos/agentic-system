@@ -104,6 +104,8 @@ def _mapped(facts: IssueFacts) -> tuple[Etapa, str | None]:
         return "Necesita humano", UNKNOWN_STATUS
     match status:
         case "open" | "defined" | "returned" | "definition_ready" | "planned" | "developing":
+            if facts.blocker:
+                return "Trabada", _blockers(facts.blocker)
             return "Trabada", NO_LIVE_PROCESS
         case "waiting_on_human":
             return "Necesita humano", _first_line(document.get("escalated"))
