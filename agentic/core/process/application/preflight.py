@@ -3,6 +3,8 @@ the code that is running it."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
@@ -50,12 +52,20 @@ class RunsOnItsOwnCheckout(ValueError):
     code executing it (ADR-0017). A `ValueError`, so the CLI refuses with it."""
 
 
+class ScratchInARepository(ValueError):
+    """The scratch root is inside the product's repository or stage0's: `TMPDIR` would
+    point into a checkout, and every test that builds a system workspace under it would
+    sit in the repository the package runs from (GH-397). A `ValueError`, so the CLI
+    refuses with it."""
+
+
 def preflight(cfg: Configuration, ports: Ports) -> None:
-    """The run's own checkout first, then the product's stack and its name, then the
-    vocabulary and every role's prompt rendered: a product that declares no stack, no
+    """The run's own checkout first, then the scratch root, then the product's stack and its
+    name, then the vocabulary and every role's prompt rendered: a product that declares no stack, no
     name, a bad flags file or an overlay with a stray placeholder fails here, not in the
     middle of a task."""
     refuse_its_own_checkout(cfg, ports)
+    refuse_scratch_in_a_repository(cfg, ports)
     declared_stack(ports)
     # Not inside `declared_stack`: that one is also read at a task's base, where a task
     # older than the key has no name to find and must still resume (issue #47).
@@ -260,4 +270,42 @@ def refuse_its_own_checkout(cfg: Configuration, ports: Ports) -> None:
         "Run the system from stage0, a checkout of its own fixed to a sha:\n"
         f"    {CHECKOUT}/scripts/stage0.sh <sha>\n"
         f"    cd ~/.agentic-stage0 && uv run agentic <command> --product-dir {product}"
+    )
+
+
+def nearest_existing(path: Path) -> Path:
+    """`path` itself if it exists, else its closest ancestor that does. `repository_at`
+    answers `None` for a path that is not there, so a root that nobody has created yet
+    would pass for free unless it is asked about where it will be created."""
+    path = path.resolve()
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return path
+
+
+def refuse_scratch_in_a_repository(cfg: Configuration, ports: Ports) -> None:
+    """The scratch root lives outside the product's repository and stage0's (GH-397):
+    `TMPDIR` exported inside either one puts pytest's `tmp_path` in a checkout, and
+    `RunsOnItsOwnCheckout` then refuses every test that builds a system workspace there.
+
+    Repositories and not paths, like `refuse_its_own_checkout`, and measured from the
+    nearest existing ancestor of the root, because the root is created lazily. A root in
+    any other repository is accepted: it is nobody's checkout."""
+    root = cfg.scratch_dir.resolve()
+    inside = ports.workspace.repository_at(nearest_existing(root))
+    if inside is None:
+        return
+    forbidden = {
+        ports.workspace.repository_at(cfg.product_dir),
+        ports.workspace.repository_at(CHECKOUT),
+    }
+    if inside not in forbidden:
+        return
+    raise ScratchInARepository(
+        f"the scratch root {root} is inside the repository {inside}: `TMPDIR` would point "
+        "into a checkout the run edits or runs from, and the tests of this system would "
+        "refuse to run there (GH-397).\n"
+        "Set `AGENTIC_SCRATCH_DIR` to a directory outside every repository, or point "
+        "`XDG_CACHE_HOME` somewhere outside them (the default root is "
+        "`$XDG_CACHE_HOME/agentic/scratch`)."
     )

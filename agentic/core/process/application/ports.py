@@ -11,10 +11,11 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
@@ -25,7 +26,13 @@ from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
-from ..domain.scratch import OwnerKind, ScratchListing, SpaceReading, SweepDecision
+from ..domain.scratch import (
+    OwnerKind,
+    PartitionListing,
+    ScratchListing,
+    SpaceReading,
+    SweepDecision,
+)
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -858,6 +865,14 @@ class Workspace(Protocol):
         is in progress; read-only."""
         ...
 
+    def merge_in_progress(self, path: Path) -> bool:
+        """Whether the checkout at `path` holds an unfinished merge or a conflict (GH-392):
+        `MERGE_HEAD` exists, or `git status --porcelain` lists an unmerged entry (UU, AA, DD,
+        AU, UA, DU, UD). Read-only; a resume asks it before committing what a stopped run
+        left, so it never commits over a merge a human is resolving. Raises `GitError` when
+        git answers neither way."""
+        ...
+
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         """The facts a dependency merge leaves behind, for the pure verdict in
         `domain/rules.py` to decide from with no git call of its own: whether `branch`
@@ -1579,7 +1594,8 @@ class Scratch(Protocol):
     def open(
         self, task_key: str | None, kind: OwnerKind, token: str, slug: str
     ) -> AbstractContextManager[Path]:
-        """The directory of one owner, under the product's `.agentic/tmp/<task>/`. Its
+        """The directory of one owner, under `<scratch root>/<product key>/<task>/`, outside every
+        repository. Its
         owner record is written before the directory is created; on the way out the
         directory is removed, then the record, however the block ended. `token` is the
         one the owner's processes are marked with."""
@@ -1591,9 +1607,21 @@ class Scratch(Protocol):
         ...
 
     def listing(self) -> ScratchListing:
-        """What is on the disk under `.agentic/tmp/`: each task folder and each owner in
-        it, with the mtimes and the liveness of its record already read (the poller's
-        sweep decides on these facts; it touches no filesystem itself)."""
+        """What is on the disk under this product's partition of the scratch root: each task
+        folder and each owner in it, with the mtimes and the liveness of its record already read
+        (the poller's sweep decides on these facts; it touches no filesystem itself)."""
+        ...
+
+    @property
+    def product_key(self) -> str:
+        """The key of this product's partition: the one `partitions` never judges."""
+        ...
+
+    def partitions(self) -> PartitionListing:
+        """Every product's partition under the scratch root, each with its mtime, its task
+        folders' mtimes and every child's (hidden temp names included), the owners' record
+        facts already read, and the `.<key>.swept-<token>` leftovers as their own kind. The
+        orphan rule decides on these facts; this port only reads."""
         ...
 
     def kept_folders(self) -> Sequence[tuple[str, datetime]]:
@@ -1602,8 +1630,10 @@ class Scratch(Protocol):
         ...
 
     def sweep(self, decision: SweepDecision) -> None:
-        """Removes what `decision` names: for an owner its directory, then its record. A path
-        already gone is not an error."""
+        """Removes what `decision` names: for an owner its directory, then its record; an orphan
+        partition is renamed aside at once, then removed, and a leftover is only removed (never
+        this product's own partition, never a name that is not one plain segment of the root).
+        A path already gone is not an error."""
         ...
 
 
@@ -1611,6 +1641,76 @@ class FreeSpace(Protocol):
     """What is left on the volume a path lives on (GH-391)."""
 
     def read(self, path: Path) -> SpaceReading: ...
+
+
+@dataclass(frozen=True)
+class IssueRow:
+    """One issue as the board mirror reads it off the tracker: `state` is `open` or `closed`,
+    `closed_at` the UTC day it closed (`None` while open)."""
+
+    number: int
+    state: Literal["open", "closed"]
+    labels: frozenset[str]
+    closed_at: date | None
+
+
+@dataclass(frozen=True)
+class SentEntry:
+    """What was last sent for one issue: the card's fingerprint and the fields that carried
+    a value, so a field that later has none knows there is something to clear."""
+
+    fingerprint: str
+    present: frozenset[Field]
+
+
+@dataclass(frozen=True)
+class SentMemory:
+    """The mirror's memory of what it sent (ADR-0073): never read from the board. Bound to
+    the Project's node id; `failed_at` is the last whole-call failure; `unreadable` is set
+    by a load that found a file it could not parse (one log line, then it reads as empty)."""
+
+    project_id: str | None = None
+    failed_at: datetime | None = None
+    issues: Mapping[int, SentEntry] = field(default_factory=dict)
+    unreadable: bool = False
+
+
+class Board(Protocol):
+    """The GitHub Project the poller mirrors state to (GH-375, ADR-0073). Write-only as far
+    as state goes: the only things read from the Project are node ids. Every method may raise
+    `TrackerCallFailed` or `ValueError`."""
+
+    def project_id(self) -> str:
+        """The Project's node id, resolving (once per process) the field and option ids the
+        writes need. `ValueError` naming what is missing when a field or option is."""
+        ...
+
+    def open_issues(self) -> list[IssueRow]:
+        """Every open issue of the product's repo."""
+        ...
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        """Every issue, open and closed, and whether the read reached its limit (more exist)."""
+        ...
+
+    def issue(self, number: int) -> IssueRow:
+        """One issue, open or closed."""
+        ...
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        """Adds each issue to the Project and writes its fields. Returns the issues whose every
+        mutation came back without error: an issue not in the set is not recorded as sent."""
+        ...
+
+
+class BoardSent(Protocol):
+    """The mirror's memory on disk, one per product."""
+
+    def load(self) -> SentMemory:
+        """The memory, empty when the file is missing or unreadable (`unreadable` then set)."""
+        ...
+
+    def save(self, memory: SentMemory) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -1685,6 +1785,10 @@ class Ports:
     # The machine's store of passing check results (ADR-0065). `None` stores and reuses
     # nothing, which is how every checkout ran before it existed.
     check_results: CheckResults | None = None
+    # The GitHub Project board mirror (GH-375, ADR-0073) and its memory. `None` mirrors
+    # nothing and makes no call, which is how every round ran before they existed.
+    board: Board | None = None
+    board_sent: BoardSent | None = None
     # Where a check or a role attempt's temporary files go, and how much room the volumes
     # have (GH-391, ADR-0069). `None` leaves everything on the inherited `TMPDIR`, which is
     # how every checkout ran before.

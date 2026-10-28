@@ -230,8 +230,7 @@ _LEGACY_DISAGREEMENT_CAUSE = (
 
 
 def _legacy_crashed_message(task_id: str, ports: Ports) -> str:
-    number = ports.inbox.issue_of(task_id)
-    flag = f"--issue {number}" if number is not None else f"--issue N  # {task_id}"
+    flag = resuming.issue_flag(task_id, ports)
     return (
         f"{task_id}'s checkpoint {legacy_names.RENAME_CAUSE}, and it crashed rather "
         f"than paused: resume it with `agentic resume {flag} --from-document`."
@@ -1526,8 +1525,16 @@ async def _resume(
         snapshot = await app.aget_state(config)
         try:
             if from_document or not snapshot.values:
-                paused = resuming.from_document(task_id, ports)
-                r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
+                seeded = resuming.seed_increment(task_id, cfg, ports)
+                r = resuming.prepare(
+                    task_id,
+                    seeded.state,
+                    "document",
+                    cfg,
+                    ports,
+                    estimate=estimate,
+                    increment=seeded.increment,
+                )
             elif not snapshot.next:
                 status = snapshot.values.get("status", "open")
                 raise CannotStart(f"{task_id} is not paused: its run ended ({status})")
@@ -1538,7 +1545,7 @@ async def _resume(
                 # Paused: take the document branch exactly as `--from-document` does,
                 # never `aupdate_state` with translated values on this existing thread.
                 try:
-                    paused = resuming.from_document(task_id, ports)
+                    seeded = resuming.seed_increment(task_id, cfg, ports)
                 except ValueError as exc:
                     prefix = f"the document of {task_id} and git disagree:"
                     message = str(exc)
@@ -1546,15 +1553,32 @@ async def _resume(
                         listed = message[len(prefix) :].lstrip("\n")
                         raise ValueError(f"{_LEGACY_DISAGREEMENT_CAUSE}\n{listed}") from exc
                     raise
-                r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
+                r = resuming.prepare(
+                    task_id,
+                    seeded.state,
+                    "document",
+                    cfg,
+                    ports,
+                    estimate=estimate,
+                    increment=seeded.increment,
+                )
             elif not snapshot.interrupts and (
                 rules.resume_source(snapshot.next, crashed=True) == "document"
             ):
                 # A crash with the pipeline pending (GH-364): its branches leave no checkpoint
                 # of their own, so the state is rebuilt from the document -- checked against
                 # git as every document seed is -- and prepared as the crash it is.
-                paused = resuming.from_document(task_id, ports)
-                r = resuming.prepare(task_id, paused, "document", cfg, ports, (PIPELINE,), estimate)
+                seeded = resuming.seed_increment(task_id, cfg, ports)
+                r = resuming.prepare(
+                    task_id,
+                    seeded.state,
+                    "document",
+                    cfg,
+                    ports,
+                    (PIPELINE,),
+                    estimate,
+                    increment=seeded.increment,
+                )
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
                 pending = () if snapshot.interrupts else tuple(snapshot.next)

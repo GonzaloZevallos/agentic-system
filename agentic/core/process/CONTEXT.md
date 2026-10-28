@@ -207,6 +207,23 @@ En el código es `rules.holds_launches` (qué `Deferred` la abre) y `rules.LandW
 _Avoid_: reserva, bloqueo, cola de aterrizaje
 _Campo_: sin término de arte
 
+**Espejo del tablero**:
+Lo que el poller mantiene en el GitHub Project para que el dueño vea en un solo lugar en qué está cada issue de ambos productos: una Tarjeta por issue, escrita desde hechos que el poller ya calculó. Es una salida: ninguna decisión del sistema lee el valor de un campo del Project, sólo sus ids de nodo. Lleva la memoria de lo enviado y solo envía lo que cambió, así que una vuelta ociosa no llama al Project. Sin `AGENTIC_BOARD_PROJECT` no existe. El sistema nunca escribe Bloque ni Hito y nunca borra un ítem (ADR-0073).
+En el código es `domain/board.py` y el puerto `Board`.
+_Avoid_: dashboard, sincronización, tablero de verdad
+_Campo_: sin término de arte
+
+**Etapa**:
+El estado de una Tarjeta, uno de siete: Corriendo, En PR (aprobada, esperando CI y merge), Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano.
+_Avoid_: estado, status, columna
+_Campo_: `Status` de GitHub Projects (renombrado Etapa)
+
+**Tarjeta**:
+Los cinco valores que el Espejo del tablero escribe para un issue: Etapa, Bloqueo, Costo USD, Inicio y Fin. Su huella (un hash de los cinco) es lo que la memoria de lo enviado compara para saber si hay algo que enviar.
+En el código es `board.Card`.
+_Avoid_: ítem, fila, entrada
+_Campo_: ítem de GitHub Projects
+
 **Cercanía**:
 Qué tan cerca de aterrizar está una tarea: el orden en que el poller arranca lo que cuenta contra el tope en una vuelta (reanudaciones, retomas y aterrizajes con modelo; el lanzamiento va último). Se ordena launch < definition < plan < development < review < delivered < land: una tarea con pull request está en `delivered`, una sin ella está en la fase más avanzada que alcanzó una de sus corridas (la más lejana, no la última), y una sin corridas está en `definition`. En el código es `rules.closeness`, un índice en `rules.CLOSENESS`; a igual cercanía decide el número de issue.
 _Avoid_: prioridad, urgencia, proximidad
@@ -318,7 +335,7 @@ Revisión que arranca del head revisado en el pase anterior, no de la base de la
 _Campo_: sin término de arte; GitHub lo ofrece sin nombrarlo, como "changes since your last review"
 
 **Head revisado**:
-El commit hasta donde llegó la última revisión de una subtarea. Se guarda como el id completo del commit; uno anterior puede estar abreviado, y se compara con `same_commit`, nunca por igualdad de texto.
+El commit hasta donde llegó la última revisión de una subtarea. Se guarda como el id completo del commit; uno anterior puede estar abreviado, y se compara con `same_commit`, nunca por igualdad de texto. Un resume desde el documento que encuentra la rama de la tarea en un descendiente estricto del head revisado de la integración, sin pull request, toma los commits posteriores como un incremento y manda solo la integración de vuelta a una revisión incremental; cualquier otro head movido se rechaza (`rules.integration_increment`).
 _Campo_: sin término de arte
 
 **Integración incremental**:
@@ -336,7 +353,7 @@ _Avoid_: comentario, issue
 _Campo_: finding — de auditoría y seguridad de nube (AWS Security Finding Format), no de code review: SARIF dice result, que es el dato, y GitHub dice alert, que es la presentación
 
 **Tabla de hallazgos**:
-Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La única excepción es la aprobación: aprobar una subtarea cierra los bloqueantes previos de esa misma subtarea que la revisión no vuelve a levantar (ADR-0015, adenda de GH-201); la otra es una corrida aprobatoria de QA Performance, que asienta las filas abiertas de su propia ubicación, porque ninguna revisión posterior las vuelve a levantar (ADR-0060); la tercera es una corrida pasada del chequeo completo de la tarea, de versión mayor, que asienta las filas de ubicación `full_checks:<chequeo>` (ADR-0015, adenda de GH-358). La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
+Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La única excepción es la aprobación: aprobar una subtarea cierra los bloqueantes previos de esa misma subtarea que la revisión no vuelve a levantar (ADR-0015, adenda de GH-201); la otra es una corrida aprobatoria de QA Performance, que asienta las filas abiertas de su propia ubicación, porque ninguna revisión posterior las vuelve a levantar (ADR-0060); la tercera es una corrida pasada del chequeo completo de la tarea, de versión mayor, que asienta las filas de ubicación `full_checks:<chequeo>` (ADR-0015, adenda de GH-358); la cuarta es una corrida de `PM: final validation`: aprobar asienta las filas abiertas de su ubicación de versión menor, y devolver asienta las anteriores que no vuelve a levantar, porque su validación no es incremental y relee la tarea entera (ADR-0071). La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
 _Avoid_: backlog, lista de issues, deuda
 _Campo_: sin término de arte; lo más cerca es la lista de alerts de GitHub code scanning, que vive en el repositorio y no muere con el cambio que la abrió
 
@@ -423,12 +440,12 @@ _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
 _Campo_: sin término de arte
 
 **Directorio temporal**:
-El directorio en el disco, bajo `.agentic/tmp/<tarea raíz>/`, que cada chequeo, cada setup y cada intento de rol recibe como `TMPDIR` y que se borra cuando termina, salga bien o mal. Lo compone una sola función y lo respalda un registro de dueño escrito antes de crearlo y borrado después de borrarlo; lo que cae en `/tmp` queda fuera de este control. Las capturas que una tarea cita no viven acá sino en la carpeta de evidencia de la tarea (`.agentic/kept/<tarea>/`), que se conserva 14 días tras el cierre (ADR-0069).
+El directorio en el disco, bajo `<raíz de scratch>/<clave del producto>/<tarea raíz>/` y fuera de todo repositorio, que cada chequeo, cada setup y cada intento de rol recibe como `TMPDIR` y que se borra cuando termina, salga bien o mal. La raíz es `AGENTIC_SCRATCH_DIR`, por defecto `$XDG_CACHE_HOME/agentic/scratch`; una raíz dentro del repositorio del producto o del de stage0 se rechaza antes de gastar (`ScratchInARepository`). Lo compone una sola función y lo respalda un registro de dueño escrito antes de crearlo y borrado después de borrarlo; lo que cae en `/tmp` queda fuera de este control. Las capturas que una tarea cita no viven acá sino en la carpeta de evidencia de la tarea (`.agentic/kept/<tarea>/`, que sigue en el producto), que se conserva 14 días tras el cierre (ADR-0069, ADR-0072).
 _Avoid_: temporales, `/tmp`, caché
 _Campo_: scratch directory; `Scratch` y `path_for` en el código
 
 **Piso de espacio libre**:
-El espacio libre, en megabytes, bajo el cual el poller no arranca nada: se mide en el volumen del directorio temporal y en `/tmp`, y la ronda solo cierra tareas hasta que ambos lo superan. Por defecto 2048 (`AGENTIC_SCRATCH_FLOOR_MB`). Se mira al arrancar, no durante una corrida. El mismo piso, junto con un mínimo de inodos libres, es lo que convierte un intento fallido en `disk_full` (ADR-0069).
+El espacio libre, en megabytes, bajo el cual el poller no arranca nada: se mide en tres volúmenes, el de la raíz de scratch, el del producto y `/tmp`, y la ronda solo cierra tareas hasta que los tres lo superan. Por defecto 2048 (`AGENTIC_SCRATCH_FLOOR_MB`). Se mira al arrancar, no durante una corrida. El mismo piso, junto con un mínimo de inodos libres, es lo que convierte un intento fallido en `disk_full`, que lee solo el directorio del intento, su checkout y `/tmp` (ADR-0069, ADR-0072).
 _Avoid_: cuota, límite de disco
 _Campo_: free-space floor (disk watermark en almacenamiento); `space_holds` y `AGENTIC_SCRATCH_FLOOR_MB` en el código
 

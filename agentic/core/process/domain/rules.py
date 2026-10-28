@@ -230,6 +230,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     approved = _approved_versions(state)
     qa_approved = qa_approved_version(state)
     green = full_checks_green_version(state)
+    plan_settled = _plan_settled_versions(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -249,6 +250,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
                 _covered(record, key, approved)
                 or qa_settles(record, qa_approved)
                 or full_checks_settles(record, green)
+                or (key in plan_settled and record["version"] < plan_settled[key])
                 for record in open_records[key]
             )
         )
@@ -301,6 +303,17 @@ def full_checks_settles(record: FindingRecord, green_version: int) -> bool:
     return _norm(record["location"]).startswith(FULL_CHECKS_PREFIX) and (
         record["version"] < green_version
     )
+
+
+def _plan_settled_versions(state: TaskState) -> dict[tuple[str, str], int]:
+    """The highest `plan_settled` version per normalised (location, claim): a record below it
+    is settled by the `PM: final validation` run that wrote the row (GH-374). Written only by
+    `plan_settlement`, which is that fold writer's one decision; `{}` on a document without it."""
+    settled: dict[tuple[str, str], int] = {}
+    for item in state.get("plan_settled", []):
+        key = (_norm(item["location"]), _norm(item["claim"]))
+        settled[key] = max(settled.get(key, 0), item["version"])
+    return settled
 
 
 def _approved_versions(state: TaskState) -> dict[tuple[str, tuple[str, str]], int]:
@@ -367,6 +380,11 @@ def _norm(text: str) -> str:
     """Two reviews of the same objection do not write the same string; a trailing space
     or a capital must not split one row into two."""
     return " ".join(text.split()).casefold()
+
+
+def finding_key(location: str, claim: str) -> tuple[str, str]:
+    """The key the table folds a record by: its normalised location and claim."""
+    return (_norm(location), _norm(claim))
 
 
 def open_findings(state: TaskState) -> list[FindingRecord]:
@@ -682,6 +700,21 @@ def _pair_returns(state: TaskState, pair_key: str) -> int:
 
 def _run_count(state: TaskState, section: str) -> int:
     return sum(1 for r in state.get("runs", []) if r.get("section", r["role"]) == section)
+
+
+def pm_final_approved_version(state: TaskState) -> int:
+    """The `version` of the latest `PM: final validation` run while it stands as the live
+    approval, `0` otherwise (GH-374). A run is the live approval exactly when the PM->Tech
+    Lead returns of `change_history` have not caught up with how many times PM ran, the
+    return-matches-run counting `_lead_satisfied` uses. The only reader of that fact: nothing
+    else counts PM runs against PM->Tech Lead returns."""
+    if _pair_returns(state, PAIR_PM_TECH_LEAD.key) >= _run_count(state, PM_FINAL.name):
+        return 0
+    latest = 0
+    for run in state.get("runs", []):
+        if run.get("section", run["role"]) == PM_FINAL.name:
+            latest = run.get("version", 1)
+    return latest
 
 
 def _lead_satisfied(
@@ -2020,8 +2053,7 @@ def final_validation_due(state: TaskState) -> bool:
     final_idx = _latest_index(state, PM_FINAL.name)
     if final_idx is None or final_idx < review_idx:
         return True
-    still_approving = _pair_returns(state, PAIR_PM_TECH_LEAD.key) < _run_count(state, PM_FINAL.name)
-    return not still_approving
+    return pm_final_approved_version(state) == 0
 
 
 def copy_review_due(state: TaskState) -> bool:
@@ -2621,6 +2653,54 @@ def resume_target(state: TaskState) -> str | None:
         return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate"}.get(status)
+
+
+def integration_increment(
+    state: TaskState, task_id: str, branch_head: str, descends: bool
+) -> Literal["agree", "increment", "refuse"]:
+    """Whether the task branch at `branch_head` is the head the integration review approved
+    (`agree`), a strict descendant of it that nobody reviewed (`increment`: a later subtask
+    merge, a commit a stopped run left), or something a resume must not go on over
+    (`refuse`). `descends` is the ancestry fact -- whether the approved head is an ancestor of
+    `branch_head` -- read by the caller, so this stays pure and is the one place the rule lives.
+
+    An increment needs all of: the reviewed unit approved at a head, on the task branch; every
+    other unit approved; no pull request (its branch moving is the landing's, not a resume's);
+    and a pause no human has anything to decide in -- a role failure or a run that stopped
+    without escalating, since `resumed` clears exactly that and nothing else stands in the way
+    (pending questions, a pair at its limit, an estimate or a cap are decisions)."""
+    unit = reviewed_unit_name(state)
+    sub = state.get("subtasks", {}).get(unit) if unit else None
+    approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
+    if approved is None:
+        return "refuse"
+    if same_commit(branch_head, approved):
+        return "agree"
+    if not descends or sub is None or sub.get("branch") != task_branch(task_id):
+        return "refuse"
+    others = (s for name, s in state.get("subtasks", {}).items() if name != unit)
+    if any(s.get("status") != "approved" for s in others) or state.get("pull_request"):
+        return "refuse"
+    if state.get("escalation_class") not in (None, "failure"):
+        return "refuse"
+    if state.get("questions_for_human") or state.get("fit_question"):
+        return "refuse"
+    if state.get("escalated") and state.get("escalation_class") is None:
+        return "refuse"  # a document older than the class: what it asked is not known
+    return "increment"
+
+
+def increment_patch(state: TaskState) -> dict[str, Any]:
+    """The patch that sends the reviewed unit back to review on an increment: its status is
+    `delivered`, and its `reviewed_head` stays the approved head the next review is incremental
+    from. The reducer replaces a subtask whole, so the unit goes back with all its keys. Nothing
+    else is written: not `task_head`, not `full_checks`, not the findings table."""
+    unit = reviewed_unit_name(state)
+    if unit is None:
+        raise ValueError("a task with no reviewed unit has no increment to review")
+    sub = state["subtasks"][unit]
+    patch: dict[str, Any] = {"subtasks": {unit: {**sub, "status": "delivered"}}}
+    return patch
 
 
 # The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller
@@ -3548,17 +3628,21 @@ def account_paused(resumes: Sequence[ResumeCandidate], now: datetime) -> bool:
 
 
 SCRATCH_VOLUME = "scratch"
+PRODUCT_VOLUME = "product"
 TMP_VOLUME = "/tmp"
+_VOLUME_ORDER = (SCRATCH_VOLUME, PRODUCT_VOLUME, TMP_VOLUME)
 
 
-def space_holds(scratch: SpaceReading, tmp: SpaceReading, floor_bytes: int) -> tuple[str, ...]:
-    """The names (`SCRATCH_VOLUME`, `TMP_VOLUME`) of the volumes under the floor (GH-391): fewer
-    free bytes than `floor_bytes`, or fewer free inodes than `INODE_FLOOR`. Empty means the round
-    may start children; anything else is what `poll_plan` takes as `held`."""
+def space_holds(readings: Mapping[str, SpaceReading], floor_bytes: int) -> tuple[str, ...]:
+    """The names (`SCRATCH_VOLUME`, `PRODUCT_VOLUME`, `TMP_VOLUME`) among `readings` of the volumes
+    under the floor (GH-391, GH-397): fewer free bytes than `floor_bytes`, or fewer free inodes than
+    `INODE_FLOOR`, in a stable order whatever the order of the mapping. Empty means the round may
+    start children; anything else is what `poll_plan` takes as `held`."""
     return tuple(
         name
-        for name, reading in ((SCRATCH_VOLUME, scratch), (TMP_VOLUME, tmp))
-        if reading.free_bytes < floor_bytes or reading.free_inodes < INODE_FLOOR
+        for name in _VOLUME_ORDER
+        if name in readings
+        and (readings[name].free_bytes < floor_bytes or readings[name].free_inodes < INODE_FLOOR)
     )
 
 

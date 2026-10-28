@@ -19,6 +19,8 @@ from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
     AddedLine,
+    Board,
+    BoardSent,
     BranchPullRequest,
     Checkout,
     CheckRequest,
@@ -32,6 +34,7 @@ from agentic.core.process.application.ports import (
     Grant,
     Inbox,
     IssueComment,
+    IssueRow,
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
@@ -49,6 +52,7 @@ from agentic.core.process.application.ports import (
     SampleApp,
     SampleAppHandle,
     Scratch,
+    SentMemory,
     TaskDocuments,
     Tracker,
     Upstream,
@@ -58,6 +62,7 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
 from agentic.core.process.domain import scratch as scratch_domain
+from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
@@ -670,6 +675,12 @@ class MemoryWorkspace:
         self.merge_heads: dict[Path, str] = {}
         self.merge_head_error: str | None = None
         self.abort_error: str | None = None
+        # GH-392: the checkouts a test declares mid-merge (or conflicted) for `merge_in_progress`,
+        # each ask in order, and a text that makes it raise `GitError` instead of answering.
+        self.merges_in_progress: set[Path] = set()
+        self.merge_in_progress_asks: list[Path] = []
+        self.merge_in_progress_error: str | None = None
+        self.commit_all_error: str | None = None
         self.aborted: list[Path] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
@@ -919,6 +930,12 @@ class MemoryWorkspace:
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
 
+    def merge_in_progress(self, path: Path) -> bool:
+        self.merge_in_progress_asks.append(path)
+        if self.merge_in_progress_error is not None:
+            raise GitError(self.merge_in_progress_error)
+        return path in self.merges_in_progress or path in self.merge_heads
+
     def merge_head(self, path: Path) -> str | None:
         if self.merge_head_error is not None:
             raise GitError(self.merge_head_error)
@@ -941,6 +958,8 @@ class MemoryWorkspace:
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
     def commit_all(self, path: Path, message: str) -> str | None:
+        if self.commit_all_error is not None:
+            raise GitError(self.commit_all_error)
         self.commits.append((path, message))
         return "c1"
 
@@ -1633,13 +1652,21 @@ class FakeCheckScheduler:
 
 
 class MemoryScratch:
-    """GH-391: `open` hands out the path `scratch.path_for` names under `root` without
-    touching a disk, and records who opened it (`opened`, as `(task, kind, token, slug)`),
-    which directories are open now (`live`) and which task folders were asked for
-    (`kept`). The directory is "removed" when the block ends, however it ends."""
+    """GH-391: `open` hands out the path `scratch.path_for` names under `root` (the evidence
+    folder under `product_dir`) without touching a disk, and records who opened it (`opened`,
+    as `(task, kind, token, slug)`), which directories are open now (`live`) and which task
+    folders were asked for (`kept`). The directory is "removed" when the block ends, however
+    it ends."""
 
-    def __init__(self, root: Path = Path("/scratch-root")) -> None:
+    def __init__(
+        self,
+        root: Path = Path("/scratch-root"),
+        product_key: str = "memorykey000",
+        product_dir: Path = Path("/product"),
+    ) -> None:
         self.root = root
+        self.product_key = product_key
+        self.product_dir = product_dir
         self.opened: list[tuple[str | None, str, str, str]] = []
         self.live: set[Path] = set()
         self.kept: list[Path] = []
@@ -1648,10 +1675,14 @@ class MemoryScratch:
         self.owners: list[scratch_domain.OwnerEntry] = []
         self.kept_on_disk: list[tuple[str, datetime]] = []
         self.swept: list[scratch_domain.SweepDecision] = []
+        # Other products' partitions and leftovers on the "disk" (GH-397).
+        self.other_partitions: list[scratch_domain.PartitionFolder] = []
+        self.leftovers: list[scratch_domain.Leftover] = []
 
     @contextmanager
     def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
-        directory = self.root / scratch_domain.path_for(task_key, scratch_domain.owner(kind, token))
+        owner = scratch_domain.owner(kind, token)
+        directory = self.root / scratch_domain.path_for(self.product_key, task_key, owner)
         self.opened.append((task_key, kind, token, slug))
         self.live.add(directory)
         try:
@@ -1660,13 +1691,17 @@ class MemoryScratch:
             self.live.discard(directory)
 
     def ensure_kept(self, task_key: str | None) -> Path:
-        kept = self.root / scratch_domain.kept_path_for(task_key)
+        kept = self.product_dir / scratch_domain.kept_path_for(task_key)
         self.kept.append(kept)
         return kept
 
     def listing(self) -> scratch_domain.ScratchListing:
         """The `tasks` and `owners` a test put on the "disk" (no disk is read)."""
         return scratch_domain.ScratchListing(tuple(self.tasks), tuple(self.owners))
+
+    def partitions(self) -> scratch_domain.PartitionListing:
+        """The `other_partitions` and `leftovers` a test put on the "disk"."""
+        return scratch_domain.PartitionListing(tuple(self.other_partitions), tuple(self.leftovers))
 
     def kept_folders(self) -> list[tuple[str, datetime]]:
         return list(self.kept_on_disk)
@@ -1679,6 +1714,10 @@ class MemoryScratch:
         gone = {(r.task, r.name) for r in decision.owners if r.directory and r.record}
         self.owners = [o for o in self.owners if (o.task, o.name) not in gone]
         self.kept_on_disk = [k for k in self.kept_on_disk if k[0] not in decision.kept]
+        self.other_partitions = [
+            p for p in self.other_partitions if p.name not in decision.partitions
+        ]
+        self.leftovers = [x for x in self.leftovers if x.name not in decision.leftovers]
 
 
 class FakeFreeSpace:
@@ -1777,6 +1816,78 @@ class FakeLauncher:
         return self.pid
 
 
+class FakeBoard:
+    """GH-375: the Project board, in memory. Records every call as `(name, argument)`.
+    `open` and `closed` are the issues it reads; `fail` (an exception) is raised by every
+    method named in `fail_on` (all of them when empty); `unwritten` are issues `write`
+    leaves out of the set it returns, as a partially failed batch would."""
+
+    def __init__(
+        self,
+        open: Sequence[IssueRow] = (),
+        closed: Sequence[IssueRow] = (),
+        *,
+        project: str = "PVT_1",
+        fail: Exception | None = None,
+        fail_on: Collection[str] = (),
+        unwritten: Collection[int] = (),
+        limit_reached: bool = False,
+    ) -> None:
+        self.open = list(open)
+        self.closed = list(closed)
+        self.project = project
+        self.fail = fail
+        self.fail_on = set(fail_on)
+        self.unwritten = set(unwritten)
+        self.limit_reached = limit_reached
+        self.calls: list[tuple[str, object]] = []
+        self.written: list[FieldWrite] = []
+
+    def _enter(self, name: str, argument: object = None) -> None:
+        self.calls.append((name, argument))
+        if self.fail is not None and (not self.fail_on or name in self.fail_on):
+            raise self.fail
+
+    def project_id(self) -> str:
+        self._enter("project_id")
+        return self.project
+
+    def open_issues(self) -> list[IssueRow]:
+        self._enter("open_issues")
+        return list(self.open)
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        self._enter("all_issues")
+        return [*self.open, *self.closed], self.limit_reached
+
+    def issue(self, number: int) -> IssueRow:
+        self._enter("issue", number)
+        for row in [*self.open, *self.closed]:
+            if row.number == number:
+                return row
+        raise ValueError(f"no issue #{number}")
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        self._enter("write", list(writes))
+        self.written.extend(writes)
+        return frozenset(w.issue for w in writes) - self.unwritten
+
+
+class FakeBoardSent:
+    """GH-375: the mirror's memory, in memory. `saved` keeps every memory it was given."""
+
+    def __init__(self, memory: SentMemory | None = None) -> None:
+        self.memory = memory if memory is not None else SentMemory()
+        self.saved: list[SentMemory] = []
+
+    def load(self) -> SentMemory:
+        return self.memory
+
+    def save(self, memory: SentMemory) -> None:
+        self.saved.append(memory)
+        self.memory = memory
+
+
 def memory_ports(
     runner: RoleRunner | None = None,
     *,
@@ -1796,6 +1907,8 @@ def memory_ports(
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
     check_results: CheckResults | None = None,
+    board: Board | None = None,
+    board_sent: BoardSent | None = None,
     scratch: Scratch | None = None,
     free_space: FreeSpace | None = None,
 ) -> Ports:
@@ -1817,6 +1930,8 @@ def memory_ports(
         perf_runner=perf_runner,
         perf_lock=perf_lock,
         check_results=check_results,
+        board=board,
+        board_sent=board_sent,
         scratch=scratch,
         free_space=free_space,
     )

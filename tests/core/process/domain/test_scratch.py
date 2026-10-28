@@ -1,5 +1,5 @@
-"""The scratch domain: where an owner's temporary directory lives under the product root,
-and the record that says who owns it. Pure (GH-391)."""
+"""The scratch domain: where an owner's temporary directory lives under the scratch root, in
+its product's partition, and the record that says who owns it. Pure (GH-391, GH-397)."""
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -9,25 +9,44 @@ import pytest
 
 from agentic.core.process.domain import scratch
 
+KEY = "0a1b2c3d4e5f"
 
-def test_a_checks_directory_is_named_by_task_kind_and_the_first_eight_of_the_token():
+
+def test_a_checks_directory_is_named_by_product_task_kind_and_the_first_eight_of_the_token():
     owner = scratch.owner("c", "0123456789abcdef")
-    assert scratch.path_for("GH-391", owner) == PurePosixPath(".agentic/tmp/GH-391/c-01234567")
-    assert scratch.record_path_for("GH-391", owner) == PurePosixPath(
-        ".agentic/tmp/GH-391/c-01234567.json"
+    assert scratch.path_for(KEY, "GH-391", owner) == PurePosixPath(f"{KEY}/GH-391/c-01234567")
+    assert scratch.record_path_for(KEY, "GH-391", owner) == PurePosixPath(
+        f"{KEY}/GH-391/c-01234567.json"
     )
+    assert scratch.task_path_for(KEY, "GH-391") == PurePosixPath(f"{KEY}/GH-391")
+    assert scratch.partition(KEY) == PurePosixPath(KEY)
+
+
+def test_the_old_product_relative_tree_is_only_kept_as_the_legacy_name():
+    assert scratch.LEGACY_SCRATCH_DIR == PurePosixPath(".agentic/tmp")
+    assert not hasattr(scratch, "SCRATCH_DIR")
+
+
+@pytest.mark.parametrize("key", ["", "a/b", "a\\b", "..", "../x", ".hidden", "x y", "k.swept"])
+def test_a_product_key_that_is_not_one_plain_segment_is_refused(key):
+    with pytest.raises(ValueError, match="product key"):
+        scratch.partition(key)
+    with pytest.raises(ValueError, match="product key"):
+        scratch.path_for(key, "GH-1", scratch.owner("c", "0" * 32))
+    with pytest.raises(ValueError, match="product key"):
+        scratch.task_path_for(key, "GH-1")
 
 
 def test_a_role_attempt_is_kind_r_and_no_task_is_the_untasked_key():
     owner = scratch.owner("r", "abcdef0123456789")
-    assert scratch.path_for(None, owner) == PurePosixPath(".agentic/tmp/_untasked/r-abcdef01")
+    assert scratch.path_for(KEY, None, owner) == PurePosixPath(f"{KEY}/_untasked/r-abcdef01")
     assert scratch.UNTASKED == "_untasked"
 
 
 def test_the_part_below_the_root_is_at_most_forty_characters_for_a_sixteen_character_key():
     key = "k" * 16
     for kind in ("c", "r"):
-        relative = str(scratch.path_for(key, scratch.owner(kind, "f" * 32)))
+        relative = str(scratch.path_for(KEY, key, scratch.owner(kind, "f" * 32)))
         assert not relative.endswith("/")
         assert len(relative) <= 40
 
@@ -40,7 +59,7 @@ def test_the_kept_folder_of_a_task_is_under_dot_agentic_kept():
 @pytest.mark.parametrize("key", ["", "a/b", "a\\b", "..", "../x", "x/.."])
 def test_a_task_key_that_could_leave_the_scratch_root_is_refused(key):
     with pytest.raises(ValueError, match="task key"):
-        scratch.path_for(key, scratch.owner("c", "0" * 32))
+        scratch.path_for(KEY, key, scratch.owner("c", "0" * 32))
     with pytest.raises(ValueError, match="task key"):
         scratch.kept_path_for(key)
 
@@ -182,6 +201,107 @@ def test_nothing_to_remove_is_a_falsy_decision():
 
 
 def test_a_task_key_that_could_name_two_directories_has_no_folder():
-    assert scratch.task_path_for("GH-9") == PurePosixPath(".agentic/tmp/GH-9")
+    assert scratch.task_path_for(KEY, "GH-9") == PurePosixPath(f"{KEY}/GH-9")
     with pytest.raises(ValueError):
-        scratch.task_path_for("../x")
+        scratch.task_path_for(KEY, "../x")
+
+
+# GH-397: the partitions of other products under the same root, and what is an orphan.
+NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+OLD = NOW - scratch.SCRATCH_ORPHAN_GRACE - timedelta(minutes=1)
+YOUNG = NOW - scratch.SCRATCH_ORPHAN_GRACE + timedelta(minutes=1)
+MINE, THEIRS = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
+
+
+def _task(name="GH-1", *, mtime=OLD, owners=(), children=None):
+    """A task folder; its children's mtimes default to those of its owners' directories and
+    records, and `children` adds the ones an owner does not show (a hidden temp name)."""
+    seen = [
+        m
+        for o in owners
+        for m in (o.directory_mtime, o.record.mtime if o.record else None)
+        if m is not None
+    ]
+    return scratch.TaskFolder(name, mtime, tuple(owners), tuple(seen + list(children or ())))
+
+
+def _owner(name="r-01234567", *, directory=OLD, record_mtime=OLD, alive: bool | None = False):
+    record = scratch.RecordFact(record_mtime, alive) if record_mtime is not None else None
+    return scratch.OwnerEntry("GH-1", name, directory, record)
+
+
+def _folder(key=THEIRS, *, mtime=OLD, tasks=None):
+    return scratch.PartitionFolder(key, mtime, tuple(tasks if tasks is not None else [_task()]))
+
+
+def _orphans(*folders, leftovers=()):
+    listing = scratch.PartitionListing(tuple(folders), tuple(leftovers))
+    return scratch.orphan_partitions(listing, MINE, NOW)
+
+
+def test_another_products_dead_and_old_partition_is_an_orphan():
+    folder = _folder(tasks=[_task(owners=[_owner()])])
+    assert _orphans(folder) == scratch.Orphans(partitions=(THEIRS,))
+
+
+def test_an_empty_old_partition_is_an_orphan_and_its_own_is_never_returned():
+    mine = _folder(MINE, tasks=[])
+    assert _orphans(_folder(tasks=[]), mine) == scratch.Orphans(partitions=(THEIRS,))
+    assert _orphans(mine) == scratch.Orphans()
+
+
+@pytest.mark.parametrize("alive", [True, None])
+def test_a_partition_holding_a_live_or_unreadable_record_is_never_returned(alive):
+    folder = _folder(tasks=[_task(owners=[_owner(alive=alive)]), _task("GH-2", owners=[])])
+    assert _orphans(folder) == scratch.Orphans()
+
+
+def test_one_live_owner_among_dead_ones_keeps_the_whole_partition():
+    owners = [_owner("r-00000001"), _owner("r-00000002", alive=True)]
+    assert _orphans(_folder(tasks=[_task(owners=owners)])) == scratch.Orphans()
+
+
+@pytest.mark.parametrize(
+    "folder",
+    [
+        _folder(mtime=YOUNG),
+        _folder(tasks=[_task(mtime=YOUNG)]),
+        _folder(tasks=[_task(owners=[_owner(directory=YOUNG)])]),
+        _folder(tasks=[_task(owners=[_owner(record_mtime=YOUNG)])]),
+        # A hidden temp record being replaced is all the folder shows of a young owner.
+        _folder(tasks=[_task(children=[YOUNG])]),
+        _folder(tasks=[_task(), _task("GH-2", children=[YOUNG])]),
+    ],
+    ids=["partition", "task", "directory", "record", "hidden-temp", "second-task"],
+)
+def test_a_partition_with_anything_inside_the_grace_is_never_returned(folder):
+    assert _orphans(folder) == scratch.Orphans()
+
+
+def test_a_partition_exactly_at_the_grace_is_not_yet_old():
+    edge = NOW - scratch.SCRATCH_ORPHAN_GRACE
+    assert _orphans(_folder(mtime=edge, tasks=[])) == scratch.Orphans()
+
+
+def test_a_swept_leftover_is_returned_once_older_than_the_grace_whoever_it_was_of():
+    old = scratch.Leftover(f".{THEIRS}.swept-abc123", OLD)
+    mine = scratch.Leftover(f".{MINE}.swept-def456", OLD)
+    young = scratch.Leftover(f".{THEIRS}.swept-fff000", YOUNG)
+    assert _orphans(leftovers=[old, mine, young]) == scratch.Orphans(
+        leftovers=(mine.name, old.name)
+    )
+
+
+def test_the_grace_is_an_argument_of_the_rule():
+    listing = scratch.PartitionListing((_folder(mtime=YOUNG, tasks=[]),), ())
+    assert scratch.orphan_partitions(listing, MINE, NOW) == scratch.Orphans()
+    short = timedelta(seconds=1)
+    assert scratch.orphan_partitions(listing, MINE, NOW, grace=short) == scratch.Orphans(
+        partitions=(THEIRS,)
+    )
+
+
+def test_a_decision_with_only_orphans_is_not_empty():
+    assert not scratch.SweepDecision()
+    assert scratch.SweepDecision(partitions=(THEIRS,))
+    assert scratch.SweepDecision(leftovers=(f".{THEIRS}.swept-x",))

@@ -798,6 +798,18 @@ class SettledRow(TypedDict):
     version: int
 
 
+class PlanSettledRow(TypedDict):
+    """A `PM: final validation` settlement (`plan_settlement`, GH-374): the records at this
+    `location` and `claim` (normalised) with a `version` below this one are settled. `by` says
+    which run decided it: `approved` (PM approved at this version) or `superseded` (a returning
+    PM round did not raise the key again). Per record, never per folded key."""
+
+    location: str
+    claim: str
+    version: int
+    by: Literal["approved", "superseded"]
+
+
 class LandingEntry(TypedDict, total=False):
     """One landing step of the task document's `landing` list (GH-239): the idempotency
     key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
@@ -1033,6 +1045,10 @@ class TaskState(TaskInput, total=False):
     # derived from the subtask's status at read time. Applied per record by
     # `rules.findings_rows`, after `settled_findings`.
     approval_settled: Annotated[list[SettledRow], operator.add]
+    # Where a `PM: final validation` run settled its own earlier rows
+    # (`plan_settlement.on_approval` / `on_return`), appended in that run's patch and never
+    # derived from `runs` at read time. Applied per record by `rules.findings_rows`.
+    plan_settled: Annotated[list[PlanSettledRow], operator.add]
     # The head of the task branch the fan-in last integrated (GH-358), stamped only for a
     # product that declares `delivery_checks`; absent otherwise. `rules.full_checks_due`
     # compares the record's head with it. Persisted in the frontmatter.

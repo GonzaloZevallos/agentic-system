@@ -15,10 +15,12 @@ from langgraph.types import Command, interrupt
 
 from agentic import composition
 from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
+from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
 from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
+from agentic.core.process.domain import reaping
 from agentic.core.process.domain.task import TaskState
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryCommands
@@ -268,13 +270,17 @@ def test_a_markable_flag_passed_to_the_composition_reaches_the_commands(tmp_path
 
 def test_the_composition_builds_the_scratch_and_free_space_adapters(tmp_path, monkeypatch):
     # GH-391: both ports are wired for later subtasks to use; the scratch is on the
-    # product's own disk.
+    # root outside the product (GH-397), in this product's partition.
     monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
     product = a_repository(tmp_path / "product")
-    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    cfg = Configuration(product_dir=product)
+    ports = composition.default_ports(cfg, NullStopFlag())
     assert ports.scratch is not None and ports.free_space is not None
+    key = reaping.product_key(str(product.resolve()))
     with ports.scratch.open("GH-1", "c", "0123456789abcdef", "tests") as directory:
-        assert directory.is_relative_to(product.resolve() / ".agentic/tmp")
+        assert directory.parent == cfg.scratch_dir.resolve() / key / "GH-1"
+        assert not directory.is_relative_to(product.resolve())
+    assert ports.scratch.ensure_kept("GH-1") == product.resolve() / ".agentic/kept/GH-1"
     assert isinstance(ports.free_space, StatvfsFreeSpace)
 
 
@@ -284,9 +290,10 @@ def test_the_checks_of_a_task_bound_to_it_file_their_scratch_under_its_root_key(
     # GH-391, invariant 1: `<task>` is the root task key, `_untasked` only with no task.
     monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
     product = a_repository(tmp_path / "product")
-    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    cfg = Configuration(product_dir=product)
+    ports = composition.default_ports(cfg, NullStopFlag())
     print_tmpdir = "python3 -c 'import tempfile; print(tempfile.gettempdir())'"
-    scratch_root = product.resolve() / ".agentic/tmp"
+    scratch_root = cfg.scratch_dir.resolve() / reaping.product_key(str(product.resolve()))
 
     unbound = Path(ports.commands.run(product, print_tmpdir, timeout_s=30).output.strip())
     bound_ports = composition.bind_task(ports, "GH-7")
@@ -305,3 +312,71 @@ def test_ports_whose_commands_are_not_the_shells_are_bound_unchanged(tmp_path, m
         commands=MemoryCommands(),
     )
     assert composition.bind_task(ports, "GH-7") is ports
+
+
+def test_a_scratch_root_inside_the_products_repository_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    root = product / "cache" / "scratch"
+    root.mkdir(parents=True)
+    with pytest.raises(preflight.ScratchInARepository) as refusal:
+        composition.default_ports(Configuration(product_dir=product, scratch_dir=root))
+    # Absolute, and says how to fix it.
+    assert str(root) in str(refusal.value)
+    assert "AGENTIC_SCRATCH_DIR" in str(refusal.value)
+    assert "XDG_CACHE_HOME" in str(refusal.value)
+
+
+def test_a_scratch_root_inside_the_running_repository_is_refused(tmp_path, monkeypatch):
+    system = a_repository(tmp_path / "system")
+    monkeypatch.setattr(preflight, "CHECKOUT", system)
+    product = a_repository(tmp_path / "product")
+    with pytest.raises(preflight.ScratchInARepository):
+        composition.default_ports(Configuration(product_dir=product, scratch_dir=system / "s"))
+
+
+def test_a_scratch_root_not_yet_created_is_judged_from_its_nearest_existing_ancestor(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    (product / "cache").mkdir()
+    root = product / "cache" / "not" / "yet" / "scratch"
+    assert not (product / "cache" / "not").exists()
+    with pytest.raises(preflight.ScratchInARepository):
+        composition.default_ports(Configuration(product_dir=product, scratch_dir=root))
+
+
+def test_a_scratch_root_in_a_third_repository_is_accepted(tmp_path, monkeypatch):
+    """The comparison is by repository: only the product's and stage0's are forbidden."""
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    other = a_repository(tmp_path / "other")
+    ports = composition.default_ports(Configuration(product_dir=product, scratch_dir=other / "s"))
+    assert ports.scratch is not None
+
+
+def test_the_default_scratch_root_raises_neither_refusal(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    assert composition.default_ports(Configuration(product_dir=product)).scratch
+
+
+def test_the_tmpdir_of_an_attempt_on_the_systems_own_repository_is_outside_it(
+    tmp_path, monkeypatch
+):
+    """Criterion 1 of GH-397. `_ports` and not `default_ports`: the product here IS the
+    repository `CHECKOUT` names, which `default_ports` refuses by design (ADR-0017); the
+    production run of this system as a product goes through the same `_ports`, and the
+    directory `scratch.open` yields is what the runner exports as `TMPDIR`."""
+    system = a_repository(tmp_path / "system")
+    monkeypatch.setattr(preflight, "CHECKOUT", system)
+    monkeypatch.setattr(composition, "refuse_its_own_checkout", lambda cfg, ports: None)
+    cfg = Configuration(product_dir=system)
+    ports = composition._ports(cfg, NullStopFlag())
+    git = GitWorkspace(system, cfg.git_identity)
+    with ports.scratch.open("GH-1", "r", "abcdef0123456789", "developer") as tmpdir:
+        assert tmpdir.is_dir()
+        assert git.repository_at(system) is not None
+        assert git.repository_at(tmpdir) != git.repository_at(system)
+        assert git.repository_at(tmpdir) != git.repository_at(preflight.CHECKOUT)
