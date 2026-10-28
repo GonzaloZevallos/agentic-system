@@ -56,6 +56,7 @@ from .task import (
     Carried,
     ChangeCategory,
     ChangesRequested,
+    CloseDocs,
     DependencyState,
     DesignItemRecord,
     EscalationClass,
@@ -2560,20 +2561,26 @@ def landing_open(state: TaskState) -> bool:
 
 
 def approved_head(state: TaskState) -> str | None:
-    """The head the task may publish (GH-373): the one its last review approved. On a tiered
-    product (the fan-in stamped `task_head`) that is `task_head`, only if the reviewed unit's
-    `reviewed_head` is the same commit and `full_checks` passed on it; without tiers it is the
-    reviewed unit's `reviewed_head`. `None` when there is none, and for a head the task moved
-    after its review (a heal, a landing pass): nobody approved that one."""
+    """The head the task may publish (GH-373): the one its last review approved, or the
+    close-time capability commit made right on top of it (`head_reviewed`). On a tiered
+    product (the fan-in stamped `task_head`) that is `task_head`, only if `head_reviewed`
+    covers it and `full_checks` passed on it; without tiers it is `close_docs.head` when the
+    record is covered, else the reviewed unit's `reviewed_head`. `None` when there is none,
+    and for a head the task moved after its review (a heal, a landing pass): nobody approved
+    that one."""
     name = reviewed_unit_name(state)
     reviewed = state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
     if not reviewed:
         return None
+    close_docs = state.get("close_docs")
     task_head = state.get("task_head")
     if not task_head:
+        docs_head = close_docs.get("head") if close_docs else None
+        if docs_head and head_reviewed(reviewed, close_docs, docs_head):
+            return docs_head
         return reviewed
     recorded = state.get("full_checks")
-    if not same_commit(reviewed, task_head):
+    if not head_reviewed(reviewed, close_docs, task_head):
         return None
     if not (recorded and recorded["passed"] and same_commit(recorded["head"], task_head)):
         return None
@@ -2674,8 +2681,8 @@ def integration_increment(
     approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
     if approved is None:
         return "refuse"
-    if same_commit(branch_head, approved):
-        return "agree"
+    if head_reviewed(approved, state.get("close_docs"), branch_head):
+        return "agree"  # the reviewed head, or the close-time docs commit made right on it
     if not descends or sub is None or sub.get("branch") != task_branch(task_id):
         return "refuse"
     others = (s for name, s in state.get("subtasks", {}).items() if name != unit)
@@ -3917,6 +3924,35 @@ def same_commit(a: str | None, b: str | None) -> bool:
     )
 
 
+CAPABILITY_DIR = "docs/product/"
+
+
+def _capability_path(path: str) -> bool:
+    """A capability file's path as `close_docs.paths` records it: under `docs/product/`, a
+    Markdown file, and no `..` step that walks out of it."""
+    return path.startswith(CAPABILITY_DIR) and path.endswith(".md") and ".." not in path.split("/")
+
+
+def head_reviewed(
+    reviewed_head: str | None, close_docs: CloseDocs | None, head: str | None
+) -> bool:
+    """Whether `head` is a head Tech Lead's review covers: the unit's `reviewed_head`, or the
+    close-time capability commit (`close_docs`) made directly on it -- its `parent` is the
+    reviewed head, `head` is its commit and every path it holds is a capability file
+    (`docs/product/*.md`). The one comparison of a pull request head, or `task_head`, with a
+    reviewed one; no reader adds its own id test. A foreign parent, a stale record or a path
+    outside `docs/product/` covers nothing."""
+    if same_commit(reviewed_head, head):
+        return True
+    return bool(
+        close_docs
+        and close_docs.get("paths")
+        and same_commit(close_docs.get("parent"), reviewed_head)
+        and same_commit(head, close_docs.get("head"))
+        and all(_capability_path(path) for path in close_docs["paths"])
+    )
+
+
 MergeRefusal = Literal[
     "not_ready",
     "pr_not_open",
@@ -4038,7 +4074,8 @@ class MergeFacts:
     `MergeFacts` built without it reads, the poller's) leaves the recorded `checks_master`
     to be compared with `current_master`, exactly as before. `github_conflicting` (GH-395) is
     `rules.github_conflicting`'s reading: GitHub reads `CONFLICTING` on the head, whatever the
-    base. Only `ci_never_coming` reads it."""
+    base. Only `ci_never_coming` reads it. `close_docs` is the document's record of the
+    close-time capability commit (`head_reviewed` reads it), `None` when there is none."""
 
     task_id: str
     status: str | None
@@ -4078,6 +4115,7 @@ class MergeFacts:
     ci_plan_only: tuple[str, ...] = ()
     ci_red_on_base: tuple[str, ...] = ()
     github_conflicting: bool = False
+    close_docs: CloseDocs | None = None
 
 
 @dataclass(frozen=True)
@@ -4212,7 +4250,10 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "adr_number_taken")
     if not facts.reviewed_unit_approved:
         return MergeDecision("refuse", "not_approved")
-    if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
+    if not (
+        full_commit_id(facts.pr_head)
+        and head_reviewed(facts.reviewed_head, facts.close_docs, facts.pr_head)
+    ):
         return MergeDecision("refuse", "head_not_reviewed")
     if facts.perf_convened and not (
         facts.perf_verdict == "approved"

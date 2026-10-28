@@ -929,6 +929,17 @@ class FullCheckEntry(TypedDict):
     duration_s: NotRequired[float]
 
 
+class CloseDocs(TypedDict):
+    """The commit `final_validation` made on the task branch when PM, approving, returned
+    capability files (the close-time pass): `parent` is the reviewed unit's `reviewed_head`
+    the commit was made on, `head` the commit, `paths` what it holds, relative to the
+    checkout. Replaced whole by every `pm_final` run, never accumulated."""
+
+    parent: str
+    head: str
+    paths: list[str]
+
+
 class FullChecksRecord(TypedDict):
     """The frontmatter record of one `full_checks` run (GH-358): the whole suite on the
     integrated head, once per task. Shaped like `merge_checks` (ADR-0045) plus `version`, which
@@ -1069,6 +1080,10 @@ class TaskState(TaskInput, total=False):
     # (GH-373, "publicación debida"): written only by `resuming.prepare` (a sha or `None`
     # on every resume), cleared only by `deliver`'s single exit. Read with `.get`.
     publish_owed: NotRequired[str | None]
+    # The capability files PM wrote at close, committed on the task branch (`CloseDocs`):
+    # `None` is how a `pm_final` run clears the previous one. Written to the document only
+    # when set, read with `.get`.
+    close_docs: NotRequired[CloseDocs | None]
     # The full sha `deliver` pushed and when (GH-216): the anchor of the CI wait, read with
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str

@@ -285,6 +285,7 @@ def _merge_facts(
         status=raw.get("status"),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
         reviewed_head=unit.get("reviewed_head") if unit is not None else None,
+        close_docs=raw.get("close_docs"),
         open_blocking=sum(1 for row in rules.open_findings(raw) if row["severity"] == "blocking"),
         open_important=sum(len(rows) for rows in partition.owned.values()) + len(partition.plan),
         open_outside=len(partition.outside),

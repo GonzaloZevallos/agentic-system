@@ -248,6 +248,31 @@ def test_final_validation_json_schema_is_pinned():
     # PM's early final validation: a verdict, a reason and `blocking` as the one-line
     # claims the integration review must settle -- a line-list like `questions_for_human`.
     assert schemas.json_schema(schemas.FinalValidation, {}) == {
+        "$defs": {
+            "CapabilityFile": {
+                "properties": {
+                    "capability": {
+                        "description": (
+                            "File name in docs/product/, a slug named after a glossary "
+                            "concept, e.g. `check-ins`, `metrics`"
+                        ),
+                        "title": "Capability",
+                        "type": "string",
+                    },
+                    "content": {
+                        "description": (
+                            "The complete updated file, not a diff: everything current plus "
+                            "what this task adds or changes, metrics included"
+                        ),
+                        "title": "Content",
+                        "type": "string",
+                    },
+                },
+                "required": ["capability", "content"],
+                "title": "CapabilityFile",
+                "type": "object",
+            }
+        },
         "description": (
             "PM's early, UI-only final validation (ADR-0040): the verdict over UX Lead's\n"
             "final walk and UI Lead's final comparisons, before Tech Lead's own close."
@@ -268,8 +293,19 @@ def test_final_validation_json_schema_is_pinned():
                     "string if none"
                 ),
             },
+            "definitions": {
+                "description": (
+                    "On `approved`, the complete file of each capability the task changed, "
+                    "reconciled with the delivered diff and the final reports, each opening "
+                    "with its `## Jobs`. Empty when no capability changed, and always empty "
+                    "on `returned`"
+                ),
+                "items": {"$ref": "#/$defs/CapabilityFile"},
+                "title": "Definitions",
+                "type": "array",
+            },
         },
-        "required": ["markdown", "verdict", "reason", "blocking"],
+        "required": ["markdown", "verdict", "reason", "blocking", "definitions"],
         "title": "FinalValidation",
         "type": "object",
     }

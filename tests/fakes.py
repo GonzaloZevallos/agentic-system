@@ -305,7 +305,8 @@ class MemoryKnowledge:
         self.definitions.update(definitions)
         self.terms.update(terms)
         self.consolidated_in = root
-        return [Path(f"/memory/docs/product/{slug}.md") for slug in definitions]
+        base = root or Path("/memory")
+        return [base / "docs" / "product" / f"{slug}.md" for slug in definitions]
 
 
 class MemoryPrompts:
@@ -2220,16 +2221,18 @@ def final_validation(
     reason: str = "r",
     blocking: Sequence[object] | None = None,
     cost: float = 0.2,
+    definitions: Sequence[object] | None = None,
 ) -> RawResult:
     """PM's early, UI-only final validation (ADR-0040): same `verdict`/`reason` shape,
-    `blocking` in place of `definitions`/`observations` -- one-line claims the
-    integration review must settle, empty on `approved`."""
+    `blocking` -- one-line claims the integration review must settle, empty on `approved` --
+    and the close-time `definitions` (capability files), empty when none changed."""
     return RawResult(
         {
             "markdown": f"### Verdict\n\n{kind}\n\n{reason}",
             "verdict": kind,
             "reason": reason,
             "blocking": list(blocking or []),
+            "definitions": list(definitions or []),
         },
         cost,
     )

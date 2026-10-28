@@ -54,6 +54,29 @@ def test_the_same_commit_at_another_length_agrees():
     assert decide(state(), head=H, descends=False) == "agree"
 
 
+DOCS = "c" * 40
+
+
+def docs_record(**more):
+    return {"parent": H, "head": DOCS, "paths": ["docs/product/dashboard.md"], **more}
+
+
+def test_the_close_time_docs_commit_on_the_approved_head_agrees_not_an_increment():
+    assert decide(state(close_docs=docs_record()), head=DOCS) == "agree"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param(docs_record(parent="d" * 40), id="foreign-parent"),
+        pytest.param(docs_record(paths=["agentic/x.py"]), id="path-outside-docs-product"),
+        pytest.param(docs_record(head="e" * 40), id="stale-record"),
+    ],
+)
+def test_a_docs_record_that_does_not_cover_the_head_leaves_it_an_increment(record):
+    assert decide(state(close_docs=record), head=DOCS) == "increment"
+
+
 def test_a_head_that_does_not_descend_is_refused():
     assert decide(state(), descends=False) == "refuse"
 
