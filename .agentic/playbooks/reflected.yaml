@@ -410,3 +410,13 @@ tasks:
   GH-400@review:
     cost_usd: 0.1583
     decisions: 1
+  GH-408@review:
+    cost_usd: 0.0636
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-408
