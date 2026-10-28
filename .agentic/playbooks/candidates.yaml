@@ -876,3 +876,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-28T12:44:40.575+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief states a lifetime or scope guarantee (once per run), trace how production constructs the object, per call or per node, and make the code, tests and docs state that same scope.
+  confidence: medium
+  seen_in:
+  - GH-409
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T14:45:46.483+00:00'
