@@ -10,12 +10,19 @@ required, every declared check run once through the same `CheckoutPresubmit` the
 uses, the tree put back as its head holds it whatever the checks did (`restore_clean`, never
 `-x`), the record and the `Full checks` section written. A red run reopens the integration
 with one row per failed check (`rules.full_checks_return`); a green one writes a passed record
-and nothing else, and the fan-in goes on."""
+and nothing else, and the fan-in goes on.
+
+A product that declares `ci:` (GH-376) does not run the suite here: the integrated head is
+published to its own ref (`rules.ci_ref`) and the node waits for the declared jobs on exactly
+that head (`ci.full_tier_verdict`), recording their verdict. Any way the CI cannot be used
+runs the local tier above instead, and the record and the section say why."""
 
 from __future__ import annotations
 
 import math
 import time
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -23,21 +30,43 @@ from pydantic import TypeAdapter
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import presubmit, rules
+from ..domain import ci, presubmit, rules
 from ..domain.check_schedule import CheckPriority
+from ..domain.ci import CiCheck, CiReport, CiUnreadable, FullTierVerdict
 from ..domain.roles import DEVELOPER_INTEGRATOR
-from ..domain.task import WAITING_ON_HUMAN, FullCheckEntry, FullChecksRecord, TaskState
-from .checkouts import SetupFailed, task_base, task_checkout_in_thread
-from .ports import Ports
+from ..domain.task import (
+    WAITING_ON_HUMAN,
+    FallbackCause,
+    FullCheckEntry,
+    FullChecksRecord,
+    TaskState,
+)
+from .checkouts import SetupFailed, Checkout, task_base, task_checkout_in_thread
+from .ports import GitError, Ports
 from .presubmit import CheckoutPresubmit, reuse_of
 from .run_role import finish
 
 SECTION = "Full checks"
 _NOTHING_BEFORE = ""
 _ENTRIES = TypeAdapter(list[FullCheckEntry])
+_REPRODUCE = (
+    "The integrated head failed CI; reproduce it with the product's declared checks in your "
+    "checkout."
+)
+
+Sleep = Callable[[float], Awaitable[None]]
+Clock = Callable[[], float]
 
 
-async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+async def full_checks(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    *,
+    sleep: Sleep = anyio.sleep,
+    clock: Clock = time.monotonic,
+) -> TaskState:
+    """`sleep` and `clock` are the CI wait's, injectable so a test does not wait."""
     try:
         task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
@@ -46,6 +75,27 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
     if not workspace.is_clean(task.path):
         return finish(state, _dirty(task.branch), ports)
     base = task_base(state, ports)
+    names = ports.stack.ci(base)
+    if not names:
+        return await _local_full_checks(state, cfg, ports, task, base, None)
+    outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock)
+    if isinstance(outcome, str):
+        return await _local_full_checks(state, cfg, ports, task, base, outcome)
+    return finish(state, outcome, ports)
+
+
+async def _local_full_checks(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    task: Checkout,
+    base: str,
+    fallback: FallbackCause | None,
+) -> TaskState:
+    """The suite run on this machine. `fallback` is why a `ci:` product ended up here: the
+    record and the section carry it. `None` for a product without `ci:`, whose record gets
+    no new key."""
+    workspace = ports.workspace
     declared = ports.stack.checks(base)
     gate = CheckoutPresubmit(
         ports,
@@ -97,10 +147,151 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
     else:
         patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
         text = text or f"Failed on `{head}`: no check output was recorded."
+    if fallback is not None:
+        record["ran_on"] = "local"
+        record["ci_fallback"] = fallback
+        text = f"CI not used ({fallback}): ran locally.\n\n{text}"
     patch["sections"] = _section(state, record["version"], text)
     if flakes := gate.flakes():
         patch["flakes"] = flakes
     return finish(state, patch, ports)
+
+
+async def _ci_full_checks(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    task: Checkout,
+    base: str,
+    names: tuple[str, ...],
+    sleep: Sleep,
+    clock: Clock,
+) -> dict[str, Any] | FallbackCause:
+    """The patch of a run decided on GitHub, or the cause for running the local tier. The
+    paths are read from the workspace only and the head is published to the task's own CI
+    ref; the wait takes no check slot and runs no command (ADR-0070)."""
+    workspace = ports.workspace
+    head = workspace.full_head(task.path)
+    try:
+        paths: tuple[str, ...] | None = workspace.changed_paths(base, head)
+    except GitError:
+        paths = None
+    if rules.ci_untrusted(paths) is not False:
+        return "untrusted"
+    ref = rules.ci_ref(state["id"])
+    try:
+        await anyio.to_thread.run_sync(workspace.publish_ci_ref, task.path, ref)
+    except GitError:
+        return "publish_failed"
+    gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
+    verdict, read, waited = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+    if verdict.state == "unreachable":
+        return verdict.cause or "no_run"
+    assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
+    if verdict.state == "green":
+        return _ci_green(state, head, gate_names, read, waited)
+    return _ci_red(state, cfg, head, gate_names, verdict, read, waited)
+
+
+async def _wait_ci(
+    ports: Ports,
+    ref: str,
+    head: str,
+    names: tuple[str, ...],
+    cfg: Configuration,
+    sleep: Sleep,
+    clock: Clock,
+) -> tuple[FullTierVerdict, CiReport | CiUnreadable, float]:
+    """Read the CI of `ref` every `CI_POLL_S` until a verdict that is not `waiting`; the one
+    bound is `cfg.check_timeout_s`, counted from the first read."""
+    started = clock()
+    while True:
+        read = await anyio.to_thread.run_sync(ports.tracker.branch_ci, ref)
+        waited = clock() - started
+        verdict = ci.full_tier_verdict(read, head, names, waited, cfg.check_timeout_s)
+        if verdict.state != "waiting":
+            return verdict, read, waited
+        await sleep(ci.CI_POLL_S)
+
+
+def _ci_record(
+    state: TaskState,
+    head: str,
+    passed: bool,
+    waited: float,
+    results: list[FullCheckEntry],
+) -> FullChecksRecord:
+    previous = state.get("full_checks")
+    return {
+        "version": previous["version"] + 1 if previous else 1,
+        "head": head,
+        "passed": passed,
+        "duration_s": round(waited, 1),
+        "declared": {"name": "ci"},
+        "results": results,
+        "witness": None,
+        "ran_on": "ci",
+    }
+
+
+def _link(report: CiReport, name: str) -> str:
+    return next((check.link for check in report.checks if check.name == name and check.link), "")
+
+
+def _ci_green(
+    state: TaskState, head: str, names: tuple[str, ...], read: CiReport, waited: float
+) -> dict[str, Any]:
+    record = _ci_record(
+        state, head, True, waited, [{"name": name, "passed": True} for name in names]
+    )
+    links = "; ".join(f"{name}: {link}" for name in names if (link := _link(read, name)))
+    text = f"Passed on CI for `{head}`: {', '.join(names)}."
+    if links:
+        text += f" Runs: {links}."
+    return {
+        "full_checks": record,
+        "sections": _section(state, record["version"], text),
+    }
+
+
+def _ci_red(
+    state: TaskState,
+    cfg: Configuration,
+    head: str,
+    names: tuple[str, ...],
+    verdict: FullTierVerdict,
+    read: CiReport,
+    waited: float,
+) -> dict[str, Any]:
+    """A red job, or a bound that ran out. A job still pending beside a red one is not a
+    failure of its own and gets no row; at the bound it does, and the section names it."""
+    timed_out = verdict.state == "timed_out"
+    red = {check.name: check for check in reversed(verdict.failing)}
+    results: list[FullCheckEntry] = []
+    for name in names:
+        if name in red:
+            results.append({"name": name, "passed": False, "link": red[name].link})
+        elif name not in verdict.pending:
+            results.append({"name": name, "passed": True})
+        elif timed_out:
+            results.append({"name": name, "passed": False})
+    record = _ci_record(state, head, False, waited, results)
+    record["failed_step"] = next(iter(red), "timeout")
+    lines = [f"Failed on CI for `{head}`."]
+    lines += [_red_line(check) for check in verdict.failing]
+    if timed_out:
+        lines.append(
+            f"Not finished within {cfg.check_timeout_s:g}s: still pending "
+            f"{', '.join(verdict.pending)}."
+        )
+    lines.append(_REPRODUCE)
+    patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
+    patch["sections"] = _section(state, record["version"], "\n\n".join(lines))
+    return patch
+
+
+def _red_line(check: CiCheck) -> str:
+    return f"- `{check.name}`: {check.conclusion}" + (f" ({check.link})" if check.link else "")
 
 
 def _record(
