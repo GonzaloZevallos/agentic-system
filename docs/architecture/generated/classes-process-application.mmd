@@ -115,6 +115,8 @@ classDiagram
   }
   class ProductStack {
   }
+  class PromptFailure {
+  }
   class Prompts {
   }
   class RawResult {
@@ -224,6 +226,7 @@ classDiagram
   TrackerTransient --|> TrackerCallFailed
   TrackerUnreachable --|> TrackerCallFailed
   EstimateCapReached --|> Escalating
+  PromptFailure --|> Escalating
   RoleFailure --|> Escalating
   TaskCapReached --|> Escalating
   FoldingDocuments --|> _Delegating
