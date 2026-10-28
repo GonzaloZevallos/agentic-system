@@ -1,4 +1,4 @@
-"""`board_sync.mirror` (GH-375, ADR-0071): the issue rows `gh issue list` gives, plus real-shaped
+"""`board_sync.mirror` (GH-375, ADR-0073): the issue rows `gh issue list` gives, plus real-shaped
 task documents, in; the card writes and the sent-memory out. The Project is never read back."""
 
 from __future__ import annotations

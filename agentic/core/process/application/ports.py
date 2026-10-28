@@ -1627,7 +1627,7 @@ class SentEntry:
 
 @dataclass(frozen=True)
 class SentMemory:
-    """The mirror's memory of what it sent (ADR-0071): never read from the board. Bound to
+    """The mirror's memory of what it sent (ADR-0073): never read from the board. Bound to
     the Project's node id; `failed_at` is the last whole-call failure; `unreadable` is set
     by a load that found a file it could not parse (one log line, then it reads as empty)."""
 
@@ -1638,7 +1638,7 @@ class SentMemory:
 
 
 class Board(Protocol):
-    """The GitHub Project the poller mirrors state to (GH-375, ADR-0071). Write-only as far
+    """The GitHub Project the poller mirrors state to (GH-375, ADR-0073). Write-only as far
     as state goes: the only things read from the Project are node ids. Every method may raise
     `TrackerCallFailed` or `ValueError`."""
 
@@ -1747,7 +1747,7 @@ class Ports:
     # The machine's store of passing check results (ADR-0065). `None` stores and reuses
     # nothing, which is how every checkout ran before it existed.
     check_results: CheckResults | None = None
-    # The GitHub Project board mirror (GH-375, ADR-0071) and its memory. `None` mirrors
+    # The GitHub Project board mirror (GH-375, ADR-0073) and its memory. `None` mirrors
     # nothing and makes no call, which is how every round ran before they existed.
     board: Board | None = None
     board_sent: BoardSent | None = None

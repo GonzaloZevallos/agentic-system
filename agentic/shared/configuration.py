@@ -197,7 +197,7 @@ class Configuration(BaseModel):
     # The machine's store of passing check results (ADR-0065): outside every checkout and
     # shared by every product, built like `run_registry_dir`.
     check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
-    # The GitHub Project the poller mirrors each issue's stage to (GH-375, ADR-0071), as
+    # The GitHub Project the poller mirrors each issue's stage to (GH-375, ADR-0073), as
     # `<owner>/<number>`. `None` mirrors nothing and makes no call.
     board_project: str | None = None
 

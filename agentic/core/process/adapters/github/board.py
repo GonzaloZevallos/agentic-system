@@ -1,4 +1,4 @@
-"""`GhBoard`: the GitHub Project the poller mirrors state to, over `gh` (GH-375, ADR-0071).
+"""`GhBoard`: the GitHub Project the poller mirrors state to, over `gh` (GH-375, ADR-0073).
 
 Write-only as far as state goes. The one thing read from the Project is its identity: the
 node ids of the project, its fields and its Etapa options, looked up by name once per

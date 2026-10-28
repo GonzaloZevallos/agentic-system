@@ -208,7 +208,7 @@ _Avoid_: reserva, bloqueo, cola de aterrizaje
 _Campo_: sin término de arte
 
 **Espejo del tablero**:
-Lo que el poller mantiene en el GitHub Project para que el dueño vea en un solo lugar en qué está cada issue de ambos productos: una Tarjeta por issue, escrita desde hechos que el poller ya calculó. Es una salida: ninguna decisión del sistema lee el valor de un campo del Project, sólo sus ids de nodo. Lleva la memoria de lo enviado y solo envía lo que cambió, así que una vuelta ociosa no llama al Project. Sin `AGENTIC_BOARD_PROJECT` no existe. El sistema nunca escribe Bloque ni Hito y nunca borra un ítem (ADR-0071).
+Lo que el poller mantiene en el GitHub Project para que el dueño vea en un solo lugar en qué está cada issue de ambos productos: una Tarjeta por issue, escrita desde hechos que el poller ya calculó. Es una salida: ninguna decisión del sistema lee el valor de un campo del Project, sólo sus ids de nodo. Lleva la memoria de lo enviado y solo envía lo que cambió, así que una vuelta ociosa no llama al Project. Sin `AGENTIC_BOARD_PROJECT` no existe. El sistema nunca escribe Bloque ni Hito y nunca borra un ítem (ADR-0073).
 En el código es `domain/board.py` y el puerto `Board`.
 _Avoid_: dashboard, sincronización, tablero de verdad
 _Campo_: sin término de arte

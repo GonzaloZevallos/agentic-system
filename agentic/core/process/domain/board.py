@@ -1,4 +1,4 @@
-"""The board mirror's pure core (GH-375, ADR-0071): what stage a GitHub Project card shows
+"""The board mirror's pure core (GH-375, ADR-0073): what stage a GitHub Project card shows
 for an issue, and what has to be written to put it there.
 
 The Project is an output. Nothing here, and nothing that calls it, reads a card's value
@@ -24,10 +24,10 @@ Etapa = Literal[
     "Corriendo", "En PR", "Trabada", "Necesita humano", "En cola", "Fuera del sistema", "Hecha"
 ]
 """The Project's `Status` field, renamed Etapa; the seven options a person created. `En PR` is
-the owner's (ADR-0071): a task approved and waiting on CI and merge, nothing live."""
+the owner's (ADR-0073): a task approved and waiting on CI and merge, nothing live."""
 
 Field = Literal["etapa", "bloqueo", "costo", "inicio", "fin"]
-"""The five fields the system writes. Bloque and Hito are never in this list (ADR-0071)."""
+"""The five fields the system writes. Bloque and Hito are never in this list (ADR-0073)."""
 FIELDS: tuple[Field, ...] = ("etapa", "bloqueo", "costo", "inicio", "fin")
 
 AGENTIC_LABEL = "agentic"

@@ -1,4 +1,4 @@
-"""GH-375, ADR-0071: the board mirror's pure core. `card` maps the facts the poller reads to
+"""GH-375, ADR-0073: the board mirror's pure core. `card` maps the facts the poller reads to
 the stage a Project card shows; `fingerprint`, `due`, `writes` and `retry_due` decide what is
 sent and when."""
 
