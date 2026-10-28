@@ -886,3 +886,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-28T14:45:46.483+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a guard reads a value another component produces, build at least one test input from that real producer, not only a hand-made fake, to prove each outcome the brief names is reachable.
+  confidence: medium
+  seen_in:
+  - GH-420
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T19:33:33.807+00:00'
