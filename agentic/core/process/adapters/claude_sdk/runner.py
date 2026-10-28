@@ -397,9 +397,7 @@ class ClaudeSdkRunner:
         if self.free_space is None or scratch_dir is None:
             return None
         try:
-            readings = [
-                self.free_space.read(path) for path in (scratch_dir, cwd, Path("/tmp"))
-            ]
+            readings = [self.free_space.read(path) for path in (scratch_dir, cwd, Path("/tmp"))]
         except OSError:
             # A reading that cannot be taken must not replace the failure it annotates.
             return None

@@ -41,6 +41,9 @@ SCRATCH_ORPHAN_GRACE = timedelta(minutes=10)
 KEPT_RETENTION = timedelta(days=14)
 INODE_FLOOR = 10_000
 
+# What sits between a product key and the token in the name a partition is renamed to.
+SWEPT_INFIX = ".swept-"
+
 # `c`: a check or a setup command. `r`: a role attempt.
 OwnerKind = Literal["c", "r"]
 _KINDS = get_args(OwnerKind)
@@ -190,6 +193,52 @@ class ScratchListing:
 
 
 @dataclass(frozen=True)
+class TaskFolder:
+    """One `<partition>/<task>/` folder of any product: its mtime, its owners and the mtime of
+    every child it holds, a hidden temp name (`.<owner>.json.tmp`) included, since a record
+    being replaced is all a young owner shows of itself."""
+
+    name: str
+    mtime: datetime
+    owners: tuple[OwnerEntry, ...]
+    child_mtimes: tuple[datetime, ...]
+
+
+@dataclass(frozen=True)
+class PartitionFolder:
+    """One `<root>/<product key>/` folder: its mtime and its task folders."""
+
+    name: str
+    mtime: datetime
+    tasks: tuple[TaskFolder, ...]
+
+
+@dataclass(frozen=True)
+class Leftover:
+    """What a sweep renamed aside (`.<key>.swept-<token>`) and did not finish removing."""
+
+    name: str
+    mtime: datetime
+
+
+@dataclass(frozen=True)
+class PartitionListing:
+    """What is under the scratch root across products: every partition and every leftover."""
+
+    partitions: tuple[PartitionFolder, ...]
+    leftovers: tuple[Leftover, ...]
+
+
+@dataclass(frozen=True)
+class Orphans:
+    """What the orphan rule returns: the names of other products' partitions to rename aside
+    and remove, and the names of leftovers (`.<key>.swept-<token>`) to remove."""
+
+    partitions: tuple[str, ...] = ()
+    leftovers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class KeptFolder:
     """A task's `.agentic/kept/<task>/`, with when its task closed (`None`: it has not)."""
 
@@ -209,15 +258,19 @@ class Removal:
 
 @dataclass(frozen=True)
 class SweepDecision:
-    """What a round removes: whole `<partition>/<task>/` folders, single owners and `kept/<task>/`
-    folders."""
+    """What a round removes: whole `<partition>/<task>/` folders, single owners, `kept/<task>/`
+    folders, and orphan partitions and leftovers under the root."""
 
     tasks: tuple[str, ...] = ()
     owners: tuple[Removal, ...] = ()
     kept: tuple[str, ...] = ()
+    # Other products' partitions (renamed aside, then removed) and leftovers of an earlier
+    # rename (removed): what `orphan_partitions` returned (GH-397).
+    partitions: tuple[str, ...] = ()
+    leftovers: tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(self.tasks or self.owners or self.kept)
+        return bool(self.tasks or self.owners or self.kept or self.partitions or self.leftovers)
 
 
 def task_path_for(product_key: str, task_key: str | None) -> PurePosixPath:
@@ -265,3 +318,49 @@ def sweep_decision(
         )
     )
     return SweepDecision(tasks, owners, expired)
+
+
+def swept_name(product_key: str, token: str) -> str:
+    """The name a partition is renamed to before it is removed, at the scratch root: hidden, so
+    it is never a partition, and carrying the key it came from."""
+    if not _WORD.fullmatch(token):
+        raise ValueError(f"not a plain token to name a leftover by: {token!r}")
+    return f".{partition(product_key).as_posix()}{SWEPT_INFIX}{token}"
+
+
+def _record_settled(record: RecordFact | None, limit: datetime) -> bool:
+    """Whether a record is dead (not alive, not unreadable) and older than `limit`."""
+    return record is None or (record.alive is False and record.mtime < limit)
+
+
+def _quiet(folder: PartitionFolder, limit: datetime) -> bool:
+    """Whether nothing in `folder` is younger than `limit` and no owner may still run."""
+    return folder.mtime < limit and all(
+        task.mtime < limit
+        and all(m < limit for m in task.child_mtimes)
+        and all(
+            (entry.directory_mtime is None or entry.directory_mtime < limit)
+            and _record_settled(entry.record, limit)
+            for entry in task.owners
+        )
+        for task in folder.tasks
+    )
+
+
+def orphan_partitions(
+    listing: PartitionListing,
+    own_key: str,
+    now: datetime,
+    grace: timedelta = SCRATCH_ORPHAN_GRACE,
+) -> Orphans:
+    """What a sweep may remove beyond its own product's partition (GH-397). A partition of
+    another product whose owners are all gone, with nothing in it (its folder, its task
+    folders, any child, a hidden temp name included) younger than `grace`; a record that is
+    alive or cannot be read keeps the whole partition. Every leftover of an earlier rename
+    older than `grace`, whichever product it was of. Never the partition of `own_key`."""
+    limit = now - grace
+    partitions = tuple(
+        sorted(f.name for f in listing.partitions if f.name != own_key and _quiet(f, limit))
+    )
+    leftovers = tuple(sorted(x.name for x in listing.leftovers if x.mtime < limit))
+    return Orphans(partitions, leftovers)

@@ -204,3 +204,104 @@ def test_a_task_key_that_could_name_two_directories_has_no_folder():
     assert scratch.task_path_for(KEY, "GH-9") == PurePosixPath(f"{KEY}/GH-9")
     with pytest.raises(ValueError):
         scratch.task_path_for(KEY, "../x")
+
+
+# GH-397: the partitions of other products under the same root, and what is an orphan.
+NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+OLD = NOW - scratch.SCRATCH_ORPHAN_GRACE - timedelta(minutes=1)
+YOUNG = NOW - scratch.SCRATCH_ORPHAN_GRACE + timedelta(minutes=1)
+MINE, THEIRS = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
+
+
+def _task(name="GH-1", *, mtime=OLD, owners=(), children=None):
+    """A task folder; its children's mtimes default to those of its owners' directories and
+    records, and `children` adds the ones an owner does not show (a hidden temp name)."""
+    seen = [
+        m
+        for o in owners
+        for m in (o.directory_mtime, o.record.mtime if o.record else None)
+        if m is not None
+    ]
+    return scratch.TaskFolder(name, mtime, tuple(owners), tuple(seen + list(children or ())))
+
+
+def _owner(name="r-01234567", *, directory=OLD, record_mtime=OLD, alive: bool | None = False):
+    record = scratch.RecordFact(record_mtime, alive) if record_mtime is not None else None
+    return scratch.OwnerEntry("GH-1", name, directory, record)
+
+
+def _folder(key=THEIRS, *, mtime=OLD, tasks=None):
+    return scratch.PartitionFolder(key, mtime, tuple(tasks if tasks is not None else [_task()]))
+
+
+def _orphans(*folders, leftovers=()):
+    listing = scratch.PartitionListing(tuple(folders), tuple(leftovers))
+    return scratch.orphan_partitions(listing, MINE, NOW)
+
+
+def test_another_products_dead_and_old_partition_is_an_orphan():
+    folder = _folder(tasks=[_task(owners=[_owner()])])
+    assert _orphans(folder) == scratch.Orphans(partitions=(THEIRS,))
+
+
+def test_an_empty_old_partition_is_an_orphan_and_its_own_is_never_returned():
+    mine = _folder(MINE, tasks=[])
+    assert _orphans(_folder(tasks=[]), mine) == scratch.Orphans(partitions=(THEIRS,))
+    assert _orphans(mine) == scratch.Orphans()
+
+
+@pytest.mark.parametrize("alive", [True, None])
+def test_a_partition_holding_a_live_or_unreadable_record_is_never_returned(alive):
+    folder = _folder(tasks=[_task(owners=[_owner(alive=alive)]), _task("GH-2", owners=[])])
+    assert _orphans(folder) == scratch.Orphans()
+
+
+def test_one_live_owner_among_dead_ones_keeps_the_whole_partition():
+    owners = [_owner("r-00000001"), _owner("r-00000002", alive=True)]
+    assert _orphans(_folder(tasks=[_task(owners=owners)])) == scratch.Orphans()
+
+
+@pytest.mark.parametrize(
+    "folder",
+    [
+        _folder(mtime=YOUNG),
+        _folder(tasks=[_task(mtime=YOUNG)]),
+        _folder(tasks=[_task(owners=[_owner(directory=YOUNG)])]),
+        _folder(tasks=[_task(owners=[_owner(record_mtime=YOUNG)])]),
+        # A hidden temp record being replaced is all the folder shows of a young owner.
+        _folder(tasks=[_task(children=[YOUNG])]),
+        _folder(tasks=[_task(), _task("GH-2", children=[YOUNG])]),
+    ],
+    ids=["partition", "task", "directory", "record", "hidden-temp", "second-task"],
+)
+def test_a_partition_with_anything_inside_the_grace_is_never_returned(folder):
+    assert _orphans(folder) == scratch.Orphans()
+
+
+def test_a_partition_exactly_at_the_grace_is_not_yet_old():
+    edge = NOW - scratch.SCRATCH_ORPHAN_GRACE
+    assert _orphans(_folder(mtime=edge, tasks=[])) == scratch.Orphans()
+
+
+def test_a_swept_leftover_is_returned_once_older_than_the_grace_whoever_it_was_of():
+    old = scratch.Leftover(f".{THEIRS}.swept-abc123", OLD)
+    mine = scratch.Leftover(f".{MINE}.swept-def456", OLD)
+    young = scratch.Leftover(f".{THEIRS}.swept-fff000", YOUNG)
+    assert _orphans(leftovers=[old, mine, young]) == scratch.Orphans(
+        leftovers=(old.name, mine.name)
+    )
+
+
+def test_the_grace_is_an_argument_of_the_rule():
+    listing = scratch.PartitionListing((_folder(mtime=YOUNG, tasks=[]),), ())
+    assert scratch.orphan_partitions(listing, MINE, NOW) == scratch.Orphans()
+    short = timedelta(seconds=1)
+    assert scratch.orphan_partitions(listing, MINE, NOW, grace=short) == scratch.Orphans(
+        partitions=(THEIRS,)
+    )
+
+
+def test_a_decision_with_only_orphans_is_not_empty():
+    assert not scratch.SweepDecision()
+    assert scratch.SweepDecision(partitions=(THEIRS,))
+    assert scratch.SweepDecision(leftovers=(f".{THEIRS}.swept-x",))

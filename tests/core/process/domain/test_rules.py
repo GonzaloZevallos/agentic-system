@@ -4010,7 +4010,9 @@ def test_space_holds_names_every_volume_under_the_floor_in_a_stable_order():
 
 def test_space_holds_at_exactly_the_floor_is_not_a_hold():
     exact = SpaceReading(free_bytes=_FLOOR, free_inodes=INODE_FLOOR)
-    assert rules.space_holds({rules.SCRATCH_VOLUME: exact, rules.PRODUCT_VOLUME: exact}, _FLOOR) == ()
+    assert (
+        rules.space_holds({rules.SCRATCH_VOLUME: exact, rules.PRODUCT_VOLUME: exact}, _FLOOR) == ()
+    )
 
 
 def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:

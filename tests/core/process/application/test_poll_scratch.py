@@ -312,9 +312,9 @@ def test_a_held_round_starts_no_retake_merge_or_reflect_child_and_an_open_one_st
     )
     assert held.spawned == []
     assert held_lines == [
-            "agentic: poll: held: /tmp 10 MB < floor 2048 MB "
-            "(scratch 380000 MB ok, product 380000 MB ok)"
-        ]
+        "agentic: poll: held: /tmp 10 MB < floor 2048 MB "
+        "(scratch 380000 MB ok, product 380000 MB ok)"
+    ]
 
     _, open_ = _round(tmp_path, build(_free(tmp_path)), _Locks(_dead_lock("GH-30")))
     kinds = {argv[1] for argv in open_.spawned}
