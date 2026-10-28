@@ -72,7 +72,7 @@ from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import CheckResult, RerunForm
 from agentic.core.process.domain.reaping import ReapedProcess
-from agentic.core.process.domain.roles import PROMPTS_DIR, Role
+from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.stall import ChildActivity
@@ -313,10 +313,21 @@ class MemoryKnowledge:
 
 
 class MemoryPrompts:
-    """The system's own prompt files, with optional overrides by slug."""
+    """The system's own prompt files, with optional overrides by slug.
 
-    def __init__(self, **overrides: str):
+    What comes from disk is a snapshot, as in `FilesystemPrompts` (GH-409): read when the
+    double is built, a read error kept and raised by `raw` for that role. `overrides` is
+    not: it is consulted on every `raw`, so a test can change a prompt mid-run."""
+
+    def __init__(self, *, system_dir: Path = PROMPTS_DIR, **overrides: str):
         self.overrides = overrides
+        self._read: dict[str, tuple[str, Path] | OSError | UnicodeDecodeError] = {}
+        for slug in {role.slug for role in ROLES}:
+            path = system_dir / f"{slug}.md"
+            try:
+                self._read[slug] = (path.read_text(encoding="utf-8"), path)
+            except (OSError, UnicodeDecodeError) as error:
+                self._read[slug] = error
         # Seeded by slug; a role with none has an empty playbook.
         self.playbooks: dict[str, Playbook] = {}
 
@@ -326,8 +337,10 @@ class MemoryPrompts:
     def raw(self, role: Role) -> tuple[str, Path]:
         if role.slug in self.overrides:
             return self.overrides[role.slug], Path(f"/memory/{role.slug}.md")
-        path = PROMPTS_DIR / f"{role.slug}.md"
-        return path.read_text(), path
+        found = self._read[role.slug]
+        if isinstance(found, (OSError, UnicodeDecodeError)):
+            raise found
+        return found
 
 
 class MemoryFlags:

@@ -1,6 +1,7 @@
 import pytest
 
 from agentic.core.knowledge.adapters.filesystem import FilesystemKnowledge
+from agentic.core.knowledge.domain import knowledge as knowledge_domain
 
 FAMILIES = ("product", "engineering")
 GLOSSARY = "# Gym\n\n## Language\n\n**Gym**:\nA business.\n"
@@ -371,3 +372,24 @@ def test_the_line_cap_measures_the_writing_standards_too(tmp_path):
     assert domain.WRITING_STANDARDS in knowledge.criteria_files()
     messages = knowledge.over_cap({"WRITING_STANDARDS.md": "x\n" * 301})
     assert len(messages) == 1 and "WRITING_STANDARDS.md" in messages[0]
+
+
+def test_the_default_standards_are_the_text_of_construction(tmp_path, monkeypatch):
+    default = tmp_path / "default.md"
+    default.write_text("## Always\n\nOriginal default.\n", encoding="utf-8")
+    monkeypatch.setattr(knowledge_domain, "DEFAULT_STANDARDS", default)
+    adapter = FilesystemKnowledge(tmp_path / "product")
+    default.write_text("## Always\n\nRewritten after the ports were built.\n", encoding="utf-8")
+    assert "Original default." in adapter.standards()
+    assert "Rewritten" not in adapter.standards()
+
+
+def test_an_unreadable_default_does_not_stop_the_construction_and_fails_the_read(
+    tmp_path, monkeypatch
+):
+    default = tmp_path / "default.md"
+    default.write_bytes(b"\xff\xfe")
+    monkeypatch.setattr(knowledge_domain, "DEFAULT_STANDARDS", default)
+    adapter = FilesystemKnowledge(tmp_path / "product")
+    with pytest.raises(UnicodeDecodeError):
+        adapter.standards()
