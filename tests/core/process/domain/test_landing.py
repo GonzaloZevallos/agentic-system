@@ -72,7 +72,7 @@ EXPECTED = {
     "merge_conflict": "sync_master",
     "merge_failed": "diagnose",
     "master_moved": "wait",
-    "adr_number_taken": "diagnose",
+    "adr_number_taken": "escalate_adr",
     "perf_unverified": "none",
     "criteria_over_cap": "none",
     "criteria_unreadable": "none",
@@ -98,7 +98,7 @@ def test_every_refusal_still_has_a_step_when_every_budget_is_spent(refusal):
     )
     step = _step(refusal, spent, owners=("api",))
     assert isinstance(step, LandingStep) and step.refusal == refusal
-    assert step.kind in {"none", "wait", "diagnose", "file_followups_and_land"}
+    assert step.kind in {"none", "wait", "diagnose", "file_followups_and_land", "escalate_adr"}
 
 
 @pytest.mark.parametrize("refusal", get_args(rules.MergeRefusal))
@@ -1113,7 +1113,7 @@ NO_IMPORTANT_STEPS = [
     ("attempts exhausted", "attempts_exhausted", {}, {}, ("sync_master", ())),
     ("merge failed", "merge_failed", {}, {}, ("diagnose", ())),
     ("master moved", "master_moved", {}, {}, ("wait", ())),
-    ("adr number taken, ambiguous", "adr_number_taken", {}, {}, ("diagnose", ())),
+    ("adr number taken, ambiguous", "adr_number_taken", {}, {}, ("escalate_adr", ())),
     ("ci missing", "ci_missing", {}, {}, ("wait", ())),
     ("ci unreadable", "ci_unreadable", {}, {}, ("wait", ())),
     ("diagnosed", "merge_conflict", {"diagnoses": 1}, {}, ("none", ())),

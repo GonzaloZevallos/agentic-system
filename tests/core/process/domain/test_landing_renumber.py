@@ -42,23 +42,59 @@ def _spent(**over) -> LandingSpent:
     return replace(base, **over)
 
 
-def _step(collision, spent=None) -> LandingStep:
-    return landing.landing_step("adr_number_taken", _facts(collision), spent or _spent(), ())
+def _step(collision, spent=None, *, adr_escalated=False) -> LandingStep:
+    return landing.landing_step(
+        "adr_number_taken",
+        _facts(collision),
+        spent or _spent(),
+        (),
+        adr_escalated=adr_escalated,
+    )
 
 
 def test_a_clean_renaming_is_a_renumber_step():
     assert _step(RENAMING) == LandingStep("renumber", "adr_number_taken")
 
 
-def test_an_ambiguous_result_goes_to_diagnose_never_to_a_pass():
-    assert _step(AMBIGUOUS) == LandingStep("diagnose", "adr_number_taken")
+def test_an_ambiguous_result_asks_the_human_never_a_pass_or_a_restart():
+    assert _step(AMBIGUOUS) == LandingStep("escalate_adr", "adr_number_taken")
     assert _step(AMBIGUOUS, _spent(renumbers=0)).units == ()
 
 
-def test_the_cap_is_three_and_a_spent_cap_diagnoses():
+def test_the_cap_is_three_and_a_spent_cap_asks_the_human():
     assert landing.LANDING_RENUMBERS_MAX == 3
     assert _step(RENAMING, _spent(renumbers=2)).kind == "renumber"
-    assert _step(RENAMING, _spent(renumbers=3)).kind == "diagnose"
+    assert _step(RENAMING, _spent(renumbers=3)).kind == "escalate_adr"
+
+
+@pytest.mark.parametrize(
+    ("collision", "spent"),
+    [(AMBIGUOUS, _spent()), (RENAMING, _spent(renumbers=3))],
+    ids=["ambiguous", "capped-renaming"],
+)
+def test_once_asked_on_this_head_the_step_is_none(collision, spent):
+    assert _step(collision, spent, adr_escalated=True) == LandingStep("none", "adr_number_taken")
+
+
+@pytest.mark.parametrize("adr_escalated", [False, True])
+@pytest.mark.parametrize(
+    "spent",
+    [
+        _spent(),
+        _spent(renumbers=3),
+        _spent(passes=landing.LANDING_PASSES_MAX, syncs=landing.LANDING_SYNCS_MAX),
+    ],
+    ids=["fresh", "renumber-cap", "all-budgets-spent"],
+)
+@pytest.mark.parametrize("collision", [AMBIGUOUS, RENAMING], ids=["ambiguous", "renaming"])
+def test_this_refusal_never_reaches_diagnose_a_slice_or_a_restart(collision, spent, adr_escalated):
+    step = _step(collision, spent, adr_escalated=adr_escalated)
+    assert step.kind in {"renumber", "escalate_adr", "none"}
+    assert step.restart_why is None
+
+
+def test_asking_the_human_spends_no_budget_and_runs_no_model():
+    assert landing.run_kind_of("escalate_adr", "adr_number_taken") == "land_checks"
 
 
 def test_a_renumber_is_not_charged_to_passes_or_syncs():

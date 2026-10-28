@@ -45,11 +45,12 @@ LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
         "diagnose",
         "settle",
         "escalate_ledger",
+        "escalate_adr",
     }
 )
 """Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`, `renumber`),
 `landing_fix`'s (`fix`, `fix_important`, `rerun`, `file_followups_and_land`, `diagnose`,
-`settle`, `escalate_ledger`) and
+`settle`, `escalate_ledger`, `escalate_adr`) and
 `landing_slice`'s (`land_slice`, GH-297). A
 step outside the set is neither recorded nor spawned, so a refusal whose step is inert logs
 as it always did."""
@@ -246,17 +247,30 @@ def step_for(
         slicing=slicing,
         ledger_only=plan_settlement.ledger_only(refusal, facts, raw),
         pending=plan_settlement.pending(raw),
-        escalated=escalation_recorded(raw, facts.pr_head, refusal),
+        escalated=escalation_recorded(raw, facts.pr_head, refusal, "escalate_ledger"),
+        adr_escalated=escalation_recorded(
+            raw, facts.pr_head, refusal, "escalate_adr", resolved_only=True
+        ),
     )
 
 
-def escalation_recorded(raw: Mapping[str, object], head: str | None, refusal: str) -> bool:
-    """Whether the `landing` list holds an `escalate_ledger` entry for this head and refusal: the
-    one question the human was asked, never twice."""
+def escalation_recorded(
+    raw: Mapping[str, object],
+    head: str | None,
+    refusal: str,
+    kind: LandingStepKind,
+    *,
+    resolved_only: bool = False,
+) -> bool:
+    """Whether the `landing` list holds an entry of step `kind` for this head and refusal: the
+    one question the human was asked, never twice. `resolved_only` counts only an entry that
+    carries `resolved_at`, i.e. one written after its comment was posted, so a question whose
+    comment failed is asked again."""
     return any(
-        entry.get("step") == "escalate_ledger"
+        entry.get("step") == kind
         and entry.get("head") == head
         and entry.get("refusal") == refusal
+        and (not resolved_only or bool(entry.get("resolved_at")))
         for entry in live_entries(raw)
     )
 
