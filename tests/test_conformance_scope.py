@@ -23,14 +23,17 @@ from types import ModuleType
 import pytest
 
 from agentic.core.process.application.ports import Ports
+from agentic.core.process.domain.roles import DEVELOPER, PM, Role
 from tests.conformance import (
     COVERED,
     UNCOVERED,
     Uncovered,
     perf_lock_stops_with_the_flag,
     perf_runner_stops_with_the_flag,
+    prompts_keep_an_unreadable_file_for_its_role,
+    prompts_serve_the_text_of_construction,
 )
-from tests.fakes import FakePerfLock, FakePerfRunner, FakeStopFlag, memory_ports
+from tests.fakes import FakePerfLock, FakePerfRunner, FakeStopFlag, MemoryPrompts, memory_ports
 
 REPO = Path(__file__).resolve().parent.parent
 PORTS = REPO / "agentic" / "core" / "process" / "application" / "ports.py"
@@ -376,3 +379,42 @@ def test_the_stop_contract_refuses_a_runner_and_a_lock_that_ignore_the_flag(tmp_
     with pytest.raises(AssertionError, match="PerfLock.acquire answered True"):
         perf_lock_stops_with_the_flag(lock, FakeStopFlag())
     assert lock.released == 1  # the contract gives back what the deaf lock took
+
+
+def test_the_prompts_double_keeps_the_snapshot_contract(tmp_path):
+    prompts_serve_the_text_of_construction(lambda d: MemoryPrompts(system_dir=d), tmp_path, PM)
+    other = tmp_path / "other"
+    other.mkdir()
+    prompts_keep_an_unreadable_file_for_its_role(
+        lambda d: MemoryPrompts(system_dir=d), other, PM, DEVELOPER
+    )
+
+
+class _LivePrompts:
+    """A `Prompts` that reads the disk on every call: what the contract refuses."""
+
+    def __init__(self, system_dir: Path):
+        self.system_dir = system_dir
+
+    def raw(self, role: Role) -> tuple[str, Path]:
+        path = self.system_dir / f"{role.slug}.md"
+        return path.read_text(encoding="utf-8"), path
+
+
+class _EagerPrompts:
+    """A `Prompts` that reads everything in its constructor and lets the error out."""
+
+    def __init__(self, system_dir: Path):
+        self.texts = {
+            path.stem: path.read_text(encoding="utf-8") for path in system_dir.glob("*.md")
+        }
+
+    def raw(self, role: Role) -> tuple[str, Path]:
+        return self.texts[role.slug], Path(role.slug)
+
+
+def test_the_snapshot_contract_refuses_a_port_that_reads_live_or_raises_when_built(tmp_path):
+    with pytest.raises(AssertionError, match="not the text of construction"):
+        prompts_serve_the_text_of_construction(_LivePrompts, tmp_path, PM)
+    with pytest.raises(AssertionError, match="building the port raised"):
+        prompts_keep_an_unreadable_file_for_its_role(_EagerPrompts, tmp_path, PM, DEVELOPER)

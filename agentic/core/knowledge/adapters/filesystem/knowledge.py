@@ -19,6 +19,13 @@ from ...domain import knowledge, knowledge_index
 class FilesystemKnowledge:
     def __init__(self, product_dir: Path):
         self.product_dir = product_dir
+        # The system's default standards are fixed when the ports are built (GH-409); a
+        # read error is kept and raised by the read that needs the default.
+        self._default_standards: str | OSError | UnicodeDecodeError
+        try:
+            self._default_standards = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            self._default_standards = error
 
     @property
     def glossary_path(self) -> Path:
@@ -120,7 +127,11 @@ class FilesystemKnowledge:
     def _standards_text(self, root: Path) -> str:
         """The product's `CODING_STANDARDS.md`, or the system's default (ADR-0012)."""
         text = _read(root / knowledge.STANDARDS)
-        return text if text is not None else knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
+        if text is not None:
+            return text
+        if isinstance(self._default_standards, (OSError, UnicodeDecodeError)):
+            raise self._default_standards
+        return self._default_standards
 
     def standards(self, root: Path | None = None, whole: bool = True) -> str:
         """The engineering standards, whole when the caller is a verifier and through the

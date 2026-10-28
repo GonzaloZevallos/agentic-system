@@ -115,7 +115,9 @@ ChangeCategory = FindingCategory | CopyCategory | Literal["definition"]
 # an external one, so the poller never retakes it by itself, `disk_full` an attempt that
 # broke with the disk it writes to full, derived from what was measured (free bytes and
 # inodes, an `ENOSPC` caught as structured data), never from the error's text (GH-391,
-# ADR-0069): external, because the machine, not the role, failed.
+# ADR-0069): external, because the machine, not the role, failed, `render` a role prompt
+# that could not be made (a placeholder nobody fills, a file the run's snapshot could not
+# read; GH-409): our own bug, never retried and never charged, so not external.
 FailureReason = Literal[
     "schema",
     "check",
@@ -127,6 +129,7 @@ FailureReason = Literal[
     "disk_full",
     "sdk",
     "stall",
+    "render",
     "other",
 ]
 # What the Landing Diagnoser says about an approved pull request the landing could not land

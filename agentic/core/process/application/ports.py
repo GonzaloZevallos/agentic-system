@@ -394,7 +394,14 @@ class ProductKnowledge(Protocol):
 
 
 class Prompts(Protocol):
-    """A role's prompt, raw, and where it came from: overlay or default (ADR-0005)."""
+    """A role's prompt, raw, and where it came from: overlay or default (ADR-0005).
+
+    The texts are a snapshot: `raw` serves what was on disk when the port was built, never
+    what is there now. The graph builds the ports on every node and keeps the first
+    `prompts` it built for each run (`_PortsPerRun`), so a run renders every role from one
+    version of the prompts (GH-409). A file that could not be read does not stop the
+    construction: `raw` for that role raises the error. The playbook is not part of the
+    snapshot."""
 
     def raw(self, role: Role) -> tuple[str, Path]: ...
 

@@ -134,6 +134,28 @@ class RoleFailure(Escalating):
         super().__init__(role, failures, reason)
 
 
+class PromptFailure(Escalating):
+    """The role's prompt could not be made: it has a placeholder nobody fills, or the
+    snapshot of its file could not be read (GH-409). Not an attempt of the role: the
+    runner was never called, so it costs nothing and is not retried (the same text fails
+    the same way). It is a bug of ours, so it is an own failure, with its own reason
+    `render`, and an escalation the poller sees."""
+
+    def __init__(self, role: Role, error: Exception, section: str):
+        message = f"prompt of {role.name} cannot be rendered: {error}"
+        failure: Failure = {
+            "role": role.name,
+            "attempt": 1,
+            "error": message,
+            "cost_usd": 0.0,
+            "session_id": "",
+            "reason": "render",
+            "slug": role.slug,
+            "section": section,
+        }
+        super().__init__(role, [failure], message)
+
+
 class TaskCapReached(Escalating):
     """The run reached its money cap before this role's next attempt, be it the
     first or the retry after a paid failure."""
@@ -336,6 +358,20 @@ def load_prompt(
     `delivery_checks` (GH-358, `presubmit.tier_section`), appended after the playbook the same
     way and covered by the hash the same way; empty, the prompt and its hash are what they
     were."""
+    raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)
+    return with_playbook(raw, rendered, role, ports, tiers)
+
+
+def render_role_prompt(
+    role: Role,
+    cfg: Configuration,
+    ports: Ports,
+    vocabulary: dict[str, str],
+    **placeholders: object,
+) -> tuple[str, Prompt]:
+    """The raw text the port holds for the role and what `render` made of it: the one step
+    of `load_prompt` that fails on the prompt's own text (a placeholder nobody fills, a
+    file the snapshot could not read) and not on the playbook, which is read live."""
     raw, source = ports.prompts.raw(role)
     rendered = render(
         raw,
@@ -345,6 +381,13 @@ def load_prompt(
         flags=describe_flags(vocabulary),
         **placeholders,
     )
+    return raw, rendered
+
+
+def with_playbook(raw: str, rendered: Prompt, role: Role, ports: Ports, tiers: str) -> Prompt:
+    """`rendered` with the role's playbook and the product's tiers section appended
+    (`load_prompt`'s own doc has the hash rule)."""
+    source = rendered.source
     text = playbook.section(ports.prompts.playbook(role))
     if not text and not tiers:
         return rendered
@@ -966,7 +1009,13 @@ async def run_role(
     session again."""
     section = section or role.name
     vocabulary = ports.flags.load()
-    loaded = load_prompt(role, cfg, ports, vocabulary, tiers=tiers, **placeholders)
+    try:
+        raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)
+    except (ValueError, OSError) as exc:
+        # Only the prompt's own text: `render`'s ValueError and the read error the snapshot
+        # kept (`raw()` re-raises it). The playbook, the flags and the tiers stay outside.
+        return None, {"current_role": role.name, **escalation(PromptFailure(role, exc, section))}
+    loaded = with_playbook(raw, rendered, role, ports, tiers)
     patch: TaskState = {
         "current_role": role.name,
         "prompts": {role.slug: loaded.hash},

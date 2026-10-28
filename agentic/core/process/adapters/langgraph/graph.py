@@ -38,6 +38,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
@@ -59,7 +60,7 @@ from ...application.full_checks import full_checks
 from ...application.integrate import integrate, integrate_turn
 from ...application.limits import RunLimits
 from ...application.plan import plan
-from ...application.ports import Ports
+from ...application.ports import Ports, ProductKnowledge, Prompts
 from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
@@ -122,18 +123,29 @@ class _PortsPerRun:
     one for every task: the graph is built once, at import (`agentic.composition`), and
     a `langgraph dev` server runs every task through it, so one per graph would hand the
     second task the first one's spend. One per thread id, which is the task id
-    (ADR-0003). The CLI is one run per process and never sees the difference."""
+    (ADR-0003). The CLI is one run per process and never sees the difference.
+
+    The same holds for the texts a run renders (GH-409): `ports_for` builds the ports again
+    on every node, and the prompts and the knowledge (with the default standards) read their
+    texts when built, so the first ones built for a thread and a product are kept and every
+    later node of that run gets them. A stage0 update between two nodes then changes nothing
+    the later node renders. A call without a thread id has no run to pin to and keeps none."""
 
     def __init__(self, ports_for: PortsFor, for_task: ForTask):
         self.ports_for = ports_for
         self.for_task = for_task
         self.limits: dict[str, RunLimits] = {}
+        self.texts: dict[tuple[str, Path], tuple[Prompts, ProductKnowledge]] = {}
 
     def __call__(self, cfg: Configuration, config: RunnableConfig | None) -> Ports:
         thread = str(((config or {}).get("configurable") or {}).get("thread_id", ""))
         limits = self.limits.setdefault(thread, RunLimits())
         ports = self.ports_for(cfg)
         if thread:
+            prompts, knowledge = self.texts.setdefault(
+                (thread, cfg.product_dir), (ports.prompts, ports.knowledge)
+            )
+            ports = replace(ports, prompts=prompts, knowledge=knowledge)
             ports = self.for_task(ports, thread)
         return replace(ports, limits=limits.sized(cfg.max_concurrent_roles))
 

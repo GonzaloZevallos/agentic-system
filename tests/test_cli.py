@@ -6039,6 +6039,53 @@ async def test_a_run_whose_archive_notice_landed_enters_with_no_failure(monkeypa
     assert not ports.documents.saved[-1].get("tracker_failures")
 
 
+class Raises:
+    """A graph double whose `ainvoke` raises the way a node that crashed does."""
+
+    def compile(self, checkpointer):
+        return self
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values={}, next=(), interrupts=())
+
+    async def ainvoke(self, task, config):
+        raise RuntimeError("a node broke")
+
+
+# GH-409 diagnostic of the crash path, not of the prompt fix: an exception that escapes a
+# node must leave the lock record marked, so the poller retakes it instead of leaving the
+# task in `developing` with no process. If it fails, the outside finding of GH-409 holds
+# (cli.py / lock / retake rules are not this task's to change): mark it xfail(strict=True).
+@pytest.mark.anyio
+async def test_a_runtime_error_inside_a_node_leaves_a_record_the_poller_retakes(
+    monkeypatch, tmp_path
+):
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+    from agentic.core.process.domain import rules
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Raises())
+    monkeypatch.setattr(cli.telemetry, "system_version", lambda: "abc123")
+    lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "boot-1")
+    with pytest.raises(RuntimeError, match="a node broke"):
+        await cli._run(
+            {"id": "T-9", "title": "t", "description": "d"},
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+            stop=cli.StopCause(),
+        )
+    record = lock.read("T-9")
+    assert record is not None and record.crashed_version == "abc123"
+    facts = rules.LockFacts(other_boot=False, alive=False, crashed_version=record.crashed_version)
+    verdict = rules.interrupted_run(
+        {"status": "developing"}, facts, 0, version_key=rules.crash_version_key("def456")
+    )
+    assert verdict == "retake_crash"
+
+
 # --- agentic restore (GH-406) --------------------------------------------------------------
 
 
