@@ -391,3 +391,5 @@ tasks:
     decisions: 2
   GH-398@review:
     cost_usd: 0.0636
+  GH-399@review:
+    cost_usd: 0.0819
