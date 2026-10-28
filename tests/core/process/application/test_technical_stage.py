@@ -1371,3 +1371,16 @@ async def test_escalate_labels_a_pause_the_predicate_keeps_for_a_human(cfg):
         ports = memory_ports()
         await escalate(state, cfg, ports)
         assert ports.tracker.labels == [("GH-12", "needs-human")]
+
+
+async def test_an_escalation_comment_that_keeps_failing_still_raises_out_of_the_node(cfg):
+    # Characterisation (GH-389): the escalation notice is NOT best effort. The document is
+    # saved and the label applied, then a GitHub error on the comment ends the node as it
+    # always did; the best-effort `note` is only for the informative callers.
+    state = {**TASK, "escalated": "PM could not decide", "questions_for_human": ["Currency?"]}
+    ports = memory_ports()
+    ports.tracker.comment_failures = 5
+    with pytest.raises(ValueError, match="gh issue failed"):
+        await escalate(state, cfg, ports)
+    assert ports.documents.last == state
+    assert ports.tracker.labels == [("GH-12", "needs-human")] and ports.tracker.comments == []
