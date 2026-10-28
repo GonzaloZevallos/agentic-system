@@ -17,7 +17,9 @@ from typing import Literal
 ADR_DIR = "docs/adr"
 _NAME = re.compile(r"^(\d{4})-.+\.md$")
 
-AmbiguityReason = Literal["duplicate_own_number", "cites_master_after_sync", "unclassified_token"]
+AmbiguityReason = Literal[
+    "duplicate_own_number", "cites_master_after_sync", "unclassified_token", "range"
+]
 
 
 def number_of(name: str) -> str | None:
@@ -54,10 +56,14 @@ class Renaming:
 
 @dataclass(frozen=True)
 class Ambiguous:
-    """The rewrite cannot be decided mechanically; `detail` names the path and the line."""
+    """The rewrite cannot be decided mechanically; `detail` names the path and the line.
+    `moves`: the `(old_path, new_path)` pairs `renumber` was given, sorted, so whoever
+    escalates can say what the renumbering would have been; empty when no renaming was
+    computed (`collisions` finding a duplicate own number)."""
 
     reason: AmbiguityReason
     detail: str
+    moves: tuple[tuple[str, str], ...] = ()
 
 
 def _basename(path: str) -> str:
@@ -130,6 +136,19 @@ _ITEM = r"\d{4}(?!\d)"
 _TOKEN = re.compile(r"(?<!\d)\d{4}(?!\d)")
 _DIGITS = re.compile(r"\d{4}")
 
+# What can sit between the two ends of a range of ADR numbers, as a regex alternation: an
+# ellipsis (`…`, `...`, `..`), an en or em dash, a hyphen directly before a digit (so the `-`
+# of `ADR-0054` and of `0054-slug.md` is never one: no number follows it) and the words
+# `to`, `through` and `a`. A closed set: a range written any other way is not seen.
+_RANGE_SEPARATOR = r"(?:…|\.\.\.|\.\.|–|—|-(?=\d)|\bto\b|\bthrough\b|\ba\b)"
+# Both ends of a range, either with an `ADR-` or `ADR ` prefix, whitespace around the
+# separator. Lookahead on the second end, so ends shared by two ranges are both found.
+_RANGE = re.compile(
+    r"(?<!\d)(?P<first>\d{4})(?!\d)(?=\s*"
+    + _RANGE_SEPARATOR
+    + r"\s*(?:ADR[- ])?(?P<last>\d{4})(?!\d))"
+)
+
 
 def _rows(text: str) -> list[tuple[int, str]]:
     """Each line of `text` with the offset it starts at, without its line break."""
@@ -160,7 +179,10 @@ def renumber(
     `adr/` prefix, anywhere; (b) `ADR-NNNN` and `ADR NNNN`; (c) a list after one `ADR` or
     `ADRs` head joined by `,`, `and`, `y` or `/`. (b) and (c) are rewritten only on lines
     the branch's own commits added. `trees` maps a commit to the ADR names in its tree.
-    A renumbered number left on an own line outside the grammar makes it `Ambiguous`."""
+    A renumbered number left on an own line outside the grammar makes it `Ambiguous`, and so
+    does one that is the end of a range (`ADR-0054…ADR-0060`): moving one end silently would
+    change what the range names. Every `Ambiguous` carries `moves`."""
+    carried = tuple(sorted(moves.items()))
     numbers: dict[str, str] = {}
     names: dict[str, str] = {}
     for old, new in sorted(moves.items()):
@@ -168,7 +190,7 @@ def renumber(
         if old_number is None or new_number is None:
             raise ValueError(f"{old} -> {new} is not a move between ADR names")
         if old_number in numbers:
-            return Ambiguous("duplicate_own_number", f"{old_number} is moved twice: {old}")
+            return Ambiguous("duplicate_own_number", f"{old_number} is moved twice: {old}", carried)
         numbers[old_number] = new_number
         names[_basename(old)] = _basename(new)
         if old not in texts:
@@ -199,6 +221,13 @@ def renumber(
         covered: list[tuple[int, int]] = []
         problems: list[Ambiguous] = []
 
+        for index, (_, line) in enumerate(rows, 1):
+            if line not in own:
+                continue
+            for ends in _RANGE.finditer(line):
+                if ends.group("first") in numbers or ends.group("last") in numbers:
+                    return Ambiguous("range", f"{path}:{index}: {line}", carried)
+
         def substitute(found: re.Match[str]) -> str:
             if found.group("name") is not None:
                 covered.append(found.span())
@@ -208,7 +237,9 @@ def renumber(
                 return found.group(0)
             cited = [n for n in _DIGITS.findall(found.group("items")) if n in numbers]
             if any(held(commit, n) for n in cited for commit in own[line]):
-                problems.append(Ambiguous("cites_master_after_sync", f"{path}:{index}: {line}"))
+                problems.append(
+                    Ambiguous("cites_master_after_sync", f"{path}:{index}: {line}", carried)
+                )
             covered.append(found.span())
             return _DIGITS.sub(lambda i: numbers.get(i.group(0), i.group(0)), found.group(0))
 
@@ -221,7 +252,7 @@ def renumber(
             for token in _TOKEN.finditer(line):
                 spot = start + token.start()
                 if token.group(0) in numbers and not any(a <= spot < b for a, b in covered):
-                    return Ambiguous("unclassified_token", f"{path}:{index}: {line}")
+                    return Ambiguous("unclassified_token", f"{path}:{index}: {line}", carried)
         return rewritten
 
     written: dict[str, str] = {}
