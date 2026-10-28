@@ -629,14 +629,15 @@ class GitWorkspace:
         kept = [name for status, name in rows if status in ("A", "M") and name]
         if against is None:
             return tuple(kept)
-        return tuple(
-            name for name in kept if self._blob(path, head, name) != self._blob(path, against, name)
+        # One call whatever the size of the delivery: the paths whose blob differs between
+        # `against` and `head`, a path `against` lacks included, are the ones to keep.
+        differing = self._run(
+            *_PLAIN, "diff", "--name-only", "--no-renames", "-z", against, head, cwd=path
         )
-
-    def _blob(self, path: Path, ref: str, name: str) -> str | None:
-        """The blob id of `name` at `ref`, or None when `ref` has no such path."""
-        result = self._run("rev-parse", "--verify", "--quiet", f"{ref}:{name}", cwd=path)
-        return result.stdout.strip() if result.returncode == 0 else None
+        if differing.returncode != 0:
+            raise GitError(f"git diff {against} {head} failed: {differing.stderr.strip()}")
+        changed = set(differing.stdout.split("\0"))
+        return tuple(name for name in kept if name in changed)
 
     def fetched_upstream(self) -> str | None:
         try:
