@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -70,11 +70,13 @@ from .task import (
     FindingRecord,
     FinishedPatch,
     FullChecksRecord,
+    LandingEntry,
     LapsePauseEntry,
     MergeOutcome,
     PartRecord,
     PauseEntry,
     PullRequest,
+    Restoration,
     ResumedPauseEntry,
     ReturnedBy,
     ReviewKind,
@@ -1676,6 +1678,176 @@ def next_archive_run(refs: Sequence[str], live: Sequence[str], task_id: str) -> 
     return None
 
 
+# Restoring an archived, approved task (GH-406, ADR-0048 addendum). Like `next_archive_run`,
+# the rule reads the state the adapter observed and says what is still owed, so a restore
+# that was cut off finishes from what it finds instead of from a log of what it did.
+
+RestoreRefusal = Literal[
+    "no_archive",
+    "no_document",
+    "not_delivered",
+    "pr_merged",
+    "pr_base_gone",
+    "head_disagrees",
+    "head_not_reachable",
+    "remote_diverged",
+    "pr_head_moved",
+    "already_restored",
+]
+"""Why `restore_steps` refuses, in the order it checks them. The use case adds two of its
+own, `task_live` (a run holds the lock's task) and `push_refused` (the remote said no).
+
+- `no_archive`: no ref under the prefix is the archived task branch.
+- `no_document`: the archive holds no readable task document.
+- `not_delivered`: the document is not a delivered task -- not `ready_for_review`, no pull
+  request, a unit not approved, no head the review approved, or no pull request found.
+- `pr_merged`: the pull request already merged; there is nothing to bring back.
+- `pr_base_gone`: the branch the pull request targets no longer exists.
+- `head_disagrees`: the pull request does not carry the approved head.
+- `head_not_reachable`: a head to restore is not an ancestor of its archived branch (or the
+  archived branch is missing): the archive does not hold what the review approved.
+- `remote_diverged`: the remote task branch exists at another commit.
+- `pr_head_moved`: a retry of this very restore finds the pull request moved off the head
+  the restoration recorded.
+- `already_restored`: the live document holds a restoration from another archive."""
+
+RestoreStep = Literal["archive_live", "create_refs", "write_document", "push", "reopen", "settle"]
+"""What a restore still owes, in the order it does it: archive the live branches of the task
+that are at another head, create the branches at the recorded shas, write the document, push
+the recorded sha when the remote lacks the branch, reopen a closed pull request, settle the
+plan rows."""
+
+RestorePrState = Literal["open", "closed", "merged"]
+
+
+@dataclass(frozen=True)
+class RestoreObserved:
+    """The facts `restore_steps` reads, all observed by the adapter and none computed there.
+
+    `archive` is the prefix restored from and `archived` the refs under it. `state` is the
+    archived task document (`None` when unreadable). `held` the live document's restorations
+    (empty when it has none or no live document exists). `live_heads` the heads of the live
+    branches of the task, by branch name. `reachable` says, by branch name, whether
+    `restore_heads` of it is an ancestor of its archived branch; a branch not in it is not.
+    `remote_head` is the remote task branch's head (`None` when absent). `pr_state`,
+    `pr_head` and `pr_base_exists` describe the task's pull request. `settled` is whether
+    the live document has no plan row left for `plan_settlement.pending`."""
+
+    task_id: str
+    archive: str
+    archived: Sequence[str]
+    state: TaskState | None
+    held: Sequence[Restoration]
+    live_heads: Mapping[str, str]
+    reachable: Mapping[str, bool]
+    remote_head: str | None
+    pr_state: RestorePrState | None
+    pr_head: str | None
+    pr_base_exists: bool
+    settled: bool
+
+
+@dataclass(frozen=True)
+class RestoreSteps:
+    """The answer of `restore_steps`: a `refusal` and no steps, or the `steps` still owed
+    (possibly none, when the restore is already done)."""
+
+    refusal: RestoreRefusal | None = None
+    steps: tuple[RestoreStep, ...] = ()
+
+
+def restore_heads(state: TaskState, task_id: str) -> dict[str, str]:
+    """The branches a restore creates and the sha each is created at (GH-406): the task
+    branch at `approved_head(state)` -- nothing else; a head the task moved after its review
+    is not restored -- and each subtask branch at its document `reviewed_head`. A subtask with
+    no `reviewed_head` gets no branch. Commits the archive itself made stay under its prefix."""
+    heads: dict[str, str] = {}
+    if head := approved_head(state):
+        heads[task_branch(task_id)] = head
+    for sid, unit in state.get("subtasks", {}).items():
+        if reviewed := unit.get("reviewed_head"):
+            heads[subtask_branch(task_id, sid)] = reviewed
+    return heads
+
+
+def _archived_branch(prefix: str, branch: str, refs: Sequence[str]) -> str | None:
+    """The ref among `refs` that is `branch` archived under `prefix`, in either spelling
+    (`archive_ref`'s, and the hand-archived one without `agentic/`), or `None`."""
+    spellings = (f"{prefix}/{branch}", f"{prefix}/{branch.removeprefix('agentic/')}")
+    return next((ref for ref in refs if ref in spellings), None)
+
+
+def _delivered(state: TaskState) -> bool:
+    """A task that reached the end of a delivery with every unit approved and a pull request."""
+    return bool(
+        state.get("status") == "ready_for_review"
+        and state.get("pull_request")
+        and all_approved(state)
+        and approved_head(state)
+    )
+
+
+def _restore_refusal(o: RestoreObserved, heads: Mapping[str, str]) -> RestoreRefusal | None:
+    """The first reason `o` cannot be restored, `None` when it can."""
+    if _archived_branch(o.archive, task_branch(o.task_id), o.archived) is None:
+        return "no_archive"
+    if o.state is None:
+        return "no_document"
+    if any(row.get("archive") != o.archive for row in o.held):
+        return "already_restored"
+    if not _delivered(o.state) or o.pr_state is None:
+        return "not_delivered"
+    if o.pr_state == "merged":
+        return "pr_merged"
+    if not o.pr_base_exists:
+        return "pr_base_gone"
+    head = heads[task_branch(o.task_id)]
+    if o.held and not same_commit(o.held[-1].get("head"), o.pr_head):
+        return "pr_head_moved"
+    if not same_commit(head, o.pr_head):
+        return "head_disagrees"
+    if o.remote_head is not None and not same_commit(head, o.remote_head):
+        return "remote_diverged"
+    if not all(
+        o.reachable.get(branch) is True and _archived_branch(o.archive, branch, o.archived)
+        for branch in heads
+    ):
+        return "head_not_reachable"
+    return None
+
+
+def restore_steps(o: RestoreObserved) -> RestoreSteps:
+    """What restoring `o.archive` still owes (GH-406), from the observed state alone: a
+    closed refusal, or the steps in the order they run. A step is owed until its effect is
+    observable, so a retry after any cut resumes where the last run stopped:
+
+    - `archive_live`: a live branch of the task is at another head than the one to restore
+      (a live branch already at it is the restored one, and stays);
+    - `create_refs`: some branch to restore is not live (after the archive, none is);
+    - `write_document`: the live document holds no restoration from this archive;
+    - `push`: the remote has no task branch;
+    - `reopen`: the pull request is closed;
+    - `settle`: the live document still has plan rows to settle."""
+    heads = restore_heads(o.state, o.task_id) if o.state is not None else {}
+    if refusal := _restore_refusal(o, heads):
+        return RestoreSteps(refusal=refusal)
+    stale = any(not same_commit(heads.get(branch), live) for branch, live in o.live_heads.items())
+    steps: list[RestoreStep] = []
+    if stale:
+        steps.append("archive_live")
+    if stale or any(branch not in o.live_heads for branch in heads):
+        steps.append("create_refs")
+    if not o.held:
+        steps.append("write_document")
+    if o.remote_head is None:
+        steps.append("push")
+    if o.pr_state == "closed":
+        steps.append("reopen")
+    if not o.settled:
+        steps.append("settle")
+    return RestoreSteps(steps=tuple(steps))
+
+
 # The graph node that runs the subtasks. The graph's own `PIPELINE` constant has this value
 # and keeps it; the domain cannot import the adapter, so the rule that reads a pending node
 # name holds its own spelling, the way `after_integrate` returns the strings.
@@ -2543,14 +2715,48 @@ def important_pass_spent(state: Mapping[str, object], *, resolved_only: bool = F
     return passes >= LANDING_IMPORTANT_PASSES_MAX
 
 
+def _restoration_cut(state: Mapping[str, object]) -> int | None:
+    """The `landing_cut` of the last well-formed restoration of `state`, `None` when there is
+    none. A value that is not a list, a row that is not a mapping or a cut that is not an int
+    is skipped: a malformed marker cuts nothing, the document reads as it did before it."""
+    rows = state.get("restorations")
+    for row in reversed(rows if isinstance(rows, list) else []):
+        cut = row.get("landing_cut") if isinstance(row, Mapping) else None
+        if isinstance(cut, int) and not isinstance(cut, bool):
+            return cut
+    return None
+
+
+def restored(state: Mapping[str, object]) -> bool:
+    """Whether the task was brought back from an archive (GH-406): its document holds a
+    restoration. The one place that asks."""
+    return _restoration_cut(state) is not None
+
+
+def live_landing(state: Mapping[str, object]) -> list[LandingEntry]:
+    """The `landing` entries of the run now living (GH-406): those after the last
+    restoration's `landing_cut`, the whole list when the task was never restored. The one
+    function that applies the cut -- every reader that decides a terminal, idempotency or
+    in-flight fact from `landing` takes its entries here; only the budget counters
+    (`important_pass_spent`, `passes`, `renumbers`) and the writers, which rewrite by index,
+    read the whole list. The cut is a position in the raw list, so it is applied before a
+    stray non-mapping row is dropped; a cut past the end leaves nothing and a negative one
+    nothing hidden. A missing or malformed `landing` reads as empty."""
+    raw = state.get("landing")
+    entries = raw if isinstance(raw, list) else []
+    cut = _restoration_cut(state)
+    kept = entries[max(cut, 0) :] if cut is not None else entries
+    return cast("list[LandingEntry]", [entry for entry in kept if isinstance(entry, Mapping)])
+
+
 def landing_open(state: TaskState) -> bool:
     """A landing pass is in flight (GH-239): the last `landing` entry is not resolved and
     some subtask is reopened for it -- `returned`, `pending` or `delivered` awaiting its
     review. `domain.landing.landing_open` is this, under the landing's own name. An entry
-    written before the pull request existed (`before_pr`) is never one."""
-    document: Mapping[str, object] = state  # `landing` is a document key, not a state field
-    entries = document.get("landing")
-    if not isinstance(entries, list) or not entries or entry_closed(entries[-1]):
+    written before the pull request existed (`before_pr`) is never one. Entries from before
+    a restoration are not read (`live_landing`)."""
+    entries = live_landing(state)
+    if not entries or entry_closed(entries[-1]):
         return False
     if before_pr(entries[-1]):
         return False

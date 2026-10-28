@@ -1138,14 +1138,11 @@ def _status_of(value: object) -> SubtaskStatus | None:
 
 def _landing_view(raw: Mapping[str, object]) -> TaskState:
     """The part of the document `rules.landing_open` reads -- the `landing` entries and each
-    subtask's status -- as a `TaskState`, so the one definition of an open landing is reused."""
+    subtask's status -- as a `TaskState`, so the one definition of an open landing is reused.
+    The entries are the live ones (`rules.live_landing`): what came before a restoration is
+    not part of the view, so neither `landing_open` nor `resume_owed` reads it."""
     state: TaskState = {"id": "", "title": "", "description": ""}
-    entries = raw.get("landing")
-    state["landing"] = (
-        [entry_of(entry) for entry in entries if isinstance(entry, Mapping)]
-        if isinstance(entries, list)
-        else []
-    )
+    state["landing"] = [entry_of(entry) for entry in rules.live_landing(raw)]
     units = raw.get("subtasks")
     subtasks: dict[str, Subtask] = {}
     for name, unit in units.items() if isinstance(units, Mapping) else []:

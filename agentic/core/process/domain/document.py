@@ -200,6 +200,10 @@ def render(
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
         **({"followups_filed": True} if state.get("followups_filed") else {}),
+        # The restorations of an archived task (GH-406): each row cuts the `landing` list
+        # (`rules.live_landing`). Written only when there is one, so every document without
+        # a restore is byte-identical to one written before.
+        **({"restorations": r} if (r := state.get("restorations")) else {}),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
