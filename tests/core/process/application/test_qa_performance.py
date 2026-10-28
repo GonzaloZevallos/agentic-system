@@ -4,9 +4,13 @@ system builds, the settling writer and the guarantee that nothing runs in a task
 
 from __future__ import annotations
 
+import time
+
+import anyio
 import pytest
 
 from agentic.core.process.application.perf import PerfInterrupted
+from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.qa_performance import qa_performance
 from agentic.core.process.application.review import review
 from agentic.core.process.domain import roles, rules
@@ -227,6 +231,60 @@ async def test_an_interrupt_leaves_no_table_no_run_no_lock_and_the_node_still_du
     (made,) = ports.workspace.detached
     assert ports.workspace.removed_checkouts[-1] == made
     assert rules.qa_performance_due(state)
+
+
+async def test_a_stop_during_the_measurement_writes_nothing_and_leaves_the_node_due():
+    class Stopped(FakePerfRunner):
+        def run(self, checkout, command, extra_env, timeout_s):
+            raise RunStopped()
+
+    state = state_of()
+    role, lock = approving(), FakePerfLock()
+    ports = memory_ports(
+        role,
+        stack=MemoryStack(performance=declared()),
+        perf_runner=Stopped(),
+        perf_lock=lock,
+    )
+    with pytest.raises(RunStopped):
+        await qa_performance(state, CFG, ports)
+    assert role.calls == [] and ports.documents.saved == []
+    assert lock.released == 1
+    (made,) = ports.workspace.detached
+    assert ports.workspace.removed_checkouts[-1] == made
+    assert state.get("findings", []) == [] and "QA Performance" not in state["sections"]
+    assert rules.qa_performance_due(state)
+
+
+async def test_the_measurement_does_not_block_the_event_loop():
+    class Slow(FakePerfRunner):
+        def run(self, checkout, command, extra_env, timeout_s):
+            time.sleep(0.3)
+            return super().run(checkout, command, extra_env, timeout_s)
+
+    ticks = 0
+    done = anyio.Event()
+    ports = memory_ports(
+        approving(),
+        stack=MemoryStack(performance=declared()),
+        perf_runner=Slow(measured(50)),
+        perf_lock=FakePerfLock(),
+    )
+
+    async def ticker():
+        nonlocal ticks
+        while not done.is_set():
+            await anyio.sleep(0.01)
+            ticks += 1
+
+    async def node():
+        await qa_performance(state_of(), CFG, ports)
+        done.set()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(ticker)
+        tg.start_soon(node)
+    assert ticks >= 5
 
 
 async def test_a_blocking_finding_of_the_role_returns_even_when_every_budget_is_within():
