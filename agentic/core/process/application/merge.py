@@ -333,6 +333,19 @@ def _facts(
     )
 
 
+def settlement_facts(
+    task_id: str,
+    raw: TaskState,
+    pull_request: PullRequest | None,
+    number: int,
+    master: str | None,
+) -> rules.MergeFacts:
+    """The facts `merge_task` starts from before it reads any diff, a worktree or the CI --
+    the builder `agentic restore` asks `plan_settlement.settleable` over, so a settlement
+    and a merge never read a document two ways. No eval set is read (`in_eval_set` is `None`)."""
+    return _merge_facts(task_id, raw, pull_request, None, number, master)
+
+
 def run_checks(
     task_id: str,
     raw: TaskState,

@@ -1769,7 +1769,7 @@ def restore_heads(state: TaskState, task_id: str) -> dict[str, str]:
     return heads
 
 
-def _archived_branch(prefix: str, branch: str, refs: Sequence[str]) -> str | None:
+def archived_branch(prefix: str, branch: str, refs: Sequence[str]) -> str | None:
     """The ref among `refs` that is `branch` archived under `prefix`, in either spelling
     (`archive_ref`'s, and the hand-archived one without `agentic/`), or `None`."""
     spellings = (f"{prefix}/{branch}", f"{prefix}/{branch.removeprefix('agentic/')}")
@@ -1788,7 +1788,7 @@ def _delivered(state: TaskState) -> bool:
 
 def _restore_refusal(o: RestoreObserved, heads: Mapping[str, str]) -> RestoreRefusal | None:
     """The first reason `o` cannot be restored, `None` when it can."""
-    if _archived_branch(o.archive, task_branch(o.task_id), o.archived) is None:
+    if archived_branch(o.archive, task_branch(o.task_id), o.archived) is None:
         return "no_archive"
     if o.state is None:
         return "no_document"
@@ -1808,7 +1808,7 @@ def _restore_refusal(o: RestoreObserved, heads: Mapping[str, str]) -> RestoreRef
     if o.remote_head is not None and not same_commit(head, o.remote_head):
         return "remote_diverged"
     if not all(
-        o.reachable.get(branch) is True and _archived_branch(o.archive, branch, o.archived)
+        o.reachable.get(branch) is True and archived_branch(o.archive, branch, o.archived)
         for branch in heads
     ):
         return "head_not_reachable"

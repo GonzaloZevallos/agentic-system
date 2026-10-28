@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -100,6 +101,7 @@ from .core.process.application.preflight import (
     unfixed_stage0,
 )
 from .core.process.application.registration import REGISTER_WAIT_S, await_registration
+from .core.process.application.restore import restore_task
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
@@ -327,6 +329,20 @@ def main() -> None:
         help="the kind this child registers under, set by the poller at spawn: land_checks "
         "for a step that runs no model, land_model (the default) for any other",
     )
+    restore = sub.add_parser(
+        "restore",
+        help="bring an archived, approved task back from its archive/run<N>-<sha> refs -- "
+        "branches, document and pull request -- so it can land without a fresh run (GH-406)",
+    )
+    restore.add_argument("--issue", type=int, metavar="N", required=True)
+    restore.add_argument(
+        "--from",
+        dest="archive",
+        metavar="archive/run<N>-<sha>",
+        required=True,
+        help="the prefix the archived run's branches live under",
+    )
+    restore.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     eval_parser = sub.add_parser(
         "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -605,6 +621,7 @@ def main() -> None:
             "reflect",
             "merge",
             "land",
+            "restore",
             "scores",
             "dashboards",
         ):
@@ -686,6 +703,11 @@ def main() -> None:
         elif args.command == "land":
             task_id = ports.inbox.task_id(args.issue)
             work = partial(_land, task_id, cfg, bind_task(ports, task_id), args.run_kind)
+        elif args.command == "restore":
+            if not _ARCHIVE_PREFIX.fullmatch(args.archive):
+                raise ValueError(f"--from {args.archive!r} is not an archive/run<N>-<sha> prefix")
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_restore, task_id, args.archive, cfg, bind_task(ports, task_id))
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -1912,6 +1934,34 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
     print(f"agentic: merge: {task_id} -> {result.kind}{suffix}", flush=True)
     if closed is not None and closed.status != "closed":
         print(f"agentic: merge: {task_id}: not closed yet: {closed.message}", flush=True)
+
+
+_ARCHIVE_PREFIX = re.compile(r"archive/run\d+-[0-9A-Za-z]+")
+
+
+async def _restore(task_id: str, archive_prefix: str, cfg: Configuration, ports: Ports) -> None:
+    """`agentic restore --issue N --from archive/run<N>-<sha>` (GH-406): the archived task's
+    branches, document and pull request put back by `restore_task`, under the task's run lock
+    (a held lock is the refusal `task_live`). Spends no model money, opens no span and touches
+    no label. One line per step taken, then the outcome; a refusal exits like any other command
+    that cannot start."""
+    try:
+        with _locked(_lock_for(cfg), task_id):
+            result = restore_task(task_id, archive_prefix, ports, cfg.product_dir)
+    except CannotStart as exc:
+        raise CannotStart(f"restore: {task_id} refused: task_live ({exc})") from exc
+    for step in result.steps:
+        print(f"agentic: restore: {task_id}: {step}", flush=True)
+    if result.refusal is not None:
+        detail = f" ({result.detail})" if result.detail else ""
+        raise CannotStart(f"restore: {task_id} refused: {result.refusal}{detail}")
+    outcome = {
+        "settled": f"settled {result.settled_rows} PM final row(s)",
+        "none_owed": "nothing to settle",
+        "no_pm_approval": "not settled: no_pm_approval",
+        "not_settleable": "not settled: not_settleable",
+    }.get(result.settlement or "", "")
+    print(f"agentic: restore: {task_id} -> restored from {archive_prefix}: {outcome}", flush=True)
 
 
 def _resume_spawner(cfg: Configuration) -> Callable[[int], int | None]:
