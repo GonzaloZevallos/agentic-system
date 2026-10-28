@@ -2,10 +2,13 @@
 previous run's branches instead of building the next one on top of them.
 
 `archive_previous_run` is the whole use case: commit what no Developer got to commit
-in every worktree of the task, take the worktrees out, then rename the task branch and
-its subtask branches under one `archive/run<N>-<system_commit>/` prefix, the task
-branch first -- that order is what makes a cut-short archive legible to a retry
-(`rules.next_archive_run`'s own three cases). Naming and the run number are pure
+in every worktree of the task, take the worktrees out, then rename the task branch, commit
+the task document onto the archived task ref and rename its subtask branches, all under one
+`archive/run<N>-<system_commit>/` prefix, the task branch first -- that order is what makes
+a cut-short archive legible to a retry (`rules.next_archive_run`'s own three cases).
+The document is the one path under `rules.UNSTAGEABLE` the system ever commits
+(`Workspace.commit_archived_document`, plumbing onto a ref under `archive/`, GH-420): no
+checkout is written and no live branch ever carries it. Naming and the run number are pure
 (`domain/rules.py`); this module only decides which port verb runs when, over the
 `Workspace` and `TaskDocuments` ports, never git or the filesystem directly.
 
@@ -20,9 +23,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..domain import rules
+from ..domain import document, rules
 from ..domain.reaping import ReapedProcess
-from .ports import Ports
+from .ports import GitError, Ports
 from .release import release_task
 
 # How the system's comment on a `--fresh` archive starts: a resume looks past it, the
@@ -42,10 +45,10 @@ class ArchiveResult:
     nothing live to archive -- the only case that calls no port verb beyond a read.
     `written` is whether this call itself committed the document and the worktrees
     (the fresh-archive case); `False` also covers the retry that only had subtask
-    branches left to rename, the document and the worktrees already someone else's
-    doing. `document_kept` says whether the document that landed in the commit is
-    still there once the product's own `.gitignore` is asked -- meaningless, and left
-    at its default, whenever `written` is `False`. `reaped` is what the release stopped
+    branches left to rename, the worktrees already someone else's doing. `document_kept`
+    says whether the archived task ref holds the task document after this call: `False`
+    for a task with no live document and for a commit that failed. A retry that has no
+    document to commit leaves it at its default. `reaped` is what the release stopped
     before the worktrees went (GH-282, ADR-0052); nothing is written to a document."""
 
     prefix: str | None
@@ -88,18 +91,20 @@ def archive_previous_run(task_id: str, ports: Ports) -> ArchiveResult:
     document_kept = True
     reaped: tuple[ReapedProcess, ...] = ()
 
+    archived_task = rules.archive_ref(task_branch, n, system_commit)
     if head is not None:
-        checkout = workspace.task_checkout(task_id)
-        doc_path = ports.documents.write_into(task_id, checkout.path)
         for worktree in workspace.worktrees(task_id):
             workspace.commit_all(worktree, f"Archive run {n} of {task_id}: {worktree.name}")
-        if doc_path is not None:
-            relative = doc_path.relative_to(checkout.path).as_posix()
-            document_kept = not workspace.is_ignored(checkout.path, relative)
         reaped = release_task(ports, task_id)
         workspace.prune()
-        workspace.rename_branch(task_branch, rules.archive_ref(task_branch, n, system_commit))
+        workspace.rename_branch(task_branch, archived_task)
+        document_kept = _commit_document(task_id, n, archived_task, ports)
         written = True
+    elif (earlier := _earlier_task_ref(archived_refs, task_id, n)) is not None:
+        # The task branch moved in a cut-short attempt that never reached the document.
+        text = ports.documents.text(task_id)
+        if text is not None:
+            document_kept = _commit_document(task_id, n, earlier, ports, text=text)
 
     for branch in rules.branches_of_task(live, task_id):
         if branch == task_branch:
@@ -107,3 +112,33 @@ def archive_previous_run(task_id: str, ports: Ports) -> ArchiveResult:
         workspace.rename_branch(branch, rules.archive_ref(branch, n, system_commit))
 
     return ArchiveResult(prefix=prefix, written=written, document_kept=document_kept, reaped=reaped)
+
+
+def _earlier_task_ref(archived_refs: list[str], task_id: str, n: int) -> str | None:
+    """The archived task branch of run `n` that a previous, cut-short attempt renamed, under
+    whatever system commit it read then."""
+    for ref in rules.archived_task_branches(archived_refs, task_id):
+        if ref.startswith(f"archive/run{n}-"):
+            return ref
+    return None
+
+
+def _commit_document(
+    task_id: str, n: int, ref: str, ports: Ports, *, text: str | None = None
+) -> bool:
+    """Whether `ref` holds the task's document after this: committed here, or already there.
+    `False` for a task with no document and for a commit git refused -- the archive goes on,
+    the live copy is still on disk."""
+    text = ports.documents.text(task_id) if text is None else text
+    if text is None:
+        return False
+    try:
+        ports.workspace.commit_archived_document(
+            ref,
+            document.relative_path(task_id).as_posix(),
+            text,
+            f"Archive run {n} of {task_id}: the task document",
+        )
+    except GitError:
+        return False
+    return True

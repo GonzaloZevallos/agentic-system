@@ -228,6 +228,11 @@ class MemoryDocuments:
         self.closures[task_id] = {**self.closures.get(task_id, {}), **values}
         return self.path_for(task_id)
 
+    def text(self, task_id: str) -> str | None:
+        if self.load(task_id) is None:
+            return None
+        return f"---\nid: {task_id}\n---\n"
+
     def write_into(self, task_id: str, root: Path) -> Path | None:
         self.written_into.append((task_id, root))
         if self.load(task_id) is None:
@@ -685,6 +690,11 @@ class MemoryWorkspace:
         self.merge_in_progress_asks: list[Path] = []
         self.merge_in_progress_error: str | None = None
         self.commit_all_error: str | None = None
+        # The documents `commit_archived_document` put on an archived ref, `(ref, path) -> text`,
+        # each commit made `(ref, path, message)`, and a text that makes it raise `GitError`.
+        self.archived_documents: dict[tuple[str, str], str] = {}
+        self.archived_document_commits: list[tuple[str, str, str]] = []
+        self.archived_document_error: str | None = None
         self.aborted: list[Path] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
@@ -973,6 +983,22 @@ class MemoryWorkspace:
             raise GitError(self.commit_all_error)
         self.commits.append((path, message))
         return "c1"
+
+    def commit_archived_document(
+        self, ref: str, relative: str, text: str, message: str
+    ) -> str | None:
+        """As the adapter: refuses a ref outside `archive/`, is idempotent on the same text,
+        and fails with `archived_document_error` when a test sets it."""
+        self.events.append("commit_archived_document")
+        if self.archived_document_error is not None:
+            raise GitError(self.archived_document_error)
+        if not ref.removeprefix("refs/heads/").startswith("archive/"):
+            raise GitError(f"{ref} is not an archived ref")
+        if self.archived_documents.get((ref, relative)) == text:
+            return None
+        self.archived_documents[(ref, relative)] = text
+        self.archived_document_commits.append((ref, relative, message))
+        return "c3"
 
     def commit_paths(self, path: Path, relatives: Sequence[str], message: str) -> str | None:
         self.events.append("commit_paths")
