@@ -395,7 +395,9 @@ class GitWorkspace:
             raise GitError(
                 f"{ref} is not an archived ref: a task document is committed under archive/"
             )
-        if not _TASK_DOCUMENT.fullmatch(relative):
+        # Only a path the rule calls unstageable is this method's to write, and of those only
+        # a task document: the rule decides the first, the pattern narrows it to the second.
+        if not rules.unstageable(relative) or not _TASK_DOCUMENT.fullmatch(relative):
             raise GitError(f"{relative} is not a task document (.agentic/tasks/<id>.md)")
         full = f"refs/heads/{branch}"
         tip = self._git("rev-parse", "--verify", "-q", f"{full}^{{commit}}")
