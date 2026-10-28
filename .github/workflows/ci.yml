@@ -3,7 +3,8 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [master]
+    # `agentic-ci/**`: the ref where `full_checks` runs the full tier on GitHub (ADR-0064).
+    branches: [master, 'agentic-ci/**']
 
 jobs:
   check:
