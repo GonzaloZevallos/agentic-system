@@ -15,6 +15,7 @@ from agentic.core.process.application.ports import AttemptFailed, CommandResult,
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.plan_view import NOTE_WRITTEN
 from agentic.core.process.domain.roles import FINDINGS, INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import INTEGRATION, apply
@@ -1371,3 +1372,18 @@ async def test_escalate_labels_a_pause_the_predicate_keeps_for_a_human(cfg):
         ports = memory_ports()
         await escalate(state, cfg, ports)
         assert ports.tracker.labels == [("GH-12", "needs-human")]
+
+
+async def test_the_integrator_is_told_to_regenerate_docs_and_not_merge_them_by_hand(cfg):
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    state = {**TASK, "subtasks": {"api": approved("api"), "domain": approved("domain")}}
+
+    async def brief(**ports):
+        made = memory_ports(ScriptedRunner(), **ports)
+        made.workspace.conflicts.add("agentic/GH-12.domain")
+        return (await integrate(state, cfg, made))["subtasks"][INTEGRATION]["brief"]
+
+    plain = await brief()
+    declared = await brief(stack=MemoryStack(docs=docs))
+    assert declared == plain + conflict_line(docs)
+    assert "run `make docs` and commit its output" in declared
