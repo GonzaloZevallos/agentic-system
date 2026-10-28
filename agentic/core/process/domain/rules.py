@@ -2662,20 +2662,72 @@ def resume_target(state: TaskState) -> str | None:
     return {"defined": "validate"}.get(status)
 
 
+@dataclass(frozen=True)
+class Commit:
+    """A commit of the task branch as a rule sees it (GH-408): its id and its parents' ids,
+    the first parent first. What `Workspace.first_parent_commits` returns."""
+
+    sha: str
+    parents: tuple[str, ...]
+
+
+def refused_commit(state: TaskState, commits: Sequence[Commit]) -> str | None:
+    """Why the first of `commits` -- the first-parent line from the integration's approved head
+    to the task branch, oldest first -- is not a merge of an approved subtask at its reviewed
+    head, `None` when every one is (GH-408). A line, naming the commit, for the refusal. The
+    approved head is the reviewed unit's own `reviewed_head`: the oldest commit's first parent
+    must be it, and each later one's the commit before."""
+    unit = reviewed_unit_name(state)
+    subtasks = state.get("subtasks", {})
+    sub = subtasks.get(unit) if unit else None
+    base = sub.get("reviewed_head") if sub else None
+    if not commits:
+        return "no commit lies between the approved head and the branch"
+    reviewed = [
+        s.get("reviewed_head")
+        for name, s in subtasks.items()
+        if name != unit and s.get("status") == "approved"
+    ]
+    for commit in commits:
+        if len(commit.parents) < 2:
+            return f"{commit.sha} is not a merge"
+        if len(commit.parents) > 2:
+            return f"{commit.sha} is an octopus merge of {len(commit.parents)} parents"
+        first, second = commit.parents
+        if not any(same_commit(second, head) for head in reviewed):
+            return (
+                f"{commit.sha} merges {second}, which is not the reviewed head of an approved "
+                "subtask"
+            )
+        if not same_commit(first, base):
+            return f"{commit.sha} is not on the first-parent line from the approved head {base}"
+        base = commit.sha
+    return None
+
+
 def integration_increment(
-    state: TaskState, task_id: str, branch_head: str, descends: bool
-) -> Literal["agree", "increment", "refuse"]:
+    state: TaskState,
+    task_id: str,
+    branch_head: str,
+    descends: bool,
+    commits: Sequence[Commit],
+) -> Literal["agree", "increment", "reintegrate", "refuse"]:
     """Whether the task branch at `branch_head` is the head the integration review approved
     (`agree`), a strict descendant of it that nobody reviewed (`increment`: a later subtask
-    merge, a commit a stopped run left), or something a resume must not go on over
+    merge, a commit a stopped run left), a descendant that only merged approved subtasks while
+    others are still returned (`reintegrate`, GH-408), or something a resume must not go on over
     (`refuse`). `descends` is the ancestry fact -- whether the approved head is an ancestor of
-    `branch_head` -- read by the caller, so this stays pure and is the one place the rule lives.
+    `branch_head` -- and `commits` the first-parent line from the approved head to it, oldest
+    first, both read by the caller, so this stays pure and is the one place the rule lives.
 
     An increment needs all of: the reviewed unit approved at a head, on the task branch; every
     other unit approved; no pull request (its branch moving is the landing's, not a resume's);
     and a pause no human has anything to decide in -- a role failure or a run that stopped
     without escalating, since `resumed` clears exactly that and nothing else stands in the way
-    (pending questions, a pair at its limit, an estimate or a cap are decisions)."""
+    (pending questions, a pair at its limit, an estimate or a cap are decisions). A
+    reintegration needs the same, but with every other unit `approved` or `returned` and one at
+    least `returned`, and every commit of `commits` a merge of an approved subtask at its
+    reviewed head (`refused_commit`); the commits are not read for the other verdicts."""
     unit = reviewed_unit_name(state)
     sub = state.get("subtasks", {}).get(unit) if unit else None
     approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
@@ -2685,8 +2737,7 @@ def integration_increment(
         return "agree"  # the reviewed head, or the close-time docs commit made right on it
     if not descends or sub is None or sub.get("branch") != task_branch(task_id):
         return "refuse"
-    others = (s for name, s in state.get("subtasks", {}).items() if name != unit)
-    if any(s.get("status") != "approved" for s in others) or state.get("pull_request"):
+    if state.get("pull_request"):
         return "refuse"
     if state.get("escalation_class") not in (None, "failure"):
         return "refuse"
@@ -2694,7 +2745,32 @@ def integration_increment(
         return "refuse"
     if state.get("escalated") and state.get("escalation_class") is None:
         return "refuse"  # a document older than the class: what it asked is not known
-    return "increment"
+    others = [s.get("status") for name, s in state.get("subtasks", {}).items() if name != unit]
+    if all(status == "approved" for status in others):
+        return "increment"
+    if all(status in ("approved", "returned") for status in others):
+        return "refuse" if refused_commit(state, commits) else "reintegrate"
+    return "refuse"
+
+
+def reintegrate_patch(state: TaskState) -> dict[str, Any]:
+    """The patch that sends the reviewed unit back to `pending` on a reintegration (GH-408):
+    its `reviewed_head` stays the approved head its next incremental review starts from, and
+    its `depends_on` names every other subtask that is not approved, in plan order, so the
+    integrator waits for the returned ones. The reducer replaces a subtask whole, so the unit
+    goes back with all its keys. Nothing else is written: not `task_head`, not `full_checks`,
+    not the findings table, not the task's status."""
+    unit = reviewed_unit_name(state)
+    if unit is None:
+        raise ValueError("a task with no reviewed unit has nothing to reintegrate")
+    subtasks = state["subtasks"]
+    waiting = [
+        name for name, s in subtasks.items() if name != unit and s.get("status") != "approved"
+    ]
+    patch: dict[str, Any] = {
+        "subtasks": {unit: {**subtasks[unit], "status": "pending", "depends_on": waiting}}
+    }
+    return patch
 
 
 def increment_patch(state: TaskState) -> dict[str, Any]:
