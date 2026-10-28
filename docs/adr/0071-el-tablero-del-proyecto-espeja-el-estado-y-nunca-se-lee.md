@@ -26,7 +26,7 @@ renombrado), **Bloque** y **Hito** (los pone una persona), **Bloqueo**, **Costo 
   acciones del plan, el `eval_set`) o de campos del documento. Ningún otro módulo recalcula
   bloqueos, merges, reanudaciones ni retomas para el tablero.
 - **Precedencia (una interpretación de la tabla del pedido, supuesto):** Hecha (issue
-  cerrado) > Corriendo (hay un proceso vivo) > Necesita humano (la etiqueta `needs-human`, o
+  cerrado) > Corriendo (hay un proceso vivo; `En PR` sólo sale del mapa) > Necesita humano (la etiqueta `needs-human`, o
   lo que da el mapa) > Fuera del sistema (sin `agentic`, o `ready-for-human`) > Trabada >
   En cola.
 - **Mapa cerrado de `Status`** para un issue abierto, con `agentic` y sin proceso vivo.
@@ -38,13 +38,13 @@ renombrado), **Bloque** y **Hito** (los pone una persona), **Bloqueo**, **Costo 
   | sin documento, sin bloqueo | En cola | — |
   | `open`, `defined`, `returned`, `definition_ready`, `planned`, `developing` | Trabada | sin proceso vivo: retomar o esperar cupo |
   | `waiting_on_human` | Necesita humano | primera línea del motivo, 200 caracteres |
-  | `ready_for_review`, en `eval_set` o `eval_set` ilegible | Necesita humano | PR esperando merge |
-  | `ready_for_review` con merge rechazado en el documento | Trabada | merge rechazado: esperando aterrizaje |
-  | `ready_for_review`, el resto | En cola | — |
+  | `ready_for_review` | En PR | — |
   | `discarded` / `split` / `tracker_only` | Necesita humano | descartada / partida: cerrar el issue / lista de tracker pendiente |
 
-  Con `eval_set` ilegible un `ready_for_review` cae en Necesita humano: es la lectura
-  conservadora de `auto_merge_decision`, que con `None` rechaza todo merge.
+  `En PR` es la opción que el dueño añadió al campo Etapa (decisión humana): una tarea
+  aprobada que espera CI y merge. Un `ready_for_review` es `En PR` lo mergee el sistema o un
+  humano, y aunque haya un merge rechazado en el documento; `Corriendo` queda para un
+  proceso vivo. Por eso el espejo ya no distingue por `eval_set` ni por merge rechazado.
 - **Límite conocido:** `Trabada` sin proceso vivo mezcla "murió" y "espera cupo", porque el
   espejo no sabe distinguirlos. Su Bloqueo es neutro y no afirma una causa que el espejo no
   calcula.

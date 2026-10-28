@@ -13,7 +13,15 @@ from agentic.core.process.adapters.github import board as board_module
 from agentic.core.process.adapters.github.board import GhBoard
 from agentic.core.process.domain.board import FieldWrite
 
-ETAPAS = ["Corriendo", "Trabada", "Necesita humano", "En cola", "Fuera del sistema", "Hecha"]
+ETAPAS = [
+    "Corriendo",
+    "En PR",
+    "Trabada",
+    "Necesita humano",
+    "En cola",
+    "Fuera del sistema",
+    "Hecha",
+]
 ISSUE_FIELDS = "number,id,labels,state,closedAt"
 
 
@@ -143,7 +151,7 @@ def test_a_batch_is_two_requests_with_every_value_a_typed_variable():
     assert "$i7_bloqueo: String!" in query and variables["i7_bloqueo"] == "#3"
     assert "$i7_costo: Float!" in query and variables["i7_costo"] == 1.5
     assert "$i7_inicio: Date!" in query and variables["i7_inicio"] == "2026-10-20"
-    assert "$i7_etapa: ID!" in query and variables["i7_etapa"] == "O_1"
+    assert "$i7_etapa: ID!" in query and variables["i7_etapa"] == "O_2"
     assert "i7_fin: clearProjectV2ItemFieldValue" in query and "i7_fin" not in variables
     assert variables["i7_item"] == "PVTI_7" and variables["f_etapa"] == "F_etapa"
     assert not any(k in variables for k in ("f_bloque", "f_hito"))

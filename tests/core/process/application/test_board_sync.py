@@ -49,7 +49,7 @@ def test_no_board_means_no_lines_and_no_call() -> None:
 def test_each_row_of_the_table_gets_its_etapa() -> None:
     docs = documents(
         i1={"status": "ready_for_review"},  # in the eval set: the human merges
-        i2={"status": "ready_for_review"},  # outside it: nobody owes anything
+        i2={"status": "ready_for_review"},  # outside it: the system merges
         i3={"status": "discarded"},
         i5={"status": "waiting_on_human", "escalated": "Which scope?\nsecond line"},
     )
@@ -72,8 +72,8 @@ def test_each_row_of_the_table_gets_its_etapa() -> None:
     blockers = {9: rules.BlockerReport(open=(3,)), 10: rules.BlockerReport()}
     mirror(ports, live=frozenset({4}), blockers=blockers, eval_set=frozenset({1}))
     assert etapas(board) == {
-        1: "Necesita humano",
-        2: "En cola",
+        1: "En PR",
+        2: "En PR",
         3: "Necesita humano",
         4: "Corriendo",
         5: "Necesita humano",
@@ -111,11 +111,11 @@ def test_cost_and_first_run_day_come_from_the_document_through_the_mirror() -> N
     assert (2, "costo") not in by_field and (2, "inicio") not in by_field
 
 
-def test_unreadable_eval_set_keeps_the_pr_with_the_human() -> None:
+def test_a_ready_for_review_task_is_en_pr_even_when_the_eval_set_is_unreadable() -> None:
     board = FakeBoard(open=[row(1)])
     ports, _ = ports_with(board, documents(i1={"status": "ready_for_review"}))
     mirror(ports, eval_set=None)
-    assert etapas(board) == {1: "Necesita humano"}
+    assert etapas(board) == {1: "En PR"}
 
 
 def test_unchanged_issue_makes_no_write_and_only_the_open_read() -> None:

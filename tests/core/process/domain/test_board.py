@@ -115,31 +115,29 @@ def test_the_reason_is_cut_to_200_characters_and_one_line():
     assert got.bloqueo == "x" * 200
 
 
-@pytest.mark.parametrize("in_eval", [True, None])
-def test_ready_for_review_a_human_merges_or_cannot_be_ruled_out_is_necesita_humano(in_eval):
-    got = board.card(_facts(document=_doc("ready_for_review"), in_eval_set=in_eval))
-    assert (got.etapa, got.bloqueo) == ("Necesita humano", "PR esperando merge")
+@pytest.mark.parametrize("in_eval", [True, False, None])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},
+        {"merge_failures": {"head": "a", "count": 1, "failure": "x"}},
+        {"landing": [{"head": "a"}]},
+    ],
+)
+def test_ready_for_review_is_en_pr_whoever_merges_and_whatever_was_refused(in_eval, extra):
+    """Human decision 1: approved and waiting on CI and merge is `En PR`, never `Corriendo`."""
+    got = board.card(_facts(document=_doc("ready_for_review", **extra), in_eval_set=in_eval))
+    assert (got.etapa, got.bloqueo) == ("En PR", None)
 
 
-def test_ready_for_review_with_a_merge_failure_on_record_is_trabada():
-    document = _doc("ready_for_review", merge_failures={"head": "a", "count": 1, "failure": "x"})
-    got = board.card(_facts(document=document))
-    assert (got.etapa, got.bloqueo) == ("Trabada", "merge rechazado: esperando aterrizaje")
+def test_a_live_process_on_a_ready_for_review_task_is_corriendo_not_en_pr():
+    assert board.card(_facts(document=_doc("ready_for_review"), live=True)).etapa == "Corriendo"
 
 
-def test_ready_for_review_with_an_open_landing_entry_is_trabada():
-    document = _doc("ready_for_review", landing=[{"head": "a", "step": "fix_important"}])
-    assert board.card(_facts(document=document)).etapa == "Trabada"
-
-
-def test_ready_for_review_with_every_landing_entry_closed_is_en_cola():
-    landing = [{"head": "a", "step": "fix_important", "resolved_at": "2026-10-20T00:00:00Z"}]
-    got = board.card(_facts(document=_doc("ready_for_review", landing=landing)))
-    assert (got.etapa, got.bloqueo) == ("En cola", None)
-
-
-def test_ready_for_review_the_system_merges_is_en_cola():
-    assert board.card(_facts(document=_doc("ready_for_review"))).etapa == "En cola"
+def test_the_needs_human_label_wins_over_en_pr():
+    labels = AGENTIC | {"needs-human"}
+    got = board.card(_facts(document=_doc("ready_for_review"), labels=labels))
+    assert got.etapa == "Necesita humano"
 
 
 @pytest.mark.parametrize(

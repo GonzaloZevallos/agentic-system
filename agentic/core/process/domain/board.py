@@ -20,8 +20,11 @@ from typing import Literal, assert_never, get_args
 from . import rules
 from .task import Status
 
-Etapa = Literal["Corriendo", "Trabada", "Necesita humano", "En cola", "Fuera del sistema", "Hecha"]
-"""The Project's `Status` field, renamed Etapa; the six options a person created."""
+Etapa = Literal[
+    "Corriendo", "En PR", "Trabada", "Necesita humano", "En cola", "Fuera del sistema", "Hecha"
+]
+"""The Project's `Status` field, renamed Etapa; the seven options a person created. `En PR` is
+the owner's (ADR-0071): a task approved and waiting on CI and merge, nothing live."""
 
 Field = Literal["etapa", "bloqueo", "costo", "inicio", "fin"]
 """The five fields the system writes. Bloque and Hito are never in this list (ADR-0071)."""
@@ -36,8 +39,6 @@ BOARD_RETRY_AFTER = timedelta(minutes=15)
 
 BLOQUEO_MAX = 200
 NO_LIVE_PROCESS = "sin proceso vivo: retomar o esperar cupo"
-PR_WAITING = "PR esperando merge"
-MERGE_REFUSED = "merge rechazado: esperando aterrizaje"
 DISCARDED = "descartada: cerrar el issue"
 SPLIT = "partida: cerrar el issue"
 TRACKER_ONLY = "lista de tracker pendiente"
@@ -91,18 +92,6 @@ def _blockers(report: rules.BlockerReport) -> str:
     return ", ".join(f"#{n}" for n in sorted(numbers))
 
 
-def _merge_refused(document: Mapping[str, object]) -> bool:
-    """A refused merge is on record: the merge verb wrote `merge_failures`, or the last
-    `landing` entry is still open (the landing owes the pull request a fix)."""
-    if document.get("merge_failures"):
-        return True
-    entries = document.get("landing")
-    if not isinstance(entries, list) or not entries:
-        return False
-    last = entries[-1]
-    return isinstance(last, Mapping) and not rules.entry_closed(last) and not rules.before_pr(last)
-
-
 def _mapped(facts: IssueFacts) -> tuple[Etapa, str | None]:
     """The map for an open, `agentic` issue with no live process."""
     document = facts.document
@@ -119,11 +108,7 @@ def _mapped(facts: IssueFacts) -> tuple[Etapa, str | None]:
         case "waiting_on_human":
             return "Necesita humano", _first_line(document.get("escalated"))
         case "ready_for_review":
-            if facts.in_eval_set is not False:
-                return "Necesita humano", PR_WAITING
-            if _merge_refused(document):
-                return "Trabada", MERGE_REFUSED
-            return "En cola", None
+            return "En PR", None
         case "discarded":
             return "Necesita humano", DISCARDED
         case "split":

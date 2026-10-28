@@ -214,7 +214,7 @@ _Avoid_: dashboard, sincronización, tablero de verdad
 _Campo_: sin término de arte
 
 **Etapa**:
-El estado de una Tarjeta, uno de seis: Corriendo, Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano.
+El estado de una Tarjeta, uno de siete: Corriendo, En PR (aprobada, esperando CI y merge), Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano.
 _Avoid_: estado, status, columna
 _Campo_: `Status` de GitHub Projects (renombrado Etapa)
 
