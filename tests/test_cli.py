@@ -4586,7 +4586,7 @@ async def test_poll_says_again_when_the_reason_changes_and_when_the_block_clears
 
 
 @pytest.mark.anyio
-async def test_poll_says_nothing_when_the_upstream_has_a_note_and_keeps_its_memory(
+async def test_poll_says_nothing_when_the_upstream_fell_back_to_head_and_keeps_its_memory(
     monkeypatch, tmp_path, capsys
 ):
     from agentic.core.process.application.ports import Upstream
