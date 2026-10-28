@@ -198,13 +198,13 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         flags=FilesystemFlags(cfg.product_dir),
         inbox=GhInbox(cfg.product_dir),
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
-        tracker=GhTracker(
-            cfg.product_dir,
-            retry=(
-                None
-                if gh_retry is None
-                else GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag)
-            ),
+        tracker=(
+            GhTracker(cfg.product_dir)
+            if gh_retry is None
+            else GhTracker(
+                cfg.product_dir,
+                retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
+            )
         ),
         stack=GitStack(cfg.product_dir),
         commands=ShellCommands(product_key, reaper, stop_flag),
