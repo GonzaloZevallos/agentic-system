@@ -22,7 +22,7 @@ _Avoid_: Lead, orquestador
 _Campo_: de la organización de software humana; el patrón agéntico es supervisor (LangGraph) u orchestrator (Microsoft Agent Framework)
 
 **PM** (Product Manager):
-Dueño del PRD y del conocimiento de producto, que destila al aprobar el PRD y, en una feature con UI, otra vez en su validación final, conciliando las capacidades con el diff entregado (ADR-0073). El sistema escribe y commitea lo que PM devuelve; Tech Lead no revisa esa prosa. El commit queda en `close_docs`, y el predicado `rules.head_reviewed` lo acepta como cabeza revisada solo si su padre es la cabeza revisada y todas sus rutas están bajo `docs/product/`.
+Dueño del PRD y del conocimiento de producto, que destila al aprobar el PRD y, en una feature con UI, otra vez en su validación final, conciliando las capacidades con el diff entregado (ADR-0075). El sistema escribe y commitea lo que PM devuelve; Tech Lead no revisa esa prosa. El commit queda en `close_docs`, y el predicado `rules.head_reviewed` lo acepta como cabeza revisada solo si su padre es la cabeza revisada y todas sus rutas están bajo `docs/product/`.
 _Campo_: de la organización de software humana
 
 **Pensador**:
