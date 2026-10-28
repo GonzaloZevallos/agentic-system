@@ -229,8 +229,8 @@ def test_the_env_given_reaches_the_command_over_what_it_inherited(commands, chec
 def test_a_command_run_without_env_sees_none_of_the_grants_variables(
     commands, checkout, monkeypatch
 ):
-    # The process running the suite may itself be a granted gate: its own CHECK_WORKERS is
-    # inherited by every command, and is not what is under test here.
+    # The variable may be exported in the caller's own environment (the delivery gate's);
+    # what is asserted is that the adapter adds none of its own.
     monkeypatch.delenv("CHECK_WORKERS", raising=False)
     result = commands.run(checkout, 'echo "w=[$CHECK_WORKERS]"', 10)
     assert "w=[]" in result.output

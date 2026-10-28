@@ -103,10 +103,8 @@ def test_a_worktree_whose_setup_failed_is_gone_and_the_branch_stays(real, produc
     # The task's checkout is the first one made, so it is the one that fails here.
     assert not (product / ".agentic/worktrees/GH-37").exists()
     assert "agentic/GH-37" in git("branch", "--list", "agentic/GH-37", cwd=product)
-    # Not the bare substring: a temporary directory named after a longer task id (GH-374) holds
-    # "GH-37" too. The worktree's own path and its branch are what must be gone.
-    listed = git("worktree", "list", cwd=product)
-    assert ".agentic/worktrees/GH-37 " not in listed and "[agentic/GH-37]" not in listed
+    # By path, not by substring: the product's own directory may hold the task id (GH-376).
+    assert ".agentic/worktrees/GH-37 " not in git("worktree", "list", cwd=product)
 
 
 def test_the_task_worktree_git_makes_on_the_way_is_prepared_too(real, product):

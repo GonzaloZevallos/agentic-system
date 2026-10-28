@@ -883,6 +883,24 @@ class Workspace(Protocol):
         moved between the read and the fetch raises `GitError`: it is never "absent"."""
         ...
 
+    def publish_ci_ref(self, path: Path, ref: str) -> None:
+        """Force push `HEAD` of the checkout at `path` to `refs/heads/<ref>` on `origin`,
+        with no lease: the ref belongs to the task and the run holds its lock. Only the
+        `agentic-ci/` refs go through here, never `agentic/<id>`, which `push` writes.
+        Raises `GitError` on any failure."""
+        ...
+
+    def remote_refs(self, prefix: str) -> tuple[str, ...]:
+        """The branch names `origin` holds under `refs/heads/<prefix>`, without
+        `refs/heads/`. A failed read or an unreachable origin raises `GitError`: it is
+        never an empty answer. The caller asks for `agentic-ci/` refs only."""
+        ...
+
+    def delete_remote_ref(self, ref: str) -> None:
+        """Delete the branch `ref` from `origin`. Only the `agentic-ci/` refs go through
+        here, never `agentic/<id>`. Raises `GitError`, a ref `origin` lacks included."""
+        ...
+
     def show(self, ref: str, relative: str) -> str | None:
         """The text of `relative` at `ref` (a branch, `HEAD` or a commit), or `None` when
         the ref or the file does not exist there."""

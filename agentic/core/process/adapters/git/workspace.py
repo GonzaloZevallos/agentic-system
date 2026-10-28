@@ -372,6 +372,18 @@ class GitWorkspace:
             )
         return fetched
 
+    def publish_ci_ref(self, path: Path, ref: str) -> None:
+        # No lease: the ref is the task's own and the run holds the task's lock.
+        self._git("push", "--force", "origin", f"HEAD:refs/heads/{ref}", cwd=path)
+
+    def remote_refs(self, prefix: str) -> tuple[str, ...]:
+        listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{prefix}*")
+        heads = "refs/heads/"
+        return tuple(line.split()[1][len(heads) :] for line in listed.splitlines() if line.strip())
+
+    def delete_remote_ref(self, ref: str) -> None:
+        self._git("push", "origin", "--delete", ref)
+
     def show(self, ref: str, relative: str) -> str | None:
         result = self._run("show", f"{ref}:{relative}")
         return result.stdout if result.returncode == 0 else None

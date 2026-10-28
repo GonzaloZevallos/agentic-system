@@ -948,6 +948,37 @@ def test_record_closure_round_trips_a_merge_checks_record_on_one_flow_line():
     _assert_roundtrip_and_replace("merge_checks", other, huge)
 
 
+def test_record_closure_round_trips_a_full_checks_record_run_on_ci_and_one_run_locally():
+    """GH-376: `ran_on`, `ci_fallback` and a job's `link` survive the flow line."""
+    ci_run = {
+        "version": 1,
+        "head": "a" * 40,
+        "passed": False,
+        "duration_s": 61.5,
+        "declared": {"name": "ci"},
+        "results": [
+            {"name": "unit", "passed": True},
+            {"name": "web", "passed": False, "link": "https://github.com/o/r/actions/runs/7"},
+        ],
+        "witness": None,
+        "ran_on": "ci",
+        "failed_step": "web",
+    }
+    local = {
+        "version": 2,
+        "head": "b" * 40,
+        "passed": True,
+        "duration_s": 3.0,
+        "declared": {"tests": "pytest"},
+        "results": [{"name": "tests", "passed": True}],
+        "witness": None,
+        "ran_on": "local",
+        "ci_fallback": "no_run",
+    }
+    _assert_roundtrip_and_replace("full_checks", ci_run, local)
+    _assert_roundtrip_and_replace("full_checks", local, ci_run)
+
+
 def _top_key(line: str) -> str | None:
     """The top-level key a frontmatter line opens, `None` for a continuation (an indented line,
     a column-0 `- ` item of an indentless sequence, or a blank line inside a quoted scalar)."""

@@ -900,12 +900,24 @@ class PartRecord(TypedDict):
     depends_on: list[int]
 
 
+# Why a `full_checks` run that wanted GitHub CI ran the local full tier instead (GH-376): a
+# closed value decided by the system, never text parsed from `gh`. Lives here, not in `ci`,
+# because the record below needs it and `ci` reaches this module through `rules`; `ci`
+# re-exports it.
+FallbackCause = Literal[
+    "gh_unavailable", "gh_unreadable", "no_run", "publish_failed", "not_started", "untrusted"
+]
+
+
 class FullCheckEntry(TypedDict):
     """One check of a `full_checks` run: its name and whether it passed. Unlike
     `merge_checks`, no `tail`: command output goes only into the `Full checks` section."""
 
     name: str
     passed: bool
+    # The run link `gh` reported for a CI job (GH-376); absent on a locally run check and on
+    # every record written before it.
+    link: NotRequired[str]
     # True when the system took the pass from a stored one instead of running the check
     # (ADR-0065); absent on a check that ran.
     reused: NotRequired[bool]
@@ -937,6 +949,12 @@ class FullChecksRecord(TypedDict):
     # numbers, written by the system only, and only on a passed run that had a breach. It
     # returns and blocks nothing.
     over_budget: NotRequired[list[BudgetBreach]]
+    # Where the run happened (GH-376): `ci` when the product's GitHub jobs gave the verdict,
+    # `local` when this machine ran the tier. Absent on a record written before it and on a
+    # product without `ci:`.
+    ran_on: NotRequired[Literal["ci", "local"]]
+    # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
+    ci_fallback: NotRequired[FallbackCause]
 
 
 class TaskState(TaskInput, total=False):

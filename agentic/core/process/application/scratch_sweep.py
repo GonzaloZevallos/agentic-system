@@ -35,6 +35,15 @@ def _stamp(value: object, fallback: datetime) -> datetime:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
+def is_ended(raw: Mapping[str, object]) -> bool:
+    """Whether the task document `raw` says the task is over: merged or closed (`closed_at`),
+    or ended with no delivery (a status of `_ENDED_WITHOUT_DELIVERY` with `finished_at`).
+    The one rule the scratch sweep and the CI ref sweep (GH-376) share."""
+    return bool(raw.get("closed_at")) or (
+        raw.get("status") in _ENDED_WITHOUT_DELIVERY and bool(raw.get("finished_at"))
+    )
+
+
 def _closed_at(
     ports: Ports, task: str, fallback: datetime, unreadable: datetime | None
 ) -> datetime | None:
@@ -48,11 +57,9 @@ def _closed_at(
     except (OSError, ValueError):
         return unreadable
     raw = raw or {}
-    if raw.get("closed_at"):
-        return _stamp(raw["closed_at"], fallback)
-    if raw.get("status") in _ENDED_WITHOUT_DELIVERY and raw.get("finished_at"):
-        return _stamp(raw["finished_at"], fallback)
-    return None
+    if not is_ended(raw):
+        return None
+    return _stamp(raw.get("closed_at") or raw["finished_at"], fallback)
 
 
 def sweep(ports: Ports, now: datetime) -> list[str]:

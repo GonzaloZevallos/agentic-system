@@ -210,6 +210,9 @@ class LandingSpent:
     # gate's own rerun (ADR-0066): the failure already repeated, so the landing's `rerun` would
     # be a third run. `False` for a record written before the gate reran, which keeps `rerun`.
     checks_rerun_on_head: bool = False
+    # GH-395: `sync_master` entries answering `ci_blocked_by_conflict` on the current head and
+    # upstream sha (the pair): the one sync a conflicting head's missing CI is owed.
+    conflict_ci_syncs_on_pair: int = 0
 
     @property
     def unlandable(self) -> bool:
@@ -289,6 +292,13 @@ def landing_step(
             return (
                 exhausted() if waited is not None and waited >= ci.CI_WAIT_MAX_S else step("wait")
             )
+        case "ci_blocked_by_conflict":
+            # GitHub runs no CI on a head that conflicts with its base: never a wait. One
+            # sync per (head, upstream) pair, off the conflict cap (a confirmed conflict's);
+            # a second one for the same pair is the diagnose.
+            if spent.conflict_ci_syncs_on_pair >= 1:
+                return exhausted()
+            return _sync(step, exhausted, spent, conflicting=False)
         case "not_approved" | "head_not_reviewed":
             return pass_("re_review")
         case "open_findings_blocking":
