@@ -42,6 +42,7 @@ from ..domain.task import (
     PullRequest,
     TaskInput,
     TaskState,
+    TrackerFailure,
 )
 from .limits import RunLimits
 
@@ -673,6 +674,26 @@ class TrackerUnreachable(TrackerCallFailed):
     recognised, never stderr."""
 
 
+class TrackerTransient(TrackerCallFailed):
+    """A `gh` call kept failing with a transient GitHub error (a 502, a reset) until the
+    retries a `GhRetry` allows ran out (GH-389). A write may have been applied after all: a
+    response can be lost after the change. The message names the call and the bound, never
+    stderr."""
+
+
+class TrackerRateLimited(TrackerCallFailed):
+    """GitHub's rate limit held a `gh` call after its retries, or the wait for the reset it
+    stated is longer than the policy's cap (GH-389). The message names the call and the
+    bound, never stderr."""
+
+
+class TrackerRefused(ValueError):
+    """`gh` ran and exited non-zero with an answer no retry changes (GH-389): the failure a
+    caller's own wording describes. A `ValueError`, so every handler that already treats a
+    failed call as one is unchanged; not a `TrackerCallFailed`, which is the transport's.
+    A missing `gh` is none of these: it stays a plain `ValueError`."""
+
+
 class GitError(RuntimeError):
     """A real git failure -- not a question `Workspace`'s own contract answers some
     other way, like `is_ancestor`'s `False` for an object this checkout does not have
@@ -1218,6 +1239,18 @@ class Tracker(Protocol):
     def label(self, task_id: str, label: str) -> None: ...
 
     def unlabel(self, task_id: str, label: str) -> None: ...
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        """`comment`, best effort (GH-389): the failure of the call, as a `TrackerFailure`
+        with a closed class, instead of raising. `None` when it landed or the task has no
+        issue. A missing `gh` still raises: that is not a GitHub failure. For a comment the
+        run can go on without; never for escalation, split, discard, tracker-only, ready,
+        push or pull request creation."""
+        ...
+
+    def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        """`unlabel`, best effort: returns the failure instead of raising, as `note`."""
+        ...
 
     def ensure_label(self, name: str) -> None:
         """Makes sure the repository has a label called `name` (GH-294), so `open_issue`

@@ -301,6 +301,12 @@ En el código se llama `flake_verdict` (dominio, `domain/presubmit.py`) y `Flake
 _Avoid_: test intermitente
 _Campo_: flaky test — Software Engineering at Google, cap. 11; retries de Playwright y `pytest-rerunfailures`, que reintentan pero no registran la cabeza
 
+**Nota al tracker**:
+Una escritura informativa a GitHub (un comentario o una etiqueta que se quita) cuyo fallo no termina la corrida (GH-389). Si la llamada falla después de los reintentos de `gh`, no lanza: devuelve el fallo, el sistema lo registra en `tracker_failures` del documento de la tarea y la corrida sigue. El registro es una fila `{target, cls, at}` con `target` `comment` o `label` y una clase cerrada (`timed_out`, `unreachable`, `transient`, `rate_limited`, `refused`) que sale del tipo del error, nunca de lo que `gh` imprimió; una fila por `(target, cls)` y diez como máximo. Un `gh` que no está instalado no es una Nota: la corrida falla como siempre. El aviso de escalado, el split, el discard, el solo-tracker, el comentario de listo para revisión, el push y la creación del PR nunca son una Nota: siguen fallando el paso.
+En el código se llama `Tracker.note` y `Tracker.drop_label` (puerto), `TrackerFailure` y su reductor `add_tracker_failures` (dominio, `domain/task.py`).
+_Avoid_: comentario opcional, best effort suelto (la lista de llamadores es cerrada)
+_Campo_: best-effort notification; la contraparte de un *fire-and-forget* con registro del fallo
+
 **Ganancia inerte del master**:
 Lo que el master ganó desde que corrió un pase registrado, cuando ningún camino de esa ganancia puede cambiar el resultado de los chequeos: todos coinciden con un glob que el producto declara en `merge_inert` (leído de la cabeza del PR) y ninguno cae en el conjunto nunca-inerte (`.agentic/stack.yaml`, `.agentic/**` salvo `.agentic/tasks/*.md`, `.github/**`, `CODING_STANDARDS.md`, manifiestos y locks). Si lo es, el pase sigue valiendo sobre el master nuevo y el merge no corre la suite; ante cualquier duda (diff ilegible, master que no es ancestro, ganancia vacía, stack ilegible) no lo es y se corre. El sistema no declara nada por defecto (ADR-0045, adenda GH-353).
 En el código se llama `gain_inert` y `masters_covered` (dominio, `domain/master_gain.py`); la ganancia la lee `Workspace.gain_paths`.
@@ -437,6 +443,11 @@ _Campo_: sin término de arte
 **Corrida interrumpida**:
 Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. El poller la retoma sin decisión del humano cuando su lock es de un arranque anterior (una Parada por apagado incluida), como mucho 3 veces por cada decisión del humano; si murió en el mismo arranque, la deja al humano. Una caída por excepción del grafo en el mismo arranque también la retoma el poller, como mucho 2 veces por versión del sistema y 6 en total por cada decisión del humano; una muerte por señal en el mismo arranque sigue siendo del humano. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
+_Campo_: sin término de arte
+
+**Corrida huérfana**:
+Una tarea de la bandeja (issue abierto con la etiqueta `agentic`), en un estado anterior a la entrega, sin registro de lock, sin corrida viva y sin que su documento se haya escrito en una hora. El poller la retoma hasta 3 veces seguidas que no corrieron nada, contadas desde el último comentario del humano, y siempre desde el documento (`--from-document`). Se la frena sacando la etiqueta `agentic` o cerrando el issue. No es una Corrida interrumpida: esa conserva su lock.
+_Avoid_: varada (la del aterrizaje, GH-257), stranded
 _Campo_: sin término de arte
 
 **Directorio temporal**:

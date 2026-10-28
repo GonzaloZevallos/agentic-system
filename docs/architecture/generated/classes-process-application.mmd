@@ -189,7 +189,13 @@ classDiagram
   }
   class TrackerCallFailed {
   }
+  class TrackerRateLimited {
+  }
+  class TrackerRefused {
+  }
   class TrackerTimedOut {
+  }
+  class TrackerTransient {
   }
   class TrackerUnreachable {
   }
@@ -213,7 +219,9 @@ classDiagram
   }
   class _Unlimited {
   }
+  TrackerRateLimited --|> TrackerCallFailed
   TrackerTimedOut --|> TrackerCallFailed
+  TrackerTransient --|> TrackerCallFailed
   TrackerUnreachable --|> TrackerCallFailed
   EstimateCapReached --|> Escalating
   RoleFailure --|> Escalating

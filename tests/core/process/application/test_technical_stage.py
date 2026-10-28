@@ -1407,6 +1407,22 @@ async def test_escalate_labels_a_pause_the_predicate_keeps_for_a_human(cfg):
         assert ports.tracker.labels == [("GH-12", "needs-human")]
 
 
+async def test_an_escalation_comment_that_keeps_returning_502_still_raises_out_of_the_node(cfg):
+    # Characterisation (GH-389): the escalation notice is NOT best effort. Over a fake `gh`
+    # that answers 502 to every `issue comment`, under the retry policy, the document is
+    # saved and the label applied, then the comment raises out of the node after the
+    # retries, as a GitHub error always did; `note` is only for the informative callers.
+    from tests.fakes import BadGatewayComments
+
+    state = {**TASK, "escalated": "PM could not decide", "questions_for_human": ["Currency?"]}
+    ports = memory_ports(tracker=BadGatewayComments())
+    with pytest.raises(ValueError, match="transient GitHub error on each of 3 attempts"):
+        await escalate(state, cfg, ports)
+    assert ports.documents.last == state
+    assert ports.tracker.labels == [("GH-12", "needs-human")] and ports.tracker.comments == []
+    assert len(ports.tracker.gh_calls) == 3  # retried, then raised
+
+
 async def test_the_integrator_is_told_to_regenerate_docs_and_not_merge_them_by_hand(cfg):
     docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
     state = {**TASK, "subtasks": {"api": approved("api"), "domain": approved("domain")}}

@@ -4126,3 +4126,198 @@ def test_the_integration_brief_gains_the_docs_conflict_line_only_when_the_produc
     assert "run `make docs` and commit its output" in declared["brief"]
     assert rules.integration_work("", [], docs) == rules.integration_work("", [])
     assert rules.integration_subtask("", ["b"], docs)["brief"].endswith(conflict_line(docs))
+
+
+# --- GH-403: Corrida huérfana ---------------------------------------------------------
+
+ORPHAN_NOW = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+
+
+def _orphan(raw: dict[str, Any] | None = None, **over: Any) -> str:
+    facts: dict[str, Any] = {
+        "live": False,
+        "has_lock": False,
+        "quiet": True,
+        "prior": 0,
+        "last_own_at": None,
+        "now": ORPHAN_NOW,
+    }
+    return rules.orphaned_run(cast(Any, {"status": "planned", **(raw or {})}), **{**facts, **over})
+
+
+def test_the_orphan_statuses_are_the_non_terminal_non_waiting_ones_of_task_status():
+    ended_or_waiting = {
+        "ready_for_review",
+        "waiting_on_human",
+        "discarded",
+        "split",
+        "tracker_only",
+    }
+    expected = set(get_args(task.Status)) - ended_or_waiting
+    assert set(rules.ORPHANED_STATUSES) == expected
+    for status in get_args(task.Status):
+        verdict = _orphan({"status": status})
+        assert verdict == ("retake" if status in expected else "none"), status
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"closed_at": "2026-10-28"},
+        {"escalated": "Developer failed"},
+        {"pull_request": "https://x/pull/3"},
+        {"status": None},
+        {"status": "bogus"},
+    ],
+)
+def test_orphaned_run_ignores_a_task_that_is_ended_escalated_delivered_or_unreadable(raw):
+    assert _orphan(raw) == "none"
+    assert _orphan({"status": "planned", **raw}) == "none"  # an extra field changes nothing
+
+
+def test_orphaned_run_ignores_a_document_with_no_status():
+    assert rules.orphaned_run({}, **_orphan_facts()) == "none"
+
+
+def _orphan_facts(**over: Any) -> dict[str, Any]:
+    return {
+        "live": False,
+        "has_lock": False,
+        "quiet": True,
+        "prior": 0,
+        "last_own_at": None,
+        "now": ORPHAN_NOW,
+        **over,
+    }
+
+
+def test_orphaned_run_is_never_a_verdict_for_a_live_run_or_a_lock_record():
+    assert _orphan(live=True) == "none"
+    assert _orphan(has_lock=True) == "none"
+    assert _orphan(live=True, quiet=False) == "none"  # the cheaper check wins
+
+
+def test_orphaned_run_waits_for_the_quiet_hour_only_for_the_first_retake():
+    assert _orphan(quiet=False) == "quiet"
+    assert _orphan() == "retake"
+
+
+def test_orphaned_run_follows_the_retake_calendar_after_the_first_retake():
+    own = ORPHAN_NOW - timedelta(minutes=29)
+    assert _orphan(prior=1, last_own_at=own) == "calendar"
+    assert _orphan(prior=1, last_own_at=ORPHAN_NOW - timedelta(minutes=30)) == "retake"
+    assert _orphan(prior=2, last_own_at=ORPHAN_NOW - timedelta(minutes=59)) == "calendar"
+    assert _orphan(prior=2, last_own_at=ORPHAN_NOW - timedelta(minutes=60)) == "retake"
+    assert rules.orphaned_due(own, 1) == own + timedelta(minutes=30)
+
+
+def test_orphaned_run_stops_at_the_cap_whatever_the_calendar_says():
+    old = ORPHAN_NOW - timedelta(days=1)
+    assert _orphan(prior=rules.ORPHANED_RETAKE_MAX, last_own_at=old) == "cap_spent"
+    assert _orphan(prior=rules.ORPHANED_RETAKE_MAX - 1, last_own_at=old) == "retake"
+    assert rules.ORPHANED_RETAKE_MAX == 3 and rules.ORPHANED_QUIET == timedelta(hours=1)
+
+
+def _stamp_at(moment: datetime) -> str:
+    return moment.isoformat().replace("+00:00", "Z")
+
+
+def test_an_orphan_retake_followed_by_a_later_run_is_not_counted():
+    posted = ORPHAN_NOW
+    after = _stamp_at(posted + timedelta(minutes=2))
+    assert rules.orphaned_retake_count([posted], [after]) == 0
+
+
+def test_an_orphan_retake_no_run_followed_is_counted():
+    posted = ORPHAN_NOW
+    before = _stamp_at(posted - timedelta(minutes=2))
+    assert rules.orphaned_retake_count([posted], [before]) == 1
+    assert rules.orphaned_retake_count([posted], []) == 1
+
+
+@pytest.mark.parametrize("entry", [None, "", "yesterday", 7, "2026-10-28T12:05:00", {"x": 1}])
+def test_a_run_that_cannot_be_dated_never_counts_as_progress(entry):
+    # The rejected input: an undatable entry (missing, not text, not ISO, no offset) must not
+    # clear the retake, however late it might have been.
+    assert rules.orphaned_retake_count([ORPHAN_NOW], [entry]) == 1
+
+
+def test_each_orphan_retake_is_judged_against_the_runs_later_than_itself():
+    first = ORPHAN_NOW
+    second = ORPHAN_NOW + timedelta(hours=1)
+    run = _stamp_at(first + timedelta(minutes=5))  # follows the first, not the second
+    assert rules.orphaned_retake_count([first, second], [run]) == 1
+
+
+def test_orphaned_line_says_how_to_hold_a_waiting_orphan():
+    hold = "remove the agentic label to hold it"
+    assert rules.orphaned_line(7, "quiet", "60 min") == (
+        "agentic: poll: #7 orphaned (no lock): "
+        f"not quiet yet (document written within 60 min); {hold}"
+    )
+    assert rules.orphaned_line(7, "calendar", "13:05") == (
+        f"agentic: poll: #7 orphaned (no lock): due at 13:05; {hold}"
+    )
+    assert rules.orphaned_line(7, "no_slot") == (
+        f"agentic: poll: #7 orphaned (no lock): no slot free; {hold}"
+    )
+
+
+def test_orphaned_line_hands_a_spent_or_unreadable_orphan_to_the_human():
+    human = "left to the human: agentic resume --issue 7 --from-document"
+    assert rules.orphaned_line(7, "cap_spent", "3 of 3") == (
+        f"agentic: poll: #7 orphaned (no lock): retake cap spent (3 of 3); {human}"
+    )
+    assert rules.orphaned_line(7, "lock_unreadable", "bad json") == (
+        f"agentic: poll: #7 orphaned (no lock): lock unreadable (bad json); {human}"
+    )
+
+
+def test_the_orphan_comment_prefix_is_a_system_comment_and_collides_with_no_other():
+    from agentic.core.process.application import poll, resume
+
+    prefix = poll.RETAKEN_ORPHANED
+    assert prefix == "Retaken with no lock: "
+    assert prefix in resume.SYSTEM_COMMENTS
+    for other in (poll.RETAKEN, poll.RETAKEN_AFTER_CRASH):
+        assert not prefix.startswith(other) and not other.startswith(prefix)
+
+
+def _orphan_plan(**over: Any) -> rules.PollPlan:
+    return rules.poll_plan(
+        **{
+            "closes": [],
+            "resumes": [],
+            "launches": [],
+            "available_slots": 1,
+            "now": ORPHAN_NOW,
+            **over,
+        }
+    )
+
+
+def test_poll_plan_starts_an_orphan_as_a_retake_with_its_own_reason():
+    plan = _orphan_plan(orphan_retakes=[7])
+    assert plan.actions == [rules.PollAction("retake", 7, reason="orphaned")]
+    assert plan.deferred == []
+
+
+def test_poll_plan_orders_an_orphan_beside_the_other_retakes_by_closeness_and_shares_the_cap():
+    plan = _orphan_plan(available_slots=2, retakes=[9], orphan_retakes=[7, 8], closeness={9: 3})
+    assert [(a.issue, a.reason) for a in plan.actions] == [(9, "reboot"), (7, "orphaned")]
+    assert plan.deferred == [rules.Deferred("orphan", 8, "no_slot")]
+
+
+def test_poll_plan_defers_every_orphan_when_no_slot_is_left_and_launches_nothing():
+    launch = rules.LaunchCandidate(20, False, None, 0, len(rules.LAUNCH_SCHEDULE))
+    plan = _orphan_plan(available_slots=0, orphan_retakes=[7], launches=[launch])
+    assert plan.actions == []
+    assert plan.deferred == [rules.Deferred("orphan", 7, "no_slot")]
+    assert not any(rules.holds_launches(d) for d in plan.deferred)
+
+
+def test_a_held_or_land_waiting_round_starts_and_defers_no_orphan():
+    assert _orphan_plan(orphan_retakes=[7], held=["scratch"]).actions == []
+    assert _orphan_plan(orphan_retakes=[7], held=["scratch"]).deferred == []
+    waiting = _orphan_plan(orphan_retakes=[7], others_landing=True)
+    assert waiting.actions == [] and waiting.deferred == []

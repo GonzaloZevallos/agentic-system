@@ -2485,6 +2485,41 @@ def _closed_run(monkeypatch, root: Path, ports, *, issue: int = 9):
     monkeypatch.setattr("sys.argv", argv)
 
 
+class _PortsAsked(BaseException):
+    """Raised by the fake `default_ports` so `main` stops right after the ports are asked."""
+
+
+@pytest.mark.parametrize(
+    ("argv", "wanted"),
+    [
+        (["run", "--issue", "9"], "run"),
+        (["resume", "--issue", "9"], "run"),
+        (["merge", "--issue", "9"], "exempt"),
+        (["land", "--issue", "9"], "exempt"),
+        (["close", "--issue", "9"], None),
+        (["poll"], None),
+    ],
+)
+def test_the_cli_asks_for_a_gh_retry_policy_only_from_the_verbs_that_own_a_task(
+    monkeypatch, tmp_path, argv, wanted
+):
+    """GH-389: run/resume wait up to the run cap, merge/land the exempt one, and every other
+    verb (the poller, close) builds its ports with no policy, so ADR-0050's fast failure
+    holds there. Swapping or dropping a verb in `main` must break this."""
+    (tmp_path / ".agentic").mkdir()
+    asked: list[object] = []
+
+    def fake_default_ports(cfg, stop_flag=None, *, gh_retry=None):
+        asked.append(gh_retry)
+        raise _PortsAsked
+
+    monkeypatch.setattr(cli, "default_ports", fake_default_ports)
+    monkeypatch.setattr("sys.argv", ["agentic", *argv, "--product-dir", str(tmp_path)])
+    with pytest.raises(_PortsAsked):
+        cli.main()
+    assert asked == [wanted]
+
+
 def test_close_refuses_with_no_document(monkeypatch, tmp_path, capsys):
     from agentic.core.measurement.adapters.otel import telemetry
 
@@ -5850,3 +5885,154 @@ def test_main_still_refuses_a_run_with_neither_title_nor_issue(monkeypatch, caps
     assert capsys.readouterr().err == (
         f"{run.format_usage()}agentic run: error: give a title and a description, or --issue N\n"
     )
+
+
+# GH-389: the failures of `announce` enter the resumed state through the reducer, with a
+# second `aupdate_state` that must not disturb the run. A real LangGraph (no graph double)
+# whose first node after the pause saves the document, as the real pipeline does.
+def _pausing_graph(ports, seen):
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import interrupt
+
+    from agentic.core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
+    from agentic.core.process.domain.task import TaskInput, TaskState
+
+    def escalate(state):
+        ports.documents.save(state)  # the first node after the entry saves the document
+        return {"status": "waiting_on_human", "escalated": "needs a decision"}
+
+    def pause(state):
+        interrupt("needs a decision")
+        return {}
+
+    def pipeline(state):
+        seen["rows"] = list(state.get("tracker_failures", []))
+        ports.documents.save(state)
+        return {"status": "ready_for_review", "escalated": None}
+
+    g = StateGraph(TaskState, input_schema=TaskInput)
+    g.add_node(ESCALATE, escalate)
+    g.add_node("pause", pause)
+    g.add_node(PIPELINE, pipeline)
+    g.add_edge(START, ESCALATE)
+    g.add_edge(ESCALATE, "pause")
+    g.add_edge("pause", PIPELINE)
+    g.add_edge(PIPELINE, END)
+    return g
+
+
+def _watching_second_update(monkeypatch):
+    """The `next` of the checkpoint right before and right after each second update."""
+    seen = []
+    real = cli._record_tracker_failures
+
+    async def watched(app, config, failures, as_node):
+        before = (await app.aget_state(config)).next
+        await real(app, config, failures, as_node)
+        after = await app.aget_state(config)
+        seen.append((before, after.next, after.values.get("tracker_failures")))
+
+    monkeypatch.setattr(cli, "_record_tracker_failures", watched)
+    return seen
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("from_document", [False, True])
+async def test_a_failed_resumed_comment_is_recorded_and_the_run_goes_on(
+    monkeypatch, tmp_path, from_document
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import BadGatewayComments, memory_ports
+
+    # The "Resumed:" note is a real `GhTracker` call over a fake `gh` that keeps answering 502.
+    ports, seen = memory_ports(tracker=BadGatewayComments()), {}
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, seen))
+    updates = _watching_second_update(monkeypatch)
+    cfg = Configuration(product_dir=tmp_path)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+    ports.tracker.earlier = ["Escalated: needs a decision", "Go on."]
+    if from_document:
+        ports.documents.save(
+            {**task, "type": "bug", "status": "waiting_on_human", "escalated": "needs a decision"}
+        )
+    else:
+        with pytest.raises(SystemExit):
+            await cli._run(task, cfg, ports, checkpointer=saver)
+
+    await cli._resume("GH-1", cfg, ports, from_document=from_document, yes=True, checkpointer=saver)
+
+    assert seen["rows"] == [{"target": "comment", "cls": "transient", "at": "2026-10-28T00:00:00Z"}]
+    assert len(ports.tracker.gh_calls) == 3 and ports.tracker.slept  # retried, then given up
+    assert ports.documents.saved[-1]["tracker_failures"] == seen["rows"]
+    [(before, after, rows)] = updates
+    assert before == after and rows == seen["rows"]  # the update did not move the checkpoint
+
+
+@pytest.mark.anyio
+async def test_a_resume_where_every_note_lands_makes_no_second_update(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports, seen = memory_ports(), {}
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, seen))
+    updates = _watching_second_update(monkeypatch)
+    cfg = Configuration(product_dir=tmp_path)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+    ports.tracker.earlier = ["Escalated: needs a decision", "Go on."]
+    with pytest.raises(SystemExit):
+        await cli._run(task, cfg, ports, checkpointer=saver)
+    await cli._resume("GH-1", cfg, ports, yes=True, checkpointer=saver)
+    [(before, after, rows)] = updates
+    assert before == after and not rows and seen["rows"] == []  # nothing recorded
+    assert ports.documents.saved[-1].get("tracker_failures", []) == []
+
+
+@pytest.mark.anyio
+async def test_no_failure_means_no_second_aupdate_state():
+    calls = []
+
+    class App:
+        async def aupdate_state(self, config, values, as_node=None):
+            calls.append((values, as_node))
+
+    row = {"target": "comment", "cls": "transient", "at": "2026-10-28T00:00:00Z"}
+    await cli._record_tracker_failures(App(), {}, [], "escalate")
+    assert calls == []
+    await cli._record_tracker_failures(App(), {}, [row], "escalate")
+    assert calls == [({"tracker_failures": [row]}, "escalate")]
+
+
+@pytest.mark.anyio
+async def test_a_failed_archive_notice_enters_the_run_as_a_tracker_failure(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, {}))
+    ports.documents.save(
+        {"id": "GH-1", "system_commit": "abc1234", "cost_usd": 4.0, "escalated": "old"}
+    )
+    ports.workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
+    ports.tracker.comment_failures = 1  # the "Started over" notice keeps failing
+    cfg = Configuration(product_dir=tmp_path)
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    with pytest.raises(SystemExit):
+        await cli._run(task, cfg, ports, fresh=True, checkpointer=Saver())
+    assert ports.tracker.unlabeled == [("GH-1", "needs-human")]  # the other write still ran
+    saved = ports.documents.saved[-1]
+    assert [(r["target"], r["cls"]) for r in saved["tracker_failures"]] == [("comment", "refused")]
+
+
+@pytest.mark.anyio
+async def test_a_run_whose_archive_notice_landed_enters_with_no_failure(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, {}))
+    ports.documents.save({"id": "GH-1", "system_commit": "abc1234", "cost_usd": 4.0})
+    cfg = Configuration(product_dir=tmp_path)
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    with pytest.raises(SystemExit):
+        await cli._run(task, cfg, ports, fresh=True, checkpointer=Saver())
+    assert not ports.documents.saved[-1].get("tracker_failures")

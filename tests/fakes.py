@@ -83,6 +83,7 @@ from agentic.core.process.domain.task import (
     PullRequest,
     TaskInput,
     TaskState,
+    TrackerFailure,
 )
 
 # What `MemoryWorkspace.merge_base` answers for a pair a test did not script (GH-334).
@@ -1308,6 +1309,8 @@ class MemoryTracker:
         self.attempted_bodies: list[str] = []
         self.open_error = "gh pr create failed: Body is too long"
         self.comment_failures = 0
+        # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).
+        self.drop_label_failures = 0
         # `pull_requests_on`: the pull requests scripted per head branch, `lookup_error`
         # to make it raise `ValueError` (`gh`'s own failure shape), and each branch asked.
         self.on_branch: dict[str, list[BranchPullRequest]] = {}
@@ -1428,6 +1431,21 @@ class MemoryTracker:
 
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        """`comment`, best effort: a scripted `ValueError` is a refused call, returned."""
+        try:
+            self.comment(task_id, text)
+        except ValueError:
+            return TrackerFailure(target="comment", cls="refused", at="2026-10-28T00:00:00Z")
+        return None
+
+    def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        if self.drop_label_failures > 0:
+            self.drop_label_failures -= 1
+            return TrackerFailure(target="label", cls="transient", at="2026-10-28T00:00:00Z")
+        self.unlabel(task_id, label)
+        return None
 
     def ensure_label(self, name: str) -> None:
         if self.ensure_label_error is not None:
@@ -2385,3 +2403,39 @@ def copy_reviewed(
         },
         cost,
     )
+
+
+class BadGatewayComments(MemoryTracker):
+    """A `MemoryTracker` whose `comment` and `note` run through a real `GhTracker` over a
+    fake `gh` that answers 502 every time, under the run/resume retry policy with an
+    injected sleep (GH-389). `gh_calls` keeps every argv, `slept` every wait; nothing sleeps."""
+
+    BAD_GATEWAY = "non-200 OK status code: 502 Bad Gateway body: <html>"
+
+    def __init__(self) -> None:
+        super().__init__()
+        import subprocess
+
+        from agentic.core.process.adapters.github.run import GhRetry
+        from agentic.core.process.adapters.github.tracker import GhTracker
+
+        self.gh_calls: list[Any] = []
+        self.slept: list[float] = []
+
+        def gh(args: Any, cwd: Any, capture_output: Any, text: Any, check: Any) -> Any:
+            self.gh_calls.append(args)
+            raise subprocess.CalledProcessError(1, args, stderr=self.BAD_GATEWAY)
+
+        self._gh = GhTracker(
+            Path("/p"),
+            gh,
+            log=lambda _line: None,
+            retry=GhRetry(max_wait_s=900, sleep=self.slept.append),
+            now=lambda: "2026-10-28T00:00:00Z",
+        )
+
+    def comment(self, task_id: str, text: str) -> None:
+        self._gh.comment(task_id, text)
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        return self._gh.note(task_id, text)
