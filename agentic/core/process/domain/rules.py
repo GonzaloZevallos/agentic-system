@@ -2681,8 +2681,8 @@ def integration_increment(
     approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
     if approved is None:
         return "refuse"
-    if same_commit(branch_head, approved):
-        return "agree"
+    if head_reviewed(approved, state.get("close_docs"), branch_head):
+        return "agree"  # the reviewed head, or the close-time docs commit made right on it
     if not descends or sub is None or sub.get("branch") != task_branch(task_id):
         return "refuse"
     others = (s for name, s in state.get("subtasks", {}).items() if name != unit)
