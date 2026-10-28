@@ -1,8 +1,11 @@
+import re
+
 import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.suppressions import Forbidden
 
 
@@ -691,3 +694,168 @@ def test_check_budgets_without_delivery_checks_is_refused_naming_the_full_run():
     del data["delivery_checks"]
     with pytest.raises(ValueError, match="stack.yaml: `check_budgets` requires `delivery_checks`"):
         stack.check_budgets(data, "stack.yaml")
+
+
+# --- docs (the stack contract for generated docs) ------------------------------------------
+
+GENERATED = "docs/architecture/generated/**"
+
+
+def docs_data(block=None, **more):
+    return {
+        "checks": {"tests": "pytest", "lint": "ruff check ."},
+        "docs": {"generate": "python scripts/gen_docs.py", "paths": [GENERATED]}
+        if block is None
+        else block,
+        **more,
+    }
+
+
+def test_an_absent_docs_block_is_none_and_changes_no_answer():
+    plain = {"checks": {"tests": "pytest"}, "delivery_checks": ["tests"]}
+    assert stack.docs(plain, "x") is None
+    assert stack.checks(plain, "x") == {"tests": "pytest"}
+    assert stack.delivery_checks(plain, "x") == ("tests",)
+
+
+def test_a_declared_docs_block_is_read_and_its_check_joins_checks_last():
+    data = docs_data()
+    assert stack.docs(data, "x") == Docs(generate="python scripts/gen_docs.py", paths=(GENERATED,))
+    found = stack.checks(data, "x")
+    assert list(found) == ["tests", "lint", "docs"]
+    assert found["docs"] == stack.docs_command(stack.docs(data, "x"))
+
+
+def test_the_docs_check_joins_delivery_checks_only_when_tiers_are_declared():
+    assert stack.delivery_checks(docs_data(), "x") == ()
+    tiers = docs_data(delivery_checks=["lint"])
+    assert stack.delivery_checks(tiers, "x") == ("lint", "docs")
+    listed = docs_data(delivery_checks=["docs", "lint"])
+    assert stack.delivery_checks(listed, "x") == ("docs", "lint")
+
+
+def test_a_product_check_named_docs_is_refused_as_reserved():
+    data = docs_data(checks={"docs": "make docs"})
+    with pytest.raises(ValueError, match="`docs` is reserved"):
+        stack.checks(data, "stack.yaml")
+
+
+def test_a_declared_check_named_docs_is_untouched_without_a_docs_block():
+    assert stack.checks({"checks": {"docs": "make docs"}}, "x") == {"docs": "make docs"}
+
+
+def test_a_product_check_named_docs_without_a_docs_block_is_not_added_to_delivery_checks():
+    data = {"checks": {"docs": "make docs", "lint": "ruff"}, "delivery_checks": ["lint"]}
+    assert stack.delivery_checks(data, "x") == ("lint",)
+
+
+def test_a_budget_an_affected_form_and_a_rerun_form_may_name_the_docs_check():
+    data = docs_data(delivery_checks=["lint"], check_budgets={"docs": 90})
+    assert stack.check_budgets(data, "x") == {"docs": 90}
+    data = docs_data(affected_checks={"docs": "make docs --since {base}"})
+    assert stack.affected_checks(data, "x") == {"docs": "make docs --since {base}"}
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "generate",
+        ["generate"],
+        {"generate": "x"},
+        {"paths": [GENERATED]},
+        {"generate": "x", "paths": [GENERATED], "extra": 1},
+        {"generate": "", "paths": [GENERATED]},
+        {"generate": "  ", "paths": [GENERATED]},
+        {"generate": 5, "paths": [GENERATED]},
+        {"generate": "a\nb", "paths": [GENERATED]},
+        {"generate": "x", "paths": GENERATED},
+        {"generate": "x", "paths": []},
+        {"generate": "x", "paths": [" "]},
+        {"generate": "x", "paths": [3]},
+    ],
+)
+def test_a_docs_block_of_the_wrong_shape_fails_at_load(block):
+    with pytest.raises(ValueError, match="stack.yaml: .*`docs`|`generate`|`paths`"):
+        stack.docs(docs_data(block), "stack.yaml")
+
+
+@pytest.mark.parametrize("empty", [None, {}])
+def test_a_docs_block_declared_empty_says_to_leave_the_key_out(empty):
+    data = {"checks": {"tests": "pytest"}, "docs": empty}
+    with pytest.raises(ValueError, match="`docs` is declared empty; leave the key out"):
+        stack.docs(data, "stack.yaml")
+
+
+@pytest.mark.parametrize(
+    ("path", "reason"),
+    [
+        ("/etc/**", "absolute"),
+        ("docs/../.git/**", "`..`"),
+        ("../x/**", "`..`"),
+        (":(exclude)x", "starts with `:`"),
+        ("**/*.md", "empty literal prefix"),
+        ("*.md", "empty literal prefix"),
+        ("docs/**", "overlaps `docs/adr`"),
+        ("docs/", "overlaps `docs/adr`"),
+        ("docs/adr/**", "overlaps `docs/adr`"),
+        ("docs/adr/0001.md", "overlaps `docs/adr`"),
+        (".agentic/**", "overlaps `.agentic`"),
+        (".agentic/index/x.md", "overlaps `.agentic`"),
+        (".git/hooks/*", "overlaps `.git`"),
+        (".g*", "overlaps `.git`"),
+        ("./docs/x/**", "`.` segment"),
+    ],
+)
+def test_an_owned_path_that_is_unsafe_is_refused_naming_the_entry_and_why(path, reason):
+    data = docs_data({"generate": "x", "paths": [GENERATED, path]})
+    with pytest.raises(ValueError, match=re.escape(f"{path!r} under `docs`") + ".*" + reason):
+        stack.docs(data, "stack.yaml")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/architecture/generated/**",
+        "docs/architecture/generated/",
+        "docs/reference/api.md",
+        "diagrams/*.mmd",
+    ],
+)
+def test_an_owned_path_with_a_safe_literal_prefix_is_accepted(path):
+    assert stack.docs(docs_data({"generate": "x", "paths": [path]}), "x") == Docs("x", (path,))
+
+
+@pytest.mark.parametrize(
+    ("where", "key"),
+    [
+        ("checks", "tests"),
+        ("affected_checks", "tests"),
+        ("rerun_checks", "tests"),
+    ],
+)
+def test_parallel_checks_refuses_a_check_that_reads_an_owned_path(where, key):
+    command = "grep -r todo docs/architecture/generated/ {base}"
+    data = docs_data(
+        parallel_checks=True,
+        delivery_checks=["tests"],
+        affected_checks={"tests": command if where == "affected_checks" else "pytest {base}"},
+        rerun_checks={
+            "tests": {
+                "command": command if where == "rerun_checks" else "pytest --lf",
+                "test_id": r"(\S+)",
+            }
+        },
+    )
+    data["checks"]["tests"] = command if where == "checks" else "pytest"
+    with pytest.raises(ValueError, match=rf"'{key}' under `{where}`.*docs/architecture/generated/"):
+        stack.docs(data, "stack.yaml")
+    del data["parallel_checks"]
+    assert stack.docs(data, "stack.yaml") is not None
+
+
+def test_parallel_checks_accepts_checks_that_do_not_read_the_owned_paths():
+    assert stack.docs(docs_data(parallel_checks=True), "x") is not None
+
+
+def test_docs_is_a_key_the_file_may_declare():
+    assert "docs" in stack.KEYS
