@@ -2142,7 +2142,7 @@ class BadGatewayComments(MemoryTracker):
         self.gh_calls: list[Any] = []
         self.slept: list[float] = []
 
-        def gh(args, cwd, capture_output, text, check):
+        def gh(args: Any, cwd: Any, capture_output: Any, text: Any, check: Any) -> Any:
             self.gh_calls.append(args)
             raise subprocess.CalledProcessError(1, args, stderr=self.BAD_GATEWAY)
 
