@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ENV_PREFIX = "AGENTIC_"
 # The legacy, shared checkpointer file, relative to the product root, outside version
@@ -30,6 +31,7 @@ STATE_DIR = Path(".agentic/state")
 # (README.md, 14; issue #33).
 LOGS_DIR = Path(".agentic/logs")
 
+_BOARD_PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[1-9][0-9]*")
 RoleKind = Literal["actor", "verifier"]
 # What `max_parallel_subtasks` resolves to when unset, before the role-slot cap (GH-364).
 DEFAULT_PARALLEL_SUBTASKS = 4
@@ -195,6 +197,25 @@ class Configuration(BaseModel):
     # The machine's store of passing check results (ADR-0065): outside every checkout and
     # shared by every product, built like `run_registry_dir`.
     check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
+    # The GitHub Project the poller mirrors each issue's stage to (GH-375, ADR-0073), as
+    # `<owner>/<number>`. `None` mirrors nothing and makes no call.
+    board_project: str | None = None
+
+    @field_validator("board_project")
+    @classmethod
+    def _board_project_shape(cls, value: str | None) -> str | None:
+        if value is not None and _BOARD_PROJECT.fullmatch(value) is None:
+            raise ValueError(f"board_project must be <owner>/<number>, got {value!r}")
+        return value
+
+    @property
+    def board_owner_and_number(self) -> tuple[str, int] | None:
+        """`board_project` split into the owner login and the project number."""
+        if self.board_project is None:
+            return None
+        owner, _, number = self.board_project.partition("/")
+        return owner, int(number)
+
     # Where every run's scratch directories live, one partition per product (GH-397): on the
     # disk, outside every repository, built like `check_results_dir` but from the cache
     # home, since it is regenerable.

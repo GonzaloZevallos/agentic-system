@@ -11,10 +11,11 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
@@ -1626,6 +1627,76 @@ class FreeSpace(Protocol):
 
 
 @dataclass(frozen=True)
+class IssueRow:
+    """One issue as the board mirror reads it off the tracker: `state` is `open` or `closed`,
+    `closed_at` the UTC day it closed (`None` while open)."""
+
+    number: int
+    state: Literal["open", "closed"]
+    labels: frozenset[str]
+    closed_at: date | None
+
+
+@dataclass(frozen=True)
+class SentEntry:
+    """What was last sent for one issue: the card's fingerprint and the fields that carried
+    a value, so a field that later has none knows there is something to clear."""
+
+    fingerprint: str
+    present: frozenset[Field]
+
+
+@dataclass(frozen=True)
+class SentMemory:
+    """The mirror's memory of what it sent (ADR-0073): never read from the board. Bound to
+    the Project's node id; `failed_at` is the last whole-call failure; `unreadable` is set
+    by a load that found a file it could not parse (one log line, then it reads as empty)."""
+
+    project_id: str | None = None
+    failed_at: datetime | None = None
+    issues: Mapping[int, SentEntry] = field(default_factory=dict)
+    unreadable: bool = False
+
+
+class Board(Protocol):
+    """The GitHub Project the poller mirrors state to (GH-375, ADR-0073). Write-only as far
+    as state goes: the only things read from the Project are node ids. Every method may raise
+    `TrackerCallFailed` or `ValueError`."""
+
+    def project_id(self) -> str:
+        """The Project's node id, resolving (once per process) the field and option ids the
+        writes need. `ValueError` naming what is missing when a field or option is."""
+        ...
+
+    def open_issues(self) -> list[IssueRow]:
+        """Every open issue of the product's repo."""
+        ...
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        """Every issue, open and closed, and whether the read reached its limit (more exist)."""
+        ...
+
+    def issue(self, number: int) -> IssueRow:
+        """One issue, open or closed."""
+        ...
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        """Adds each issue to the Project and writes its fields. Returns the issues whose every
+        mutation came back without error: an issue not in the set is not recorded as sent."""
+        ...
+
+
+class BoardSent(Protocol):
+    """The mirror's memory on disk, one per product."""
+
+    def load(self) -> SentMemory:
+        """The memory, empty when the file is missing or unreadable (`unreadable` then set)."""
+        ...
+
+    def save(self, memory: SentMemory) -> None: ...
+
+
+@dataclass(frozen=True)
 class CheckRequest:
     """A gate asking for a share of the machine's cores (GH-361, ADR-0070). `enqueued_at`
     and `token` are `None` on the gate's first call and are the grant's on every later one,
@@ -1697,6 +1768,10 @@ class Ports:
     # The machine's store of passing check results (ADR-0065). `None` stores and reuses
     # nothing, which is how every checkout ran before it existed.
     check_results: CheckResults | None = None
+    # The GitHub Project board mirror (GH-375, ADR-0073) and its memory. `None` mirrors
+    # nothing and makes no call, which is how every round ran before they existed.
+    board: Board | None = None
+    board_sent: BoardSent | None = None
     # Where a check or a role attempt's temporary files go, and how much room the volumes
     # have (GH-391, ADR-0069). `None` leaves everything on the inherited `TMPDIR`, which is
     # how every checkout ran before.

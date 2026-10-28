@@ -33,6 +33,23 @@ def test_max_concurrent_runs_defaults_to_one():
         Configuration(product_dir=Path("/tmp/p"), max_concurrent_runs=0)
 
 
+def test_no_board_project_means_no_board():
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.board_project is None
+    assert cfg.board_owner_and_number is None
+
+
+def test_board_project_reads_owner_and_number_from_the_environment():
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_BOARD_PROJECT": "GonzaloZevallos/3"})
+    assert cfg.board_owner_and_number == ("GonzaloZevallos", 3)
+
+
+@pytest.mark.parametrize("bad", ["3", "owner/", "/3", "owner/0", "owner/x", "a/b/3", "o wner/3"])
+def test_board_project_rejects_anything_but_owner_slash_number(bad):
+    with pytest.raises(ValueError, match="board_project"):
+        Configuration.from_sources(PRODUCT, {"AGENTIC_BOARD_PROJECT": bad})
+
+
 def test_spend_pacing_is_off_by_default_and_the_pace_defaults_to_35():
     cfg = Configuration.from_sources(PRODUCT, {})
     assert cfg.spend_pacing is False
