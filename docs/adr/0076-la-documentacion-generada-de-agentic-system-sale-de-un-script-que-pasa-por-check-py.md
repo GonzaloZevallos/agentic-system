@@ -47,9 +47,12 @@ Aplica ADR-0074 (generada y escrita) y ADR-0021 (el alcance de mypy).
   `Literal["open", "closed"]`— se analiza junto a cualquier otro módulo; cada archivo solo
   anda bien. Las corridas de capa pasan `--ignore board.py` (que omite todo archivo con ese
   nombre, también `domain/board.py`) y las clases de esos archivos salen de una corrida sobre
-  cada uno, fusionada en el diagrama de la capa. Los diagramas de paquetes no tienen el nodo
-  `board`, porque una corrida de un solo archivo no dibuja paquetes. Si astroid lo arregla,
-  se quita el `--ignore`.
+  cada uno, fusionada en el diagrama de la capa. Los diagramas de paquetes no tienen los dos
+  nodos `board` (`process.domain.board` y `process.adapters.github.board`), porque una corrida
+  de un solo archivo no dibuja paquetes. La fusión de diagramas de clases junta en un bloque
+  las clases de distintos módulos que comparten nombre (`Entry`, `Pair`, `Refusal`,
+  `Subtask`, `Verdict`), como Mermaid las dibujaría de todos modos. Si astroid lo arregla,
+  se quita el `--ignore`; el recorrido AST de la clave 7 es la salida si no lo hace.
 - El grafo de roles incluye un segundo bloque: la rama `develop -> review` que el nodo
   `pipeline` corre por subtarea, que `get_graph(xray=True)` no expande. Sale de
   `pipeline_branch`, función pública nueva del adaptador de LangGraph.
