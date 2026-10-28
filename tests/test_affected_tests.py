@@ -534,6 +534,21 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "tests/*__init__.py",
         "checks `agentic/core/*/__init__.py` exist; the same name under tests/ is not read",
     ),
+    Allowance(
+        "tests/core/process/domain/test_master_gain.py",
+        "docs/README.md",
+        "its `docs/*.md` is a glob it feeds to the matcher as a string; it reads no page",
+    ),
+    Allowance(
+        "tests/core/process/domain/test_roles.py",
+        "docs/README.md",
+        "names `docs/**` as a string of a `docs:` block; it never reads the page",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "docs/README.md",
+        "its `docs/*` strings are inputs to the selector under test, not reads of the page",
+    ),
 )
 
 
