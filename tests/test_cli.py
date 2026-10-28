@@ -5843,9 +5843,7 @@ async def test_a_failed_resumed_comment_is_recorded_and_the_run_goes_on(
             await cli._run(task, cfg, ports, checkpointer=saver)
 
     ports.tracker.comment_failures = 1  # the "Resumed:" note keeps failing
-    await cli._resume(
-        "GH-1", cfg, ports, from_document=from_document, yes=True, checkpointer=saver
-    )
+    await cli._resume("GH-1", cfg, ports, from_document=from_document, yes=True, checkpointer=saver)
 
     assert [row["target"] + "/" + row["cls"] for row in seen["rows"]] == ["comment/refused"]
     assert ports.documents.saved[-1]["tracker_failures"] == seen["rows"]
