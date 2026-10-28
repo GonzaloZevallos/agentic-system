@@ -867,3 +867,12 @@ candidates:
   - finding
   - return
   added_at: '2026-10-28T10:54:47.804+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: When you integrate subtasks, grep the merged code for cast and fix the types at their source; a new module also needs its entry in the type-checked file registry before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-406
+  sources:
+  - finding
+  added_at: '2026-10-28T12:44:40.575+00:00'

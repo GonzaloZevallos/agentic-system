@@ -420,3 +420,20 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-408
+  GH-406@review:
+    cost_usd: 0.0993
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-406
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-406
