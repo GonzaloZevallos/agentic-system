@@ -131,21 +131,13 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     reopened = state.get("landing")
     if reopened:
         state = {**state, "landing": _closed_landing(reopened, state, task.path, ports)}
-    body = _bounded(state, task.branch, relative, ignored=False, preface=preface)
-    if body.bounded and ports.workspace.is_ignored(task.path, relative):
-        body = _bounded(state, task.branch, relative, ignored=True, preface=preface)
-        committing = False
-    else:
-        committing = body.bounded
+    body = _bounded(state, relative, preface=preface)
     try:
-        step = "task document commit failed"
-        if committing:
-            ports.documents.save(state)
-            ports.documents.write_into(state["id"], task.path)
-            ports.workspace.commit_paths(task.path, [relative], f"{state['id']}: task document")
-        if replaced and not committing:
-            # The sha is durable before the destructive step, whether or not the branch
-            # carries the document.
+        step = "task document save failed"
+        if body.bounded or replaced:
+            # The system never versions the task document (GH-420), so the full sections the
+            # body points to live in the product checkout's copy: saved before the push, and
+            # the sha of a replaced remote is durable before the destructive step.
             ports.documents.save(state)
         # The head the push carries, read after the last commit and before the push:
         # nothing is committed after it (GH-216), so the CI the push starts is of this sha.
@@ -394,20 +386,12 @@ def _undelivered(
     )
 
 
-def _bounded(
-    state: TaskState, branch: str, relative: str, *, ignored: bool, preface: str
-) -> BoundedBody:
+def _bounded(state: TaskState, relative: str, *, preface: str) -> BoundedBody:
     def pointer(omitted: tuple[str, ...]) -> str:
         named = ", ".join(omitted)
-        if ignored:
-            return (
-                f"Full sections ({named}): the task document in the product checkout at "
-                f"`{relative}`; this repository does not version it."
-            )
         return (
-            f"Full sections ({named}): the task document as of delivery, `{relative}` on "
-            f"branch `{branch}`. Its status and later fields are kept in the product "
-            f"checkout's copy."
+            f"Full sections ({named}): the task document in the product checkout at "
+            f"`{relative}`; the system does not version it."
         )
 
     return bounded_body(_parts(state), state["title"], pointer, preface=preface)

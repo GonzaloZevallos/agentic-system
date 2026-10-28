@@ -42,6 +42,7 @@ from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
 from ...application.ports import AddedAdr, AddedLine, Checkout, Upstream, UpstreamMerge
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
+from ...application.ports import UnstageablePath as UnstageablePath
 from ...domain import rules
 from ...domain.ci import Containment
 from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
@@ -54,6 +55,7 @@ WORKTREES = Path(".agentic/worktrees")
 # The knowledge index a role reads is written here on every attempt and never committed
 # (ADR-0001 of the knowledge module); `core.knowledge`'s builder names the same directory.
 INDEX_DIR = ".agentic/index"
+TASKS_DIR = ".agentic/tasks"
 # The scratch an older run left in the product (it lives outside every repository now,
 # GH-397), and the evidence a task keeps (GH-391).
 EXCLUDES = (
@@ -64,6 +66,9 @@ EXCLUDES = (
     f"{INDEX_DIR}/",
     f"{LEGACY_SCRATCH_DIR}/",
     f"{KEPT_DIR}/",
+    # The task documents (GH-420): the system keeps them on the machine and never stages
+    # them, so a product that does not track them never sees them as untracked either.
+    f"{TASKS_DIR}/*.md",
 )
 
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
@@ -348,19 +353,35 @@ class GitWorkspace:
         return rules.has_conflict_markers(text)
 
     def commit_all(self, path: Path, message: str) -> str | None:
-        self._git("add", "-A", cwd=path)
-        if not self._git("status", "--porcelain", cwd=path):
+        keep_out = [f":(exclude){prefix}" for prefix in rules.UNSTAGEABLE]
+        self._git("add", "-A", "--", ".", *keep_out, cwd=path)
+        # Something force-added earlier is still in the index: refuse, never commit it.
+        staged = self._git("diff", "--cached", "--name-only", cwd=path).splitlines()
+        if refused := [relative for relative in staged if rules.unstageable(relative)]:
+            raise UnstageablePath(refused)
+        if not self._has_staged_changes(path):
             return None
         self._git("commit", "-q", "-m", message, cwd=path)
         return self.head(path)
 
     def commit_paths(self, path: Path, relatives: Sequence[str], message: str) -> str | None:
+        if refused := [relative for relative in relatives if rules.unstageable(relative)]:
+            raise UnstageablePath(refused)
         self._git("add", "--", *relatives, cwd=path)
-        if not self._git("status", "--porcelain", "--", *relatives, cwd=path):
+        if not self._has_staged_changes(path, relatives):
             return None
         # With a pathspec `git commit` takes those paths only, whatever else is staged.
         self._git("commit", "-q", "-m", message, "--", *relatives, cwd=path)
         return self.head(path)
+
+    def _has_staged_changes(self, path: Path, relatives: Sequence[str] = ()) -> bool:
+        """`git diff --cached --quiet`: exit 0 is nothing staged, 1 is something; any other
+        exit is a git failure and raises."""
+        scope = ["--", *relatives] if relatives else []
+        result = self._run("diff", "--cached", "--quiet", *scope, cwd=path)
+        if result.returncode not in (0, 1):
+            raise GitError(f"git diff --cached --quiet failed: {result.stderr.strip()}")
+        return result.returncode == 1
 
     def push(self, branch: str, *, lease: str | None = None) -> None:
         if lease is None:
