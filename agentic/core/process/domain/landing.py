@@ -806,7 +806,8 @@ def already_dispatched(
     diagnose whose verdict is `sync` never blocks: the next diagnosis is the second look at the
     sha. A `land_slice` is never taken for good (GH-297): an open one is continued by its
     executor, a refused one is retried until `SLICE_REFUSALS_MAX`, and a landed one leaves
-    other units to land on the same head."""
+    other units to land on the same head. An `escalate_adr` is taken only once it is resolved
+    (GH-412): an entry recorded without its comment posted does not silence the next round."""
 
     def taken(entry: Mapping[str, object]) -> bool:
         if entry.get("head") != head or entry.get("step") != step or "lacks" in entry:
@@ -816,6 +817,8 @@ def already_dispatched(
         if step == "sync_master":
             recorded = entry.get(UPSTREAM_KEY)
             return not isinstance(recorded, str) or recorded == upstream
+        if step == "escalate_adr":
+            return bool(entry.get("resolved_at"))
         return True
 
     return step != "land_slice" and any(taken(entry) for entry in landing)

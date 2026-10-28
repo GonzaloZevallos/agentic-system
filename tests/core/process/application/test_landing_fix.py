@@ -12,6 +12,7 @@ import pytest
 
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import landing, landing_fix, landing_plan, poll
+from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.landing_sync import reopen
 from agentic.core.process.application.ports import (
     AttemptFailed,
@@ -21,6 +22,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import document, rules
 from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain.adr_numbers import Ambiguous, Renaming
 from agentic.core.process.domain.roles import PAIR_PM_TECH_LEAD
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
@@ -33,6 +35,7 @@ from tests.core.process.application.test_poll_merge import (
     _ports,
     _pr,
 )
+from tests.core.process.domain.test_landing import _facts
 from tests.fakes import FakeLauncher, MemoryStack, ScriptedRunner
 from tests.gh150_stranded import GH150_STRANDED
 
@@ -1888,3 +1891,117 @@ def test_rows_no_approval_settles_are_asked_once_as_questions_and_never_restart(
     again, _ = _land(ports, tmp_path, launcher)
     assert again.kind == "skipped"
     assert launcher.spawned == []
+
+
+A_MOVE = ("docs/adr/0054-a.md", "docs/adr/0061-a.md")
+WAY_OUT = "renumber the colliding ADRs by hand and push"
+
+
+def test_a_duplicate_own_number_names_the_files_and_says_no_number_was_calculated():
+    found = Ambiguous(
+        "duplicate_own_number", "0054 is the number of docs/adr/0054-a.md, docs/adr/0054-b.md"
+    )
+
+    text = landing_fix.adr_collision_reason(found, 3)
+
+    assert "docs/adr/0054-a.md, docs/adr/0054-b.md" in text
+    assert "duplicate_own_number" in text
+    assert "No number was calculated" in text
+    assert "->" not in text
+    assert WAY_OUT in text and "a reply without a new head" in text
+
+
+def test_an_ambiguous_rewrite_lists_each_move_the_reason_and_the_line_to_fix_by_hand():
+    found = Ambiguous("range", "docs/notes.md:2: ADR-0054…ADR-0060", (A_MOVE,))
+
+    text = landing_fix.adr_collision_reason(found, 3)
+
+    assert "docs/adr/0054-a.md -> docs/adr/0061-a.md" in text
+    assert "`range`" in text
+    assert "docs/notes.md:2: ADR-0054…ADR-0060" in text
+    assert WAY_OUT in text and "a reply without a new head" in text
+
+
+def test_a_renaming_past_its_cap_says_how_many_renumbers_were_spent_and_the_moves():
+    found = Renaming((A_MOVE,), {})
+
+    text = landing_fix.adr_collision_reason(found, 3)
+
+    assert "3 renumbers" in text
+    assert "docs/adr/0054-a.md -> docs/adr/0061-a.md" in text
+    assert "master" in text
+    assert WAY_OUT in text and "a reply without a new head" in text
+
+
+def _adr_context(ports, tmp_path, found, lines):
+    """The executor's context for a recorded, unresolved `escalate_adr` entry of `HEAD`."""
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "landing": [
+                {
+                    "head": HEAD,
+                    "step": "escalate_adr",
+                    "refusal": "adr_number_taken",
+                    "at": NOW,
+                    "cost_base": 0.0,
+                }
+            ]
+        },
+    )
+    return LandingContext(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        landing_rules.LandingStep("escalate_adr", "adr_number_taken"),
+        HEAD,
+        Upstream("origin/master", MASTER, None),
+        _facts(pr_head=HEAD, adr_collision=found),
+        lines.append,
+        clock=lambda: NOW,
+    )
+
+
+def _adr_asked(document) -> bool:
+    return landing_plan.escalation_recorded(
+        document, HEAD, "adr_number_taken", "escalate_adr", resolved_only=True
+    )
+
+
+def test_a_posted_adr_escalation_resolves_its_entry_and_escalates_as_questions(tmp_path):
+    ports = _ports(5)
+    found = Ambiguous("range", "docs/notes.md:2: ADR-0054…ADR-0060", (A_MOVE,))
+    context = _adr_context(ports, tmp_path, found, [])
+
+    landing_fix.escalate_adr(context)
+
+    document = _doc(ports)
+    assert document["escalation_class"] == "questions"
+    [question] = document["questions_for_human"]
+    assert question == landing_fix.adr_collision_reason(found, landing_rules.LANDING_RENUMBERS_MAX)
+    assert ports.tracker.labels and len(ports.tracker.comments) == 1
+    [entry] = document["landing"]
+    assert entry["resolved_at"] == NOW
+    assert _adr_asked(document)
+    assert landing_rules.already_dispatched(
+        landing_plan.live_entries(document), HEAD, "escalate_adr", MASTER
+    )
+
+
+def test_a_failed_comment_leaves_the_entry_unresolved_and_the_question_is_asked_again(tmp_path):
+    ports = _ports(5)
+    ports.tracker.comment_failures = 1
+    found = Ambiguous("range", "docs/notes.md:2: ADR-0054…ADR-0060", (A_MOVE,))
+    context = _adr_context(ports, tmp_path, found, [])
+
+    with pytest.raises(ValueError, match="scripted"):
+        landing_fix.escalate_adr(context)
+
+    document = _doc(ports)
+    [entry] = document["landing"]
+    assert "resolved_at" not in entry
+    assert not _adr_asked(document)
+    assert ports.tracker.comments == []
+    assert not landing_rules.already_dispatched(
+        landing_plan.live_entries(document), HEAD, "escalate_adr", MASTER
+    )
