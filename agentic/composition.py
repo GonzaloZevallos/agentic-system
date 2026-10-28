@@ -154,12 +154,14 @@ def bind_task(ports: Ports, task_key: str) -> Ports:
 
 def perf_runner(cfg: Configuration, ports: Ports) -> PerfShellRunner:
     """`agentic perf`'s runner (GH-318): its processes carry the product's own key, so the
-    reaper the ports hold finds them."""
-    return PerfShellRunner(reaping.product_key(str(cfg.product_dir.resolve())), ports.reaper)
+    reaper the ports hold finds them. The verb has no run to stop, so its flag never sets."""
+    return PerfShellRunner(
+        reaping.product_key(str(cfg.product_dir.resolve())), ports.reaper, NullStopFlag()
+    )
 
 
 def perf_lock(cfg: Configuration) -> FilesystemPerfLock:
-    return FilesystemPerfLock(cfg.perf_lock_path)
+    return FilesystemPerfLock(cfg.perf_lock_path, NullStopFlag())
 
 
 def system_repo() -> SystemRepo:
@@ -226,8 +228,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
         sample_app=ShellSampleApp(),
         reaper=reaper,
         check_scheduler=FilesystemCheckLedger(cfg.check_ledger_dir, product_key, reaper, limits),
-        perf_runner=PerfShellRunner(product_key, reaper),
-        perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
+        perf_runner=PerfShellRunner(product_key, reaper, stop_flag),
+        perf_lock=FilesystemPerfLock(cfg.perf_lock_path, stop_flag),
         check_results=FilesystemCheckResults(cfg.check_results_dir),
         # GH-375: the Project mirror exists only when a project is configured; its memory
         # sits beside the run registry, one file per product.

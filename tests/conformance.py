@@ -12,6 +12,8 @@ outside mypy's scope, so they are named by file and class, never by line.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from pathlib import Path
 from typing import NamedTuple
 
 from agentic.core.process.application.limits import RunLimits
@@ -34,6 +36,7 @@ from agentic.core.process.application.ports import (
     Prompts,
     RoleRunner,
     RunRegistry,
+    RunStopped,
     SampleApp,
     Scratch,
     StopFlag,
@@ -184,3 +187,29 @@ UNCOVERED: dict[str, Uncovered] = {
         _INLINE,
     ),
 }
+
+
+def perf_runner_stops_with_the_flag(runner: PerfRunner, stop: StopFlag, checkout: Path) -> None:
+    """The `PerfRunner` contract of the stop (GH-385): with the run's flag set, `run` raises
+    `RunStopped` and never answers a `Run`. `runner` must be built on `stop`. Raises
+    `AssertionError` for a runner that ignores the flag."""
+    extra_env: Mapping[str, str] = {}
+    stop.set()
+    try:
+        runner.run(checkout, "true", extra_env, 10.0)
+    except RunStopped:
+        return
+    raise AssertionError("PerfRunner.run answered with the run's stop flag set")
+
+
+def perf_lock_stops_with_the_flag(lock: PerfLock, stop: StopFlag) -> None:
+    """The `PerfLock` contract of the stop (GH-385): with the run's flag set, `acquire` raises
+    `RunStopped` and does not take the lock. `lock` must be built on `stop`. Raises
+    `AssertionError` for a lock that ignores the flag."""
+    stop.set()
+    try:
+        taken = lock.acquire(0.0)
+    except RunStopped:
+        return
+    lock.release()
+    raise AssertionError(f"PerfLock.acquire answered {taken} with the run's stop flag set")

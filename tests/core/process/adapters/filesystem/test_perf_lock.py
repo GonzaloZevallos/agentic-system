@@ -6,7 +6,12 @@ import json
 import os
 import socket
 
+import pytest
+
 from agentic.core.process.adapters.filesystem.perf_lock import POLL_INTERVAL_S, FilesystemPerfLock
+from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
+from agentic.core.process.application.ports import RunStopped, StopFlag
+from tests.conformance import perf_lock_stops_with_the_flag
 
 DEAD_PID = 999_999_999
 BOOT = "boot-a"
@@ -25,9 +30,17 @@ class Time:
         self.now += seconds
 
 
-def lock_at(path, time: Time | None = None, boot: str | None = BOOT) -> FilesystemPerfLock:
+def lock_at(
+    path, time: Time | None = None, boot: str | None = BOOT, stop: StopFlag | None = None
+) -> FilesystemPerfLock:
     time = time or Time()
-    return FilesystemPerfLock(path, boot_id=lambda: boot, clock=time.clock, sleep=time.sleep)
+    return FilesystemPerfLock(
+        path,
+        stop or NullStopFlag(),
+        boot_id=lambda: boot,
+        clock=time.clock,
+        sleep=time.sleep,
+    )
 
 
 def write_record(path, pid: int, boot: str | None) -> None:
@@ -67,7 +80,9 @@ def test_a_holder_that_releases_while_we_wait_hands_it_over(tmp_path):
         time.sleep(seconds)
         path.unlink()
 
-    lock = FilesystemPerfLock(path, boot_id=lambda: BOOT, clock=time.clock, sleep=sleep)
+    lock = FilesystemPerfLock(
+        path, NullStopFlag(), boot_id=lambda: BOOT, clock=time.clock, sleep=sleep
+    )
     assert lock.acquire(60) is True
     assert len(time.slept) == 1
 
@@ -134,3 +149,84 @@ def test_a_refused_acquire_leaves_the_live_holders_record_and_no_private_file_be
     assert lock_at(path).acquire(0) is False
     assert path.read_text() == before
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_a_stop_before_acquire_raises_and_takes_no_lock(tmp_path):
+    path = tmp_path / "perf.lock"
+    stop = EventStopFlag()
+    stop.set()
+    with pytest.raises(RunStopped):
+        lock_at(path, stop=stop).acquire(10)
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []  # no private file either
+
+
+def test_a_stop_while_waiting_for_a_live_holder_raises_without_taking_the_lock(tmp_path):
+    """The case that cost 2 x 1800 s: a live holder, a waiter, and the run told to stop. The
+    waiter leaves at its next poll, takes nothing and leaves the holder's record as it was."""
+    path = tmp_path / "perf.lock"
+    write_record(path, os.getpid(), BOOT)
+    before = path.read_text()
+    time, stop = Time(), EventStopFlag()
+
+    def sleep(seconds: float) -> None:
+        time.sleep(seconds)
+        stop.set()  # the stop arrives while the waiter sleeps
+
+    lock = FilesystemPerfLock(path, stop, boot_id=lambda: BOOT, clock=time.clock, sleep=sleep)
+    with pytest.raises(RunStopped):
+        lock.acquire(1800)
+    assert time.slept == [POLL_INTERVAL_S]  # one poll, not the 1800 s
+    assert path.read_text() == before
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_a_stop_while_the_holder_is_dead_does_not_take_the_lock_over(tmp_path):
+    path = tmp_path / "perf.lock"
+    write_record(path, DEAD_PID, BOOT)
+    before = path.read_text()
+    stop = EventStopFlag()
+    stop.set()
+    with pytest.raises(RunStopped):
+        lock_at(path, stop=stop).acquire(10)
+    assert path.read_text() == before
+
+
+def test_a_stop_that_arrives_after_the_lock_was_taken_leaves_it_to_release(tmp_path):
+    path = tmp_path / "perf.lock"
+    stop = EventStopFlag()
+    lock = lock_at(path, stop=stop)
+    assert lock.acquire(0) is True
+    stop.set()
+    lock.release()
+    assert not path.exists()
+
+
+class _SetFromTheSecondLook:
+    """A flag that is clear on the first look (the top of the loop) and set from the second
+    (the one before the sleep): the stop that arrives while the waiter checks the holder."""
+
+    def __init__(self) -> None:
+        self.looks = 0
+
+    def is_set(self) -> bool:
+        self.looks += 1
+        return self.looks >= 2
+
+    def set(self) -> None:
+        raise AssertionError("the lock never sets the flag")
+
+
+def test_a_stop_that_arrives_while_the_holder_is_read_does_not_sleep_a_poll_first(tmp_path):
+    path = tmp_path / "perf.lock"
+    write_record(path, os.getpid(), BOOT)
+    time = Time()
+    with pytest.raises(RunStopped):
+        lock_at(path, time, stop=_SetFromTheSecondLook()).acquire(1800)
+    assert time.slept == []
+
+
+def test_the_real_lock_keeps_the_perf_lock_contract_of_the_stop(tmp_path):
+    stop = EventStopFlag()
+    perf_lock_stops_with_the_flag(lock_at(tmp_path / "perf.lock", stop=stop), stop)
+    assert not (tmp_path / "perf.lock").exists()
