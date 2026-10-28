@@ -203,6 +203,8 @@ classDiagram
   }
   class Transcript {
   }
+  class UnstageablePath {
+  }
   class Upstream {
   }
   class UpstreamMerge {
@@ -227,6 +229,7 @@ classDiagram
   TrackerTimedOut --|> TrackerCallFailed
   TrackerTransient --|> TrackerCallFailed
   TrackerUnreachable --|> TrackerCallFailed
+  UnstageablePath --|> GitError
   EstimateCapReached --|> Escalating
   RoleFailure --|> Escalating
   TaskCapReached --|> Escalating

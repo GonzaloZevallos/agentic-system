@@ -11,7 +11,7 @@ import pytest
 from agentic.core.knowledge.adapters.git.stack import GitStack
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.git import workspace as workspace_module
-from agentic.core.process.adapters.git.workspace import GitError
+from agentic.core.process.adapters.git.workspace import GitError, UnstageablePath
 from agentic.core.process.domain import rules
 from agentic.shared.configuration import Configuration
 
@@ -832,8 +832,8 @@ def test_head_stays_abbreviated_and_is_not_a_full_id(product):
 def test_commit_paths_commits_only_the_named_paths(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
-    document = ".agentic/tasks/GH-12.md"
-    (task.path / ".agentic/tasks").mkdir(parents=True)
+    document = "docs/GH-12.md"
+    (task.path / "docs").mkdir(parents=True)
     (task.path / document).write_text("the task document\n")
     (task.path / "stray.txt").write_text("untracked\n")
     (task.path / "README.md").write_text("modified\n")
@@ -851,8 +851,8 @@ def test_commit_paths_commits_only_the_named_paths(product):
 def test_commit_paths_has_nothing_to_commit_when_the_path_is_already_committed(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
-    document = ".agentic/tasks/GH-12.md"
-    (task.path / ".agentic/tasks").mkdir(parents=True)
+    document = "docs/GH-12.md"
+    (task.path / "docs").mkdir(parents=True)
     (task.path / document).write_text("the task document\n")
     assert ws.commit_paths(task.path, [document], "first") is not None
     head = ws.head(task.path)
@@ -865,7 +865,7 @@ def test_commit_paths_raises_a_git_error_for_a_path_git_cannot_add(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     with pytest.raises(GitError, match="git add"):
-        ws.commit_paths(task.path, [".agentic/tasks/not-there.md"], "x")
+        ws.commit_paths(task.path, ["docs/not-there.md"], "x")
 
 
 # -- push(lease=) and remote_tip against a real bare origin ------------------------------
@@ -1425,3 +1425,94 @@ def test_first_parent_commits_raises_git_error_on_an_unknown_ref(product):
     ws = GitWorkspace(product, IDENTITY)
     with pytest.raises(GitError, match="rev-list"):
         ws.first_parent_commits("f" * 40, "e" * 40)
+
+
+# --- GH-420: the system never stages its own documents -------------------------------
+
+DOCUMENT = ".agentic/tasks/GH-12.md"
+
+
+def test_commit_paths_refuses_an_unstageable_path_before_touching_the_index(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / DOCUMENT).write_text("doc\n")
+    (task.path / "code.py").write_text("x\n")
+    with pytest.raises(UnstageablePath) as refused:
+        ws.commit_paths(task.path, ["code.py", DOCUMENT], "no")
+    assert refused.value.paths == (DOCUMENT,)
+    assert isinstance(refused.value, GitError)
+    assert git("diff", "--cached", "--name-only", cwd=task.path) == ""
+
+
+def test_commit_paths_on_an_unchanged_path_returns_none(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = git("rev-parse", "HEAD", cwd=task.path)
+    (task.path / "other.txt").write_text("not asked for\n")
+    assert ws.commit_paths(task.path, ["README.md"], "nothing") is None
+    assert git("rev-parse", "HEAD", cwd=task.path) == head
+
+
+def test_commit_all_leaves_a_new_task_document_out_of_the_commit(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / DOCUMENT).write_text("doc\n")
+    (task.path / ".agentic/runs").mkdir()
+    (task.path / ".agentic/runs/r.json").write_text("{}\n")
+    (task.path / "code.py").write_text("x\n")
+    assert ws.commit_all(task.path, "GH-12: code") is not None
+    assert git("show", "--name-only", "--format=", "HEAD", cwd=task.path) == "code.py"
+
+
+def test_commit_all_with_only_a_modified_tracked_document_commits_nothing(product):
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "e",
+        cwd=product,
+    )
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / DOCUMENT).write_text("v1\n")
+    git("add", "-f", DOCUMENT, cwd=product)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tracked", cwd=product)
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = git("rev-parse", "HEAD", cwd=task.path)
+    (task.path / DOCUMENT).write_text("v2 modified\n")
+    assert ws.commit_all(task.path, "GH-12: nothing") is None
+    assert git("rev-parse", "HEAD", cwd=task.path) == head
+    assert git("diff", "--cached", "--name-only", cwd=task.path) == ""
+
+
+def test_commit_all_refuses_a_document_that_was_already_staged(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / DOCUMENT).write_text("doc\n")
+    git("add", "-f", DOCUMENT, cwd=task.path)
+    (task.path / "code.py").write_text("x\n")
+    head = git("rev-parse", "HEAD", cwd=task.path)
+    with pytest.raises(UnstageablePath) as refused:
+        ws.commit_all(task.path, "no")
+    assert refused.value.paths == (DOCUMENT,)
+    assert git("rev-parse", "HEAD", cwd=task.path) == head
+
+
+def test_the_task_documents_are_excluded_once_and_never_through_the_gitignore(product):
+    ws = GitWorkspace(product, IDENTITY)
+    ws.exclude_system_files()
+    ws.exclude_system_files()
+    exclude = (product / ".git/info/exclude").read_text().splitlines()
+    assert exclude.count(".agentic/tasks/*.md") == 1
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / DOCUMENT).write_text("doc\n")
+    assert git("status", "--porcelain", cwd=product) == ""
+    assert not (product / ".gitignore").exists()

@@ -91,6 +91,19 @@ from .task import (
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
 PRD_RETURN: ChangeCategory = "definition"
 
+# The paths the system keeps on the machine and never stages on a delivery branch: the task
+# documents, the run records, the logs and the worktrees. Closed: the one place that names them.
+UNSTAGEABLE = (".agentic/tasks/", ".agentic/runs/", ".agentic/logs/", ".agentic/worktrees/")
+
+
+def unstageable(relative: str) -> bool:
+    """Whether `relative` (a path inside a checkout) is under `UNSTAGEABLE`. The path is read
+    as POSIX with a leading `./` stripped; the directory itself, without its slash, matches."""
+    path = relative.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return any(path.startswith(prefix) or path == prefix.rstrip("/") for prefix in UNSTAGEABLE)
+
 
 def remaining_changes(state: TaskState, pair: Pair, limit: int) -> int:
     """Returns `pair` may still use before PjM escalates."""
