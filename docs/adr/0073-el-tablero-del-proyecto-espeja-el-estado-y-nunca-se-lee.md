@@ -79,3 +79,9 @@ renombrado), **Bloque** y **Hito** (los pone una persona), **Bloqueo**, **Costo 
   uno).
 - Si un mapeo es incorrecto se reporta como bug y, tras el arreglo, se borra el archivo de
   memoria del producto para que el espejo reenvíe todo.
+
+## Adenda (GH-421, 2026-10-28)
+
+Se observó que `updateProjectV2Field(name: "Etapa")` sobre el campo `Status` incorporado
+contesta `name: "Status"` sin cambio. Por eso el adaptador toma como Etapa el SINGLE_SELECT
+`Etapa` o, si no existe, el `Status` con las siete opciones.

@@ -92,7 +92,9 @@ def test_a_failing_board_does_not_fail_the_round(tmp_path, failure):
     board = FakeBoard(open=_rows(), fail=failure)
     ports = _queued(board, FakeBoardSent())
     lines = _round(tmp_path, ports)
-    note = f"agentic: poll: board: not updated ({type(failure).__name__}), next try in 15 min"
+    name = type(failure).__name__
+    shown = f"{name}: x" if isinstance(failure, ValueError) else name
+    note = f"agentic: poll: board: not updated ({shown}), next try in 15 min"
     assert sorted(lines) == sorted(["agentic: poll: launch #6 -> pid 4242", note])
     board.calls.clear()
     again = _round(tmp_path, ports, now=NOW + timedelta(minutes=5))

@@ -134,6 +134,109 @@ def test_a_missing_etapa_option_is_a_value_error_naming_it():
         board(FakeGh([identity(options=ETAPAS[:-1])])).project_id()
 
 
+def select(field_id: str, name: str, options: list[str], kind: str = "SINGLE_SELECT") -> dict:
+    node: dict = {"id": field_id, "name": name, "dataType": kind}
+    if kind == "SINGLE_SELECT":
+        node["options"] = [{"id": f"{field_id}_{i}", "name": n} for i, n in enumerate(options)]
+    return node
+
+
+OTHERS = [
+    {"id": "F_bloqueo", "name": "Bloqueo", "dataType": "TEXT"},
+    {"id": "F_costo", "name": "Costo USD", "dataType": "NUMBER"},
+    {"id": "F_inicio", "name": "Inicio", "dataType": "DATE"},
+    {"id": "F_fin", "name": "Fin", "dataType": "DATE"},
+]
+
+
+def project_with(*fields: dict) -> dict:
+    project = {"id": "PVT_1", "fields": {"nodes": [*fields, *OTHERS]}}
+    return {"data": {"repositoryOwner": {"projectV2": project}}}
+
+
+def resolve(*fields: dict):
+    return board_module._identity_of(project_with(*fields), "o/3")
+
+
+def test_a_status_field_with_the_seven_options_and_no_etapa_is_the_etapa_field():
+    ids = resolve(select("F_status", "Status", ETAPAS))
+    assert ids.fields["etapa"] == "F_status"
+    assert ids.options == {n: f"F_status_{i}" for i, n in enumerate(ETAPAS)}
+
+
+def test_status_with_extra_options_is_still_accepted():
+    assert resolve(select("F_status", "Status", [*ETAPAS, "Otra"])).fields["etapa"] == "F_status"
+
+
+def test_a_complete_etapa_wins_over_a_status_that_is_also_there():
+    ids = resolve(select("F_status", "Status", ETAPAS), select("F_etapa", "Etapa", ETAPAS))
+    assert ids.fields["etapa"] == "F_etapa"
+
+
+def test_an_incomplete_etapa_does_not_fall_back_to_a_complete_status():
+    with pytest.raises(ValueError, match="has no Etapa option 'Hecha'") as raised:
+        resolve(select("F_etapa", "Etapa", ETAPAS[:-1]), select("F_status", "Status", ETAPAS))
+    assert "Status" not in str(raised.value)
+
+
+def test_an_etapa_of_another_type_counts_as_absent():
+    text = select("F_etapa", "Etapa", [], kind="TEXT")
+    ids = resolve(text, select("F_status", "Status", ETAPAS))
+    assert ids.fields["etapa"] == "F_status"
+
+
+def test_a_status_missing_an_option_names_it_and_the_field():
+    with pytest.raises(ValueError) as raised:
+        resolve(select("F_status", "Status", ETAPAS[:-1]))
+    assert (
+        str(raised.value) == "the board project o/3 has no Etapa option 'Hecha' on its Status field"
+    )
+
+
+def test_neither_etapa_nor_status_is_one_message_naming_both():
+    text_status = select("F_status", "Status", [], kind="TEXT")
+    for fields in ([], [text_status]):
+        with pytest.raises(ValueError) as raised:
+            resolve(*fields)
+        assert str(raised.value) == (
+            "the board project o/3 has no SINGLE_SELECT field 'Etapa' "
+            "nor a SINGLE_SELECT field 'Status'"
+        )
+
+
+def project_three() -> dict:
+    """The shape of GonzaloZevallos/3 as the issue (GH-421) and ADR-0073 describe it, not a
+    live API read: the built-in Status field carries the seven Etapa options."""
+    return project_with(
+        {"id": "PVTF_title", "name": "Title", "dataType": "TITLE"},
+        {"id": "PVTF_assignees", "name": "Assignees", "dataType": "ASSIGNEES"},
+        select("PVTSSF_lAHOAuV6bM4Bo5rQzhnXo0o", "Status", ETAPAS),
+        select("PVTSSF_bloque", "Bloque", ["A", "B"]),
+        select("PVTSSF_hito", "Hito", ["H1"]),
+    )
+
+
+def test_project_three_resolves_all_five_fields_and_seven_options():
+    ids = board_module._identity_of(project_three(), "GonzaloZevallos/3")
+    status = "PVTSSF_lAHOAuV6bM4Bo5rQzhnXo0o"
+    assert ids.fields == {
+        "etapa": status,
+        "bloqueo": "F_bloqueo",
+        "costo": "F_costo",
+        "inicio": "F_inicio",
+        "fin": "F_fin",
+    }
+    assert ids.options == {n: f"{status}_{i}" for i, n in enumerate(ETAPAS)}
+
+
+def test_an_etapa_write_on_project_three_goes_to_the_status_field_with_the_option_id():
+    ids = board_module._identity_of(project_three(), "GonzaloZevallos/3")
+    _, variables = board_module._fields(ids, {7: [FieldWrite(7, "etapa", "En PR")]}, {7: "PVTI_7"})
+    status = "PVTSSF_lAHOAuV6bM4Bo5rQzhnXo0o"
+    assert variables["f_etapa"] == status
+    assert variables["i7_etapa"] == f"{status}_1"
+
+
 def test_a_project_that_is_not_there_is_a_value_error():
     with pytest.raises(ValueError, match="not found"):
         board(FakeGh([{"data": {"repositoryOwner": None}}])).project_id()

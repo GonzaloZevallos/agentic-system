@@ -219,9 +219,9 @@ _Avoid_: dashboard, sincronización, tablero de verdad
 _Campo_: sin término de arte
 
 **Etapa**:
-El estado de una Tarjeta, uno de siete: Corriendo, En PR (aprobada, esperando CI y merge), Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano.
+El estado de una Tarjeta, uno de siete: Corriendo, En PR (aprobada, esperando CI y merge), Trabada, Necesita humano, En cola, Fuera del sistema, Hecha. Se decide por precedencia (Hecha, Corriendo, Necesita humano, Fuera del sistema, Trabada, En cola) con un mapa cerrado de los valores de `Status` del documento; solo `board.card` la calcula. Su Bloqueo dice por qué una Tarjeta está Trabada o Necesita humano. El adaptador la encuentra como el campo SINGLE_SELECT `Etapa` o, si no existe, como el `Status` incorporado cuando trae las siete opciones; solo `_etapa_field` la resuelve.
 _Avoid_: estado, status, columna
-_Campo_: `Status` de GitHub Projects (renombrado Etapa)
+_Campo_: `Status` de GitHub Projects; la API conserva el nombre `Status` al renombrarlo
 
 **Tarjeta**:
 Los cinco valores que el Espejo del tablero escribe para un issue: Etapa, Bloqueo, Costo USD, Inicio y Fin. Su huella (un hash de los cinco) es lo que la memoria de lo enviado compara para saber si hay algo que enviar.

@@ -1,10 +1,12 @@
 """`GhBoard`: the GitHub Project the poller mirrors state to, over `gh` (GH-375, ADR-0073).
 
 Write-only as far as state goes. The one thing read from the Project is its identity: the
-node ids of the project, its fields and its Etapa options, looked up by name once per
-process. Cards are added with `addProjectV2ItemById` (idempotent) and their fields written
-with `updateProjectV2ItemFieldValue` / `clearProjectV2ItemFieldValue`, 25 issues per batch,
-two requests per batch.
+node ids of the project, its fields and its Etapa options, looked up once per process. The
+fields are found by name and type; Etapa is the SINGLE_SELECT `Etapa` or, absent it, the
+built-in `Status` carrying the seven options (`_etapa_field`). Cards are added with
+`addProjectV2ItemById` (idempotent) and their fields written with
+`updateProjectV2ItemFieldValue` / `clearProjectV2ItemFieldValue`, 25 issues per batch, two
+requests per batch.
 
 Every value travels as a typed GraphQL variable in a JSON body (`gh api graphql --input`):
 `-f`/`-F` would let `gh` guess types and read `@file`. Only aliases of the form
@@ -262,21 +264,56 @@ def _identity_of(body: Mapping[str, Any], name: str) -> _Identity:
         project_id = str(project["id"])
     except (KeyError, TypeError) as exc:
         raise ValueError(f"the board project {name} was not found") from exc
-    fields: dict[Field, str] = {}
-    options: dict[str, str] = {}
+    etapa_node = _etapa_field(nodes, name)
+    fields: dict[Field, str] = {"etapa": str(etapa_node["id"])}
+    options = _options_of(etapa_node)
     for key, title in _FIELD_NAMES.items():
+        if key == "etapa":
+            continue
         found = [
             n for n in nodes if n.get("name") == title and n.get("dataType") == _FIELD_TYPES[key]
         ]
         if not found:
             raise ValueError(f"the board project {name} has no {_FIELD_TYPES[key]} field {title!r}")
         fields[key] = str(found[0]["id"])
-        if key == "etapa":
-            options = {str(o["name"]): str(o["id"]) for o in found[0].get("options", [])}
-    for etapa in get_args(Etapa):
-        if etapa not in options:
-            raise ValueError(f"the board project {name} has no Etapa option {etapa!r}")
     return _Identity(project_id, fields, options)
+
+
+def _options_of(node: Mapping[str, Any]) -> dict[str, str]:
+    return {str(o["name"]): str(o["id"]) for o in node.get("options", [])}
+
+
+def _single_select(nodes: Sequence[Mapping[str, Any]], title: str) -> Mapping[str, Any] | None:
+    found = [n for n in nodes if n.get("name") == title and n.get("dataType") == "SINGLE_SELECT"]
+    return found[0] if found else None
+
+
+def _first_missing_etapa(node: Mapping[str, Any]) -> str | None:
+    options = _options_of(node)
+    return next((etapa for etapa in get_args(Etapa) if etapa not in options), None)
+
+
+def _etapa_field(nodes: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, Any]:
+    """The field node that carries the Etapa options: the SINGLE_SELECT `Etapa`, even when it
+    is incomplete (no fallback then), else the built-in `Status` when it has all seven."""
+    etapa_node = _single_select(nodes, "Etapa")
+    if etapa_node is not None:
+        missing = _first_missing_etapa(etapa_node)
+        if missing is not None:
+            raise ValueError(f"the board project {name} has no Etapa option {missing!r}")
+        return etapa_node
+    status_node = _single_select(nodes, "Status")
+    if status_node is None:
+        raise ValueError(
+            f"the board project {name} has no SINGLE_SELECT field 'Etapa' "
+            "nor a SINGLE_SELECT field 'Status'"
+        )
+    missing = _first_missing_etapa(status_node)
+    if missing is not None:
+        raise ValueError(
+            f"the board project {name} has no Etapa option {missing!r} on its Status field"
+        )
+    return status_node
 
 
 def _adds(
