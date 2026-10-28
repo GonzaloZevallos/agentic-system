@@ -11,7 +11,7 @@ import pytest
 from agentic.core.knowledge.adapters.git.stack import GitStack
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.git import workspace as workspace_module
-from agentic.core.process.adapters.git.workspace import GitError
+from agentic.core.process.adapters.git.workspace import GitError, UnstageablePath
 from agentic.core.process.domain import rules
 from agentic.shared.configuration import Configuration
 
@@ -650,6 +650,19 @@ def test_a_branch_with_commits_the_upstream_lacks_starts_from_the_upstream_and_n
     assert found.note is not None and local in found.note
 
 
+def test_a_diverged_clone_warns_diverged_from_the_upstream_the_workspace_itself_reads(remote):
+    """GH-420: the left-out note comes with a fetched tip, so the poller still judges against it."""
+    remote.merge_on_origin()
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    found = ws.upstream()
+    assert found.note and found.sha and found.ref != "HEAD"
+    view = ws.fast_forward_view(found.sha)
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("diverged", ())
+    )
+
+
 def test_the_left_out_commits_are_capped_at_ten_and_the_rest_counted(remote):
     for i in range(12):
         _commit(remote.clone, f"l{i}.txt", "l\n", f"local {i}")
@@ -832,8 +845,8 @@ def test_head_stays_abbreviated_and_is_not_a_full_id(product):
 def test_commit_paths_commits_only_the_named_paths(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
-    document = ".agentic/tasks/GH-12.md"
-    (task.path / ".agentic/tasks").mkdir(parents=True)
+    document = "docs/GH-12.md"
+    (task.path / "docs").mkdir(parents=True)
     (task.path / document).write_text("the task document\n")
     (task.path / "stray.txt").write_text("untracked\n")
     (task.path / "README.md").write_text("modified\n")
@@ -851,8 +864,8 @@ def test_commit_paths_commits_only_the_named_paths(product):
 def test_commit_paths_has_nothing_to_commit_when_the_path_is_already_committed(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
-    document = ".agentic/tasks/GH-12.md"
-    (task.path / ".agentic/tasks").mkdir(parents=True)
+    document = "docs/GH-12.md"
+    (task.path / "docs").mkdir(parents=True)
     (task.path / document).write_text("the task document\n")
     assert ws.commit_paths(task.path, [document], "first") is not None
     head = ws.head(task.path)
@@ -865,7 +878,7 @@ def test_commit_paths_raises_a_git_error_for_a_path_git_cannot_add(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     with pytest.raises(GitError, match="git add"):
-        ws.commit_paths(task.path, [".agentic/tasks/not-there.md"], "x")
+        ws.commit_paths(task.path, ["docs/not-there.md"], "x")
 
 
 # -- push(lease=) and remote_tip against a real bare origin ------------------------------
@@ -1425,3 +1438,284 @@ def test_first_parent_commits_raises_git_error_on_an_unknown_ref(product):
     ws = GitWorkspace(product, IDENTITY)
     with pytest.raises(GitError, match="rev-list"):
         ws.first_parent_commits("f" * 40, "e" * 40)
+
+
+# --- GH-420: the system never stages its own documents -------------------------------
+
+DOCUMENT = ".agentic/tasks/GH-12.md"
+
+
+def test_commit_paths_refuses_an_unstageable_path_before_touching_the_index(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / DOCUMENT).write_text("doc\n")
+    (task.path / "code.py").write_text("x\n")
+    with pytest.raises(UnstageablePath) as refused:
+        ws.commit_paths(task.path, ["code.py", DOCUMENT], "no")
+    assert refused.value.paths == (DOCUMENT,)
+    assert isinstance(refused.value, GitError)
+    assert git("diff", "--cached", "--name-only", cwd=task.path) == ""
+
+
+def test_commit_paths_on_an_unchanged_path_returns_none(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = git("rev-parse", "HEAD", cwd=task.path)
+    (task.path / "other.txt").write_text("not asked for\n")
+    assert ws.commit_paths(task.path, ["README.md"], "nothing") is None
+    assert git("rev-parse", "HEAD", cwd=task.path) == head
+
+
+def test_commit_all_leaves_a_new_task_document_out_of_the_commit(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / DOCUMENT).write_text("doc\n")
+    (task.path / ".agentic/runs").mkdir()
+    (task.path / ".agentic/runs/r.json").write_text("{}\n")
+    (task.path / "code.py").write_text("x\n")
+    assert ws.commit_all(task.path, "GH-12: code") is not None
+    assert git("show", "--name-only", "--format=", "HEAD", cwd=task.path) == "code.py"
+
+
+def test_commit_all_with_only_a_modified_tracked_document_commits_nothing(product):
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "e",
+        cwd=product,
+    )
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / DOCUMENT).write_text("v1\n")
+    git("add", "-f", DOCUMENT, cwd=product)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tracked", cwd=product)
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = git("rev-parse", "HEAD", cwd=task.path)
+    (task.path / DOCUMENT).write_text("v2 modified\n")
+    assert ws.commit_all(task.path, "GH-12: nothing") is None
+    assert git("rev-parse", "HEAD", cwd=task.path) == head
+    assert git("diff", "--cached", "--name-only", cwd=task.path) == ""
+
+
+def test_commit_all_refuses_a_document_that_was_already_staged(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / DOCUMENT).write_text("doc\n")
+    git("add", "-f", DOCUMENT, cwd=task.path)
+    (task.path / "code.py").write_text("x\n")
+    head = git("rev-parse", "HEAD", cwd=task.path)
+    with pytest.raises(UnstageablePath) as refused:
+        ws.commit_all(task.path, "no")
+    assert refused.value.paths == (DOCUMENT,)
+    assert git("rev-parse", "HEAD", cwd=task.path) == head
+
+
+def test_the_task_documents_are_excluded_once_and_never_through_the_gitignore(product):
+    ws = GitWorkspace(product, IDENTITY)
+    ws.exclude_system_files()
+    ws.exclude_system_files()
+    exclude = (product / ".git/info/exclude").read_text().splitlines()
+    assert exclude.count(".agentic/tasks/*.md") == 1
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / DOCUMENT).write_text("doc\n")
+    assert git("status", "--porcelain", cwd=product) == ""
+    assert not (product / ".gitignore").exists()
+
+
+ARCHIVED = "archive/run1-abc1234/agentic/GH-12"
+
+
+@pytest.fixture
+def archived(product):
+    """A product whose task branch was already renamed under `archive/`, one commit past master."""
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / "code.py").write_text("x\n")
+    assert ws.commit_all(task.path, "GH-12: code") is not None
+    ws.discard(task.path)
+    ws.rename_branch("agentic/GH-12", ARCHIVED)
+    return ws
+
+
+def test_the_archived_document_is_one_added_path_on_the_archived_ref_and_nothing_else_moves(
+    product, archived
+):
+    tip = git("rev-parse", ARCHIVED, cwd=product)
+    head, status = git("rev-parse", "HEAD", cwd=product), git("status", "--porcelain", cwd=product)
+    worktrees = git("worktree", "list", cwd=product)
+    new = archived.commit_archived_document(ARCHIVED, DOCUMENT, "the record\n", "Archive GH-12")
+    assert new is not None
+    assert git("rev-parse", ARCHIVED, cwd=product) == new
+    assert git("rev-parse", f"{new}^", cwd=product) == tip
+    assert git("diff", "--name-status", tip, new, cwd=product) == f"A\t{DOCUMENT}"
+    assert git("show", f"{ARCHIVED}:{DOCUMENT}", cwd=product) == "the record"
+    assert git("log", "-1", "--format=%s", ARCHIVED, cwd=product) == "Archive GH-12"
+    assert git("rev-parse", "HEAD", cwd=product) == head
+    assert git("status", "--porcelain", cwd=product) == status
+    assert git("worktree", "list", cwd=product) == worktrees
+    assert git("ls-files", cwd=product) == "README.md"
+    # The temporary index it used is gone with it.
+    assert not list((product / ".git").glob("agentic-archive-index*"))
+
+
+def test_the_archived_document_given_again_with_the_same_text_commits_nothing(product, archived):
+    first = archived.commit_archived_document(ARCHIVED, DOCUMENT, "the record\n", "Archive GH-12")
+    assert archived.commit_archived_document(ARCHIVED, DOCUMENT, "the record\n", "again") is None
+    assert git("rev-parse", ARCHIVED, cwd=product) == first
+    # Changed text is a new commit on top, one path modified.
+    later = archived.commit_archived_document(ARCHIVED, DOCUMENT, "more\n", "Archive GH-12")
+    assert later is not None
+    assert git("diff", "--name-status", f"{first}", later, cwd=product) == f"M\t{DOCUMENT}"
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "agentic/GH-12",
+        "master",
+        "refs/heads/master",
+        "refs/heads/agentic/GH-12",
+        "HEAD",
+        "archived",
+    ],
+)
+def test_the_archived_document_is_refused_on_a_ref_outside_the_archive(product, archived, ref):
+    master = git("rev-parse", "master", cwd=product)
+    with pytest.raises(GitError):
+        archived.commit_archived_document(ref, DOCUMENT, "doc\n", "no")
+    assert git("rev-parse", "master", cwd=product) == master
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "README.md",
+        "code.py",
+        ".agentic/runs/GH-12.md",
+        ".agentic/tasks/sub/GH-12.md",
+        ".agentic/tasks/GH-12.json",
+        ".agentic/tasks/",
+        ".agentic/tasks/../../README.md",
+    ],
+)
+def test_the_archived_document_is_refused_for_any_path_but_a_task_document(
+    product, archived, relative
+):
+    tip = git("rev-parse", ARCHIVED, cwd=product)
+    with pytest.raises(GitError):
+        archived.commit_archived_document(ARCHIVED, relative, "x\n", "no")
+    assert git("rev-parse", ARCHIVED, cwd=product) == tip
+
+
+def test_the_archived_document_fails_without_moving_the_ref_when_the_tip_moved_meanwhile(
+    product, archived
+):
+    other = git("rev-parse", "master", cwd=product)
+
+    class Racing(GitWorkspace):
+        def _run(self, *args, cwd=None):
+            if args and args[0] == "commit-tree":
+                # Someone else moves the archived ref after the tip was read.
+                git("update-ref", f"refs/heads/{ARCHIVED}", other, cwd=product)
+            return super()._run(*args, cwd=cwd)
+
+    with pytest.raises(GitError):
+        Racing(product, IDENTITY).commit_archived_document(ARCHIVED, DOCUMENT, "doc\n", "race")
+    assert git("rev-parse", ARCHIVED, cwd=product) == other
+    assert not list((product / ".git").glob("agentic-archive-index*"))
+
+
+# --- GH-420: the poller's read-only view of whether the checkout can fast-forward ------------
+
+
+def _remote_ahead(product: Path, tmp_path: Path, name: str) -> str:
+    """Push `product`, then a second clone adds `name` on top; returns the new upstream sha."""
+    git("push", "-q", "origin", "master", cwd=product)
+    other = tmp_path / "other"
+    git("clone", "-q", str(tmp_path / "remote.git"), str(other), cwd=tmp_path)
+    (other / name).parent.mkdir(parents=True, exist_ok=True)
+    (other / name).write_text("from upstream\n")
+    git("add", "-A", cwd=other)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "up", cwd=other)
+    git("push", "-q", "origin", "master", cwd=other)
+    git("fetch", "-q", "origin", cwd=product)
+    return git("rev-parse", "origin/master", cwd=product)
+
+
+def test_fast_forward_view_names_an_untracked_file_the_upstream_adds(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, ".agentic/tasks/GH-1.md")
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / ".agentic/tasks/GH-1.md").write_text("live copy\n")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.ancestor
+    assert view.changed == frozenset({".agentic/tasks/GH-1.md"})
+    assert ".agentic/tasks/GH-1.md" in view.dirty
+    block = rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty)
+    assert block == rules.FastForwardBlock("would_overwrite", (".agentic/tasks/GH-1.md",))
+    # Read only: the file is as it was and nothing was merged.
+    assert (product / ".agentic/tasks/GH-1.md").read_text() == "live copy\n"
+    assert git("rev-parse", "HEAD", cwd=product) != tip
+
+
+def test_fast_forward_view_ignores_what_info_exclude_hides(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, ".agentic/tasks/GH-1.md")
+    (product / ".git/info/exclude").write_text(".agentic/tasks/*.md\n")
+    (product / ".agentic/tasks").mkdir(parents=True)
+    (product / ".agentic/tasks/GH-1.md").write_text("live copy\n")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.dirty == frozenset()
+
+
+def test_fast_forward_view_reports_a_local_commit_the_upstream_lacks(product, tmp_path):
+    tip = _remote_ahead(product, tmp_path, "other.txt")
+    (product / "local.txt").write_text("local\n")
+    git("add", "-A", cwd=product)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "local", cwd=product)
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert not view.ancestor
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("diverged", ())
+    )
+
+
+def test_fast_forward_view_of_a_clean_checkout_behind_the_upstream_is_not_blocked(
+    product, tmp_path
+):
+    tip = _remote_ahead(product, tmp_path, "other.txt")
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.ancestor and view.changed == frozenset({"other.txt"})
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) is None
+
+
+def test_fast_forward_view_raises_git_error_when_git_cannot_answer(tmp_path):
+    with pytest.raises(GitError):
+        GitWorkspace(tmp_path, IDENTITY).fast_forward_view("abc")
+
+
+def test_fast_forward_view_reads_a_rename_and_a_path_with_unicode_by_its_real_name(
+    product, tmp_path
+):
+    tip = _remote_ahead(product, tmp_path, "ñandú.txt")
+    (product / "ñandú.txt").write_text("mine\n")
+    git("mv", "README.md", "LEEME.md", cwd=product)
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.changed == frozenset({"ñandú.txt"})
+    assert view.dirty == frozenset({"ñandú.txt", "LEEME.md"})
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("would_overwrite", ("ñandú.txt",))
+    )
+
+
+def test_fast_forward_view_raises_git_error_when_the_diff_fails(product):
+    """The tip exists as a name but not as an object `diff` can read: the error is git's."""
+    with pytest.raises(GitError):
+        GitWorkspace(product, IDENTITY).fast_forward_view("not-a-revision")

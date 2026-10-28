@@ -176,7 +176,7 @@ La rama del producto donde termina el código de una tarea, una por tarea. Cada 
 _Campo_: branch — de git, no del campo agéntico
 
 **Archivado**:
-Lo que el sistema hace con lo que dejó la corrida anterior de una tarea cuando esa tarea se reinicia de cero: commitea en cada worktree lo que nadie commiteó, los saca, y renombra la rama de tarea y las de sus subtareas bajo `archive/run<N>-<commit del sistema>/`, la de tarea primero. No borra nada, y por eso una corrida vieja se puede leer después; el issue recibe una línea diciendo bajo qué prefijo quedó. `N` es el número de archivado de esa tarea, y que la rama de tarea se renombre antes que las de subtarea es lo que hace visible un archivado que se cortó a la mitad: un reintento lo termina en el mismo prefijo en vez de abrir otro.
+Lo que el sistema hace con lo que dejó la corrida anterior de una tarea cuando esa tarea se reinicia de cero: commitea en cada worktree lo que nadie commiteó, los saca, y renombra la rama de tarea y las de sus subtareas bajo `archive/run<N>-<commit del sistema>/`, la de tarea primero. El documento de tarea se commitea solo ahí, por el sistema y después del renombre, sobre la rama de tarea ya archivada (ADR-0078). No borra nada, y por eso una corrida vieja se puede leer después; el issue recibe una línea diciendo bajo qué prefijo quedó. `N` es el número de archivado de esa tarea, y que la rama de tarea se renombre antes que las de subtarea es lo que hace visible un archivado que se cortó a la mitad: un reintento lo termina en el mismo prefijo en vez de abrir otro.
 _Avoid_: borrado, limpieza (el archivado no borra), backup
 _Campo_: sin término de arte
 
@@ -509,7 +509,9 @@ _Avoid_: tope de tarea, presupuesto
 Un archivo por tarea con frontmatter YAML de PjM y una sección Markdown por rol. El registro
 crudo del trabajo de la tarea, materia prima del conocimiento de producto: guarda también las
 entregas que una devolución pisó y las corridas de cada rol. Nadie lee tareas viejas para
-saber qué está vigente; para eso está el conocimiento de producto.
+saber qué está vigente; para eso está el conocimiento de producto. Vive en el disco del producto
+y nunca se versiona en una rama de entrega (ADR-0078): ninguna ruta bajo `.agentic/tasks/` se
+commitea salvo en el archivado.
 _Campo_: sin término de arte. `blackboard`, la palabra que uno esperaría, es de la IA clásica (Hearsay-II; Nii 1986) y no aparece en el código de LangGraph, AutoGen, CrewAI, Google ADK ni el OpenAI Agents SDK
 
 **Sección**:

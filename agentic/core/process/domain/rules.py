@@ -17,7 +17,7 @@ from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
-from .document import HUMAN, demote
+from .document import HUMAN, demote, relative_path
 from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
     DEVELOPER,
@@ -90,6 +90,25 @@ from .task import (
 
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
 PRD_RETURN: ChangeCategory = "definition"
+
+# The paths the system keeps on the machine and never stages on a delivery branch: the task
+# documents, the run records, the logs and the worktrees. Closed: the one place that names them.
+UNSTAGEABLE = (".agentic/tasks/", ".agentic/runs/", ".agentic/logs/", ".agentic/worktrees/")
+
+
+def unstageable(relative: str) -> bool:
+    """Whether `relative` (a path inside a checkout) is under `UNSTAGEABLE`. The path is read
+    as POSIX with a leading `./` stripped; the directory itself, without its slash, matches."""
+    path = relative.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return any(path.startswith(prefix) or path == prefix.rstrip("/") for prefix in UNSTAGEABLE)
+
+
+def archivable_document(relative: str, task_id: str) -> bool:
+    """Whether `relative` is exactly the task's own document, `.agentic/tasks/<id>.md`: the one
+    path under `UNSTAGEABLE` that archiving may commit, onto an archived ref and nowhere else."""
+    return relative == relative_path(task_id).as_posix()
 
 
 def remaining_changes(state: TaskState, pair: Pair, limit: int) -> int:
@@ -5432,3 +5451,35 @@ def close_after_merge(document: Mapping[str, object]) -> bool:
         return True
     slices = document.get("closed_by_slices")
     return isinstance(slices, list) and bool(slices)
+
+
+# --- GH-420 poller warning ---
+# When the product checkout cannot fast-forward to its fetched upstream, the stack the system
+# reads from it is stale. The one place that says why is `fast_forward_blocked`.
+
+MAX_BLOCK_PATHS = 5
+
+
+@dataclass(frozen=True)
+class FastForwardBlock:
+    """Why `git merge --ff-only <tip>` would fail in the product checkout: `diverged` (HEAD
+    is not an ancestor of the tip) or `would_overwrite` (an untracked or modified file would
+    be replaced by the tip). `paths` are the files git would name, sorted and capped at
+    `MAX_BLOCK_PATHS`; empty when diverged."""
+
+    reason: Literal["diverged", "would_overwrite"]
+    paths: tuple[str, ...]
+
+
+def fast_forward_blocked(
+    ancestor: bool, changed: frozenset[str], dirty: frozenset[str]
+) -> FastForwardBlock | None:
+    """`ancestor`: HEAD is an ancestor of the tip. `changed`: the paths that differ between
+    HEAD and the tip. `dirty`: the untracked or modified paths of the checkout. None when a
+    fast-forward would succeed."""
+    if not ancestor:
+        return FastForwardBlock("diverged", ())
+    clash = sorted(changed & dirty)
+    if clash:
+        return FastForwardBlock("would_overwrite", tuple(clash[:MAX_BLOCK_PATHS]))
+    return None

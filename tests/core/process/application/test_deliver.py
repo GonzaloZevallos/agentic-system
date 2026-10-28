@@ -117,7 +117,7 @@ def _big_state(**extra):
     }
 
 
-async def test_a_body_over_the_limit_fits_and_points_to_the_committed_document(cfg):
+async def test_a_body_over_the_limit_fits_and_points_to_the_product_checkouts_document(cfg):
     ports = memory_ports()
     state = _big_state()
     patch = await deliver(state, cfg, ports)
@@ -126,20 +126,18 @@ async def test_a_body_over_the_limit_fits_and_points_to_the_committed_document(c
     assert github_length(f"Closes #12\n\n{body}") < GITHUB_LIMIT
     assert "## PM\n\n" in body and "## Tech Lead" not in body
     assert "## Task document" in body
-    assert f"`{PATH}` on branch `agentic/GH-12`" in body
+    assert f"in the product checkout at `{PATH}`; the system does not version it." in body
+    assert "on branch" not in body and "agentic/GH-12" not in body
     assert "Tech Lead" in body.split("## Task document")[1]
-    # One commit of the document, before the push, and the document it commits holds the
-    # section the body dropped, rendered from the state the node received.
-    [(path, relatives, message)] = ports.workspace.path_commits
-    assert (path, relatives, message) == (
-        ports.workspace.ROOT / "GH-12",
-        (PATH,),
-        "GH-12: task document",
-    )
-    assert ports.workspace.events == ["commit_paths", "push"]
+    # The delivery commits nothing: the document is saved in the product checkout before
+    # the push, holding the section the body dropped, rendered from the state it received.
+    assert ports.workspace.path_commits == []
+    assert ports.workspace.commits == []
+    assert ports.workspace.events == ["push"]
     assert ports.documents.saved[0] is state
     assert "t" * 70_000 in ports.documents.saved[0]["sections"]["Tech Lead"]
-    assert ports.documents.written_into == [("GH-12", ports.workspace.ROOT / "GH-12")]
+    assert ports.documents.written_into == []
+    assert ports.workspace.ignored_checks == []
     assert patch["pull_request"] == "https://github.com/o/r/pull/7"
     assert patch["status"] == "ready_for_review"
 
@@ -152,18 +150,6 @@ async def test_a_small_body_writes_no_document_and_commits_nothing(cfg):
     assert ports.workspace.ignored_checks == []
     assert ports.workspace.commits == []
     assert ports.workspace.events == ["push"]
-
-
-async def test_a_product_that_ignores_the_document_gets_a_pointer_that_says_so(cfg):
-    ports = memory_ports()
-    ports.workspace.ignored.add(PATH)
-    await deliver(_big_state(), cfg, ports)
-
-    body = ports.tracker.pull_requests[0][2]
-    assert f"in the product checkout at `{PATH}`; this repository does not version it." in body
-    assert "on branch" not in body
-    assert ports.workspace.path_commits == []
-    assert github_length(f"Closes #12\n\n{body}") < GITHUB_LIMIT
 
 
 async def test_a_failing_open_pull_request_escalates_with_the_error_text(cfg):
@@ -192,17 +178,6 @@ async def test_a_failing_push_escalates_and_never_opens_the_pull_request(cfg):
     assert patch["escalation_class"] == "failure"
     assert ports.tracker.pull_requests == []
     assert rules.auto_resumable({**TASK, **patch}) is None
-
-
-async def test_a_failing_document_commit_escalates_naming_the_step_and_pushes_nothing(cfg):
-    ports = memory_ports()
-    ports.workspace.commit_paths_error = "git commit failed: hook said no"
-    patch = await deliver(_big_state(), cfg, ports)
-
-    assert patch["escalated"].startswith("task document commit failed: git commit failed")
-    assert patch["escalation_class"] == "failure"
-    assert ports.workspace.pushed == [] and ports.tracker.pull_requests == []
-    assert rules.auto_resumable({**_big_state(), **patch}) is None
 
 
 async def test_a_failing_comment_or_cleanup_does_not_undo_the_pull_request(cfg):
@@ -480,7 +455,7 @@ async def test_a_bounded_body_keeps_the_note_and_commits_the_document_with_the_s
     body = ports.tracker.pull_requests[0][2]
     assert body.startswith(f"Replaced remote `{BRANCH}` at `{OLD}`")
     assert github_length(f"Closes #12\n\n{body}") < GITHUB_LIMIT
-    assert ports.workspace.events == ["commit_paths", "push"]
+    assert ports.workspace.events == ["push"]
     assert ports.documents.saved[0]["replaced_remote_tip"] == OLD
     assert ports.workspace.leases == [OLD]
 
@@ -492,7 +467,7 @@ async def test_the_pushed_head_and_time_are_saved_and_nothing_is_committed_after
 
     patch = await deliver(state, cfg, ports)
 
-    assert ports.workspace.events == ["commit_paths", "push"]  # no commit after the push
+    assert ports.workspace.events == ["push"]  # no commit after the push
     assert ports.workspace.commits == []
     # The first look at the task checkout after the last commit, taken before the push.
     assert patch["pushed_head"] == "head1"

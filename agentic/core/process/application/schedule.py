@@ -66,6 +66,9 @@ class _Delegating:
     def load(self, task_id: str) -> dict[str, object] | None:
         return self._inner.load(task_id)
 
+    def text(self, task_id: str) -> str | None:
+        return self._inner.text(task_id)
+
     def write_into(self, task_id: str, root: Path) -> Path | None:
         return self._inner.write_into(task_id, root)
 

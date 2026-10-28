@@ -40,8 +40,16 @@ from pathlib import Path, PurePosixPath
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
-from ...application.ports import AddedAdr, AddedLine, Checkout, Upstream, UpstreamMerge
+from ...application.ports import (
+    AddedAdr,
+    AddedLine,
+    Checkout,
+    FastForwardView,
+    Upstream,
+    UpstreamMerge,
+)
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
+from ...application.ports import UnstageablePath as UnstageablePath
 from ...domain import rules
 from ...domain.ci import Containment
 from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
@@ -54,6 +62,10 @@ WORKTREES = Path(".agentic/worktrees")
 # The knowledge index a role reads is written here on every attempt and never committed
 # (ADR-0001 of the knowledge module); `core.knowledge`'s builder names the same directory.
 INDEX_DIR = ".agentic/index"
+TASKS_DIR = ".agentic/tasks"
+# The only path `commit_archived_document` takes, and the namespace of the only refs it writes.
+_TASK_DOCUMENT = re.compile(r"\.agentic/tasks/[^/]+\.md")
+_ARCHIVE_NAMESPACE = "archive/"
 # The scratch an older run left in the product (it lives outside every repository now,
 # GH-397), and the evidence a task keeps (GH-391).
 EXCLUDES = (
@@ -64,6 +76,9 @@ EXCLUDES = (
     f"{INDEX_DIR}/",
     f"{LEGACY_SCRATCH_DIR}/",
     f"{KEPT_DIR}/",
+    # The task documents (GH-420): the system keeps them on the machine and never stages
+    # them, so a product that does not track them never sees them as untracked either.
+    f"{TASKS_DIR}/*.md",
 )
 
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
@@ -348,19 +363,89 @@ class GitWorkspace:
         return rules.has_conflict_markers(text)
 
     def commit_all(self, path: Path, message: str) -> str | None:
-        self._git("add", "-A", cwd=path)
-        if not self._git("status", "--porcelain", cwd=path):
+        keep_out = [f":(exclude){prefix}" for prefix in rules.UNSTAGEABLE]
+        self._git("add", "-A", "--", ".", *keep_out, cwd=path)
+        # Something force-added earlier is still in the index: refuse, never commit it.
+        staged = self._git("diff", "--cached", "--name-only", cwd=path).splitlines()
+        if refused := [relative for relative in staged if rules.unstageable(relative)]:
+            raise UnstageablePath(refused)
+        if not self._has_staged_changes(path):
             return None
         self._git("commit", "-q", "-m", message, cwd=path)
         return self.head(path)
 
     def commit_paths(self, path: Path, relatives: Sequence[str], message: str) -> str | None:
+        if refused := [relative for relative in relatives if rules.unstageable(relative)]:
+            raise UnstageablePath(refused)
         self._git("add", "--", *relatives, cwd=path)
-        if not self._git("status", "--porcelain", "--", *relatives, cwd=path):
+        if not self._has_staged_changes(path, relatives):
             return None
         # With a pathspec `git commit` takes those paths only, whatever else is staged.
         self._git("commit", "-q", "-m", message, "--", *relatives, cwd=path)
         return self.head(path)
+
+    def commit_archived_document(
+        self, ref: str, relative: str, text: str, message: str
+    ) -> str | None:
+        """Plumbing only (`hash-object`, a private index, `write-tree`, `commit-tree`,
+        `update-ref`): no worktree, no checkout's index and no `HEAD` is read or written, so
+        the one staging of a path under `rules.UNSTAGEABLE` cannot reach a live branch."""
+        branch = ref.removeprefix("refs/heads/")
+        if not branch.startswith(_ARCHIVE_NAMESPACE):
+            raise GitError(
+                f"{ref} is not an archived ref: a task document is committed under archive/"
+            )
+        # Only a path the rule calls unstageable is this method's to write, and of those only
+        # a task document: the rule decides the first, the pattern narrows it to the second.
+        if not rules.unstageable(relative) or not _TASK_DOCUMENT.fullmatch(relative):
+            raise GitError(f"{relative} is not a task document (.agentic/tasks/<id>.md)")
+        full = f"refs/heads/{branch}"
+        tip = self._git("rev-parse", "--verify", "-q", f"{full}^{{commit}}")
+        blob = self._plumbing("hash-object", "-w", "--stdin", stdin=text)
+        held = self._run("rev-parse", "--verify", "-q", f"{tip}:{relative}")
+        if held.returncode == 0 and held.stdout.strip() == blob:
+            return None  # the idempotent case: a retried archive already committed this text
+        index = (
+            Path(self._git("rev-parse", "--absolute-git-dir"))
+            / f"agentic-archive-index-{uuid.uuid4().hex}"
+        )
+        try:
+            env = {"GIT_INDEX_FILE": str(index)}
+            self._plumbing("read-tree", tip, env=env)
+            self._plumbing(
+                "update-index", "--add", "--cacheinfo", f"100644,{blob},{relative}", env=env
+            )
+            tree = self._plumbing("write-tree", env=env)
+        finally:
+            index.unlink(missing_ok=True)
+        new = self._git("commit-tree", tree, "-p", tip, "-m", message)
+        # The old value is the lease: a ref that moved since `tip` was read fails here.
+        self._git("update-ref", full, new, tip)
+        return new
+
+    def _plumbing(
+        self, *args: str, stdin: str | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=self.product_dir,
+            env={**os.environ, **self.identity, **(env or {})},
+            input=stdin,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout.strip()
+
+    def _has_staged_changes(self, path: Path, relatives: Sequence[str] = ()) -> bool:
+        """`git diff --cached --quiet`: exit 0 is nothing staged, 1 is something; any other
+        exit is a git failure and raises."""
+        scope = ["--", *relatives] if relatives else []
+        result = self._run("diff", "--cached", "--quiet", *scope, cwd=path)
+        if result.returncode not in (0, 1):
+            raise GitError(f"git diff --cached --quiet failed: {result.stderr.strip()}")
+        return result.returncode == 1
 
     def push(self, branch: str, *, lease: str | None = None) -> None:
         if lease is None:
@@ -528,6 +613,54 @@ class GitWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
+
+    def introduced_paths(
+        self, path: Path, base: str, head: str, against: str | None
+    ) -> tuple[str, ...]:
+        # `--no-renames`: a rename is a delete plus an add whatever `diff.renames` the
+        # machine has. `-z` with `core.quotepath` off: a name comes back as it is.
+        result = self._run(
+            *_PLAIN, "diff", "--name-status", "--no-renames", "-z", f"{base}...{head}", cwd=path
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff {base}...{head} failed: {result.stderr.strip()}")
+        fields = result.stdout.split("\0")
+        rows = zip(fields[0::2], fields[1::2], strict=False)
+        kept = [name for status, name in rows if status in ("A", "M") and name]
+        if against is None:
+            return tuple(kept)
+        # One call whatever the size of the delivery: the paths whose blob differs between
+        # `against` and `head`, a path `against` lacks included, are the ones to keep.
+        differing = self._run(
+            *_PLAIN, "diff", "--name-only", "--no-renames", "-z", against, head, cwd=path
+        )
+        if differing.returncode != 0:
+            raise GitError(f"git diff {against} {head} failed: {differing.stderr.strip()}")
+        changed = set(differing.stdout.split("\0"))
+        return tuple(name for name in kept if name in changed)
+
+    def fetched_upstream(self) -> str | None:
+        try:
+            branch = self._run("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
+            if not branch:
+                return None
+            ref, remote = self._tracking(branch)
+            if not ref or not remote or remote == ".":
+                return None
+            tip = self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+            return tip.stdout.strip() or None
+        except (GitError, OSError, subprocess.SubprocessError):
+            return None
+
+    def fast_forward_view(self, sha: str) -> FastForwardView:
+        ancestor = self.is_ancestor(self.product_dir, "HEAD", sha)
+        changed = self._read_z("diff", "--name-only", "-z", "HEAD", sha)
+        status = self._read_z("status", "--porcelain", "-uall", "-z")
+        return FastForwardView(
+            ancestor,
+            frozenset(name for name in changed.split("\0") if name),
+            _dirty_paths(status),
+        )
 
     def first_parent_commits(self, older: str, newer: str) -> tuple[rules.Commit, ...]:
         result = self._run(
@@ -699,12 +832,7 @@ class GitWorkspace:
         branch = self._run("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
         if not branch:
             return Upstream("HEAD", head, "detached HEAD has no upstream: starting from HEAD")
-        found = self._git(
-            "for-each-ref",
-            "--format=%(upstream)|%(upstream:remotename)",
-            f"refs/heads/{branch}",
-        )
-        ref, _, remote = found.partition("|")
+        ref, remote = self._tracking(branch)
         if not ref or not remote:
             return Upstream("HEAD", head, f"{branch} has no upstream: starting from HEAD")
         if remote == ".":
@@ -722,6 +850,16 @@ class GitWorkspace:
                 ref, tip, _left_out_note(self._left_out(ref), f"fetch failed: {reason}")
             )
         return Upstream("HEAD", head, f"fetch failed ({reason}): starting from HEAD")
+
+    def _tracking(self, branch: str) -> tuple[str, str]:
+        """The upstream ref `branch` tracks and the remote it comes from; empty when none."""
+        found = self._git(
+            "for-each-ref",
+            "--format=%(upstream)|%(upstream:remotename)",
+            f"refs/heads/{branch}",
+        )
+        ref, _, remote = found.partition("|")
+        return ref, remote
 
     def _left_out(self, ref: str) -> list[str]:
         """The short shas HEAD has that `ref` lacks: the commits a base from `ref` leaves out."""
@@ -862,11 +1000,33 @@ class GitWorkspace:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
 
+    def _read_z(self, *args: str) -> str:
+        """The raw stdout of a NUL-separated git read: never stripped, so no path loses a
+        leading or trailing space."""
+        result = self._run(*args)
+        if result.returncode != 0:
+            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout
+
     def _git(self, *args: str, cwd: Path | None = None) -> str:
         result = self._run(*args, cwd=cwd)
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
+
+
+def _dirty_paths(porcelain_z: str) -> frozenset[str]:
+    """The paths of a `git status --porcelain -z` output. A rename or a copy carries its
+    source as one more field, which is skipped: only the path that exists now can clash."""
+    fields = iter(porcelain_z.split("\0"))
+    paths: set[str] = set()
+    for entry in fields:
+        if len(entry) < 4:
+            continue
+        paths.add(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            next(fields, None)
+    return frozenset(paths)
 
 
 def _patch_additions(log: str) -> list[AddedLine]:

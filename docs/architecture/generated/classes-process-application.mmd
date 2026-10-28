@@ -43,6 +43,8 @@ classDiagram
   }
   class Fact {
   }
+  class FastForwardView {
+  }
   class FlagVocabulary {
   }
   class FoldingDocuments {
@@ -205,6 +207,8 @@ classDiagram
   }
   class Transcript {
   }
+  class UnstageablePath {
+  }
   class Upstream {
   }
   class UpstreamMerge {
@@ -229,6 +233,7 @@ classDiagram
   TrackerTimedOut --|> TrackerCallFailed
   TrackerTransient --|> TrackerCallFailed
   TrackerUnreachable --|> TrackerCallFailed
+  UnstageablePath --|> GitError
   EstimateCapReached --|> Escalating
   PromptFailure --|> Escalating
   RoleFailure --|> Escalating

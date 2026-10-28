@@ -45,6 +45,9 @@ NO_COMMIT = (
     "no commit on the branch: a delivery is committed code, commit your work on the "
     "current branch and then deliver"
 )
+# The most paths the unstageable refusal names; the rest are counted.
+UNSTAGEABLE_NAMED = 5
+
 UNCOMMITTED = (
     "uncommitted changes in the working tree: the branch must hold exactly what you "
     "tested, commit them (or discard them) and then deliver"
@@ -241,6 +244,29 @@ def refusal(
     if regressions:
         parts.append(_regressions_text(regressions))
     return "\n\n".join(parts) or None
+
+
+def unstageable_refusal(introduced: Sequence[str]) -> str | None:
+    """Why this delivery is not one yet because it introduces paths the system never
+    versions on a delivery branch (GH-420), or None. `introduced` is what the workspace
+    says the delivery adds or modifies; `rules.unstageable` decides which of those are the
+    system's own. The reason names at most `UNSTAGEABLE_NAMED` of them, sorted, and says how
+    to take them out."""
+    # At call time: `rules` imports this module, so a module-level import is a cycle.
+    from .rules import unstageable
+
+    paths = sorted({path for path in introduced if unstageable(path)})
+    if not paths:
+        return None
+    named = ", ".join(f"`{path}`" for path in paths[:UNSTAGEABLE_NAMED])
+    more = len(paths) - UNSTAGEABLE_NAMED
+    if more > 0:
+        named += f" and {more} more"
+    return (
+        f"the delivery adds or changes files the system never versions on a delivery "
+        f"branch: {named}. Take them out of the commit with `git rm --cached <path>` "
+        "(the files stay on disk), commit, and deliver again."
+    )
 
 
 def _failed_text(r: CheckResult) -> str:

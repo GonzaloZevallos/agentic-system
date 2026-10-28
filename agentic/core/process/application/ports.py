@@ -318,6 +318,11 @@ class TaskDocuments(Protocol):
         The path it wrote, or None when the task has no document to write."""
         ...
 
+    def text(self, task_id: str) -> str | None:
+        """The document exactly as it is on disk, or None when the task has none: what archiving
+        commits onto the archived ref, since it never writes into a checkout."""
+        ...
+
     def record_closure(self, task_id: str, values: Mapping[str, object]) -> Path:
         """Line-level edit of the closure's own top-level frontmatter keys
         (`document.record_closure`'s own docstring) into the document already on disk.
@@ -713,6 +718,17 @@ class GitError(RuntimeError):
     import it from `adapters.git.workspace` keep working unchanged."""
 
 
+class UnstageablePath(GitError):
+    """A path under `rules.UNSTAGEABLE` was asked to be staged, or was found staged: the task
+    documents, run records, logs and worktrees stay on the machine and are never committed on
+    a delivery branch. A `GitError`, so a caller that already ends a delivery on a failed git
+    call ends it on this one. `paths` are the offending paths."""
+
+    def __init__(self, paths: Sequence[str]):
+        self.paths = tuple(paths)
+        super().__init__(f"paths the system never stages: {', '.join(self.paths)}")
+
+
 @dataclass(frozen=True)
 class Upstream:
     """Where new work starts from and what the poller judges a merge against (GH-180):
@@ -726,6 +742,18 @@ class Upstream:
     # Why it is not the plain fetched upstream (no remote, fetch failed, local commits
     # left out), for the run's log and the poll round's output. None when nothing to say.
     note: str | None
+
+
+@dataclass(frozen=True)
+class FastForwardView:
+    """What `Workspace.fast_forward_view` reads of the product checkout against a tip
+    (GH-420): `ancestor` is whether its HEAD is an ancestor of the tip, `changed` the paths
+    that differ between HEAD and the tip, `dirty` the paths of its untracked and modified
+    files that git does not ignore. `rules.fast_forward_blocked` decides from these."""
+
+    ancestor: bool
+    changed: frozenset[str]
+    dirty: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -910,15 +938,29 @@ class Workspace(Protocol):
         ...
 
     def commit_all(self, path: Path, message: str) -> str | None:
-        """Commit everything changed under `path`; `None` when there was nothing."""
+        """Commit everything changed under `path`; `None` when there was nothing. Nothing
+        under `rules.UNSTAGEABLE` is staged, a tracked task document included; one that is
+        already in the index raises `UnstageablePath`."""
         ...
 
     def commit_paths(self, path: Path, relatives: Sequence[str], message: str) -> str | None:
         """Commit only `relatives` (paths relative to the checkout at `path`), whatever
-        else is changed there; `None` when those paths have nothing to commit. The
-        delivery's own document commit (GH-203) is the caller: `commit_all` would take a
-        stray file along. A path deleted from the worktree is committed as a deletion, so
-        a rename is the old path and the new one together (GH-229). Raises `GitError`."""
+        else is changed there; `None` when those paths have nothing to commit. A path
+        deleted from the worktree is committed as a deletion, so a rename is the old path
+        and the new one together (GH-229). A path under `rules.UNSTAGEABLE` raises
+        `UnstageablePath` before any git command runs. Raises `GitError`."""
+        ...
+
+    def commit_archived_document(
+        self, ref: str, relative: str, text: str, message: str
+    ) -> str | None:
+        """The one staging of a path under `rules.UNSTAGEABLE` (GH-420): commit `text` as
+        `relative`, exactly `.agentic/tasks/<id>.md`, on top of the archived branch `ref`
+        (`archive/...`, with or without `refs/heads/`), in plumbing: no worktree, no checkout
+        index and no `HEAD` is touched. Returns the new commit, or `None` when the ref already
+        holds that text there (a retried archive). A ref outside `archive/` or any other path
+        raises `GitError`, and so does a ref that moved while the commit was being made: it
+        is moved with the tip read first as its expected old value."""
         ...
 
     def push(self, branch: str, *, lease: str | None = None) -> None:
@@ -1011,11 +1053,9 @@ class Workspace(Protocol):
         ...
 
     def is_ignored(self, root: Path, relative: str) -> bool:
-        """Whether the product's own `.gitignore` under `root` ignores `relative`
-        (ADR-0011, sixth addendum): archiving commits the task document with
-        `commit_all`'s own `git add -A`, so this is how it tells the caller the
-        document did not land, without assuming every product versions
-        `.agentic/tasks/` the way this repo and gym-saas both happen to."""
+        """Whether the product's own ignore rules under `root` ignore `relative`. Kept for
+        the callers that still ask; the delivery no longer does, because it never commits
+        the task document (see `UnstageablePath`)."""
         ...
 
     def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
@@ -1030,6 +1070,11 @@ class Workspace(Protocol):
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
         ...
 
+    def fast_forward_view(self, sha: str) -> FastForwardView:
+        """The product checkout's own facts against the fetched tip `sha` (GH-420), read
+        only: no merge, no checkout, no fetch. Raises `GitError` when git cannot answer."""
+        ...
+
     def first_parent_commits(self, older: str, newer: str) -> tuple[Commit, ...]:
         """The commits on the first-parent line from `older` (excluded) to `newer` (included),
         oldest first, each with the ids of its parents, the first parent first (GH-408: what a
@@ -1040,6 +1085,24 @@ class Workspace(Protocol):
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
         pull request changes against the commit it branched from. Raises `GitError`."""
+        ...
+
+    def introduced_paths(
+        self, path: Path, base: str, head: str, against: str | None
+    ) -> tuple[str, ...]:
+        """The paths a delivery introduces (GH-420): the added and modified rows of
+        `git diff --name-status --no-renames <base>...<head>` at the checkout `path` (a
+        rename is a delete plus an add, and a deletion is never returned), less every path
+        whose blob at `head` equals its blob at `against`. A path missing at `against` is
+        kept; `against=None` drops nothing. Names come back unquoted. Read only: it never
+        fetches. Raises `GitError` when git cannot say."""
+        ...
+
+    def fetched_upstream(self) -> str | None:
+        """The sha the product checkout's upstream ref holds as it stands (GH-420), the ref
+        `upstream()` resolves, read without fetching. `None` when the branch is detached,
+        has no upstream, tracks a local branch, or the ref was never fetched. Never raises
+        for a git failure: an unreadable ref is a missing one."""
         ...
 
     def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:

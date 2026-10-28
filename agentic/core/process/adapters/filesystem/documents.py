@@ -221,6 +221,10 @@ class FilesystemTaskDocuments:
         path.write_text(document.record_closure(raw, values), encoding="utf-8")
         return path
 
+    def text(self, task_id: str) -> str | None:
+        source = self.path_for(task_id)
+        return source.read_text(encoding="utf-8") if source.is_file() else None
+
     def write_into(self, task_id: str, root: Path) -> Path | None:
         source = self.path_for(task_id)
         if not source.is_file():
