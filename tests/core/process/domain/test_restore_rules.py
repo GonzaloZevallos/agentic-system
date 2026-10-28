@@ -171,6 +171,7 @@ def _document(**over):
             "api": {
                 "id": "api",
                 "status": "approved",
+                "branch": SUB,
                 "reviewed_head": HEAD,
             }
         },
@@ -200,9 +201,19 @@ def _observed(**over) -> RestoreObserved:
 def test_restore_heads_name_the_approved_head_and_each_subtask_reviewed_head():
     state = _document(
         subtasks={
-            "api": {"id": "api", "status": "approved", "reviewed_head": HEAD},
-            "web": {"id": "web", "status": "approved", "reviewed_head": OTHER},
-            "gap": {"id": "gap", "status": "approved"},
+            "api": {
+                "id": "api",
+                "status": "approved",
+                "branch": "agentic/GH-9.api",
+                "reviewed_head": HEAD,
+            },
+            "web": {
+                "id": "web",
+                "status": "approved",
+                "branch": "agentic/GH-9.web",
+                "reviewed_head": OTHER,
+            },
+            "gap": {"id": "gap", "status": "approved", "branch": "agentic/GH-9.gap"},
         }
     )
 
@@ -214,6 +225,92 @@ def test_restore_heads_name_the_approved_head_and_each_subtask_reviewed_head():
 
 def test_restore_heads_of_a_single_unit_task_include_the_task_branch_at_the_approved_head():
     assert rules.restore_heads(_document(), "GH-9") == {TASK: HEAD, SUB: HEAD}
+
+
+def _gh374_document(**over):
+    """GH-374's shape: three subtasks on their own branches plus the integration on the task
+    branch, at the head the task was approved at."""
+    heads = {"layout": "1" * 40, "cards": "2" * 40, "hero": "3" * 40}
+    units = {
+        sid: {"id": sid, "status": "approved", "branch": f"agentic/GH-9.{sid}", "reviewed_head": h}
+        for sid, h in heads.items()
+    }
+    units["integration"] = {
+        "id": "integration",
+        "status": "approved",
+        "branch": TASK,
+        "reviewed_head": HEAD,
+    }
+    return _document(subtasks=units, **over)
+
+
+def test_restore_heads_of_the_gh374_shape_take_the_integration_branch_from_its_document():
+    assert rules.restore_heads(_gh374_document(), "GH-9") == {
+        TASK: HEAD,
+        "agentic/GH-9.layout": "1" * 40,
+        "agentic/GH-9.cards": "2" * 40,
+        "agentic/GH-9.hero": "3" * 40,
+    }
+
+
+def test_restore_heads_of_a_single_unit_on_the_task_branch_is_only_the_task_branch():
+    state = _document(
+        subtasks={
+            "api": {"id": "api", "status": "approved", "branch": TASK, "reviewed_head": HEAD}
+        }
+    )
+
+    assert rules.restore_heads(state, "GH-9") == {TASK: HEAD}
+
+
+def test_restore_heads_never_let_a_unit_on_the_task_branch_replace_the_approved_head():
+    docs = "d" * 40
+    state = _gh374_document(
+        close_docs={"parent": HEAD, "head": docs, "paths": ["docs/product/x.md"]}
+    )
+
+    assert rules.approved_head(state) == docs
+    assert rules.restore_heads(state, "GH-9")[TASK] == docs
+
+
+def test_restore_heads_give_a_unit_without_a_branch_nothing_and_ignore_dict_order():
+    units = _gh374_document()["subtasks"]
+    del units["cards"]["branch"]
+    forward = rules.restore_heads(_document(subtasks=units), "GH-9")
+    backward = rules.restore_heads(_document(subtasks=dict(reversed(units.items()))), "GH-9")
+
+    assert forward == backward
+    assert "agentic/GH-9.cards" not in forward
+    assert not any(branch.endswith(".integration") for branch in forward)
+
+
+def test_restore_steps_of_the_gh374_shape_find_every_derived_branch_and_refuse_nothing():
+    state = _gh374_document()
+    names = tuple(rules.restore_heads(state, "GH-9"))
+    plan = rules.restore_steps(
+        _observed(
+            state=state,
+            archived=tuple(f"{ARCHIVE}/{name}" for name in names),
+            reachable=dict.fromkeys(names, True),
+        )
+    )
+
+    assert plan.refusal is None
+    assert plan.steps == ("create_refs", "write_document", "push", "reopen", "settle")
+
+
+def test_a_branch_the_derived_heads_name_but_the_archive_lacks_is_refused():
+    state = _gh374_document()
+    names = tuple(rules.restore_heads(state, "GH-9"))
+    plan = rules.restore_steps(
+        _observed(
+            state=state,
+            archived=tuple(f"{ARCHIVE}/{name}" for name in names if name != "agentic/GH-9.hero"),
+            reachable=dict.fromkeys(names, True),
+        )
+    )
+
+    assert plan.refusal == "head_not_reachable"
 
 
 def test_a_delivered_archive_on_a_clean_slate_owes_every_step_in_order():

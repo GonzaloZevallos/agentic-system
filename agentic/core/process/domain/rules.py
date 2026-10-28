@@ -1777,14 +1777,21 @@ class RestoreSteps:
 def restore_heads(state: TaskState, task_id: str) -> dict[str, str]:
     """The branches a restore creates and the sha each is created at (GH-406): the task
     branch at `approved_head(state)` -- nothing else; a head the task moved after its review
-    is not restored -- and each subtask branch at its document `reviewed_head`. A subtask with
-    no `reviewed_head` gets no branch. Commits the archive itself made stay under its prefix."""
+    is not restored -- and each unit at its document `reviewed_head`. Every name comes from
+    the unit's own `branch` field, never from its key: the integration unit lives on the task
+    branch. A unit on the task branch is skipped (it never overwrites `approved_head`, which may
+    be past it, and is never refused for a different head). A unit with no `reviewed_head` or no
+    `branch` gets no branch, with no fallback. Commits the archive itself made stay under its
+    prefix."""
     heads: dict[str, str] = {}
+    task = task_branch(task_id)
     if head := approved_head(state):
-        heads[task_branch(task_id)] = head
-    for sid, unit in state.get("subtasks", {}).items():
-        if reviewed := unit.get("reviewed_head"):
-            heads[subtask_branch(task_id, sid)] = reviewed
+        heads[task] = head
+    for _sid, unit in sorted(state.get("subtasks", {}).items()):
+        branch = unit.get("branch")
+        reviewed = unit.get("reviewed_head")
+        if branch and reviewed and branch != task:
+            heads[branch] = reviewed
     return heads
 
 
