@@ -155,6 +155,8 @@ def test_approved_head_without_tiers_is_the_docs_head_when_the_record_is_covered
     assert rules.approved_head(state(close_docs=close_docs())) == DOCS
     assert rules.approved_head(state(close_docs=close_docs(parent=OTHER))) == REVIEWED
     assert rules.approved_head(state(close_docs=close_docs(paths=["agentic/x.py"]))) == REVIEWED
+    headless = {"parent": REVIEWED, "paths": ["docs/product/dashboard.md"]}  # malformed record
+    assert rules.approved_head(state(close_docs=headless)) == REVIEWED
 
 
 def test_approved_head_with_tiers_accepts_the_docs_head_only_with_the_suite_passed_on_it():

@@ -185,6 +185,29 @@ async def test_a_second_approval_with_identical_content_records_nothing(tmp_path
     assert patch["close_docs"] is None
 
 
+async def test_an_approval_after_a_return_records_the_new_commit(tmp_path):
+    earlier = {"parent": "p", "head": "h1", "paths": ["docs/product/old.md"]}
+    returned = final_verdict("returned", blocking=["x"])
+    start = {**state(), "close_docs": earlier}
+
+    first, _ = await run(start, runner_with(returned), tmp_path, MemoryWorkspace())
+    assert first["close_docs"] is None
+
+    second, ports = await run(
+        apply(start, first),
+        runner_with(final_verdict("approved", definitions=[capability()])),
+        tmp_path,
+        MemoryWorkspace(),
+    )
+
+    assert ports.knowledge.definitions == {"dashboard": JOBS}
+    assert second["close_docs"] == {
+        "parent": REVIEWED,
+        "head": "c2",
+        "paths": ["docs/product/dashboard.md"],
+    }
+
+
 def test_relative_paths_are_taken_against_the_checkout():
     root = Path("/checkouts/GH-12")
 

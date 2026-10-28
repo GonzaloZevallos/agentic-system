@@ -2567,8 +2567,9 @@ def approved_head(state: TaskState) -> str | None:
     close_docs = state.get("close_docs")
     task_head = state.get("task_head")
     if not task_head:
-        if close_docs and head_reviewed(reviewed, close_docs, close_docs["head"]):
-            return close_docs["head"]
+        docs_head = close_docs.get("head") if close_docs else None
+        if docs_head and head_reviewed(reviewed, close_docs, docs_head):
+            return docs_head
         return reviewed
     recorded = state.get("full_checks")
     if not head_reviewed(reviewed, close_docs, task_head):

@@ -51,4 +51,4 @@ def test_pm_final_returns_definitions_reconciled_with_the_delivered_diff():
     output = prompt[prompt.index("<Output>") :]
     assert "`definitions`" in output
     assert "git diff <base>..<head>" in prompt
-    assert "empty on `returned`" in output.lower() or "always empty on `returned`" in output
+    assert "always empty on `returned`" in output
