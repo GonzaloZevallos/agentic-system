@@ -847,3 +847,23 @@ candidates:
   - finding
   - return
   added_at: '2026-10-28T08:51:38.442+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Never narrow a test or deliverable so it passes when the brief requires more; build it, or flag a conflict between criteria and constraints in your first delivery instead of shipping a silent substitute.
+  confidence: medium
+  seen_in:
+  - GH-400
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T10:54:47.804+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you write docs about behaviour, trace each claim to the code branch that does it, including exhausted, error and conditional paths and who triggers what, and cite it, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-400
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T10:54:47.804+00:00'
