@@ -4303,9 +4303,9 @@ def test_poll_plan_starts_an_orphan_as_a_retake_with_its_own_reason():
 
 
 def test_poll_plan_orders_an_orphan_beside_the_other_retakes_by_closeness_and_shares_the_cap():
-    plan = _orphan_plan(available_slots=2, retakes=[9], orphan_retakes=[7, 8], closeness={8: 3})
-    assert [(a.issue, a.reason) for a in plan.actions] == [(8, "orphaned"), (9, "reboot")]
-    assert plan.deferred == [rules.Deferred("orphan", 7, "no_slot")]
+    plan = _orphan_plan(available_slots=2, retakes=[9], orphan_retakes=[7, 8], closeness={9: 3})
+    assert [(a.issue, a.reason) for a in plan.actions] == [(9, "reboot"), (7, "orphaned")]
+    assert plan.deferred == [rules.Deferred("orphan", 8, "no_slot")]
 
 
 def test_poll_plan_defers_every_orphan_when_no_slot_is_left_and_launches_nothing():
