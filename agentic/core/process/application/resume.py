@@ -181,21 +181,40 @@ def seed_increment(task_id: str, cfg: Configuration, ports: Ports) -> Seed:
         return Seed(_checked(task_id, state, ports), None)
     if rules.same_commit(head, approved):
         return Seed(_checked(task_id, state, ports), None)
-    descends, unreadable = False, None
+    descends, unreadable, unread_commits = False, None, None
+    commits: tuple[rules.Commit, ...] = ()
     if branch == rules.task_branch(task_id):
         try:
             descends = ports.workspace.is_ancestor(cfg.product_dir, approved, head)
         except (GitError, ValueError) as failed:
             unreadable = failed
+        if descends:
+            try:
+                commits = ports.workspace.first_parent_commits(approved, head)
+            except (GitError, ValueError) as failed:
+                unread_commits = failed
     verdict = (
-        "refuse" if unreadable else rules.integration_increment(state, task_id, head, descends)
+        "refuse"
+        if unreadable
+        else rules.integration_increment(state, task_id, head, descends, commits)
     )
+    if verdict == "reintegrate":
+        return _reintegrated(task_id, state, ports)
     if verdict != "increment":
         problems = disagreements(state, ports.workspace)
         today = f"{unit}: approved at {approved}, but `{branch}` is at {head}"
         if today in problems:
+            reintegration = _reintegration_line(
+                task_id, state, (unit, branch, approved), descends, commits, unread_commits
+            )
             problems[problems.index(today)] = _moved_line(
-                task_id, ports, state, (unit, branch, approved, head), descends, unreadable
+                task_id,
+                ports,
+                state,
+                (unit, branch, approved, head),
+                descends,
+                unreadable,
+                reintegration,
             )
         raise _disagree(task_id, problems)
     checkout, dirty = _task_checkout(task_id, ports)
@@ -203,6 +222,54 @@ def seed_increment(task_id: str, cfg: Configuration, ports: Ports) -> Seed:
     if problems := disagreements(seeded, ports.workspace, exempt=frozenset({unit})):
         raise _disagree(task_id, problems)
     return Seed(seeded, Increment(approved, head, branch, checkout, dirty))
+
+
+def _reintegrated(task_id: str, state: TaskState, ports: Ports) -> Seed:
+    """The seed of a reintegration (GH-408): the integration goes back to `pending`, its
+    reviewed head kept, depending on every subtask not approved; nothing is reviewed as an
+    increment, so there is no `Increment`. The integration checkout must hold nothing of a human's
+    or of the stopped run's: a merge in progress or uncommitted files refuse, and nothing here
+    commits them. Every document-against-git check runs again, with no unit exempt."""
+    checkout, dirty = _task_checkout(task_id, ports)
+    if dirty and checkout is not None:
+        raise _disagree(
+            task_id,
+            [
+                f"the integration checkout `{checkout}` has uncommitted changes the stopped run "
+                f"left: inspect them with `git -C {checkout} status`, commit or discard them by "
+                f"hand, then `agentic resume {issue_flag(task_id, ports)} --from-document`."
+            ],
+        )
+    seeded = apply(state, rules.reintegrate_patch(state))
+    if problems := disagreements(seeded, ports.workspace):
+        raise _disagree(task_id, problems)
+    return Seed(seeded, None)
+
+
+def _reintegration_line(
+    task_id: str,
+    state: TaskState,
+    moved: tuple[str, str, str],
+    descends: bool,
+    commits: tuple[rules.Commit, ...],
+    unread: Exception | None,
+) -> str | None:
+    """The refusal line of a branch that moved past the approved head with some subtasks
+    returned, when its commits are what is wrong: the first one not accepted and why, or that
+    they could not be read. `None` when another condition of the rule fails, whose line stays."""
+    unit, branch, approved = moved
+    reason = rules.refused_reintegration(state, task_id, descends, commits)
+    if reason is None:
+        return None
+    if unread is not None:
+        return (
+            f"{unit}: could not read the commits between {approved} and `{branch}` ({unread}): "
+            "retry the resume."
+        )
+    return (
+        f"{unit}: `{branch}` moved past the approved head {approved} but not only by merges of "
+        f"approved subtasks while others are returned: {reason}."
+    )
 
 
 def _checked(task_id: str, state: TaskState, ports: Ports) -> TaskState:
@@ -218,10 +285,11 @@ def _moved_line(
     moved: tuple[str, str, str, str],
     descends: bool,
     unreadable: Exception | None,
+    reintegration: str | None = None,
 ) -> str:
     """The refusal line for the reviewed unit's moved branch: what is wrong and a command that
-    is safe to run. A condition of the rule other than ancestry and the pull request keeps
-    today's line."""
+    is safe to run. A condition of the rule other than ancestry, the pull request and the
+    commits of a reintegration (`reintegration`, GH-408) keeps today's line."""
     unit, branch, approved, head = moved
     if unreadable is not None:
         return (
@@ -239,6 +307,8 @@ def _moved_line(
             f"{task_id} has a pull request: its branch moved after approval, which the "
             f"landing owns; run `agentic land {issue_flag(task_id, ports)}`."
         )
+    if reintegration is not None:
+        return reintegration
     return f"{unit}: approved at {approved}, but `{branch}` is at {head}"
 
 
