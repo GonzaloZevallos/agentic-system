@@ -5145,7 +5145,8 @@ _PARTS_STEP = (
     "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
     "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
     "   If the section `## Human` says the human decided to build this task whole, write\n"
-    "   subtasks and no parts."
+    "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+    "   commit) is still a subtask of this task, never a part."
 )
 _PARTS_FIELD = (
     "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"

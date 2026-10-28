@@ -361,7 +361,8 @@ ORIGINAL_PARTS_WORDING = {
         "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again."
         "\n"
         "   If the section `## Human` says the human decided to build this task whole, write\n"
-        "   subtasks and no parts."
+        "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+        "   commit) is still a subtask of this task, never a part."
     ),
     "{{parts_field}}": (
         "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
@@ -409,6 +410,23 @@ def test_a_filled_slot_reaches_the_rendered_prompt(tmp_path):
     text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **values).text
     assert "GH-316" in text
     assert "{{" not in text
+
+
+POST_MERGE_SENTENCE = "is still a subtask of this task, never a part"
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_the_planning_prompts_say_work_after_the_merge_is_a_subtask_not_a_part(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    text = load_prompt(
+        role, Configuration(product_dir=tmp_path), memory_ports(), {}, **PLACEHOLDERS
+    ).text
+    flat = " ".join(text.split())
+    assert "a post-merge workflow, a bot commit) " + POST_MERGE_SENTENCE in flat
+    # A part never reads it: it has no `### Parts` step at all.
+    part = {**PLACEHOLDERS, "parts_step": rules.parts_step_text(("GH-316", 2))}
+    part_text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **part)
+    assert POST_MERGE_SENTENCE not in " ".join(part_text.text.split())
 
 
 REMEDY_SENTENCES = (
