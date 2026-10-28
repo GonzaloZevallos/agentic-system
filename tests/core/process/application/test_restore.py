@@ -135,8 +135,14 @@ class CutDocuments(MemoryDocuments):
     def __init__(self) -> None:
         super().__init__()
         self.armed = False
+        self.arm_after: int | None = None  # saves that pass before the next one raises
 
     def save(self, state: TaskState):
+        if self.arm_after is not None:
+            if self.arm_after == 0:
+                self.arm_after = None
+                raise OSError("disk full")
+            self.arm_after -= 1
         if self.armed:
             self.armed = False
             raise OSError("disk full")
@@ -439,6 +445,68 @@ def test_a_cut_at_create_refs_is_finished_by_a_retry_that_archives_and_renames_n
     assert world.workspace.existing_branches[SUB_BRANCH][0] == SUB_HEAD
 
 
+def test_a_failure_of_the_platform_that_is_not_about_the_task_is_raised_not_reported_as_a_base_gone():
+    world = World()
+    world.tracker.reopen_error = "gh pr reopen failed: HTTP 502"
+
+    with pytest.raises(ValueError, match="502"):
+        world.run()
+
+    world.tracker.reopen_error = None
+    assert world.run().steps == ("reopen", "settle")
+
+
+def test_a_cut_after_archive_live_is_retried_without_archiving_the_displaced_run_twice():
+    displaced = archived_state(
+        pull_request=None,
+        status="in_progress",
+        cost_usd=3.0,
+        landing_restarts=1,
+        landing_cost_carried=2.0,
+    )
+    world = World(live=displaced)
+    world.workspace.existing_branches[BRANCH] = ("other-head", "b0")
+    world.workspace.kill_once = SUB_BRANCH  # after the archive, mid create_refs
+    with pytest.raises(GitError):
+        world.run()
+    assert world.workspace.renamed == [(BRANCH, f"archive/run2-unknown/{BRANCH}")]
+
+    second = world.run()
+
+    assert second.refusal is None
+    assert "archive_live" not in second.steps
+    assert world.workspace.renamed == [(BRANCH, f"archive/run2-unknown/{BRANCH}")]
+    assert not [name for name in world.workspace.existing_branches if "run3" in name]
+    assert world.workspace.existing_branches[BRANCH][0] == HEAD
+    assert world.workspace.existing_branches[SUB_BRANCH][0] == SUB_HEAD
+    after = world.document()
+    assert after["landing_restarts"] == 1
+    assert after["landing_cost_carried"] == 5.0
+    assert len(after["restorations"]) == 1
+
+
+def test_a_cut_at_settle_is_retried_and_the_rows_are_written_once():
+    world = World(live=archived_state())
+    first = world.run()
+    assert first.settlement == "settled"
+    reference = [row["claim"] for row in world.document()["plan_settled"]]
+    assert reference == ["a", "b"]
+
+    cut = World(live=archived_state())
+    cut.documents.arm_after = 1  # the write_document save passes, the settle save raises
+    with pytest.raises(OSError, match="disk full"):
+        cut.run()
+    assert "plan_settled" not in cut.document()
+
+    second = cut.run()
+
+    assert second.steps == ("settle",)
+    assert [row["claim"] for row in cut.document()["plan_settled"]] == ["a", "b"]
+    assert cut.run().steps == ()
+    assert [row["claim"] for row in cut.document()["plan_settled"]] == ["a", "b"]
+    assert cut.workspace.renamed == []
+
+
 def test_a_cut_at_write_document_is_finished_by_a_retry():
     world = World(live=archived_state())
     world.documents.armed = True
@@ -470,7 +538,8 @@ def test_a_cut_after_every_step_ends_in_the_state_an_uncut_restore_leaves():
     cut.workspace.push_failures = 1
     assert cut.run().refusal == "push_refused"
     cut.tracker.reopen_error = "flaky"
-    assert cut.run().refusal == "pr_base_gone"
+    with pytest.raises(ValueError, match="flaky"):
+        cut.run()
     cut.tracker.reopen_error = None
     assert cut.run().refusal is None
     assert cut.run().steps == ()  # nothing left to do, and nothing done twice

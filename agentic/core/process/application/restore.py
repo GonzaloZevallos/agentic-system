@@ -246,7 +246,9 @@ def _restored(archived: TaskState, seen: _Seen, prefix: str, at: str) -> TaskSta
 
 def _reopen(seen: _Seen, ports: Ports) -> tuple[Refusal, str] | None:
     """Reopen the pull request; a refusal of the platform is read, never retried: a merged
-    pull request is `pr_merged`, anything else it refuses (a deleted base) `pr_base_gone`."""
+    pull request is `pr_merged`, a text that speaks of the base branch is `pr_base_gone`. Any
+    other failure (a timeout, a rate limit) is not a refusal about the task: it is raised as it
+    came, and a retry finishes from what is observed."""
     reference = cast(TaskState, seen.observed.state).get("pull_request", "")
     if seen.number is None:
         return "not_delivered", f"no pull request number in {reference!r}"
@@ -256,7 +258,9 @@ def _reopen(seen: _Seen, ports: Ports) -> tuple[Refusal, str] | None:
         now = _pull_request(ports, reference)
         if now is not None and now.state == "MERGED":
             return "pr_merged", str(exc)
-        return "pr_base_gone", str(exc)
+        if "base" in str(exc).lower():
+            return "pr_base_gone", str(exc)
+        raise
     return None
 
 
