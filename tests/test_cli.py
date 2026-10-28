@@ -5826,9 +5826,10 @@ async def test_a_failed_resumed_comment_is_recorded_and_the_run_goes_on(
     monkeypatch, tmp_path, from_document
 ):
     from agentic.shared.configuration import Configuration
-    from tests.fakes import memory_ports
+    from tests.fakes import BadGatewayComments, memory_ports
 
-    ports, seen = memory_ports(), {}
+    # The "Resumed:" note is a real `GhTracker` call over a fake `gh` that keeps answering 502.
+    ports, seen = memory_ports(tracker=BadGatewayComments()), {}
     monkeypatch.setattr(cli, "graph", _pausing_graph(ports, seen))
     updates = _watching_second_update(monkeypatch)
     cfg = Configuration(product_dir=tmp_path)
@@ -5842,10 +5843,10 @@ async def test_a_failed_resumed_comment_is_recorded_and_the_run_goes_on(
         with pytest.raises(SystemExit):
             await cli._run(task, cfg, ports, checkpointer=saver)
 
-    ports.tracker.comment_failures = 1  # the "Resumed:" note keeps failing
     await cli._resume("GH-1", cfg, ports, from_document=from_document, yes=True, checkpointer=saver)
 
-    assert [row["target"] + "/" + row["cls"] for row in seen["rows"]] == ["comment/refused"]
+    assert seen["rows"] == [{"target": "comment", "cls": "transient", "at": "2026-10-28T00:00:00Z"}]
+    assert len(ports.tracker.gh_calls) == 3 and ports.tracker.slept  # retried, then given up
     assert ports.documents.saved[-1]["tracker_failures"] == seen["rows"]
     [(before, after, rows)] = updates
     assert before == after and rows == seen["rows"]  # the update did not move the checkpoint

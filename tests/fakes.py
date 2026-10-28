@@ -2123,3 +2123,39 @@ def copy_reviewed(
         },
         cost,
     )
+
+
+class BadGatewayComments(MemoryTracker):
+    """A `MemoryTracker` whose `comment` and `note` run through a real `GhTracker` over a
+    fake `gh` that answers 502 every time, under the run/resume retry policy with an
+    injected sleep (GH-389). `gh_calls` keeps every argv, `slept` every wait; nothing sleeps."""
+
+    BAD_GATEWAY = "non-200 OK status code: 502 Bad Gateway body: <html>"
+
+    def __init__(self) -> None:
+        super().__init__()
+        import subprocess
+
+        from agentic.core.process.adapters.github.run import GhRetry
+        from agentic.core.process.adapters.github.tracker import GhTracker
+
+        self.gh_calls: list[Any] = []
+        self.slept: list[float] = []
+
+        def gh(args, cwd, capture_output, text, check):
+            self.gh_calls.append(args)
+            raise subprocess.CalledProcessError(1, args, stderr=self.BAD_GATEWAY)
+
+        self._gh = GhTracker(
+            Path("/p"),
+            gh,
+            log=lambda _line: None,
+            retry=GhRetry(max_wait_s=900, sleep=self.slept.append),
+            now=lambda: "2026-10-28T00:00:00Z",
+        )
+
+    def comment(self, task_id: str, text: str) -> None:
+        self._gh.comment(task_id, text)
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        return self._gh.note(task_id, text)
