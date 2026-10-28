@@ -388,15 +388,69 @@ class Allowance(NamedTuple):
 
 ALLOWANCES: tuple[Allowance, ...] = (
     Allowance(
-        "tests/*",
+        "tests/core/process/domain/test_rules.py",
         "docs/architecture/generated/*",
-        "tests name these as the string globs of a `docs:` block in a throwaway repo; none "
-        "reads the files, which the docs check deletes and restores (GH-400, ADR-0076)",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
     ),
     Allowance(
-        "tests/*",
+        "tests/core/process/domain/test_docs.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_landing_sync.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_review_arm.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_plan_skip_ephemeral.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_preflight.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/process/application/test_technical_stage.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/adapters/git/test_stack.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/domain/test_stack_docs_check.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/domain/test_stack.py",
+        "docs/architecture/generated/*",
+        "names the owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/core/knowledge/domain/test_stack_docs_check.py",
         "docs/reference/*",
-        "same: the second owned glob of this repo's `docs:` block, named and never read",
+        "names the second owned glob as a string of a `docs:` block; it never reads the files",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "docs/architecture/generated/*",
+        "names the owned globs in this very table; it never reads the files",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "docs/reference/*",
+        "names the owned globs in this very table; it never reads the files",
     ),
     Allowance(
         "tests/core/knowledge/adapters/filesystem/test_knowledge.py",

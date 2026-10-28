@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import inspect
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from agentic.core.knowledge.domain.stack import (
     Computed,
@@ -75,13 +75,19 @@ def mermaid_limits(text: str) -> None:
             raise ValueError(f"mermaid block {number} has {edges} edges; the limit is {MAX_EDGES}")
 
 
-def role_graph(mermaid: str) -> str:
-    """The role graph page: LangGraph's own `draw_mermaid()` text in a fence."""
+def role_graph(mermaid: str, branch: str) -> str:
+    """The role graph page: LangGraph's own `draw_mermaid()` text of the task graph and of
+    the `develop -> review` graph inside its `pipeline` node, each in a fence."""
     return (
         "# Grafo de roles\n\n"
         "Generado por `scripts/docs/generate.py` desde `agentic.composition:graph` "
         "(`get_graph(xray=True).draw_mermaid()`). No se edita a mano.\n\n"
-        f"```mermaid\n{mermaid.rstrip()}\n```\n"
+        f"```mermaid\n{mermaid.rstrip()}\n```\n\n"
+        "## Rama `pipeline`\n\n"
+        "El nodo `pipeline` corre, por cada subtarea, este grafo propio "
+        "(`agentic.core.process.adapters.langgraph.graph:pipeline_branch`), que el grafo de "
+        "arriba no expande.\n\n"
+        f"```mermaid\n{branch.rstrip()}\n```\n"
     )
 
 
@@ -99,9 +105,9 @@ def cli_reference(helps: Sequence[tuple[tuple[str, ...], str]]) -> str:
     return "\n".join(parts)
 
 
-def _annotation(reader: object) -> str:
+def _annotation(reader: Callable[[object, object], object] | None) -> str:
     """The return annotation of a reader, as the text it is written with."""
-    if not callable(reader):
+    if reader is None:
         return "?"
     annotation = inspect.signature(reader).return_annotation
     if annotation is inspect.Signature.empty:
@@ -150,7 +156,7 @@ def stack_reference(references: Sequence[KeyReference]) -> str:
         if reference.sub_keys:
             lines.append("- **Subclaves**: " + ", ".join(f"`{key}`" for key in reference.sub_keys))
         lines.append(f"- **Qué es**: {reference.description}")
-        if callable(reader):
+        if reader is not None:
             lines.append(f"- **Lector**: `{reader.__module__}.{reader.__qualname__}`")
         parts.append("\n".join(lines) + "\n")
     return "\n".join(parts)
@@ -168,3 +174,28 @@ def select_mermaid(files: Mapping[str, str], kind: str) -> str:
 def has_classes(diagram: str) -> bool:
     """Whether a pyreverse class diagram declares any class."""
     return any(line.startswith("  class ") for line in diagram.splitlines())
+
+
+def merge_mermaid(parts: Sequence[str]) -> str:
+    """One pyreverse diagram out of several runs over parts of the same code: the header of
+    the first, then every block once (the first of a name) and every relation once, both
+    sorted so the result does not depend on the order of the runs."""
+    header = parts[0].splitlines()[0] if parts and parts[0] else "classDiagram"
+    blocks: dict[str, str] = {}
+    relations: set[str] = set()
+    for part in parts:
+        lines = part.splitlines()
+        position = 1
+        while position < len(lines):
+            line = lines[position]
+            if line.startswith("  class "):
+                end = position
+                while end < len(lines) - 1 and lines[end] != "  }" and line.endswith("{"):
+                    end += 1
+                blocks.setdefault(line, "\n".join(lines[position : end + 1]))
+                position = end
+            elif line.strip():
+                relations.add(line)
+            position += 1
+    body = [blocks[key] for key in sorted(blocks)] + sorted(relations)
+    return "\n".join([header, *body]) + "\n"

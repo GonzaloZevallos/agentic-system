@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -114,24 +114,50 @@ def _declarations(mermaid: str) -> list[tuple[str, str]]:
     return found
 
 
-def test_role_graph_nodes_are_the_compiled_graphs(full_run: Path) -> None:
-    from agentic import composition
-
-    text = (full_run / "docs/architecture/generated/role-graph.md").read_text()
-    block = re.search(r"```mermaid\n(.*?)```", text, re.DOTALL)
-    assert block is not None
-    declared = _declarations(block.group(1))
-    nodes = composition.graph.compile().get_graph(xray=True).nodes
+def _expected(nodes: Iterable[str]) -> list[tuple[str, str]]:
+    """(subgraph or root, label) of each node name, split on LangGraph's separator."""
     expected = []
     for name in nodes:
         parent, _, leaf = name.rpartition(SEPARATOR)
         expected.append((parent.replace(SEPARATOR, "_"), leaf))
-    assert len(declared) == len(nodes)
-    assert sorted(declared) == sorted(expected)
-    labels = {label for _, label in declared}
-    # `develop` and `review` are not nodes of this graph: they live inside `pipeline`, which
-    # the compiled graph does not expand (no `:` in any node name).
-    assert {"classify", "pipeline", "deliver"} <= labels
+    return sorted(expected)
+
+
+def test_role_graph_nodes_are_the_compiled_graphs_and_the_pipeline_branch(
+    scripts: tuple[ModuleType, ModuleType], full_run: Path
+) -> None:
+    from agentic import composition
+
+    _, generate = scripts
+    text = (full_run / "docs/architecture/generated/role-graph.md").read_text()
+    blocks = re.findall(r"```mermaid\n(.*?)```", text, re.DOTALL)
+    assert len(blocks) == 2
+    task_nodes = composition.graph.compile().get_graph(xray=True).nodes
+    declared = _declarations(blocks[0])
+    assert len(declared) == len(task_nodes)
+    assert sorted(declared) == _expected(task_nodes)
+    assert {"classify", "pipeline", "deliver"} <= {label for _, label in declared}
+    # `develop` and `review` live in the graph the `pipeline` node runs for each subtask,
+    # which the task graph does not expand: they are the second block.
+    branch_nodes = generate.branch_graph().get_graph().nodes
+    branch = _declarations(blocks[1])
+    assert len(branch) == len(branch_nodes)
+    assert sorted(branch) == _expected(branch_nodes)
+    assert {"develop", "review"} <= {label for _, label in branch}
+
+
+def test_merging_pyreverse_runs_keeps_each_block_once_and_sorts(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    first = "classDiagram\n  class B {\n  }\n  class A {\n  }\n  B --|> A\n"
+    second = "classDiagram\n  class C {\n  }\n  class A {\n  }\n  C --|> A\n  B --|> A\n"
+    merged = render.merge_mermaid([first, second])
+    assert merged == (
+        "classDiagram\n  class A {\n  }\n  class B {\n  }\n  class C {\n  }\n"
+        "  B --|> A\n  C --|> A\n"
+    )
+    assert render.merge_mermaid([second, first]) == merged
 
 
 def test_every_generated_mermaid_block_is_within_the_limits(
@@ -145,7 +171,7 @@ def test_every_generated_mermaid_block_is_within_the_limits(
             if "```mermaid" in text or relative.endswith(".mmd"):
                 render.mermaid_limits(text)
                 checked += 1
-    assert checked >= 4
+    assert checked >= 5
 
 
 def test_mermaid_limits_refuse_a_block_over_either_limit(

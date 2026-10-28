@@ -33,8 +33,8 @@ Aplica ADR-0074 (generada y escrita) y ADR-0021 (el alcance de mypy).
    `stack.docs` y `stack.docs_command`: el mismo texto que corre la puerta. Si falla,
    imprime la línea para regenerar y commitear. Se fija `.python-version` en 3.13 porque la
    ayuda de argparse y la salida de pyreverse dependen de la versión del intérprete.
-6. **Presupuesto**: `check_budgets: {docs: 240}`. Una corrida mide unos 60 s en reposo y
-   150 s con la máquina cargada (once corridas de pyreverse más el import de la CLI).
+6. **Presupuesto**: `check_budgets: {docs: 231}`. Una corrida mide unos 63 s en reposo y
+   154 s con la máquina cargada (once corridas de pyreverse más el import de la CLI).
    El chequeo `docs` entra en `delivery_checks` por ADR-0074, así que corre en cada entrega
    de toda tarea futura y crece con las clases públicas de `agentic/core/`.
 7. **Alternativa**: si pyreverse resultara no determinista, se reemplaza por un recorrido
@@ -44,8 +44,15 @@ Aplica ADR-0074 (generada y escrita) y ADR-0021 (el alcance de mypy).
 
 - pyreverse 4.1.3 se cae dentro de astroid (`brain_typing.infer_typing_alias`) cuando
   `agentic/core/process/adapters/github/board.py` —que anota un local con
-  `Literal["open", "closed"]`— se analiza junto a cualquier otro módulo. El generador pasa
-  `--ignore board.py`: ese módulo no aparece en ningún diagrama hasta que astroid lo arregle.
+  `Literal["open", "closed"]`— se analiza junto a cualquier otro módulo; cada archivo solo
+  anda bien. Las corridas de capa pasan `--ignore board.py` (que omite todo archivo con ese
+  nombre, también `domain/board.py`) y las clases de esos archivos salen de una corrida sobre
+  cada uno, fusionada en el diagrama de la capa. Los diagramas de paquetes no tienen el nodo
+  `board`, porque una corrida de un solo archivo no dibuja paquetes. Si astroid lo arregla,
+  se quita el `--ignore`.
+- El grafo de roles incluye un segundo bloque: la rama `develop -> review` que el nodo
+  `pipeline` corre por subtarea, que `get_graph(xray=True)` no expande. Sale de
+  `pipeline_branch`, función pública nueva del adaptador de LangGraph.
 - Una tarea con base anterior a este merge no tiene el bloque `docs` (el stack rige desde la
   tarea siguiente) y puede terminar con los archivos generados viejos: se resuelve con un
   pase `fix` mecánico guiado por la línea `run ... and commit` que imprime `check.py`.

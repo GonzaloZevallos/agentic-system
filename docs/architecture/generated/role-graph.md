@@ -132,3 +132,28 @@ graph TD;
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
 ```
+
+## Rama `pipeline`
+
+El nodo `pipeline` corre, por cada subtarea, este grafo propio (`agentic.core.process.adapters.langgraph.graph:pipeline_branch`), que el grafo de arriba no expande.
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	develop(develop)
+	review(review)
+	__end__([<p>__end__</p>]):::last
+	__start__ -.-> develop;
+	__start__ -.-> review;
+	develop -.-> __end__;
+	develop -.-> review;
+	review --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```

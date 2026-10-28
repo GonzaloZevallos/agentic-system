@@ -25,6 +25,8 @@ classDiagram
   }
   class CapabilityFile {
   }
+  class Card {
+  }
   class Carried {
   }
   class ChangesRequested {
@@ -89,10 +91,6 @@ classDiagram
   }
   class Entry {
   }
-  class Entry {
-  }
-  class Entry {
-  }
   class EscalationPatch {
   }
   class EscalationPauseEntry {
@@ -106,6 +104,8 @@ classDiagram
   class Failure {
   }
   class FailurePauseEntry {
+  }
+  class FieldWrite {
   }
   class FinalValidation {
   }
@@ -142,6 +142,8 @@ classDiagram
   class InterviewStats {
   }
   class InterviewTurn {
+  }
+  class IssueFacts {
   }
   class Item {
   }
@@ -207,8 +209,6 @@ classDiagram
   }
   class Pair {
   }
-  class Pair {
-  }
   class Parsed {
   }
   class ParsedMark {
@@ -256,10 +256,6 @@ classDiagram
   class Reflection {
   }
   class Refusal {
-  }
-  class Refusal {
-  }
-  class Rejected {
   }
   class Rejected {
   }
@@ -325,8 +321,6 @@ classDiagram
   }
   class Subtask {
   }
-  class Subtask {
-  }
   class SweepDecision {
   }
   class TaskFolder {
@@ -343,8 +337,6 @@ classDiagram
   }
   class Verdict {
   }
-  class Verdict {
-  }
   class WitnessResult {
   }
   class _BranchPullRequest {
@@ -354,6 +346,9 @@ classDiagram
   class _Shelves {
   }
   Answers --|> RoleOutput
+  Applied --> Playbook : playbook
+  Archived --> Item : item
+  Candidate --> Record : record
   Classification --|> RoleOutput
   Consolidation --|> RoleOutput
   Consultation --|> RoleOutput
@@ -363,33 +358,30 @@ classDiagram
   DesignDraft --|> RoleOutput
   DesignReview --|> RoleOutput
   Diagnosis --|> RoleOutput
+  Entry --> CheckPriority : priority
   FinalValidation --|> RoleOutput
+  Interview --> Role : author
+  Interview --> Role : interviewee
+  Interview --> Role : interviewer
   InterviewTurn --|> RoleOutput
   LandingDiagnosis --|> RoleOutput
+  MetricResult --> Limit : limit
   PRD --|> RoleOutput
+  Pair --> Role : by
+  Pair --> Role : to
   PlatformAnswers --|> RoleOutput
   Reflection --|> RoleOutput
+  Refusal --> Delta : delta
+  Rejected --> Refusal : refusal
+  Request --> CheckPriority : priority
   Review --|> RoleOutput
   Ruling --|> RoleOutput
   SolutionTurn --|> InterviewTurn
   StackProposal --|> RoleOutput
+  TaskState --> FullChecksRecord : full_checks
+  TaskState --> InterviewStats : interview_stats
+  TaskState --|> TaskInput
   TechAnswers --|> RoleOutput
   TechPlan --|> RoleOutput
   Verdict --|> RoleOutput
-  TaskState --|> TaskInput
-  Entry --> CheckPriority : priority
-  Request --> CheckPriority : priority
-  Rejected --> Refusal : refusal
-  MetricResult --> Limit : limit
-  Refusal --> Delta : delta
-  Archived --> Item : item
-  Applied --> Playbook : playbook
   _Shelves --> Playbook : playbook
-  Candidate --> Record : record
-  Interview --> Role : interviewer
-  Interview --> Role : interviewee
-  Interview --> Role : author
-  Pair --> Role : by
-  Pair --> Role : to
-  TaskState --> FullChecksRecord : full_checks
-  TaskState --> InterviewStats : interview_stats

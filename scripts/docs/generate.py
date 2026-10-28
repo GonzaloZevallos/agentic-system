@@ -19,6 +19,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import render
 
@@ -27,9 +28,10 @@ HELP_WIDTH = 100
 # pyreverse 4.1.3 crashes inside astroid (`brain_typing.infer_typing_alias`, a `str > int`
 # comparison) when `adapters/github/board.py`, whose function body annotates a local with
 # `Literal["open", "closed"]`, is analysed together with any other module. Each file alone is
-# fine. That module is left out of every diagram (ADR-0076) until astroid fixes it.
+# fine. So the layer runs skip it and its classes come from a run over that file alone,
+# merged in (ADR-0076). The package diagrams lack its node: a single-file run draws none.
 PYREVERSE_IGNORE = "board.py"
-PYREVERSE_FLAGS = ("-o", "mmd", "-k", "--filter-mode", "PUB_ONLY", "--ignore", PYREVERSE_IGNORE)
+PYREVERSE_FLAGS = ("-o", "mmd", "-k", "--filter-mode", "PUB_ONLY")
 
 
 class GenerateError(Exception):
@@ -60,7 +62,22 @@ def role_graph_mermaid() -> str:
     return composition.graph.compile().get_graph(xray=True).draw_mermaid()
 
 
-def _pyreverse(name: str, targets: Sequence[Path]) -> dict[str, str]:
+def branch_graph() -> Any:
+    """The compiled `develop -> review` graph one subtask runs inside the `pipeline` node,
+    from the adapter's public `pipeline_branch`. Nothing runs, so no port is ever asked for."""
+    from agentic.core.process.adapters.langgraph.graph import pipeline_branch
+
+    def no_ports(cfg: object, config: object) -> Any:
+        raise RuntimeError("drawing the graph asks for no ports")
+
+    return pipeline_branch(no_ports, arm_for=lambda cfg: "")
+
+
+def pipeline_branch_mermaid() -> str:
+    return str(branch_graph().get_graph().draw_mermaid())
+
+
+def _pyreverse(name: str, targets: Sequence[Path], ignore: bool = True) -> dict[str, str]:
     """Run pyreverse over `targets` with the fixed project name `name`; the files it wrote."""
     environment = {"PYTHONHASHSEED": "0", "PATH": os.environ.get("PATH", "")}
     if "HOME" in os.environ:
@@ -71,6 +88,7 @@ def _pyreverse(name: str, targets: Sequence[Path]) -> dict[str, str]:
             "-m",
             "pylint.pyreverse.main",
             *PYREVERSE_FLAGS,
+            *(("--ignore", PYREVERSE_IGNORE) if ignore else ()),
             "-p",
             name,
             "-d",
@@ -102,12 +120,22 @@ def _module_dir(module: str) -> Path:
     return REPO / "agentic" / "core" / module
 
 
-def _diagram(name: str, targets: Sequence[Path], kind: str) -> str:
-    files = _pyreverse(name, targets)
+def _diagram(name: str, targets: Sequence[Path], kind: str, ignore: bool = True) -> str:
+    files = _pyreverse(name, targets, ignore)
     try:
         return render.select_mermaid(files, kind)
     except ValueError as error:
         raise GenerateError(f"pyreverse emitted no mmd for {name}: {error}") from error
+
+
+def _with_ignored(diagram: str, name: str, files: Sequence[Path]) -> str:
+    """`diagram` plus the classes of the files pyreverse crashes on in company."""
+    extras = [
+        _diagram(name, [file], "classes", ignore=False)
+        for file in files
+        if file.name == PYREVERSE_IGNORE
+    ]
+    return render.merge_mermaid([diagram, *extras]) if extras else diagram
 
 
 def class_diagrams(module: str, layers: Sequence[str]) -> dict[str, str]:
@@ -120,16 +148,16 @@ def class_diagrams(module: str, layers: Sequence[str]) -> dict[str, str]:
         if not directory.is_dir():
             continue
         name = f"{module}-{layer}"
-        whole = _diagram(name, [directory], "classes")
+        every = sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
+        whole = _with_ignored(_diagram(name, [directory], "classes"), name, every)
         if not render.has_classes(whole):
             continue
         try:
             render.mermaid_limits(whole)
         except ValueError:
-            files = sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
-            middle = (len(files) + 1) // 2
-            for number, chunk in enumerate((files[:middle], files[middle:]), start=1):
-                diagram = _diagram(name, chunk, "classes")
+            middle = (len(every) + 1) // 2
+            for number, chunk in enumerate((every[:middle], every[middle:]), start=1):
+                diagram = _with_ignored(_diagram(name, chunk, "classes"), name, chunk)
                 try:
                     render.mermaid_limits(diagram)
                 except ValueError as error:
@@ -176,7 +204,7 @@ def generate(
     from agentic.core.knowledge.domain import stack
 
     texts: dict[str, str] = {
-        render.ROLE_GRAPH: render.role_graph(role_graph_mermaid()),
+        render.ROLE_GRAPH: render.role_graph(role_graph_mermaid(), pipeline_branch_mermaid()),
         render.CLI_REFERENCE: render.cli_reference(cli_helps()),
         render.STACK_REFERENCE: render.stack_reference(stack.KEY_REFERENCE),
     }
