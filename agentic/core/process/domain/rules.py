@@ -2647,6 +2647,54 @@ def resume_target(state: TaskState) -> str | None:
     return {"defined": "validate"}.get(status)
 
 
+def integration_increment(
+    state: TaskState, task_id: str, branch_head: str, descends: bool
+) -> Literal["agree", "increment", "refuse"]:
+    """Whether the task branch at `branch_head` is the head the integration review approved
+    (`agree`), a strict descendant of it that nobody reviewed (`increment`: a later subtask
+    merge, a commit a stopped run left), or something a resume must not go on over
+    (`refuse`). `descends` is the ancestry fact -- whether the approved head is an ancestor of
+    `branch_head` -- read by the caller, so this stays pure and is the one place the rule lives.
+
+    An increment needs all of: the reviewed unit approved at a head, on the task branch; every
+    other unit approved; no pull request (its branch moving is the landing's, not a resume's);
+    and a pause no human has anything to decide in -- a role failure or a run that stopped
+    without escalating, since `resumed` clears exactly that and nothing else stands in the way
+    (pending questions, a pair at its limit, an estimate or a cap are decisions)."""
+    unit = reviewed_unit_name(state)
+    sub = state.get("subtasks", {}).get(unit) if unit else None
+    approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
+    if approved is None:
+        return "refuse"
+    if same_commit(branch_head, approved):
+        return "agree"
+    if not descends or sub is None or sub.get("branch") != task_branch(task_id):
+        return "refuse"
+    others = (s for name, s in state.get("subtasks", {}).items() if name != unit)
+    if any(s.get("status") != "approved" for s in others) or state.get("pull_request"):
+        return "refuse"
+    if state.get("escalation_class") not in (None, "failure"):
+        return "refuse"
+    if state.get("questions_for_human") or state.get("fit_question"):
+        return "refuse"
+    if state.get("escalated") and state.get("escalation_class") is None:
+        return "refuse"  # a document older than the class: what it asked is not known
+    return "increment"
+
+
+def increment_patch(state: TaskState) -> dict[str, Any]:
+    """The patch that sends the reviewed unit back to review on an increment: its status is
+    `delivered`, and its `reviewed_head` stays the approved head the next review is incremental
+    from. The reducer replaces a subtask whole, so the unit goes back with all its keys. Nothing
+    else is written: not `task_head`, not `full_checks`, not the findings table."""
+    unit = reviewed_unit_name(state)
+    if unit is None:
+        raise ValueError("a task with no reviewed unit has no increment to review")
+    sub = state["subtasks"][unit]
+    patch: dict[str, Any] = {"subtasks": {unit: {**sub, "status": "delivered"}}}
+    return patch
+
+
 # The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller
 # of stage 5 will do the search"). First slice: retake a pause an external API cut
 # caused, close a task whose pull request merged, and launch the next unblocked issue,

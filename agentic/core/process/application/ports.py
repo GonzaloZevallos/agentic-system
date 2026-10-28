@@ -856,6 +856,14 @@ class Workspace(Protocol):
         is in progress; read-only."""
         ...
 
+    def merge_in_progress(self, path: Path) -> bool:
+        """Whether the checkout at `path` holds an unfinished merge or a conflict (GH-392):
+        `MERGE_HEAD` exists, or `git status --porcelain` lists an unmerged entry (UU, AA, DD,
+        AU, UA, DU, UD). Read-only; a resume asks it before committing what a stopped run
+        left, so it never commits over a merge a human is resolving. Raises `GitError` when
+        git answers neither way."""
+        ...
+
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         """The facts a dependency merge leaves behind, for the pure verdict in
         `domain/rules.py` to decide from with no git call of its own: whether `branch`

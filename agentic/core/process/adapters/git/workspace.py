@@ -80,6 +80,8 @@ LOCK_TIMEOUT_MS = 5000
 # How many times one of those calls is retried when git still reports a lock, waiting
 # `LOCK_BACKOFF_S * 2**attempt` seconds before each retry.
 LOCK_RETRIES = 4
+# The two-letter codes `git status --porcelain` gives a path with an unresolved merge conflict.
+UNMERGED_CODES = frozenset({"UU", "AA", "DD", "AU", "UA", "DU", "UD"})
 LOCK_BACKOFF_S = 0.25
 _LOCK_OPTIONS = (
     "-c",
@@ -309,6 +311,15 @@ class GitWorkspace:
         found = self._run("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=path)
         sha = found.stdout.strip()
         return sha if found.returncode == 0 and sha else None
+
+    def merge_in_progress(self, path: Path) -> bool:
+        if self.merge_head(path) is not None:
+            return True
+        # Raw output: `_git` strips it, and the first column of a line is part of its code.
+        status = self._run("status", "--porcelain", cwd=path)
+        if status.returncode != 0:
+            raise GitError(f"git status --porcelain failed: {status.stderr.strip()}")
+        return any(line[:2] in UNMERGED_CODES for line in status.stdout.splitlines())
 
     def abort_merge(self, path: Path) -> None:
         if self.merge_head(path) is None:
