@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from agentic.core.knowledge.domain.knowledge import STANDARDS
+from agentic.core.process.adapters.filesystem import FilesystemPrompts
 from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
@@ -32,6 +33,7 @@ from agentic.core.process.domain.roles import (
     PJM,
     PM,
     PRODUCT_ANALYST,
+    PROMPTS_DIR,
     ROLES,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_INTERVIEWEE,
@@ -1603,3 +1605,23 @@ async def test_the_flat_cap_keeps_its_class_and_text_when_both_are_reached(tmp_p
     assert patch["escalation_class"] == "cap"
     assert patch["escalated"] == "PjM stopped by the task cap: 90.00 of 50.00 USD spent"
     assert "proposed_estimate" not in patch
+
+
+async def test_a_stage0_update_between_two_roles_changes_nothing_the_second_one_renders(tmp_path):
+    """GH-409: the second role's prompt is replaced on disk, with a placeholder nothing
+    fills, after the ports were built; it renders the text that was there at the start."""
+    system = tmp_path / "system"
+    system.mkdir()
+    for source in PROMPTS_DIR.glob("*.md"):
+        (system / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    original = (system / "pm.md").read_text(encoding="utf-8")
+    runner = ScriptedRunner(developer=[delivered()], pm=[delivered()])
+    ports = memory_ports(runner, prompts=FilesystemPrompts(tmp_path / "product", system))
+
+    await _run(DEVELOPER, ports, runner)
+    (system / "pm.md").write_text(original + "\n{{docs_review}}\n", encoding="utf-8")
+    _, patch = await _run(PM, ports, runner)
+
+    assert runner.slugs == ["developer", "pm"]
+    assert "{{docs_review}}" not in runner.prompts("pm")[0]
+    assert patch["prompts"]["pm"] == prompt_hash(original)

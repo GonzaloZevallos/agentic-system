@@ -12,7 +12,7 @@ outside mypy's scope, so they are named by file and class, never by line.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
@@ -44,6 +44,7 @@ from agentic.core.process.application.ports import (
     Tracker,
     Workspace,
 )
+from agentic.core.process.domain.roles import Role
 from tests.fakes import (
     FakeBoard,
     FakeBoardSent,
@@ -213,3 +214,39 @@ def perf_lock_stops_with_the_flag(lock: PerfLock, stop: StopFlag) -> None:
         return
     lock.release()
     raise AssertionError(f"PerfLock.acquire answered {taken} with the run's stop flag set")
+
+
+def prompts_serve_the_text_of_construction(
+    build: Callable[[Path], Prompts], system_dir: Path, role: Role
+) -> None:
+    """The `Prompts` snapshot contract (GH-409): `raw` returns the text the role's file held
+    when `build` ran, whatever the file says afterwards. `build(system_dir)` must read the
+    system defaults from `system_dir`. Raises `AssertionError` for a port that reads live."""
+    path = system_dir / f"{role.slug}.md"
+    path.write_text("Original text for {{date}}.", encoding="utf-8")
+    prompts = build(system_dir)
+    path.write_text("A new text that wants {{docs_review}}.", encoding="utf-8")
+    text, _ = prompts.raw(role)
+    if text != "Original text for {{date}}.":
+        raise AssertionError(f"Prompts.raw answered {text!r}, not the text of construction")
+
+
+def prompts_keep_an_unreadable_file_for_its_role(
+    build: Callable[[Path], Prompts], system_dir: Path, role: Role, other: Role
+) -> None:
+    """The other half of the snapshot contract: a file that cannot be decoded does not stop
+    `build`, and `raw` for that role raises while `other` still answers. Raises
+    `AssertionError` for a port that raises at construction or never raises."""
+    (system_dir / f"{role.slug}.md").write_bytes(b"\xff\xfe not utf-8 \xff")
+    (system_dir / f"{other.slug}.md").write_text("Fine.", encoding="utf-8")
+    try:
+        prompts = build(system_dir)
+    except (OSError, UnicodeDecodeError) as error:
+        raise AssertionError(f"building the port raised {error!r}") from error
+    if prompts.raw(other)[0] != "Fine.":
+        raise AssertionError("an unreadable file of one role spoiled another role")
+    try:
+        prompts.raw(role)
+    except UnicodeDecodeError:
+        return
+    raise AssertionError("Prompts.raw answered for a file that is not UTF-8")
