@@ -984,7 +984,8 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         "list of globs whose change forces the full form of every check",
     ),
     # Computed, not DependsOn("checks"): the reader returns `()` whenever the key is absent
-    # (no tiers), whatever `checks` holds.
+    # (no tiers), whatever `checks` holds. The owner kept it so (GH-400): the reference
+    # documents what the code does; a dependency on `checks` would be a separate issue.
     KeyReference(
         "delivery_checks",
         delivery_checks,
