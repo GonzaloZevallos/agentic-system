@@ -1,0 +1,29 @@
+{
+  "_source": {
+    "query": "gh api graphql -f query='{ __type(name:\"ProjectV2FieldValue\") { inputFields { name type { kind name ofType { kind name } } } } }' (and the same for each input type below)",
+    "captured": "2026-10-28",
+    "note": "Transcribed, not captured. Only issue #425's error is observed: GitHub answered 'Type mismatch on variable $i406_etapa and argument singleSelectOptionId (ID! / String)', code variableMismatch, i.e. (variable type / argument type). Every other entry is documented and is to be confirmed against the pollers' log after the merge."
+  },
+  "ProjectV2FieldValue": {
+    "text": {"type": "String", "evidence": "documented"},
+    "number": {"type": "Float", "evidence": "documented"},
+    "date": {"type": "Date", "evidence": "documented"},
+    "singleSelectOptionId": {"type": "String", "evidence": "observed", "cite": "#425"},
+    "iterationId": {"type": "String", "evidence": "documented"}
+  },
+  "UpdateProjectV2ItemFieldValueInput": {
+    "projectId": {"type": "ID!", "evidence": "documented"},
+    "itemId": {"type": "ID!", "evidence": "documented"},
+    "fieldId": {"type": "ID!", "evidence": "documented"},
+    "value": {"type": "ProjectV2FieldValue!", "evidence": "documented"}
+  },
+  "ClearProjectV2ItemFieldValueInput": {
+    "projectId": {"type": "ID!", "evidence": "documented"},
+    "itemId": {"type": "ID!", "evidence": "documented"},
+    "fieldId": {"type": "ID!", "evidence": "documented"}
+  },
+  "AddProjectV2ItemByIdInput": {
+    "projectId": {"type": "ID!", "evidence": "documented"},
+    "contentId": {"type": "ID!", "evidence": "documented"}
+  }
+}

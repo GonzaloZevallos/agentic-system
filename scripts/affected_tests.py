@@ -135,6 +135,11 @@ TABLE: tuple[Row, ...] = (
         ("tests/core/process/domain/test_schemas.py",),
         "an old task document that must still parse with no performance scenarios",
     ),
+    Row(
+        "tests/core/process/adapters/github/fixtures/project_v2_schema.json",
+        ("tests/core/process/adapters/github/test_board.py",),
+        "the declared GraphQL types of the board's mutations are checked against it",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (
