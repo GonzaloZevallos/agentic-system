@@ -837,3 +837,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-28T05:07:34.677+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When an invariant names the exact exception types a handler may catch, match only those types. Do not add a branch that absorbs a wider case, and flag the gap to the plan instead.
+  confidence: medium
+  seen_in:
+  - GH-389
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T08:51:38.442+00:00'
