@@ -12,6 +12,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -22,10 +23,20 @@ from ...application.ports import (
     ListedPullRequest,
     MergeCallFailed,
     TrackerCallFailed,
+    TrackerRateLimited,
+    TrackerRefused,
+    TrackerTimedOut,
+    TrackerTransient,
     TrackerUnreachable,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable
-from ...domain.task import PullRequest, PullRequestCommit
+from ...domain.task import (
+    PullRequest,
+    PullRequestCommit,
+    TrackerFailure,
+    TrackerFailureClass,
+    TrackerTarget,
+)
 from .run import GhRetry, bounded_run, print_line, run_gh
 
 _ISSUE = re.compile(r"^GH-(\d+)$")
@@ -188,6 +199,30 @@ def _text(value: object) -> str:
     return value
 
 
+def _utc_now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _failure_class(error: ValueError) -> TrackerFailureClass | None:
+    """The closed class of a `gh` failure by the type of the error, never by its text;
+    `None` for what is not a GitHub failure (a missing `gh`), which a best-effort write
+    does not absorb. A plain `ValueError` caused by a non-zero exit is a refusal: with no
+    retry policy `run_gh` keeps its original `ValueError` (ADR-0050)."""
+    if isinstance(error, TrackerTimedOut):
+        return "timed_out"
+    if isinstance(error, TrackerUnreachable):
+        return "unreachable"
+    if isinstance(error, TrackerTransient):
+        return "transient"
+    if isinstance(error, TrackerRateLimited):
+        return "rate_limited"
+    if isinstance(error, TrackerRefused) or isinstance(
+        error.__cause__, subprocess.CalledProcessError
+    ):
+        return "refused"
+    return None
+
+
 def issue_number(task_id: str) -> int | None:
     match = _ISSUE.match(task_id)
     return int(match.group(1)) if match else None
@@ -231,8 +266,10 @@ class GhTracker:
         run: Run = bounded_run,
         log: Callable[[str], None] = print_line,
         retry: GhRetry | None = None,
+        now: Callable[[], str] = _utc_now,
     ):
         self.product_dir = product_dir
+        self._now = now
         self._run = run
         self._log = log
         self._retry = retry
@@ -320,6 +357,28 @@ class GhTracker:
     def comment(self, task_id: str, text: str) -> None:
         if (number := issue_number(task_id)) is not None:
             self._gh_retrying("issue", "comment", str(number), "--body", text)
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        return self._best_effort("comment", "note", lambda: self.comment(task_id, text))
+
+    def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        return self._best_effort("label", "drop_label", lambda: self.unlabel(task_id, label))
+
+    def _best_effort(
+        self, target: TrackerTarget, name: str, write: Callable[[], None]
+    ) -> TrackerFailure | None:
+        """Runs `write`, the same `gh` call and retry path as the strict verb, and returns
+        the failure of a GitHub error as a closed class. Anything else, a missing `gh`
+        included, raises as the strict verb does."""
+        try:
+            write()
+        except ValueError as exc:
+            cls = _failure_class(exc)
+            if cls is None:
+                raise
+            self._log(f"agentic: {name} could not write the {target} ({cls}); the run goes on")
+            return TrackerFailure(target=target, cls=cls, at=self._now())
+        return None
 
     def close_issue(self, task_id: str) -> None:
         if (number := issue_number(task_id)) is not None:

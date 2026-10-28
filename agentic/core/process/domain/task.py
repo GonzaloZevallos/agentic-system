@@ -1207,8 +1207,8 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 patch[key] = grown
         elif reducer is add_tracker_failures:
             known = {(r["target"], r["cls"]) for r in old}
-            if added := [r for r in value if (r["target"], r["cls"]) not in known]:
-                patch[key] = added
+            if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
+                patch[key] = fresh
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
                 patch[key] = changed

@@ -32,6 +32,7 @@ from ..domain.task import (
     PullRequest,
     TaskInput,
     TaskState,
+    TrackerFailure,
 )
 from .limits import RunLimits
 
@@ -1170,6 +1171,18 @@ class Tracker(Protocol):
     def label(self, task_id: str, label: str) -> None: ...
 
     def unlabel(self, task_id: str, label: str) -> None: ...
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        """`comment`, best effort (GH-389): the failure of the call, as a `TrackerFailure`
+        with a closed class, instead of raising. `None` when it landed or the task has no
+        issue. A missing `gh` still raises: that is not a GitHub failure. For a comment the
+        run can go on without; never for escalation, split, discard, tracker-only, ready,
+        push or pull request creation."""
+        ...
+
+    def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        """`unlabel`, best effort: returns the failure instead of raising, as `note`."""
+        ...
 
     def ensure_label(self, name: str) -> None:
         """Makes sure the repository has a label called `name` (GH-294), so `open_issue`

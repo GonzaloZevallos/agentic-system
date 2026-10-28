@@ -67,6 +67,7 @@ from agentic.core.process.domain.task import (
     PullRequest,
     TaskInput,
     TaskState,
+    TrackerFailure,
 )
 
 # What `MemoryWorkspace.merge_base` answers for a pair a test did not script (GH-334).
@@ -1354,6 +1355,18 @@ class MemoryTracker:
 
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
+
+    def note(self, task_id: str, text: str) -> TrackerFailure | None:
+        """`comment`, best effort: a scripted `ValueError` is a refused call, returned."""
+        try:
+            self.comment(task_id, text)
+        except ValueError:
+            return TrackerFailure(target="comment", cls="refused", at="2026-10-28T00:00:00Z")
+        return None
+
+    def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        self.unlabel(task_id, label)
+        return None
 
     def ensure_label(self, name: str) -> None:
         if self.ensure_label_error is not None:
