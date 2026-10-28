@@ -5769,3 +5769,118 @@ async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed()
     with pytest.raises(SystemExit):
         await cli._signal_guarded(work, stop)
     assert (lock.released, lock.kept, lock.kept_crashed) == (["T-9"], [], [])
+
+
+# GH-389: the failures of `announce` enter the resumed state through the reducer, with a
+# second `aupdate_state` that must not disturb the run. A real LangGraph (no graph double)
+# whose first node after the pause saves the document, as the real pipeline does.
+def _pausing_graph(ports, seen):
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import interrupt
+
+    from agentic.core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
+    from agentic.core.process.domain.task import TaskInput, TaskState
+
+    def escalate(state):
+        return {"status": "waiting_on_human", "escalated": "needs a decision"}
+
+    def pause(state):
+        interrupt("needs a decision")
+        return {}
+
+    def pipeline(state):
+        seen["rows"] = list(state.get("tracker_failures", []))
+        ports.documents.save(state)
+        return {"status": "ready_for_review", "escalated": None}
+
+    g = StateGraph(TaskState, input_schema=TaskInput)
+    g.add_node(ESCALATE, escalate)
+    g.add_node("pause", pause)
+    g.add_node(PIPELINE, pipeline)
+    g.add_edge(START, ESCALATE)
+    g.add_edge(ESCALATE, "pause")
+    g.add_edge("pause", PIPELINE)
+    g.add_edge(PIPELINE, END)
+    return g
+
+
+def _watching_second_update(monkeypatch):
+    """The `next` of the checkpoint right before and right after each second update."""
+    seen = []
+    real = cli._record_tracker_failures
+
+    async def watched(app, config, failures, as_node):
+        before = (await app.aget_state(config)).next
+        await real(app, config, failures, as_node)
+        after = await app.aget_state(config)
+        seen.append((before, after.next, after.values.get("tracker_failures")))
+
+    monkeypatch.setattr(cli, "_record_tracker_failures", watched)
+    return seen
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("from_document", [False, True])
+async def test_a_failed_resumed_comment_is_recorded_and_the_run_goes_on(
+    monkeypatch, tmp_path, from_document
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports, seen = memory_ports(), {}
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, seen))
+    updates = _watching_second_update(monkeypatch)
+    cfg = Configuration(product_dir=tmp_path)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+    ports.tracker.earlier = ["Escalated: needs a decision", "Go on."]
+    if from_document:
+        ports.documents.save(
+            {**task, "type": "bug", "status": "waiting_on_human", "escalated": "needs a decision"}
+        )
+    else:
+        with pytest.raises(SystemExit):
+            await cli._run(task, cfg, ports, checkpointer=saver)
+
+    ports.tracker.comment_failures = 1  # the "Resumed:" note keeps failing
+    await cli._resume(
+        "GH-1", cfg, ports, from_document=from_document, yes=True, checkpointer=saver
+    )
+
+    assert [row["target"] + "/" + row["cls"] for row in seen["rows"]] == ["comment/refused"]
+    assert ports.documents.saved[-1]["tracker_failures"] == seen["rows"]
+    [(before, after, rows)] = updates
+    assert before == after and rows == seen["rows"]  # the update did not move the checkpoint
+
+
+@pytest.mark.anyio
+async def test_a_resume_where_every_note_lands_makes_no_second_update(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports, seen = memory_ports(), {}
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, seen))
+    updates = _watching_second_update(monkeypatch)
+    cfg = Configuration(product_dir=tmp_path)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+    ports.tracker.earlier = ["Escalated: needs a decision", "Go on."]
+    with pytest.raises(SystemExit):
+        await cli._run(task, cfg, ports, checkpointer=saver)
+    await cli._resume("GH-1", cfg, ports, yes=True, checkpointer=saver)
+    [(before, after, rows)] = updates
+    assert before == after and not rows and seen["rows"] == []  # nothing recorded
+    assert ports.documents.saved[-1].get("tracker_failures", []) == []
+
+
+@pytest.mark.anyio
+async def test_no_failure_means_no_second_aupdate_state():
+    calls = []
+
+    class App:
+        async def aupdate_state(self, config, values, as_node=None):
+            calls.append((values, as_node))
+
+    row = {"target": "comment", "cls": "transient", "at": "2026-10-28T00:00:00Z"}
+    await cli._record_tracker_failures(App(), {}, [], "escalate")
+    assert calls == []
+    await cli._record_tracker_failures(App(), {}, [row], "escalate")
+    assert calls == [({"tracker_failures": [row]}, "escalate")]
