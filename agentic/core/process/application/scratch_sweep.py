@@ -1,5 +1,6 @@
 """What a poller round does about scratch (GH-391, ADR-0069): sweep what is dead or closed,
-then read how much room the two volumes have and say when they are under the floor.
+then read how much room the three volumes (the scratch root, the product's `.agentic` and
+`/tmp`) have and say when they are under the floor.
 
 The decisions are pure (`scratch.sweep_decision`, `rules.space_holds`); this module gathers
 the facts from the ports and carries the sweep out through `Scratch.sweep`. Neither step may
@@ -102,7 +103,7 @@ def _describe(name: str, reading: SpaceReading, floor_bytes: int) -> str:
 
 
 def hold_line(held: tuple[str, ...], readings: Mapping[str, SpaceReading], floor: int) -> str:
-    """`held: /tmp 1400 MB < floor 2048 MB (scratch 380000 MB ok)`: each volume under the
+    """`held: /tmp 1400 MB < floor 2048 MB (scratch 380000 MB ok, product 380000 MB ok)`: each volume under the
     floor with its figures, then the others."""
     under = ", ".join(_describe(name, readings[name], floor) for name in held)
     fine = ", ".join(_describe(name, r, floor) for name, r in readings.items() if name not in held)
@@ -116,11 +117,12 @@ def read_holds(cfg: Configuration, ports: Ports) -> tuple[tuple[str, ...], list[
         return (), []
     try:
         readings = {
-            rules.SCRATCH_VOLUME: ports.free_space.read(cfg.product_dir / ".agentic"),
+            rules.SCRATCH_VOLUME: ports.free_space.read(cfg.scratch_dir),
+            rules.PRODUCT_VOLUME: ports.free_space.read(cfg.product_dir / ".agentic"),
             rules.TMP_VOLUME: ports.free_space.read(TMP_ROOT),
         }
     except OSError as exc:
         return (), [f"agentic: poll: free space unreadable: {exc}"]
     floor = cfg.scratch_floor_bytes
-    held = rules.space_holds(readings[rules.SCRATCH_VOLUME], readings[rules.TMP_VOLUME], floor)
+    held = rules.space_holds(readings, floor)
     return held, [hold_line(held, readings, floor)] if held else []
