@@ -129,13 +129,14 @@ def _commit_document(
     """Whether `ref` holds the task's document after this: committed here, or already there.
     `False` for a task with no document and for a commit git refused -- the archive goes on,
     the live copy is still on disk."""
+    relative = document.relative_path(task_id).as_posix()
     text = ports.documents.text(task_id) if text is None else text
-    if text is None:
+    if text is None or not rules.archivable_document(relative, task_id):
         return False
     try:
         ports.workspace.commit_archived_document(
             ref,
-            document.relative_path(task_id).as_posix(),
+            relative,
             text,
             f"Archive run {n} of {task_id}: the task document",
         )
