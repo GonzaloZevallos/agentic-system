@@ -1625,13 +1625,21 @@ class FakeCheckScheduler:
 
 
 class MemoryScratch:
-    """GH-391: `open` hands out the path `scratch.path_for` names under `root` without
-    touching a disk, and records who opened it (`opened`, as `(task, kind, token, slug)`),
-    which directories are open now (`live`) and which task folders were asked for
-    (`kept`). The directory is "removed" when the block ends, however it ends."""
+    """GH-391: `open` hands out the path `scratch.path_for` names under `root` (the evidence
+    folder under `product_dir`) without touching a disk, and records who opened it (`opened`,
+    as `(task, kind, token, slug)`), which directories are open now (`live`) and which task
+    folders were asked for (`kept`). The directory is "removed" when the block ends, however
+    it ends."""
 
-    def __init__(self, root: Path = Path("/scratch-root")) -> None:
+    def __init__(
+        self,
+        root: Path = Path("/scratch-root"),
+        product_key: str = "memorykey000",
+        product_dir: Path = Path("/product"),
+    ) -> None:
         self.root = root
+        self.product_key = product_key
+        self.product_dir = product_dir
         self.opened: list[tuple[str | None, str, str, str]] = []
         self.live: set[Path] = set()
         self.kept: list[Path] = []
@@ -1643,7 +1651,8 @@ class MemoryScratch:
 
     @contextmanager
     def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
-        directory = self.root / scratch_domain.path_for(task_key, scratch_domain.owner(kind, token))
+        owner = scratch_domain.owner(kind, token)
+        directory = self.root / scratch_domain.path_for(self.product_key, task_key, owner)
         self.opened.append((task_key, kind, token, slug))
         self.live.add(directory)
         try:
@@ -1652,7 +1661,7 @@ class MemoryScratch:
             self.live.discard(directory)
 
     def ensure_kept(self, task_key: str | None) -> Path:
-        kept = self.root / scratch_domain.kept_path_for(task_key)
+        kept = self.product_dir / scratch_domain.kept_path_for(task_key)
         self.kept.append(kept)
         return kept
 

@@ -195,6 +195,10 @@ class Configuration(BaseModel):
     # The machine's store of passing check results (ADR-0065): outside every checkout and
     # shared by every product, built like `run_registry_dir`.
     check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
+    # Where every run's scratch directories live, one partition per product (GH-397): on the
+    # disk, outside every repository, built like `check_results_dir` but from the cache
+    # home, since it is regenerable.
+    scratch_dir: Path = Field(default_factory=lambda: _default_scratch_dir())
     # The free space, in MB, under which a volume holding scratch (the product's disk, or
     # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
     # Declared, not measured: a few parallel runs' worth of build and test scratch.
@@ -330,6 +334,12 @@ def _default_check_results_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME")
     root = Path(base) if base else Path.home() / ".local" / "state"
     return root / "agentic" / "check-results"
+
+
+def _default_scratch_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    return root / "agentic" / "scratch"
 
 
 def _default_perf_lock_path() -> Path:

@@ -137,10 +137,10 @@ def default_ports(cfg: Configuration, stop_flag: StopFlag | None = None) -> Port
 
 def bind_task(ports: Ports, task_key: str) -> Ports:
     """`ports` with the checks and setup it runs filed under `task_key`'s scratch directory
-    (`.agentic/tmp/<task>/`, GH-391, invariant 1) instead of `_untasked`: the one place that
-    says which task a check belongs to, called by whoever knows the root task -- the graph per
-    node (its thread id) and the CLI's verbs that run checks. Ports whose commands are not the
-    shell's own (a double) come back unchanged."""
+    (`<scratch_dir>/<product key>/<task>/`, GH-391, GH-397) instead of `_untasked`: the one
+    place that says which task a check belongs to, called by whoever knows the root task -- the
+    graph per node (its thread id) and the CLI's verbs that run checks. Ports whose commands
+    are not the shell's own (a double) come back unchanged."""
     if not isinstance(ports.commands, ShellCommands):
         return ports
     return replace(ports, commands=ports.commands.for_task(task_key))
@@ -182,7 +182,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
     )
     # One scratch and one reader of free space for the runner (which gives each attempt its
     # directory) and for `Ports` (GH-391).
-    scratch = FilesystemScratch(cfg.product_dir)
+    scratch = FilesystemScratch(cfg.scratch_dir, product_key, cfg.product_dir)
     free_space = StatvfsFreeSpace()
     return Ports(
         # The roles get the configuration the run decided, never the one the human's

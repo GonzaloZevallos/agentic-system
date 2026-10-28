@@ -61,6 +61,19 @@ def no_real_run_registry(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_scratch_root(tmp_path, monkeypatch):
+    """GH-397: `Configuration.scratch_dir` defaults under `XDG_CACHE_HOME` (its own
+    `default_factory`, read by pydantic directly) and is overridden by `AGENTIC_SCRATCH_DIR`
+    only through `from_sources`. Both point into the test's own `tmp_path`, to the same
+    place, so no test creates a directory under the real `~/.cache` whichever way it builds
+    its `Configuration`. `isolated_env` clears the other `AGENTIC_*` first. A test that wants
+    another root sets its own `AGENTIC_SCRATCH_DIR` or passes `scratch_dir=`."""
+    cache = tmp_path / "xdg-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    monkeypatch.setenv("AGENTIC_SCRATCH_DIR", str(cache / "agentic" / "scratch"))
+
+
+@pytest.fixture(autouse=True)
 def no_real_inhibitor(monkeypatch):
     """GH-176: `_run`/`_resume` hold a logind inhibitor for their lifetime; a test that
     runs one must not take a real sleep/shutdown lock on the machine running the suite.

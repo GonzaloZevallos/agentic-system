@@ -1,6 +1,7 @@
 """`FilesystemScratch`: the owner record is written before the directory and removed after
-it, on every way out (GH-391). Real files under `tmp_path`; the boot id and the clock are
-faked."""
+it, on every way out (GH-391). Real files under `tmp_path`: the scratch root is
+`tmp_path/root` and holds this product's partition (`KEY`), the product is `tmp_path/product`
+(GH-397); the boot id and the clock are faked."""
 
 import json
 import os
@@ -14,15 +15,22 @@ from agentic.core.process.domain.scratch import OwnerRecord, Removal, ScratchLis
 
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 TOKEN = "0123456789abcdef"
+KEY = "0a1b2c3d4e5f"
 
 
-def scratch_at(product: Path) -> FilesystemScratch:
-    return FilesystemScratch(product, boot_id=lambda: "boot-a", clock=lambda: NOW)
+def partition(base: Path) -> Path:
+    return base / "root" / KEY
+
+
+def scratch_at(base: Path) -> FilesystemScratch:
+    return FilesystemScratch(
+        base / "root", KEY, base / "product", boot_id=lambda: "boot-a", clock=lambda: NOW
+    )
 
 
 def test_open_gives_the_directory_the_path_for_names(tmp_path):
     with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
-        assert directory == tmp_path.resolve() / ".agentic/tmp/GH-391/c-01234567"
+        assert directory == tmp_path.resolve() / "root" / KEY / "GH-391/c-01234567"
         assert directory.is_dir()
 
 
@@ -69,7 +77,7 @@ def test_after_the_context_neither_the_directory_nor_the_record_remains(tmp_path
     with scratch_at(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
         (directory / "deep").mkdir()
         (directory / "deep" / "file").write_text("x")
-    parent = tmp_path / ".agentic/tmp/GH-391"
+    parent = partition(tmp_path) / "GH-391"
     assert list(parent.iterdir()) == []
 
 
@@ -80,7 +88,7 @@ def test_after_an_exception_neither_remains_and_the_exception_propagates(tmp_pat
     ):
         (directory / "file").write_text("x")
         raise RuntimeError("boom")
-    assert list((tmp_path / ".agentic/tmp/GH-391").iterdir()) == []
+    assert list((partition(tmp_path) / "GH-391").iterdir()) == []
 
 
 def test_the_record_is_removed_after_the_directory(tmp_path, monkeypatch):
@@ -112,7 +120,7 @@ def test_a_directory_that_cannot_be_made_leaves_no_record(tmp_path, monkeypatch)
     monkeypatch.setattr(Path, "mkdir", mkdir)
     with pytest.raises(OSError, match="no"), scratch_at(tmp_path).open("GH-391", "c", TOKEN, "t"):
         pass
-    assert list((tmp_path / ".agentic/tmp/GH-391").iterdir()) == []
+    assert list((partition(tmp_path) / "GH-391").iterdir()) == []
 
 
 def test_no_task_goes_under_untasked(tmp_path):
@@ -134,7 +142,7 @@ def test_two_owners_of_one_task_do_not_share_a_directory(tmp_path):
 def test_ensure_kept_creates_the_folder_and_never_removes_it(tmp_path):
     scratch = scratch_at(tmp_path)
     kept = scratch.ensure_kept("GH-391")
-    assert kept == tmp_path.resolve() / ".agentic/kept/GH-391" and kept.is_dir()
+    assert kept == tmp_path.resolve() / "product/.agentic/kept/GH-391" and kept.is_dir()
     (kept / "capture.png").write_text("x")
     assert scratch.ensure_kept("GH-391") == kept  # idempotent
     with scratch.open("GH-391", "r", TOKEN, "developer"):
@@ -143,7 +151,9 @@ def test_ensure_kept_creates_the_folder_and_never_removes_it(tmp_path):
 
 
 def test_the_default_boot_id_is_the_kernels(tmp_path):
-    with FilesystemScratch(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
+    with FilesystemScratch(tmp_path / "root", KEY, tmp_path).open(
+        "GH-391", "c", TOKEN, "tests"
+    ) as directory:
         record = OwnerRecord.from_json(Path(f"{directory}.json").read_text())
     assert record is not None and record.pid == os.getpid()
 
@@ -152,11 +162,11 @@ def test_the_default_boot_id_is_the_kernels(tmp_path):
 # carries a decision out. The decision itself is the domain's.
 
 
-def _make_owner(product: Path, task: str, name: str, record: str | None) -> Path:
-    directory = product / ".agentic/tmp" / task / name
+def _make_owner(base: Path, task: str, name: str, record: str | None, key: str = KEY) -> Path:
+    directory = base / "root" / key / task / name
     directory.mkdir(parents=True)
     if record is not None:
-        (product / ".agentic/tmp" / task / f"{name}.json").write_text(record)
+        (directory.parent / f"{name}.json").write_text(record)
     return directory
 
 
@@ -169,7 +179,7 @@ def test_listing_reports_the_liveness_of_each_record_and_the_unreadable_ones(tmp
     _make_owner(tmp_path, "GH-1", "c-otherboot", _record(os.getpid(), "boot-b"))
     _make_owner(tmp_path, "GH-1", "c-garbage0", "not json")
     _make_owner(tmp_path, "GH-1", "c-norecord", None)
-    (tmp_path / ".agentic/tmp/GH-2").mkdir()
+    (partition(tmp_path) / "GH-2").mkdir()
     listing = scratch_at(tmp_path).listing()
     assert listing.tasks == ("GH-1", "GH-2")
     seen = {e.name: e for e in listing.owners}
@@ -189,8 +199,8 @@ def test_sweep_removes_what_the_decision_names_and_nothing_else(tmp_path):
     gone = _make_owner(tmp_path, "GH-1", "c-gone0000", _record(1, "boot-b"))
     orphan = _make_owner(tmp_path, "GH-1", "c-orphan00", None)
     closed = _make_owner(tmp_path, "GH-2", "c-closed000", _record(os.getpid()))
-    (tmp_path / ".agentic/kept/GH-2").mkdir(parents=True)
-    (tmp_path / ".agentic/kept/GH-3").mkdir()
+    (tmp_path / "product/.agentic/kept/GH-2").mkdir(parents=True)
+    (tmp_path / "product/.agentic/kept/GH-3").mkdir()
     scratch_at(tmp_path).sweep(
         SweepDecision(
             tasks=("GH-2",),
@@ -205,8 +215,8 @@ def test_sweep_removes_what_the_decision_names_and_nothing_else(tmp_path):
     assert not gone.exists() and not gone.with_name("c-gone0000.json").exists()
     assert not orphan.exists()
     assert not closed.parent.exists()
-    assert not (tmp_path / ".agentic/kept/GH-2").exists()
-    assert (tmp_path / ".agentic/kept/GH-3").is_dir()
+    assert not (tmp_path / "product/.agentic/kept/GH-2").exists()
+    assert (tmp_path / "product/.agentic/kept/GH-3").is_dir()
 
 
 def test_sweeping_what_is_already_gone_is_not_an_error(tmp_path):
@@ -216,6 +226,25 @@ def test_sweeping_what_is_already_gone_is_not_an_error(tmp_path):
 
 
 def test_kept_folders_are_listed_with_their_mtime(tmp_path):
-    (tmp_path / ".agentic/kept/GH-5").mkdir(parents=True)
+    (tmp_path / "product/.agentic/kept/GH-5").mkdir(parents=True)
     ((task, mtime),) = scratch_at(tmp_path).kept_folders()
     assert task == "GH-5" and mtime.tzinfo is not None
+
+
+def test_listing_and_sweep_touch_only_this_products_partition(tmp_path):
+    mine = _make_owner(tmp_path, "GH-1", "c-mine0000", _record(1, "boot-b"))
+    theirs = _make_owner(tmp_path, "GH-1", "c-their000", _record(1, "boot-b"), key="ffffffffffff")
+    legacy = tmp_path / "product/.agentic/tmp/GH-1/c-legacy00"
+    legacy.mkdir(parents=True)
+    scratch = scratch_at(tmp_path)
+    assert [e.name for e in scratch.listing().owners] == ["c-mine0000"]
+    scratch.sweep(SweepDecision(("GH-1",), (Removal("GH-1", "c-their000", True, True),)))
+    assert not mine.exists()
+    assert theirs.is_dir() and theirs.with_name("c-their000.json").is_file()
+    assert legacy.is_dir()
+
+
+@pytest.mark.parametrize("key", ["", "a/b", "..", ".hidden"])
+def test_a_product_key_that_is_not_a_plain_segment_builds_no_scratch(tmp_path, key):
+    with pytest.raises(ValueError, match="product key"):
+        FilesystemScratch(tmp_path / "root", key, tmp_path / "product")

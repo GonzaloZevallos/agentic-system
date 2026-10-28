@@ -1,5 +1,6 @@
-"""`Scratch` over the product's disk (GH-391, ADR-0069): one directory per check or role
-attempt under `.agentic/tmp/<task>/`, with an owner record next to it.
+"""`Scratch` over the machine's scratch root (GH-391, ADR-0069, GH-397): one directory per
+check or role attempt under `<root>/<product key>/<task>/`, with an owner record next to
+it. The root is outside every repository; only the evidence folder stays in the product.
 
 The record is written whole to a hidden temp name and renamed into place before the
 directory is created, and removed only after the directory is gone: a crash at any point
@@ -50,20 +51,24 @@ def _mtime(path: Path) -> datetime | None:
 class FilesystemScratch:
     def __init__(
         self,
+        root: Path,
+        product_key: str,
         product_dir: Path,
         boot_id: Callable[[], str | None] = current_boot_id,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         # Absolute: the directory is exported as `TMPDIR` to processes that run elsewhere.
-        self._root = product_dir.resolve()
+        self._root = root.resolve()
+        self._product_key = scratch.partition(product_key).as_posix()
+        self._product_dir = product_dir.resolve()
         self._boot_id = boot_id
         self._clock = clock
 
     @contextmanager
     def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
         owner = scratch.owner(kind, token)
-        directory = self._root / scratch.path_for(task_key, owner)
-        record = self._root / scratch.record_path_for(task_key, owner)
+        directory = self._root / scratch.path_for(self._product_key, task_key, owner)
+        record = self._root / scratch.record_path_for(self._product_key, task_key, owner)
         self._write_record(
             record, OwnerRecord(os.getpid(), self._boot_id(), slug, kind, self._clock())
         )
@@ -76,12 +81,12 @@ class FilesystemScratch:
                 record.unlink()
 
     def ensure_kept(self, task_key: str | None) -> Path:
-        kept = self._root / scratch.kept_path_for(task_key)
+        kept = self._product_dir / scratch.kept_path_for(task_key)
         kept.mkdir(parents=True, exist_ok=True)
         return kept
 
     def listing(self) -> ScratchListing:
-        base = self._root / scratch.SCRATCH_DIR
+        base = self._root / scratch.partition(self._product_key)
         tasks: list[str] = []
         owners: list[OwnerEntry] = []
         for task_dir in sorted(_children(base)):
@@ -93,7 +98,7 @@ class FilesystemScratch:
 
     def kept_folders(self) -> list[tuple[str, datetime]]:
         folders = []
-        for folder in sorted(_children(self._root / scratch.KEPT_DIR)):
+        for folder in sorted(_children(self._product_dir / scratch.KEPT_DIR)):
             mtime = _mtime(folder)
             if folder.is_dir() and mtime is not None:
                 folders.append((folder.name, mtime))
@@ -102,9 +107,11 @@ class FilesystemScratch:
     def sweep(self, decision: SweepDecision) -> None:
         """Best effort: a path that cannot be removed is left for the next round."""
         for task in decision.tasks:
-            shutil.rmtree(self._root / scratch.task_path_for(task), ignore_errors=True)
+            shutil.rmtree(
+                self._root / scratch.task_path_for(self._product_key, task), ignore_errors=True
+            )
         for removal in decision.owners:
-            task_dir = self._root / scratch.task_path_for(removal.task)
+            task_dir = self._root / scratch.task_path_for(self._product_key, removal.task)
             if removal.directory:
                 shutil.rmtree(task_dir / removal.name, ignore_errors=True)
             if removal.record:
@@ -112,7 +119,7 @@ class FilesystemScratch:
                 with contextlib.suppress(OSError):
                     (task_dir / f"{removal.name}.json").unlink()
         for task in decision.kept:
-            shutil.rmtree(self._root / scratch.KEPT_DIR / task, ignore_errors=True)
+            shutil.rmtree(self._product_dir / scratch.KEPT_DIR / task, ignore_errors=True)
 
     def _owners_in(self, task_dir: Path) -> list[OwnerEntry]:
         directories: dict[str, datetime] = {}

@@ -19,6 +19,7 @@ from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
 from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
+from agentic.core.process.domain import reaping
 from agentic.core.process.domain.task import TaskState
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryCommands
@@ -268,13 +269,17 @@ def test_a_markable_flag_passed_to_the_composition_reaches_the_commands(tmp_path
 
 def test_the_composition_builds_the_scratch_and_free_space_adapters(tmp_path, monkeypatch):
     # GH-391: both ports are wired for later subtasks to use; the scratch is on the
-    # product's own disk.
+    # root outside the product (GH-397), in this product's partition.
     monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
     product = a_repository(tmp_path / "product")
-    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    cfg = Configuration(product_dir=product)
+    ports = composition.default_ports(cfg, NullStopFlag())
     assert ports.scratch is not None and ports.free_space is not None
+    key = reaping.product_key(str(product.resolve()))
     with ports.scratch.open("GH-1", "c", "0123456789abcdef", "tests") as directory:
-        assert directory.is_relative_to(product.resolve() / ".agentic/tmp")
+        assert directory.parent == cfg.scratch_dir.resolve() / key / "GH-1"
+        assert not directory.is_relative_to(product.resolve())
+    assert ports.scratch.ensure_kept("GH-1") == product.resolve() / ".agentic/kept/GH-1"
     assert isinstance(ports.free_space, StatvfsFreeSpace)
 
 
@@ -284,9 +289,10 @@ def test_the_checks_of_a_task_bound_to_it_file_their_scratch_under_its_root_key(
     # GH-391, invariant 1: `<task>` is the root task key, `_untasked` only with no task.
     monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
     product = a_repository(tmp_path / "product")
-    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    cfg = Configuration(product_dir=product)
+    ports = composition.default_ports(cfg, NullStopFlag())
     print_tmpdir = "python3 -c 'import tempfile; print(tempfile.gettempdir())'"
-    scratch_root = product.resolve() / ".agentic/tmp"
+    scratch_root = cfg.scratch_dir.resolve() / reaping.product_key(str(product.resolve()))
 
     unbound = Path(ports.commands.run(product, print_tmpdir, timeout_s=30).output.strip())
     bound_ports = composition.bind_task(ports, "GH-7")

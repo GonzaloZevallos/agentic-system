@@ -1946,12 +1946,16 @@ async def test_a_default_runner_never_stalls_an_attempt_that_keeps_talking(monke
 # --- GH-391: every attempt has its own scratch on the disk and its task's evidence folder
 
 
+SCRATCH_KEY = "0a1b2c3d4e5f"
+
+
 class DiskScratch:
     """`Scratch` over a real directory, with the events that matter to the order test:
     `events` is appended to when the directory is made and when it is removed."""
 
     def __init__(self, root: Path, events: list[str] | None = None) -> None:
-        self.inner = FilesystemScratch(root)
+        # The scratch root is beside the product, never in it (GH-397).
+        self.inner = FilesystemScratch(root.parent / "scratch-root", SCRATCH_KEY, root)
         self.events = events if events is not None else []
 
     @contextmanager
@@ -2002,7 +2006,8 @@ async def test_an_attempt_sees_its_scratch_and_its_evidence_folder_and_they_exis
     env = seen[0].env
     root = (tmp_path / "product").resolve()
     scratch_dir, kept = Path(env["TMPDIR"]), Path(env["TASK_EVIDENCE_DIR"])
-    assert scratch_dir.parent == root / ".agentic/tmp/GH-1" and scratch_dir.name.startswith("r-")
+    assert scratch_dir.parent == (tmp_path / "scratch-root").resolve() / SCRATCH_KEY / "GH-1"
+    assert scratch_dir.name.startswith("r-")
     assert kept == root / ".agentic/kept/GH-1"
     assert existed == [(True, True)]
     # The shared environment of the runner is not the attempt's.
@@ -2129,7 +2134,7 @@ async def test_the_failure_keeps_the_lower_reading_of_the_scratch_volume_and_of_
         ample,
         by_path={
             Path("/tmp"): SpaceReading(free_bytes=5, free_inodes=ample.free_inodes),
-            (tmp_path / "product").resolve(): SpaceReading(
+            (tmp_path / "scratch-root").resolve(): SpaceReading(
                 free_bytes=ample.free_bytes, free_inodes=7
             ),
         },

@@ -1570,7 +1570,8 @@ class Scratch(Protocol):
     def open(
         self, task_key: str | None, kind: OwnerKind, token: str, slug: str
     ) -> AbstractContextManager[Path]:
-        """The directory of one owner, under the product's `.agentic/tmp/<task>/`. Its
+        """The directory of one owner, under `<scratch root>/<product key>/<task>/`, outside every
+        repository. Its
         owner record is written before the directory is created; on the way out the
         directory is removed, then the record, however the block ended. `token` is the
         one the owner's processes are marked with."""
@@ -1582,9 +1583,9 @@ class Scratch(Protocol):
         ...
 
     def listing(self) -> ScratchListing:
-        """What is on the disk under `.agentic/tmp/`: each task folder and each owner in
-        it, with the mtimes and the liveness of its record already read (the poller's
-        sweep decides on these facts; it touches no filesystem itself)."""
+        """What is on the disk under this product's partition of the scratch root: each task
+        folder and each owner in it, with the mtimes and the liveness of its record already read
+        (the poller's sweep decides on these facts; it touches no filesystem itself)."""
         ...
 
     def kept_folders(self) -> Sequence[tuple[str, datetime]]:

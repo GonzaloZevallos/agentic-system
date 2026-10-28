@@ -1,17 +1,18 @@
 """Where the temporary files of a check or a role attempt live, and who owns them
 (GH-391, ADR-0069).
 
-Every check, setup and role attempt gets its own directory on the disk under the product,
-`.agentic/tmp/<root task>/<kind>-<token prefix>/`, so what it writes never lands on the
-RAM-backed `/tmp`. This module is the only place that composes that path, the kept folder
-of a task's evidence and the owner record that says whose a directory is; no adapter
-spells `.agentic/tmp` by hand. Pure: the filesystem, the clock and `/proc` are the
-adapters'.
+Every check, setup and role attempt gets its own directory on the disk, outside every
+repository, under `Configuration.scratch_dir` (the scratch root) and the partition of its
+product: `<product key>/<root task>/<kind>-<token prefix>/`, so what it writes never lands
+on the RAM-backed `/tmp` nor inside a checkout. This module is the only place that composes
+that path, the kept folder of a task's evidence (which stays in the product) and the owner
+record that says whose a directory is; no adapter spells a scratch path by hand. Pure: the
+filesystem, the clock and `/proc` are the adapters'.
 
-The part below the product root is bounded: for a task key of up to 16 characters it is at
-most 40 characters without the trailing slash (12 for `.agentic/tmp/`, the key, `/`, and
-10 for `<kind>-<8 characters>`), because a unix socket under a pytest `tmp_path` has to fit
-in 108 bytes.
+The part below the scratch root is bounded: for a task key of up to 16 characters it is at
+most 40 characters without the trailing slash (12 for the product key, `/`, the task key,
+`/`, and 10 for `<kind>-<8 characters>`), because a unix socket under a pytest `tmp_path`
+has to fit in 108 bytes; the root's own length is the operator's budget.
 """
 
 from __future__ import annotations
@@ -27,7 +28,9 @@ from typing import Literal, get_args
 # The task segment when a run has no root task (a command outside any task).
 UNTASKED = "_untasked"
 
-SCRATCH_DIR = PurePosixPath(".agentic/tmp")
+# Where the scratch of a product lived before the root moved out of the repositories
+# (GH-397): kept only so the git exclude still covers a tree an older run left behind.
+LEGACY_SCRATCH_DIR = PurePosixPath(".agentic/tmp")
 KEPT_DIR = PurePosixPath(".agentic/kept")
 
 # Declared, not measured: a directory with no owner record is an orphan only once it is
@@ -44,6 +47,7 @@ _KINDS = get_args(OwnerKind)
 # How many characters of the reaping token name the directory.
 TOKEN_CHARS = 8
 _WORD = re.compile(r"[0-9A-Za-z]+")
+_PARTITION = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]*")
 
 
 @dataclass(frozen=True)
@@ -79,14 +83,23 @@ def _segment(task_key: str | None) -> str:
     return task_key
 
 
-def path_for(task_key: str | None, owner: Owner) -> PurePosixPath:
-    """The directory of `owner`, relative to the product root."""
-    return SCRATCH_DIR / _segment(task_key) / owner.name
+def partition(product_key: str) -> PurePosixPath:
+    """The folder of one product under the scratch root, named by its reaping key. Refused
+    when it is not one plain path segment: it could otherwise name another product's
+    partition or something outside the root."""
+    if not _PARTITION.fullmatch(product_key):
+        raise ValueError(f"not a valid product key for a scratch partition: {product_key!r}")
+    return PurePosixPath(product_key)
 
 
-def record_path_for(task_key: str | None, owner: Owner) -> PurePosixPath:
-    """The owner record next to the directory: `<owner>.json`, relative to the product root."""
-    return SCRATCH_DIR / _segment(task_key) / f"{owner.name}.json"
+def path_for(product_key: str, task_key: str | None, owner: Owner) -> PurePosixPath:
+    """The directory of `owner`, relative to the scratch root."""
+    return partition(product_key) / _segment(task_key) / owner.name
+
+
+def record_path_for(product_key: str, task_key: str | None, owner: Owner) -> PurePosixPath:
+    """The owner record next to the directory: `<owner>.json`, relative to the scratch root."""
+    return partition(product_key) / _segment(task_key) / f"{owner.name}.json"
 
 
 def kept_path_for(task_key: str | None) -> PurePosixPath:
@@ -158,7 +171,7 @@ class RecordFact:
 
 @dataclass(frozen=True)
 class OwnerEntry:
-    """One owner under `.agentic/tmp/<task>/`: its directory's mtime (`None` when there is
+    """One owner under `<partition>/<task>/`: its directory's mtime (`None` when there is
     no directory) and its record (`None` when there is none)."""
 
     task: str
@@ -169,7 +182,7 @@ class OwnerEntry:
 
 @dataclass(frozen=True)
 class ScratchListing:
-    """What is on the disk under `.agentic/tmp/`: the task directories (an empty one
+    """What is on the disk under the product's partition: the task directories (an empty one
     included) and every owner in them."""
 
     tasks: tuple[str, ...]
@@ -196,7 +209,7 @@ class Removal:
 
 @dataclass(frozen=True)
 class SweepDecision:
-    """What a round removes: whole `tmp/<task>/` folders, single owners and `kept/<task>/`
+    """What a round removes: whole `<partition>/<task>/` folders, single owners and `kept/<task>/`
     folders."""
 
     tasks: tuple[str, ...] = ()
@@ -207,9 +220,9 @@ class SweepDecision:
         return bool(self.tasks or self.owners or self.kept)
 
 
-def task_path_for(task_key: str | None) -> PurePosixPath:
-    """The folder of one task's owners, relative to the product root."""
-    return SCRATCH_DIR / _segment(task_key)
+def task_path_for(product_key: str, task_key: str | None) -> PurePosixPath:
+    """The folder of one task's owners, relative to the scratch root."""
+    return partition(product_key) / _segment(task_key)
 
 
 def _owner_removal(entry: OwnerEntry, now: datetime) -> Removal | None:

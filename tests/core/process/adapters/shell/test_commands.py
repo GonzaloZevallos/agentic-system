@@ -405,7 +405,7 @@ def test_the_null_flag_never_stops_a_check_even_when_set(worktrees, checkout):
     assert timed_out.timed_out
 
 
-# GH-391: every run has its own TMPDIR on the disk, under the product, and takes it with it.
+# GH-391: every run has its own TMPDIR on the disk, outside the product, and takes it with it.
 
 PRINT_TMPDIR = "python3 -c 'import tempfile; print(tempfile.gettempdir())'"
 
@@ -417,25 +417,38 @@ def product(tmp_path: Path) -> Path:
     return root
 
 
+SCRATCH_KEY = "0a1b2c3d4e5f"
+
+
+def _scratch_root(product: Path) -> Path:
+    """The scratch root of these tests (GH-397): beside the product, never in it."""
+    return product.parent / "scratch-root"
+
+
+def _scratch_of(product: Path) -> FilesystemScratch:
+    return FilesystemScratch(_scratch_root(product), SCRATCH_KEY, product)
+
+
 def _with_scratch(worktrees: Path, product: Path, task_key: str | None = None) -> ShellCommands:
     return ShellCommands(
         PRODUCT,
         ShellReaper(PRODUCT, worktrees),
         NullStopFlag(),
-        scratch=FilesystemScratch(product),
+        scratch=_scratch_of(product),
         task_key=task_key,
     )
 
 
 def _left_in(product: Path) -> list[str]:
-    """Every entry under the product's scratch root, directories and owner records."""
-    root = product / ".agentic" / "tmp"
+    """Every entry under the product's partition of the scratch root, directories and owner
+    records."""
+    root = _scratch_root(product) / SCRATCH_KEY
     return sorted(str(p.relative_to(root)) for p in root.rglob("*")) if root.exists() else []
 
 
 def _seen_tmpdir(result: CommandResult, product: Path) -> Path:
     seen = Path(result.output.strip().splitlines()[-1])
-    assert seen.is_relative_to((product / ".agentic" / "tmp").resolve()), seen
+    assert seen.is_relative_to((_scratch_root(product) / SCRATCH_KEY).resolve()), seen
     return seen
 
 
@@ -483,7 +496,7 @@ def test_a_pytest_tmp_path_resolves_under_the_checks_directory(worktrees, checko
     result = _with_scratch(worktrees, product).run(checkout, command, timeout_s=60)
     assert result.passed, result.output
     printed = next(line for line in result.output.splitlines() if "TMP " in line)
-    scratch_root = (product / ".agentic" / "tmp").resolve()
+    scratch_root = (_scratch_root(product) / SCRATCH_KEY).resolve()
     assert Path(printed.split("TMP ", 1)[1]).is_relative_to(scratch_root)
     assert _left_in(product) == ["_untasked"]
 
@@ -506,7 +519,7 @@ def test_the_marked_processes_are_reaped_before_the_directory_is_removed(
 ):
     reaper = _SeesTheDirectory(product)
     commands = ShellCommands(
-        PRODUCT, reaper, NullStopFlag(), scratch=FilesystemScratch(product), task_key="GH-7"
+        PRODUCT, reaper, NullStopFlag(), scratch=_scratch_of(product), task_key="GH-7"
     )
     commands.run(checkout, "true", timeout_s=30)
     assert reaper.at_reap, "the check was never reaped"
@@ -519,7 +532,7 @@ def test_a_run_stopped_after_the_launch_removes_its_directory(worktrees, checkou
         PRODUCT,
         ShellReaper(PRODUCT, worktrees),
         _FlipsAfterFirstLook(),
-        scratch=FilesystemScratch(product),
+        scratch=_scratch_of(product),
     )
     with pytest.raises(RunStopped):
         commands.run(checkout, f"exec {SLEEP} 300", timeout_s=120)

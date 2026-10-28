@@ -1,5 +1,5 @@
-"""The scratch domain: where an owner's temporary directory lives under the product root,
-and the record that says who owns it. Pure (GH-391)."""
+"""The scratch domain: where an owner's temporary directory lives under the scratch root, in
+its product's partition, and the record that says who owns it. Pure (GH-391, GH-397)."""
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -9,25 +9,44 @@ import pytest
 
 from agentic.core.process.domain import scratch
 
+KEY = "0a1b2c3d4e5f"
 
-def test_a_checks_directory_is_named_by_task_kind_and_the_first_eight_of_the_token():
+
+def test_a_checks_directory_is_named_by_product_task_kind_and_the_first_eight_of_the_token():
     owner = scratch.owner("c", "0123456789abcdef")
-    assert scratch.path_for("GH-391", owner) == PurePosixPath(".agentic/tmp/GH-391/c-01234567")
-    assert scratch.record_path_for("GH-391", owner) == PurePosixPath(
-        ".agentic/tmp/GH-391/c-01234567.json"
+    assert scratch.path_for(KEY, "GH-391", owner) == PurePosixPath(f"{KEY}/GH-391/c-01234567")
+    assert scratch.record_path_for(KEY, "GH-391", owner) == PurePosixPath(
+        f"{KEY}/GH-391/c-01234567.json"
     )
+    assert scratch.task_path_for(KEY, "GH-391") == PurePosixPath(f"{KEY}/GH-391")
+    assert scratch.partition(KEY) == PurePosixPath(KEY)
+
+
+def test_the_old_product_relative_tree_is_only_kept_as_the_legacy_name():
+    assert scratch.LEGACY_SCRATCH_DIR == PurePosixPath(".agentic/tmp")
+    assert not hasattr(scratch, "SCRATCH_DIR")
+
+
+@pytest.mark.parametrize("key", ["", "a/b", "a\\b", "..", "../x", ".hidden", "x y", "k.swept"])
+def test_a_product_key_that_is_not_one_plain_segment_is_refused(key):
+    with pytest.raises(ValueError, match="product key"):
+        scratch.partition(key)
+    with pytest.raises(ValueError, match="product key"):
+        scratch.path_for(key, "GH-1", scratch.owner("c", "0" * 32))
+    with pytest.raises(ValueError, match="product key"):
+        scratch.task_path_for(key, "GH-1")
 
 
 def test_a_role_attempt_is_kind_r_and_no_task_is_the_untasked_key():
     owner = scratch.owner("r", "abcdef0123456789")
-    assert scratch.path_for(None, owner) == PurePosixPath(".agentic/tmp/_untasked/r-abcdef01")
+    assert scratch.path_for(KEY, None, owner) == PurePosixPath(f"{KEY}/_untasked/r-abcdef01")
     assert scratch.UNTASKED == "_untasked"
 
 
 def test_the_part_below_the_root_is_at_most_forty_characters_for_a_sixteen_character_key():
     key = "k" * 16
     for kind in ("c", "r"):
-        relative = str(scratch.path_for(key, scratch.owner(kind, "f" * 32)))
+        relative = str(scratch.path_for(KEY, key, scratch.owner(kind, "f" * 32)))
         assert not relative.endswith("/")
         assert len(relative) <= 40
 
@@ -40,7 +59,7 @@ def test_the_kept_folder_of_a_task_is_under_dot_agentic_kept():
 @pytest.mark.parametrize("key", ["", "a/b", "a\\b", "..", "../x", "x/.."])
 def test_a_task_key_that_could_leave_the_scratch_root_is_refused(key):
     with pytest.raises(ValueError, match="task key"):
-        scratch.path_for(key, scratch.owner("c", "0" * 32))
+        scratch.path_for(KEY, key, scratch.owner("c", "0" * 32))
     with pytest.raises(ValueError, match="task key"):
         scratch.kept_path_for(key)
 
@@ -182,6 +201,6 @@ def test_nothing_to_remove_is_a_falsy_decision():
 
 
 def test_a_task_key_that_could_name_two_directories_has_no_folder():
-    assert scratch.task_path_for("GH-9") == PurePosixPath(".agentic/tmp/GH-9")
+    assert scratch.task_path_for(KEY, "GH-9") == PurePosixPath(f"{KEY}/GH-9")
     with pytest.raises(ValueError):
-        scratch.task_path_for("../x")
+        scratch.task_path_for(KEY, "../x")
