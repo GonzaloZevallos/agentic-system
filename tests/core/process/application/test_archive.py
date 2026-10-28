@@ -289,7 +289,7 @@ def _real_product(tmp_path: Path):
         return done.stdout.strip()
 
     git("init", "-q", "-b", "master")
-    (tmp_path / "README.md").write_text("v0\n")
+    (tmp_path / "base.txt").write_text("v0\n")
     git("add", "-A")
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v0")
     workspace = GitWorkspace(tmp_path, Configuration(product_dir=tmp_path).git_identity)
@@ -317,10 +317,11 @@ def test_over_a_real_repo_the_document_lands_on_the_archived_ref_and_on_no_live_
     assert result.document_kept is True
     assert git("show", f"{ref}:.agentic/tasks/GH-1.md") == "the record"
     assert git("show", "--name-only", "--format=", f"{ref}~1") == "code.py"
-    assert git("branch", "--list", "agentic/*") == ""
+    live = git("branch", "--format=%(refname:short)").splitlines()
+    assert [name for name in live if name.startswith("agentic")] == []
     # No live branch carries the document, nor does the product's own index.
     assert git("log", "--all", "--not", ref, "--format=%s") == ""
-    assert git("ls-files") == "README.md"
+    assert git("ls-files") == "base.txt"
     # Retried with the task already archived: still exactly one document commit.
     assert git("rev-list", "--count", f"{ref}~1..{ref}") == "1"
     archive.archive_previous_run("GH-1", ports)

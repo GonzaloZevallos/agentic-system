@@ -1558,7 +1558,7 @@ def _archive_previous_run(task_id: str, ports: Ports) -> list[TrackerFailureReco
         )
         line = f"agentic: {verb} {result.prefix}"
         if not result.document_kept:
-            line += " (archived without the document: there was none to commit, or committing it failed)"
+            line += " (archived without the document: none to commit, or the commit failed)"
         note = f"{archive.STARTED_OVER}previous run archived as {result.prefix}/"
         if reaped := release.summary(result.reaped):
             line += f"; {reaped}"
