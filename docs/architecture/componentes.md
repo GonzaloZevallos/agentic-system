@@ -70,9 +70,11 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 | `RunLock`, `RunRegistry` | un solo proceso por tarea, quién corre | `agentic/core/process/adapters/filesystem/lock.py:FilesystemRunLock`, `agentic/core/process/adapters/filesystem/run_registry.py:FilesystemRunRegistry` |
 | `Scratch`, `FreeSpace` | el directorio temporal y el espacio libre | `agentic/core/process/adapters/filesystem/scratch.py:FilesystemScratch`, `agentic/core/process/adapters/filesystem/free_space.py:StatvfsFreeSpace` |
 | `StopFlag` | marcar que una señal frena la corrida | `agentic/core/process/adapters/shell/stop.py:EventStopFlag` |
-| `Telemetry` | abrir el span de cada rol | `agentic/core/measurement/adapters/otel/telemetry.py` (ver abajo) |
 
 `ProductKnowledge`, `FlagVocabulary` y `ProductStack` los implementa `core/knowledge`.
+`Telemetry` no es un campo de `Ports`: es un puerto aparte
+(`agentic/core/process/adapters/telemetry.py:Telemetry`) que la composición le pasa a
+`build_graph`, y lo cumple `core/measurement` (ver abajo).
 
 ## `core/knowledge`
 

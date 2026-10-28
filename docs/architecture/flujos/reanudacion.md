@@ -15,7 +15,7 @@ sequenceDiagram
     participant Poller
     participant Resume as agentic resume
     Graph->>Escalate: a role, a pair or the cap cannot go on
-    Escalate->>GitHub: Escalated comment, label needs-human
+    Escalate->>GitHub: label needs-human only if needs_a_human, then Escalated comment
     Escalate->>Pause: the same state
     Pause->>Pause: interrupt, checkpoint saved
     Note over Graph,Pause: the run ends, nothing is spent while it waits
@@ -23,8 +23,8 @@ sequenceDiagram
         Owner->>GitHub: answers in a comment
         Owner->>Resume: agentic resume --issue N
     else external cut (role failure, account limit, full disk)
-        Poller->>GitHub: Auto-resumed comment
         Poller->>Resume: spawn resume --issue N --yes --detach
+        Poller->>GitHub: Auto-resumed comment, once the spawn returned a pid
     end
     Resume->>GitHub: comments since the last system one
     Resume->>Resume: prepare, summary, confirmation
@@ -36,9 +36,12 @@ sequenceDiagram
 ## Paso por paso
 
 1. **El escalado.** El caso de uso de un nodo deja el motivo en el estado; no pausa.
-   `agentic/core/process/application/escalate.py:escalate` comenta el issue con el prefijo
-   `Escalated: ` (`agentic/core/process/application/escalate.py:ESCALATED`), pone la etiqueta
-   `needs-human` y guarda el documento.
+   `agentic/core/process/application/escalate.py:escalate`, en este orden, guarda el
+   documento, pone la etiqueta `needs-human` solo si
+   `agentic/core/process/domain/rules.py:needs_a_human` lo dice, y comenta el issue con el
+   prefijo `Escalated: ` (`agentic/core/process/application/escalate.py:ESCALATED`). Una pausa
+   causada solo por el límite de la cuenta, que el poller retoma sola, no lleva la etiqueta
+   (glosario de `agentic/core/process/CONTEXT.md`).
 2. **La pausa.** El nodo `pause` va después de `escalate` y no tiene efectos
    (`agentic/core/process/adapters/langgraph/graph.py:pause`). Ahí vive el `interrupt()`:
    LangGraph reanuda un nodo desde su comienzo, así que dentro de un caso de uso volvería a
@@ -52,9 +55,11 @@ sequenceDiagram
      cuenta, un disco lleno), el poller la retoma por su calendario:
      `agentic/core/process/application/poll.py:gather_resumes` evalúa cada pausa con
      `agentic/core/process/domain/rules.py:auto_resumable` y
-     `agentic/core/process/domain/rules.py:next_attempt_at`, y `execute` lanza el hijo y deja
-     el comentario `Auto-resumed: `
-     (`agentic/core/process/application/poll.py:AUTO_RESUMED`). Si una persona habló después
+     `agentic/core/process/domain/rules.py:next_attempt_at`, y `execute` lanza el hijo y,
+     recién cuando el spawn devolvió un pid, deja el comentario `Auto-resumed: `
+     (`agentic/core/process/application/poll.py:AUTO_RESUMED`). Las corridas que murieron por un
+     reinicio o una caída las retoma también el poller
+     (`agentic/core/process/application/poll.py:gather_retakes`). Si una persona habló después
      del sistema, la pausa ya es del humano y el poller no la toca.
 4. **Antes de gastar.** `agentic/core/process/application/resume.py:prepare` decide la
    reanudación: toma como decisión todos los comentarios posteriores al último del sistema

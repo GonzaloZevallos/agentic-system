@@ -26,11 +26,15 @@ sequenceDiagram
         Land->>Land: nothing to do, next round decides again
     else sync_master, re_review, fix, rerun
         Land->>GitHub: bring upstream, review, fix or rerun CI
-        Land->>Poller: resume spawned when the technical stage reopens
+        Land->>Land: spawn resume --from-document when the technical stage reopens
     else file_followups_and_land
         Land->>GitHub: open follow-up issues, merge
-    else diagnose
-        Land->>Land: verdict sync or unlandable
+    else budget spent, ledger only
+        Land->>GitHub: escalate_ledger asks the human once, then none
+    else budget spent, a clean slice exists
+        Land->>GitHub: land_slice lands what is approved
+    else budget spent, no slice
+        Land->>Land: diagnose, then sync_master, restart or escalate
     end
     Land-->>Poller: result printed, lock released
 ```
@@ -51,11 +55,16 @@ sequenceDiagram
    hacer en vez de* mergear. El paso queda en la lista `landing` del documento antes de
    ejecutarse, y cada tipo de paso tiene su brazo en
    `agentic/core/process/application/landing.py:_dispatch`.
-4. **Los pasos.** Esperar (`wait`), traer el upstream (`sync_master`), volver a revisar
-   (`re_review`), corregir (`fix`), repetir el CI o los chequeos (`rerun`), archivar el
-   seguimiento de lo que quedó fuera de alcance y mergear (`file_followups_and_land`),
-   renumerar el ADR cuyo número ya tomó master (`renumber`), aterrizar por tramos
-   (`land_slice`) o diagnosticar (`diagnose`). Los brazos están en
+4. **Los pasos.** `LandingStepKind` tiene 14 tipos
+   (`agentic/core/process/domain/landing.py:LandingStepKind`), cada uno con su brazo en
+   `_dispatch`. Con modelo o con el upstream: traer el upstream (`sync_master`), volver a
+   revisar (`re_review`), corregir (`fix`), el pase final sobre los importantes propios
+   (`fix_important`), repetir el CI o los chequeos (`rerun`), archivar el seguimiento de lo
+   que quedó fuera de alcance y mergear (`file_followups_and_land`), renumerar el ADR cuyo
+   número ya tomó master (`renumber`), aterrizar por tramos (`land_slice`) y diagnosticar
+   (`diagnose`). Sin gastar modelo: esperar (`wait`), escribir lo que la aprobación vigente de
+   PM cubre (`settle`), preguntarle una vez al humano por lo que no cubre (`escalate_ledger`),
+   escalar (`escalate`) y no hacer nada (`none`). Los brazos están en
    `agentic/core/process/application/landing_sync.py`,
    `agentic/core/process/application/landing_fix.py` y
    `agentic/core/process/application/landing_slice.py`.
@@ -64,6 +73,12 @@ sequenceDiagram
    (`agentic/cli.py:_resume_spawner`: `agentic resume --issue N --from-document --yes --detach`)
    y espera a que se registre.
 6. **Presupuestos.** Los pases del modelo y las sincronizaciones tienen topes por tarea
-   (`agentic/core/process/domain/landing.py`); un paso que los excedería es `diagnose`. El
-   diagnóstico tiene un veredicto cerrado, `sync` o `unlandable`, y solo el reinicio es el
+   (`agentic/core/process/domain/landing.py:LANDING_PASSES_MAX`,
+   `agentic/core/process/domain/landing.py:LANDING_SYNCS_MAX`). Cuando uno se agota, todos
+   terminan en el mismo lugar, `exhausted()` dentro de `landing_step`: si el rechazo es solo
+   del libro mayor (`ledger_only`), el paso es `escalate_ledger`, o `none` si ya se preguntó;
+   si no, es `land_slice` cuando existe un tramo limpio ya aprobado, y `diagnose` solo cuando
+   no. El diagnóstico tiene un veredicto cerrado, `sync` o `unlandable`, y
+   `agentic/core/process/domain/landing.py:after_diagnosis` lo convierte en una sincronización
+   más (`sync_master`), un reinicio (`restart`) o un escalado (`escalate`). El reinicio es el
    último recurso: avisa en el issue con el motivo y el costo hasta ese momento.
