@@ -1625,13 +1625,21 @@ class FakeCheckScheduler:
 
 
 class MemoryScratch:
-    """GH-391: `open` hands out the path `scratch.path_for` names under `root` without
-    touching a disk, and records who opened it (`opened`, as `(task, kind, token, slug)`),
-    which directories are open now (`live`) and which task folders were asked for
-    (`kept`). The directory is "removed" when the block ends, however it ends."""
+    """GH-391: `open` hands out the path `scratch.path_for` names under `root` (the evidence
+    folder under `product_dir`) without touching a disk, and records who opened it (`opened`,
+    as `(task, kind, token, slug)`), which directories are open now (`live`) and which task
+    folders were asked for (`kept`). The directory is "removed" when the block ends, however
+    it ends."""
 
-    def __init__(self, root: Path = Path("/scratch-root")) -> None:
+    def __init__(
+        self,
+        root: Path = Path("/scratch-root"),
+        product_key: str = "memorykey000",
+        product_dir: Path = Path("/product"),
+    ) -> None:
         self.root = root
+        self.product_key = product_key
+        self.product_dir = product_dir
         self.opened: list[tuple[str | None, str, str, str]] = []
         self.live: set[Path] = set()
         self.kept: list[Path] = []
@@ -1640,10 +1648,14 @@ class MemoryScratch:
         self.owners: list[scratch_domain.OwnerEntry] = []
         self.kept_on_disk: list[tuple[str, datetime]] = []
         self.swept: list[scratch_domain.SweepDecision] = []
+        # Other products' partitions and leftovers on the "disk" (GH-397).
+        self.other_partitions: list[scratch_domain.PartitionFolder] = []
+        self.leftovers: list[scratch_domain.Leftover] = []
 
     @contextmanager
     def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
-        directory = self.root / scratch_domain.path_for(task_key, scratch_domain.owner(kind, token))
+        owner = scratch_domain.owner(kind, token)
+        directory = self.root / scratch_domain.path_for(self.product_key, task_key, owner)
         self.opened.append((task_key, kind, token, slug))
         self.live.add(directory)
         try:
@@ -1652,13 +1664,17 @@ class MemoryScratch:
             self.live.discard(directory)
 
     def ensure_kept(self, task_key: str | None) -> Path:
-        kept = self.root / scratch_domain.kept_path_for(task_key)
+        kept = self.product_dir / scratch_domain.kept_path_for(task_key)
         self.kept.append(kept)
         return kept
 
     def listing(self) -> scratch_domain.ScratchListing:
         """The `tasks` and `owners` a test put on the "disk" (no disk is read)."""
         return scratch_domain.ScratchListing(tuple(self.tasks), tuple(self.owners))
+
+    def partitions(self) -> scratch_domain.PartitionListing:
+        """The `other_partitions` and `leftovers` a test put on the "disk"."""
+        return scratch_domain.PartitionListing(tuple(self.other_partitions), tuple(self.leftovers))
 
     def kept_folders(self) -> list[tuple[str, datetime]]:
         return list(self.kept_on_disk)
@@ -1671,6 +1687,10 @@ class MemoryScratch:
         gone = {(r.task, r.name) for r in decision.owners if r.directory and r.record}
         self.owners = [o for o in self.owners if (o.task, o.name) not in gone]
         self.kept_on_disk = [k for k in self.kept_on_disk if k[0] not in decision.kept]
+        self.other_partitions = [
+            p for p in self.other_partitions if p.name not in decision.partitions
+        ]
+        self.leftovers = [x for x in self.leftovers if x.name not in decision.leftovers]
 
 
 class FakeFreeSpace:

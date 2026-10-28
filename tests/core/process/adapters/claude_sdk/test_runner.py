@@ -1946,12 +1946,16 @@ async def test_a_default_runner_never_stalls_an_attempt_that_keeps_talking(monke
 # --- GH-391: every attempt has its own scratch on the disk and its task's evidence folder
 
 
+SCRATCH_KEY = "0a1b2c3d4e5f"
+
+
 class DiskScratch:
     """`Scratch` over a real directory, with the events that matter to the order test:
     `events` is appended to when the directory is made and when it is removed."""
 
     def __init__(self, root: Path, events: list[str] | None = None) -> None:
-        self.inner = FilesystemScratch(root)
+        # The scratch root is beside the product, never in it (GH-397).
+        self.inner = FilesystemScratch(root.parent / "scratch-root", SCRATCH_KEY, root)
         self.events = events if events is not None else []
 
     @contextmanager
@@ -2002,7 +2006,8 @@ async def test_an_attempt_sees_its_scratch_and_its_evidence_folder_and_they_exis
     env = seen[0].env
     root = (tmp_path / "product").resolve()
     scratch_dir, kept = Path(env["TMPDIR"]), Path(env["TASK_EVIDENCE_DIR"])
-    assert scratch_dir.parent == root / ".agentic/tmp/GH-1" and scratch_dir.name.startswith("r-")
+    assert scratch_dir.parent == (tmp_path / "scratch-root").resolve() / SCRATCH_KEY / "GH-1"
+    assert scratch_dir.name.startswith("r-")
     assert kept == root / ".agentic/kept/GH-1"
     assert existed == [(True, True)]
     # The shared environment of the runner is not the attempt's.
@@ -2117,7 +2122,15 @@ async def test_free_space_is_read_after_the_reap_and_before_the_scratch_is_remov
     with pytest.raises(AttemptFailed) as info:
         await run_once(runner, tmp_path)
     assert info.value.space == LowUntilRemoved.LOW
-    assert [e.split()[0] for e in events] == ["made", "reap", "read", "read", "removing", "removed"]
+    assert [e.split()[0] for e in events] == [
+        "made",
+        "reap",
+        "read",
+        "read",
+        "read",
+        "removing",
+        "removed",
+    ]
 
 
 async def test_the_failure_keeps_the_lower_reading_of_the_scratch_volume_and_of_tmp(
@@ -2129,7 +2142,7 @@ async def test_the_failure_keeps_the_lower_reading_of_the_scratch_volume_and_of_
         ample,
         by_path={
             Path("/tmp"): SpaceReading(free_bytes=5, free_inodes=ample.free_inodes),
-            (tmp_path / "product").resolve(): SpaceReading(
+            (tmp_path / "scratch-root").resolve(): SpaceReading(
                 free_bytes=ample.free_bytes, free_inodes=7
             ),
         },
@@ -2139,6 +2152,35 @@ async def test_the_failure_keeps_the_lower_reading_of_the_scratch_volume_and_of_
         await run_once(runner, tmp_path)
     assert info.value.space == SpaceReading(free_bytes=5, free_inodes=7)
     assert info.value.enospc is False
+
+
+async def test_the_failure_reads_the_scratch_directory_the_checkout_and_tmp_and_nothing_else(
+    monkeypatch, tmp_path
+):
+    scratch_query(monkeypatch, [])
+    space = FakeFreeSpace()
+    checkout = tmp_path / "checkout"
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=space)
+    with pytest.raises(AttemptFailed):
+        await run_once(runner, checkout)
+    scratch_root = (tmp_path / "scratch-root").resolve()
+    assert len(space.asked) == 3
+    assert scratch_root in space.asked[0].parents and space.asked[0].name.startswith("r-")
+    assert space.asked[1:] == [checkout, Path("/tmp")]
+    assert tmp_path / "product" not in space.asked
+
+
+async def test_the_failure_keeps_the_checkout_volume_when_it_is_the_lowest(monkeypatch, tmp_path):
+    scratch_query(monkeypatch, [])
+    ample = FakeFreeSpace.AMPLE
+    checkout = tmp_path / "checkout"
+    space = FakeFreeSpace(
+        ample, by_path={checkout: SpaceReading(free_bytes=3, free_inodes=ample.free_inodes)}
+    )
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=space)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, checkout)
+    assert info.value.space == SpaceReading(free_bytes=3, free_inodes=ample.free_inodes)
 
 
 async def test_a_successful_attempt_reads_no_free_space(monkeypatch, tmp_path):

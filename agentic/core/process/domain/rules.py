@@ -3540,17 +3540,21 @@ def account_paused(resumes: Sequence[ResumeCandidate], now: datetime) -> bool:
 
 
 SCRATCH_VOLUME = "scratch"
+PRODUCT_VOLUME = "product"
 TMP_VOLUME = "/tmp"
+_VOLUME_ORDER = (SCRATCH_VOLUME, PRODUCT_VOLUME, TMP_VOLUME)
 
 
-def space_holds(scratch: SpaceReading, tmp: SpaceReading, floor_bytes: int) -> tuple[str, ...]:
-    """The names (`SCRATCH_VOLUME`, `TMP_VOLUME`) of the volumes under the floor (GH-391): fewer
-    free bytes than `floor_bytes`, or fewer free inodes than `INODE_FLOOR`. Empty means the round
-    may start children; anything else is what `poll_plan` takes as `held`."""
+def space_holds(readings: Mapping[str, SpaceReading], floor_bytes: int) -> tuple[str, ...]:
+    """The names (`SCRATCH_VOLUME`, `PRODUCT_VOLUME`, `TMP_VOLUME`) among `readings` of the volumes
+    under the floor (GH-391, GH-397): fewer free bytes than `floor_bytes`, or fewer free inodes than
+    `INODE_FLOOR`, in a stable order whatever the order of the mapping. Empty means the round may
+    start children; anything else is what `poll_plan` takes as `held`."""
     return tuple(
         name
-        for name, reading in ((SCRATCH_VOLUME, scratch), (TMP_VOLUME, tmp))
-        if reading.free_bytes < floor_bytes or reading.free_inodes < INODE_FLOOR
+        for name in _VOLUME_ORDER
+        if name in readings
+        and (readings[name].free_bytes < floor_bytes or readings[name].free_inodes < INODE_FLOOR)
     )
 
 

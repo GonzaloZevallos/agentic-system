@@ -3976,18 +3976,43 @@ _AMPLE = SpaceReading(free_bytes=10**12, free_inodes=10**7)
 _FLOOR = 2048 * 1024 * 1024
 
 
+def _readings(**by_name: SpaceReading) -> dict[str, SpaceReading]:
+    """All three volumes ample, except the ones named by `scratch`, `product` and `tmp`."""
+    names = {
+        "scratch": rules.SCRATCH_VOLUME,
+        "product": rules.PRODUCT_VOLUME,
+        "tmp": rules.TMP_VOLUME,
+    }
+    readings = {name: _AMPLE for name in names.values()}
+    readings.update({names[key]: reading for key, reading in by_name.items()})
+    return readings
+
+
 def test_space_holds_names_each_volume_under_the_byte_floor_or_the_inode_floor():
     low_bytes = SpaceReading(free_bytes=_FLOOR - 1, free_inodes=10**7)
     low_inodes = SpaceReading(free_bytes=10**12, free_inodes=INODE_FLOOR - 1)
-    assert rules.space_holds(_AMPLE, _AMPLE, _FLOOR) == ()
-    assert rules.space_holds(_AMPLE, low_bytes, _FLOOR) == ("/tmp",)
-    assert rules.space_holds(low_inodes, _AMPLE, _FLOOR) == ("scratch",)
-    assert rules.space_holds(low_bytes, low_inodes, _FLOOR) == ("scratch", "/tmp")
+    assert rules.PRODUCT_VOLUME == "product"
+    assert rules.space_holds(_readings(), _FLOOR) == ()
+    assert rules.space_holds(_readings(tmp=low_bytes), _FLOOR) == ("/tmp",)
+    assert rules.space_holds(_readings(scratch=low_inodes), _FLOOR) == ("scratch",)
+    assert rules.space_holds(_readings(product=low_bytes), _FLOOR) == ("product",)
+    assert rules.space_holds(_readings(product=low_inodes), _FLOOR) == ("product",)
+
+
+def test_space_holds_names_every_volume_under_the_floor_in_a_stable_order():
+    low = SpaceReading(free_bytes=0, free_inodes=0)
+    everything = _readings(tmp=low, product=low, scratch=low)
+    assert rules.space_holds(everything, _FLOOR) == ("scratch", "product", "/tmp")
+    # The order is the rule's, not the mapping's.
+    reversed_ = dict(reversed(list(everything.items())))
+    assert rules.space_holds(reversed_, _FLOOR) == ("scratch", "product", "/tmp")
 
 
 def test_space_holds_at_exactly_the_floor_is_not_a_hold():
     exact = SpaceReading(free_bytes=_FLOOR, free_inodes=INODE_FLOOR)
-    assert rules.space_holds(exact, exact, _FLOOR) == ()
+    assert (
+        rules.space_holds({rules.SCRATCH_VOLUME: exact, rules.PRODUCT_VOLUME: exact}, _FLOOR) == ()
+    )
 
 
 def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:

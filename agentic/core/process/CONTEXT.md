@@ -423,12 +423,12 @@ _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
 _Campo_: sin término de arte
 
 **Directorio temporal**:
-El directorio en el disco, bajo `.agentic/tmp/<tarea raíz>/`, que cada chequeo, cada setup y cada intento de rol recibe como `TMPDIR` y que se borra cuando termina, salga bien o mal. Lo compone una sola función y lo respalda un registro de dueño escrito antes de crearlo y borrado después de borrarlo; lo que cae en `/tmp` queda fuera de este control. Las capturas que una tarea cita no viven acá sino en la carpeta de evidencia de la tarea (`.agentic/kept/<tarea>/`), que se conserva 14 días tras el cierre (ADR-0069).
+El directorio en el disco, bajo `<raíz de scratch>/<clave del producto>/<tarea raíz>/` y fuera de todo repositorio, que cada chequeo, cada setup y cada intento de rol recibe como `TMPDIR` y que se borra cuando termina, salga bien o mal. La raíz es `AGENTIC_SCRATCH_DIR`, por defecto `$XDG_CACHE_HOME/agentic/scratch`; una raíz dentro del repositorio del producto o del de stage0 se rechaza antes de gastar (`ScratchInARepository`). Lo compone una sola función y lo respalda un registro de dueño escrito antes de crearlo y borrado después de borrarlo; lo que cae en `/tmp` queda fuera de este control. Las capturas que una tarea cita no viven acá sino en la carpeta de evidencia de la tarea (`.agentic/kept/<tarea>/`, que sigue en el producto), que se conserva 14 días tras el cierre (ADR-0069, ADR-0072).
 _Avoid_: temporales, `/tmp`, caché
 _Campo_: scratch directory; `Scratch` y `path_for` en el código
 
 **Piso de espacio libre**:
-El espacio libre, en megabytes, bajo el cual el poller no arranca nada: se mide en el volumen del directorio temporal y en `/tmp`, y la ronda solo cierra tareas hasta que ambos lo superan. Por defecto 2048 (`AGENTIC_SCRATCH_FLOOR_MB`). Se mira al arrancar, no durante una corrida. El mismo piso, junto con un mínimo de inodos libres, es lo que convierte un intento fallido en `disk_full` (ADR-0069).
+El espacio libre, en megabytes, bajo el cual el poller no arranca nada: se mide en tres volúmenes, el de la raíz de scratch, el del producto y `/tmp`, y la ronda solo cierra tareas hasta que los tres lo superan. Por defecto 2048 (`AGENTIC_SCRATCH_FLOOR_MB`). Se mira al arrancar, no durante una corrida. El mismo piso, junto con un mínimo de inodos libres, es lo que convierte un intento fallido en `disk_full`, que lee solo el directorio del intento, su checkout y `/tmp` (ADR-0069, ADR-0072).
 _Avoid_: cuota, límite de disco
 _Campo_: free-space floor (disk watermark en almacenamiento); `space_holds` y `AGENTIC_SCRATCH_FLOOR_MB` en el código
 

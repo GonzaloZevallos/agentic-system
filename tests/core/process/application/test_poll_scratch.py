@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic.core.process.application import poll
+from agentic.core.process.application import poll, scratch_sweep
 from agentic.core.process.application.ports import IssueComment, IssueState
 from agentic.core.process.domain import scratch
 from agentic.core.process.domain.scratch import SpaceReading
@@ -31,7 +31,7 @@ MB = 1024 * 1024
 def _round(tmp_path, ports, locks=None, **over):
     launcher = FakeLauncher()
     lines = poll.run_once(
-        Configuration(product_dir=tmp_path, **over),
+        Configuration(product_dir=tmp_path, **{"scratch_dir": tmp_path / "scratch-root", **over}),
         ports,
         MemoryRunRegistry(),
         launcher,
@@ -44,12 +44,15 @@ def _round(tmp_path, ports, locks=None, **over):
     return lines, launcher
 
 
-def _free(tmp_path, *, scratch_mb=380_000, tmp_mb=380_000, tmp_inodes=10**7) -> FakeFreeSpace:
-    # The product lives under /tmp in a test, so the product's volume is named explicitly:
-    # the longest path wins.
+def _free(
+    tmp_path, *, scratch_mb=380_000, product_mb=380_000, tmp_mb=380_000, tmp_inodes=10**7
+) -> FakeFreeSpace:
+    # The product and the scratch root live under /tmp in a test, so each volume is named
+    # explicitly: the longest path wins.
     return FakeFreeSpace(
         by_path={
-            tmp_path / ".agentic": SpaceReading(scratch_mb * MB, 10**7),
+            tmp_path / "scratch-root": SpaceReading(scratch_mb * MB, 10**7),
+            tmp_path / ".agentic": SpaceReading(product_mb * MB, 10**7),
             Path("/tmp"): SpaceReading(tmp_mb * MB, tmp_inodes),
         }
     )
@@ -192,12 +195,12 @@ def _busy_ports(free: FakeFreeSpace):
     return ports
 
 
-def test_with_room_on_both_volumes_the_round_closes_and_resumes(tmp_path):
+def test_with_room_on_the_three_volumes_the_round_closes_and_resumes(tmp_path):
     free = _free(tmp_path)
     lines, launcher = _round(tmp_path, _busy_ports(free))
     assert [argv[1] for argv in launcher.spawned][:2] == ["close", "resume"]
     assert not any("held" in line for line in lines)
-    assert free.asked == [tmp_path / ".agentic", Path("/tmp")]
+    assert free.asked == [tmp_path / "scratch-root", tmp_path / ".agentic", Path("/tmp")]
 
 
 @pytest.mark.parametrize(
@@ -205,23 +208,32 @@ def test_with_room_on_both_volumes_the_round_closes_and_resumes(tmp_path):
     [
         (
             {"tmp_mb": 1400},
-            "agentic: poll: held: /tmp 1400 MB < floor 2048 MB (scratch 380000 MB ok)",
+            "agentic: poll: held: /tmp 1400 MB < floor 2048 MB "
+            "(scratch 380000 MB ok, product 380000 MB ok)",
         ),
         (
             {"scratch_mb": 100},
-            "agentic: poll: held: scratch 100 MB < floor 2048 MB (/tmp 380000 MB ok)",
+            "agentic: poll: held: scratch 100 MB < floor 2048 MB "
+            "(product 380000 MB ok, /tmp 380000 MB ok)",
         ),
         (
-            {"scratch_mb": 100, "tmp_mb": 2047},
-            "agentic: poll: held: scratch 100 MB < floor 2048 MB, /tmp 2047 MB < floor 2048 MB",
+            {"product_mb": 100},
+            "agentic: poll: held: product 100 MB < floor 2048 MB "
+            "(scratch 380000 MB ok, /tmp 380000 MB ok)",
+        ),
+        (
+            {"scratch_mb": 100, "product_mb": 5, "tmp_mb": 2047},
+            "agentic: poll: held: scratch 100 MB < floor 2048 MB, product 5 MB < floor 2048 MB, "
+            "/tmp 2047 MB < floor 2048 MB",
         ),
         (
             {"tmp_inodes": 500},
-            "agentic: poll: held: /tmp 500 inodes < floor 10000 (scratch 380000 MB ok)",
+            "agentic: poll: held: /tmp 500 inodes < floor 10000 "
+            "(scratch 380000 MB ok, product 380000 MB ok)",
         ),
     ],
 )
-def test_under_the_floor_on_either_volume_the_round_only_closes_and_says_why(
+def test_under_the_floor_on_any_volume_the_round_only_closes_and_says_why(
     tmp_path, free_kwargs, line
 ):
     ports = _busy_ports(_free(tmp_path, **free_kwargs))
@@ -229,6 +241,15 @@ def test_under_the_floor_on_either_volume_the_round_only_closes_and_says_why(
     assert [argv[1] for argv in launcher.spawned] == ["close"]
     assert lines == [line, "agentic: poll: close #3 -> pid 4242"]
     assert ports.tracker.comments == []  # no resume was announced
+
+
+def test_hold_line_names_the_product_volume_with_its_figures():
+    low = SpaceReading(free_bytes=100 * MB, free_inodes=10**7)
+    ample = SpaceReading(free_bytes=5000 * MB, free_inodes=10**7)
+    readings = {"scratch": ample, "product": low, "/tmp": ample}
+    assert scratch_sweep.hold_line(("product",), readings, 2048 * MB) == (
+        "agentic: poll: held: product 100 MB < floor 2048 MB (scratch 5000 MB ok, /tmp 5000 MB ok)"
+    )
 
 
 def test_the_floor_is_configurable(tmp_path):
@@ -256,7 +277,7 @@ def test_the_sweep_runs_before_the_volumes_are_read():
     ports.documents.save({"id": "GH-3", "closed_at": "2026-10-20T00:00:00Z"})
     _disk(ports).tasks = ["GH-3"]
     _round(Path("/p"), ports)
-    assert order == ["sweep", "read", "read"]
+    assert order == ["sweep", "read", "read", "read"]
 
 
 def test_a_volume_that_cannot_be_read_holds_nothing_and_says_so(tmp_path):
@@ -290,8 +311,47 @@ def test_a_held_round_starts_no_retake_merge_or_reflect_child_and_an_open_one_st
         tmp_path, build(_free(tmp_path, tmp_mb=10)), _Locks(_dead_lock("GH-30"))
     )
     assert held.spawned == []
-    assert held_lines == ["agentic: poll: held: /tmp 10 MB < floor 2048 MB (scratch 380000 MB ok)"]
+    assert held_lines == [
+        "agentic: poll: held: /tmp 10 MB < floor 2048 MB "
+        "(scratch 380000 MB ok, product 380000 MB ok)"
+    ]
 
     _, open_ = _round(tmp_path, build(_free(tmp_path)), _Locks(_dead_lock("GH-30")))
     kinds = {argv[1] for argv in open_.spawned}
     assert {"merge", "resume", "reflect"} <= kinds
+
+
+# GH-397: the same round also removes what the orphan rule returns.
+def _folder(key, *, mtime, alive=False):
+    owner = scratch.OwnerEntry("GH-1", "r-00000001", mtime, scratch.RecordFact(mtime, alive))
+    task = scratch.TaskFolder("GH-1", mtime, (owner,), (mtime, mtime))
+    return scratch.PartitionFolder(key, mtime, (task,))
+
+
+def test_the_round_removes_a_dead_old_partition_and_an_old_leftover_and_keeps_a_live_one():
+    ports = memory_ports(scratch=MemoryScratch(), free_space=FakeFreeSpace())
+    disk = _disk(ports)
+    old = NOW - timedelta(hours=1)
+    disk.other_partitions = [
+        _folder("deadkey00000", mtime=old),
+        _folder("livekey00000", mtime=old, alive=True),
+        _folder("youngkey0000", mtime=NOW - timedelta(minutes=1)),
+    ]
+    disk.leftovers = [
+        scratch.Leftover(".deadkey00000.swept-abc", old),
+        scratch.Leftover(".youngkey0000.swept-def", NOW),
+    ]
+    lines = scratch_sweep.sweep(ports, NOW)
+    assert lines == [
+        "agentic: poll: scratch swept: 0 closed task(s), 0 owner(s), 0 kept folder(s), "
+        "1 orphan partition(s), 1 leftover(s)"
+    ]
+    assert [p.name for p in disk.other_partitions] == ["livekey00000", "youngkey0000"]
+    assert [x.name for x in disk.leftovers] == [".youngkey0000.swept-def"]
+
+
+def test_the_own_partition_is_never_an_orphan_to_the_round():
+    ports = memory_ports(scratch=MemoryScratch(), free_space=FakeFreeSpace())
+    disk = _disk(ports)
+    disk.other_partitions = [_folder(disk.product_key, mtime=NOW - timedelta(hours=1))]
+    assert scratch_sweep.sweep(ports, NOW) == []
