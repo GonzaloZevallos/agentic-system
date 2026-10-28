@@ -21,10 +21,15 @@ defecto).
    encima del default del sistema, y `FilesystemKnowledge.__init__` lee una sola vez
    `DEFAULT_STANDARDS`. `raw()` y la lectura de estándares sirven esa copia. Solo se leen los
    slugs del conjunto: otros `.md` del overlay se ignoran, como hoy.
-2. **Por qué ahí.** Los puertos se construyen una vez por invocación (preflight,
-   `langgraph dev` y la corrida pasan por `composition`), así que un solo punto cubre los
-   tres. No es perezoso por rol (eso es lo que falla hoy) ni vive en preflight (la corrida no
-   lo comparte con `langgraph dev`).
+2. **Por qué ahí, y dónde vive la corrida.** `composition.default_ports` construye los
+   puertos otra vez en cada nodo del grafo, porque `product_dir` puede llegar con el
+   `configurable` de la corrida. Fijar los textos solo al construir el adaptador duraría,
+   entonces, un rol. Por eso el adaptador lee al construirse y `_PortsPerRun` (el mismo
+   objeto que ya guarda el `RunLimits` de la corrida) se queda con los `prompts` y el
+   `knowledge` que armó por primera vez para cada par (`thread_id`, `product_dir`) y se los
+   entrega a todo nodo posterior de esa corrida. Una llamada sin `thread_id` no tiene corrida
+   a la que fijarse y no guarda nada. No es perezoso por rol (eso es lo que falla hoy) ni vive
+   en preflight (la corrida no lo comparte con `langgraph dev`).
 3. **Un error de lectura no rompe la construcción.** Se guarda por slug y `raw()` lo vuelve a
    lanzar tal cual (`OSError`/`UnicodeDecodeError`) para ese rol; igual para los estándares.
    El hash `prompt_hash(raw)` de cada texto no cambia.
@@ -39,7 +44,7 @@ defecto).
 
 ## Consecuencias
 
-- **Costo.** Una lectura de unos 19 archivos chicos por invocación, que antes se hacía rol
+- **Costo.** Una lectura de unos 19 archivos chicos por nodo del grafo, que antes se hacía rol
   por rol. No crece con los datos.
 - **Riesgos que quedan.** Los imports perezosos del código y las skills del plugin, cargadas
   de `PLUGIN_DIR`, siguen leyendo el stage0 vivo. `scripts/stage0.sh` puede mover stage0 bajo

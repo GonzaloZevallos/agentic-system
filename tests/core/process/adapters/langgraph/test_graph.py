@@ -18,7 +18,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from agentic import composition
 from agentic.composition import default_ports
 from agentic.core.measurement.adapters.otel import semconv, telemetry
-from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+from agentic.core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
 from agentic.core.process.adapters.langgraph.graph import (
     _PortsPerRun,
     build_graph,
@@ -31,7 +31,15 @@ from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.application.preflight import UNKNOWN_PRODUCT
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.design import NO_DESIGN_NOTE, NO_SAMPLE_APP_NOTE, Design
-from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
+from agentic.core.process.domain.roles import (
+    FINDINGS,
+    PAIR_PM_PA,
+    PJM,
+    PM,
+    PRODUCT_ANALYST,
+    PROMPTS_DIR,
+    prompt_hash,
+)
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
@@ -143,6 +151,7 @@ def compiled(
     stack=None,
     sample_app=None,
     inbox=None,
+    prompts_for=None,
 ):
     """The graph with the real ports over the temporary product, the scripted runner in
     place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
@@ -172,6 +181,7 @@ def compiled(
             check_results=None,
             sample_app=sample_app,
             **({"inbox": inbox} if inbox is not None else {}),
+            **({"prompts": prompts_for(cfg)} if prompts_for is not None else {}),
         )
 
     return build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
@@ -1874,3 +1884,66 @@ def test_the_ports_of_a_node_are_filed_under_the_task_its_thread_is(tmp_path):
     shared(cfg, {"configurable": {"thread_id": "GH-7"}})
     shared(cfg, None)
     assert bound == ["GH-7"]
+
+
+class _StageZeroUpdate(ScriptedRunner):
+    """A runner that, while the Product Analyst works, replaces the PM prompt on disk with a
+    text that wants a placeholder nothing fills: a stage0 update under a live run (GH-409)."""
+
+    def __init__(self, system_dir, **queues):
+        super().__init__(**queues)
+        self.system_dir = system_dir
+
+    async def run_once(self, role, prompt, **kwargs):
+        if role.slug == "product_analyst":
+            pm = self.system_dir / "pm.md"
+            pm.write_text(pm.read_text(encoding="utf-8") + "\n{{docs_review}}\n", encoding="utf-8")
+        return await super().run_once(role, prompt, **kwargs)
+
+
+async def test_a_stage0_update_between_two_nodes_changes_nothing_the_later_one_renders(
+    config, tmp_path
+):
+    system = tmp_path / "system"
+    system.mkdir()
+    for source in PROMPTS_DIR.glob("*.md"):
+        (system / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    original = (system / "pm.md").read_text(encoding="utf-8")
+    script = _StageZeroUpdate(system, **script_for(**technical()).queues)
+    fakes = Fakes()
+    fakes.workspace.moved.update({MemoryWorkspace.ROOT / "GH-1", MemoryWorkspace.ROOT / "GH-1.api"})
+    fakes = Fakes()
+
+    def prompts_for(cfg):
+        # As production does: the prompts are read again, from disk, on every node.
+        return FilesystemPrompts(cfg.product_dir, system_dir=system)
+
+    app = compiled(script, fakes=fakes, prompts_for=prompts_for)
+    final = await app.ainvoke(TASK, config=config)
+
+    assert "{{docs_review}}" in (system / "pm.md").read_text(encoding="utf-8")
+    assert final["status"] == "ready_for_review"
+    assert final["prompts"]["pm"] == prompt_hash(original)
+    assert "{{docs_review}}" not in script.calls[5]["system_prompt"]
+
+
+def test_the_texts_are_pinned_per_run_and_product_not_per_graph(tmp_path):
+    built: list[object] = []
+
+    def ports_for(cfg):
+        ports = memory_ports()
+        built.append(ports.prompts)
+        return ports
+
+    shared = _PortsPerRun(ports_for, lambda ports, task: ports)
+    cfg = Configuration(product_dir=tmp_path)
+    first = shared(cfg, {"configurable": {"thread_id": "GH-1"}})
+    again = shared(cfg, {"configurable": {"thread_id": "GH-1"}})
+    other_task = shared(cfg, {"configurable": {"thread_id": "GH-2"}})
+    other_product = shared(
+        Configuration(product_dir=tmp_path / "other"), {"configurable": {"thread_id": "GH-1"}}
+    )
+    unthreaded = shared(cfg, None)
+    assert again.prompts is first.prompts is built[0]
+    assert other_task.prompts is built[2] and other_product.prompts is built[3]
+    assert unthreaded.prompts is built[4]
