@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..domain import ci, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.task import TaskState, add_flakes
 from . import landing_plan
 from .checkouts import task_base
@@ -141,6 +142,8 @@ def _checks_pass(
             "",
             declared,
             cfg.check_timeout_s,
+            priority=CheckPriority.LAND,
+            wait_max_s=cfg.check_wait_max_s,
             witness=ports.stack.witness(base),
             parallel=ports.stack.parallel_checks(base),
             reuse=reuse_of(ports, base),
@@ -156,6 +159,7 @@ def _checks_pass(
         witness=gate.witness_result if gate is not None else None,
         failed_step=failed_step,
         setup_failure=setup_failure,
+        gate=gate.gate if gate is not None else None,
         row_master=master,
     )
     if gate is not None and (flakes := gate.flakes()):

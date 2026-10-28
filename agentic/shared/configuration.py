@@ -179,6 +179,21 @@ class Configuration(BaseModel):
     # The machine-wide lock two measurements take so they never share a CPU: outside every
     # product, built like `run_registry_dir`.
     perf_lock_path: Path = Field(default_factory=lambda: _default_perf_lock_path())
+    # The machine-wide scheduler of check suites (GH-361, ADR-0070). `check_cores` is what
+    # the scheduler may book across every product at once: the cores this process may run
+    # on, lowered to leave room for what it does not see (role sessions, lint, types).
+    # A quarter of it is a reserve only `integration` and `land` gates may use. A gate gets
+    # at most `check_share_max` cores (`cores - reserve` when unset) and a `subtask` gate at
+    # most `check_share_max_subtask` (half of that when unset), never less than
+    # `check_share_min`. One waits at most `check_wait_max_s` for a share before it takes the
+    # minimum, marked overdue. The ledger lives outside every product, built like
+    # `run_registry_dir`.
+    check_cores: int = Field(default_factory=lambda: _default_check_cores(), ge=1)
+    check_share_min: int = Field(default=2, ge=1)
+    check_share_max: int | None = Field(default=None, ge=1)
+    check_share_max_subtask: int | None = Field(default=None, ge=1)
+    check_wait_max_s: float = Field(default=1800, ge=0)
+    check_ledger_dir: Path = Field(default_factory=lambda: _default_check_ledger_dir())
     # The machine's store of passing check results (ADR-0065): outside every checkout and
     # shared by every product, built like `run_registry_dir`.
     check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
@@ -342,6 +357,21 @@ def _default_perf_lock_path() -> Path:
     base = os.environ.get("XDG_STATE_HOME")
     root = Path(base) if base else Path.home() / ".local" / "state"
     return root / "agentic" / "perf.lock"
+
+
+def _default_check_ledger_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "agentic" / "checks"
+
+
+def _default_check_cores() -> int:
+    """The cores this process may run on; `os.cpu_count` where the platform has no
+    affinity call."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        return os.cpu_count() or 1
 
 
 def _from_env(raw: str, annotation: Any) -> Any:

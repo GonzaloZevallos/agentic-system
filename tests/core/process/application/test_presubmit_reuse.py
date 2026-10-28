@@ -5,8 +5,15 @@ from pathlib import Path
 
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.core.process.domain.presubmit import AffectedPlan
-from tests.fakes import MemoryCheckResults, MemoryCommands, MemoryWorkspace, memory_ports
+from tests.fakes import (
+    FakeCheckScheduler,
+    MemoryCheckResults,
+    MemoryCommands,
+    MemoryWorkspace,
+    memory_ports,
+)
 
 PATH = Path("/memory/worktrees/GH-1.api")
 OTHER = Path("/memory/worktrees/GH-1.merge")
@@ -23,6 +30,7 @@ def build(
     path: Path = PATH,
     checks: dict[str, str] | None = None,
     reuse: Reuse | None = REUSE,
+    scheduler: FakeCheckScheduler | None = None,
     **options,
 ) -> CheckoutPresubmit:
     workspace = workspace or MemoryWorkspace()
@@ -34,7 +42,9 @@ def build(
         commands=commands or MemoryCommands(),
         workspace=workspace,
         check_results=store if store is not None else MemoryCheckResults(),
+        check_scheduler=scheduler,
     )
+    options.setdefault("priority", CheckPriority.SUBTASK)
     return CheckoutPresubmit(
         ports, path, "base", checks or {"tests": "pytest"}, 30.0, reuse=reuse, **options
     )
@@ -54,6 +64,48 @@ def test_a_second_call_on_the_same_key_runs_nothing_and_marks_the_row_reused():
     assert first.results is not None and "reused" not in first.results[0]
     assert second.results is not None and second.results[0]["reused"] is True
     assert second.results[0]["passed"] is True
+
+
+def test_the_gate_stores_a_pass_by_the_declared_command_so_a_share_does_not_split_the_store():
+    """GH-361: `{workers}` is sized into the command that runs, but the stored pass is keyed
+    by the command as declared: a pass at a share of 6 is read at a share of 12."""
+    commands, store = MemoryCommands(), MemoryCheckResults()
+    checks = {"tests": "pytest -n {workers}"}
+    first = build(commands=commands, store=store, checks=checks, scheduler=FakeCheckScheduler(6))
+    assert first() is None
+    assert ran(commands) == ["pytest -n 6"]
+    second = build(
+        commands=commands,
+        store=store,
+        checks=checks,
+        path=OTHER,
+        scheduler=FakeCheckScheduler(12),
+    )
+    assert second() is None
+    assert ran(commands) == ["pytest -n 6"]  # nothing ran at the share of 12
+    assert second.results is not None and second.results[0]["reused"] is True
+
+
+def test_a_pass_stored_under_one_declared_command_is_not_read_under_another():
+    """The input the keying must reject: the same sized command (`-n 6`) declared another
+    way is another check, so it runs."""
+    commands, store = MemoryCommands(), MemoryCheckResults()
+    first = build(
+        commands=commands,
+        store=store,
+        checks={"tests": "pytest -n {workers}"},
+        scheduler=FakeCheckScheduler(6),
+    )
+    assert first() is None
+    other = build(
+        commands=commands,
+        store=store,
+        checks={"tests": "pytest -n 6"},
+        path=OTHER,
+        scheduler=FakeCheckScheduler(6),
+    )
+    assert other() is None
+    assert ran(commands) == ["pytest -n 6", "pytest -n 6"]
 
 
 def test_a_changed_tree_runs_again():

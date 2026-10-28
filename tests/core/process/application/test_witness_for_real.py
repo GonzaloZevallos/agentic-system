@@ -15,6 +15,7 @@ from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application.checkouts import subtask_checkout
 from agentic.core.process.application.presubmit import CheckoutPresubmit
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports, real_commands
 
@@ -64,7 +65,13 @@ def _gate(real, product, witness: str, path: Path | None = None) -> CheckoutPres
     git("add", "-A", cwd=checkout.path)
     git("commit", "-q", "-m", "deliver", cwd=checkout.path)
     return CheckoutPresubmit(
-        ports, path or checkout.path, before, {"noop": "true"}, cfg.check_timeout_s, witness=witness
+        ports,
+        path or checkout.path,
+        before,
+        {"noop": "true"},
+        cfg.check_timeout_s,
+        witness=witness,
+        priority=CheckPriority.SUBTASK,
     )
 
 
@@ -105,6 +112,12 @@ def test_a_checkout_reached_through_a_symlink_whose_witness_prints_the_resolved_
     resolved = checkout.path.resolve()
 
     gate = CheckoutPresubmit(
-        ports, link, before, {"noop": "true"}, cfg.check_timeout_s, witness=f"echo {resolved}"
+        ports,
+        link,
+        before,
+        {"noop": "true"},
+        cfg.check_timeout_s,
+        witness=f"echo {resolved}",
+        priority=CheckPriority.SUBTASK,
     )
     assert gate() is None

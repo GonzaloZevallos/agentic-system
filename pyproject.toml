@@ -66,6 +66,7 @@ files = [
     "agentic/core/process/adapters/shell/reaper.py",
     "agentic/core/process/adapters/shell/perf_runner.py",
     "agentic/core/process/adapters/filesystem/perf_lock.py",
+    "agentic/core/process/adapters/filesystem/check_ledger.py",
     "agentic/core/process/adapters/filesystem/check_results.py",
     "agentic/core/process/adapters/filesystem/board_sent.py",
     "agentic/core/process/adapters/github/board.py",
@@ -85,6 +86,7 @@ files = [
     "agentic/core/process/application/scratch_sweep.py",
     "agentic/core/process/application/pre_pr_fix.py",
     "scripts/poll_waits.py",
+    "scripts/gate_concurrency.py",
     "tests/fakes.py",
     "tests/conformance.py",
 ]
