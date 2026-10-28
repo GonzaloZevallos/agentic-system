@@ -8,8 +8,15 @@ import pytest
 
 from agentic.core.process.application.ports import CommandResult, RunStopped
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.core.process.domain.presubmit import AffectedPlan, FlakeGate, RerunForm
-from tests.fakes import MemoryCheckResults, MemoryCommands, MemoryWorkspace, memory_ports
+from tests.fakes import (
+    FakeCheckScheduler,
+    MemoryCheckResults,
+    MemoryCommands,
+    MemoryWorkspace,
+    memory_ports,
+)
 
 PATH = Path("/memory/worktrees/GH-360.gate")
 CHECKS = {"tests": "pytest", "lint": "ruff check ."}
@@ -31,7 +38,11 @@ def gate(
     workspace = MemoryWorkspace()
     workspace.diff_paths = ("src/a.py",)
     workspace.moved.add(PATH)
-    ports = type("Ports", (), {"workspace": workspace, "commands": commands})()
+    ports = type(
+        "Ports",
+        (),
+        {"workspace": workspace, "commands": commands, "check_scheduler": FakeCheckScheduler()},
+    )()
     return CheckoutPresubmit(
         ports,
         PATH,
@@ -42,6 +53,7 @@ def gate(
         affected=plan,
         rerun_forms=forms,
         flake_gate=flake_gate,
+        priority=CheckPriority.SUBTASK,
     )
 
 
@@ -157,7 +169,13 @@ def test_a_flaked_check_stores_nothing_but_a_green_one_still_does():
         check_results=store,
     )
     g = CheckoutPresubmit(
-        ports, PATH, "base", CHECKS, 30.0, reuse=Reuse("p", ("uv sync",), "a" * 40)
+        ports,
+        PATH,
+        "base",
+        CHECKS,
+        30.0,
+        reuse=Reuse("p", ("uv sync",), "a" * 40),
+        priority=CheckPriority.SUBTASK,
     )
     assert g() is None
     # lint only: the flaked check's green rerun is never stored
@@ -232,10 +250,10 @@ def test_a_timeout_spends_a_refusal_and_its_reason_says_it_timed_out():
 class _StopsOnTheRerun(MemoryCommands):
     """The first run of `pytest` is red; the stop lands during its flake rerun."""
 
-    def run(self, cwd, command, timeout_s):
+    def run(self, cwd, command, timeout_s, *, env=None):
         if command == "pytest" and any(c == "pytest" for _, c in self.ran):
             raise RunStopped
-        return super().run(cwd, command, timeout_s)
+        return super().run(cwd, command, timeout_s, env=env)
 
 
 @pytest.mark.parametrize("parallel", [False, True])

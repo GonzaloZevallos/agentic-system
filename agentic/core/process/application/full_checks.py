@@ -24,6 +24,7 @@ from pydantic import TypeAdapter
 from agentic.shared.configuration import Configuration
 
 from ..domain import presubmit, rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import WAITING_ON_HUMAN, FullCheckEntry, FullChecksRecord, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
@@ -52,6 +53,8 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         _NOTHING_BEFORE,
         declared,
         cfg.check_timeout_s,
+        priority=CheckPriority.INTEGRATION,
+        wait_max_s=cfg.check_wait_max_s,
         witness=ports.stack.witness(base),
         parallel=ports.stack.parallel_checks(base),
         reuse=reuse_of(ports, base),
@@ -75,6 +78,7 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         declared=declared,
         results=gate.results,
         witness=gate.witness_result,
+        gate=gate.gate,
     )
     record = _record(state, merged, declared, gate)
     text = presubmit.failed_checks_markdown(merged, head, neutralise=False)
@@ -114,6 +118,8 @@ def _record(
     }
     if not record["passed"]:
         record["failed_step"] = str(merged["failed_step"])
+    if (taken := gate.gate) is not None:
+        record["gate"] = taken
     return record
 
 

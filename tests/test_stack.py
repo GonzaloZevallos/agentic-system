@@ -95,9 +95,9 @@ def test_every_mypy_file_exists():
 # that assigns them to their ports (GH-227, the 2026-10-08 addendum to ADR-0021). Nothing else
 # under `tests/` is checked, so nothing else is admitted.
 MYPY_TEST_ENTRIES = frozenset({"tests/fakes.py", "tests/conformance.py"})
-# The one script the scope admits: the read-only poller-journal measure (GH-362). Other
-# scripts are not checked, so none is admitted.
-MYPY_SCRIPT_ENTRIES = frozenset({"scripts/poll_waits.py"})
+# The scripts the scope admits: the read-only poller-journal measure (GH-362) and the gate
+# duration by concurrency table (GH-361). Other scripts are not checked, so none is admitted.
+MYPY_SCRIPT_ENTRIES = frozenset({"scripts/poll_waits.py", "scripts/gate_concurrency.py"})
 
 
 def _outside_scope(entries: list[str]) -> list[str]:
@@ -125,7 +125,7 @@ def test_the_guard_admits_the_named_doubles_and_refuses_any_other_test_file():
 
 
 def test_the_guard_admits_the_named_script_and_refuses_any_other_script():
-    assert _outside_scope(["scripts/poll_waits.py"]) == []
+    assert _outside_scope(["scripts/poll_waits.py", "scripts/gate_concurrency.py"]) == []
     assert _outside_scope(["scripts/poll_waits.py", "scripts/affected_tests.py", "scripts"]) == [
         "scripts/affected_tests.py",
         "scripts",

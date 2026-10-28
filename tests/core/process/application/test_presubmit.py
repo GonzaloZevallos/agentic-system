@@ -5,7 +5,8 @@ from pathlib import Path
 
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.application.presubmit import CheckoutPresubmit
-from tests.fakes import MemoryCommands, MemoryWorkspace, memory_ports
+from agentic.core.process.domain.check_schedule import CheckPriority
+from tests.fakes import FakeCheckScheduler, MemoryCommands, MemoryWorkspace, memory_ports
 
 PATH = Path("/memory/worktrees/GH-1.api")
 
@@ -14,8 +15,14 @@ def presubmit(commands: MemoryCommands, workspace: MemoryWorkspace | None = None
     if workspace is None:
         workspace = MemoryWorkspace()
         workspace.moved.add(PATH)  # a commit landed: `head` now differs from `before`
-    ports = type("Ports", (), {"workspace": workspace, "commands": commands})()
-    gate = CheckoutPresubmit(ports, PATH, "base", {"tests": "pytest"}, 30.0)
+    ports = type(
+        "Ports",
+        (),
+        {"workspace": workspace, "commands": commands, "check_scheduler": FakeCheckScheduler()},
+    )()
+    gate = CheckoutPresubmit(
+        ports, PATH, "base", {"tests": "pytest"}, 30.0, priority=CheckPriority.SUBTASK
+    )
     return gate, workspace
 
 
@@ -69,9 +76,22 @@ def criteria_gate(workspace: MemoryWorkspace | None = None, *, base: str | None 
     ports = type(
         "Ports",
         (),
-        {"workspace": workspace, "commands": MemoryCommands(), "knowledge": ports.knowledge},
+        {
+            "workspace": workspace,
+            "commands": MemoryCommands(),
+            "knowledge": ports.knowledge,
+            "check_scheduler": FakeCheckScheduler(),
+        },
     )()
-    gate = CheckoutPresubmit(ports, PATH, "base", {"tests": "pytest"}, 30.0, criteria_base=base)
+    gate = CheckoutPresubmit(
+        ports,
+        PATH,
+        "base",
+        {"tests": "pytest"},
+        30.0,
+        criteria_base=base,
+        priority=CheckPriority.SUBTASK,
+    )
     return gate, workspace
 
 

@@ -308,7 +308,10 @@ def hooks_for(
                 # answer. The guard is in-process and fast, so it adds nothing here:
                 # `GUARD_TIMEOUT_S` alone already covers its share (unchanged from
                 # before the guard existed, when this was the presubmit's own timeout).
-                timeout=GUARD_TIMEOUT_S + (presubmit.timeout_s if presubmit is not None else 0.0),
+                # GH-361: plus the longest the gate may wait for a share of the machine's
+                # cores, which is no part of `timeout_s` (the checks' clock starts after).
+                timeout=GUARD_TIMEOUT_S
+                + (presubmit.timeout_s + presubmit.wait_max_s if presubmit is not None else 0.0),
             )
         )
     hooks: dict[str, list[HookMatcher]] = {}

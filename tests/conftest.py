@@ -1,9 +1,31 @@
+import os
+
 import pytest
 
 
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def git_stops_at_the_temporary_directory(tmp_path_factory):
+    """A test's temporary directory is never inside a repository, wherever `TMPDIR` points.
+    When it sits under a checkout (the delivery gate's does: `.agentic/tmp/<task>/`), a
+    "plain directory" would resolve to that checkout's repository and the tests of "not a
+    repository" and of "runs on its own checkout" would fail for a reason that is not the
+    code's. `GIT_CEILING_DIRECTORIES` stops git's upward search at pytest's base directory;
+    a repository a test creates inside its own `tmp_path` is still found."""
+    ceiling = str(tmp_path_factory.getbasetemp().resolve().parent)
+    previous = os.environ.get("GIT_CEILING_DIRECTORIES")
+    os.environ["GIT_CEILING_DIRECTORIES"] = (
+        ceiling if not previous else f"{previous}{os.pathsep}{ceiling}"
+    )
+    yield
+    if previous is None:
+        os.environ.pop("GIT_CEILING_DIRECTORIES", None)
+    else:
+        os.environ["GIT_CEILING_DIRECTORIES"] = previous
 
 
 @pytest.fixture(autouse=True)
