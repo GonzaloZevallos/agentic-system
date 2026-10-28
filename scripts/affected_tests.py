@@ -107,6 +107,11 @@ TABLE: tuple[Row, ...] = (
         ("tests/test_observability_config.py",),
         "that test parses the collector config",
     ),
+    Row(
+        "docs/*",
+        ("tests/test_docs.py",),
+        "its pages are checked for links, language and the generator's outputs",
+    ),
     Row("docs/adr/*", ("tests/test_adr_numbers.py",), "that test lists the ADR directory"),
     Row(
         ".agentic/playbooks/*",

@@ -66,6 +66,18 @@ affected_fallback:
 # all of `checks`. Read at a task's base, like every key here: it governs from the task after
 # the merge.
 delivery_checks: [tests, lint, format, types]
+# `check_budgets`: the seconds the `docs` check may take on the full run (GH-365 made the key;
+# GH-400, ADR-0076, sets this value). Measured: one `generate.py` run takes about 63 s idle and
+# 154 s with the machine loaded (eleven pyreverse runs, the import of the CLI and the compile of
+# the graph); the budget is the loaded time times 1.5, rounded up.
+check_budgets:
+  docs: 231
+# `docs`: the generated documentation (ADR-0074). `generate` rewrites every file the globs
+# own; the reserved `docs` check runs it and fails when the tree changed, and CI runs the same
+# command through `scripts/docs/check.py`. Hand-written pages never go under these globs.
+docs:
+  generate: uv run python scripts/docs/generate.py
+  paths: ["docs/architecture/generated/**", "docs/reference/**"]
 # `merge_inert`: the paths master may gain without a recorded check pass going stale (ADR-0045,
 # amendment). Only the task documents: no test or check reads this repo's own
 # `.agentic/tasks/` (the tests build their own under tmp_path, and `scripts/affected_tests.py`

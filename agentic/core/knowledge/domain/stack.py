@@ -98,7 +98,8 @@ from __future__ import annotations
 import importlib
 import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeGuard
 
@@ -894,3 +895,163 @@ def _mapping(data: object, source: object, key: str | None = None) -> dict[str, 
         what = f"`{key}`, a non-empty mapping" if key else "a non-empty mapping"
         raise ValueError(f"{source}: expected {what}")
     return data
+
+
+@dataclass(frozen=True)
+class Computed:
+    """A key whose absence is a value the reader computes itself (`{}`, `()`, `False`)."""
+
+
+@dataclass(frozen=True)
+class DependsOn:
+    """A key whose absence reads as a value that another key changes."""
+
+    key: str
+
+
+@dataclass(frozen=True)
+class Disabled:
+    """A key whose absence is the feature off: its reader returns `None`."""
+
+
+KeyDefault = Computed | DependsOn | Disabled
+
+
+@dataclass(frozen=True)
+class KeyReference:
+    """What the product contract says about one key of `KEYS`, for the generated reference.
+
+    `reader` is the module function that reads the key, `sub_keys` the tuple of sub-keys it
+    accepts (`()` for a key with none), `default` what absence means (`None` for the required
+    keys, which have none) and `description` one hand-written line with the YAML shape."""
+
+    name: str
+    reader: Callable[[object, object], object] | None
+    sub_keys: tuple[str, ...]
+    default: KeyDefault | None
+    description: str
+
+
+# One entry per key of `KEYS`, in the same order; a test holds the two together.
+KEY_REFERENCE: tuple[KeyReference, ...] = (
+    KeyReference(
+        "product",
+        product,
+        (),
+        None,
+        "string, a slug: the name the product goes by, the label of every span and metric",
+    ),
+    KeyReference(
+        "setup",
+        setup,
+        (),
+        Computed(),
+        "mapping of step name to one-line command, run once when a checkout is born",
+    ),
+    KeyReference(
+        "checks",
+        checks,
+        (),
+        None,
+        "mapping of check name to one-line command: how the product says its code is sound",
+    ),
+    KeyReference(
+        "witness",
+        witness,
+        (),
+        Disabled(),
+        "string, one command whose last printed line is the path of the code the checks measured",
+    ),
+    KeyReference(
+        "parallel_checks",
+        parallel_checks,
+        (),
+        Computed(),
+        "boolean: true lets the delivery gate run the declared checks concurrently",
+    ),
+    KeyReference(
+        "affected_checks",
+        affected_checks,
+        (),
+        Computed(),
+        "mapping of check name to its affected-only command, which carries the token `{base}`",
+    ),
+    KeyReference(
+        "affected_fallback",
+        affected_fallback,
+        (),
+        Computed(),
+        "list of globs whose change forces the full form of every check",
+    ),
+    # Computed, not DependsOn("checks"): the reader returns `()` whenever the key is absent
+    # (no tiers), whatever `checks` holds. The owner kept it so (GH-400): the reference
+    # documents what the code does; a dependency on `checks` would be a separate issue.
+    KeyReference(
+        "delivery_checks",
+        delivery_checks,
+        (),
+        Computed(),
+        "list of check names the delivery gate runs at every subtask delivery; "
+        "absent means no tiers: every delivery runs all of `checks`",
+    ),
+    KeyReference(
+        "forbidden",
+        forbidden,
+        (),
+        Computed(),
+        "list of mappings of `pattern`, `extensions` and `reason`: suppressions a Developer "
+        "may not add",
+    ),
+    KeyReference(
+        "design",
+        design,
+        DESIGN_KEYS,
+        Disabled(),
+        "mapping of `prototype`, `entry`, `sample_app` and `compare`: the static prototype",
+    ),
+    KeyReference(
+        "ci",
+        ci,
+        (),
+        Computed(),
+        "list of GitHub check-run names that gate a merge when the product trusts its CI",
+    ),
+    KeyReference(
+        "performance",
+        performance,
+        PERFORMANCE_KEYS,
+        Computed(),
+        "mapping of scenario name to a mapping of `seed`, `measure`, `volume`, `volume_unit` "
+        "and `limits`, read only by `agentic perf`",
+    ),
+    KeyReference(
+        "rerun_checks",
+        rerun_checks,
+        RERUN_KEYS,
+        Computed(),
+        "mapping of check name to a mapping of `command` and `test_id`: the failed-tests-only "
+        "form of the check",
+    ),
+    KeyReference(
+        "check_budgets",
+        check_budgets,
+        (),
+        Computed(),
+        "mapping of check name to a positive number of seconds, compared on the full run",
+    ),
+    KeyReference(
+        "merge_inert",
+        merge_inert,
+        (),
+        Computed(),
+        "list of path globs none of the checks reads, so master's gain there keeps a check pass",
+    ),
+    KeyReference(
+        "docs",
+        docs,
+        DOCS_KEYS,
+        Disabled(),
+        "mapping of `generate` and `paths`: the command that rewrites generated docs and the "
+        "globs it owns",
+    ),
+)
