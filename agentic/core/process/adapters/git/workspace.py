@@ -605,6 +605,43 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def introduced_paths(
+        self, path: Path, base: str, head: str, against: str | None
+    ) -> tuple[str, ...]:
+        # `--no-renames`: a rename is a delete plus an add whatever `diff.renames` the
+        # machine has. `-z` with `core.quotepath` off: a name comes back as it is.
+        result = self._run(
+            *_PLAIN, "diff", "--name-status", "--no-renames", "-z", f"{base}...{head}", cwd=path
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff {base}...{head} failed: {result.stderr.strip()}")
+        fields = result.stdout.split("\0")
+        rows = zip(fields[0::2], fields[1::2], strict=False)
+        kept = [name for status, name in rows if status in ("A", "M") and name]
+        if against is None:
+            return tuple(kept)
+        return tuple(
+            name for name in kept if self._blob(path, head, name) != self._blob(path, against, name)
+        )
+
+    def _blob(self, path: Path, ref: str, name: str) -> str | None:
+        """The blob id of `name` at `ref`, or None when `ref` has no such path."""
+        result = self._run("rev-parse", "--verify", "--quiet", f"{ref}:{name}", cwd=path)
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    def fetched_upstream(self) -> str | None:
+        try:
+            branch = self._run("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
+            if not branch:
+                return None
+            ref, remote = self._tracking(branch)
+            if not ref or not remote or remote == ".":
+                return None
+            tip = self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+            return tip.stdout.strip() or None
+        except (GitError, OSError, subprocess.SubprocessError):
+            return None
+
     def first_parent_commits(self, older: str, newer: str) -> tuple[rules.Commit, ...]:
         result = self._run(
             "rev-list", "--first-parent", "--parents", "--reverse", f"{older}..{newer}"
@@ -775,12 +812,7 @@ class GitWorkspace:
         branch = self._run("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
         if not branch:
             return Upstream("HEAD", head, "detached HEAD has no upstream: starting from HEAD")
-        found = self._git(
-            "for-each-ref",
-            "--format=%(upstream)|%(upstream:remotename)",
-            f"refs/heads/{branch}",
-        )
-        ref, _, remote = found.partition("|")
+        ref, remote = self._tracking(branch)
         if not ref or not remote:
             return Upstream("HEAD", head, f"{branch} has no upstream: starting from HEAD")
         if remote == ".":
@@ -798,6 +830,16 @@ class GitWorkspace:
                 ref, tip, _left_out_note(self._left_out(ref), f"fetch failed: {reason}")
             )
         return Upstream("HEAD", head, f"fetch failed ({reason}): starting from HEAD")
+
+    def _tracking(self, branch: str) -> tuple[str, str]:
+        """The upstream ref `branch` tracks and the remote it comes from; empty when none."""
+        found = self._git(
+            "for-each-ref",
+            "--format=%(upstream)|%(upstream:remotename)",
+            f"refs/heads/{branch}",
+        )
+        ref, _, remote = found.partition("|")
+        return ref, remote
 
     def _left_out(self, ref: str) -> list[str]:
         """The short shas HEAD has that `ref` lacks: the commits a base from `ref` leaves out."""
