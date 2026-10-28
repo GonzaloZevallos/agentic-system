@@ -33,7 +33,6 @@ PRODUCT = Path("/memory/product")
 DOC = f".agentic/tasks/{TASK}.md"
 BRANCH = f"agentic/{TASK}"
 SUB_BRANCH = f"agentic/{TASK}.api"
-INTEGRATION_BRANCH = f"agentic/{TASK}.integration"
 DIAGNOSE = {
     "head": HEAD,
     "step": "diagnose",
@@ -71,8 +70,18 @@ def archived_state(**more) -> dict:
         "status": "ready_for_review",
         "pull_request": URL,
         "subtasks": {
-            "integration": {"id": "integration", "status": "approved", "reviewed_head": HEAD},
-            "api": {"id": "api", "status": "approved", "reviewed_head": SUB_HEAD},
+            "integration": {
+                "id": "integration",
+                "status": "approved",
+                "branch": BRANCH,
+                "reviewed_head": HEAD,
+            },
+            "api": {
+                "id": "api",
+                "status": "approved",
+                "branch": SUB_BRANCH,
+                "reviewed_head": SUB_HEAD,
+            },
         },
         "runs": [{"role": "PM", "section": PM, "version": v, "cost_usd": 0.1} for v in (1, 2, 3)],
         "change_history": history,
@@ -165,7 +174,6 @@ class World:
         self.workspace.files[(f"{PREFIX}/{BRANCH}", DOC)] = text
         self.workspace.existing_branches[f"{PREFIX}/{BRANCH}"] = ("tip-task", "b0")
         self.workspace.existing_branches[f"{PREFIX}/{SUB_BRANCH}"] = ("tip-api", "b0")
-        self.workspace.existing_branches[f"{PREFIX}/{INTEGRATION_BRANCH}"] = ("tip-int", "b0")
         self.workspace.ancestors.update({HEAD, SUB_HEAD})
         self.workspace.upstream_answer = replace(self.workspace.upstream_answer, sha=NEW_MASTER)
         self.tracker.prs[URL] = pr if pr is not None else pull_request()
@@ -243,7 +251,6 @@ def test_the_restored_branches_stand_at_the_recorded_heads_and_the_archive_stays
     workspace = world.workspace
     assert set(workspace.created) == {
         (BRANCH, HEAD),
-        (INTEGRATION_BRANCH, HEAD),
         (SUB_BRANCH, SUB_HEAD),
     }
     assert workspace.pushed == [BRANCH]
