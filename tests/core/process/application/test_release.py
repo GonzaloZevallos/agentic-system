@@ -17,7 +17,7 @@ from agentic.core.process.application.release import (
     release_processes,
     release_task,
 )
-from agentic.core.process.domain.reaping import CHECK_TASK, MARK_NAME, ReapedProcess
+from agentic.core.process.domain.reaping import CHECK_TASK, MARK_NAME, PERF_TASK, ReapedProcess
 from tests.fakes import FakeReaper, MemoryWorkspace, memory_ports
 
 LEFT: tuple[ReapedProcess, ...] = ({"pid": 7, "command": "sleep 99", "outcome": "kill"},)
@@ -117,8 +117,12 @@ def test_a_dead_run_releases_its_role_scope_and_its_checks_and_never_cleans_up()
 
     reaped = release_processes(ports, "GH-12", run=4321)
 
-    assert reaped == OTHER + OTHER
-    assert reaper.calls == [("run", "GH-12", 4321, None), ("run", CHECK_TASK, 4321, None)]
+    assert reaped == OTHER + OTHER + OTHER
+    assert reaper.calls == [
+        ("run", "GH-12", 4321, None),
+        ("run", CHECK_TASK, 4321, None),
+        ("run", PERF_TASK, 4321, None),
+    ]
     assert workspace.cleaned == []
 
 

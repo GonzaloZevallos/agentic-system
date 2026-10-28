@@ -922,7 +922,8 @@ async def _signal_guarded(
     anyio receiver, so the signal also gets a Python handler, which runs on the main
     thread whatever the loop is doing. It is idempotent: the first signal starts one
     daemon thread that marks the run's stop flag (so the commands of the run raise
-    `RunStopped`), reaps the run's CHECKS (never a role's processes: the runner closes
+    `RunStopped`), reaps the run's CHECKS and PERFORMANCE commands (`reaping.RUN_SCOPED`,
+    one after the other; never a role's processes: the runner closes
     those as the cancellation unwinds it) and waits `deadline_s`. If the process is still
     alive then, it reaps the roles too, settles the lock, flushes the telemetry briefly
     and `hard_exit`s. A second signal does none of it again.
@@ -945,7 +946,8 @@ async def _signal_guarded(
         if cause.reaper is not None:
             if held is not None:
                 cause.reaper.reap_run(held[1], pid)
-            cause.reaper.reap_run(reaping.CHECK_TASK, pid)
+            for scoped in reaping.RUN_SCOPED:
+                cause.reaper.reap_run(scoped, pid)
         if held is not None:
             cause.settle_lock(*held)
         flusher = threading.Thread(target=flush, daemon=True)
@@ -957,7 +959,8 @@ async def _signal_guarded(
         if cause.flag is not None:
             cause.flag.set()
         if cause.reaper is not None:
-            cause.reaper.reap_run(reaping.CHECK_TASK, os.getpid())
+            for scoped in reaping.RUN_SCOPED:
+                cause.reaper.reap_run(scoped, os.getpid())
         if not finished.wait(deadline_s):
             hard_stop(cause)
 

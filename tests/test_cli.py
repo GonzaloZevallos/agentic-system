@@ -1191,8 +1191,9 @@ async def test_a_takeover_reaps_the_dead_runs_own_scope_and_no_takeover_reaps_no
         assert reaper.calls == [
             ("run", "GH-1", 999_999_999, None),  # never the whole task
             ("run", "check", 999_999_999, None),
+            ("run", "perf", 999_999_999, None),
         ]
-        assert "reaped 2 processes: `uv run sample_app.py` (kill), " in err
+        assert "reaped 3 processes: `uv run sample_app.py` (kill), " in err
     else:
         assert reaper.calls == [] and "reaped" not in err
 
@@ -1236,7 +1237,11 @@ async def test_a_run_takeover_reaps_the_dead_runs_own_scope(monkeypatch, tmp_pat
         checkpointer=in_memory,
         run_lock=FakeLock(taken_over=dead),
     )
-    assert reaper.calls == [("run", "T-9", 4444, None), ("run", "check", 4444, None)]
+    assert reaper.calls == [
+        ("run", "T-9", 4444, None),
+        ("run", "check", 4444, None),
+        ("run", "perf", 4444, None),
+    ]
 
 
 @pytest.mark.anyio
@@ -5664,8 +5669,9 @@ async def test_a_signal_reaps_only_the_checks_before_it_cancels_and_marks_the_fl
         await cli._signal_guarded(work, stop)
     await _until(lambda: len(reaper.calls) >= 1)
     check = ("run", "check", os.getpid(), None)
-    assert work.at_cancel in ([], [check])  # never a role's processes before the cancel
-    assert reaper.calls == [check]
+    perf = ("run", "perf", os.getpid(), None)
+    assert work.at_cancel in ([], [check], [check, perf])  # never a role's processes before it
+    assert reaper.calls == [check, perf]
     assert flag.is_set()
     assert stop.signalled
 
@@ -5680,9 +5686,12 @@ async def test_a_second_signal_starts_no_second_reap_and_no_exit():
     work = _Signalling(reaper, times=3)
     with pytest.raises(SystemExit):
         await cli._signal_guarded(work, stop, hard_exit=exits.append)
-    await _until(lambda: len(reaper.calls) >= 1)
+    await _until(lambda: len(reaper.calls) >= 2)
     await anyio.sleep(0.2)
-    assert reaper.calls == [("run", "check", os.getpid(), None)]
+    assert reaper.calls == [
+        ("run", "check", os.getpid(), None),
+        ("run", "perf", os.getpid(), None),
+    ]
     assert exits == []
 
 
@@ -5705,8 +5714,10 @@ async def test_the_deadline_reaps_roles_releases_the_lock_once_and_exits_once():
     pid = os.getpid()
     assert reaper.calls == [
         ("run", "check", pid, None),
+        ("run", "perf", pid, None),
         ("run", "T-9", pid, None),
         ("run", "check", pid, None),
+        ("run", "perf", pid, None),
     ]
     assert lock.released == ["T-9"]  # the deadline released it; `_locked`'s finally did not
     assert (exits, flushed) == ([1], [1])
@@ -5723,7 +5734,7 @@ async def test_the_deadline_never_fires_when_the_run_unwinds_in_time():
         await cli._signal_guarded(_Signalling(reaper), stop, deadline_s=0.3, hard_exit=exits.append)
     await anyio.sleep(0.5)
     assert exits == []
-    assert len(reaper.calls) == 1
+    assert len(reaper.calls) == 2
 
 
 @pytest.mark.anyio
