@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -70,7 +70,6 @@ from .task import (
     FindingRecord,
     FinishedPatch,
     FullChecksRecord,
-    LandingEntry,
     LapsePauseEntry,
     MergeOutcome,
     PartRecord,
@@ -2733,7 +2732,7 @@ def restored(state: Mapping[str, object]) -> bool:
     return _restoration_cut(state) is not None
 
 
-def live_landing(state: Mapping[str, object]) -> list[LandingEntry]:
+def live_landing(state: Mapping[str, object]) -> list[Mapping[str, object]]:
     """The `landing` entries of the run now living (GH-406): those after the last
     restoration's `landing_cut`, the whole list when the task was never restored. The one
     function that applies the cut -- every reader that decides a terminal, idempotency or
@@ -2746,7 +2745,7 @@ def live_landing(state: Mapping[str, object]) -> list[LandingEntry]:
     entries = raw if isinstance(raw, list) else []
     cut = _restoration_cut(state)
     kept = entries[max(cut, 0) :] if cut is not None else entries
-    return cast("list[LandingEntry]", [entry for entry in kept if isinstance(entry, Mapping)])
+    return [entry for entry in kept if isinstance(entry, Mapping)]
 
 
 def landing_open(state: TaskState) -> bool:
