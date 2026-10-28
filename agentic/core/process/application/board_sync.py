@@ -27,6 +27,22 @@ def _failed_line(reason: str) -> str:
     return f"agentic: poll: board: not updated ({reason}), next try in {minutes} min"
 
 
+_REASON_LIMIT = 160
+
+
+def _reason(exc: BaseException) -> str:
+    """What goes in the warning's parentheses. A `ValueError` is raised by our own code or the
+    JSON parser, so its text is safe to show (one line, cut); any other exception may carry
+    `gh` output or paths, so only its type name shows."""
+    name = type(exc).__name__
+    if not isinstance(exc, ValueError):
+        return name
+    text = " ".join(str(exc).split())
+    if len(text) > _REASON_LIMIT:
+        text = text[: _REASON_LIMIT - 1] + "…"
+    return f"{name}: {text}"
+
+
 def _remember_failure(sent: BoardSent, memory: SentMemory, now: datetime, reason: str) -> list[str]:
     """Records `failed_at` so the next rounds stay away from GitHub, and says it once."""
     lines = [_failed_line(reason)]
@@ -98,13 +114,13 @@ def mirror(
     try:
         project = board.project_id()
     except _FAILURES as exc:
-        return [*lines, *_remember_failure(sent, memory, now, type(exc).__name__)]
+        return [*lines, *_remember_failure(sent, memory, now, _reason(exc))]
     if memory.project_id != project:
         memory = SentMemory(project_id=project)
     try:
         rows, limit_reached = _read(board, memory)
     except _FAILURES as exc:
-        return [*lines, *_remember_failure(sent, memory, now, type(exc).__name__)]
+        return [*lines, *_remember_failure(sent, memory, now, _reason(exc))]
     if limit_reached:
         lines.append("agentic: poll: board: issue list reached its limit, older ones not mirrored")
     cards = [domain.card(f) for f in _facts(ports, rows, live_issues, blockers, eval_set)]
@@ -121,7 +137,7 @@ def mirror(
     try:
         written = board.write(writes)
     except _FAILURES as exc:
-        return [*lines, *_remember_failure(sent, memory, now, type(exc).__name__)]
+        return [*lines, *_remember_failure(sent, memory, now, _reason(exc))]
     if not written:
         return [*lines, *_remember_failure(sent, memory, now, _NOTHING_WRITTEN)]
     issues = dict(memory.issues)

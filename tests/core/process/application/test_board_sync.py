@@ -3,6 +3,7 @@ task documents, in; the card writes and the sent-memory out. The Project is neve
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -139,9 +140,9 @@ def test_a_failing_board_is_one_line_and_rests_fifteen_minutes(failure: Exceptio
     board = FakeBoard(open=[row(1)], fail=failure)
     ports, sent = ports_with(board)
     lines = mirror(ports)
-    assert lines == [
-        f"agentic: poll: board: not updated ({type(failure).__name__}), next try in 15 min"
-    ]
+    name = type(failure).__name__
+    shown = f"{name}: x" if isinstance(failure, ValueError) else name
+    assert lines == [f"agentic: poll: board: not updated ({shown}), next try in 15 min"]
     board.calls.clear()
     assert mirror(ports, now=NOW + timedelta(minutes=5)) == []
     assert board.calls == []
@@ -149,6 +150,35 @@ def test_a_failing_board_is_one_line_and_rests_fifteen_minutes(failure: Exceptio
     mirror(ports, now=NOW + timedelta(minutes=16))
     assert etapas(board) == {1: "En cola"}
     assert sent.memory.failed_at is None
+
+
+def failure_line(failure: Exception) -> str:
+    return mirror(ports_with(FakeBoard(open=[row(1)], fail=failure))[0])[0]
+
+
+def test_a_multi_line_value_error_shows_on_one_line() -> None:
+    line = failure_line(ValueError("the board project o/3\n  has no\tEtapa option 'Hecha'"))
+    assert line == (
+        "agentic: poll: board: not updated "
+        "(ValueError: the board project o/3 has no Etapa option 'Hecha'), next try in 15 min"
+    )
+
+
+def test_a_long_value_error_is_cut_to_160_characters_with_an_ellipsis() -> None:
+    line = failure_line(ValueError("y" * 300))
+    assert f"(ValueError: {'y' * 159}…)" in line
+    exact = failure_line(ValueError("z" * 160))
+    assert f"(ValueError: {'z' * 160})" in exact
+
+
+def test_a_json_decode_error_shows_its_subclass_name_and_message() -> None:
+    line = failure_line(json.JSONDecodeError("Expecting value", "", 0))
+    assert "(JSONDecodeError: Expecting value: line 1 column 1 (char 0))" in line
+
+
+def test_an_os_error_with_a_message_shows_only_its_type() -> None:
+    line = failure_line(OSError("/home/zeta/secret/path: permission denied"))
+    assert "(OSError)" in line and "secret" not in line
 
 
 def test_a_partial_write_saves_only_what_was_written() -> None:
