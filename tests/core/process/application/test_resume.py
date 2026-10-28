@@ -375,6 +375,39 @@ def test_announcing_an_interrupted_resume_names_the_crashed_role(cfg):
     assert ports.tracker.comments == [("GH-12", expected)]
 
 
+def test_announcing_returns_the_failed_informative_writes_instead_of_raising(cfg):
+    # GH-389: the unlabel and the comment are best effort; a GitHub error that outlasts the
+    # retries is a row for `tracker_failures`, not the end of the resume.
+    ports = memory_ports()
+    ports.tracker.drop_label_failures = 1
+    ports.tracker.comment_failures = 1
+    r = resume.prepare("GH-12", paused(), "checkpoint", cfg, ports)
+    failures = resume.announce(r, ports)
+    assert [(f["target"], f["cls"]) for f in failures] == [
+        ("label", "transient"),
+        ("comment", "refused"),
+    ]
+    assert ports.tracker.unlabeled == [] and ports.tracker.comments == []
+
+
+def test_announcing_with_every_write_landed_returns_no_failure_and_the_same_bytes(cfg):
+    ports = memory_ports()
+    r = resume.prepare("GH-12", paused(), "checkpoint", cfg, ports)
+    assert resume.announce(r, ports) == []
+    assert ports.tracker.unlabeled == [("GH-12", "needs-human")]
+    [(task_id, text)] = ports.tracker.comments
+    assert task_id == "GH-12"
+    assert text == f"Resumed: integrate, under a task cap of {r.cap_usd:.2f} USD."
+
+
+def test_announcing_keeps_its_order_prune_unlabel_comment(cfg):
+    ports = memory_ports()
+    r = resume.prepare("GH-12", paused(), "document", cfg, ports)
+    resume.announce(r, ports)
+    assert ports.workspace.pruned == 1
+    assert ports.tracker.events[-1] == "comment"
+
+
 def test_announcing_takes_the_task_out_of_the_queue(cfg):
     ports = memory_ports()
     raised = Configuration(

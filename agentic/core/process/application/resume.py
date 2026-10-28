@@ -22,7 +22,7 @@ from typing import Literal, cast, get_type_hints
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules
-from ..domain.task import TaskState, apply
+from ..domain.task import TaskState, TrackerFailure, TrackerFailureRecord, apply
 from .archive import STARTED_OVER
 from .deliver import READY
 from .discard import DISCARDED
@@ -347,7 +347,7 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
     return "\n".join(lines)
 
 
-def announce(r: Resumption, ports: Ports) -> None:
+def announce(r: Resumption, ports: Ports) -> list[TrackerFailureRecord]:
     """Take the task out of the queue and say on the issue that it resumed. A task seeded
     from its document first forgets the worktrees the human removed by hand, so asking
     for those checkouts again recreates them; a dry run never gets here.
@@ -356,20 +356,28 @@ def announce(r: Resumption, ports: Ports) -> None:
     previous invocation was interrupted at, so "el issue quedó mintiendo" (the request's
     own words) gets an answer without a new comment prefix: `RESUMED` is the only one
     this ever wrote, `SYSTEM_COMMENTS` stays as it is, and a resume that was not
-    interrupted emits the exact same bytes as before (subtask `signals`)."""
+    interrupted emits the exact same bytes as before (subtask `signals`).
+
+    Both writes are informative (GH-389): a GitHub error that outlasts the retries does not
+    end the resume. The failures come back as rows for `tracker_failures`, empty when both
+    landed; the caller records them through the state's reducer."""
+    failures: list[TrackerFailure | None] = []
     if r.source == "document":
         ports.workspace.prune()
     # `gh issue edit --remove-label` fails for a label the repository never had, and an
     # account-limit-only pause (GH-381) is never labelled, so it is not unlabelled either.
     if rules.needs_a_human(r.paused):
-        ports.tracker.unlabel(r.task_id, NEEDS_HUMAN)
+        failures.append(ports.tracker.drop_label(r.task_id, NEEDS_HUMAN))
     answered = " with your decision" if r.decision else ""
     role = r.paused.get("current_role") or "before any role"
     interrupted = f", interrupted at {role}" if r.interrupted else ""
-    ports.tracker.comment(
-        r.task_id,
-        f"{RESUMED}{r.target}{answered}{interrupted}, under a task cap of {r.cap_usd:.2f} USD.",
+    failures.append(
+        ports.tracker.note(
+            r.task_id,
+            f"{RESUMED}{r.target}{answered}{interrupted}, under a task cap of {r.cap_usd:.2f} USD.",
+        )
     )
+    return [failure.record() for failure in failures if failure is not None]
 
 
 def _indented(text: str) -> str:

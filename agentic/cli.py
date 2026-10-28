@@ -107,7 +107,13 @@ from .core.process.domain import legacy_names, reaping, rules, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
-from .core.process.domain.task import Carried, PullRequest, TaskInput, TaskState
+from .core.process.domain.task import (
+    Carried,
+    PullRequest,
+    TaskInput,
+    TaskState,
+    TrackerFailureRecord,
+)
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
@@ -1502,6 +1508,17 @@ def _positive_usd(text: str) -> float:
     return value
 
 
+async def _record_tracker_failures(
+    app, config: RunnableConfig, failures: list[TrackerFailureRecord], as_node: str | None
+) -> None:
+    """The best-effort writes of the preparation that failed (GH-389), into the state of
+    the run through the reducer `add_tracker_failures`: the second `aupdate_state` of an
+    invocation, after the seed and before the graph runs. With no failure there is no
+    call, so the happy path writes the same checkpoints as before."""
+    if failures:
+        await app.aupdate_state(config, {"tracker_failures": failures}, as_node=as_node)
+
+
 async def _resume(
     task_id: str,
     cfg: Configuration,
@@ -1603,7 +1620,9 @@ async def _resume(
                     await migrated_app.aupdate_state(config, r.paused, as_node=seed)
                     crashed = r.interrupted
                     command: Command | None = None if crashed else Command(resume=r.answer())
-                    resuming.announce(r, ports)
+                    await _record_tracker_failures(
+                        migrated_app, config, resuming.announce(r, ports), seed
+                    )
                     final = await _invoke(
                         migrated_app,
                         command,
@@ -1618,7 +1637,7 @@ async def _resume(
             else:
                 crashed = r.interrupted
                 command = None if crashed else Command(resume=r.answer())
-                resuming.announce(r, ports)
+                await _record_tracker_failures(app, config, resuming.announce(r, ports), None)
                 final = await _invoke(
                     app, command, config, r.paused, ports, cfg, "resume", r.decision, stop=stop
                 )

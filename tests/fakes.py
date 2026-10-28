@@ -1235,6 +1235,8 @@ class MemoryTracker:
         self.attempted_bodies: list[str] = []
         self.open_error = "gh pr create failed: Body is too long"
         self.comment_failures = 0
+        # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).
+        self.drop_label_failures = 0
         # `pull_requests_on`: the pull requests scripted per head branch, `lookup_error`
         # to make it raise `ValueError` (`gh`'s own failure shape), and each branch asked.
         self.on_branch: dict[str, list[BranchPullRequest]] = {}
@@ -1365,6 +1367,9 @@ class MemoryTracker:
         return None
 
     def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
+        if self.drop_label_failures > 0:
+            self.drop_label_failures -= 1
+            return TrackerFailure(target="label", cls="transient", at="2026-10-28T00:00:00Z")
         self.unlabel(task_id, label)
         return None
 
