@@ -807,3 +807,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-28T03:04:17.176+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: When you generate a request or query from a template, declare only what that request uses, and test it with a fake that enforces the real service's validation rules, not one that accepts anything.
+  confidence: low
+  seen_in:
+  - GH-375
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T04:16:31.268+00:00'
