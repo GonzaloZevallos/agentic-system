@@ -5817,6 +5817,76 @@ async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed()
     assert (lock.released, lock.kept, lock.kept_crashed) == (["T-9"], [], [])
 
 
+# `build_parser()` (GH-400, subtask `entry-points`): the command line as a tree the docs
+# generator can walk without running anything, and `main()` still answers as before.
+COMMAND_PATHS = [
+    ("run",),
+    ("resume",),
+    ("close",),
+    ("merge",),
+    ("land",),
+    ("eval",),
+    ("eval", "run"),
+    ("eval", "score"),
+    ("eval", "compare"),
+    ("eval", "findings"),
+    ("stack",),
+    ("stack", "review"),
+    ("scores",),
+    ("scores", "backfill"),
+    ("dashboards",),
+    ("dashboards", "apply"),
+    ("poll",),
+    ("reflect",),
+    ("perf",),
+]
+
+
+def _main_without_env(monkeypatch, argv):
+    monkeypatch.setenv("COLUMNS", "100")
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setattr(cli, "_replace_environ", lambda env: None)
+    monkeypatch.setattr("sys.argv", ["agentic", *argv])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    return info.value.code
+
+
+def test_build_parser_keys_every_command_by_its_path_in_creation_order(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "100")
+    tree = cli.build_parser()
+    assert list(tree.commands) == COMMAND_PATHS
+    assert tree.root.prog == "agentic"
+    assert all(parser.prog.split()[1:] == list(path) for path, parser in tree.commands.items())
+
+
+def test_build_parser_reads_no_environment(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "100")
+    first = {path: parser.format_help() for path, parser in cli.build_parser().commands.items()}
+    monkeypatch.setenv(ENV_PREFIX + "PRODUCT_DIR", "/elsewhere")
+    monkeypatch.setenv(ENV_PREFIX + "VERBOSE", "1")
+    second = {path: parser.format_help() for path, parser in cli.build_parser().commands.items()}
+    assert first == second
+
+
+def test_main_prints_the_help_of_the_root_and_of_every_command(monkeypatch, capsys):
+    tree = cli.build_parser()
+    monkeypatch.setenv("COLUMNS", "100")
+    assert _main_without_env(monkeypatch, ["--help"]) == 0
+    assert capsys.readouterr().out == tree.root.format_help()
+    for path, parser in tree.commands.items():
+        assert _main_without_env(monkeypatch, [*path, "--help"]) == 0
+        assert capsys.readouterr().out == parser.format_help(), path
+
+
+def test_main_still_refuses_a_run_with_neither_title_nor_issue(monkeypatch, capsys):
+    assert _main_without_env(monkeypatch, ["run"]) == 2
+    run = cli.build_parser().commands[("run",)]
+    assert capsys.readouterr().err == (
+        f"{run.format_usage()}agentic run: error: give a title and a description, or --issue N\n"
+    )
+
+
 # GH-389: the failures of `announce` enter the resumed state through the reducer, with a
 # second `aupdate_state` that must not disturb the run. A real LangGraph (no graph double)
 # whose first node after the pause saves the document, as the real pipeline does.

@@ -1,0 +1,497 @@
+classDiagram
+  class process {
+  }
+  class adapters {
+  }
+  class claude_sdk {
+  }
+  class check_server {
+  }
+  class hooks {
+  }
+  class printer {
+  }
+  class runner {
+  }
+  class schema {
+  }
+  class filesystem {
+  }
+  class board_sent {
+  }
+  class check_ledger {
+  }
+  class check_results {
+  }
+  class documents {
+  }
+  class free_space {
+  }
+  class liveness {
+  }
+  class lock {
+  }
+  class perf_lock {
+  }
+  class prompts {
+  }
+  class run_registry {
+  }
+  class scratch {
+  }
+  class git {
+  }
+  class workspace {
+  }
+  class github {
+  }
+  class inbox {
+  }
+  class run {
+  }
+  class tracker {
+  }
+  class langgraph {
+  }
+  class graph {
+  }
+  class plugins {
+  }
+  class shell {
+  }
+  class commands {
+  }
+  class inhibitor {
+  }
+  class perf_runner {
+  }
+  class reaper {
+  }
+  class sample_app {
+  }
+  class stop {
+  }
+  class telemetry {
+  }
+  class application {
+  }
+  class adr_collision {
+  }
+  class archive {
+  }
+  class board_sync {
+  }
+  class checkouts {
+  }
+  class ci_ref_sweep {
+  }
+  class ci_review {
+  }
+  class classify {
+  }
+  class close_issues {
+  }
+  class closed {
+  }
+  class copy {
+  }
+  class coverage_guard {
+  }
+  class define {
+  }
+  class deliver {
+  }
+  class delivered {
+  }
+  class design {
+  }
+  class develop {
+  }
+  class diagnose {
+  }
+  class discard {
+  }
+  class escalate {
+  }
+  class final_validation {
+  }
+  class full_checks {
+  }
+  class integrate {
+  }
+  class interview {
+  }
+  class landing {
+  }
+  class landing_fix {
+  }
+  class landing_flakes {
+  }
+  class landing_plan {
+  }
+  class landing_slice {
+  }
+  class landing_sync {
+  }
+  class limits {
+  }
+  class merge {
+  }
+  class perf {
+  }
+  class plan {
+  }
+  class poll {
+  }
+  class ports {
+  }
+  class pre_pr_fix {
+  }
+  class preflight {
+  }
+  class presubmit {
+  }
+  class qa_performance {
+  }
+  class reflect {
+  }
+  class reflect_run {
+  }
+  class registration {
+  }
+  class release {
+  }
+  class resume {
+  }
+  class review {
+  }
+  class run_check {
+  }
+  class run_role {
+  }
+  class schedule {
+  }
+  class schema_guard {
+  }
+  class scratch_sweep {
+  }
+  class split {
+  }
+  class stack_review {
+  }
+  class tracker_only {
+  }
+  class validate_prd {
+  }
+  class domain {
+  }
+  class account_reset {
+  }
+  class adr_numbers {
+  }
+  class boot {
+  }
+  class check_results {
+  }
+  class check_schedule {
+  }
+  class ci {
+  }
+  class copy {
+  }
+  class cost_history {
+  }
+  class coverage {
+  }
+  class denials {
+  }
+  class design {
+  }
+  class docs {
+  }
+  class document {
+  }
+  class landing {
+  }
+  class legacy_names {
+  }
+  class master_gain {
+  }
+  class performance {
+  }
+  class plan_settlement {
+  }
+  class plan_view {
+  }
+  class playbook {
+  }
+  class playbook_candidates {
+  }
+  class presubmit {
+  }
+  class pull_request {
+  }
+  class reaping {
+  }
+  class returns {
+  }
+  class roles {
+  }
+  class rules {
+  }
+  class run_check {
+  }
+  class schema_guard {
+  }
+  class schemas {
+  }
+  class scratch {
+  }
+  class signals {
+  }
+  class stack_review {
+  }
+  class stack_signals {
+  }
+  class stall {
+  }
+  class suppressions {
+  }
+  class system_lessons {
+  }
+  class task {
+  }
+  class turn_notice {
+  }
+  claude_sdk --> printer
+  claude_sdk --> runner
+  check_server --> hooks
+  runner --> check_server
+  runner --> hooks
+  runner --> printer
+  runner --> schema
+  filesystem --> documents
+  filesystem --> lock
+  filesystem --> prompts
+  filesystem --> run_registry
+  check_ledger --> liveness
+  lock --> liveness
+  perf_lock --> liveness
+  run_registry --> liveness
+  scratch --> liveness
+  git --> workspace
+  github --> inbox
+  github --> tracker
+  inbox --> run
+  inbox --> tracker
+  tracker --> run
+  shell --> commands
+  shell --> reaper
+  shell --> sample_app
+  shell --> stop
+  adr_collision --> ports
+  archive --> ports
+  archive --> release
+  board_sync --> ports
+  checkouts --> ports
+  checkouts --> release
+  ci_ref_sweep --> ports
+  ci_ref_sweep --> scratch_sweep
+  ci_review --> ports
+  classify --> ports
+  classify --> preflight
+  classify --> run_role
+  close_issues --> ports
+  closed --> ports
+  copy --> checkouts
+  copy --> ports
+  copy --> run_role
+  coverage_guard --> ports
+  define --> checkouts
+  define --> interview
+  define --> ports
+  define --> run_role
+  deliver --> checkouts
+  deliver --> ports
+  deliver --> preflight
+  deliver --> release
+  deliver --> run_role
+  deliver --> tracker_only
+  delivered --> ports
+  design --> checkouts
+  design --> ports
+  design --> run_role
+  develop --> checkouts
+  develop --> coverage_guard
+  develop --> ports
+  develop --> presubmit
+  develop --> run_check
+  develop --> run_role
+  diagnose --> checkouts
+  diagnose --> ports
+  diagnose --> presubmit
+  diagnose --> run_role
+  discard --> ports
+  discard --> release
+  discard --> run_role
+  escalate --> ports
+  final_validation --> checkouts
+  final_validation --> ports
+  final_validation --> run_role
+  full_checks --> checkouts
+  full_checks --> ports
+  full_checks --> presubmit
+  full_checks --> run_role
+  integrate --> checkouts
+  integrate --> ports
+  integrate --> run_role
+  interview --> ports
+  interview --> run_role
+  landing --> checkouts
+  landing --> landing_plan
+  landing --> poll
+  landing --> ports
+  landing --> resume
+  landing_fix --> checkouts
+  landing_fix --> landing_plan
+  landing_fix --> poll
+  landing_fix --> resume
+  landing_fix --> run_role
+  landing_flakes --> ports
+  landing_plan --> checkouts
+  landing_plan --> escalate
+  landing_plan --> ports
+  landing_plan --> resume
+  landing_plan --> run_role
+  landing_slice --> checkouts
+  landing_slice --> landing_plan
+  landing_slice --> poll
+  landing_slice --> ports
+  landing_slice --> presubmit
+  landing_slice --> release
+  landing_slice --> resume
+  landing_sync --> adr_collision
+  landing_sync --> checkouts
+  landing_sync --> landing_plan
+  landing_sync --> ports
+  landing_sync --> registration
+  merge --> checkouts
+  merge --> delivered
+  merge --> poll
+  merge --> ports
+  merge --> presubmit
+  merge --> release
+  perf --> ports
+  perf --> preflight
+  plan --> checkouts
+  plan --> interview
+  plan --> ports
+  plan --> reflect_run
+  plan --> run_role
+  poll --> checkouts
+  poll --> escalate
+  poll --> ports
+  poll --> registration
+  poll --> resume
+  ports --> limits
+  pre_pr_fix --> ports
+  pre_pr_fix --> run_role
+  preflight --> checkouts
+  preflight --> ports
+  preflight --> run_role
+  presubmit --> checkouts
+  presubmit --> ports
+  presubmit --> preflight
+  qa_performance --> checkouts
+  qa_performance --> perf
+  qa_performance --> ports
+  qa_performance --> run_role
+  reflect --> ports
+  reflect --> run_role
+  reflect_run --> closed
+  reflect_run --> ports
+  reflect_run --> reflect
+  reflect_run --> release
+  registration --> ports
+  release --> ports
+  resume --> archive
+  resume --> deliver
+  resume --> discard
+  resume --> escalate
+  resume --> plan
+  resume --> poll
+  resume --> ports
+  resume --> run_role
+  resume --> tracker_only
+  review --> checkouts
+  review --> ci_review
+  review --> ports
+  review --> presubmit
+  review --> run_role
+  run_check --> presubmit
+  run_role --> closed
+  run_role --> limits
+  run_role --> ports
+  run_role --> schema_guard
+  schedule --> ports
+  scratch_sweep --> ports
+  split --> ports
+  split --> run_role
+  split --> tracker_only
+  stack_review --> interview
+  stack_review --> ports
+  stack_review --> run_role
+  tracker_only --> ports
+  tracker_only --> release
+  tracker_only --> run_role
+  validate_prd --> checkouts
+  validate_prd --> ports
+  validate_prd --> run_role
+  account_reset --> rules
+  ci --> task
+  copy --> schemas
+  copy --> task
+  cost_history --> task
+  denials --> roles
+  document --> legacy_names
+  document --> task
+  landing --> adr_numbers
+  landing --> document
+  landing --> roles
+  landing --> task
+  master_gain --> check_results
+  plan_settlement --> domain
+  plan_settlement --> roles
+  plan_settlement --> task
+  plan_view --> task
+  playbook --> copy
+  playbook --> returns
+  playbook --> schemas
+  playbook --> task
+  playbook_candidates --> document
+  playbook_candidates --> stack_signals
+  returns --> rules
+  returns --> task
+  roles --> document
+  roles --> schemas
+  roles --> task
+  rules --> copy
+  rules --> denials
+  rules --> docs
+  rules --> document
+  rules --> reaping
+  rules --> roles
+  rules --> schemas
+  rules --> scratch
+  rules --> task
+  schema_guard --> rules
+  schemas --> cost_history
+  schemas --> coverage
+  schemas --> performance
+  schemas --> rules
+  schemas --> task
+  system_lessons --> playbook
+  task --> presubmit
+  task --> reaping
+  turn_notice --> roles
+  turn_notice --> rules
