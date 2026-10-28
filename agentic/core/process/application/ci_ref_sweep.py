@@ -22,7 +22,13 @@ def _ended(ports: Ports, task_id: str) -> bool:
 def sweep(ports: Ports, live_ids: Collection[str]) -> list[str]:
     """Deletes the CI refs whose task ended and has no run in `live_ids`. One line when some
     were deleted and one per failure; nothing when there is nothing to do. A ref whose
-    document cannot be read is kept."""
+    document cannot be read is kept. A product that declares no `ci:` never published such a
+    ref: it makes no call to the remote at all (one line when its `ci:` cannot be read)."""
+    try:
+        if not ports.stack.ci("HEAD"):
+            return []
+    except ValueError as exc:
+        return [f"agentic: poll: CI ref sweep skipped, ci: unreadable: {exc}"]
     try:
         refs = ports.workspace.remote_refs(rules.CI_REF_PREFIX)
     except GitError as exc:
