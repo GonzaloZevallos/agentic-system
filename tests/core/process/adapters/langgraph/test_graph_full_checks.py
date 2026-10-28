@@ -340,3 +340,43 @@ async def test_resume_from_the_document_reviews_the_increment_through_the_cli(
     only_the_integration_review(script, fakes, final, commands)
     assert f"{APPROVED}..{MOVED}" in ports.tracker.comments[0][1]
     assert ports.workspace.commits == []  # a clean (absent) checkout: nothing to commit
+
+
+async def test_a_dry_run_of_an_increment_prints_the_plan_and_writes_nothing(
+    monkeypatch, config, tmp_path, capsys
+):
+    """GH-392: `--dry-run` shows the increment and the commit it would make, and makes none:
+    no commit, no comment, no label change, and the thread is not seeded."""
+    from types import SimpleNamespace
+
+    from agentic import cli
+    from tests.test_cli import FakeLock, in_memory
+
+    stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
+    app, fakes, script = build(
+        script_for(tech_lead_review=[reviewed("approved")]), stack, MemoryCommands()
+    )
+    monkeypatch.setattr(cli, "graph", SimpleNamespace(compile=lambda checkpointer: app))
+    monkeypatch.setattr(cli, "_configurable", lambda task_id, log_file: config["configurable"])
+    ports, cfg = increment_world(tmp_path)
+    checkout = Path("/p/.agentic/worktrees/GH-1")
+    ports.workspace.checkouts = [checkout]
+    ports.workspace.dirty.add(checkout)
+
+    await cli._resume(
+        "GH-1",
+        cfg,
+        ports,
+        from_document=True,
+        dry_run=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    shown = capsys.readouterr().out
+    assert f"reviewing the increment {APPROVED}..{MOVED}" in shown
+    assert f"uncommitted files in `{checkout}` will be committed into the increment" in shown
+    assert ports.workspace.commits == []
+    assert ports.tracker.comments == [] and ports.tracker.unlabeled == []
+    assert script.calls == [] and "push" not in fakes.workspace.events
+    assert not (await app.aget_state(config)).values  # the thread was never seeded
