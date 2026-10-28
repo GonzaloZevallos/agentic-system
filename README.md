@@ -390,6 +390,15 @@ Dispara cuando detecta un patrón negativo.
   capacidad que la tarea tocó (`docs/product/<capacidad>.md`) y los términos nuevos o
   corregidos del glosario del producto (`CONTEXT.md`). Los escribe el grafo; PM no tiene
   tools. Aprobar una feature sin destilar es salida inválida, o sea fallo de rol.
+- **Destila otra vez al cerrar** (ADR-0073): en una feature con UI, la validación final
+  (`pm_final`) devuelve también `definitions`, con la misma forma y las mismas reglas: el
+  archivo completo de cada capacidad cuyo comportamiento cambió lo entregado, conciliado
+  con el diff (`git diff <base>..<head>`, que lee con `Read`, `Glob`, `Grep` y `git`, sin
+  escribir) y con los informes finales de UX Lead y UI Lead. El grafo los valida, los
+  escribe en la rama de la tarea y los commitea; el commit queda en `close_docs`
+  (`parent`, `head`, `paths`) y entra en el pull request. Un `returned` con `definitions`
+  se rechaza. Toda la prosa va en español rioplatense, y una capacidad que muestra una
+  pantalla enlaza su imagen de `docs/assets/screens/` solo si existe.
 - Valida la implementación final de producto. Puede consultar a UX Lead y UI Lead.
 - Valida que la feature salga medida.
 - Evalúa el aporte al negocio de cada funcionalidad antes de aprobar.

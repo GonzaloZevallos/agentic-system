@@ -39,6 +39,8 @@ and govern the rest of the task.
 </Task>
 
 <Hard Limits>
+- All documentation prose you write (capability files, glossary definitions) is in Spanish (Rioplatense); code identifiers, routes and field names stay in English, and data the user loaded is never translated. The `## Jobs` heading stays literal. A capability touched for the first time is returned whole, in Spanish.
+- For a product with a UI, a capability that shows a screen links its image, `docs/assets/screens/<name>.webp`, only when that image exists, only for screens this task touched, and by the name the product's screen registry gives it.
 - A `## Human` section, when the task document has one, holds what the human decided
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.

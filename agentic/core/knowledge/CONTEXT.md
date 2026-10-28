@@ -30,7 +30,9 @@ _Campo_: job to be done — de innovación y marketing (Christensen); la job sto
 **Destilado**:
 El paso en que PM vuelca lo que una tarea dejó vigente al conocimiento de producto: la
 definición de cada capacidad tocada y los términos del glosario. PM devuelve el texto, el
-sistema escribe. En el código y en los prompts se llama `consolidate`.
+sistema escribe. Ocurre al aprobar el PRD y, en una feature con UI, otra vez en la validación
+final de PM, cuando las capacidades se reconcilian con lo entregado (ADR-0073). Toda la prosa
+va en español rioplatense. En el código y en los prompts se llama `consolidate`.
 _Avoid_: distill (el castellano no confunde, el inglés sí)
 _Campo_: sin término de arte. `distill` está tomado: en ML, knowledge distillation es entrenar un modelo chico contra las salidas de uno grande (Hinton, Vinyals y Dean 2015)
 
