@@ -160,4 +160,4 @@ cuándo una fila levantada por el sistema está saldada.
 
 Una cuarta excepción, de GH-374: una corrida de `PM: final validation` asienta sus propias
 filas anteriores (`plan_settlement`, escritora nombrada que deja `plan_settled` en el parche
-de la corrida). Ver ADR-0070.
+de la corrida). Ver ADR-0071.
