@@ -156,6 +156,14 @@ def spent(
         conflicting_syncs_for_upstream=count_epoch(
             lambda e: e.get("step") == "sync_master" and _conflicting(e) and for_upstream(e)
         ),
+        conflict_ci_syncs_on_pair=count_epoch(
+            lambda e: (
+                e.get("step") == "sync_master"
+                and e.get("refusal") == "ci_blocked_by_conflict"
+                and e.get("head") == head
+                and for_upstream(e)
+            )
+        ),
         verdict_syncs_for_upstream=verdict_syncs,
         verdict_sync_due=due,
         last_verdict=last_verdict,

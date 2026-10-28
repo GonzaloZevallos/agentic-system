@@ -148,7 +148,12 @@ def merge_task(
         # probe is the last look's, immediately before the merge call.
         github = rules.merge_conflicts_from(pull_request, head, master, None)
         facts = with_ci(
-            replace(base_facts, adr_collision=collision, conflicts=github),
+            replace(
+                base_facts,
+                adr_collision=collision,
+                conflicts=github,
+                github_conflicting=rules.github_conflicting(pull_request, head),
+            ),
             document,
             declared,
             report,
@@ -601,6 +606,12 @@ def _ci_evidence(
     (name, conclusion, link) with no tail, the declared names never reported, or `gh` and
     the cause class of an unreadable report."""
     verdict = facts.ci_verdict
+    if reason == "ci_blocked_by_conflict":
+        return (
+            "GitHub runs no CI on a head that conflicts with its base: "
+            f"{', '.join(verdict.missing) if verdict is not None else 'the required checks'} "
+            "cannot report until the base is merged in"
+        )
     if reason == "ci_failed" and verdict is not None:
         return "\n".join(
             f"- {check.name} {check.conclusion or check.status} {check.link}"
@@ -686,7 +697,12 @@ def _refuse(
             text = "\n\n".join(part for part in (first, evidence, closing) if part)
         if facts is not None and reason == "adr_number_taken":
             text = "\n\n".join(part for part in (first, _adr_evidence(facts), closing) if part)
-        if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
+        if facts is not None and reason in (
+            "ci_failed",
+            "ci_missing",
+            "ci_unreadable",
+            "ci_blocked_by_conflict",
+        ):
             text = "\n\n".join(
                 part for part in (first, _ci_evidence(reason, facts, report), closing) if part
             )
