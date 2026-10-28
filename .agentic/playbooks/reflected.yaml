@@ -465,3 +465,5 @@ tasks:
     cost_usd: 0.1079
   GH-425@review:
     cost_usd: 0.0353
+  GH-427@review:
+    cost_usd: 0.0628
