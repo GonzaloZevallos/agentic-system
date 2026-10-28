@@ -793,6 +793,11 @@ class MemoryWorkspace:
         # not be confused with ("ante la duda, no lanza" needs a rejected-input test
         # for this, not only for the known-false case `ancestors` already covers).
         self.ancestor_errors: set[str] = set()
+        # GH-408: the first-parent line `first_parent_commits` answers, oldest first (whatever
+        # the range asked), the asks it got, and a message that makes it raise `GitError`.
+        self.first_parent_line: tuple[rules.Commit, ...] = ()
+        self.first_parent_asks: list[tuple[str, str]] = []
+        self.first_parent_error: str | None = None
         # What `upstream()` answers (the poller's blocker tip, GH-180) and how many times
         # it was asked: the real one fetches, so "once per round, and only when a blocker
         # needs it" is a count.
@@ -1208,6 +1213,12 @@ class MemoryWorkspace:
     def is_ignored(self, root: Path, relative: str) -> bool:
         self.ignored_checks.append((root, relative))
         return relative in self.ignored
+
+    def first_parent_commits(self, older: str, newer: str) -> tuple[rules.Commit, ...]:
+        self.first_parent_asks.append((older, newer))
+        if self.first_parent_error is not None:
+            raise GitError(self.first_parent_error)
+        return self.first_parent_line
 
     def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
         self.ancestor_checks.append((path, sha, ref))

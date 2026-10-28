@@ -161,3 +161,14 @@ cuándo una fila levantada por el sistema está saldada.
 Una cuarta excepción, de GH-374: una corrida de `PM: final validation` asienta sus propias
 filas anteriores (`plan_settlement`, escritora nombrada que deja `plan_settled` en el parche
 de la corrida). Ver ADR-0071.
+
+## Adenda (2026-10-28): una integración que vuelve a `pending` conserva su head revisado (GH-408)
+
+Cuando la rama de la tarea avanzó sobre el head aprobado de la integración solo por merges de
+subtareas aprobadas en su head revisado, y otras subtareas siguen devueltas, la reanudación
+(`rules.integration_increment`, veredicto `reintegrate`) manda la integración a `pending` en
+vez de a revisión. Conserva su `reviewed_head`: sigue siendo la base de su próxima revisión
+incremental, que se hace cuando llegue su turno, como en esta ADR. Su `depends_on` nombra cada
+subtarea no aprobada (`rules.reintegrate_patch`) y la retiene hasta que las devueltas se
+aprueban; no se escribe nada más (ni `task_head`, ni `full_checks`, ni la tabla de hallazgos).
+La vía de GH-392 (`increment`, todas las demás aprobadas) no cambia.

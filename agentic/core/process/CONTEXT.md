@@ -341,7 +341,7 @@ Revisión que arranca del head revisado en el pase anterior, no de la base de la
 _Campo_: sin término de arte; GitHub lo ofrece sin nombrarlo, como "changes since your last review"
 
 **Head revisado**:
-El commit hasta donde llegó la última revisión de una subtarea. Se guarda como el id completo del commit; uno anterior puede estar abreviado, y se compara con `same_commit`, nunca por igualdad de texto. Un resume desde el documento que encuentra la rama de la tarea en un descendiente estricto del head revisado de la integración, sin pull request, toma los commits posteriores como un incremento y manda solo la integración de vuelta a una revisión incremental; cualquier otro head movido se rechaza (`rules.integration_increment`).
+El commit hasta donde llegó la última revisión de una subtarea. Se guarda como el id completo del commit; uno anterior puede estar abreviado, y se compara con `same_commit`, nunca por igualdad de texto. Un resume desde el documento que encuentra la rama de la tarea en un descendiente estricto del head revisado de la integración, sin pull request, toma los commits posteriores como un incremento y manda solo la integración de vuelta a una revisión incremental; una segunda vía (`reintegrate`, GH-408) acepta la rama de la tarea movida solo por merges de subtareas aprobadas en su head revisado, en la línea del primer padre, mientras otras subtareas están devueltas: la integración vuelve a `pending`, conserva su head revisado y depende de las subtareas no aprobadas (`rules.reintegrate_patch`); cualquier otro head movido se rechaza (`rules.integration_increment`).
 _Campo_: sin término de arte
 
 **Integración incremental**:

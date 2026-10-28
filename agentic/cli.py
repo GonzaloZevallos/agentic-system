@@ -244,17 +244,30 @@ def _legacy_crashed_message(task_id: str, ports: Ports) -> str:
     )
 
 
-def main() -> None:
-    # `.env` in the working directory, if any. Real env vars win over it.
-    load_dotenv()
-    # `uv run agentic` activated our venv; nothing we spawn in the product (git, a
-    # role running its tests) may inherit it. The SDK copies this process's whole
-    # environment into every role's, so the scrub is here, once, after `.env` so
-    # nothing reintroduces it and before anything runs.
-    _replace_environ(without_own_toolchain(os.environ))
-    parser = argparse.ArgumentParser(prog="agentic")
-    sub = parser.add_subparsers(dest="command", required=True)
-    run = sub.add_parser("run", help="run one task through the feature path")
+@dataclass(frozen=True)
+class CommandTree:
+    """The argparse tree of `agentic`, built without running anything: the root parser and
+    every command and sub-command by its path (`("eval", "run")`), in creation order."""
+
+    root: argparse.ArgumentParser
+    commands: Mapping[tuple[str, ...], argparse.ArgumentParser]
+
+
+def build_parser() -> CommandTree:
+    """The whole command line, and nothing else: it reads no environment, so the docs
+    generator can walk it as `main()` does."""
+    root = argparse.ArgumentParser(prog="agentic")
+    commands: dict[tuple[str, ...], argparse.ArgumentParser] = {}
+
+    def add(
+        path: tuple[str, ...], subparsers: Any, name: str, **kwargs: Any
+    ) -> argparse.ArgumentParser:
+        created: argparse.ArgumentParser = subparsers.add_parser(name, **kwargs)
+        commands[path] = created
+        return created
+
+    sub = root.add_subparsers(dest="command", required=True)
+    run = add(("run",), sub, "run", help="run one task through the feature path")
     run.add_argument("title", nargs="?")
     run.add_argument("description", nargs="?")
     run.add_argument(
@@ -270,7 +283,7 @@ def main() -> None:
         "its previous branches, if any, archived under archive/run<N>-<sha>/ before a fresh "
         "run begins",
     )
-    resume = sub.add_parser("resume", help="resume the task of issue N where it paused")
+    resume = add(("resume",), sub, "resume", help="resume the task of issue N where it paused")
     resume.add_argument("--issue", type=int, metavar="N", required=True)
     resume.add_argument(
         "--task-budget",
@@ -295,8 +308,11 @@ def main() -> None:
         "--dry-run", action="store_true", help="show what would resume and stop, spending nothing"
     )
     resume.add_argument("--yes", action="store_true", help="do not ask for confirmation")
-    close = sub.add_parser(
-        "close", help="record the human's verdict on a task's pull request and close it"
+    close = add(
+        ("close",),
+        sub,
+        "close",
+        help="record the human's verdict on a task's pull request and close it",
     )
     close.add_argument("--issue", type=int, metavar="N")
     close.add_argument(
@@ -306,14 +322,18 @@ def main() -> None:
         "(Tech Lead plan, subtask `close-all`)",
     )
     close.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
-    merge = sub.add_parser(
+    merge = add(
+        ("merge",),
+        sub,
         "merge",
         help="merge a task's approved pull request when the checks pass on its head merged "
         "with the upstream master (GH-178, ADR-0045); the poller spawns it, nobody else needs to",
     )
     merge.add_argument("--issue", type=int, metavar="N", required=True)
     merge.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
-    land = sub.add_parser(
+    land = add(
+        ("land",),
+        sub,
         "land",
         help="take the landing step for a task's approved pull request that the automatic "
         "merge refused (GH-239, ADR-0048); the poller spawns it, nobody else needs to",
@@ -327,12 +347,15 @@ def main() -> None:
         help="the kind this child registers under, set by the poller at spawn: land_checks "
         "for a step that runs no model, land_model (the default) for any other",
     )
-    eval_parser = sub.add_parser(
-        "eval", help="drive or score README.md 9's fixed five-task evaluation set"
+    eval_parser = add(
+        ("eval",), sub, "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
     eval_sub = eval_parser.add_subparsers(dest="eval_command", required=True)
-    eval_run = eval_sub.add_parser(
-        "run", help="run every task of the evaluation set from scratch, one at a time"
+    eval_run = add(
+        ("eval", "run"),
+        eval_sub,
+        "run",
+        help="run every task of the evaluation set from scratch, one at a time",
     )
     eval_run.add_argument(
         "--budget",
@@ -360,8 +383,11 @@ def main() -> None:
         "--set", metavar="PATH", help="override the product's own .agentic/eval-set.yaml"
     )
     eval_run.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
-    eval_score = eval_sub.add_parser(
-        "score", help="write one JSONL line per evaluation-set task, read off its own document"
+    eval_score = add(
+        ("eval", "score"),
+        eval_sub,
+        "score",
+        help="write one JSONL line per evaluation-set task, read off its own document",
     )
     eval_score.add_argument(
         "--out", metavar="PATH", required=True, help="destination JSONL; refuses if it exists"
@@ -370,7 +396,9 @@ def main() -> None:
         "--set", metavar="PATH", help="override the product's own .agentic/eval-set.yaml"
     )
     eval_score.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
-    eval_compare = eval_sub.add_parser(
+    eval_compare = add(
+        ("eval", "compare"),
+        eval_sub,
         "compare",
         help="ADR-0028's scorecard for two baselines, from task documents and local git alone",
     )
@@ -385,7 +413,9 @@ def main() -> None:
         help="the system checkout to resolve a document's own system_commit against "
         "(defaults to the pinned stage0 checkout)",
     )
-    eval_findings = eval_sub.add_parser(
+    eval_findings = add(
+        ("eval", "findings"),
+        eval_sub,
         "findings",
         help="where important findings and returns come from, over the task documents "
         "closed in a window (GH-354); reads documents only",
@@ -398,9 +428,11 @@ def main() -> None:
         dest="product_dir",
         help="root of the product repo (AGENTIC_PRODUCT_DIR)",
     )
-    stack = sub.add_parser("stack", help="the product's own stack (ADR-0034)")
+    stack = add(("stack",), sub, "stack", help="the product's own stack (ADR-0034)")
     stack_sub = stack.add_subparsers(dest="stack_command", required=True)
-    stack_review = stack_sub.add_parser(
+    stack_review = add(
+        ("stack", "review"),
+        stack_sub,
         "review",
         help="the Tech Lead in proactive mode decides whether the product's stack "
         "still fits its Brief; never a direct change, always a proposal issue",
@@ -420,9 +452,11 @@ def main() -> None:
         help="show which signals hold, the anchor and what would be opened; spends "
         "nothing, takes no lock, writes no file and makes no `gh` call",
     )
-    scores = sub.add_parser("scores", help="a task's numbers as Langfuse scores (GH-273)")
+    scores = add(("scores",), sub, "scores", help="a task's numbers as Langfuse scores (GH-273)")
     scores_sub = scores.add_subparsers(dest="scores_command", required=True)
-    scores_backfill = scores_sub.add_parser(
+    scores_backfill = add(
+        ("scores", "backfill"),
+        scores_sub,
         "backfill",
         help="write the scores of every finished task document of the product, once; a "
         "rerun sends the same ids, so it fills gaps and never duplicates",
@@ -436,9 +470,13 @@ def main() -> None:
         help="read every document, pull request and issue and print what would be written; "
         "writes nothing to Langfuse",
     )
-    dashboards = sub.add_parser("dashboards", help="the Langfuse dashboards as code (GH-274)")
+    dashboards = add(
+        ("dashboards",), sub, "dashboards", help="the Langfuse dashboards as code (GH-274)"
+    )
     dashboards_sub = dashboards.add_subparsers(dest="dashboards_command", required=True)
-    dashboards_apply = dashboards_sub.add_parser(
+    dashboards_apply = add(
+        ("dashboards", "apply"),
+        dashboards_sub,
         "apply",
         help="write the product's four dashboards into the local Langfuse's Postgres, "
         "idempotently (ADR-0051)",
@@ -457,7 +495,9 @@ def main() -> None:
         help="also count the rows each widget reads in ClickHouse; a widget that reads none "
         "fails unless its score is omitted by design",
     )
-    poll_parser = sub.add_parser(
+    poll_parser = add(
+        ("poll",),
+        sub,
         "poll",
         help="a long-lived process per product (GH-137): closes merged pull requests, "
         "retakes a pause an external API cut caused once its own wait elapses, and "
@@ -479,7 +519,9 @@ def main() -> None:
         metavar="SECONDS",
         help="how long to wait between rounds (default 60)",
     )
-    reflect = sub.add_parser(
+    reflect = add(
+        ("reflect",),
+        sub,
         "reflect",
         help="what closed tasks' returns teach each role (ADR-0043): candidate playbook "
         "deltas on the branch agentic/playbook, in one pull request for a person to merge",
@@ -496,7 +538,9 @@ def main() -> None:
         help="reach back to tasks closed on or after this day (the first run reflects "
         "nothing older than itself otherwise)",
     )
-    perf_parser = sub.add_parser(
+    perf_parser = add(
+        ("perf",),
+        sub,
         "perf",
         help="measure a product against the performance budgets its stack declares "
         "(GH-318, ADR-0059); exits 0 within, 1 over, 2 inconclusive, 3 refused",
@@ -526,6 +570,24 @@ def main() -> None:
             action="store_true",
             help="detach from this session (setsid), print the pid and the log path, and exit",
         )
+    return CommandTree(root=root, commands=commands)
+
+
+def main() -> None:
+    # `.env` in the working directory, if any. Real env vars win over it.
+    load_dotenv()
+    # `uv run agentic` activated our venv; nothing we spawn in the product (git, a
+    # role running its tests) may inherit it. The SDK copies this process's whole
+    # environment into every role's, so the scrub is here, once, after `.env` so
+    # nothing reintroduces it and before anything runs.
+    _replace_environ(without_own_toolchain(os.environ))
+    tree = build_parser()
+    parser = tree.root
+    run = tree.commands[("run",)]
+    resume = tree.commands[("resume",)]
+    close = tree.commands[("close",)]
+    eval_run = tree.commands[("eval", "run")]
+    perf_parser = tree.commands[("perf",)]
     # `parse_args` minus its last line: the root parser reports a flag a subparser did not
     # recognise, so `perf` has to get it back to answer with its own exit code.
     args, unrecognized = parser.parse_known_args()

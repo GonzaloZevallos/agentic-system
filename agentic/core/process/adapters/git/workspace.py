@@ -521,6 +521,15 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def first_parent_commits(self, older: str, newer: str) -> tuple[rules.Commit, ...]:
+        result = self._run(
+            "rev-list", "--first-parent", "--parents", "--reverse", f"{older}..{newer}"
+        )
+        if result.returncode != 0:
+            raise GitError(f"git rev-list {older}..{newer} failed: {result.stderr.strip()}")
+        lines = (line.split() for line in result.stdout.splitlines() if line.strip())
+        return tuple(rules.Commit(sha, tuple(parents)) for sha, *parents in lines)
+
     def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
         # Two-dot, `--no-renames` (a rename lists both sides, whatever `diff.renames` the
         # machine has) and `-z` with `core.quotepath` off (a name comes back as it is). The

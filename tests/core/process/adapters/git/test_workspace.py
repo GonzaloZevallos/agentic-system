@@ -1336,3 +1336,44 @@ def test_delete_remote_ref_of_a_missing_ref_or_remote_raises(product, tmp_path):
     git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
     with pytest.raises(GitError, match="push"):
         ws.delete_remote_ref("agentic-ci/GH-12")
+
+
+def test_first_parent_commits_lists_the_line_oldest_first_limited_to_the_range(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    api = ws.subtask_checkout("GH-12", "api")
+    (api.path / "api.py").write_text("x\n")
+    ws.commit_all(api.path, "GH-12.api: api")
+    api_head = git("rev-parse", "HEAD", cwd=api.path)
+    approved = git("rev-parse", "HEAD", cwd=task.path)
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "merge",
+        "--no-ff",
+        "-m",
+        "merge api",
+        "agentic/GH-12.api",
+        cwd=task.path,
+    )
+    merge = git("rev-parse", "HEAD", cwd=task.path)
+    (task.path / "later.py").write_text("y\n")
+    ws.commit_all(task.path, "GH-12: later")
+    later = git("rev-parse", "HEAD", cwd=task.path)
+
+    commits = ws.first_parent_commits(approved, later)
+
+    assert commits == (
+        rules.Commit(merge, (approved, api_head)),
+        rules.Commit(later, (merge,)),
+    )
+    assert ws.first_parent_commits(approved, approved) == ()  # the range excludes the older end
+    assert ws.first_parent_commits(approved, merge) == (rules.Commit(merge, (approved, api_head)),)
+
+
+def test_first_parent_commits_raises_git_error_on_an_unknown_ref(product):
+    ws = GitWorkspace(product, IDENTITY)
+    with pytest.raises(GitError, match="rev-list"):
+        ws.first_parent_commits("f" * 40, "e" * 40)

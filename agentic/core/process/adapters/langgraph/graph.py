@@ -242,6 +242,12 @@ def _pipeline(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     return branch.compile(checkpointer=False)
 
 
+def pipeline_branch(ports_of: PortsOf, arm_for: ArmFor, telemetry: Telemetry = NoTelemetry()):
+    """The compiled `develop -> review` graph of one subtask, public so the generated docs
+    draw the same graph the `pipeline` node runs (GH-400)."""
+    return _pipeline(ports_of, telemetry, arm_for)
+
+
 BRANCH_DOCUMENTS = "branch_documents"
 
 

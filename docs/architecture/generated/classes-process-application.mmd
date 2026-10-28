@@ -1,0 +1,254 @@
+classDiagram
+  class Abandoned {
+  }
+  class AddedAdr {
+  }
+  class AddedLine {
+  }
+  class ArchiveResult {
+  }
+  class AttemptFailed {
+  }
+  class Board {
+  }
+  class BoardSent {
+  }
+  class BranchPullRequest {
+  }
+  class CheckRequest {
+  }
+  class CheckResults {
+  }
+  class CheckScheduler {
+  }
+  class CheckTool {
+  }
+  class Checkout {
+  }
+  class CheckoutPresubmit {
+  }
+  class CiEvidence {
+  }
+  class CommandResult {
+  }
+  class Commands {
+  }
+  class CrashRetake {
+  }
+  class Escalating {
+  }
+  class EstimateCapReached {
+  }
+  class EstimateStop {
+  }
+  class Fact {
+  }
+  class FlagVocabulary {
+  }
+  class FoldingDocuments {
+  }
+  class FreeSpace {
+  }
+  class GitError {
+  }
+  class Grant {
+  }
+  class GuardChain {
+  }
+  class Inbox {
+  }
+  class Increment {
+  }
+  class InvariantCoverageGuard {
+  }
+  class IssueComment {
+  }
+  class IssueRow {
+  }
+  class IssueState {
+  }
+  class Known {
+  }
+  class LandResult {
+  }
+  class LandingContext {
+  }
+  class LaunchAttempt {
+  }
+  class Launcher {
+  }
+  class ListedPullRequest {
+  }
+  class LockHeld {
+  }
+  class LockRecord {
+  }
+  class MergeAssessment {
+  }
+  class MergeCallFailed {
+  }
+  class MergeResult {
+  }
+  class Merges {
+  }
+  class Outcome {
+  }
+  class Output {
+  }
+  class PerfExit {
+  }
+  class PerfInterrupted {
+  }
+  class PerfLock {
+  }
+  class PerfRefused {
+  }
+  class PerfRunner {
+  }
+  class Ports {
+  }
+  class Presubmit {
+  }
+  class ProcessReaper {
+  }
+  class ProductKnowledge {
+  }
+  class ProductStack {
+  }
+  class Prompts {
+  }
+  class RawResult {
+  }
+  class Reflected {
+  }
+  class Release {
+  }
+  class Report {
+  }
+  class ResumeContext {
+  }
+  class Resumption {
+  }
+  class Reuse {
+  }
+  class RoleFailure {
+  }
+  class RoleRun {
+  }
+  class RoleRunner {
+  }
+  class RoleSchemaGuard {
+  }
+  class Row {
+  }
+  class RunCheck {
+  }
+  class RunLimits {
+  }
+  class RunLock {
+  }
+  class RunRegistration {
+  }
+  class RunRegistry {
+  }
+  class RunStopped {
+  }
+  class RunsOnItsOwnCheckout {
+  }
+  class SampleApp {
+  }
+  class SampleAppHandle {
+  }
+  class SchemaGuard {
+  }
+  class Scratch {
+  }
+  class ScratchInARepository {
+  }
+  class Seed {
+  }
+  class SentEntry {
+  }
+  class SentMemory {
+  }
+  class SetupFailed {
+  }
+  class StackReview {
+  }
+  class StackUnreadable {
+  }
+  class StopFlag {
+  }
+  class SystemRepo {
+  }
+  class TaskCapReached {
+  }
+  class TaskDocuments {
+  }
+  class Tracker {
+  }
+  class TrackerCallFailed {
+  }
+  class TrackerRateLimited {
+  }
+  class TrackerRefused {
+  }
+  class TrackerTimedOut {
+  }
+  class TrackerTransient {
+  }
+  class TrackerUnreachable {
+  }
+  class Transcript {
+  }
+  class Upstream {
+  }
+  class UpstreamMerge {
+  }
+  class WaitingOnHuman {
+  }
+  class Workspace {
+  }
+  class _BranchDocuments {
+  }
+  class _Delegating {
+  }
+  class _InFlight {
+  }
+  class _Recovery {
+  }
+  class _Unlimited {
+  }
+  TrackerRateLimited --|> TrackerCallFailed
+  TrackerTimedOut --|> TrackerCallFailed
+  TrackerTransient --|> TrackerCallFailed
+  TrackerUnreachable --|> TrackerCallFailed
+  EstimateCapReached --|> Escalating
+  RoleFailure --|> Escalating
+  TaskCapReached --|> Escalating
+  FoldingDocuments --|> _Delegating
+  _BranchDocuments --|> _Delegating
+  Ports --> RunLimits : limits
+  Ports --> CheckScheduler : check_scheduler
+  Ports --> Commands : commands
+  Ports --> FlagVocabulary : flags
+  Ports --> Inbox : inbox
+  SystemRepo --> Inbox : inbox
+  _Recovery --> Ports : ports
+  LandingContext --> Ports : ports
+  Ports --> ProcessReaper : reaper
+  Ports --> ProductKnowledge : knowledge
+  Ports --> ProductStack : stack
+  Ports --> Prompts : prompts
+  Ports --> RoleRunner : runner
+  Ports --> SampleApp : sample_app
+  Ports --> TaskDocuments : documents
+  Ports --> Tracker : tracker
+  SystemRepo --> Tracker : tracker
+  LandingContext --> Upstream : upstream
+  Ports --> Workspace : workspace
+  LockRecord --o LockHeld : record
+  Ports --o CheckoutPresubmit : ports
+  SchemaGuard --o GuardChain : first
+  SchemaGuard --o GuardChain : second
+  CheckoutPresubmit --o RunCheck : gate
