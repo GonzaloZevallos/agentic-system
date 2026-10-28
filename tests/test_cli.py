@@ -5782,6 +5782,7 @@ def _pausing_graph(ports, seen):
     from agentic.core.process.domain.task import TaskInput, TaskState
 
     def escalate(state):
+        ports.documents.save(state)  # the first node after the entry saves the document
         return {"status": "waiting_on_human", "escalated": "needs a decision"}
 
     def pause(state):
@@ -5884,3 +5885,39 @@ async def test_no_failure_means_no_second_aupdate_state():
     assert calls == []
     await cli._record_tracker_failures(App(), {}, [row], "escalate")
     assert calls == [({"tracker_failures": [row]}, "escalate")]
+
+
+@pytest.mark.anyio
+async def test_a_failed_archive_notice_enters_the_run_as_a_tracker_failure(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, {}))
+    ports.documents.save(
+        {"id": "GH-1", "system_commit": "abc1234", "cost_usd": 4.0, "escalated": "old"}
+    )
+    ports.workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
+    ports.tracker.comment_failures = 1  # the "Started over" notice keeps failing
+    cfg = Configuration(product_dir=tmp_path)
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    with pytest.raises(SystemExit):
+        await cli._run(task, cfg, ports, fresh=True, checkpointer=Saver())
+    assert ports.tracker.unlabeled == [("GH-1", "needs-human")]  # the other write still ran
+    saved = ports.documents.saved[-1]
+    assert [(r["target"], r["cls"]) for r in saved["tracker_failures"]] == [("comment", "refused")]
+
+
+@pytest.mark.anyio
+async def test_a_run_whose_archive_notice_landed_enters_with_no_failure(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+    monkeypatch.setattr(cli, "graph", _pausing_graph(ports, {}))
+    ports.documents.save({"id": "GH-1", "system_commit": "abc1234", "cost_usd": 4.0})
+    cfg = Configuration(product_dir=tmp_path)
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    with pytest.raises(SystemExit):
+        await cli._run(task, cfg, ports, fresh=True, checkpointer=Saver())
+    assert not ports.documents.saved[-1].get("tracker_failures")

@@ -361,6 +361,10 @@ class TaskInput(TypedDict):
     # decision the human took survives a landing restart (GH-297). Only that key is ever
     # seeded; absent reads as a run with no section. Declared for the same reason as `decided`.
     sections: NotRequired[dict[str, str]]
+    # The informative tracker writes that failed before the graph started (GH-389): the
+    # archive notice of `cli._run`, entering through the reducer `add_tracker_failures`.
+    # Declared for the same reason as `decided`. Absent reads as none.
+    tracker_failures: NotRequired[list[TrackerFailureRecord]]
 
 
 @dataclass(frozen=True)
