@@ -21,3 +21,5 @@ a nadie, se grepea por nombre de sección y entra en el checkpoint.
 ## Consecuencias
 
 La sincronización archivo → issue se puede desfasar. El archivo manda siempre.
+
+**Adenda (2026-10-28):** la cláusula "el documento se commitea" la supersede parcialmente [ADR-0077](0077-el-documento-de-tarea-nunca-se-versiona-en-una-rama-de-entrega.md): el documento vive en el disco del producto y no se versiona en una rama de entrega.
