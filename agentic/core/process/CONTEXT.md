@@ -445,6 +445,11 @@ Una corrida que terminó sin cierre ni escalado porque su proceso murió. No esp
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
 _Campo_: sin término de arte
 
+**Corrida huérfana**:
+Una tarea de la bandeja (issue abierto con la etiqueta `agentic`), en un estado anterior a la entrega, sin registro de lock, sin corrida viva y sin que su documento se haya escrito en una hora. El poller la retoma hasta 3 veces seguidas que no corrieron nada, contadas desde el último comentario del humano, y siempre desde el documento (`--from-document`). Se la frena sacando la etiqueta `agentic` o cerrando el issue. No es una Corrida interrumpida: esa conserva su lock.
+_Avoid_: varada (la del aterrizaje, GH-257), stranded
+_Campo_: sin término de arte
+
 **Directorio temporal**:
 El directorio en el disco, bajo `<raíz de scratch>/<clave del producto>/<tarea raíz>/` y fuera de todo repositorio, que cada chequeo, cada setup y cada intento de rol recibe como `TMPDIR` y que se borra cuando termina, salga bien o mal. La raíz es `AGENTIC_SCRATCH_DIR`, por defecto `$XDG_CACHE_HOME/agentic/scratch`; una raíz dentro del repositorio del producto o del de stage0 se rechaza antes de gastar (`ScratchInARepository`). Lo compone una sola función y lo respalda un registro de dueño escrito antes de crearlo y borrado después de borrarlo; lo que cae en `/tmp` queda fuera de este control. Las capturas que una tarea cita no viven acá sino en la carpeta de evidencia de la tarea (`.agentic/kept/<tarea>/`, que sigue en el producto), que se conserva 14 días tras el cierre (ADR-0069, ADR-0072).
 _Avoid_: temporales, `/tmp`, caché

@@ -678,3 +678,26 @@ retoma a la hora dicha.
 
 Como en ADR-0045: el 429 de otro producto de la misma cuenta no se ve; el costo es casi nulo
 porque el 429 llega en el primer turno.
+
+## Adenda (GH-403): la corrida huérfana
+
+Una corrida detenida por una señal que no es el apagado libera su lock (`cli.py`), y ninguna
+ruta del poller la veía: no es candidata a lanzamiento porque ya tiene documento, y no es
+retoma porque no hay registro de lock. Una tarea en `planned` quedó así horas en apostrophe
+(GH-384, GH-427), y la línea de cola bloqueada ocultaba que había trabajo listo.
+
+- El poller retoma una **Corrida huérfana** cuando el issue sigue en la bandeja, el documento
+  está en `open`, `defined`, `returned`, `definition_ready`, `planned` o `developing` sin
+  `escalated`, `pull_request` ni `closed_at`, no hay corrida viva ni registro de lock, y el
+  documento lleva una hora sin escribirse.
+- La forma de frenarla es la etiqueta `agentic` (o cerrar el issue), no un comentario: una
+  corrida que un humano paró a propósito se retoma pasada la hora si la etiqueta sigue.
+- Siempre retoma con `--from-document`, que descarta el checkpoint; la guarda es la comparación
+  del documento contra git de `seed_increment`, que falla en voz alta si el documento quedó atrás.
+- El tope (3) cuenta solo las retomas que no corrieron nada: una retoma seguida por una entrada de
+  `runs[]` con `started_at` posterior no cuenta, y una entrada sin fecha legible no prueba nada.
+  La segunda y la tercera siguen el calendario de retomas (30 y 60 minutos).
+- El comentario es `Retaken with no lock: ` y es un comentario del sistema. Las órdenes que no
+  puede dar el poller (sin cupo, tope gastado, lock ilegible) salen como una línea por tarea que
+  nombra la tarea y cómo frenarla o retomarla a mano; la línea de cola bloqueada sigue saliendo.
+
