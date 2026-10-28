@@ -65,6 +65,7 @@ from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import CheckResult, RerunForm
@@ -354,6 +355,7 @@ class MemoryStack:
         rerun_checks: dict[str, RerunForm] | None = None,
         merge_inert: tuple[str, ...] = (),
         check_budgets: dict[str, float] | None = None,
+        docs: Docs | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -370,6 +372,8 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # None is a product that declares no `docs` block: no generated docs, today's gate.
+        self.declared_docs = docs
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
@@ -473,6 +477,10 @@ class MemoryStack:
     def design(self, revision: str) -> Design | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_design
+
+    def docs(self, revision: str) -> Docs | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_docs
 
 
 class MemoryCommands:

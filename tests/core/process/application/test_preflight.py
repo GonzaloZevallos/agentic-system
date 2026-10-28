@@ -17,6 +17,7 @@ from agentic.core.process.application.preflight import (
     ScratchInARepository,
     declared_stack,
     declared_stack_of,
+    docs_placeholders_missing,
     nearest_existing,
     no_forbidden,
     no_setup,
@@ -27,6 +28,7 @@ from agentic.core.process.application.preflight import (
 )
 from agentic.core.process.application.run_role import load_prompt
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.docs import Docs, plan_text, review_text
 from agentic.core.process.domain.presubmit import RerunForm
 from agentic.core.process.domain.roles import ROLES
 from agentic.core.process.domain.suppressions import Forbidden
@@ -371,7 +373,7 @@ ORIGINAL_PARTS_WORDING = {
 def before_this_change(raw: str) -> str:
     """The prompt file as it was: no slot line, the original wording where the
     placeholders now stand."""
-    before = raw.replace("{{split_part}}\n", "")
+    before = raw.replace("{{split_part}}{{docs_plan}}\n", "")
     for placeholder, wording in ORIGINAL_PARTS_WORDING.items():
         assert before.count(placeholder) == 1
         before = before.replace(placeholder, wording)
@@ -386,7 +388,7 @@ def test_the_planning_prompts_differ_from_before_only_by_the_empty_slot(slug, tm
     cfg = Configuration(product_dir=tmp_path)
     ports = memory_ports()
     raw, _ = ports.prompts.raw(role)
-    assert raw.count("{{split_part}}\n") == 1
+    assert raw.count("{{split_part}}{{docs_plan}}\n") == 1
     before_ports = memory_ports(prompts=MemoryPrompts(**{slug: before_this_change(raw)}))
 
     after = load_prompt(role, cfg, ports, {}, **PLACEHOLDERS).text.split("\n")
@@ -747,3 +749,73 @@ def test_a_refused_merge_inert_glob_refuses_before_spending(stage0):
         preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
     with pytest.raises(ValueError, match=r"under `merge_inert` is refused"):
         declared_stack(replace(ports, stack=stack_), "abc123")
+
+
+DOCS = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+DOCS_SLUGS = ("tech_lead", "tech_lead_platform", "tech_lead_review", "tech_lead_review_light")
+
+
+def _docs_text(slug: str) -> str:
+    return plan_text(DOCS) if slug in ("tech_lead", "tech_lead_platform") else review_text(DOCS)
+
+
+def _lines_of(slug: str, tmp_path, **docs_values) -> list[str]:
+    role = next(r for r in ROLES if r.slug == slug)
+    values = {**PLACEHOLDERS, **docs_values}
+    return load_prompt(
+        role, Configuration(product_dir=tmp_path), memory_ports(), {}, **values
+    ).text.split("\n")
+
+
+@pytest.mark.parametrize("slug", DOCS_SLUGS)
+def test_the_docs_placeholder_ends_a_line_so_an_empty_one_leaves_the_prompt_as_it_was(
+    slug, tmp_path
+):
+    """No blank line is added: the placeholder sits at the end of a line that existed before
+    (`{{split_part}}` or `{{checks}}`), never on a line of its own."""
+    raw, _ = memory_ports().prompts.raw(next(r for r in ROLES if r.slug == slug))
+    name = "docs_plan" if slug in ("tech_lead", "tech_lead_platform") else "docs_review"
+    assert raw.count("{{" + name + "}}") == 1
+    assert "\n{{" + name + "}}\n" not in raw
+    before = raw.replace("{{" + name + "}}", "")
+    ports = memory_ports(prompts=MemoryPrompts(**{slug: before}))
+    role = next(r for r in ROLES if r.slug == slug)
+    cfg = Configuration(product_dir=tmp_path)
+    assert (
+        load_prompt(role, cfg, memory_ports(), {}, **PLACEHOLDERS).text
+        == load_prompt(role, cfg, ports, {}, **PLACEHOLDERS).text
+    )
+
+
+@pytest.mark.parametrize("slug", DOCS_SLUGS)
+def test_a_declared_docs_block_reaches_each_tech_lead_prompt(slug, tmp_path):
+    name = "docs_plan" if slug in ("tech_lead", "tech_lead_platform") else "docs_review"
+    text = _docs_text(slug)
+    lines = _lines_of(slug, tmp_path, **{name: text})
+    assert text.strip().split("\n")[0] in lines
+    assert "{{" not in "\n".join(lines)
+
+
+def test_no_advisory_when_the_product_declares_no_docs():
+    assert docs_placeholders_missing(memory_ports()) == []
+
+
+def test_no_advisory_when_every_tech_lead_prompt_carries_its_placeholder():
+    ports = replace(memory_ports(), stack=MemoryStack(docs=DOCS))
+    assert docs_placeholders_missing(ports) == []
+
+
+def test_an_override_that_drops_a_placeholder_is_named_with_its_file_and_never_refused():
+    kept = memory_ports().prompts.raw(next(r for r in ROLES if r.slug == "tech_lead_review"))[0]
+    dropped = kept.replace("{{docs_review}}", "")
+    assert dropped != kept
+    ports = replace(
+        memory_ports(),
+        stack=MemoryStack(docs=DOCS),
+        prompts=MemoryPrompts(tech_lead_review=dropped),
+    )
+    messages = docs_placeholders_missing(ports)
+    assert len(messages) == 1
+    assert "/memory/tech_lead_review.md" in messages[0]
+    assert "{{docs_review}}" in messages[0]
+    preflight(Configuration(product_dir=PRODUCT), ports)

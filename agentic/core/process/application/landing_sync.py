@@ -26,6 +26,7 @@ from typing import Literal, Protocol
 
 from ..domain import adr_numbers, landing, rules
 from ..domain.adr_numbers import Renaming
+from ..domain.docs import Docs, conflict_line
 from ..domain.roles import pair_for
 from ..domain.task import INTEGRATION, ChangeCategory, ChangesRequested, Subtask, TaskState
 from . import resume as resuming
@@ -243,14 +244,22 @@ def _bring_in(
     return merges.merge_in(context.head).conflicted
 
 
-def _conflict_reason(paths: Sequence[str], source: str) -> str:
+def _conflict_reason(paths: Sequence[str], source: str, docs: Docs | None = None) -> str:
+    """Why the unit reopens on a merge that conflicted. The product's `docs` (read at the base)
+    adds the sentence that sends a conflict in a generated file to `generate`, never a hand
+    merge; without it the text is what it always was."""
     listed = ", ".join(paths)
     return (
         f"Merging {source} into the task branch conflicted in: {listed}. The merge was aborted "
         f"and the worktree is clean. In this worktree (the task checkout) run `git merge "
         f"{source}`, resolve the conflicts in {listed}, `git add` the files and commit the "
-        "merge."
+        "merge." + conflict_line(docs)
     )
+
+
+def _docs(context: LandingContext, state: TaskState) -> Docs | None:
+    """The product's `docs` block at the task's base, where its stack is always read."""
+    return context.ports.stack.docs(task_base(state, context.ports))
 
 
 def _failed_reason(what: str, failed: object, source: str) -> str:
@@ -296,7 +305,7 @@ def _re_reviewed(context: LandingContext, state: TaskState) -> Reopening:
     except SetupFailed as failed:
         return _head_failed(context, failed), "returned"
     if conflicted:
-        return _conflict_reason(conflicted, context.head), "returned"
+        return _conflict_reason(conflicted, context.head, _docs(context, state)), "returned"
     reason = (
         f"The pull request head is {context.head}, which the Tech Lead has not reviewed "
         f"({context.step.refusal}): review it."
@@ -329,12 +338,12 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
     with merges_cleared(ports.workspace, checkout.path, _owned(context, state)) as merges:
         try:
             if conflicted := _bring_in(context, state, checkout, merges):
-                return _conflict_reason(conflicted, context.head), "returned"
+                return _conflict_reason(conflicted, context.head, _docs(context, state)), "returned"
             merged = merges.merge_in(sha)
         except GitError as failed:
             return _failed_reason(f"syncing {sha} failed", failed, sha), "returned"
         if not merged.clean:
-            return _conflict_reason(merged.conflicted, sha), "returned"
+            return _conflict_reason(merged.conflicted, sha, _docs(context, state)), "returned"
         if not _sync_carries(context, state, reviewed, merged.head):
             return f"Master ({sha}) was merged into the branch; review the result as it is.", (
                 "delivered"

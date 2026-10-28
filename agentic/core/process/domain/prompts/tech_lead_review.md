@@ -139,7 +139,7 @@ file or a single test, and the lines of the output that show the problem. Start 
 command exactly as the product declares it and append the target (`<command>
 path::test_name`); nothing else runs:
 
-{{checks}}
+{{checks}}{{docs_review}}
 
 Do not run a whole check again: the system ran all of them when the Developer delivered
 and wrote the results under `### Checks` in the Developer's section. If the diff changes

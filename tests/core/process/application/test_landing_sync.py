@@ -25,6 +25,7 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.application.registration import REGISTER_WAIT_S
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain import playbook, rules
+from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.task import TaskState
 from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _round
 from tests.core.process.application.test_poll_merge import (
@@ -650,3 +651,14 @@ def test_a_land_whose_wait_fails_still_leaves_no_lock_behind(tmp_path):
         pass  # whether the land lets it out or records it is not this test's business
 
     assert not world.locks.held("GH-5")
+
+
+def test_the_conflict_reason_is_what_it_was_without_docs_and_regenerates_with_them():
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    plain = landing_sync._conflict_reason(["a.md"], "abc123")
+    assert landing_sync._conflict_reason(["a.md"], "abc123", None) == plain
+    assert plain.endswith("commit the merge.")
+    declared = landing_sync._conflict_reason(["a.md"], "abc123", docs)
+    assert declared == plain + conflict_line(docs)
+    assert "do not merge them by hand" in declared
+    assert "run `make docs` and commit its output" in declared

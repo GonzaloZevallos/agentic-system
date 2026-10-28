@@ -8,7 +8,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
-from ..domain import rules
+from ..domain import docs, rules
 from ..domain.roles import ROLES
 from .checkouts import task_base
 from .ports import Ports
@@ -29,6 +29,9 @@ PLACEHOLDERS = {
     "cost_history": "- none",
     "checks": "- `tests`: `<the product's own command>`",
     "split_part": "",
+    # Empty for a product that declares no `docs`, so the gate renders the prompts as they ship.
+    "docs_plan": docs.plan_text(None),
+    "docs_review": docs.review_text(None),
     # The wording of a task that is not a part, so the gate renders the prompt as it ships.
     "parts_remedy": rules.parts_remedy_text(None),
     "parts_step": rules.parts_step_text(None),
@@ -70,6 +73,37 @@ def preflight(cfg: Configuration, ports: Ports) -> None:
     vocabulary = ports.flags.load()
     for role in ROLES:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
+
+
+# Where each Tech Lead prompt that carries the rules for written docs holds them.
+DOCS_PLACEHOLDERS = {
+    "tech_lead": "docs_plan",
+    "tech_lead_platform": "docs_plan",
+    "tech_lead_review": "docs_review",
+    "tech_lead_review_light": "docs_review",
+}
+
+
+def docs_placeholders_missing(ports: Ports, revision: str = "HEAD") -> list[str]:
+    """One advisory per Tech Lead prompt that cannot carry the written-docs rules: the
+    product declares `docs` at `revision` and the prompt it resolves to (a product override
+    included) lacks its placeholder, so the plan and the review never hear them. Never a
+    refusal: the gate on generated files still applies, and a product may mean it."""
+    if ports.stack.docs(revision) is None:
+        return []
+    messages = []
+    for role in ROLES:
+        placeholder = DOCS_PLACEHOLDERS.get(role.slug)
+        if placeholder is None:
+            continue
+        raw, source = ports.prompts.raw(role)
+        if "{{" + placeholder + "}}" not in raw:
+            messages.append(
+                f"the product declares `docs`, but {source} has no `{{{{{placeholder}}}}}`: "
+                "the Tech Lead will not hear the rules for the written docs "
+                "(`docs/architecture/`, `docs/README.md`). Put the placeholder back."
+            )
+    return messages
 
 
 def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:

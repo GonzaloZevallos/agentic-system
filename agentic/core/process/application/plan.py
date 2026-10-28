@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import cost_history, plan_view, rules, schemas
+from ..domain import cost_history, docs, plan_view, rules, schemas
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -25,7 +25,7 @@ from ..domain.roles import (
     Interview,
 )
 from ..domain.task import Subtask, TaskState, apply
-from .checkouts import SetupFailed, task_checkout_in_thread
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
 from .ports import Ports
 from .reflect_run import closed_documents
@@ -72,6 +72,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
         split_part=rules.split_part_text(part_of),
+        docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),
@@ -178,6 +179,7 @@ async def _plan_cold(
         proposed_invariants=_SKIPPED_PROPOSAL,
         cost_history=history.text(),
         split_part=rules.split_part_text(part_of),
+        docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),

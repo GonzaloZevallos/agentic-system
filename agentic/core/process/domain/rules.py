@@ -16,6 +16,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
+from .docs import Docs, conflict_line
 from .document import HUMAN, demote
 from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
@@ -602,14 +603,17 @@ def dependency_unresolved_reason(dep_state: DependencyState) -> str:
     return "the dependency is still not on the branch."
 
 
-def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) -> str:
+def merge_notice(
+    dependency: str, branch: str, conflicted_paths: Sequence[str], docs: Docs | None = None
+) -> str:
     """The per-case text a Developer reads when its dependency does not apply clean
     (gym #16's own two escalations, a hunk a human deleted in one turn): what carries
     markers, how to take one side of a file without the strategy the cage denies
     outright (`git checkout --theirs`, `hooks.SWITCH`), and what never to reach for
     instead — `-s ours`, `-X ours` and `-X theirs` decide a whole file or a whole
     merge by strategy, never the conflicting lines a hand resolution keeps both
-    intents over."""
+    intents over. A product that declares `docs` gains `conflict_line`: its generated files
+    are regenerated, never merged by hand."""
     listed = "\n".join(f"- `{p}`" for p in conflicted_paths) or "(none reported)"
     return (
         f"The dependency `{dependency}` (`{branch}`) does not apply clean on top of "
@@ -622,7 +626,7 @@ def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) 
         "side of the merge by strategy, and this one is resolved file by file, keeping "
         "both intents, the way a human already did for this exact shape of conflict. "
         "The conflicted paths and the diff against the dependency branch will be "
-        "written into your section for the review to check."
+        "written into your section for the review to check." + conflict_line(docs)
     )
 
 
@@ -1770,7 +1774,9 @@ def needs_integration(state: TaskState) -> bool:
     return INTEGRATION not in subtasks and len(subtasks) > 1 and all_approved(state)
 
 
-def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subtask:
+def integration_subtask(
+    brief: str = "", conflicts: Sequence[str] = (), docs: Docs | None = None
+) -> Subtask:
     """The integration as the fan-in adds it.
 
     `pending` when there is something for the integrator to do: a merge the system could
@@ -1778,7 +1784,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     the incremental merge was the whole job (README.md, 13), so the branch goes straight
     to its review with no Developer paid for a merge already done. Either way the
     integration review reads the whole branch, which is the only review that does."""
-    work = integration_work(brief, conflicts)
+    work = integration_work(brief, conflicts, docs)
     return {
         "id": INTEGRATION,
         "title": "Integration",
@@ -1789,7 +1795,7 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     }
 
 
-def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
+def integration_work(brief: str, conflicts: Sequence[str], docs: Docs | None = None) -> Subtask:
     """The part of the integration subtask a wave can change: what is left to do and
     which branches are still out. Recomputed on every wave, so an integration the review
     sent back is not still telling its Developer there was nothing to do."""
@@ -1798,7 +1804,9 @@ def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
         line
         for line in (
             brief.strip(),
-            f"Merge into the task branch what the system could not: {listed}." if listed else "",
+            f"Merge into the task branch what the system could not: {listed}." + conflict_line(docs)
+            if listed
+            else "",
         )
         if line
     ]

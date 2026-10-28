@@ -19,6 +19,7 @@ from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
+from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.presubmit import CheckResult, RerunForm
@@ -500,6 +501,14 @@ class ProductStack(Protocol):
         `sample_app`/`compare` commands a design role reaches instead of a browser or
         an arbitrary URL. `None` when the product declares none, which is every
         product that has not handed the human a prototype yet -- never an error."""
+        ...
+
+    def docs(self, revision: str) -> Docs | None:
+        """The optional `docs` block (`core.knowledge`): the
+        command that regenerates every generated doc artifact and the paths it owns, as the
+        commit `revision` declares them. `None` when the product declares none, which is
+        every product until it adopts generated docs -- never an error. Its reserved
+        check is already in `checks`; this is the block itself, for the prompts."""
         ...
 
     def performance(self, revision: str) -> dict[str, Scenario]:

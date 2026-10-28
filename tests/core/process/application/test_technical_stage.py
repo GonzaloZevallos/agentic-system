@@ -15,6 +15,7 @@ from agentic.core.process.application.ports import AttemptFailed, CommandResult,
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.plan_view import NOTE_WRITTEN
 from agentic.core.process.domain.roles import FINDINGS, INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import INTEGRATION, apply
@@ -437,6 +438,39 @@ async def test_a_conflicting_dependency_hands_the_worktree_to_the_developer(cfg)
     assert patch["subtasks"]["api"]["status"] == "delivered"
     assert patch["subtasks"]["api"]["conflicted_paths"] == []
     assert "### Dependency merge" in patch["sections"]["Developer: api"]
+
+
+@pytest.mark.parametrize("declared", [False, True])
+async def test_the_dependency_merge_notice_gains_the_docs_line_only_when_docs_is_declared(
+    cfg, declared
+):
+    state = {
+        **TASK,
+        "subtasks": {
+            "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
+            "api": sub("api", depends_on=["domain"]),
+        },
+        "subtask_id": "api",
+    }
+    docs = Docs("make docs", ("docs/architecture/generated/**",))
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    if declared:
+        ports.stack.declared_docs = docs
+    ports.workspace.conflicts.add("agentic/GH-12.domain")
+    ports.workspace.conflict_paths["agentic/GH-12.domain"] = ("docs/architecture/generated/a.md",)
+    api = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(api.path)
+    from agentic.core.process.domain.task import DependencyState
+
+    ports.workspace.dependency_states["agentic/GH-12.domain"] = [
+        DependencyState(False, False, ()),
+        DependencyState(True, False, ()),
+    ]
+    await develop(state, cfg, ports)
+    prompt = runner.calls[0]["prompt"]
+    assert ("do not merge them by hand" in prompt) is declared
+    assert (conflict_line(docs) in prompt) is declared
 
 
 async def test_a_dependency_the_developer_could_not_settle_escalates_unmergeable(cfg):
@@ -1371,3 +1405,18 @@ async def test_escalate_labels_a_pause_the_predicate_keeps_for_a_human(cfg):
         ports = memory_ports()
         await escalate(state, cfg, ports)
         assert ports.tracker.labels == [("GH-12", "needs-human")]
+
+
+async def test_the_integrator_is_told_to_regenerate_docs_and_not_merge_them_by_hand(cfg):
+    docs = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
+    state = {**TASK, "subtasks": {"api": approved("api"), "domain": approved("domain")}}
+
+    async def brief(**ports):
+        made = memory_ports(ScriptedRunner(), **ports)
+        made.workspace.conflicts.add("agentic/GH-12.domain")
+        return (await integrate(state, cfg, made))["subtasks"][INTEGRATION]["brief"]
+
+    plain = await brief()
+    declared = await brief(stack=MemoryStack(docs=docs))
+    assert declared == plain + conflict_line(docs)
+    assert "run `make docs` and commit its output" in declared

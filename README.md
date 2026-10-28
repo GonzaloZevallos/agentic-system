@@ -510,6 +510,11 @@ Uno por tarea. **Nunca codea, siempre delega.**
    consultar el orden con PM.
 5b. Escribe un ADR en `docs/adr/` cuando una decisión técnica sobrevive a la tarea. El
    efímero lo valida en el mismo pingpong.
+5c. Si el producto declara `docs:` en su stack y la tarea cambia un límite (un contenedor,
+   un componente, un contrato entre módulos, el modelo de datos o un flujo clave), el plan
+   pone la actualización de `docs/architecture/` (vistas C4 y secuencias en Mermaid) y de las
+   secciones técnicas de `docs/README.md` en la subtarea que hace el cambio, como con los
+   ADR; la escribe un Developer, nunca Tech Lead (ADR-0074).
 6. Informa a PjM: plan de subtareas, Developers asignados, QAs convocados.
 
 **Ejecución**
@@ -531,6 +536,13 @@ Uno por tarea. **Nunca codea, siempre delega.**
   categoría. Una objeción que no reprodujo es una observación. El veredicto no lo escribe:
   devuelve si y solo si hay un hallazgo bloqueante sobre la subtarea. Un chequeo entero no
   lo repite: lo corrió la puerta de entrega y está en la sección del Developer.
+- **Revisa la documentación técnica** cuando el producto declara `docs:` (ADR-0074): un
+  límite cambiado sin actualización bajo `docs/architecture/` ni `docs/README.md` en la misma
+  subtarea es un hallazgo bloqueante; una afirmación sin referencia a un archivo o símbolo, o
+  prosa que no está en español, es `important`, y ambas se juzgan sólo sobre las líneas que el
+  diff agrega o cambia; el resto de un documento que el diff toca es `outside`. Que falte
+  `docs/README.md` nunca es bloqueante por sí solo. Lo generado lo verifica el chequeo `docs`,
+  no la revisión.
 - Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro, y la vuelta pasa por el
   fan-in: la ola siguiente arranca sabiendo lo que vio toda la anterior.
 - Designa un Developer integrador y revisa la integración final. El sistema ya trajo cada
