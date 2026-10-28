@@ -538,14 +538,12 @@ class GitWorkspace:
 
     def fast_forward_view(self, sha: str) -> FastForwardView:
         ancestor = self.is_ancestor(self.product_dir, "HEAD", sha)
-        changed = self._git("diff", "--name-only", "HEAD", sha)
-        status = self._run("status", "--porcelain", "-uall", "-z")
-        if status.returncode != 0:
-            raise GitError(f"git status --porcelain failed: {status.stderr.strip()}")
+        changed = self._read_z("diff", "--name-only", "-z", "HEAD", sha)
+        status = self._read_z("status", "--porcelain", "-uall", "-z")
         return FastForwardView(
             ancestor,
-            frozenset(line for line in changed.splitlines() if line),
-            _dirty_paths(status.stdout),
+            frozenset(name for name in changed.split("\0") if name),
+            _dirty_paths(status),
         )
 
     def first_parent_commits(self, older: str, newer: str) -> tuple[rules.Commit, ...]:
@@ -880,6 +878,14 @@ class GitWorkspace:
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
+
+    def _read_z(self, *args: str) -> str:
+        """The raw stdout of a NUL-separated git read: never stripped, so no path loses a
+        leading or trailing space."""
+        result = self._run(*args)
+        if result.returncode != 0:
+            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:
         result = self._run(*args, cwd=cwd)

@@ -55,7 +55,11 @@ Hay un poller por producto, como servicio de usuario de systemd. Se instala con
 desde el stage0 (`Restart=on-failure`, `KillMode=process`, para que reiniciarlo no mate las
 corridas que lanzó). El bucle es `agentic/cli.py:_poll`: una ronda de
 `agentic/core/process/application/poll.py:run_once` cada cierto intervalo, bajo un lock por
-producto. Una ronda reúne lo que hay que hacer (lanzar tareas nuevas, reanudar las
+producto. Cada ronda lee `upstream()` una sola vez (un fetch) y, antes de `run_once`, compara
+el checkout del producto con esa punta, solo leyendo (`Workspace.fast_forward_view`,
+`rules.fast_forward_blocked`): si no puede avanzar con fast-forward (`diverged` o
+`would_overwrite`) avisa con una línea, una sola por cambio de estado, porque el stack que se
+lee de ese checkout queda viejo. Una ronda reúne lo que hay que hacer (lanzar tareas nuevas, reanudar las
 pausadas, aterrizar y mergear pull requests, cerrar) y lo decide en
 `agentic/core/process/domain/rules.py:poll_plan`. El poller no corre ningún rol: lanza
 procesos hijos con `agentic/cli.py:SpawnLauncher`, y cada hijo es una invocación de la CLI.

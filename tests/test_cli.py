@@ -4608,6 +4608,23 @@ async def test_poll_says_nothing_when_the_upstream_has_a_note_and_keeps_its_memo
 
 
 @pytest.mark.anyio
+async def test_poll_warns_diverged_when_the_upstream_names_the_left_out_commits(
+    monkeypatch, tmp_path, capsys
+):
+    """The real `upstream()` of a diverged checkout is a fetched tip *with* a note."""
+    from agentic.core.process.application.ports import Upstream
+
+    ports = _blocked_ports(ancestor=False, changed=frozenset(), dirty=frozenset())
+    ports.workspace.upstream_answer = Upstream(
+        "refs/remotes/origin/master", "a" * 40, "local commits left out: abc1234"
+    )
+    await _poll_rounds(monkeypatch, tmp_path, ports, 2)
+    assert capsys.readouterr().out.splitlines() == [
+        "agentic: poll: product checkout cannot fast-forward to aaaaaaa (diverged)"
+    ]
+
+
+@pytest.mark.anyio
 async def test_poll_says_nothing_without_a_sha_and_never_for_a_clean_checkout(
     monkeypatch, tmp_path, capsys
 ):

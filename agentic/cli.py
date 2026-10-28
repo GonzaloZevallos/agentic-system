@@ -1986,9 +1986,12 @@ def _fast_forward_notice(
     """The lines one round says about the product checkout against the round's `upstream`
     (GH-420), and what to remember for the next: a line only when the state changes, since
     one every five minutes is noise nobody reads. A stale stack is read from that checkout
-    whenever it cannot fast-forward. With a note or no sha there is no tip to judge against:
-    nothing is said and the memory stays. Read only (ADR-0002): never a merge or a write."""
-    if upstream.sha is None or upstream.note:
+    whenever it cannot fast-forward. The note does not matter (a checkout with local commits
+    always carries the left-out one, and that is the `diverged` case); what matters is a tip:
+    with no sha, or `HEAD` itself as the ref (no remote, detached, a failed fetch with no
+    tip), there is nothing to judge against, so nothing is said and the memory stays. Read
+    only (ADR-0002): never a merge or a write."""
+    if upstream.sha is None or upstream.ref == "HEAD":
         return said, []
     try:
         view = ports.workspace.fast_forward_view(upstream.sha)

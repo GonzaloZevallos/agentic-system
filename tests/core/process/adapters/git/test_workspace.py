@@ -650,6 +650,19 @@ def test_a_branch_with_commits_the_upstream_lacks_starts_from_the_upstream_and_n
     assert found.note is not None and local in found.note
 
 
+def test_a_diverged_clone_warns_diverged_from_the_upstream_the_workspace_itself_reads(remote):
+    """GH-420: the left-out note comes with a fetched tip, so the poller still judges against it."""
+    remote.merge_on_origin()
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    found = ws.upstream()
+    assert found.note and found.sha and found.ref != "HEAD"
+    view = ws.fast_forward_view(found.sha)
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("diverged", ())
+    )
+
+
 def test_the_left_out_commits_are_capped_at_ten_and_the_rest_counted(remote):
     for i in range(12):
         _commit(remote.clone, f"l{i}.txt", "l\n", f"local {i}")
@@ -1492,3 +1505,23 @@ def test_fast_forward_view_of_a_clean_checkout_behind_the_upstream_is_not_blocke
 def test_fast_forward_view_raises_git_error_when_git_cannot_answer(tmp_path):
     with pytest.raises(GitError):
         GitWorkspace(tmp_path, IDENTITY).fast_forward_view("abc")
+
+
+def test_fast_forward_view_reads_a_rename_and_a_path_with_unicode_by_its_real_name(
+    product, tmp_path
+):
+    tip = _remote_ahead(product, tmp_path, "ñandú.txt")
+    (product / "ñandú.txt").write_text("mine\n")
+    git("mv", "README.md", "LEEME.md", cwd=product)
+    view = GitWorkspace(product, IDENTITY).fast_forward_view(tip)
+    assert view.changed == frozenset({"ñandú.txt"})
+    assert view.dirty == frozenset({"ñandú.txt", "LEEME.md"})
+    assert rules.fast_forward_blocked(view.ancestor, view.changed, view.dirty) == (
+        rules.FastForwardBlock("would_overwrite", ("ñandú.txt",))
+    )
+
+
+def test_fast_forward_view_raises_git_error_when_the_diff_fails(product):
+    """The tip exists as a name but not as an object `diff` can read: the error is git's."""
+    with pytest.raises(GitError):
+        GitWorkspace(product, IDENTITY).fast_forward_view("not-a-revision")
