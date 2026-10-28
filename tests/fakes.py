@@ -810,6 +810,12 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # GH-420: what `introduced_paths` answers (or raises as a `GitError`), each ask as
+        # (base, head, against), and the sha `fetched_upstream` reads (None: no upstream).
+        self.introduced: tuple[str, ...] = ()
+        self.introduced_error: str | None = None
+        self.introduced_reads: list[tuple[str, str, str | None]] = []
+        self.fetched_upstream_sha: str | None = "upstream-tip"
         # `gain_paths`: what master gained per (older, newer), and every pair asked in order.
         # A pair with no entry raises `GitError`, the way an unknown sha does; an entry may
         # also be an exception to raise.
@@ -1158,6 +1164,17 @@ class MemoryWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
+
+    def introduced_paths(
+        self, path: Path, base: str, head: str, against: str | None
+    ) -> tuple[str, ...]:
+        self.introduced_reads.append((base, head, against))
+        if self.introduced_error is not None:
+            raise GitError(self.introduced_error)
+        return self.introduced
+
+    def fetched_upstream(self) -> str | None:
+        return self.fetched_upstream_sha
 
     def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
         self.gain_reads.append((older, newer))

@@ -1046,6 +1046,24 @@ class Workspace(Protocol):
         pull request changes against the commit it branched from. Raises `GitError`."""
         ...
 
+    def introduced_paths(
+        self, path: Path, base: str, head: str, against: str | None
+    ) -> tuple[str, ...]:
+        """The paths a delivery introduces (GH-420): the added and modified rows of
+        `git diff --name-status --no-renames <base>...<head>` at the checkout `path` (a
+        rename is a delete plus an add, and a deletion is never returned), less every path
+        whose blob at `head` equals its blob at `against`. A path missing at `against` is
+        kept; `against=None` drops nothing. Names come back unquoted. Read only: it never
+        fetches. Raises `GitError` when git cannot say."""
+        ...
+
+    def fetched_upstream(self) -> str | None:
+        """The sha the product checkout's upstream ref holds as it stands (GH-420), the ref
+        `upstream()` resolves, read without fetching. `None` when the branch is detached,
+        has no upstream, tracks a local branch, or the ref was never fetched. Never raises
+        for a git failure: an unreadable ref is a missing one."""
+        ...
+
     def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
         """Every path that differs between `older` and `newer`, two-dot and with renames
         off, so a rename lists both its old and its new path: what master gained since a
