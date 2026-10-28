@@ -324,3 +324,32 @@ def test_a_stack_the_poller_cannot_read_leaves_that_task_and_never_aborts_the_ro
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: stack_unreadable"]
     assert ports.tracker.ci_reads == []
+
+
+def test_a_refusal_whose_comment_fails_is_recorded_once_and_still_refuses(tmp_path):
+    # GH-389: the merge child has no state owner; the row goes through the state's reducer
+    # and `record_closure`, and repeated rounds stay deduplicated.
+    red = _report(_check("web", "FAILURE", run=7), _check("e2e", "SUCCESS", run=8))
+    ports = _world(red, declared=("web", "e2e"))
+    ports.tracker.comment_failures = 10
+
+    first, _ = _run(ports, tmp_path)
+    second, _ = _run(ports, tmp_path)
+
+    assert first == second == merge.MergeResult("refused", "ci_failed")
+    assert ports.tracker.comments == []
+    rows = ports.documents.closures["GH-5"]["tracker_failures"]
+    assert [(r["target"], r["cls"]) for r in rows] == [("comment", "refused")]
+    assert "reason" not in rows[0] and set(rows[0]) == {"target", "cls", "at"}
+
+
+def test_a_merge_whose_notice_fails_is_still_merged_and_records_the_failure(tmp_path):
+    ports = _world(_report(_check()))
+    ports.tracker.comment_failures = 1
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged"
+    assert ports.tracker.merge_calls  # the merge happened, only its notice did not
+    rows = ports.documents.closures["GH-5"]["tracker_failures"]
+    assert [(r["target"], r["cls"]) for r in rows] == [("comment", "refused")]

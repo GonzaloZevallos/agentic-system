@@ -39,7 +39,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from . import composition
-from .composition import bind_task, default_ports, graph
+from .composition import GhWait, bind_task, default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
@@ -108,7 +108,14 @@ from .core.process.domain import legacy_names, reaping, rules, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
-from .core.process.domain.task import Carried, PullRequest, TaskInput, TaskState
+from .core.process.domain.task import (
+    Carried,
+    PullRequest,
+    TaskInput,
+    TaskState,
+    TrackerFailure,
+    TrackerFailureRecord,
+)
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
@@ -574,7 +581,22 @@ def main() -> None:
         # Only `run`/`resume` own a flag a signal can mark; every other verb gets the one
         # that never is (composition's default), so none can raise `RunStopped`.
         stop_flag = EventStopFlag() if args.command in ("run", "resume") else None
-        ports = default_ports(cfg) if stop_flag is None else default_ports(cfg, stop_flag)
+        # Only the processes that own a task retry a `gh` call (GH-389): `run`/`resume` wait
+        # at most GH_RATE_WAIT_MAX_S, the `merge`/`land` children a minute. The poller,
+        # `inbox`, `close` and every other verb keep the fast failure of ADR-0050.
+        gh_retry: GhWait | None = (
+            "run"
+            if args.command in ("run", "resume")
+            else "exempt"
+            if args.command in ("merge", "land")
+            else None
+        )
+        # The bare call stays the shape of every verb that owns nothing to wait for.
+        ports = (
+            default_ports(cfg)
+            if gh_retry is None
+            else default_ports(cfg, stop_flag, gh_retry=gh_retry)
+        )
         if args.command not in (
             "close",
             "eval",
@@ -1377,7 +1399,7 @@ async def _run(
             carried, diagnosis = _landing_carry(task["id"], ports) if fresh else (None, "")
             if diagnosis:
                 task = {**task, "description": f"{task['description']}\n\n{diagnosis}"}
-            _archive_previous_run(task["id"], ports)
+            archive_failures = _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
             # The thread just dropped: routing now resolves to the task's own file
@@ -1389,6 +1411,10 @@ async def _run(
                 # The one place `decided` is set (`rules.entering`): before any node
                 # runs, so `--fresh`, the poller and `eval run` all reach it.
                 entered = rules.entering(task, cap=cfg.decided_cap, carried=carried)
+                if archive_failures:
+                    # The archive notice that did not land (GH-389) enters through the state's
+                    # reducer with the seed itself: no line edit, no second update on a new thread.
+                    entered = {**entered, "tracker_failures": archive_failures}
                 final = await _invoke(
                     migrated_app, entered, config, entered, ports, cfg, "run", stop=stop
                 )
@@ -1421,7 +1447,7 @@ def _landing_carry(task_id: str, ports: Ports) -> tuple[Carried | None, str]:
     return carried, "\n\n".join(parts)
 
 
-def _archive_previous_run(task_id: str, ports: Ports) -> None:
+def _archive_previous_run(task_id: str, ports: Ports) -> list[TrackerFailureRecord]:
     """Archives what a previous run of `task_id` left before its thread is dropped
     (ADR-0011, sixth addendum): the first statement inside the lock, under the same
     exclusion as the rest of the invocation. A `GitError` becomes `CannotStart` so the
@@ -1431,7 +1457,11 @@ def _archive_previous_run(task_id: str, ports: Ports) -> None:
     The printed line and the issue's `needs-human` label are two separate facts:
     whether anything was archived (`result.prefix`) says nothing about whether the
     document the task paused on can even be read, and a document that cannot be read
-    should not keep a restarted task in the escalated queue either."""
+    should not keep a restarted task in the escalated queue either.
+
+    Both tracker writes are informative (GH-389): their failures come back as rows for
+    `tracker_failures`, empty when both landed, and the run enters with them."""
+    failures: list[TrackerFailure | None] = []
     try:
         result = archive.archive_previous_run(task_id, ports)
     except GitError as exc:
@@ -1448,14 +1478,15 @@ def _archive_previous_run(task_id: str, ports: Ports) -> None:
             line += f"; {reaped}"
             note += f"; {reaped}"
         print(line)
-        ports.tracker.comment(task_id, note)
+        failures.append(ports.tracker.note(task_id, note))
     try:
         raw = ports.documents.load(task_id)
         unreadable = False
     except (ValueError, OSError):
         raw, unreadable = None, True
     if unreadable or (raw or {}).get("escalated"):
-        ports.tracker.unlabel(task_id, NEEDS_HUMAN)
+        failures.append(ports.tracker.drop_label(task_id, NEEDS_HUMAN))
+    return [failure.record() for failure in failures if failure is not None]
 
 
 def _detach(
@@ -1500,6 +1531,17 @@ def _positive_usd(text: str) -> float:
     if not value > 0:
         raise argparse.ArgumentTypeError(f"{text!r} must be above zero")
     return value
+
+
+async def _record_tracker_failures(
+    app, config: RunnableConfig, failures: list[TrackerFailureRecord], as_node: str | None
+) -> None:
+    """The best-effort writes of the preparation that failed (GH-389), into the state of
+    the run through the reducer `add_tracker_failures`: the second `aupdate_state` of an
+    invocation, after the seed and before the graph runs. With no failure there is no
+    call, so the happy path writes the same checkpoints as before."""
+    if failures:
+        await app.aupdate_state(config, {"tracker_failures": failures}, as_node=as_node)
 
 
 async def _resume(
@@ -1628,7 +1670,9 @@ async def _resume(
                     await migrated_app.aupdate_state(config, r.paused, as_node=seed)
                     crashed = r.interrupted
                     command: Command | None = None if crashed else Command(resume=r.answer())
-                    resuming.announce(r, ports)
+                    await _record_tracker_failures(
+                        migrated_app, config, resuming.announce(r, ports), seed
+                    )
                     final = await _invoke(
                         migrated_app,
                         command,
@@ -1643,7 +1687,7 @@ async def _resume(
             else:
                 crashed = r.interrupted
                 command = None if crashed else Command(resume=r.answer())
-                resuming.announce(r, ports)
+                await _record_tracker_failures(app, config, resuming.announce(r, ports), None)
                 final = await _invoke(
                     app, command, config, r.paused, ports, cfg, "resume", r.decision, stop=stop
                 )

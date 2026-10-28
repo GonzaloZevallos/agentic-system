@@ -446,3 +446,48 @@ def test_the_clock_guard_rejects_a_construction_that_passes_one():
     source = "documents=FilesystemTaskDocuments(\n    cfg.product_dir,\n    clock=lambda: 0,\n),\n"
 
     assert _passes_clock(source)
+
+
+def _failure(target="comment", cls="transient", at="2026-10-28T10:00:00Z"):
+    return {"target": target, "cls": cls, "at": at}
+
+
+def test_tracker_failures_round_trip_as_rows_with_no_free_text(tmp_path):
+    """GH-389: the document keeps a closed class, the target and a time, nothing else."""
+    documents = FilesystemTaskDocuments(tmp_path)
+    rows = [_failure(), _failure("label", "refused", "2026-10-28T10:01:00Z")]
+    path = documents.save({"id": "T-1", "title": "t", "description": "d", "tracker_failures": rows})
+
+    assert documents.load("T-1")["tracker_failures"] == rows
+    saved = path.read_text(encoding="utf-8")
+    assert "stderr" not in saved and "502" not in saved
+
+
+def test_a_document_without_tracker_failures_writes_none_and_loads_as_empty(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path)
+    path = documents.save({"id": "T-1", "title": "t", "description": "d"})
+
+    assert "tracker_failures" not in path.read_text(encoding="utf-8")
+    assert documents.load("T-1").get("tracker_failures", []) == []
+
+
+def test_record_closure_replaces_the_tracker_failures_list_whole(tmp_path):
+    """A merge child owns no state: it writes the reduced list through `record_closure`."""
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save(
+        {"id": "T-1", "title": "t", "description": "d", "tracker_failures": [_failure()]}
+    )
+    longer = [_failure(), _failure("label", "timed_out")]
+
+    documents.record_closure("T-1", {"tracker_failures": longer})
+
+    assert documents.load("T-1")["tracker_failures"] == longer
+
+
+def test_record_closure_adds_tracker_failures_to_a_document_that_had_none(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save({"id": "T-1", "title": "t", "description": "d"})
+
+    documents.record_closure("T-1", {"tracker_failures": [_failure()]})
+
+    assert documents.load("T-1")["tracker_failures"] == [_failure()]

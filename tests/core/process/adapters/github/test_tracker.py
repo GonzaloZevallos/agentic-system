@@ -1320,3 +1320,240 @@ def test_the_fallback_read_of_an_old_gh_still_asks_for_the_labels():
     state = GhTracker(Path("/p"), run).issue_state(20)
     assert state.blocked_by is None and state.labels == ()
     assert "labels" in run.calls[-1][run.calls[-1].index("--json") + 1].split(",")
+
+
+# --- the retry policy per verb (GH-389) --------------------------------------------------
+
+_BAD_GATEWAY = "non-200 OK status code: 502 Bad Gateway body: <html>"
+
+
+class Flaky:
+    """Fails `failing` times with a 502, then answers; keeps every argv."""
+
+    def __init__(self, failing, stdout="[]"):
+        self.calls, self.failing, self.stdout = [], failing, stdout
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        if len(self.calls) <= self.failing:
+            raise subprocess.CalledProcessError(1, args, stderr=_BAD_GATEWAY)
+        return subprocess.CompletedProcess(args, 0, self.stdout, "")
+
+
+def _policy():
+    from agentic.core.process.adapters.github.run import GhRetry
+
+    slept: list[float] = []
+    return GhRetry(max_wait_s=900, sleep=slept.append), slept
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda t: t.comment("GH-12", "hi"),
+        lambda t: t.label("GH-12", "x"),
+        lambda t: t.unlabel("GH-12", "x"),
+        lambda t: t.comment_on_issue("12", "hi"),
+        lambda t: t.update_pull_request_body(3, "body"),
+        lambda t: t.queue(),
+        lambda t: t.issue_created_at("GH-12"),
+    ],
+)
+def test_the_retrying_verbs_survive_a_502(call):
+    policy, slept = _policy()
+    run = Flaky(failing=1, stdout="{}")
+    call(GhTracker(Path("/p"), run, lambda line: None, retry=policy))
+    assert len(run.calls) == 2 and slept == [1, 1]  # a 2 s backoff, slept in 1 s slices
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda t: t.open_pull_request("GH-12", "b", "title", "body"),
+        lambda t: t.open_issue("title", "body"),
+        lambda t: t.merge("https://github.com/o/r/pull/7", "abc"),
+        lambda t: t.close_issue("GH-12"),
+        lambda t: t.close_pull_request("https://github.com/o/r/pull/7"),
+        lambda t: t.rerun_failed_ci("https://github.com/o/r/pull/7", "abc"),
+    ],
+)
+def test_the_verbs_that_create_or_merge_call_gh_exactly_once_on_a_502(call):
+    policy, slept = _policy()
+    run = Flaky(failing=9)
+    tracker = GhTracker(Path("/p"), run, lambda line: None, retry=policy)
+    with pytest.raises(ValueError):
+        call(tracker)
+    assert len(run.calls) == 1 and slept == []
+
+
+def test_a_write_timeout_is_not_retried_and_a_read_timeout_is():
+    policy, _ = _policy()
+    expired = subprocess.TimeoutExpired(["gh"], 60)
+
+    class TimesOut:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if len(self.calls) == 1:
+                raise expired
+            return subprocess.CompletedProcess(args, 0, "[]", "")
+
+    write = TimesOut()
+    with pytest.raises(TrackerTimedOut):
+        GhTracker(Path("/p"), write, lambda line: None, retry=policy).comment("GH-12", "hi")
+    assert len(write.calls) == 1
+    read = TimesOut()
+    assert GhTracker(Path("/p"), read, lambda line: None, retry=policy).queue() == []
+    assert len(read.calls) == 2
+
+
+def test_a_tracker_with_no_policy_fails_a_502_at_once():
+    run = Flaky(failing=9)
+    with pytest.raises(ValueError, match="502"):
+        GhTracker(Path("/p"), run, lambda line: None).comment("GH-12", "hi")
+    assert len(run.calls) == 1
+
+
+# --- note / drop_label: the best-effort writes (GH-389) ----------------------------------
+
+_RATE_LIMITED = "gh: API rate limit exceeded for user ID 1. (HTTP 403)"
+_SECRET = "SECRET-STDERR-TEXT"
+
+
+class Outcomes:
+    """Raises (an exception) or answers (a string) per call, in order; keeps every argv."""
+
+    def __init__(self, *outcomes):
+        self.calls, self._outcomes = [], list(outcomes)
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return subprocess.CompletedProcess(args, 0, outcome, "")
+
+
+def _failed_gh(stderr, code=1):
+    return subprocess.CalledProcessError(code, ["gh"], stderr=stderr)
+
+
+def _quiet_policy(max_wait=900):
+    from agentic.core.process.adapters.github.run import GhRetry
+
+    return GhRetry(max_wait_s=max_wait, sleep=lambda seconds: None, now=lambda: 1_000)
+
+
+_NOTES = {
+    "comment": lambda tracker: tracker.note("GH-12", "Resumed"),
+    "label": lambda tracker: tracker.drop_label("GH-12", "needs-human"),
+}
+
+
+@pytest.mark.parametrize("target", ["comment", "label"])
+def test_a_note_that_lands_returns_none_and_makes_the_same_gh_call_as_comment_and_unlabel(target):
+    run = Outcomes("")
+    assert _NOTES[target](GhTracker(Path("/p"), run, lambda line: None)) is None
+    expected = {
+        "comment": ["gh", "issue", "comment", "12", "--body", "Resumed"],
+        "label": ["gh", "issue", "edit", "12", "--remove-label", "needs-human"],
+    }[target]
+    assert run.calls == [expected]
+
+
+@pytest.mark.parametrize(
+    ("cls", "build"),
+    [
+        pytest.param(
+            "transient",
+            lambda: (Outcomes(*[_failed_gh(_BAD_GATEWAY + _SECRET)] * 3), _quiet_policy()),
+            id="a 502 on every attempt",
+        ),
+        pytest.param(
+            "timed_out",
+            lambda: (Outcomes(subprocess.TimeoutExpired(["gh"], 60)), _quiet_policy()),
+            id="a write that timed out",
+        ),
+        pytest.param(
+            "unreachable",
+            lambda: (Outcomes(_failed_gh("error connecting to api.github.com " + _SECRET)), None),
+            id="no policy, GitHub unreachable",
+        ),
+        pytest.param(
+            "rate_limited",
+            lambda: (
+                Outcomes(
+                    _failed_gh(_RATE_LIMITED + _SECRET),
+                    '{"resources": {"core": {"remaining": 0, "reset": 9000}}}',
+                ),
+                _quiet_policy(max_wait=60),
+            ),
+            id="a reset over the cap",
+        ),
+        pytest.param(
+            "refused",
+            lambda: (
+                Outcomes(_failed_gh("could not resolve to an Issue " + _SECRET)),
+                _quiet_policy(),
+            ),
+            id="a refusal under a policy",
+        ),
+    ],
+)
+@pytest.mark.parametrize("target", ["comment", "label"])
+def test_a_note_that_failed_returns_the_class_of_the_error_never_its_text(target, cls, build):
+    from agentic.core.process.domain.task import TrackerFailure
+
+    run, policy = build()
+    lines: list[str] = []
+
+    failure = _NOTES[target](GhTracker(Path("/p"), run, lines.append, retry=policy))
+
+    assert isinstance(failure, TrackerFailure)
+    assert (failure.target, failure.cls) == (target, cls)
+    assert failure.at  # a timestamp, whichever the clock reads
+    assert _SECRET not in repr(failure) and not any(_SECRET in line for line in lines)
+
+
+def test_a_failed_note_writes_one_log_line_naming_the_call_and_the_class():
+    lines: list[str] = []
+    tracker = GhTracker(
+        Path("/p"), Outcomes(_failed_gh("no auth")), lines.append, retry=_quiet_policy()
+    )
+
+    assert tracker.note("GH-12", "x") is not None
+
+    named = [line for line in lines if "note" in line]
+    assert len(named) == 1
+    assert "comment" in named[0] and "refused" in named[0] and "no auth" not in named[0]
+
+
+@pytest.mark.parametrize("target", ["comment", "label"])
+def test_a_missing_gh_still_raises_from_a_note(target):
+    run = Outcomes(FileNotFoundError("gh"))
+    with pytest.raises(ValueError, match="not installed") as raised:
+        _NOTES[target](GhTracker(Path("/p"), run, lambda line: None, retry=_quiet_policy()))
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+
+
+@pytest.mark.parametrize("target", ["comment", "label"])
+def test_a_note_on_a_task_with_no_issue_calls_nothing(target):
+    run = Outcomes()
+    note = {
+        "comment": lambda t: t.note("T-abc", "x"),
+        "label": lambda t: t.drop_label("T-abc", "x"),
+    }[target]
+    assert note(GhTracker(Path("/p"), run)) is None and run.calls == []
+
+
+@pytest.mark.parametrize("target", ["comment", "label"])
+@pytest.mark.parametrize("code", [1, 4])
+def test_a_refusal_with_no_policy_is_a_plain_value_error_and_raises_from_a_note(target, code):
+    """Only the hierarchy and `TrackerRefused` are absorbed: with no policy `run_gh` keeps
+    its plain `ValueError` (ADR-0050), an authentication failure (exit 4) included."""
+    run = Outcomes(_failed_gh("no auth " + _SECRET, code))
+    with pytest.raises(ValueError) as raised:
+        _NOTES[target](GhTracker(Path("/p"), run, lambda line: None))
+    assert type(raised.value) is ValueError

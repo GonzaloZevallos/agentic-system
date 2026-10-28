@@ -306,6 +306,45 @@ def add_flakes(existing: list[FlakeRecord], new: list[FlakeRecord]) -> list[Flak
     return [joined[key] for key in sorted(joined)]
 
 
+TrackerTarget = Literal["comment", "label"]
+TrackerFailureClass = Literal["timed_out", "unreachable", "transient", "rate_limited", "refused"]
+TRACKER_FAILURES_MAX = 10
+
+
+@dataclass(frozen=True)
+class TrackerFailure:
+    """A best-effort tracker write that did not land (GH-389): what it was aimed at, the
+    closed class of the failure and when. Never `gh`'s text: the class comes from the type
+    of the error and nothing else is kept."""
+
+    target: TrackerTarget
+    cls: TrackerFailureClass
+    at: str
+
+    def record(self) -> TrackerFailureRecord:
+        return {"target": self.target, "cls": self.cls, "at": self.at}
+
+
+class TrackerFailureRecord(TypedDict):
+    """One row of `tracker_failures` as the document keeps it: `TrackerFailure`'s fields."""
+
+    target: TrackerTarget
+    cls: TrackerFailureClass
+    at: str
+
+
+def add_tracker_failures(
+    existing: list[TrackerFailureRecord], new: list[TrackerFailureRecord]
+) -> list[TrackerFailureRecord]:
+    """The failures of `existing` and `new` as one list: one row per `(target, cls)`, the
+    first seen keeping its `at`, at most `TRACKER_FAILURES_MAX` rows (the oldest stay). The
+    only way `tracker_failures` is ever written."""
+    joined: dict[tuple[str, str], TrackerFailureRecord] = {}
+    for record in (*existing, *new):
+        joined.setdefault((record["target"], record["cls"]), record)
+    return list(joined.values())[:TRACKER_FAILURES_MAX]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -326,6 +365,10 @@ class TaskInput(TypedDict):
     # decision the human took survives a landing restart (GH-297). Only that key is ever
     # seeded; absent reads as a run with no section. Declared for the same reason as `decided`.
     sections: NotRequired[dict[str, str]]
+    # The informative tracker writes that failed before the graph started (GH-389): the
+    # archive notice of `cli._run`, entering through the reducer `add_tracker_failures`.
+    # Declared for the same reason as `decided`. Absent reads as none.
+    tracker_failures: NotRequired[list[TrackerFailureRecord]]
 
 
 @dataclass(frozen=True)
@@ -1168,6 +1211,10 @@ class TaskState(TaskInput, total=False):
     # `(check, head, gate)` so parallel branches merge their observations without repeating
     # them. Read with `.get("flakes", [])`: a document written before this field has none.
     flakes: Annotated[list[FlakeRecord], add_flakes]
+    # The best-effort tracker writes that failed (GH-389), `add_tracker_failures`: one row
+    # per `(target, cls)`, at most ten, never `gh`'s text. Read with
+    # `.get("tracker_failures", [])`: a document written before this field has none.
+    tracker_failures: Annotated[list[TrackerFailureRecord], add_tracker_failures]
 
 
 def _reducers() -> dict[str, object]:
@@ -1241,6 +1288,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 or any(t not in old_tests[_flake_key(r)] for t in r["tests"])
             ]:
                 patch[key] = grown
+        elif reducer is add_tracker_failures:
+            known = {(r["target"], r["cls"]) for r in old}
+            if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
+                patch[key] = fresh
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
                 patch[key] = changed

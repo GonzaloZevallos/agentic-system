@@ -70,7 +70,9 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # when a run posted it, and the poller's closure replaces it whole. `flake_comments`
 # (ADR-0066) is the list of flake issues the landing already commented on for this task;
 # `flakes` is the task's flake records, which the merge gate and the landing slice replace
-# whole with `add_flakes`' result.
+# whole with `add_flakes`' result. `tracker_failures` (GH-389) is the best-effort tracker
+# writes that failed, which a merge child (no state owner) replaces whole with
+# `add_tracker_failures`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -82,12 +84,13 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "full_checks",
         "flake_comments",
         "flakes",
+        "tracker_failures",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
 # The record keys `render` writes as one flow line, swapped in for a placeholder: a list the
 # landing keeps about itself, which `record_closure` then replaces whole (GH-242, GH-297).
-_FLOW_KEYS = ("landing", "landed_slices", "full_checks", "flakes")
+_FLOW_KEYS = ("landing", "landed_slices", "full_checks", "flakes", "tracker_failures")
 
 
 def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
@@ -190,6 +193,9 @@ def render(
         # The flakes the gates observed (ADR-0066) and the flake issues already commented on:
         # each written only when non-empty, `flakes` as one flow line like the records above.
         **({"flakes": _LANDING_PLACEHOLDER} if state.get("flakes") else {}),
+        # The best-effort tracker writes that failed (GH-389): closed class, target and time,
+        # written only when there is one, as one flow line so `record_closure` replaces it.
+        **({"tracker_failures": _LANDING_PLACEHOLDER} if state.get("tracker_failures") else {}),
         **({"flake_comments": c} if (c := state.get("flake_comments")) else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),

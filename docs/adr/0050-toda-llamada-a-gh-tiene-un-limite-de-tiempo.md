@@ -161,3 +161,32 @@ lecturas de `GhInbox` fuera de `_blocked`.
   stdout.
 - §8: nada nuevo se vuelve alcanzable. El costo por ronda no cambia; una caída de red
   cuesta una ronda fallida en lugar de un reinicio del proceso.
+
+## Adenda (GH-389): reintentos acotados y opt-in
+
+La corrida de GH-374 murió con un 502 de `gh issue comment`. Las reglas de arriba (falla
+rápida, la próxima ronda reintenta) siguen siendo las del poller; los procesos que **son
+dueños de una tarea** pueden pedir reintentos.
+
+- **Opt-in.** `run_gh(..., retry: GhRetry | None = None)`. Sin política, todo es byte a byte
+  lo de arriba: mismas excepciones, mismas líneas de `log`. Solo `run`/`resume` (tope de
+  espera `GH_RATE_WAIT_MAX_S = 900`) y los hijos `merge`/`land` (`GH_EXEMPT_WAIT_MAX_S = 60`,
+  para no retener el carril de las corridas exentas del tope) construyen el puerto con
+  política (`default_ports(..., gh_retry=...)`). Poller, `inbox`, `close`, `system_repo()` y
+  el resto de los verbos no cambian.
+- **Qué se reintenta.** Hasta 3 llamadas con espera de 2 y 8 s (la tabla llega a 30 s si
+  `attempts` sube): `GH_TRANSIENT_MARKERS` (hoy solo el 502 capturado del log de GH-374),
+  `error connecting to`, el límite de tasa primario y, solo en lecturas, `TimeoutExpired`.
+  El exit 4 nunca. Un stderr desconocido falla de inmediato.
+- **Límite de tasa.** El reset sale de `gh api rate_limit`, llamado sin política: el mayor
+  `reset` entre los recursos con `remaining == 0`. Si no se puede leer, backoff. Una espera
+  mayor que el tope lanza `TrackerRateLimited` sin dormir.
+- **Espera.** `sleep` y `now` se inyectan; se duerme en rebanadas de 1 s y se mira el
+  `StopFlag` entre ellas: una bandera puesta corta la espera y relanza el tipo original.
+- **Agotado.** `TrackerTransient`, `TrackerUnreachable`, `TrackerTimedOut` o
+  `TrackerRateLimited` (todos `TrackerCallFailed`); con política, el rechazo de `gh` es
+  `TrackerRefused(ValueError)`. Los mensajes nombran la llamada y la cota, nunca el stderr.
+- **Qué escrituras.** Se reintentan lecturas, `comment`, `comment_on_issue`, `label`,
+  `unlabel`, `ensure_label` y `update_pull_request_body`; **nunca** `open_issue`,
+  `open_pull_request`, `merge`, `close_*` ni `rerun_failed_ci`. Queda aceptado que un
+  comentario se duplique si el 502 llegó después de que se aplicó.

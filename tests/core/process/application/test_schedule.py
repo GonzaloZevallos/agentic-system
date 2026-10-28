@@ -19,6 +19,7 @@ from agentic.core.process.domain.task import (
     REDUCERS,
     add,
     add_flakes,
+    add_tracker_failures,
     apply,
     first,
     last,
@@ -396,6 +397,11 @@ def value_for(key: str, branch: str, n: int):
         return {f"{branch}:{n % 2}": f"{key}:{n}"}
     if reducer is add_flakes:
         return [{"check": f"c{n % 2}", "head": "h", "gate": "g", "tests": [f"{branch}{n}"]}]
+    if reducer is add_tracker_failures:
+        # Four distinct keys at most, and one `at` per key: the first row seen wins, so a
+        # row that differed by branch would depend on which branch landed first.
+        target = "comment" if n % 2 else "label"
+        return [{"target": target, "cls": "transient", "at": f"{target}-at"}]
     if reducer is last:
         return f"{branch}:{key}:{n}"
     return f"{branch}:{key}:{n}"
@@ -405,7 +411,15 @@ def test_every_reducer_key_of_the_state_has_a_generator():
     # A reducer added to `TaskState` that `value_for` cannot generate would make the
     # property below prove nothing about it.
     for key, reducer in REDUCERS.items():
-        assert reducer in (add, operator.add, merge, first, add_flakes, last), key
+        assert reducer in (
+            add,
+            operator.add,
+            merge,
+            first,
+            add_flakes,
+            add_tracker_failures,
+            last,
+        ), key
 
 
 def net(patches: list[dict]) -> dict:
