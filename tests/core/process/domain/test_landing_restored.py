@@ -153,7 +153,7 @@ def landing_reads(source: str, allowed: set[str]) -> list[str]:
     or `["landing"]`; a store (`state["landing"] = ...`) is a write and does not count."""
     found: list[str] = []
     for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.FunctionDef) or node.name in allowed:
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) or node.name in allowed:
             continue
         for inner in ast.walk(node):
             via_get = (
@@ -186,5 +186,6 @@ def test_the_guard_rejects_a_reader_that_takes_the_whole_list():
         "def other(raw):\n    return raw['landing'][0]\n"
         "def writer(raw):\n    raw['landing'] = []\n"
         "def fine(raw):\n    return raw.get('landing')\n"
+        "async def later(raw):\n    return raw.get('landing')\n"
     )
-    assert landing_reads(bad, {"fine"}) == ["spent", "other"]
+    assert landing_reads(bad, {"fine"}) == ["spent", "other", "later"]

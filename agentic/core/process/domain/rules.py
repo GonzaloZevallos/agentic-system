@@ -2714,16 +2714,34 @@ def important_pass_spent(state: Mapping[str, object], *, resolved_only: bool = F
     return passes >= LANDING_IMPORTANT_PASSES_MAX
 
 
-def _restoration_cut(state: Mapping[str, object]) -> int | None:
-    """The `landing_cut` of the last well-formed restoration of `state`, `None` when there is
-    none. A value that is not a list, a row that is not a mapping or a cut that is not an int
-    is skipped: a malformed marker cuts nothing, the document reads as it did before it."""
+def _last_restoration(state: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The last well-formed restoration row of `state` (a mapping with an int `landing_cut`),
+    `None` when there is none. A value that is not a list, a row that is not a mapping or a cut
+    that is not an int is skipped: a malformed marker cuts nothing, the document reads as it did
+    before it."""
     rows = state.get("restorations")
     for row in reversed(rows if isinstance(rows, list) else []):
         cut = row.get("landing_cut") if isinstance(row, Mapping) else None
-        if isinstance(cut, int) and not isinstance(cut, bool):
-            return cut
+        if isinstance(row, Mapping) and isinstance(cut, int) and not isinstance(cut, bool):
+            return row
     return None
+
+
+def _restoration_cut(state: Mapping[str, object]) -> int | None:
+    """The `landing_cut` of the last well-formed restoration of `state`, `None` when there is
+    none (`_last_restoration`)."""
+    row = _last_restoration(state)
+    cut = row.get("landing_cut") if row is not None else None
+    return cut if isinstance(cut, int) else None
+
+
+def restored_at(state: Mapping[str, object]) -> str | None:
+    """When the last restoration of `state` happened (its `at`, as written), `None` when the
+    task was never restored or the row holds no text there. What a record kept beside `landing`
+    is dated against to tell the archived run's from the live one's (GH-406)."""
+    row = _last_restoration(state)
+    at = row.get("at") if row is not None else None
+    return at if isinstance(at, str) else None
 
 
 def restored(state: Mapping[str, object]) -> bool:

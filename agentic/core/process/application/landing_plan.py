@@ -192,12 +192,34 @@ def spent(
     )
 
 
+def _after_restoration(written: object, restored_at: str | None) -> bool:
+    """Whether a record dated `written` is of the run now living (GH-406): it carries an aware
+    time that is not before the restoration's. A record with no time, or with one that cannot
+    be read, is the archived run's -- `merge.run_checks` stamps `at` on the records of a
+    restored task only."""
+    stamp, restored = _aware(written), _aware(restored_at)
+    return stamp is not None and restored is not None and stamp >= restored
+
+
+def _aware(value: object) -> datetime | None:
+    """`value` as an aware datetime, `None` when it is not an ISO string with an offset."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+
+
 def _gate_reran(raw: Mapping[str, object], head: str | None) -> bool:
     """The recorded `merge_checks` is of `head` and holds a red check whose last row is the
     gate's own rerun (ADR-0066). Tolerant of a record from before the rerun, which has no
     marker, and of one that is not the shape the merge writes."""
     record = raw.get("merge_checks")
     if head is None or not isinstance(record, Mapping) or record.get("head") != head:
+        return False
+    if rules.restored(raw) and not _after_restoration(record.get("at"), rules.restored_at(raw)):
         return False
     checks = record.get("checks")
     return isinstance(checks, list) and any(

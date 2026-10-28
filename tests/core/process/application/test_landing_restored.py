@@ -5,11 +5,14 @@ reopened and conflicting with master. Every refusal comes from `rules.auto_merge
 fixture's facts, never from the test."""
 
 from dataclasses import replace
+from datetime import datetime
 
-from agentic.core.process.application import landing_plan
+from agentic.core.process.application import landing_plan, merge
 from agentic.core.process.domain import ci, landing, plan_settlement, rules
 from agentic.core.process.domain.landing import LandingStep
 from agentic.core.process.domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL
+from agentic.shared.configuration import Configuration
+from tests.fakes import MemoryCommands, MemoryStack, MemoryTracker, memory_ports
 
 PM = PM_FINAL.name
 HEAD = "e9c47772" + "0" * 32
@@ -132,3 +135,54 @@ def test_the_green_ci_is_not_needed_to_settle_but_the_merge_still_asks_for_it():
     assert not plan_settlement.settleable(facts(state), False)
     assert plan_settlement.settleable(facts(state, **green), False)
     assert landing.LandingStep("settle", "open_findings_blocking") == step(state, **green)
+
+
+def _gate_record(**over) -> dict:
+    """A `merge_checks` record whose last row is the gate's own rerun and still red."""
+    checks = [{"name": "test", "passed": False, "rerun": True}]
+    return {"head": HEAD, "master": MASTER, "passed": False, "checks": checks, **over}
+
+
+def _reran(state: dict) -> bool:
+    return landing_plan.spent(state, HEAD, None, NEW_MASTER).checks_rerun_on_head
+
+
+def test_a_red_gate_rerun_recorded_before_the_restoration_does_not_count():
+    archived = document(merge_checks=_gate_record())
+    assert not _reran(archived)
+    before = document(merge_checks=_gate_record(at="2026-10-20T00:00:00+00:00"))
+    assert not _reran(before)
+    plain = {k: v for k, v in before.items() if k != "restorations"}
+    assert _reran(plain)
+    assert _reran({k: v for k, v in archived.items() if k != "restorations"})
+
+
+def test_a_red_gate_rerun_recorded_after_the_restoration_counts():
+    after = document(merge_checks=_gate_record(at="2026-10-28T01:00:00+00:00"))
+    assert _reran(after)
+    unreadable = document(merge_checks=_gate_record(at="yesterday"))
+    assert not _reran(unreadable)
+
+
+def _ran_checks(raw: dict) -> dict:
+    """The `merge_checks` record `merge.run_checks` writes for `raw` over the fakes."""
+    ports = memory_ports(
+        tracker=MemoryTracker(),
+        stack=MemoryStack(checks={"tests": "pytest"}),
+        commands=MemoryCommands(),
+    )
+    ports.workspace.trees[ports.workspace.checkout_path(merge._name("GH-374"))] = "tree"
+    ports.documents.save({"id": "GH-374", "status": "ready_for_review"})
+    cfg = Configuration(product_dir=ports.workspace.ROOT)
+    merge.run_checks("GH-374", raw, HEAD, NEW_MASTER, "base", cfg, ports, None, lambda _: None)
+    return ports.documents.load("GH-374")["merge_checks"]
+
+
+def test_only_the_checks_of_a_restored_task_are_dated_so_the_landing_can_tell_them_apart():
+    restored = _ran_checks(document())
+    assert _aware_after(restored["at"], "2026-10-28T00:00:00+00:00")
+    assert "at" not in _ran_checks(document(cut=None))
+
+
+def _aware_after(written: str, restored: str) -> bool:
+    return datetime.fromisoformat(written) >= datetime.fromisoformat(restored)
