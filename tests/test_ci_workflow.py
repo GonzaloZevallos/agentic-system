@@ -21,7 +21,8 @@ CI_YML = REPO / ".github" / "workflows" / "ci.yml"
 STACK_YAML = REPO / ".agentic" / "stack.yaml"
 
 CI_REF_SAMPLE = "agentic-ci/GH-376"
-TASK_BRANCH_SAMPLE = "agentic/GH-376"
+TASK_PREFIX = "agentic/"
+TASK_BRANCH_SAMPLE = f"{TASK_PREFIX}GH-376"
 
 
 def push_branches(workflow: dict[str, Any]) -> list[str]:
@@ -78,7 +79,7 @@ def test_removing_the_ci_ref_trigger_is_rejected() -> None:
 
 def test_a_trigger_matching_task_branches_is_rejected() -> None:
     workflow = load_workflow()
-    workflow["on"] = {"push": {"branches": ["master", "agentic-ci/**", "agentic/**"]}}
+    workflow["on"] = {"push": {"branches": ["master", "agentic-ci/**", f"{TASK_PREFIX}**"]}}
     workflow.pop(True, None)
     found = violations(workflow, declared_ci_jobs())
     assert any("matches task branches" in f for f in found)
