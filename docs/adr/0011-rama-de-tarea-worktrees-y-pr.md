@@ -774,3 +774,35 @@ rechazar; los commits de una persona sobre la rama de un PR cerrado se reemplaza
 pedido, y el lease solo cubre un push dentro de la ventana; si alguien resetea el remoto a mano a
 un sha no relacionado, la reanudación limpia la clave tras un lease perdido (correcto), y si lo
 hace tras un reemplazo aterrizado, el plan es `refuse unowned_divergence`.
+
+## Addendum (GH-406): restaurar es el inverso del archivado, por copia
+
+`agentic restore --issue N --from archive/run<N>-<commit>` trae de vuelta una tarea archivada que
+estaba entregada y aprobada. Es el inverso de `archive_previous_run`, pero **copia**: crea las
+ramas vivas con `Workspace.create_branch` (nunca fuerza, no hace nada si el ref ya está en ese
+sha, falla si apunta a otro) y deja intactos los refs del archivo; `next_archive_run` no cambia.
+La tarea se crea solo en `rules.approved_head(state)` y cada subtarea solo en su `reviewed_head`,
+cada uno comprobado como ancestro de su rama archivada: lo que el archivo hizo por su cuenta se
+queda bajo el prefijo.
+
+Orden, bajo el `RunLock` (comando `restore`; un lock tomado es `task_live`), cada paso omitible en
+un reintento porque `rules.restore_steps` decide qué falta mirando solo el estado observado:
+
+1. Pre-chequeos de solo lectura (los rechazos de abajo).
+2. `archive_live`: si hay una rama viva de la tarea en otro commit, se archiva primero.
+3. `create_refs`: las ramas en los shas registrados.
+4. `write_document`: el documento archivado (o su copia viva, que puede tener más entradas de
+   `landing`, ninguna se pierde) más el registro de `restorations`; `landing_restarts` toma el
+   máximo y `landing_cost_carried` suma el costo de la corrida desplazada, si la hubo.
+5. `push` del sha registrado solo si el remoto no tiene la rama; cualquier fallo es `push_refused`,
+   sin reintentos.
+6. `reopen` del pull request (`Tracker.reopen_pull_request`; su `ValueError` se lee como
+   `pr_merged` o `pr_base_gone`).
+7. `settle`: las filas de `PM: final validation` por `plan_settlement.pending`, permitido por
+   `plan_settlement.settleable(facts, restored=True)`.
+
+Rechazos, un conjunto cerrado: `task_live`, `no_archive`, `no_document`, `not_delivered`,
+`pr_merged`, `pr_base_gone`, `head_disagrees`, `head_not_reachable`, `remote_diverged`,
+`pr_head_moved`, `push_refused`, `already_restored`. No toca etiquetas ni el estado del issue.
+Una restauración por tarea; el mismo prefijo en un reintento termina lo que falta.
+
