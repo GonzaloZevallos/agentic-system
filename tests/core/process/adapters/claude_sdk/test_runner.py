@@ -2122,7 +2122,15 @@ async def test_free_space_is_read_after_the_reap_and_before_the_scratch_is_remov
     with pytest.raises(AttemptFailed) as info:
         await run_once(runner, tmp_path)
     assert info.value.space == LowUntilRemoved.LOW
-    assert [e.split()[0] for e in events] == ["made", "reap", "read", "read", "removing", "removed"]
+    assert [e.split()[0] for e in events] == [
+        "made",
+        "reap",
+        "read",
+        "read",
+        "read",
+        "removing",
+        "removed",
+    ]
 
 
 async def test_the_failure_keeps_the_lower_reading_of_the_scratch_volume_and_of_tmp(
@@ -2144,6 +2152,35 @@ async def test_the_failure_keeps_the_lower_reading_of_the_scratch_volume_and_of_
         await run_once(runner, tmp_path)
     assert info.value.space == SpaceReading(free_bytes=5, free_inodes=7)
     assert info.value.enospc is False
+
+
+async def test_the_failure_reads_the_scratch_directory_the_checkout_and_tmp_and_nothing_else(
+    monkeypatch, tmp_path
+):
+    scratch_query(monkeypatch, [])
+    space = FakeFreeSpace()
+    checkout = tmp_path / "checkout"
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=space)
+    with pytest.raises(AttemptFailed):
+        await run_once(runner, checkout)
+    scratch_root = (tmp_path / "scratch-root").resolve()
+    assert len(space.asked) == 3
+    assert scratch_root in space.asked[0].parents and space.asked[0].name.startswith("r-")
+    assert space.asked[1:] == [checkout, Path("/tmp")]
+    assert tmp_path / "product" not in space.asked
+
+
+async def test_the_failure_keeps_the_checkout_volume_when_it_is_the_lowest(monkeypatch, tmp_path):
+    scratch_query(monkeypatch, [])
+    ample = FakeFreeSpace.AMPLE
+    checkout = tmp_path / "checkout"
+    space = FakeFreeSpace(
+        ample, by_path={checkout: SpaceReading(free_bytes=3, free_inodes=ample.free_inodes)}
+    )
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=space)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, checkout)
+    assert info.value.space == SpaceReading(free_bytes=3, free_inodes=ample.free_inodes)
 
 
 async def test_a_successful_attempt_reads_no_free_space(monkeypatch, tmp_path):

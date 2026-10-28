@@ -370,7 +370,7 @@ class ClaudeSdkRunner:
                 exc.reaped = list(await self._reap(owner_task, token))
                 # Only a failing attempt reads the disk, and before its directory is
                 # removed: the space the directory held is not the space it left.
-                exc.space = self._read_space(scratch_dir)
+                exc.space = self._read_space(scratch_dir, cwd)
                 exc.enospc = exc.enospc or hooks.enospc or _caused_by_enospc(exc)
                 raise
             except BaseException:
@@ -391,12 +391,15 @@ class ClaudeSdkRunner:
             return nullcontext((None, None))
         return _opened(self.scratch, owner_task, role.slug, token)
 
-    def _read_space(self, scratch_dir: Path | None) -> SpaceReading | None:
-        """The lower of the scratch volume's and `/tmp`'s free bytes and free inodes."""
+    def _read_space(self, scratch_dir: Path | None, cwd: Path) -> SpaceReading | None:
+        """The lower of the free bytes and free inodes of the volumes the attempt writes to:
+        its scratch directory, its checkout (`cwd`) and `/tmp`. Nothing else is read."""
         if self.free_space is None or scratch_dir is None:
             return None
         try:
-            readings = [self.free_space.read(scratch_dir), self.free_space.read(Path("/tmp"))]
+            readings = [
+                self.free_space.read(path) for path in (scratch_dir, cwd, Path("/tmp"))
+            ]
         except OSError:
             # A reading that cannot be taken must not replace the failure it annotates.
             return None
