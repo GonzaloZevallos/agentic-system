@@ -585,14 +585,17 @@ def dependency_unresolved_reason(dep_state: DependencyState) -> str:
     return "the dependency is still not on the branch."
 
 
-def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) -> str:
+def merge_notice(
+    dependency: str, branch: str, conflicted_paths: Sequence[str], docs: Docs | None = None
+) -> str:
     """The per-case text a Developer reads when its dependency does not apply clean
     (gym #16's own two escalations, a hunk a human deleted in one turn): what carries
     markers, how to take one side of a file without the strategy the cage denies
     outright (`git checkout --theirs`, `hooks.SWITCH`), and what never to reach for
     instead — `-s ours`, `-X ours` and `-X theirs` decide a whole file or a whole
     merge by strategy, never the conflicting lines a hand resolution keeps both
-    intents over."""
+    intents over. A product that declares `docs` gains `conflict_line`: its generated files
+    are regenerated, never merged by hand."""
     listed = "\n".join(f"- `{p}`" for p in conflicted_paths) or "(none reported)"
     return (
         f"The dependency `{dependency}` (`{branch}`) does not apply clean on top of "
@@ -605,7 +608,7 @@ def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) 
         "side of the merge by strategy, and this one is resolved file by file, keeping "
         "both intents, the way a human already did for this exact shape of conflict. "
         "The conflicted paths and the diff against the dependency branch will be "
-        "written into your section for the review to check."
+        "written into your section for the review to check." + conflict_line(docs)
     )
 
 

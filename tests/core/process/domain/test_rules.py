@@ -921,6 +921,16 @@ def test_merge_notice_names_the_paths_and_forbids_whole_side_strategies():
     assert "section" in notice  # the conflicted paths and the diff land there
 
 
+def test_merge_notice_gains_the_docs_conflict_line_only_when_the_product_declares_docs():
+    args = ("domain", "agentic/GH-1.domain", ["docs/architecture/generated/a.md"])
+    bare = rules.merge_notice(*args)
+    assert rules.merge_notice(*args, None) == bare
+    docs = Docs("make docs", ("docs/architecture/generated/**",))
+    declared = rules.merge_notice(*args, docs)
+    assert declared == bare + conflict_line(docs)
+    assert "make docs" in declared and "do not merge them by hand" in declared
+
+
 def test_resumed_after_unmergeable_says_why_and_what_may_already_be_done():
     state = {
         "subtasks": {"api": {"conflicted_paths": ["pyproject.toml"]}},

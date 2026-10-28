@@ -440,6 +440,39 @@ async def test_a_conflicting_dependency_hands_the_worktree_to_the_developer(cfg)
     assert "### Dependency merge" in patch["sections"]["Developer: api"]
 
 
+@pytest.mark.parametrize("declared", [False, True])
+async def test_the_dependency_merge_notice_gains_the_docs_line_only_when_docs_is_declared(
+    cfg, declared
+):
+    state = {
+        **TASK,
+        "subtasks": {
+            "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
+            "api": sub("api", depends_on=["domain"]),
+        },
+        "subtask_id": "api",
+    }
+    docs = Docs("make docs", ("docs/architecture/generated/**",))
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    if declared:
+        ports.stack.declared_docs = docs
+    ports.workspace.conflicts.add("agentic/GH-12.domain")
+    ports.workspace.conflict_paths["agentic/GH-12.domain"] = ("docs/architecture/generated/a.md",)
+    api = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(api.path)
+    from agentic.core.process.domain.task import DependencyState
+
+    ports.workspace.dependency_states["agentic/GH-12.domain"] = [
+        DependencyState(False, False, ()),
+        DependencyState(True, False, ()),
+    ]
+    await develop(state, cfg, ports)
+    prompt = runner.calls[0]["prompt"]
+    assert ("do not merge them by hand" in prompt) is declared
+    assert (conflict_line(docs) in prompt) is declared
+
+
 async def test_a_dependency_the_developer_could_not_settle_escalates_unmergeable(cfg):
     state = {
         **TASK,
