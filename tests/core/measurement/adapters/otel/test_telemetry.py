@@ -1173,3 +1173,23 @@ def test_a_flaked_check_is_green_with_the_flake_outcome_and_its_rerun_is_not_sam
     ]
     assert list(span.attributes["agentic.presubmit.duration"]) == ["tests=4.0", "lint=1.0"]
     assert "test_a" not in " ".join(span.attributes["agentic.presubmit.checks"])
+
+
+def test_role_finish_reads_a_full_checks_record_run_on_ci_that_has_no_gate(spans):
+    """GH-376: a record written from the CI's verdict carries `ran_on` and no `gate`; the
+    gate attributes are simply absent."""
+    record = {
+        "version": 1,
+        "head": "h",
+        "passed": True,
+        "duration_s": 12.0,
+        "declared": {"name": "ci"},
+        "results": [{"name": "unit", "passed": True}],
+        "witness": None,
+        "ran_on": "ci",
+    }
+    patch = {"runs": [], "failures": [], "cost_usd": 0.0, "status": "approved"}
+    with telemetry.role_span("Developer", "developer", "agentic", arm="default") as run:
+        run.finish({**patch, "full_checks": record})
+    span = spans.get_finished_spans()[-1]
+    assert not any("gate" in key for key in span.attributes)

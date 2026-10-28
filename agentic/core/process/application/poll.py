@@ -38,6 +38,7 @@ from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
 from . import (
     adr_collision,
     board_sync,
+    ci_ref_sweep,
     close_issues,
     landing_plan,
     preflight,
@@ -309,6 +310,8 @@ def _merge_facts(
         perf_convened=perf_convened,
         perf_verdict=perf_verdict,
         perf_head=perf_head,
+        # GH-395: GitHub's reading of this head, off the pull request already read.
+        github_conflicting=rules.github_conflicting(pull_request, pr_head),
     )
 
 
@@ -1478,6 +1481,8 @@ def run_once(
     # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
     # read, so a round that frees room starts its children in the same round.
     swept = [*scratch_sweep.sweep(ports, now), *swept]
+    # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
+    swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}

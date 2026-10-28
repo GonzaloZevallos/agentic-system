@@ -724,6 +724,12 @@ class MemoryWorkspace:
         self.remote_tips: dict[str, str] = {}
         self.remote_tip_error: str | None = None
         self.remote_tip_calls: list[tuple[Path, str]] = []
+        # GH-376: `ci_refs` is the sha each `agentic-ci/` ref holds on the fake remote;
+        # `ci_ref_calls` is every `publish_ci_ref` / `remote_refs` / `delete_remote_ref`
+        # as `(verb, argument)`, and `ci_ref_error` makes each of them raise `GitError`.
+        self.ci_refs: dict[str, str] = {}
+        self.ci_ref_calls: list[tuple[str, str]] = []
+        self.ci_ref_error: str | None = None
         # `(path, relatives, message)` of every `commit_paths`, and `events`: that call and
         # every `push`, in order, so a test says which came first (GH-203).
         self.path_commits: list[tuple[Path, tuple[str, ...], str]] = []
@@ -992,6 +998,26 @@ class MemoryWorkspace:
         if self.remote_tip_error is not None:
             raise GitError(self.remote_tip_error)
         return self.remote_tips.get(branch)
+
+    def publish_ci_ref(self, path: Path, ref: str) -> None:
+        self.ci_ref_calls.append(("publish", ref))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        self.ci_refs[ref] = self.head(path)
+
+    def remote_refs(self, prefix: str) -> tuple[str, ...]:
+        self.ci_ref_calls.append(("list", prefix))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        return tuple(ref for ref in self.ci_refs if ref.startswith(prefix))
+
+    def delete_remote_ref(self, ref: str) -> None:
+        self.ci_ref_calls.append(("delete", ref))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        if ref not in self.ci_refs:
+            raise GitError(f"git push origin --delete {ref} failed: no such ref")
+        del self.ci_refs[ref]
 
     def show(self, ref: str, relative: str) -> str | None:
         if (ref, relative) in self.files or not self.track_commits:

@@ -61,6 +61,7 @@ EXPECTED = {
     "eval_set_unreadable": "wait",
     "ci_missing": "wait",
     "ci_unreadable": "wait",
+    "ci_blocked_by_conflict": "sync_master",
     "not_approved": "re_review",
     "head_not_reviewed": "re_review",
     "open_findings_blocking": "fix",
@@ -145,6 +146,33 @@ def test_a_definite_conflict_syncs_while_both_budgets_last_then_diagnoses():
     syncs = _spent(syncs=landing.LANDING_SYNCS_MAX)
     assert _step("merge_conflict", syncs).kind == "diagnose"
     assert _step("merge_conflict", _spent(diagnoses=1)).kind == "none"
+
+
+def test_a_ci_blocked_by_a_conflict_syncs_once_per_pair_without_the_conflict_cap():
+    """GH-395: GitHub runs no CI on a conflicting head, so the sync is the step; the per-sha
+    conflict cap is not consulted, only the pair's own counter, then the diagnose."""
+    assert _step("ci_blocked_by_conflict") == LandingStep("sync_master", "ci_blocked_by_conflict")
+    capped = _spent(conflicting_syncs_for_upstream=landing.LANDING_CONFLICT_SYNCS_MAX)
+    assert _step("ci_blocked_by_conflict", capped).kind == "sync_master"
+    again = _spent(conflict_ci_syncs_on_pair=1)
+    assert _step("ci_blocked_by_conflict", again).kind == "diagnose"
+    assert _step("ci_blocked_by_conflict", _spent(conflict_ci_syncs_on_pair=3)).kind == "diagnose"
+
+
+def test_a_ci_blocked_by_a_conflict_never_waits_and_keeps_the_task_wide_sync_budgets():
+    for waited in (None, 0.0, ci.CI_WAIT_MAX_S + 1):
+        assert _step("ci_blocked_by_conflict", _spent(waited_s=waited)).kind == "sync_master"
+    assert _step("ci_blocked_by_conflict", _spent(syncs=landing.LANDING_SYNCS_MAX)).kind == (
+        "diagnose"
+    )
+    unsynced = _spent(unsynced_for_upstream=landing.LANDING_UNSYNCED_MAX)
+    assert _step("ci_blocked_by_conflict", unsynced).kind == "diagnose"
+
+
+def test_a_ci_blocked_by_a_conflict_keeps_the_unlandable_and_verdict_sync_precedence():
+    assert _step("ci_blocked_by_conflict", _spent(diagnoses=1)).kind == "none"
+    due = _spent(verdict_sync_due=True, conflict_ci_syncs_on_pair=1)
+    assert _step("ci_blocked_by_conflict", due).kind == "sync_master"
 
 
 def test_the_refusals_that_make_a_sync_a_conflicting_one_are_the_two_conflict_reasons():

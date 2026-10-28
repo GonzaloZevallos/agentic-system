@@ -148,7 +148,12 @@ def merge_task(
         # probe is the last look's, immediately before the merge call.
         github = rules.merge_conflicts_from(pull_request, head, master, None)
         facts = with_ci(
-            replace(base_facts, adr_collision=collision, conflicts=github),
+            replace(
+                base_facts,
+                adr_collision=collision,
+                conflicts=github,
+                github_conflicting=rules.github_conflicting(pull_request, head),
+            ),
             document,
             declared,
             report,
