@@ -76,12 +76,12 @@ def approved_green(facts: rules.MergeFacts) -> bool:
     """The reviewed head is the pull request's, approved, and green where the product declares
     a CI: the shape under which a refusal that is only ledger state is never the code's fault.
     The CI is read like `rules._ci_gate` reads it (verdict `green` on a full `ci_head` that is the
-    pull request's); a product with no `ci_required` has none to read. Ids compare only through
-    `rules.same_commit`."""
+    pull request's); a product with no `ci_required` has none to read. The reviewed head is
+    compared only through `rules.head_reviewed`, other ids through `rules.same_commit`."""
     if not (
         facts.reviewed_unit_approved
         and rules.full_commit_id(facts.pr_head)
-        and rules.same_commit(facts.reviewed_head, facts.pr_head)
+        and rules.head_reviewed(facts.reviewed_head, facts.close_docs, facts.pr_head)
     ):
         return False
     if not facts.ci_required:

@@ -14,6 +14,7 @@ from agentic.composition import default_ports
 from agentic.core.process.adapters.langgraph.graph import build_graph
 from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application.ports import CommandResult
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import DEVELOPER, prompt_hash
 from tests.core.process.adapters.langgraph.test_graph import (
     TASK,
@@ -28,14 +29,29 @@ from tests.fakes import (
     MemorySampleApp,
     MemoryStack,
     ScriptedRunner,
+    consolidation,
     delivered,
+    design_draft,
+    design_findings,
+    final_validation,
     reviewed,
+    verdict,
 )
 
 pytestmark = pytest.mark.anyio
 
 CHECKS = {"tests": "pytest", "lint": "ruff", "e2e": "playwright"}
 FAST = ("tests", "lint")
+
+
+class _Rebased(_Rooted):
+    """`_Rooted` writes in the temporary product; the checkout the graph names is a memory
+    path, so the files `consolidate` wrote are reported under that checkout, as a real one
+    would."""
+
+    def consolidate(self, verdict, root=None):
+        written = super().consolidate(verdict, root)
+        return [root / path.relative_to(self.root) for path in written] if root else written
 
 
 class SteadyWorkspace(MemoryWorkspace):
@@ -77,9 +93,9 @@ def config(tmp_path):
     }
 
 
-def build(script, stack, commands, fakes=None):
+def build(script, stack, commands, fakes=None, workspace=None):
     fakes = fakes or Fakes()
-    fakes.workspace = SteadyWorkspace()
+    fakes.workspace = workspace or SteadyWorkspace()
     script = CommittingRunner(fakes.workspace, script)
 
     def ports_for(cfg):
@@ -91,7 +107,7 @@ def build(script, stack, commands, fakes=None):
             runner=script,
             workspace=fakes.workspace,
             tracker=fakes.tracker,
-            knowledge=_Rooted(knowledge, cfg.product_dir),
+            knowledge=_Rebased(knowledge, cfg.product_dir),
             stack=stack,
             commands=commands,
             sample_app=MemorySampleApp(),
@@ -202,3 +218,86 @@ async def test_a_product_with_no_tiers_never_visits_the_node_and_writes_no_new_k
         )
     ).prompts.raw(DEVELOPER)
     assert final["prompts"][DEVELOPER.slug] == prompt_hash(raw)
+
+
+class DocsWorkspace(SteadyWorkspace):
+    """`commit_paths` is a commit like the Developer's: it advances the head, so the
+    close-time capability commit is a new head on top of the reviewed one."""
+
+    def commit_paths(self, path, relatives, message):
+        super().commit_paths(path, relatives, message)
+        self.commit(path)
+        return self.head(path)
+
+
+CAPABILITY = {
+    "capability": "dashboard",
+    "content": "## Jobs\n\nCuando entreno, quiero ver mi semana.",
+}
+
+
+def ui_script(definitions):
+    return script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        ui_lead=[design_findings("approved")],
+        pm_consolidator=[consolidation("approved")],
+        ux_lead_final=[design_findings("approved")],
+        ui_lead_final=[design_findings("approved")],
+        pm_final=[final_validation("approved", definitions=definitions)],
+        **technical(),
+    )
+
+
+async def test_pm_final_definitions_move_the_head_and_the_suite_runs_once_more_on_it(config):
+    commands = MemoryCommands()
+    stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
+    graph, fakes, script = build(
+        ui_script([CAPABILITY]), stack, commands, workspace=DocsWorkspace()
+    )
+    final = await graph.ainvoke(TASK, config=config)
+
+    assert final["status"] == "ready_for_review"
+    docs = final["close_docs"]
+    assert docs["paths"] == ["docs/product/dashboard.md"]
+    assert rules.same_commit(docs["parent"], final["subtasks"]["api"]["reviewed_head"])
+    # The fan-in stamped the documentation head, and the suite covered it.
+    assert final["task_head"] == docs["head"] != docs["parent"]
+    assert final["full_checks"]["passed"] and final["full_checks"]["head"] == docs["head"]
+    assert commands_run(commands).count("playwright") == 2  # once per head, no heal
+    assert "full_checks_healed" not in final
+    assert script.slugs.count("pm_final") == 1
+    assert rules.approved_head(final) == docs["head"]
+    assert fakes.workspace.events.count("push") == 1
+
+
+async def test_pm_final_definitions_of_a_product_with_no_tiers_go_straight_to_delivery(config):
+    commands = MemoryCommands()
+    stack = MemoryStack(checks=CHECKS)
+    graph, fakes, script = build(
+        ui_script([CAPABILITY]), stack, commands, workspace=DocsWorkspace()
+    )
+    final = await graph.ainvoke(TASK, config=config)
+
+    assert final["status"] == "ready_for_review"
+    docs = final["close_docs"]
+    assert docs["paths"] == ["docs/product/dashboard.md"]
+    for key in ("task_head", "full_checks", "full_checks_healed"):
+        assert key not in final
+    assert commands_run(commands) == ["pytest", "ruff", "playwright"]  # the one gate, no suite
+    assert rules.approved_head(final) == docs["head"]
+    assert fakes.workspace.events.count("push") == 1
+
+
+async def test_a_pm_final_with_no_definitions_leaves_the_head_and_the_record_alone(config):
+    commands = MemoryCommands()
+    stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
+    graph, fakes, script = build(ui_script([]), stack, commands, workspace=DocsWorkspace())
+    final = await graph.ainvoke(TASK, config=config)
+
+    assert final["status"] == "ready_for_review"
+    assert not final.get("close_docs")
+    assert commands_run(commands).count("playwright") == 1
+    assert rules.approved_head(final) == final["task_head"]
