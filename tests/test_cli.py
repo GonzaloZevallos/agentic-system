@@ -2480,6 +2480,41 @@ def _closed_run(monkeypatch, root: Path, ports, *, issue: int = 9):
     monkeypatch.setattr("sys.argv", argv)
 
 
+class _PortsAsked(BaseException):
+    """Raised by the fake `default_ports` so `main` stops right after the ports are asked."""
+
+
+@pytest.mark.parametrize(
+    ("argv", "wanted"),
+    [
+        (["run", "--issue", "9"], "run"),
+        (["resume", "--issue", "9"], "run"),
+        (["merge", "--issue", "9"], "exempt"),
+        (["land", "--issue", "9"], "exempt"),
+        (["close", "--issue", "9"], None),
+        (["poll"], None),
+    ],
+)
+def test_the_cli_asks_for_a_gh_retry_policy_only_from_the_verbs_that_own_a_task(
+    monkeypatch, tmp_path, argv, wanted
+):
+    """GH-389: run/resume wait up to the run cap, merge/land the exempt one, and every other
+    verb (the poller, close) builds its ports with no policy, so ADR-0050's fast failure
+    holds there. Swapping or dropping a verb in `main` must break this."""
+    (tmp_path / ".agentic").mkdir()
+    asked: list[object] = []
+
+    def fake_default_ports(cfg, stop_flag=None, *, gh_retry=None):
+        asked.append(gh_retry)
+        raise _PortsAsked
+
+    monkeypatch.setattr(cli, "default_ports", fake_default_ports)
+    monkeypatch.setattr("sys.argv", ["agentic", *argv, "--product-dir", str(tmp_path)])
+    with pytest.raises(_PortsAsked):
+        cli.main()
+    assert asked == [wanted]
+
+
 def test_close_refuses_with_no_document(monkeypatch, tmp_path, capsys):
     from agentic.core.measurement.adapters.otel import telemetry
 
