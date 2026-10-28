@@ -26,7 +26,7 @@ from ...application.ports import (
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable
 from ...domain.task import PullRequest, PullRequestCommit
-from .run import bounded_run, print_line, run_gh
+from .run import GhRetry, bounded_run, print_line, run_gh
 
 _ISSUE = re.compile(r"^GH-(\d+)$")
 _PULL_REQUEST_URL = re.compile(r"/pull/(\d+)$")
@@ -230,10 +230,12 @@ class GhTracker:
         product_dir: Path,
         run: Run = bounded_run,
         log: Callable[[str], None] = print_line,
+        retry: GhRetry | None = None,
     ):
         self.product_dir = product_dir
         self._run = run
         self._log = log
+        self._retry = retry
 
     def open_pull_request(
         self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
@@ -271,7 +273,7 @@ class GhTracker:
             h.write(text)
             path = h.name
         try:
-            self._gh("issue", "comment", reference, "--body-file", path)
+            self._gh_retrying("issue", "comment", reference, "--body-file", path)
         finally:
             Path(path).unlink(missing_ok=True)
 
@@ -294,7 +296,7 @@ class GhTracker:
         self._gh("pr", "close", str(pull_request_number(reference)))
 
     def changed_files(self, pull_request: str) -> int:
-        raw = self._gh(
+        raw = self._gh_read(
             "pr", "view", str(pull_request_number(pull_request)), "--json", "changedFiles"
         )
         try:
@@ -317,7 +319,7 @@ class GhTracker:
 
     def comment(self, task_id: str, text: str) -> None:
         if (number := issue_number(task_id)) is not None:
-            self._gh("issue", "comment", str(number), "--body", text)
+            self._gh_retrying("issue", "comment", str(number), "--body", text)
 
     def close_issue(self, task_id: str) -> None:
         if (number := issue_number(task_id)) is not None:
@@ -325,27 +327,27 @@ class GhTracker:
 
     def label(self, task_id: str, label: str) -> None:
         if (number := issue_number(task_id)) is not None:
-            self._gh("issue", "edit", str(number), "--add-label", label)
+            self._gh_retrying("issue", "edit", str(number), "--add-label", label)
 
     def unlabel(self, task_id: str, label: str) -> None:
         if (number := issue_number(task_id)) is not None:
-            self._gh("issue", "edit", str(number), "--remove-label", label)
+            self._gh_retrying("issue", "edit", str(number), "--remove-label", label)
 
     def ensure_label(self, name: str) -> None:
         # Never `--search`: its index is eventually consistent (ADR-0034), so the whole
         # list is asked and the name is compared here. No `--force`: an existing label is
         # not ours to edit, and nothing here reads `stderr` to decide.
-        raw = self._gh("label", "list", "--limit", "1000", "--json", "name")
+        raw = self._gh_read("label", "list", "--limit", "1000", "--json", "name")
         existing: set[str] = set()
         for item in self._json_list(raw, "gh label list"):
             if not isinstance(item, dict) or not isinstance(item.get("name"), str):
                 raise ValueError("gh label list answered an entry without a name")
             existing.add(item["name"])
         if name not in existing:
-            self._gh("label", "create", name)
+            self._gh_retrying("label", "create", name)
 
     def list_pull_requests(self) -> list[ListedPullRequest]:
-        raw = self._gh(
+        raw = self._gh_read(
             "pr",
             "list",
             "--state",
@@ -368,7 +370,7 @@ class GhTracker:
         ]
 
     def pull_requests_on(self, branch: str) -> list[BranchPullRequest]:
-        raw = self._gh(
+        raw = self._gh_read(
             "pr",
             "list",
             "--head",
@@ -408,20 +410,20 @@ class GhTracker:
             handle.write(body)
             path = handle.name
         try:
-            self._gh("pr", "edit", str(number), "--body-file", path)
+            self._gh_retrying("pr", "edit", str(number), "--body-file", path)
         finally:
             Path(path).unlink(missing_ok=True)
 
     def issue_comments(self, task_id: str) -> list[str]:
         if (number := issue_number(task_id)) is None:
             return []
-        comments = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
+        comments = json.loads(self._gh_read("issue", "view", str(number), "--json", "comments"))
         return [c.get("body") or "" for c in comments.get("comments", [])]
 
     def timestamped_comments(self, task_id: str) -> list[IssueComment]:
         if (number := issue_number(task_id)) is None:
             return []
-        raw = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
+        raw = json.loads(self._gh_read("issue", "view", str(number), "--json", "comments"))
         return [
             IssueComment(body=c.get("body") or "", created_at=c.get("createdAt") or "")
             for c in raw.get("comments", [])
@@ -430,12 +432,12 @@ class GhTracker:
     def issue_created_at(self, task_id: str) -> str | None:
         if (number := issue_number(task_id)) is None:
             return None
-        raw = json.loads(self._gh("issue", "view", str(number), "--json", "createdAt"))
+        raw = json.loads(self._gh_read("issue", "view", str(number), "--json", "createdAt"))
         created = raw.get("createdAt") if isinstance(raw, dict) else None
         return created if isinstance(created, str) and created else None
 
     def queue(self) -> list[int]:
-        raw = self._gh(
+        raw = self._gh_read(
             "issue",
             "list",
             "--label",
@@ -452,7 +454,7 @@ class GhTracker:
     def issue_state(self, number: int) -> IssueState:
         fields = "state,stateReason,blockedBy,closedByPullRequestsReferences,labels"
         try:
-            raw = self._gh("issue", "view", str(number), "--json", fields)
+            raw = self._gh_read("issue", "view", str(number), "--json", fields)
         except TrackerCallFailed:
             # A stall or an unreachable GitHub is not an old `gh`: never fall back, never
             # `blocked_by=None`.
@@ -461,7 +463,7 @@ class GhTracker:
             # An older `gh` that does not expose the native dependency at all: fall
             # back to every other field, `blocked_by=None` tells the caller to read
             # the issue body's own `Blocked by:` line instead.
-            raw = self._gh(
+            raw = self._gh_read(
                 "issue",
                 "view",
                 str(number),
@@ -484,7 +486,7 @@ class GhTracker:
 
     def pull_request(self, reference: str) -> PullRequest | None:
         number = pull_request_number(reference)
-        raw = self._gh(
+        raw = self._gh_read(
             "api",
             "graphql",
             "-f",
@@ -567,7 +569,7 @@ class GhTracker:
     def _graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
         """One `gh api graphql` call, its JSON object or the class of its failure."""
         try:
-            raw = self._gh("api", "graphql", "-f", f"query={query}", *fields)
+            raw = self._gh_read("api", "graphql", "-f", f"query={query}", *fields)
         except ValueError as exc:  # `_gh`'s own failure
             missing = isinstance(exc.__cause__, FileNotFoundError)
             return CiUnreadable("gh_unavailable" if missing else "gh_unreadable")
@@ -624,6 +626,11 @@ class GhTracker:
         return method
 
     def _gh(self, *args: str) -> str:
+        """No retry, whatever the policy: open_issue, open_pull_request, merge, close_* and
+        rerun_failed_ci call this one, because repeating them can duplicate or merge twice."""
+        return self._call(args, retry=None, retry_timeouts=False)
+
+    def _call(self, args: tuple[str, ...], *, retry: GhRetry | None, retry_timeouts: bool) -> str:
         return run_gh(
             self._run,
             args,
@@ -631,4 +638,16 @@ class GhTracker:
             log=self._log,
             not_installed="gh is not installed; delivering to GitHub needs the CLI",
             failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
+            retry=retry,
+            retry_timeouts=retry_timeouts,
         )
+
+    def _gh_read(self, *args: str) -> str:
+        """A read: under a policy a timeout is retried too, since nothing changed."""
+        return self._call(args, retry=self._retry, retry_timeouts=True)
+
+    def _gh_retrying(self, *args: str) -> str:
+        """A write that is safe to repeat (a comment, a label, a body): retried under the
+        policy except on a timeout, which may have applied it. The only other door to `gh`
+        besides `_gh`, so the verbs that create or merge are the ones that call `_gh`."""
+        return self._call(args, retry=self._retry, retry_timeouts=False)
