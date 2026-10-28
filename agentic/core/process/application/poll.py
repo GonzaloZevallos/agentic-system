@@ -309,6 +309,8 @@ def _merge_facts(
         perf_convened=perf_convened,
         perf_verdict=perf_verdict,
         perf_head=perf_head,
+        # GH-395: GitHub's reading of this head, off the pull request already read.
+        github_conflicting=rules.github_conflicting(pull_request, pr_head),
     )
 
 
