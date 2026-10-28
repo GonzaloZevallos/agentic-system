@@ -445,7 +445,7 @@ def test_a_cut_at_create_refs_is_finished_by_a_retry_that_archives_and_renames_n
     assert world.workspace.existing_branches[SUB_BRANCH][0] == SUB_HEAD
 
 
-def test_a_failure_of_the_platform_that_is_not_about_the_task_is_raised_not_reported_as_a_base_gone():
+def test_a_platform_failure_not_about_the_base_is_raised_not_reported_as_pr_base_gone():
     world = World()
     world.tracker.reopen_error = "gh pr reopen failed: HTTP 502"
 
