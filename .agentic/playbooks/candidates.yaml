@@ -769,3 +769,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-27T21:08:39.243+00:00'
+- slug: developer_integrator
+  category: process-suite-red
+  lesson: After merging master, run the full declared test suite once on the merged head within its timeout, and fix or report any failure or hang before you hand the integration over.
+  confidence: medium
+  seen_in:
+  - GH-361
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T00:12:42.205+00:00'

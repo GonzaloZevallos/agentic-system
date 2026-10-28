@@ -333,3 +333,14 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-391
+  GH-361@review:
+    cost_usd: 0.1319
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-361
+    decisions: 1
