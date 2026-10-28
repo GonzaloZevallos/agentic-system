@@ -51,6 +51,7 @@ LandingStepKind = Literal[
     "diagnose",
     "settle",
     "escalate_ledger",
+    "escalate_adr",
     "escalate",
     "none",
 ]
@@ -66,7 +67,9 @@ GH-229), `land_slice` (GH-297: land the approved units that apply cleanly on mas
 slice of their own, then go on with the rest; `LandingStep.units` is the slice), `diagnose`
 (the terminal path: the landing diagnoser, then a restart; `restart_why` says why no slice
 was possible), `escalate` (GH-371: every failing required check is also red on the base branch,
-so the task escalates to the human with no model run) and `none` (nothing the system can do: the
+so the task escalates to the human with no model run), `escalate_adr` (an `adr_number_taken`
+collision the renumbering rule cannot settle -- ambiguous, or its cap spent -- asks the human
+once per head, with no model run and no restart) and `none` (nothing the system can do: the
 human's)."""
 
 RestartWhy = Literal["single_unit", "no_clean_slice", "slice_refused", "unreadable"]
@@ -98,7 +101,7 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_checks"
         case "fix_important":
             return "land_model"
-        case "land_slice" | "settle" | "escalate" | "escalate_ledger":
+        case "land_slice" | "settle" | "escalate" | "escalate_ledger" | "escalate_adr":
             return "land_checks"
         case _:
             return "land_model"
@@ -231,12 +234,16 @@ def landing_step(
     ledger_only: bool = False,
     pending: Sequence[object] = (),
     escalated: bool = False,
+    adr_escalated: bool = False,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
     (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
     refusal is recorded) are computed by the caller: a ledger-only `open_findings_blocking` is
     `settle` while `pending` is not empty, then one `escalate_ledger`, then `none`; and an
-    exhausted budget under it is that escalation, never a slice or a restart. A model pass or a
+    exhausted budget under it is that escalation, never a slice or a restart. `adr_escalated`
+    (a *resolved* `escalate_adr` entry for this head and refusal is recorded) does the same for
+    an `adr_number_taken` the renumbering cannot settle: one `escalate_adr`, then `none`, and
+    never `exhausted()`, so no diagnose, slice or restart. A model pass or a
     sync past its budget is the exhaustion: the `land_slice` when `slicing` is a `Slice`, else
     the `diagnose` carrying `slicing` as its `restart_why` (`None`: as before GH-297). A task
     whose latest diagnosis is `unlandable` has no step left (`none`); one whose diagnosis said
@@ -328,13 +335,14 @@ def landing_step(
         case "attempts_exhausted":
             return _sync(step, exhausted, spent, conflicting=False)
         case "adr_number_taken":
-            # A clean renaming has its own capped step; anything else -- an ambiguous result
-            # included -- is the diagnose, so no Developer ever picks an ADR number.
+            # A clean renaming has its own capped step; anything else -- an ambiguous result,
+            # or a renaming past its cap -- is asked once of the human and never restarted: no
+            # Developer picks an ADR number, and a restart would meet the same number again.
             if isinstance(facts.adr_collision, Renaming) and (
                 spent.renumbers < LANDING_RENUMBERS_MAX
             ):
                 return step("renumber")
-            return exhausted()
+            return step("none") if adr_escalated else step("escalate_adr")
         case "merge_failed":
             return exhausted()
         case "master_moved":

@@ -469,6 +469,10 @@ def _dispatch(context: LandingContext) -> None:
             landing_fix.settle(context)
         case "escalate_ledger":
             landing_fix.escalate_ledger(context)
+        case "escalate_adr":
+            # The executor is the `landing-adr-escalation` subtask's; until it replaces this
+            # arm the step records nothing and the human is not yet asked.
+            context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: not built yet")
         case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:

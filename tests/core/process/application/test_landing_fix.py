@@ -237,6 +237,7 @@ def test_the_executors_that_are_built_are_the_live_steps():
         "diagnose",
         "settle",
         "escalate_ledger",
+        "escalate_adr",
     }
 
 

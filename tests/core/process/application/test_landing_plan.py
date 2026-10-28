@@ -8,7 +8,7 @@ import pytest
 
 from agentic.core.process.application import landing_plan
 from agentic.core.process.application.ports import IssueComment, IssueState
-from agentic.core.process.domain import landing, rules
+from agentic.core.process.domain import adr_numbers, landing, rules
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryTracker, memory_ports
 
@@ -282,3 +282,65 @@ def test_a_pass_written_before_the_pull_request_spends_the_important_budget_and_
     assert spent.important_passes == landing.LANDING_IMPORTANT_PASSES_MAX
     assert spent.passes == 0 and spent.syncs == 0 and spent.reruns_on_head == 0
     assert landing_plan.spent({"landing": [{"step": "fix"}]}, "h", None).important_passes == 0
+
+
+def _asked(step: str, *, head: str = HEAD, refusal: str = "adr_number_taken", **more) -> dict:
+    return {"step": step, "head": head, "refusal": refusal, **more}
+
+
+def test_an_open_escalate_adr_entry_does_not_count_as_asked_but_a_resolved_one_does():
+    open_ = {"landing": [_asked("escalate_adr")]}
+    done = {"landing": [_asked("escalate_adr", resolved_at="2026-10-28T10:00:00Z")]}
+    recorded = landing_plan.escalation_recorded
+    assert not recorded(open_, HEAD, "adr_number_taken", "escalate_adr", resolved_only=True)
+    assert recorded(done, HEAD, "adr_number_taken", "escalate_adr", resolved_only=True)
+
+
+def test_another_head_refusal_or_step_is_not_the_question_asked():
+    raw = {"landing": [_asked("escalate_adr", resolved_at="t")]}
+    recorded = landing_plan.escalation_recorded
+    assert not recorded(raw, "b" * 40, "adr_number_taken", "escalate_adr", resolved_only=True)
+    assert not recorded(raw, HEAD, "merge_failed", "escalate_adr", resolved_only=True)
+    assert not recorded(raw, HEAD, "adr_number_taken", "escalate_ledger", resolved_only=True)
+
+
+def test_escalate_ledger_keeps_counting_an_entry_without_resolved_at():
+    raw = {"landing": [_asked("escalate_ledger", refusal="open_findings_blocking")]}
+    assert landing_plan.escalation_recorded(raw, HEAD, "open_findings_blocking", "escalate_ledger")
+
+
+def test_escalate_adr_is_a_live_step_but_not_an_always_taken_one():
+    assert "escalate_adr" in landing_plan.LIVE_STEPS
+    assert "escalate_adr" not in landing_plan.ALWAYS_TAKEN
+    assert landing_plan.takes_action("escalate_adr", landing_plan.LIVE_STEPS)
+    assert not landing_plan.takes_action("escalate_adr", frozenset())
+
+
+def _adr_step(raw: dict) -> landing.LandingStep:
+    facts = rules.MergeFacts(
+        task_id="GH-9",
+        status="ready_for_review",
+        reviewed_unit_approved=True,
+        reviewed_head=HEAD,
+        open_blocking=0,
+        open_important=0,
+        pr_state="OPEN",
+        pr_head=HEAD,
+        in_eval_set=False,
+        touched_paths=(),
+        attempts=1,
+        checks_head=HEAD,
+        checks_master="b" * 40,
+        checks_passed=True,
+        current_master="b" * 40,
+        adr_collision=adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0054"),
+    )
+    return landing_plan.step_for(raw, "adr_number_taken", facts)
+
+
+def test_step_for_asks_until_the_escalation_is_resolved_then_waits():
+    assert _adr_step({}).kind == "escalate_adr"
+    assert _adr_step({"landing": [_asked("escalate_adr")]}).kind == "escalate_adr"
+    assert _adr_step({"landing": [_asked("escalate_adr", resolved_at="t")]}).kind == "none"
+    other_head = _asked("escalate_adr", head="c" * 40, resolved_at="t")
+    assert _adr_step({"landing": [other_head]}).kind == "escalate_adr"

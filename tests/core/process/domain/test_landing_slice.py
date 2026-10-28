@@ -347,10 +347,10 @@ def test_without_slicing_the_exhaustion_is_the_diagnose_it_always_was(refusal, s
     assert step.restart_why is None
 
 
-def test_the_adr_collision_that_cannot_be_renamed_goes_through_the_same_helper():
+def test_the_adr_collision_that_cannot_be_renamed_never_slices_or_restarts():
     facts = _facts(adr_collision=Ambiguous("duplicate_own_number", "docs/adr/0001-x.md"))
     step = landing.landing_step("adr_number_taken", facts, _spent(), (), slicing=SLICE)
-    assert step == LandingStep("land_slice", "adr_number_taken", ("a", "b"))
+    assert step == LandingStep("escalate_adr", "adr_number_taken")
 
 
 def test_a_step_with_budget_left_is_not_touched_by_slicing():
