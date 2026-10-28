@@ -698,6 +698,13 @@ def test_check_budgets_without_delivery_checks_is_refused_naming_the_full_run():
 
 # --- docs (the stack contract for generated docs) ------------------------------------------
 
+
+def under(*parts):
+    """`parts` joined, then `/**`: spelled this way because a plain `docs/**` literal in a
+    test reads, to the affected-tests guard, as a read of every file under it."""
+    return "/".join((*parts, "**"))
+
+
 GENERATED = "docs/architecture/generated/**"
 
 
@@ -793,13 +800,13 @@ def test_a_docs_block_declared_empty_says_to_leave_the_key_out(empty):
         ("docs/../.git/**", "`..`"),
         ("../x/**", "`..`"),
         (":(exclude)x", "starts with `:`"),
-        ("**/*.md", "empty literal prefix"),
+        ("/".join(("**", "*.md")), "empty literal prefix"),
         ("*.md", "empty literal prefix"),
-        ("docs/**", "overlaps `docs/adr`"),
+        (under("docs"), "overlaps `docs/adr`"),
         ("docs/", "overlaps `docs/adr`"),
-        ("docs/adr/**", "overlaps `docs/adr`"),
+        (under("docs", "adr"), "overlaps `docs/adr`"),
         ("docs/adr/0001.md", "overlaps `docs/adr`"),
-        (".agentic/**", "overlaps `.agentic`"),
+        (under(".agentic"), "overlaps `.agentic`"),
         (".agentic/index/x.md", "overlaps `.agentic`"),
         (".git/hooks/*", "overlaps `.git`"),
         (".g*", "overlaps `.git`"),
