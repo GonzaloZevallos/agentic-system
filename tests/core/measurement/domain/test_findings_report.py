@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any
 
 from agentic.core.measurement.domain import findings_report as fr
+from agentic.core.process.domain import rules
 
 WINDOW = (date(2026, 10, 13), date(2026, 10, 27))
 
@@ -127,6 +128,28 @@ def test_returns_are_counted_by_category_origin_and_subtask_and_a_landing_reopen
     assert report.returns_by_origin == {"full_checks": 1, "review": 1, "suite_red": 1}
     assert report.figures.returns == 3
     assert report.figures.returns_per_subtask == 1.5
+
+
+def test_a_return_from_a_red_ci_job_is_counted_as_a_full_checks_return():
+    """GH-376: the CI path returns through `rules.full_checks_return`, so its reason is the
+    one `returns_by_origin` already classifies, whichever machine ran the jobs."""
+    record: Any = {
+        "version": 1,
+        "head": "a" * 40,
+        "passed": False,
+        "duration_s": 1.0,
+        "declared": {"name": "ci"},
+        "results": [{"name": "web", "passed": False, "link": "https://example/runs/1"}],
+        "witness": None,
+        "ran_on": "ci",
+        "failed_step": "web",
+    }
+    state: Any = {"id": "T-1", "subtasks": {"a": {"id": "a", "status": "approved"}}}
+    patch = rules.full_checks_return(state, record, 3)
+    doc = _doc("T-1", subtasks={"a": {}}, change_history=patch["change_history"])
+    report = fr.build([doc], *WINDOW)
+    assert report.returns_by_origin == {"full_checks": 1}
+    assert report.returns_by_category == {"process-suite-red": 1}
 
 
 def test_the_medians_read_the_pr_clock_and_the_task_clock():

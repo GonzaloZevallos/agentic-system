@@ -22,7 +22,6 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any
 
 import anyio
@@ -41,7 +40,7 @@ from ..domain.task import (
     FullChecksRecord,
     TaskState,
 )
-from .checkouts import SetupFailed, Checkout, task_base, task_checkout_in_thread
+from .checkouts import Checkout, SetupFailed, task_base, task_checkout_in_thread
 from .ports import GitError, Ports
 from .presubmit import CheckoutPresubmit, reuse_of
 from .run_role import finish
