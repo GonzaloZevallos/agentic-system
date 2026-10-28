@@ -48,15 +48,15 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 For issues the poller launches (the ones labelled `agentic`). The rule is ADR-0039 ("Bloqueantes" and its 2026-10-04 addendum); this section only says how to write the issue.
 
-- **Form**: the first non-empty line of the body is a `Blocked by:` line, and the line holds nothing else. Matching is case-insensitive.
+- **Form**: any whole line of the body, outside a code fence, is a `Blocked by:` line, and the line holds nothing else. Matching is case-insensitive. Several lines are combined (their numbers are united). A line inside a fenced code block (three or more backticks or tildes) is ignored; an indented line still counts.
 
   ```
   Blocked by: #58
   Blocked by: #58, #61
   ```
 
-- **Forms that do not match**: bold or quote markup (`**Blocked by:** #58`, `> Blocked by: #58`), no colon, `and` between numbers, a full issue URL, a trailing comment such as `(API)`, or the line placed below other text. A line that does not match means no blocker: the issue launches on the next poll.
-- **With wayfinding**: when a child also carries `Part of #<map>`, the `Blocked by:` line goes **first**, above `Part of #<map>`. Only the first non-empty line is read.
+- **Forms that do not match**: bold or quote markup (`**Blocked by:** #58`, `> Blocked by: #58`), no colon, `and` between numbers, a full issue URL, or a trailing comment such as `(API)`. A line that does not match means no blocker: the issue launches on the next poll.
+- **With wayfinding**: when a child also carries `Part of #<map>`, put the `Blocked by:` line first, above `Part of #<map>`, as a convention only: the line is read wherever it sits. The system scans the whole body rather than refusing to launch an issue whose line is not first (GH-415): refusing would need a new kind of hold and would keep the writer's mistake alive.
 - **Label**: put `agentic` on the issue **at creation**. The poller holds it until every blocker is resolved. Never write "the label goes on once #N is merged"; that leaves the issue out of the queue until a human comes back.
 - **Native dependencies**: when the issue has native GitHub dependencies, those decide and the body line is ignored. The body line is the fallback when there are none. The two are never combined.
 - **Resolved**: a blocker is resolved when it is closed as not planned, or closed as completed with its PR merged and that merge commit in the product checkout's local `HEAD`. A checkout behind `origin` does not launch the dependent issue until someone pulls, and the poller logs nothing in that case: if a dependent issue looks stuck, pull the product checkout.

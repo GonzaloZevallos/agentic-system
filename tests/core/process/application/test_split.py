@@ -142,10 +142,9 @@ async def test_a_gh_failure_outside_the_creation_escalates_failure_and_resumes_c
     assert created == 4
 
 
-def test_the_reader_of_blockers_loses_every_blocker_after_the_first_line():
-    # Why a part lists all its blockers on one line (invariant 8 cannot hold literally):
-    # `rules.blockers_from_body` reads the first non-empty line only.
-    assert rules.blockers_from_body("Blocked by: #1\nBlocked by: #2\n\nbody") == (1,)
+def test_the_reader_of_blockers_unites_every_blocked_by_line():
+    # A part still lists all its blockers on one line; the reader no longer needs it to.
+    assert rules.blockers_from_body("Blocked by: #1\nBlocked by: #2, #1\n\nbody") == (1, 2)
     assert rules.blockers_from_body("Blocked by: #1, #2\n\nbody") == (1, 2)
 
 

@@ -701,3 +701,18 @@ retoma porque no hay registro de lock. Una tarea en `planned` quedó así horas 
   puede dar el poller (sin cupo, tope gastado, lock ilegible) salen como una línea por tarea que
   nombra la tarea y cómo frenarla o retomarla a mano; la línea de cola bloqueada sigue saliendo.
 
+## Addendum (GH-415, 2026-10-28): `Blocked by:` en cualquier línea fuera de un bloque de código
+
+El poller lanzó apostrophe #461 con `Blocked by: #460` en la línea 22 del cuerpo, porque el
+lector solo miraba la primera línea no vacía. La sección "Bloqueantes" queda así:
+
+- Cuenta cualquier línea completa `Blocked by: #N[, #M]` fuera de un bloque de código (cercas
+  de 3 o más acentos graves o tildes), en cualquier posición del cuerpo. Varias líneas se
+  unen, sin repetir números. Una línea sangrada sigue contando; `> cita`, `**negrita**` y la
+  prosa siguen sin contar.
+- Alcanza a los issues abiertos que ya están en la bandeja: uno con una de esas líneas bajo la
+  primera queda retenido en cuanto se despliega el cambio. Un humano borra la línea, o la
+  encierra en una cerca, para liberarlo.
+- La lista del split (`split_tracker_items`, ADR-0062) usa el mismo alcance.
+- Se eligió leer todo el cuerpo y no negarse a lanzar un issue con la línea fuera de lugar:
+  negarse pedía un nuevo `Deferred` y dejaba vivo el error de quien escribe el issue.
