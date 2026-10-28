@@ -22,10 +22,11 @@ the launch (the signal's reap may have run just before the `Popen` and found not
 when the command ended, whatever it answered. It raises only once the command's process has
 ended, so a caller that restores the checkout afterwards never races a live check.
 
-Each run also gets its own `TMPDIR`, a directory on the disk under the product's `.agentic/tmp/`
-(GH-391, ADR-0069), so what pytest, Node or Playwright write never lands on the RAM-backed
-`/tmp`. The run reaps its mark first and the directory is removed after, however the run ends
-(a result, a timeout, `RunStopped`): by then the command's process has ended.
+Each run also gets its own `TMPDIR`, a directory on the disk under the scratch root, in the
+product's partition (GH-391, ADR-0069, GH-397), so what pytest, Node or Playwright write never
+lands on the RAM-backed `/tmp`. The run reaps its mark first and the directory is removed
+after, however the run ends (a result, a timeout, `RunStopped`): by then the command's
+process has ended.
 """
 
 from __future__ import annotations

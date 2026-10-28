@@ -87,6 +87,25 @@ def test_run_registry_dir_falls_back_to_the_home_dot_local_state(monkeypatch):
     assert cfg.run_registry_dir == Path("/home/t/.local/state/agentic/runs")
 
 
+def test_scratch_dir_defaults_under_xdg_cache_home(monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", "/tmp/cache")
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.scratch_dir == Path("/tmp/cache/agentic/scratch")
+    assert Configuration(product_dir=Path("/tmp/p")).scratch_dir == cfg.scratch_dir
+
+
+def test_scratch_dir_falls_back_to_the_home_dot_cache(monkeypatch):
+    monkeypatch.delenv("XDG_CACHE_HOME")
+    monkeypatch.setattr(Path, "home", lambda: Path("/home/t"))
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.scratch_dir == Path("/home/t/.cache/agentic/scratch")
+
+
+def test_scratch_dir_is_overridable_by_the_environment():
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_SCRATCH_DIR": "/var/scratch"})
+    assert cfg.scratch_dir == Path("/var/scratch")
+
+
 def test_run_registry_dir_is_overridable_so_tests_never_touch_the_real_one():
     # `tests/conftest.py` of a future subtask redirects every test through this same
     # env override (invariant: no test writes to the real run registry).

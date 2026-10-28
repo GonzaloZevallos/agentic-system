@@ -25,7 +25,13 @@ from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
-from ..domain.scratch import OwnerKind, ScratchListing, SpaceReading, SweepDecision
+from ..domain.scratch import (
+    OwnerKind,
+    PartitionListing,
+    ScratchListing,
+    SpaceReading,
+    SweepDecision,
+)
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -1571,7 +1577,8 @@ class Scratch(Protocol):
     def open(
         self, task_key: str | None, kind: OwnerKind, token: str, slug: str
     ) -> AbstractContextManager[Path]:
-        """The directory of one owner, under the product's `.agentic/tmp/<task>/`. Its
+        """The directory of one owner, under `<scratch root>/<product key>/<task>/`, outside every
+        repository. Its
         owner record is written before the directory is created; on the way out the
         directory is removed, then the record, however the block ended. `token` is the
         one the owner's processes are marked with."""
@@ -1583,9 +1590,21 @@ class Scratch(Protocol):
         ...
 
     def listing(self) -> ScratchListing:
-        """What is on the disk under `.agentic/tmp/`: each task folder and each owner in
-        it, with the mtimes and the liveness of its record already read (the poller's
-        sweep decides on these facts; it touches no filesystem itself)."""
+        """What is on the disk under this product's partition of the scratch root: each task
+        folder and each owner in it, with the mtimes and the liveness of its record already read
+        (the poller's sweep decides on these facts; it touches no filesystem itself)."""
+        ...
+
+    @property
+    def product_key(self) -> str:
+        """The key of this product's partition: the one `partitions` never judges."""
+        ...
+
+    def partitions(self) -> PartitionListing:
+        """Every product's partition under the scratch root, each with its mtime, its task
+        folders' mtimes and every child's (hidden temp names included), the owners' record
+        facts already read, and the `.<key>.swept-<token>` leftovers as their own kind. The
+        orphan rule decides on these facts; this port only reads."""
         ...
 
     def kept_folders(self) -> Sequence[tuple[str, datetime]]:
@@ -1594,8 +1613,10 @@ class Scratch(Protocol):
         ...
 
     def sweep(self, decision: SweepDecision) -> None:
-        """Removes what `decision` names: for an owner its directory, then its record. A path
-        already gone is not an error."""
+        """Removes what `decision` names: for an owner its directory, then its record; an orphan
+        partition is renamed aside at once, then removed, and a leftover is only removed (never
+        this product's own partition, never a name that is not one plain segment of the root).
+        A path already gone is not an error."""
         ...
 
 

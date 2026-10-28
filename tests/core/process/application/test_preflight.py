@@ -14,12 +14,15 @@ from agentic.core.process.application.preflight import (
     PLACEHOLDERS,
     UNKNOWN_PRODUCT,
     RunsOnItsOwnCheckout,
+    ScratchInARepository,
     declared_stack,
     declared_stack_of,
+    nearest_existing,
     no_forbidden,
     no_setup,
     preflight,
     product_name,
+    refuse_scratch_in_a_repository,
     unfixed_stage0,
 )
 from agentic.core.process.application.run_role import load_prompt
@@ -78,6 +81,50 @@ def test_a_worktree_of_the_running_repository_is_refused_too(stage0):
     ports = ports_where(**{str(stage0): "/repos/system/.git", str(worktree): "/repos/system/.git"})
     with pytest.raises(RunsOnItsOwnCheckout):
         preflight(Configuration(product_dir=worktree), ports)
+
+
+def test_the_nearest_existing_ancestor_of_a_root_that_is_not_there_yet(tmp_path):
+    (tmp_path / "cache").mkdir()
+    assert nearest_existing(tmp_path / "cache" / "a" / "b") == (tmp_path / "cache").resolve()
+    assert nearest_existing(tmp_path / "cache") == (tmp_path / "cache").resolve()
+
+
+def test_a_scratch_root_in_the_products_repository_is_refused(stage0, tmp_path):
+    root = tmp_path / "cache" / "scratch"
+    ports = ports_where(**{str(tmp_path.resolve()): "/r/.git", str(PRODUCT): "/r/.git"})
+    with pytest.raises(ScratchInARepository) as refusal:
+        refuse_scratch_in_a_repository(Configuration(product_dir=PRODUCT, scratch_dir=root), ports)
+    assert str(root.resolve()) in str(refusal.value)
+    assert "/r/.git" in str(refusal.value)
+    assert "AGENTIC_SCRATCH_DIR" in str(refusal.value)
+
+
+def test_a_scratch_root_in_stage0s_repository_is_refused(stage0, tmp_path):
+    ports = ports_where(
+        **{str(tmp_path.resolve()): "/sys/.git", str(stage0): "/sys/.git", str(PRODUCT): "/p/.git"}
+    )
+    with pytest.raises(ScratchInARepository):
+        refuse_scratch_in_a_repository(
+            Configuration(product_dir=PRODUCT, scratch_dir=tmp_path / "s"), ports
+        )
+
+
+def test_a_scratch_root_in_no_repository_or_in_a_third_one_passes(stage0, tmp_path):
+    cfg = Configuration(product_dir=PRODUCT, scratch_dir=tmp_path / "s")
+    refuse_scratch_in_a_repository(cfg, ports_where(**{str(PRODUCT): "/p/.git"}))
+    third = ports_where(**{str(tmp_path.resolve()): "/o/.git", str(PRODUCT): "/p/.git"})
+    refuse_scratch_in_a_repository(cfg, third)
+
+
+def test_preflight_refuses_a_scratch_root_in_a_repository_before_reading_the_product(
+    stage0, tmp_path
+):
+    ports = ports_where(**{str(tmp_path.resolve()): "/p/.git", str(PRODUCT): "/p/.git"})
+    with pytest.raises(ScratchInARepository):
+        preflight(
+            Configuration(product_dir=PRODUCT, scratch_dir=tmp_path / "s"),
+            replace(ports, flags=ExplodingFlags(), stack=ExplodingStack()),
+        )
 
 
 class ExplodingFlags:

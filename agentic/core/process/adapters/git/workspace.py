@@ -44,7 +44,7 @@ from ...application.ports import AddedAdr, AddedLine, Checkout, Upstream, Upstre
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.ci import Containment
-from ...domain.scratch import KEPT_DIR, SCRATCH_DIR
+from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
 from ...domain.task import DependencyState, MergeOutcome
 
 WORKTREES = Path(".agentic/worktrees")
@@ -54,14 +54,15 @@ WORKTREES = Path(".agentic/worktrees")
 # The knowledge index a role reads is written here on every attempt and never committed
 # (ADR-0001 of the knowledge module); `core.knowledge`'s builder names the same directory.
 INDEX_DIR = ".agentic/index"
-# The scratch of every check and role attempt, and the evidence a task keeps (GH-391).
+# The scratch an older run left in the product (it lives outside every repository now,
+# GH-397), and the evidence a task keeps (GH-391).
 EXCLUDES = (
     f"{WORKTREES}/",
     f"{STATE_FILE}*",
     f"{STATE_DIR}/",
     f"{LOGS_DIR}/",
     f"{INDEX_DIR}/",
-    f"{SCRATCH_DIR}/",
+    f"{LEGACY_SCRATCH_DIR}/",
     f"{KEPT_DIR}/",
 )
 

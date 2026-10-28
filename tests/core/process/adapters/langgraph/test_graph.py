@@ -26,6 +26,7 @@ from agentic.core.process.adapters.langgraph.graph import (
 )
 from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application import resume
+from agentic.core.process.application.final_validation import _verdict_patch
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.application.preflight import UNKNOWN_PRODUCT
 from agentic.core.process.domain import rules
@@ -1694,6 +1695,89 @@ async def test_a_failed_delivery_of_a_platform_task_resumes_to_deliver_at_no_cos
     first, second = fakes.tracker.attempted_bodies
     assert first == second
     assert fakes.workspace.cleaned == ["GH-1"]
+
+
+async def _final_validation_rounds(config, rounds, developer_runs):
+    """The sample-app-less UI feature of the test above, with PM's final validation scripted as
+    `rounds` (one `final_validation(...)` each); each return the Developer answers (`developer_runs`
+    of them, the pair's limit being two) goes through an approving incremental review."""
+    script = script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        ui_lead=[design_findings("approved")],
+        pm_consolidator=[consolidation("approved")],
+        ux_lead_final=[design_findings("approved") for _ in rounds],
+        ui_lead_final=[design_findings("approved") for _ in rounds],
+        pm_final=rounds,
+        **technical(
+            developer=[delivered()] + [delivered("fixed") for _ in range(developer_runs)],
+            tech_lead_review=[reviewed("approved") for _ in range(developer_runs + 1)],
+        ),
+    )
+    return await run_graph(script, config, fakes=Fakes())
+
+
+def _settled(final):
+    return [(r["claim"], r["version"], r["by"]) for r in final.get("plan_settled", [])]
+
+
+async def test_an_approving_final_validation_settles_the_earlier_rounds_rows(config):
+    """GH-374: PM approves at version 3 after two returns; the criteria still standing from both
+    earlier rounds are settled `approved` at 3 (round 2 raises round 1's criterion again,
+    word for word, so nothing is superseded: the approval settles it), and no row of the
+    ledger is left open."""
+    final = await _final_validation_rounds(
+        config,
+        [
+            final_validation("returned", "wide", blocking=["Nueva venta is 1037px wide"]),
+            final_validation(
+                "returned",
+                "still wide",
+                blocking=["Nueva venta is 1037px wide", "Nueva venta must fit 390px"],
+            ),
+            final_validation("approved"),
+        ],
+        developer_runs=2,
+    )
+    assert final["status"] == "ready_for_review"
+    assert _settled(final) == [
+        ("Nueva venta is 1037px wide", 3, "approved"),
+        ("Nueva venta must fit 390px", 3, "approved"),
+    ]
+    assert rules.open_findings(final) == []
+
+
+async def test_a_returning_final_validation_supersedes_only_keys_it_does_not_raise(config):
+    """The first return writes no settlement (nothing earlier to settle, see the patch test
+    below). The second raises `a` again and adds `b`: nothing is superseded. The third (which
+    escalates, the pair's limit reached) raises only `c`: `a` and `b` are superseded at 3, `c`
+    -- its own -- stays open."""
+    final = await _final_validation_rounds(
+        config,
+        [
+            final_validation("returned", "wide", blocking=["a"]),
+            final_validation("returned", "still", blocking=["a", "b"]),
+            final_validation("returned", "again", blocking=["c"]),
+        ],
+        developer_runs=2,
+    )
+    assert final["status"] == WAITING_ON_HUMAN
+    assert _settled(final) == [("a", 3, "superseded"), ("b", 3, "superseded")]
+    assert [r["claim"] for r in rules.open_findings(final)] == ["c"]
+
+
+def test_the_first_returning_final_validation_writes_no_settlement(config):
+    """The patch of a run with no earlier PM record carries no `plan_settled` key at all."""
+    state = {"subtasks": {"api": {"status": "approved"}}}
+    patch = _verdict_patch(
+        state,
+        configuration_from(config),
+        {"verdict": "returned", "reason": "wide", "blocking": ["a"]},
+    )
+    assert "plan_settled" not in patch
+    assert [f["claim"] for f in patch["findings"]] == ["a"]
 
 
 # --- GH-373: a run stopped after its approved integration and full checks ----------------------
