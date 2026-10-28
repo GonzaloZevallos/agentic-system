@@ -155,7 +155,7 @@ def _land(
     if head is None:
         return LandResult("skipped", "no_head")
     integration_work = False
-    resumed = landing_slice.open_entry(landing_plan.entries(raw), head)
+    resumed = landing_slice.open_entry(landing_plan.live_entries(raw), head)
     if resumed is not None:
         # A slice a crash or a CI wait left open: continued as recorded, never decided again.
         units = resumed.get("slice_units")
@@ -209,7 +209,7 @@ def _land(
         landing_fix.escalate_failed_diagnosis(context)
         return LandResult("dispatched", step=step.kind)
     if resumed is None and landing_rules.already_dispatched(
-        landing_plan.entries(current), head, step.kind, master
+        landing_plan.live_entries(current), head, step.kind, master
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -249,7 +249,7 @@ def _land(
             entry["integration_work"] = True
     if resumed is None:
         ports.documents.record_closure(
-            task_id, {"landing": [*landing_plan.entries(current), entry]}
+            task_id, {"landing": [*landing_plan.all_entries(current), entry]}
         )
     context = LandingContext(
         task_id,
@@ -333,7 +333,7 @@ def _foreign_merge(
         merging = ports.workspace.merge_head(checkout.path)
     except GitError as exc:
         return LandResult("stopped", f"merge_head_unreadable: {exc}", kind)
-    owner = landing_rules.merge_owner(merging, master, head, landing_plan.entries(document))
+    owner = landing_rules.merge_owner(merging, master, head, landing_plan.all_entries(document))
     if owner != "foreign":
         return None
     log(f"agentic: land: {task_id}: merge in progress ({merging}) is not the system's, left alone")
@@ -352,7 +352,7 @@ def _refused(
     does (the head moved since the poller classified it, or a recovery is owed): nothing is
     recorded, no resume or diagnoser is spawned, and the next round decides again. `head`
     is the one the step answers; a recovery has none, so the last entry's stands in."""
-    entries = landing_plan.entries(document)
+    entries = landing_plan.all_entries(document)
     shown = head or (str(entries[-1].get("head")) if entries else "-")
     log(
         f"agentic: land: {task_id}: {shown} skipped: run_kind_mismatch "
@@ -402,7 +402,7 @@ def _recover(
     respawned, whatever the merge decision would say: its entry is already written, so the
     path below would only answer `already_dispatched` or `not_live` forever. `None` when
     nothing is owed and the ordinary path goes on."""
-    written = landing_plan.entries(raw)
+    written = landing_plan.live_entries(raw)
     last = written[-1] if written else {}
     try:
         now = datetime.fromisoformat(clock())

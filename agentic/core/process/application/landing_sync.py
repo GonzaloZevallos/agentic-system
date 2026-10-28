@@ -32,7 +32,7 @@ from ..domain.task import INTEGRATION, ChangeCategory, ChangesRequested, Subtask
 from . import resume as resuming
 from .adr_collision import adr_collision
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout
-from .landing_plan import LandingContext, entries
+from .landing_plan import LandingContext, all_entries
 from .ports import GitError, Ports, UpstreamMerge, Workspace
 from .registration import REGISTER_WAIT_S
 
@@ -139,7 +139,7 @@ def spawn_and_mark(context: ResumeContext, clock: Callable[[], str] = _now) -> i
     if pid is None:
         return None
     written = [
-        dict(entry) for entry in entries(context.ports.documents.load(context.task_id) or {})
+        dict(entry) for entry in all_entries(context.ports.documents.load(context.task_id) or {})
     ]
     if not written:
         return pid
@@ -176,7 +176,7 @@ def _reopened(
     and resumes the task."""
     reopened = reopen(state, [unit], reason, CROSSCUT, status)
     marked = landing.with_cost_base(
-        entries(state), context.head, context.step.kind, state.get("cost_usd", 0.0)
+        all_entries(state), context.head, context.step.kind, state.get("cost_usd", 0.0)
     )
     context.ports.documents.save({**reopened, "landing": marked})
     record_landing(context, marked)
@@ -229,7 +229,7 @@ def merges_cleared(
 def _owned(context: LandingContext, state: TaskState) -> Callable[[str], bool]:
     """Whether a `MERGE_HEAD` is one this task's landing merged (`landing.merge_owner`)."""
     return lambda sha: (
-        landing.merge_owner(sha, context.upstream.sha, context.head, entries(state)) == "system"
+        landing.merge_owner(sha, context.upstream.sha, context.head, all_entries(state)) == "system"
     )
 
 
@@ -356,7 +356,7 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
             contains: bool | None = ports.workspace.is_ancestor(checkout.path, sha, merged.head)
         except GitError:
             contains = None
-        written = entries(state)
+        written = all_entries(state)
         cost = state.get("cost_usd", 0.0)
         # Defensive: a clean merge always holds its upstream; one that does not is closed
         # as unsynced, never resolved, and the verdict is not carried to it.
@@ -487,7 +487,7 @@ def renumber_adr(context: LandingContext) -> None:
         "head_after": new_head,
         "carried": carried,
     }
-    resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
+    resolved = landing.resolve_open(all_entries(state), _now(), state.get("cost_usd", 0.0))
     subtasks = _carries(state, unit, reviewed, new_head, holds=carried)
     ports.documents.save(
         {
