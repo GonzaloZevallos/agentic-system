@@ -15,6 +15,7 @@ from langgraph.types import Command, interrupt
 
 from agentic import composition
 from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
+from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
 from agentic.core.process.application.ports import RunStopped
@@ -311,3 +312,71 @@ def test_ports_whose_commands_are_not_the_shells_are_bound_unchanged(tmp_path, m
         commands=MemoryCommands(),
     )
     assert composition.bind_task(ports, "GH-7") is ports
+
+
+def test_a_scratch_root_inside_the_products_repository_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    root = product / "cache" / "scratch"
+    root.mkdir(parents=True)
+    with pytest.raises(preflight.ScratchInARepository) as refusal:
+        composition.default_ports(Configuration(product_dir=product, scratch_dir=root))
+    # Absolute, and says how to fix it.
+    assert str(root) in str(refusal.value)
+    assert "AGENTIC_SCRATCH_DIR" in str(refusal.value)
+    assert "XDG_CACHE_HOME" in str(refusal.value)
+
+
+def test_a_scratch_root_inside_the_running_repository_is_refused(tmp_path, monkeypatch):
+    system = a_repository(tmp_path / "system")
+    monkeypatch.setattr(preflight, "CHECKOUT", system)
+    product = a_repository(tmp_path / "product")
+    with pytest.raises(preflight.ScratchInARepository):
+        composition.default_ports(Configuration(product_dir=product, scratch_dir=system / "s"))
+
+
+def test_a_scratch_root_not_yet_created_is_judged_from_its_nearest_existing_ancestor(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    (product / "cache").mkdir()
+    root = product / "cache" / "not" / "yet" / "scratch"
+    assert not (product / "cache" / "not").exists()
+    with pytest.raises(preflight.ScratchInARepository):
+        composition.default_ports(Configuration(product_dir=product, scratch_dir=root))
+
+
+def test_a_scratch_root_in_a_third_repository_is_accepted(tmp_path, monkeypatch):
+    """The comparison is by repository: only the product's and stage0's are forbidden."""
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    other = a_repository(tmp_path / "other")
+    ports = composition.default_ports(Configuration(product_dir=product, scratch_dir=other / "s"))
+    assert ports.scratch is not None
+
+
+def test_the_default_scratch_root_raises_neither_refusal(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    assert composition.default_ports(Configuration(product_dir=product)).scratch
+
+
+def test_the_tmpdir_of_an_attempt_on_the_systems_own_repository_is_outside_it(
+    tmp_path, monkeypatch
+):
+    """Criterion 1 of GH-397. `_ports` and not `default_ports`: the product here IS the
+    repository `CHECKOUT` names, which `default_ports` refuses by design (ADR-0017); the
+    production run of this system as a product goes through the same `_ports`, and the
+    directory `scratch.open` yields is what the runner exports as `TMPDIR`."""
+    system = a_repository(tmp_path / "system")
+    monkeypatch.setattr(preflight, "CHECKOUT", system)
+    monkeypatch.setattr(composition, "refuse_its_own_checkout", lambda cfg, ports: None)
+    cfg = Configuration(product_dir=system)
+    ports = composition._ports(cfg, NullStopFlag())
+    git = GitWorkspace(system, cfg.git_identity)
+    with ports.scratch.open("GH-1", "r", "abcdef0123456789", "developer") as tmpdir:
+        assert tmpdir.is_dir()
+        assert git.repository_at(system) is not None
+        assert git.repository_at(tmpdir) != git.repository_at(system)
+        assert git.repository_at(tmpdir) != git.repository_at(preflight.CHECKOUT)

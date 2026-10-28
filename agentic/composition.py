@@ -47,7 +47,10 @@ from .core.process.adapters.shell import (
 )
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
 from .core.process.application.ports import Ports, StopFlag
-from .core.process.application.preflight import refuse_its_own_checkout
+from .core.process.application.preflight import (
+    refuse_its_own_checkout,
+    refuse_scratch_in_a_repository,
+)
 from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
@@ -132,6 +135,7 @@ def default_ports(cfg: Configuration, stop_flag: StopFlag | None = None) -> Port
     # door all of them share. The refusal is the application's; the root only asks
     # (issue #44).
     refuse_its_own_checkout(cfg, ports)
+    refuse_scratch_in_a_repository(cfg, ports)
     return ports
 
 
