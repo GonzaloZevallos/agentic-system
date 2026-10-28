@@ -210,6 +210,9 @@ def render(
         # document without one is byte-identical to one written before GH-201. Under its
         # own name, never through `RECORDED_AS`.
         **({"approval_settled": approved} if (approved := state.get("approval_settled")) else {}),
+        # What `PM: final validation` runs settled (`plan_settlement`, GH-374), the same way:
+        # only when non-empty, under its own name.
+        **({"plan_settled": planned} if (planned := state.get("plan_settled")) else {}),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         # The plan's estimate and what follows from it (ADR-0054), written only when the
         # state carries them, so a document from before them is byte-identical.

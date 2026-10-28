@@ -15,7 +15,7 @@ from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import landing, rules
+from ..domain import landing, plan_settlement, rules
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
 from ..domain.task import (
@@ -43,10 +43,13 @@ LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
         "renumber",
         "land_slice",
         "diagnose",
+        "settle",
+        "escalate_ledger",
     }
 )
 """Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`, `renumber`),
-`landing_fix`'s (`fix`, `fix_important`, `rerun`, `file_followups_and_land`, `diagnose`) and
+`landing_fix`'s (`fix`, `fix_important`, `rerun`, `file_followups_and_land`, `diagnose`,
+`settle`, `escalate_ledger`) and
 `landing_slice`'s (`land_slice`, GH-297). A
 step outside the set is neither recorded nor spawned, so a refusal whose step is inert logs
 as it always did."""
@@ -201,6 +204,20 @@ def step_for(
         landing.blocking_owners(raw),
         important_units=landing.important_owners(raw),
         slicing=slicing,
+        ledger_only=plan_settlement.ledger_only(refusal, facts, raw),
+        pending=plan_settlement.pending(raw),
+        escalated=escalation_recorded(raw, facts.pr_head, refusal),
+    )
+
+
+def escalation_recorded(raw: Mapping[str, object], head: str | None, refusal: str) -> bool:
+    """Whether the `landing` list holds an `escalate_ledger` entry for this head and refusal: the
+    one question the human was asked, never twice."""
+    return any(
+        entry.get("step") == "escalate_ledger"
+        and entry.get("head") == head
+        and entry.get("refusal") == refusal
+        for entry in entries(raw)
     )
 
 

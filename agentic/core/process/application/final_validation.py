@@ -27,7 +27,7 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import plan_settlement, rules
 from ..domain.design import NO_SAMPLE_APP_NOTE, Design, compare_facts, design_facts, design_rules
 from ..domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL, UI_LEAD_FINAL, UX_LEAD_FINAL
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
@@ -133,8 +133,10 @@ async def _ui_lead_final(
 
 
 def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -> TaskState:
+    version = rules.next_version(state, PM_FINAL.name)
     if data["verdict"] == "approved":
-        return {}
+        settled = plan_settlement.on_approval(state, version)
+        return {"plan_settled": settled} if settled else {}
     subtasks = state.get("subtasks", {})
     target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks))
     subtask = {
@@ -144,7 +146,6 @@ def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -
         "returned_by": "final_validation",
     }
     patch: TaskState = {"subtasks": {target: subtask}}
-    version = rules.next_version(state, PM_FINAL.name)
     patch["findings"] = [
         {
             "subtask": target,
@@ -158,6 +159,8 @@ def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -
         }
         for claim in data["blocking"]
     ]
+    if superseded := plan_settlement.on_return(state, version, data["blocking"]):
+        patch["plan_settled"] = superseded
     limit = cfg.max_changes_requested_per_pair
     remaining = rules.remaining_changes(state, PAIR_PM_TECH_LEAD, limit)
     if remaining > 0:

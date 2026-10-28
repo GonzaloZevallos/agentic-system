@@ -229,6 +229,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     approved = _approved_versions(state)
     qa_approved = qa_approved_version(state)
     green = full_checks_green_version(state)
+    plan_settled = _plan_settled_versions(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -248,6 +249,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
                 _covered(record, key, approved)
                 or qa_settles(record, qa_approved)
                 or full_checks_settles(record, green)
+                or (key in plan_settled and record["version"] < plan_settled[key])
                 for record in open_records[key]
             )
         )
@@ -300,6 +302,17 @@ def full_checks_settles(record: FindingRecord, green_version: int) -> bool:
     return _norm(record["location"]).startswith(FULL_CHECKS_PREFIX) and (
         record["version"] < green_version
     )
+
+
+def _plan_settled_versions(state: TaskState) -> dict[tuple[str, str], int]:
+    """The highest `plan_settled` version per normalised (location, claim): a record below it
+    is settled by the `PM: final validation` run that wrote the row (GH-374). Written only by
+    `plan_settlement`, which is that fold writer's one decision; `{}` on a document without it."""
+    settled: dict[tuple[str, str], int] = {}
+    for item in state.get("plan_settled", []):
+        key = (_norm(item["location"]), _norm(item["claim"]))
+        settled[key] = max(settled.get(key, 0), item["version"])
+    return settled
 
 
 def _approved_versions(state: TaskState) -> dict[tuple[str, tuple[str, str]], int]:
@@ -366,6 +379,11 @@ def _norm(text: str) -> str:
     """Two reviews of the same objection do not write the same string; a trailing space
     or a capital must not split one row into two."""
     return " ".join(text.split()).casefold()
+
+
+def finding_key(location: str, claim: str) -> tuple[str, str]:
+    """The key the table folds a record by: its normalised location and claim."""
+    return (_norm(location), _norm(claim))
 
 
 def open_findings(state: TaskState) -> list[FindingRecord]:
@@ -678,6 +696,21 @@ def _pair_returns(state: TaskState, pair_key: str) -> int:
 
 def _run_count(state: TaskState, section: str) -> int:
     return sum(1 for r in state.get("runs", []) if r.get("section", r["role"]) == section)
+
+
+def pm_final_approved_version(state: TaskState) -> int:
+    """The `version` of the latest `PM: final validation` run while it stands as the live
+    approval, `0` otherwise (GH-374). A run is the live approval exactly when the PM->Tech
+    Lead returns of `change_history` have not caught up with how many times PM ran, the
+    return-matches-run counting `_lead_satisfied` uses. The only reader of that fact: nothing
+    else counts PM runs against PM->Tech Lead returns."""
+    if _pair_returns(state, PAIR_PM_TECH_LEAD.key) >= _run_count(state, PM_FINAL.name):
+        return 0
+    latest = 0
+    for run in state.get("runs", []):
+        if run.get("section", run["role"]) == PM_FINAL.name:
+            latest = run.get("version", 1)
+    return latest
 
 
 def _lead_satisfied(
@@ -2012,8 +2045,7 @@ def final_validation_due(state: TaskState) -> bool:
     final_idx = _latest_index(state, PM_FINAL.name)
     if final_idx is None or final_idx < review_idx:
         return True
-    still_approving = _pair_returns(state, PAIR_PM_TECH_LEAD.key) < _run_count(state, PM_FINAL.name)
-    return not still_approving
+    return pm_final_approved_version(state) == 0
 
 
 def copy_review_due(state: TaskState) -> bool:
