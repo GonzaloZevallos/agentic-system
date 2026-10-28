@@ -378,5 +378,6 @@ async def test_a_dry_run_of_an_increment_prints_the_plan_and_writes_nothing(
     assert f"uncommitted files in `{checkout}` will be committed into the increment" in shown
     assert ports.workspace.commits == []
     assert ports.tracker.comments == [] and ports.tracker.unlabeled == []
-    assert script.calls == [] and "push" not in fakes.workspace.events
+    assert script.calls == [] and fakes.workspace.events == []
+    assert ports.workspace.events == []  # the workspace the resume used was only read
     assert not (await app.aget_state(config)).values  # the thread was never seeded
