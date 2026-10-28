@@ -1,5 +1,5 @@
 """`FilesystemBoardSent`: the board mirror's memory of what it sent, one JSON file per
-product under the machine state dir (GH-375, ADR-0070).
+product under the machine state dir (GH-375, ADR-0071).
 
 The file is written whole and atomically (a temp file beside it, then `os.replace`), so a
 crash never leaves half of it. A file that cannot be read, or that does not hold the shape

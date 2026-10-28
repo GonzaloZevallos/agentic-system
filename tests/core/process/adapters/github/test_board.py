@@ -1,4 +1,4 @@
-"""GH-375, ADR-0070: the GraphQL adapter over an injected `gh` run. The responses are shaped
+"""GH-375, ADR-0071: the GraphQL adapter over an injected `gh` run. The responses are shaped
 like what `gh api graphql` prints for the Project API."""
 
 import json

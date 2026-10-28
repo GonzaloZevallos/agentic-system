@@ -1,4 +1,4 @@
-"""GH-375, ADR-0070: the board mirror inside `poll.run_once`, against `FakeBoard` and
+"""GH-375, ADR-0071: the board mirror inside `poll.run_once`, against `FakeBoard` and
 `FakeBoardSent`. The round's own lines are the ones it had before the mirror; the mirror adds
 at most its own notes and never fails the round."""
 

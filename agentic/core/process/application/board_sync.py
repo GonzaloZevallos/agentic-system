@@ -1,4 +1,4 @@
-"""The board mirror's use case (GH-375, ADR-0070): once per poll round, put each issue's card
+"""The board mirror's use case (GH-375, ADR-0071): once per poll round, put each issue's card
 on the GitHub Project, only when it changed since the last send.
 
 The Project is an output. This module reads issues off the tracker, builds `IssueFacts` from
