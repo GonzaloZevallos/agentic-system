@@ -462,6 +462,37 @@ def test_timestamped_comments_carries_each_bodys_own_timestamp():
     ]
 
 
+def test_timestamped_comments_carries_each_comments_author_and_url():
+    # `gh issue view --json comments` names the author under `author.login` and the
+    # `#issuecomment-<id>` address under `url`; the REST shape says `user.login` and
+    # `html_url`. A comment saying neither reads as empty strings, never a crash.
+    stdout = json.dumps(
+        {
+            "comments": [
+                {
+                    "body": "Owner's rule: x",
+                    "createdAt": "2026-10-28T10:00:00Z",
+                    "author": {"login": "GonzaloZevallos"},
+                    "url": "https://github.com/o/r/issues/19#issuecomment-111",
+                },
+                {
+                    "body": "rest shape",
+                    "createdAt": "2026-10-28T11:00:00Z",
+                    "user": {"login": "someone"},
+                    "html_url": "https://github.com/o/r/issues/19#issuecomment-222",
+                },
+                {"body": "bare", "createdAt": "2026-10-28T12:00:00Z", "author": None},
+            ]
+        }
+    )
+    comments = GhTracker(Path("/p"), Recorder(stdout=stdout)).timestamped_comments("GH-19")
+    assert [(c.author, c.url) for c in comments] == [
+        ("GonzaloZevallos", "https://github.com/o/r/issues/19#issuecomment-111"),
+        ("someone", "https://github.com/o/r/issues/19#issuecomment-222"),
+        ("", ""),
+    ]
+
+
 def test_timestamped_comments_of_a_task_without_an_issue_is_empty():
     assert GhTracker(Path("/p"), Recorder()).timestamped_comments("T-abc") == []
 

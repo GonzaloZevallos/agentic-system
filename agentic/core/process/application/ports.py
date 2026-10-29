@@ -1227,10 +1227,14 @@ class IssueState:
 class IssueComment:
     """One comment of an issue, with its timestamp (GH-137): `rules.next_attempt_at`'s
     own `since` reads a structured `createdAt`, never a parsed sentence, and `prior`
-    counts comments after the last one a human (not the system) wrote."""
+    counts comments after the last one a human (not the system) wrote. `author` (the
+    login) and `url` (the `#issuecomment-<id>` address) default to empty so every reader
+    that predates them is unchanged (GH-431); empty means the tracker did not say."""
 
     body: str
     created_at: str
+    author: str = ""
+    url: str = ""
 
 
 @dataclass(frozen=True)
