@@ -1011,6 +1011,21 @@ class CloseDocs(TypedDict):
     paths: list[str]
 
 
+OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
+"""Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
+`owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
+`template`, `link` and `too_long` are the text limits of invariant 4; `unknown_scope` is a
+marker with a parenthesis the grammar does not name."""
+
+
+class OwnerRuleElsewhere(TypedDict):
+    """An owner rule the `owner_rules` step did not write: its `rule` text as the owner
+    marked it and the closed `cls` of why."""
+
+    rule: str
+    cls: OwnerRuleRejection
+
+
 class FullChecksRecord(TypedDict):
     """The frontmatter record of one `full_checks` run (GH-358): the whole suite on the
     integrated head, once per task. Shaped like `merge_checks` (ADR-0045) plus `version`, which
@@ -1155,6 +1170,14 @@ class TaskState(TaskInput, total=False):
     # `None` is how a `pm_final` run clears the previous one. Written to the document only
     # when set, read with `.get`.
     close_docs: NotRequired[CloseDocs | None]
+    # The head the `owner_rules` step last observed (`rules.owner_rules_due` compares it with
+    # the current head; never a record of which rules were written). Written to the document
+    # only when set, read with `.get`.
+    owner_rules_seen: NotRequired[str | None]
+    # The owner rules the step could not write into this repo (a closed class, no free text
+    # beyond the rule itself, which carries no newline), for the ready comment. Written to the
+    # document only when non-empty, read with `.get`.
+    owner_rules_elsewhere: NotRequired[list[OwnerRuleElsewhere]]
     # The full sha `deliver` pushed and when (GH-216): the anchor of the CI wait, read with
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str

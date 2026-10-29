@@ -42,3 +42,17 @@ def test_a_citation_inside_a_struck_entry_still_replaces_what_it_cites():
     struck_b = "- ~~D-bbbbbbbb: x Reemplaza: D-aaaaaaaa~~"
     kept = owner_rules.live(HEADER + A + "\n" + struck_b + "\n")
     assert "D-aaaaaaaa" not in kept and "D-bbbbbbbb" not in kept
+
+
+def _rule(text: str, replaces: str | None = None) -> owner_rules.OwnerRule:
+    return owner_rules.OwnerRule(text, "product", replaces, "2026-10-28T10:00:00Z", "url")
+
+
+def test_live_reads_the_heading_entries_that_append_writes_and_drops_the_replaced_one():
+    old = _rule("Un PR lo abre la entrega.")
+    new = _rule("Una parte se construye entera.", owner_rules.entry_id(old.text))
+    written = owner_rules.append(owner_rules.append(HEADER, [old]), [new])
+    kept = owner_rules.live(written)
+    assert "Un PR lo abre" not in kept
+    assert "Una parte se construye entera." in kept
+    assert kept.startswith(HEADER)

@@ -168,6 +168,11 @@ def render(
         # set so a document without them is byte-identical to one written before. The merge
         # gate reads it from here.
         **({"close_docs": docs} if (docs := state.get("close_docs")) else {}),
+        # The owner-rules step's observation (GH-431): the head it last saw and the rules it
+        # could not write here, each written only when set so a document without them is
+        # byte-identical to one written before.
+        **({"owner_rules_seen": s} if (s := state.get("owner_rules_seen")) else {}),
+        **({"owner_rules_elsewhere": e} if (e := state.get("owner_rules_elsewhere")) else {}),
         # Where the CI wait is measured from (GH-216): written only when a delivery set
         # them, so a document without them is byte-identical to one written before.
         **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),
