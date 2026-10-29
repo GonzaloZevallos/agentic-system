@@ -1818,6 +1818,18 @@ class SentMemory:
     unreadable: bool = False
 
 
+@dataclass(frozen=True)
+class BoardWritten:
+    """What one `Board.write` sent (GH-438, ADR-0073 addendum). `written` are the issues whose
+    add and every field write of the round came back without error. `complete` is `False`
+    only for a transport cause: the write deadline, a chunk split down to one issue and given
+    up, a stop, an unreadable body. An error that names an issue never lowers it: that issue
+    is simply not in `written`."""
+
+    written: frozenset[int]
+    complete: bool
+
+
 class Board(Protocol):
     """The GitHub Project the poller mirrors state to (GH-375, ADR-0073). Write-only as far
     as state goes: the only things read from the Project are node ids. Every method may raise
@@ -1840,9 +1852,11 @@ class Board(Protocol):
         """One issue, open or closed."""
         ...
 
-    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
-        """Adds each issue to the Project and writes its fields. Returns the issues whose every
-        mutation came back without error: an issue not in the set is not recorded as sent."""
+    def write(self, writes: Sequence[FieldWrite]) -> BoardWritten:
+        """Adds each issue to the Project and writes its fields, in small requests. Never
+        raises once an issue was sent: it returns what it sent (an issue not in `written` is
+        not recorded as sent) and whether a transport cause cut the round short. With nothing
+        sent, a stop raises its cause."""
         ...
 
 

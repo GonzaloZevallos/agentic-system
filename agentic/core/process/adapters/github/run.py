@@ -78,7 +78,7 @@ GH_EXEMPT_WAIT_MAX_S: float = 60
 # A wait sleeps in slices of at most this long, checking the `StopFlag` between them.
 _SLICE_S: float = 1
 # `gh`'s exit code for an authentication failure: never a connectivity failure.
-_GH_EXIT_AUTH = 4
+GH_EXIT_AUTH = 4
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -156,7 +156,7 @@ def _with_status(message: str, status: int | None) -> str:
 
 
 def _unreachable_marker(returncode: int, stderr: str) -> str | None:
-    if returncode == _GH_EXIT_AUTH:
+    if returncode == GH_EXIT_AUTH:
         return None
     lowered = stderr.lower()
     return next((marker for marker in GH_UNREACHABLE_MARKERS if marker in lowered), None)
@@ -210,7 +210,7 @@ _PHRASES: dict[_Kind, str] = {
 def _retryable_kind(returncode: int, stderr: str) -> _Kind | None:
     """The class of a non-zero exit a retry may change; `None` for anything else,
     authentication failures among them."""
-    if returncode == _GH_EXIT_AUTH:
+    if returncode == GH_EXIT_AUTH:
         return None
     lowered = stderr.lower()
     if GH_RATE_LIMIT_MARKER in lowered:
@@ -347,6 +347,7 @@ def run_gh(
 
 __all__ = [
     "GH_DRAIN_S",
+    "GH_EXIT_AUTH",
     "GH_EXEMPT_WAIT_MAX_S",
     "GH_RATE_WAIT_MAX_S",
     "GH_TIMEOUT_S",

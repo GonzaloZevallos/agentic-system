@@ -135,17 +135,20 @@ def mirror(
         )
     ]
     try:
-        written = board.write(writes)
+        result = board.write(writes)
     except _FAILURES as exc:
         return [*lines, *_remember_failure(sent, memory, now, _reason(exc))]
-    if not written:
+    if not result.written:
         return [*lines, *_remember_failure(sent, memory, now, _NOTHING_WRITTEN)]
     issues = dict(memory.issues)
     for card in pending:
-        if card.number in written:
+        if card.number in result.written:
             issues[card.number] = SentEntry(domain.fingerprint(card), domain.present(card))
     try:
-        sent.save(SentMemory(project_id=project, failed_at=None, issues=issues))
+        # A transport cause cut the round short: what was sent is kept, and the rest rests
+        # 15 minutes instead of hammering GitHub every round (GH-438).
+        failed_at = None if result.complete else now
+        sent.save(SentMemory(project_id=project, failed_at=failed_at, issues=issues))
     except OSError as exc:
         lines.append(f"agentic: poll: board: memory not saved ({type(exc).__name__})")
     return lines

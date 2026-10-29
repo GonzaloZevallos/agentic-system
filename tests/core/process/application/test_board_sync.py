@@ -192,6 +192,35 @@ def test_a_partial_write_saves_only_what_was_written() -> None:
     assert {w.issue for w in board.written} == {2}
 
 
+def test_a_partial_transport_failure_keeps_what_was_sent_and_rests_the_rest() -> None:
+    board = FakeBoard(open=[row(1), row(2)], unwritten=[2], complete=False)
+    ports, sent = ports_with(board)
+    assert mirror(ports) == []
+    assert set(sent.memory.issues) == {1}
+    assert sent.memory.failed_at == NOW
+    board.written.clear()
+    assert mirror(ports, now=NOW + timedelta(minutes=5)) == []
+    assert board.written == []  # resting: no write
+    board.complete = True
+    board.unwritten.clear()
+    mirror(ports, now=NOW + timedelta(minutes=16))
+    assert {w.issue for w in board.written} == {2} and sent.memory.failed_at is None
+
+
+def test_an_error_naming_an_issue_saves_partially_and_does_not_rest() -> None:
+    board = FakeBoard(open=[row(1), row(2)], unwritten=[2], complete=True)
+    ports, sent = ports_with(board)
+    mirror(ports)
+    assert set(sent.memory.issues) == {1} and sent.memory.failed_at is None
+
+
+def test_nothing_written_and_incomplete_is_still_a_whole_failure() -> None:
+    board = FakeBoard(open=[row(1)], unwritten=[1], complete=False)
+    ports, sent = ports_with(board)
+    assert mirror(ports) == ["agentic: poll: board: not updated (WriteFailed), next try in 15 min"]
+    assert sent.memory.failed_at == NOW
+
+
 def test_a_new_project_discards_the_memory() -> None:
     board = FakeBoard(open=[row(1)])
     ports, sent = ports_with(board)

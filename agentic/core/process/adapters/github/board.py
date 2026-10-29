@@ -5,13 +5,22 @@ node ids of the project, its fields and its Etapa options, looked up once per pr
 fields are found by name and type; Etapa is the SINGLE_SELECT `Etapa` or, absent it, the
 built-in `Status` carrying the seven options (`_etapa_field`). Cards are added with
 `addProjectV2ItemById` (idempotent) and their fields written with
-`updateProjectV2ItemFieldValue` / `clearProjectV2ItemFieldValue`, 25 issues per batch, two
-requests per batch.
+`updateProjectV2ItemFieldValue` / `clearProjectV2ItemFieldValue`.
+
+Requests are sized by mutation count (`MUTATIONS_PER_REQUEST`, `_chunks`), an issue never split
+across two: each chunk of adds is followed by the field chunks of the issues it added (GH-438).
+A failed chunk does not end the round. With a `GhRetry` policy (writes only; reads and the
+identity keep today's calls) `_verdict` decides what a failure does: `stop` ends the write,
+`split` waits and halves the chunk down to one issue, `skip` logs it and goes on. The write
+stops at `BOARD_WRITE_DEADLINE_S`, measured with the injected monotonic `clock`, and never
+raises once an issue was sent: `BoardWritten` says what was and whether a transport cause cut
+the round short.
 
 Every value travels as a typed GraphQL variable in a JSON body (`gh api graphql --input`):
 `-f`/`-F` would let `gh` guess types and read `@file`. Only aliases of the form
 `i<number>_<field>`, the number an `int` and the field from `_ALIAS_FIELDS`, are written
-into the query text. A reason such as `"} mutation { x` therefore arrives as data.
+into the query text. A reason such as `"} mutation { x` therefore arrives as data. A log line
+carries what `gh` printed only as a three-digit status, `(HTTP nnn)`.
 """
 
 from __future__ import annotations
@@ -21,22 +30,47 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal, NoReturn, TypeVar, get_args
 
-from ...application.ports import IssueRow
+from ...application.ports import (
+    BoardWritten,
+    IssueRow,
+    TrackerCallFailed,
+    TrackerRateLimited,
+    TrackerRefused,
+    TrackerTimedOut,
+    TrackerTransient,
+    TrackerUnreachable,
+)
 from ...domain.board import Etapa, Field, FieldWrite
-from .run import Run, bounded_run, print_line, run_gh
+from .run import GH_EXIT_AUTH, GhRetry, Run, bounded_run, http_status, print_line, run_gh
 
 BOARD_TIMEOUT_S: float = 30
 """Each Project call's own bound (the tracker's is `GH_TIMEOUT_S`, 60)."""
-BATCH = 25
+# GH-438: a document of about 125 aliased mutations (25 issues x 5 fields) got a 502 from
+# GitHub's gateway, while one issue with one write went through. The limit bounds the aliased
+# mutations of one request, adds and field writes alike; it is the order of magnitude that
+# passed, not a number GitHub publishes. An issue is never split across two requests, so it
+# must hold the writes of one issue.
+MUTATIONS_PER_REQUEST = 20
 LIST_LIMIT = 1000
+# The write policy (GH-438), built by the composition root: one retry after 5 s, no wait over
+# 30 s, and the whole write given up 120 s in (one request, at most about 65 s, may still be
+# in flight). A partial or failed round rests 15 minutes (`domain.board.BOARD_RETRY_AFTER`).
+BOARD_WRITE_ATTEMPTS = 2
+BOARD_WRITE_BACKOFF_S: tuple[float, ...] = (5,)
+BOARD_WRITE_WAIT_MAX_S: float = 30
+BOARD_WRITE_DEADLINE_S: float = 120
+# A 403 or a 429 is GitHub refusing the caller, not a gateway failing: more requests would
+# only be refused too, so the write stops.
+BOARD_STOP_STATUSES: frozenset[int] = frozenset({403, 429})
 ERROR_SUMMARY_CHARS = 300
 ERRORS_SHOWN = 2
 
@@ -67,6 +101,7 @@ _VALUE: dict[Field, tuple[str, str]] = {
 # The only words that follow `i<number>_` in the query text.
 _ALIAS_FIELDS: tuple[str, ...] = ("add", "item", *_FIELD_NAMES)
 _ALIAS = re.compile(r"i(\d+)_([a-z]+)")
+assert MUTATIONS_PER_REQUEST >= len(_FIELD_NAMES), "one issue's writes must fit in one request"
 
 _IDENTITY = """
 query($owner: String!, $number: Int!) {
@@ -93,6 +128,23 @@ class _Identity:
     project: str
     fields: Mapping[Field, str]
     options: Mapping[str, str]
+
+
+def _chunks(costs: Mapping[int, int], limit: int) -> list[tuple[int, ...]]:
+    """The issues in ascending order, grouped so each group's total cost stays within `limit`.
+    An issue is never split: one that alone costs more than `limit` travels by itself."""
+    chunks: list[tuple[int, ...]] = []
+    current: list[int] = []
+    total = 0
+    for number in sorted(costs):
+        if current and total + costs[number] > limit:
+            chunks.append(tuple(current))
+            current, total = [], 0
+        current.append(number)
+        total += costs[number]
+    if current:
+        chunks.append(tuple(current))
+    return chunks
 
 
 def _alias(number: int, name: str) -> str:
@@ -122,25 +174,35 @@ class GhBoard:
         number: int,
         run: Run | None = None,
         log: Callable[[str], None] = print_line,
+        retry: GhRetry | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self.cwd = cwd
         self.owner = owner
         self.number = number
         self.run: Run = run if run is not None else partial(bounded_run, timeout_s=BOARD_TIMEOUT_S)
         self.log = log
+        self.retry = retry
+        self.clock = clock
+        self._exit = 0
         self._identity: _Identity | None = None
         self._nodes: dict[int, str] = {}
 
     # -- the transport --------------------------------------------------------------------
 
-    def _gh(self, *args: str) -> str:
+    def _gh(self, *args: str, write: bool = False) -> str:
+        """A read or the identity as always; a write goes through the policy, and what `gh`
+        refuses with is classified by `_write_failed`."""
         return run_gh(
             self._keeping_errors,
             args,
             cwd=self.cwd,
             not_installed="gh is not installed, so the board cannot be mirrored",
-            failed=lambda _stderr: f"gh {' '.join(args[:2])} failed",
+            failed=self._write_failed
+            if write
+            else lambda _stderr: f"gh {' '.join(args[:2])} failed",
             log=self.log,
+            retry=self.retry if write else None,
         )
 
     def _keeping_errors(
@@ -158,19 +220,38 @@ class GhBoard:
             body = None
         if isinstance(body, dict) and "errors" in body:
             return subprocess.CompletedProcess(result.args, 0, result.stdout, result.stderr)
+        self._exit = result.returncode
         raise subprocess.CalledProcessError(result.returncode, args, result.stdout, result.stderr)
 
-    def _graphql(self, query: str, variables: Mapping[str, object]) -> dict[str, Any]:
+    def _write_failed(self, stderr: str) -> NoReturn:
+        """What a write `gh` refused with is, for `_verdict`: not signed in, an answer with a
+        status, or no status at all (an unreadable body). Only `http_status` reads `stderr`."""
+        status = http_status(stderr)
+        if self._exit == GH_EXIT_AUTH:
+            raise _Unauthenticated("gh is not authenticated, so the board cannot be written")
+        if status is None:
+            raise _UnreadableBody("gh api graphql answered nothing readable")
+        raise TrackerRefused(f"gh api graphql failed (HTTP {status})", status=status)
+
+    def _graphql(
+        self, query: str, variables: Mapping[str, object], *, write: bool = False
+    ) -> dict[str, Any]:
         handle, name = tempfile.mkstemp(prefix="board-", suffix=".json")
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as out:
                 out.write(json.dumps({"query": query, "variables": variables}))
-            text = self._gh("api", "graphql", "--input", name)
+            text = self._gh("api", "graphql", "--input", name, write=write)
         finally:
             Path(name).unlink(missing_ok=True)
-        body = json.loads(text)
+        try:
+            body = json.loads(text)
+        except ValueError as exc:
+            if write:
+                raise _UnreadableBody("gh api graphql answered something that is not JSON") from exc
+            raise
         if not isinstance(body, dict):
-            raise ValueError("gh api graphql answered something other than an object")
+            message = "gh api graphql answered something other than an object"
+            raise (_UnreadableBody if write else ValueError)(message)
         return body
 
     # -- identity -------------------------------------------------------------------------
@@ -212,54 +293,140 @@ class GhBoard:
 
     # -- writes ---------------------------------------------------------------------------
 
-    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+    def write(self, writes: Sequence[FieldWrite]) -> BoardWritten:
         by_issue: dict[int, list[FieldWrite]] = defaultdict(list)
         for item in writes:
             by_issue[item.issue].append(item)
         ids = self._ids()
-        done: set[int] = set()
         numbers = sorted(by_issue)
-        for start in range(0, len(numbers), BATCH):
-            batch = {n: by_issue[n] for n in numbers[start : start + BATCH]}
-            try:
-                done |= self._batch(ids, batch)
-            except (ValueError, OSError) as exc:
-                self.log(
-                    f"agentic: a board batch failed; its issues are not recorded as sent: {exc}"
-                )
-                break
-        return frozenset(done)
+        deadline = None if self.retry is None else self.clock() + BOARD_WRITE_DEADLINE_S
+        rnd = _Round(pending=set(numbers), deadline=deadline)
+        for adds in _chunks(dict.fromkeys(numbers, 1), MUTATIONS_PER_REQUEST):
+            items: dict[int, str] = {}
+            for got in self._attempt(rnd, adds, lambda part: self._add(ids, part, by_issue, rnd)):
+                items.update(got)
+            costs = {n: len(by_issue[n]) for n in items}
+            for chunk in _chunks(costs, MUTATIONS_PER_REQUEST):
+                for done in self._attempt(
+                    rnd, chunk, lambda part: self._set_fields(ids, part, by_issue, items, rnd)
+                ):
+                    rnd.written |= done
+        if rnd.stopped is not None and not rnd.written:
+            raise rnd.stopped
+        return BoardWritten(frozenset(rnd.written), rnd.complete)
 
-    def _batch(self, ids: _Identity, batch: Mapping[int, list[FieldWrite]]) -> frozenset[int]:
-        for number in batch:
+    def _attempt(
+        self,
+        rnd: _Round,
+        numbers: tuple[int, ...],
+        step: Callable[[tuple[int, ...]], _T],
+    ) -> list[_T]:
+        """`step` over `numbers`, and what it returned for each piece that went through. A
+        failure is decided by `_verdict`: a stop ends the whole write, a split waits and
+        halves (a single issue that fails again is given up), a skip logs and goes on."""
+        if self._halted(rnd):
+            return []
+        try:
+            return [step(numbers)]
+        except (ValueError, OSError) as exc:
+            verdict = _verdict(exc)
+            if verdict == "stop":
+                self._stop(rnd, exc)
+                return []
+            if verdict == "skip":
+                self.log(f"agentic: board: a chunk was not written: {_shown(exc)}")
+                rnd.pending -= set(numbers)
+                return []
+            if self.retry is None or len(numbers) == 1:
+                self.log(f"agentic: board: gave up on issues {_listed(numbers)}: {_shown(exc)}")
+                rnd.pending -= set(numbers)
+                rnd.complete = False
+                return []
+            if not self.retry.wait(self.retry.backoff(1)):
+                self._halt(rnd, "agentic: board: write stopped because the process is stopping")
+                return []
+            half = len(numbers) // 2
+            return [
+                *self._attempt(rnd, numbers[:half], step),
+                *self._attempt(rnd, numbers[half:], step),
+            ]
+
+    def _halted(self, rnd: _Round) -> bool:
+        """Checked before each request: the write already ended, the stop flag is set, or the
+        deadline passed."""
+        if rnd.halted:
+            return True
+        retry = self.retry
+        if retry is not None and retry.stop is not None and retry.stop.is_set():
+            self._halt(rnd, "agentic: board: write stopped because the process is stopping")
+        elif rnd.deadline is not None and self.clock() > rnd.deadline:
+            self._halt(
+                rnd,
+                f"agentic: board: write deadline reached; {len(rnd.pending)} issues "
+                "deferred to the next round",
+            )
+        return rnd.halted
+
+    def _halt(self, rnd: _Round, line: str) -> None:
+        self.log(line)
+        rnd.halted = True
+        rnd.complete = False
+
+    def _stop(self, rnd: _Round, exc: BaseException) -> None:
+        rnd.stopped = rnd.stopped or exc
+        self._halt(rnd, f"agentic: board: write stopped because of {type(exc).__name__}")
+
+    def _add(
+        self,
+        ids: _Identity,
+        numbers: tuple[int, ...],
+        by_issue: Mapping[int, list[FieldWrite]],
+        rnd: _Round,
+    ) -> dict[int, str]:
+        """Adds `numbers` to the Project: the card id of each one that was added."""
+        for number in numbers:
             if number not in self._nodes:
                 self.issue(number)
-        added, bad_adds = self._send(*_adds(ids, batch, self._nodes))
+        added, bad_adds = self._send(*_adds(ids, by_issue, self._nodes, numbers), write=True)
         items: dict[int, str] = {}
-        for number in batch:
+        for number in numbers:
             item = (added.get(_alias(number, "add")) or {}).get("item") or {}
             if number not in bad_adds and isinstance(item.get("id"), str):
                 items[number] = item["id"]
-        if not items:
-            return frozenset()
-        data, bad_writes = self._send(*_fields(ids, {n: batch[n] for n in items}, items))
+        rnd.pending -= set(numbers) - set(items)
+        return items
+
+    def _set_fields(
+        self,
+        ids: _Identity,
+        numbers: tuple[int, ...],
+        by_issue: Mapping[int, list[FieldWrite]],
+        items: Mapping[int, str],
+        rnd: _Round,
+    ) -> frozenset[int]:
+        """Writes the fields of `numbers`: the issues whose every alias came back."""
+        data, bad_writes = self._send(*_fields(ids, by_issue, items, numbers), write=True)
+        rnd.pending -= set(numbers)
         return frozenset(
             number
-            for number in items
+            for number in numbers
             if number not in bad_writes
-            and all(data.get(_alias(number, write.field)) is not None for write in batch[number])
+            and all(data.get(_alias(number, w.field)) is not None for w in by_issue[number])
         )
 
     def _send(
-        self, query: str, variables: Mapping[str, object]
+        self, query: str, variables: Mapping[str, object], *, write: bool = False
     ) -> tuple[dict[str, Any], frozenset[int]]:
         """The response's `data` and the issues an error names, anywhere in its path. An error
         that names none, or a response that is not parseable, fails the whole request:
-        `ValueError` carrying the summary, which `write` logs. When every error blames an
-        issue, the summary is logged here, once."""
-        body = self._graphql(query, variables)
+        `ValueError` carrying the summary, which `_attempt` logs. When every error blames an
+        issue, the summary is logged here, once. A `RATE_LIMITED` error arrives as HTTP 200
+        and ends the write (`_RateLimited`)."""
+        body = self._graphql(query, variables, write=write)
         data = body.get("data")
         errors = body.get("errors") or []
+        if any(_rate_limited(error) for error in errors):
+            raise _RateLimited("GitHub's GraphQL rate limit was reached")
         bad: set[int] = set()
         for error in errors:
             blamed = _blamed(error)
@@ -269,6 +436,65 @@ class GhBoard:
         if errors:
             self.log(f"agentic: board: the response carried errors: {_summary(errors)}")
         return (data if isinstance(data, dict) else {}), frozenset(bad)
+
+
+_T = TypeVar("_T")
+
+
+@dataclass
+class _Round:
+    """What one `write` has done so far: the issues still unsettled, the ones sent, and
+    whether the write ended (`halted`) and why (`stopped`, the exception of a stop)."""
+
+    pending: set[int]
+    deadline: float | None
+    written: set[int] = field(default_factory=set)
+    complete: bool = True
+    halted: bool = False
+    stopped: BaseException | None = None
+
+
+class _UnreadableBody(ValueError):
+    """A write's answer was not a GraphQL response: nothing to attribute, the chunk is split."""
+
+
+class _RateLimited(ValueError):
+    """A GraphQL error of type `RATE_LIMITED`: GitHub's answer to everything that follows."""
+
+
+class _Unauthenticated(TrackerRefused):
+    """`gh` exited 4: not signed in. No later request would be any different."""
+
+
+def _rate_limited(error: object) -> bool:
+    if not isinstance(error, dict):
+        return False
+    extensions = error.get("extensions")
+    code = extensions.get("code") if isinstance(extensions, dict) else None
+    return error.get("type") == "RATE_LIMITED" or code == "RATE_LIMITED"
+
+
+def _verdict(exc: BaseException) -> Literal["stop", "split", "skip"]:
+    """What one failed chunk does to the write, from the exception alone."""
+    stopping = (TrackerUnreachable, TrackerRateLimited, _RateLimited, _Unauthenticated, OSError)
+    if isinstance(exc, stopping):
+        return "stop"
+    if isinstance(exc, TrackerCallFailed | TrackerRefused) and exc.status in BOARD_STOP_STATUSES:
+        return "stop"
+    if isinstance(exc, ValueError) and isinstance(exc.__cause__, FileNotFoundError):
+        return "stop"
+    if isinstance(exc, TrackerTransient | TrackerTimedOut | _UnreadableBody):
+        return "split"
+    return "skip"
+
+
+def _shown(exc: BaseException) -> str:
+    """An exception as a log line says it: our own wording, or only the class name."""
+    return str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+
+
+def _listed(numbers: Sequence[int]) -> str:
+    return ", ".join(f"#{n}" for n in numbers)
 
 
 def _blamed(error: object) -> set[int]:
@@ -356,11 +582,14 @@ def _etapa_field(nodes: Sequence[Mapping[str, Any]], name: str) -> Mapping[str, 
 
 
 def _adds(
-    ids: _Identity, batch: Mapping[int, Sequence[FieldWrite]], nodes: Mapping[int, str]
+    ids: _Identity,
+    batch: Mapping[int, Sequence[FieldWrite]],
+    nodes: Mapping[int, str],
+    only: Sequence[int] | None = None,
 ) -> tuple[str, dict[str, object]]:
     declared, calls = ["$project: ID!"], []
     variables: dict[str, object] = {"project": ids.project}
-    for number in batch:
+    for number in batch if only is None else only:
         content = _alias(number, "item")
         declared.append(f"${content}: ID!")
         variables[content] = nodes[number]
@@ -372,8 +601,12 @@ def _adds(
 
 
 def _fields(
-    ids: _Identity, batch: Mapping[int, Sequence[FieldWrite]], items: Mapping[int, str]
+    ids: _Identity,
+    batch: Mapping[int, Sequence[FieldWrite]],
+    items: Mapping[int, str],
+    only: Sequence[int] | None = None,
 ) -> tuple[str, dict[str, object]]:
+    batch = batch if only is None else {n: batch[n] for n in only}
     declared = ["$project: ID!"]
     variables: dict[str, object] = {"project": ids.project}
     used = {write.field for writes in batch.values() for write in writes}
