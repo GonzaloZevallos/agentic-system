@@ -65,6 +65,28 @@ def test_nothing_else_is_reviewed(reviewed, record, head):
     assert not rules.head_reviewed(reviewed, record, head)
 
 
+def test_the_system_decisions_file_is_a_reviewed_close_path():
+    """The owner-rules commit may append to the system's decisions file (invariant 8)."""
+    record = close_docs(paths=["docs/decisiones-del-dueño.md"])
+    assert rules.head_reviewed(REVIEWED, record, DOCS)
+    both = ["docs/product/decisiones-del-dueño.md", "docs/decisiones-del-dueño.md"]
+    assert rules.head_reviewed(REVIEWED, close_docs(paths=both), DOCS)
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ["docs/orquestacion.md"],  # the orchestration rules are never a close path
+        ["docs/decisiones-del-dueño.md", "docs/orquestacion.md"],
+        ["docs/decisiones-del-dueño.md", "agentic/x.py"],
+        ["docs/other/decisiones-del-dueño.md"],  # the name elsewhere is no owner file
+        ["docs/../decisiones-del-dueño.md"],
+    ],
+)
+def test_the_orchestration_file_and_other_paths_cover_nothing(paths):
+    assert not rules.head_reviewed(REVIEWED, close_docs(paths=paths), DOCS)
+
+
 # --- auto_merge_decision and approved_green ----------------------------------------------------
 
 

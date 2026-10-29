@@ -13,6 +13,8 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
+from agentic.shared.owner_decisions import OWNER_DECISIONS
+
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
@@ -2333,6 +2335,41 @@ def pre_pr_important_due(state: TaskState) -> bool:
     return any("reported_severity" not in row for row in rows)
 
 
+def owner_rules_due(state: TaskState) -> bool:
+    """Whether the `owner_rules` step has to observe the task (GH-431): every unit is
+    approved, the pre-PR important pass (which can move the head) has nothing left to run,
+    and the head the step last saw (`owner_rules_seen`) is not the current one -- the
+    integrated `task_head` when the fan-in stamped it, else the reviewed unit's
+    `reviewed_head` (a single subtask has no integration). It is decided by observing the
+    head, never by a record of which rules were written (invariant 7): a rule given after
+    the last observation is found by the next head, not remembered."""
+    if not all_approved(state) or pre_pr_important_due(state):
+        return False
+    head = state.get("task_head")
+    if not head:
+        unit = reviewed_unit_name(state)
+        head = state.get("subtasks", {}).get(unit, {}).get("reviewed_head") if unit else None
+    return bool(head) and not same_commit(state.get("owner_rules_seen"), head)
+
+
+def extend_close_docs(
+    previous: CloseDocs | None,
+    reviewed: str | None,
+    head: str | None,
+    paths: Sequence[str],
+) -> CloseDocs | None:
+    """The `close_docs` record after a close-time commit `head` made on the reviewed head
+    `reviewed` holding `paths` (GH-431): `previous` is extended only when its `parent` is
+    `reviewed` (the new commit sits on the earlier one, so both covers' paths are
+    reviewed); a record on another parent is discarded and the new one starts fresh. `None`
+    when there is no commit or no reviewed head to anchor it."""
+    if head is None or reviewed is None:
+        return None
+    kept = list(previous["paths"]) if previous and same_commit(previous["parent"], reviewed) else []
+    added = [path for path in dict.fromkeys(paths) if path not in kept]
+    return CloseDocs(parent=reviewed, head=head, paths=[*kept, *added])
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -4428,9 +4465,11 @@ def head_reviewed(
     """Whether `head` is a head Tech Lead's review covers: the unit's `reviewed_head`, or the
     close-time capability commit (`close_docs`) made directly on it -- its `parent` is the
     reviewed head, `head` is its commit and every path it holds is a capability file
-    (`docs/product/*.md`). The one comparison of a pull request head, or `task_head`, with a
-    reviewed one; no reader adds its own id test. A foreign parent, a stale record or a path
-    outside `docs/product/` covers nothing."""
+    (`docs/product/*.md`) or one of the owner-decision files (`OWNER_DECISIONS`: the system's
+    `docs/decisiones-del-dueño.md` is outside `docs/product/`; `docs/orquestacion.md` is
+    never one). The one comparison of a pull request head, or `task_head`, with a reviewed
+    one; no reader adds its own id test. A foreign parent, a stale record or any other path
+    covers nothing."""
     if same_commit(reviewed_head, head):
         return True
     return bool(
@@ -4438,7 +4477,7 @@ def head_reviewed(
         and close_docs.get("paths")
         and same_commit(close_docs.get("parent"), reviewed_head)
         and same_commit(head, close_docs.get("head"))
-        and all(_capability_path(path) for path in close_docs["paths"])
+        and all(_capability_path(path) or path in OWNER_DECISIONS for path in close_docs["paths"])
     )
 
 
