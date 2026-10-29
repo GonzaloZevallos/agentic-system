@@ -11,6 +11,15 @@ import pytest
 
 from agentic.core.process.adapters.github import board as board_module
 from agentic.core.process.adapters.github.board import GhBoard
+from agentic.core.process.adapters.github.run import GhRetry
+from agentic.core.process.application.ports import (
+    BoardWritten,
+    TrackerRateLimited,
+    TrackerRefused,
+    TrackerTimedOut,
+    TrackerTransient,
+    TrackerUnreachable,
+)
 from agentic.core.process.domain.board import FieldWrite
 
 ETAPAS = [
@@ -252,7 +261,7 @@ def test_a_batch_is_two_requests_with_every_value_a_typed_variable():
     gh = FakeGh([identity(), added(7), wrote(WRITES)])
     b = board(gh)
     prime(gh, b, 7)
-    assert b.write(WRITES) == frozenset({7})
+    assert b.write(WRITES).written == frozenset({7})
     _, adding, fields = gh.bodies
     assert "i7_add: addProjectV2ItemById" in adding["query"]
     assert adding["variables"] == {"project": "PVT_1", "i7_item": "I_7"}
@@ -270,7 +279,7 @@ def test_a_batch_declares_only_the_field_ids_its_writes_use():
     gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", "En cola")])])
     b = board(gh)
     prime(gh, b, 7)
-    assert b.write([FieldWrite(7, "etapa", "En cola")]) == frozenset({7})
+    assert b.write([FieldWrite(7, "etapa", "En cola")]).written == frozenset({7})
     fields = gh.bodies[-1]
     assert "$f_etapa: ID!" in fields["query"] and "$f_bloqueo" not in fields["query"]
     assert set(fields["variables"]) == {"project", "f_etapa", "i7_item", "i7_etapa"}
@@ -309,7 +318,7 @@ def test_an_error_on_one_alias_mid_batch_excludes_exactly_that_issue():
     prime(gh, b, 7, 8, 9)
     writes = [FieldWrite(n, "etapa", "En cola") for n in (7, 8, 9)]
     writes.append(FieldWrite(8, "bloqueo", "x"))
-    assert b.write(writes) == frozenset({7, 9})
+    assert b.write(writes).written == frozenset({7, 9})
 
 
 def test_an_error_on_an_add_keeps_that_issue_out_of_the_field_request():
@@ -319,7 +328,7 @@ def test_an_error_on_an_add_keeps_that_issue_out_of_the_field_request():
     b = board(gh)
     prime(gh, b, 7, 8)
     writes = [FieldWrite(n, "etapa", "En cola") for n in (7, 8)]
-    assert b.write(writes) == frozenset({7})
+    assert b.write(writes).written == frozenset({7})
     assert "i8_etapa" not in gh.bodies[2]["query"]
 
 
@@ -338,7 +347,7 @@ def test_the_body_gh_prints_with_exit_one_still_attributes_the_error():
 
     b.run = exit_one
     writes = [FieldWrite(n, "etapa", "En cola") for n in (7, 8)]
-    assert b.write(writes) == frozenset({7})
+    assert b.write(writes).written == frozenset({7})
 
 
 @pytest.mark.parametrize(
@@ -349,7 +358,7 @@ def test_an_unparseable_or_unattributable_response_writes_nothing(response):
     gh = FakeGh([identity(), response])
     b = board(gh)
     prime(gh, b, 7)
-    assert b.write(WRITES) == frozenset()
+    assert b.write(WRITES).written == frozenset()
     assert len(gh.bodies) == 2
 
 
@@ -363,27 +372,33 @@ def test_a_transport_failure_ends_the_write_with_nothing_recorded():
     gh = Timeout([identity(), added(7)])
     b = board(gh)
     prime(gh, b, 7)
-    assert b.write(WRITES) == frozenset()
+    assert b.write(WRITES).written == frozenset()
 
 
-def test_issues_go_in_batches_of_25_two_requests_each():
+def test_thirty_issues_with_one_write_each_go_in_one_add_and_two_field_requests():
     numbers = list(range(1, 31))
-    first, rest = numbers[:25], numbers[25:]
+    first, rest = numbers[:20], numbers[20:]
     writes = [FieldWrite(n, "etapa", "En cola") for n in numbers]
-    first_ok = wrote([w for w in writes if w.issue in first])
-    rest_ok = wrote([w for w in writes if w.issue in rest])
-    gh = FakeGh([identity(), added(*first), first_ok, added(*rest), rest_ok])
+    gh = FakeGh(
+        [
+            identity(),
+            added(*first),
+            wrote([w for w in writes if w.issue in first]),
+            added(*rest),
+            wrote([w for w in writes if w.issue in rest]),
+        ]
+    )
     b = board(gh)
     prime(gh, b, *numbers)
     got = b.write(writes)
-    assert got == frozenset(numbers) and len(gh.bodies) == 5
+    assert got == BoardWritten(frozenset(numbers), True) and len(gh.bodies) == 5
 
 
 def test_an_issue_not_read_this_process_has_its_node_looked_up():
     gh = FakeGh([identity(), added(7), wrote([FieldWrite(7, "etapa", "En cola")])])
     b = board(gh)
     gh.listing = json.dumps(issue_node(7))
-    assert b.write([FieldWrite(7, "etapa", "En cola")]) == frozenset({7})
+    assert b.write([FieldWrite(7, "etapa", "En cola")]).written == frozenset({7})
     assert ["gh", "issue", "view", "7", "--json", ISSUE_FIELDS] in gh.calls
 
 
@@ -558,7 +573,7 @@ def test_a_validation_response_records_no_issue_as_sent():
     b = board(gh)
     prime(gh, b, 406, 407)
     writes = [FieldWrite(n, "etapa", "En cola") for n in (406, 407)]
-    assert b.write(writes) == frozenset()
+    assert b.write(writes).written == frozenset()
 
 
 def test_an_issue_whose_alias_is_missing_or_null_in_data_is_not_sent():
@@ -567,7 +582,7 @@ def test_an_issue_whose_alias_is_missing_or_null_in_data_is_not_sent():
     gh = FakeGh([identity(), added(7, 8, 9), {"data": data}])
     b = board(gh)
     prime(gh, b, 7, 8, 9)
-    assert b.write(writes) == frozenset({7})
+    assert b.write(writes).written == frozenset({7})
 
 
 def test_an_issue_is_sent_only_when_each_alias_it_wrote_is_in_data():
@@ -576,7 +591,7 @@ def test_an_issue_is_sent_only_when_each_alias_it_wrote_is_in_data():
     gh = FakeGh([identity(), added(7), short])
     b = board(gh)
     prime(gh, b, 7)
-    assert b.write(writes) == frozenset()
+    assert b.write(writes).written == frozenset()
 
 
 def logged_write(response, writes=None):
@@ -584,7 +599,7 @@ def logged_write(response, writes=None):
     gh = FakeGh([identity(), added(7), response])
     b = board(gh, log=lines.append)
     prime(gh, b, 7)
-    done = b.write(writes or [FieldWrite(7, "etapa", "En cola")])
+    done = b.write(writes or [FieldWrite(7, "etapa", "En cola")]).written
     return done, lines, gh
 
 
@@ -628,12 +643,319 @@ def test_a_summary_has_two_errors_a_count_of_the_rest_and_at_most_300_characters
     assert len(board_module._summary([{"message": "x" * 1000}])) == 300
 
 
-def test_a_batch_with_an_error_naming_no_issue_ends_the_write_after_the_first_batch():
-    numbers = list(range(1, 52))
+def test_a_chunk_with_an_error_naming_no_issue_does_not_block_the_next_one():
+    numbers = list(range(1, 42))
     writes = [FieldWrite(n, "etapa", "En cola") for n in numbers]
-    first = wrote(writes[:25])
-    gh = FakeGh([identity(), added(*numbers[:25]), first, {"errors": [{"message": "no alias"}]}])
+    gh = FakeGh(
+        [
+            identity(),
+            added(*numbers[:20]),
+            {"errors": [{"message": "no alias"}]},
+            added(*numbers[20:40]),
+            wrote(writes[20:40]),
+            added(41),
+            wrote(writes[40:]),
+        ]
+    )
     b = board(gh)
     prime(gh, b, *numbers)
-    assert b.write(writes) == frozenset(numbers[:25])
-    assert len(gh.bodies) == 4
+    got = b.write(writes)
+    assert got == BoardWritten(frozenset(numbers[20:]), True)
+    assert len(gh.bodies) == 7
+
+
+# -- GH-438: chunks, retries, halving, verdicts, deadline ---------------------------------------
+
+BAD_GATEWAY = "<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx</center>"
+MUTATION = re.compile(r"\b(i(\d+)_([a-z]+)): (\w+)\(")
+
+
+class FakeClock:
+    """A monotonic clock that only moves when something sleeps or a `gh` call is made."""
+
+    def __init__(self, tick: float = 0.0):
+        self.now = 0.0
+        self.tick = tick
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+class SizedGh:
+    """A `gh` that understands the mutations it is sent and answers each alias like GitHub.
+    `reject_over` answers anything with more mutations than that as the gateway does (exit 1,
+    HTML on stdout, `gh: HTTP 502` on stderr); `refuse` maps the 1-based number of a mutation
+    request to the (exit code, stdout, stderr) it is answered with instead."""
+
+    def __init__(self, reject_over=None, refuse=None, clock=None):
+        self.reject_over = reject_over
+        self.refuse = refuse or {}
+        self.clock = clock
+        self.sizes: list[int] = []
+        self.adds: list[int] = []
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(list(args))
+        if self.clock is not None:
+            self.clock.now += self.clock.tick
+        if args[1:3] != ["api", "graphql"]:
+            return subprocess.CompletedProcess(args, 0, "[]", "")
+        query = json.loads(Path(args[args.index("--input") + 1]).read_text())["query"]
+        if not query.startswith("mutation"):
+            return subprocess.CompletedProcess(args, 0, json.dumps(identity()), "")
+        found = MUTATION.findall(query)
+        self.sizes.append(len(found))
+        number = len(self.sizes)
+        if number in self.refuse:
+            code, out, err = self.refuse[number]
+            return subprocess.CompletedProcess(args, code, out, err)
+        if self.reject_over is not None and len(found) > self.reject_over:
+            return subprocess.CompletedProcess(args, 1, BAD_GATEWAY, "gh: HTTP 502")
+        data = {}
+        for alias, issue, field, _ in found:
+            if field == "add":
+                self.adds.append(int(issue))
+                data[alias] = {"item": {"id": f"PVTI_{issue}"}}
+            else:
+                data[alias] = {"clientMutationId": None}
+        return subprocess.CompletedProcess(args, 0, json.dumps({"data": data}), "")
+
+
+def retrying_board(gh, clock=None, lines=None, stop=None) -> GhBoard:
+    clock = clock or FakeClock()
+    retry = GhRetry(
+        max_wait_s=board_module.BOARD_WRITE_WAIT_MAX_S,
+        attempts=board_module.BOARD_WRITE_ATTEMPTS,
+        backoff_s=board_module.BOARD_WRITE_BACKOFF_S,
+        sleep=clock.sleep,
+        now=clock,
+        stop=stop,
+    )
+    log = (lambda _line: None) if lines is None else lines.append
+    return GhBoard(Path("/p"), "o", 3, gh, log=log, retry=retry, clock=clock)
+
+
+def sync_of(numbers, fields=("etapa", "bloqueo", "costo", "inicio", "fin")):
+    return [FieldWrite(n, f, None) for n in numbers for f in fields]
+
+
+def run_with_listing(gh: SizedGh, numbers):
+    """`gh` that also answers `issue list` with these issues."""
+    listing = json.dumps([issue_node(n) for n in numbers])
+
+    def run(args, cwd, capture_output, text, check):
+        if args[1:3] == ["issue", "list"]:
+            gh.calls.append(list(args))
+            return subprocess.CompletedProcess(args, 0, listing, "")
+        return gh(args, cwd, capture_output, text, check)
+
+    return run
+
+
+def synced(numbers, gh: SizedGh, **kwargs):
+    b = retrying_board(gh, **kwargs)
+    b.run = run_with_listing(gh, numbers)
+    b.open_issues()
+    return b
+
+
+def test_a_125_write_sync_goes_out_in_requests_of_at_most_the_limit_adds_included():
+    numbers = list(range(1, 26))
+    gh = SizedGh()
+    got = synced(numbers, gh).write(sync_of(numbers))
+    assert got == BoardWritten(frozenset(numbers), True)
+    assert max(gh.sizes) <= board_module.MUTATIONS_PER_REQUEST
+    assert sum(gh.sizes) == 25 + 125 and sorted(gh.adds) == numbers
+
+
+def test_each_chunk_of_adds_is_followed_by_the_fields_of_the_issues_it_added():
+    numbers = list(range(1, 26))
+    gh = SizedGh()
+    synced(numbers, gh).write(sync_of(numbers, fields=("etapa",)))
+    assert gh.sizes == [20, 20, 5, 5]
+
+
+def test_a_gateway_that_rejects_big_requests_still_gets_every_write_through(monkeypatch):
+    monkeypatch.setattr(board_module, "MUTATIONS_PER_REQUEST", 40)
+    numbers = list(range(1, 26))
+    gh = SizedGh(reject_over=10)
+    lines: list[str] = []
+    got = synced(numbers, gh, lines=lines).write(sync_of(numbers))
+    assert got == BoardWritten(frozenset(numbers), True)
+    assert sum(size for size in gh.sizes if size <= 10) == 25 + 125
+    assert any(size > 10 for size in gh.sizes)
+
+
+def test_one_chunk_that_keeps_failing_does_not_block_the_next():
+    numbers = list(range(1, 41))
+    gh = SizedGh(refuse={1: (0, json.dumps({"errors": [{"message": "no alias"}]}), "")})
+    lines: list[str] = []
+    got = synced(numbers, gh, lines=lines).write(sync_of(numbers, fields=("etapa",)))
+    assert got == BoardWritten(frozenset(range(21, 41)), True)
+    assert any("a chunk was not written" in line for line in lines)
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        (1, "", "gh: Resource not accessible by integration (HTTP 403)"),
+        (1, "", "gh: HTTP 429"),
+        (0, json.dumps({"errors": [{"type": "RATE_LIMITED", "message": "slow"}]}), ""),
+        (0, json.dumps({"errors": [{"extensions": {"code": "RATE_LIMITED"}, "message": "x"}]}), ""),
+    ],
+)
+def test_a_403_a_429_and_a_rate_limited_error_stop_the_write_with_no_later_request(refusal):
+    numbers = list(range(1, 26))
+    gh = SizedGh(refuse={3: refusal})
+    lines: list[str] = []
+    got = synced(numbers, gh, lines=lines).write(sync_of(numbers, fields=("etapa",)))
+    assert got == BoardWritten(frozenset(range(1, 21)), False)
+    assert len(gh.sizes) == 3
+    assert any("write stopped because of" in line for line in lines)
+    assert not any("<" in line or "slow" in line for line in lines)
+
+
+def test_a_stop_with_nothing_sent_raises_its_cause():
+    gh = SizedGh(refuse={1: (1, "", "gh: HTTP 429")})
+    with pytest.raises(ValueError, match=r"\(HTTP 429\)"):
+        synced([1], gh).write(sync_of([1]))
+    assert len(gh.sizes) == 1
+
+
+def test_gh_not_signed_in_stops_the_write():
+    gh = SizedGh(refuse={1: (4, "", "To get started with GitHub CLI, please run: gh auth login")})
+    with pytest.raises(ValueError, match="not authenticated"):
+        synced([1], gh).write(sync_of([1]))
+    assert len(gh.sizes) == 1
+
+
+def test_a_missing_gh_stops_the_write():
+    gh = SizedGh()
+    b = synced([1], gh)
+
+    def no_gh(args, **kwargs):
+        raise FileNotFoundError(2, "gh")
+
+    b.run = no_gh
+    with pytest.raises(ValueError, match="not installed"):
+        b.write(sync_of([1]))
+
+
+def test_an_unreadable_body_is_split_until_it_reads():
+    numbers = list(range(1, 5))
+    gh = SizedGh(refuse={1: (0, "<html>", "")})
+    got = synced(numbers, gh).write(sync_of(numbers, fields=("etapa",)))
+    assert got == BoardWritten(frozenset(numbers), True)
+    assert gh.sizes == [4, 2, 2, 4]
+
+
+def test_an_exit_with_no_status_and_no_json_is_an_unreadable_body_and_split():
+    numbers = list(range(1, 5))
+    gh = SizedGh(refuse={1: (1, "", "gh: something went wrong")})
+    got = synced(numbers, gh).write(sync_of(numbers, fields=("etapa",)))
+    assert got == BoardWritten(frozenset(numbers), True)
+    assert gh.sizes[:2] == [4, 2]
+
+
+def test_a_single_issue_that_keeps_failing_is_given_up_with_its_status_in_the_log():
+    gh = SizedGh(reject_over=0)
+    lines: list[str] = []
+    got = synced([7], gh, lines=lines).write(sync_of([7], fields=("etapa",)))
+    assert got == BoardWritten(frozenset(), False)
+    gave_up = [line for line in lines if "gave up" in line]
+    assert len(gave_up) == 1 and gave_up[0].endswith("(HTTP 502)")
+    assert not any("Bad Gateway" in line or "nginx" in line for line in lines)
+
+
+def test_a_split_waits_the_backoff_after_the_retry():
+    clock = FakeClock()
+    gh = SizedGh(reject_over=1)
+    synced([1, 2], gh, clock=clock).write(sync_of([1, 2], fields=("etapa",)))
+    # per level: 5 s before the retry of the rejected request, 5 s more before the split
+    assert sum(clock.slept) == 2 * (5 + 5)
+
+
+def test_without_a_policy_a_gateway_error_is_skipped_with_its_status_and_not_split():
+    gh = SizedGh(reject_over=0)
+    lines: list[str] = []
+    b = GhBoard(Path("/p"), "o", 3, run_with_listing(gh, [1, 2]), log=lines.append)
+    b.open_issues()
+    got = b.write(sync_of([1, 2], fields=("etapa",)))
+    assert got == BoardWritten(frozenset(), True)
+    assert len(gh.sizes) == 1
+    assert lines[-1].endswith("(HTTP 502)")
+
+
+def test_a_policy_never_applies_to_the_reads():
+    calls = []
+
+    def failing(args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 1, "", "gh: HTTP 502")
+
+    b = retrying_board(SizedGh())
+    b.run = failing
+    with pytest.raises(ValueError):
+        b.open_issues()
+    assert len(calls) == 1
+
+
+def test_the_deadline_defers_the_rest_and_says_how_many():
+    clock = FakeClock(tick=70)
+    gh = SizedGh(clock=clock)
+    lines: list[str] = []
+    numbers = list(range(1, 46))
+    got = synced(numbers, gh, clock=clock, lines=lines).write(sync_of(numbers, fields=("etapa",)))
+    assert got == BoardWritten(frozenset(range(1, 21)), False)
+    assert len(gh.sizes) == 2
+    deadline = "agentic: board: write deadline reached; 25 issues deferred to the next round"
+    assert lines.count(deadline) == 1
+
+
+def test_a_set_stop_flag_ends_the_write_before_any_request():
+    class Set:
+        def is_set(self) -> bool:
+            return True
+
+    gh = SizedGh()
+    got = synced([1], gh, stop=Set()).write(sync_of([1]))
+    assert got == BoardWritten(frozenset(), False) and gh.sizes == []
+
+
+@pytest.mark.parametrize(
+    ("exc", "verdict"),
+    [
+        (TrackerUnreachable("x"), "stop"),
+        (TrackerRateLimited("x"), "stop"),
+        (TrackerRefused("x", status=403), "stop"),
+        (TrackerRefused("x", status=429), "stop"),
+        (TrackerTransient("x", status=429), "stop"),
+        (board_module._Unauthenticated("x"), "stop"),
+        (board_module._RateLimited("x"), "stop"),
+        (OSError("disk"), "stop"),
+        (TrackerTransient("x", status=502), "split"),
+        (TrackerTimedOut("x"), "split"),
+        (board_module._UnreadableBody("x"), "split"),
+        (ValueError("a graphql error that names no issue"), "skip"),
+        (TrackerRefused("x", status=404), "skip"),
+        (TrackerRefused("x"), "skip"),
+    ],
+)
+def test_the_verdict_of_each_failure(exc, verdict):
+    assert board_module._verdict(exc) == verdict
+
+
+def test_a_value_error_caused_by_a_missing_gh_is_a_stop():
+    try:
+        try:
+            raise FileNotFoundError(2, "gh")
+        except FileNotFoundError as cause:
+            raise ValueError("gh is not installed") from cause
+    except ValueError as exc:
+        assert board_module._verdict(exc) == "stop"

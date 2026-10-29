@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -42,13 +43,30 @@ GH_DRAIN_S: float = 2
 # https://githubstatus.com". A marker is added only with a stderr captured from the pinned
 # `gh`: a missing one costs a poller restart, an extra one hides a real error.
 GH_UNREACHABLE_MARKERS: tuple[str, ...] = ("error connecting to",)
-# What `gh` prints when GitHub answered with a gateway error, matched case-insensitively
-# against its stderr (GH-389). Captured from gh 2.100.0 on exit 1 in the GH-374 run
+# What `gh` prints when GitHub answered with a gateway error (GH-389), matched
+# case-insensitively against its stderr. Captured from gh 2.100.0 on exit 1 in the GH-374 run
 # (`.agentic/logs/GH-374-20261027T143450Z.log`, `gh issue comment`): "non-200 OK status code:
-# 502 Bad Gateway body: ...". 503, 504, "connection reset by peer" and "secondary rate limit"
-# are NOT here: no line of the pinned `gh`'s source or captured stderr is cited for them, and
-# an unrecognised stderr stays an immediate failure.
+# 502 Bad Gateway body: ...". Since GH-438 the status classifier below (`http_status`) decides
+# the retry; this marker stays as the 502 evidence the GH-389 tests pin. "connection reset by
+# peer" and "secondary rate limit" are NOT here: no line of the pinned `gh`'s source or
+# captured stderr is cited for them, and an unrecognised stderr stays an immediate failure.
 GH_TRANSIENT_MARKERS: tuple[str, ...] = ("non-200 ok status code: 502",)
+# The HTTP status `gh` prints (GH-438), read by `http_status` and nothing else: the one place
+# that compares text from `gh` to classify. Three forms, each with its evidence.
+#   (a) The pinned gh's source, `pkg/cmd/api/api.go`: `serverError = fmt.Sprintf("HTTP %d",
+#       resp.StatusCode)` is the whole error line, printed as "gh: HTTP 502"; with a message
+#       from the response body it is "gh: <message> (HTTP %d)".
+#   (b) Captured from gh 2.100.0 on exit 1 (`gh api /repos/<owner>/<repo>/issues/0`):
+#       "gh: Not Found (HTTP 404)".
+#   (c) The GH-374 stderr cited above: "non-200 OK status code: 502 Bad Gateway body: ...".
+# Exactly three digits, so "(HTTP 4040)" or a stray number is no status.
+_HTTP_STATUS = re.compile(
+    r"(?:\bgh: HTTP |\(HTTP |non-200 OK status code: )(\d{3})(?!\d)", re.IGNORECASE
+)
+# The statuses that are a gateway failing, not an answer to the question: retried under a
+# policy (GH-438). 503 and 504 are backed by the pinned source's `HTTP %d` form, not by a
+# captured failure; if `gh`'s wording changes the classifier does not retry, the safe side.
+GH_TRANSIENT_STATUSES: frozenset[int] = frozenset({502, 503, 504})
 # What `gh` prints when the primary rate limit is spent ("API rate limit exceeded ... (HTTP
 # 403)"); the wait for it comes from `gh api rate_limit`, never from this text.
 GH_RATE_LIMIT_MARKER = "api rate limit exceeded"
@@ -60,7 +78,7 @@ GH_EXEMPT_WAIT_MAX_S: float = 60
 # A wait sleeps in slices of at most this long, checking the `StopFlag` between them.
 _SLICE_S: float = 1
 # `gh`'s exit code for an authentication failure: never a connectivity failure.
-_GH_EXIT_AUTH = 4
+GH_EXIT_AUTH = 4
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -126,8 +144,19 @@ def bounded_run(
     return subprocess.CompletedProcess(args, returncode, stdout, stderr)
 
 
+def http_status(stderr: str) -> int | None:
+    """The HTTP status `gh` printed in `stderr`, in one of the three forms `_HTTP_STATUS`
+    cites; `None` for any other text."""
+    found = _HTTP_STATUS.search(stderr)
+    return None if found is None else int(found.group(1))
+
+
+def _with_status(message: str, status: int | None) -> str:
+    return message if status is None else f"{message} (HTTP {status})"
+
+
 def _unreachable_marker(returncode: int, stderr: str) -> str | None:
-    if returncode == _GH_EXIT_AUTH:
+    if returncode == GH_EXIT_AUTH:
         return None
     lowered = stderr.lower()
     return next((marker for marker in GH_UNREACHABLE_MARKERS if marker in lowered), None)
@@ -181,12 +210,14 @@ _PHRASES: dict[_Kind, str] = {
 def _retryable_kind(returncode: int, stderr: str) -> _Kind | None:
     """The class of a non-zero exit a retry may change; `None` for anything else,
     authentication failures among them."""
-    if returncode == _GH_EXIT_AUTH:
+    if returncode == GH_EXIT_AUTH:
         return None
     lowered = stderr.lower()
     if GH_RATE_LIMIT_MARKER in lowered:
         return "rate_limited"
-    if any(marker in lowered for marker in GH_TRANSIENT_MARKERS):
+    if http_status(stderr) in GH_TRANSIENT_STATUSES or any(
+        marker in lowered for marker in GH_TRANSIENT_MARKERS
+    ):
         return "transient"
     if any(marker in lowered for marker in GH_UNREACHABLE_MARKERS):
         return "unreachable"
@@ -257,12 +288,16 @@ def run_gh(
     `gh` printed.
 
     With no `retry` that is all (ADR-0050). With one (GH-389), a gateway error
-    (`GH_TRANSIENT_MARKERS`), an unreachable GitHub, the primary rate limit and, when
+    (`GH_TRANSIENT_STATUSES`, 502/503/504), an unreachable GitHub, the primary rate limit and, when
     `retry_timeouts` (a read), a timeout are retried up to `retry.attempts` calls: the rate
     limit waits until the reset `gh api rate_limit` states, the rest after the backoff. One
     `log` line per wait, none with stderr. What runs out ends as `TrackerTransient`,
     `TrackerUnreachable`, `TrackerTimedOut` or `TrackerRateLimited` (also when the reset is
-    over `retry.max_wait_s`, with no sleep, or the stop flag ends the wait)."""
+    over `retry.max_wait_s`, with no sleep, or the stop flag ends the wait).
+
+    When `gh` printed an HTTP status (`http_status`), the refusal and the exhaustion message
+    end with ` (HTTP nnn)` and the exception carries it as `status` (GH-438); nothing else
+    `gh` printed is added."""
     call = " ".join(args[:2])
     attempt = 1
     while True:
@@ -272,6 +307,7 @@ def run_gh(
             raise ValueError(not_installed) from exc
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr.strip()
+            status = http_status(stderr)
             kind = None if retry is None else _retryable_kind(exc.returncode, stderr)
             if kind is None:
                 marker = _unreachable_marker(exc.returncode, stderr)
@@ -280,8 +316,10 @@ def run_gh(
                     log(f"agentic: {message}; this read fails and the next round retries")
                     raise TrackerUnreachable(message) from exc
                 # A plain `ValueError` with no policy: ADR-0050, byte for byte as before.
-                refusal = ValueError if retry is None else TrackerRefused
-                raise refusal(failed(stderr)) from exc
+                message = _with_status(failed(stderr), status)
+                if retry is None:
+                    raise ValueError(message) from exc
+                raise TrackerRefused(message, status=status) from exc
             cause: BaseException = exc
         except subprocess.TimeoutExpired as exc:
             if retry is None or not retry_timeouts:
@@ -289,6 +327,7 @@ def run_gh(
                 log(f"agentic: {message}; this read fails and the next round retries")
                 raise TrackerTimedOut(message) from exc
             kind = "timed_out"
+            status = None
             cause = exc
         else:
             return result.stdout.strip()
@@ -303,18 +342,21 @@ def run_gh(
                 attempt += 1
                 continue
             giving_up = f"gh {call} {_PHRASES[kind]}; the wait was stopped"
-        raise _ERRORS[kind](giving_up) from cause
+        raise _ERRORS[kind](_with_status(giving_up, status), status=status) from cause
 
 
 __all__ = [
     "GH_DRAIN_S",
+    "GH_EXIT_AUTH",
     "GH_EXEMPT_WAIT_MAX_S",
     "GH_RATE_WAIT_MAX_S",
     "GH_TIMEOUT_S",
     "GH_TRANSIENT_MARKERS",
+    "GH_TRANSIENT_STATUSES",
     "GH_UNREACHABLE_MARKERS",
     "GhRetry",
     "bounded_run",
+    "http_status",
     "print_line",
     "run_gh",
 ]

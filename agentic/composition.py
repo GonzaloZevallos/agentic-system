@@ -39,7 +39,12 @@ from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
-from .core.process.adapters.github.board import GhBoard
+from .core.process.adapters.github.board import (
+    BOARD_WRITE_ATTEMPTS,
+    BOARD_WRITE_BACKOFF_S,
+    BOARD_WRITE_WAIT_MAX_S,
+    GhBoard,
+)
 from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
@@ -257,7 +262,19 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         check_results=FilesystemCheckResults(cfg.check_results_dir),
         # GH-375: the Project mirror exists only when a project is configured; its memory
         # sits beside the run registry, one file per product.
-        board=None if project is None else GhBoard(cfg.product_dir, *project),
+        # GH-438: only its writes retry, under their own short policy and deadline.
+        board=None
+        if project is None
+        else GhBoard(
+            cfg.product_dir,
+            *project,
+            retry=GhRetry(
+                max_wait_s=BOARD_WRITE_WAIT_MAX_S,
+                attempts=BOARD_WRITE_ATTEMPTS,
+                backoff_s=BOARD_WRITE_BACKOFF_S,
+                stop=stop_flag,
+            ),
+        ),
         board_sent=None
         if project is None
         else FilesystemBoardSent(

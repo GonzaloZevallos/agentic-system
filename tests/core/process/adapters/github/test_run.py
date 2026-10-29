@@ -10,10 +10,18 @@ from pathlib import Path
 
 import pytest
 
-from agentic.core.process.adapters.github.run import GH_DRAIN_S, bounded_run, run_gh
+from agentic.core.process.adapters.github.run import (
+    GH_DRAIN_S,
+    GH_TRANSIENT_STATUSES,
+    bounded_run,
+    http_status,
+    run_gh,
+)
 from agentic.core.process.application.ports import (
     TrackerCallFailed,
+    TrackerRefused,
     TrackerTimedOut,
+    TrackerTransient,
     TrackerUnreachable,
 )
 
@@ -490,6 +498,108 @@ def test_without_a_policy_a_502_is_the_same_value_error_and_writes_no_line():
     call, lines = _gh(_raising(_failed(BAD_GATEWAY)), "issue", "comment", "7")
     with pytest.raises(ValueError) as raised:
         call()
-    assert str(raised.value) == f"failed: {BAD_GATEWAY}"
+    assert str(raised.value) == f"failed: {BAD_GATEWAY} (HTTP 502)"
     assert not isinstance(raised.value, TrackerCallFailed)
     assert lines == []
+
+
+# --- the HTTP status gh prints (GH-438) ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("stderr", "status"),
+    [
+        ("gh: HTTP 502", 502),
+        ("gh: Not Found (HTTP 404)", 404),
+        ("gh: Server Error (HTTP 503)\n", 503),
+        (BAD_GATEWAY, 502),
+        ("non-200 OK status code: 504 Gateway Timeout body: x", 504),
+        ("gh: API rate limit exceeded for user ID 1. (HTTP 403)", 403),
+        ("", None),
+        ("HTTP 401: Bad credentials", None),
+        ("error connecting to api.github.com", None),
+        ("gh: Not Found (HTTP 4040)", None),
+        ("gh: Not Found (HTTP 40)", None),
+    ],
+)
+def test_http_status_reads_the_three_forms_gh_prints_and_nothing_else(stderr, status):
+    assert http_status(stderr) == status
+
+
+def test_the_transient_statuses_are_the_gateway_errors():
+    assert GH_TRANSIENT_STATUSES == frozenset({502, 503, 504})
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_a_gateway_status_is_retried_and_ends_transient_with_the_status(status):
+    clock = _Clock()
+    run = _script(*[_failed(f"gh: Server Error (HTTP {status})")] * 3)
+    call, lines = _retrying(run, clock)
+    with pytest.raises(TrackerTransient) as raised:
+        call()
+    assert len(run.calls) == 3
+    assert str(raised.value).endswith(f"on each of 3 attempts (HTTP {status})")
+    assert raised.value.status == status
+    assert all("Server Error" not in line for line in lines)
+
+
+def test_a_gateway_status_then_success_is_retried():
+    clock = _Clock()
+    run = _script(_failed("gh: Service Unavailable (HTTP 503)"), "ok")
+    call, _ = _retrying(run, clock)
+    assert call() == "ok" and len(run.calls) == 2
+
+
+@pytest.mark.parametrize("status", [503, 504])
+def test_without_a_policy_a_gateway_status_fails_at_once_with_the_suffix(status):
+    stderr = f"gh: Unavailable (HTTP {status})"
+    call, lines = _gh(_raising(_failed(stderr)))
+    with pytest.raises(ValueError) as raised:
+        call()
+    assert type(raised.value) is ValueError
+    assert str(raised.value) == f"failed: {stderr} (HTTP {status})"
+    assert lines == []
+
+
+def test_a_refusal_under_a_policy_carries_its_status():
+    clock = _Clock()
+    run = _script(_failed("gh: Not Found (HTTP 404)"))
+    call, lines = _retrying(run, clock)
+    with pytest.raises(TrackerRefused) as raised:
+        call()
+    assert raised.value.status == 404
+    assert str(raised.value) == "failed: gh: Not Found (HTTP 404) (HTTP 404)"
+    assert len(run.calls) == 1 and lines == []
+
+
+def test_a_refusal_without_a_status_has_none_and_no_suffix():
+    clock = _Clock()
+    run = _script(_failed("HTTP 404: Not Found"))
+    call, _ = _retrying(run, clock)
+    with pytest.raises(TrackerRefused) as raised:
+        call()
+    assert raised.value.status is None
+    assert str(raised.value) == "failed: HTTP 404: Not Found"
+
+
+def test_a_rate_limit_that_runs_out_carries_the_status_and_a_timeout_none():
+    from agentic.core.process.application.ports import TrackerRateLimited
+
+    clock = _Clock(1_000)
+    run = _script(_failed(RATE_LIMITED), '{"resources": {"core": {"remaining": 0, "reset": 1100}}}')
+    call, _ = _retrying(run, clock, cap=60)
+    with pytest.raises(TrackerRateLimited) as raised:
+        call()
+    assert raised.value.status == 403 and str(raised.value).endswith("(HTTP 403)")
+
+    timed = _script(*[subprocess.TimeoutExpired(["gh"], 60)] * 3)
+    call, _ = _retrying(timed, _Clock(), read=True, args=("issue", "list"))
+    with pytest.raises(TrackerTimedOut) as raised:
+        call()
+    assert raised.value.status is None and "(HTTP" not in str(raised.value)
+
+
+def test_the_status_exceptions_still_build_from_a_message_alone():
+    assert TrackerTransient("m").status is None
+    assert TrackerRefused("m").status is None
+    assert TrackerRefused("m", status=404).status == 404

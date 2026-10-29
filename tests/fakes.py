@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
     AddedLine,
     Board,
     BoardSent,
+    BoardWritten,
     BranchPullRequest,
     Checkout,
     CheckRequest,
@@ -1955,7 +1956,8 @@ class FakeBoard:
     """GH-375: the Project board, in memory. Records every call as `(name, argument)`.
     `open` and `closed` are the issues it reads; `fail` (an exception) is raised by every
     method named in `fail_on` (all of them when empty); `unwritten` are issues `write`
-    leaves out of the set it returns, as a partially failed batch would."""
+    leaves out of the set it returns, as a partially failed batch would; `complete` is the
+    flag of the `BoardWritten` it returns (False: a transport cause cut the round short)."""
 
     def __init__(
         self,
@@ -1967,7 +1969,9 @@ class FakeBoard:
         fail_on: Collection[str] = (),
         unwritten: Collection[int] = (),
         limit_reached: bool = False,
+        complete: bool = True,
     ) -> None:
+        self.complete = complete
         self.open = list(open)
         self.closed = list(closed)
         self.project = project
@@ -2002,10 +2006,10 @@ class FakeBoard:
                 return row
         raise ValueError(f"no issue #{number}")
 
-    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+    def write(self, writes: Sequence[FieldWrite]) -> BoardWritten:
         self._enter("write", list(writes))
         self.written.extend(writes)
-        return frozenset(w.issue for w in writes) - self.unwritten
+        return BoardWritten(frozenset(w.issue for w in writes) - self.unwritten, self.complete)
 
 
 class FakeBoardSent:
