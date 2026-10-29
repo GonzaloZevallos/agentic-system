@@ -170,6 +170,37 @@ def lower_unbacked_blocks(
     return settled, lowered
 
 
+def lower_landing_blocks(
+    findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The findings with every one that asks for landing evidence made an `observation`
+    (GH-441), and a line for each. The evidence only the pull request's CI can give does
+    not exist while a subtask is reviewed, so no Developer can supply it: the request is
+    kept, in the record and in the pull request's body, and verified at landing. It reads
+    the structured `landing_checks` and the `severity`, never the prose, so it runs first,
+    whatever the severity or the scope, and `reported_severity` keeps what the reviewer
+    said. Idempotent: a finding that already carries `reported_severity` is left alone."""
+    settled, lowered = [], []
+    for item in findings:
+        if item.get("landing_checks") and "reported_severity" not in item:
+            lowered.append(
+                f"`{item['location']}` {item['severity']} lowered to observation: "
+                "verified at landing"
+            )
+            item = {**item, "reported_severity": item["severity"], "severity": "observation"}
+        settled.append(item)
+    return settled, lowered
+
+
+NO_LANDING_GATE = "none: this product declares no CI"
+
+
+def landing_gate_text(names: Sequence[str]) -> str:
+    """What `{{landing_gate}}` says in a review prompt (GH-441): the names of the CI gate
+    (`ci_gate_names`) as backticked names, or `NO_LANDING_GATE` when the gate is empty."""
+    return ", ".join(f"`{name}`" for name in names) if names else NO_LANDING_GATE
+
+
 def review_markdown(
     category: FindingCategory | None, reason: str, text: str, lowered: Sequence[str] = ()
 ) -> str:
@@ -216,7 +247,40 @@ def _record(subtask_id: str, version: int, item: dict[str, Any]) -> FindingRecor
     }
     if "reported_severity" in item:
         record["reported_severity"] = item["reported_severity"]
+    if item.get("landing_checks"):
+        record["landing_checks"] = list(item["landing_checks"])
     return record
+
+
+LANDING_HEADING = "### Verified at landing"
+_LANDING_NAMES_MAX = 10
+
+
+def landing_notes(records: Sequence[FindingRecord], gate_names: Sequence[str]) -> str:
+    """The `Verified at landing` block of the pull request body: the checks the reviews asked
+    for that only the pull request's CI can show. Reads the raw records, whatever their
+    `status` (a dismissed row's request stands too), never the folded rows, and merges the
+    names in order of appearance without duplicates. A name in `gate_names` (the product's
+    gate, `ci_gate_names`) is written verbatim, at most `_LANDING_NAMES_MAX`; every other name
+    is only counted under a fixed template, so no text the reviewer wrote reaches GitHub.
+    `""` when no record carries the key."""
+    asked: dict[str, None] = {}
+    for record in records:
+        for name in record.get("landing_checks", []):
+            if isinstance(name, str) and name.strip():
+                asked[name.strip()] = None
+    if not asked:
+        return ""
+    gate = set(gate_names)
+    declared = [name for name in asked if name in gate]
+    undeclared = len(asked) - len(declared)
+    lines = [f"- verified at landing: `{name}`" for name in declared[:_LANDING_NAMES_MAX]]
+    if undeclared:
+        lines.append(
+            f"- {undeclared} requested checks are not declared in the product's CI: "
+            "not verified at landing"
+        )
+    return "\n\n".join([LANDING_HEADING, "\n".join(lines)])
 
 
 # Where a `full_checks` finding row sits: `full_checks:<check>`, never a file of the diff.

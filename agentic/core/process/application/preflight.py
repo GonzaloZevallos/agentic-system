@@ -37,6 +37,8 @@ PLACEHOLDERS = {
     "parts_step": rules.parts_step_text(None),
     "parts_field": rules.parts_field_text(None),
     "tracker_with_parts": rules.TRACKER_WITH_PARTS,
+    # The names of the CI gate in a subtask review; a product with no CI reads this.
+    "landing_gate": rules.NO_LANDING_GATE,
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.
     "product": "product",

@@ -629,6 +629,15 @@ class Finding(BaseModel):
         "branch a problem between subtasks is `subtask`"
     )
     category: FindingCategory
+    landing_checks: list[str] = Field(
+        default_factory=list,
+        description="The CI check names, preferably from the landing gate listed in your "
+        "prompt, whose evidence only the pull request's CI can give. Filling it never "
+        "returns the subtask: the system turns the finding into an `observation` and "
+        "the delivery's pull request body asks for those checks at landing. One "
+        "objection per finding, never mixed with a defect the Developer can fix. An "
+        "empty list when the finding needs no such evidence",
+    )
 
 
 class Review(RoleOutput):
