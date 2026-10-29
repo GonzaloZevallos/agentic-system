@@ -177,6 +177,8 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             ready += f"\n\n{replaced_note}"
         if unconfirmed:
             ready += f"\n\n{unconfirmed}"
+        if elsewhere := rules.owner_rules_block(state.get("owner_rules_elsewhere", [])):
+            ready += f"\n\n{elsewhere}"
         ports.tracker.comment(state["id"], ready)
     except Exception as failed:
         _lapsed(lapses, "ready comment", failed)

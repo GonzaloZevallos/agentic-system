@@ -55,11 +55,11 @@ def test_a_state_without_task_head_never_visits_the_node():
 
 
 def test_with_task_head_and_no_record_the_node_comes_before_everything_after_the_fan_in():
-    due = state(task_head=HEAD)
+    due = state(task_head=HEAD, owner_rules_seen=HEAD)
     assert rules.full_checks_due(due)
     assert rules.after_integrate(due) == "full_checks"
     # Before the copy review, the final validation and QA Performance, whatever is convened.
-    convened = state(task_head=HEAD, performance=[{"name": "x"}])
+    convened = state(task_head=HEAD, owner_rules_seen=HEAD, performance=[{"name": "x"}])
     assert rules.after_integrate(convened) == "full_checks"
 
 
@@ -72,7 +72,7 @@ def test_the_fan_in_still_dispatches_and_stops_before_it_considers_the_node():
 
 
 def test_a_passed_record_of_the_same_head_is_not_due_and_deliver_follows():
-    done = state(task_head=HEAD, full_checks=record())
+    done = state(task_head=HEAD, owner_rules_seen=HEAD, full_checks=record())
     assert not rules.full_checks_due(done)
     assert rules.after_integrate(done) == "deliver"
     # The same commit at another length is the same head.
@@ -86,7 +86,9 @@ def test_a_red_record_or_one_of_another_head_is_due_again():
 
 def test_a_head_moved_by_a_landing_pass_is_due_again():
     landing = [{"head": HEAD, "step": "sync", "by": "landing"}]
-    moved = state(task_head=MOVED, full_checks=record(HEAD), landing=landing)
+    moved = state(
+        task_head=MOVED, owner_rules_seen=MOVED, full_checks=record(HEAD), landing=landing
+    )
     assert rules.after_integrate(moved) == "full_checks"
 
 

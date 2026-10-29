@@ -267,6 +267,7 @@ async def test_definition_stage_then_delivery(config, tmp_path):
         FINDINGS,  # written by the fan-in, before the wave it hands the table to
         "Developer: api",
         "Tech Lead: review api",
+        "Owner rules",  # the step notes that no owner login is configured
     ]
     assert final["flags"] == {"touches_ui": False, "touches_copy": False}  # PM replaces PA's set
     assert final["failures"] == []
@@ -755,6 +756,7 @@ async def test_a_bug_is_diagnosed_validated_and_built_like_a_feature(config, tmp
         FINDINGS,
         "Developer: api",
         "Tech Lead: review api",
+        "Owner rules",  # the step notes that no owner login is configured
     ]
     assert "flags" not in final  # nobody proposed any: a bug changes no scope
     assert final["pull_request"].endswith("/pull/7")
@@ -863,6 +865,7 @@ async def test_a_platform_enhancement_goes_from_pjm_straight_to_the_plan(config,
         FINDINGS,
         "Developer: api",
         "Tech Lead: review api",
+        "Owner rules",  # the step notes that no owner login is configured
     ]
     assert "flags" not in final  # no Product Analyst ran, so no flags were ever proposed
     assert final["pull_request"].endswith("/pull/7")
@@ -1230,6 +1233,7 @@ def test_exported_graph_uses_the_default_ports():
         "integrate",
         "full_checks",
         "fix_important",
+        "owner_rules",
         "copy_review",
         "final_validation",
         "qa_performance",

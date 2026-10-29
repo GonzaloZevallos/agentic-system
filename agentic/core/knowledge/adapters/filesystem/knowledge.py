@@ -9,11 +9,14 @@ leaves the product half consolidated.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...domain import knowledge, knowledge_index
+from agentic.core.process.application.ports import IssueComment, OwnerRuleEntry
+from agentic.core.process.domain.task import OwnerRuleElsewhere
+
+from ...domain import knowledge, knowledge_index, owner_rules
 
 
 class FilesystemKnowledge:
@@ -133,6 +136,28 @@ class FilesystemKnowledge:
     def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
         """The decisions files with more lines in force than the cap, one message each."""
         return knowledge.owner_over_cap(texts)
+
+    def owner_parse(
+        self, comments: Sequence[IssueComment], owner: str
+    ) -> tuple[list[OwnerRuleEntry], list[OwnerRuleElsewhere]]:
+        """The owner's marked rules in the comments and the ones that cannot be written."""
+        accepted, rejected = owner_rules.parse(
+            [(c.body, c.author, c.created_at, c.url) for c in comments], owner
+        )
+        return (
+            [OwnerRuleEntry(r.text, r.scope, r.replaces, r.created_at, r.url) for r in accepted],
+            [{"rule": r.text, "cls": r.cls} for r in rejected],
+        )
+
+    def owner_append(self, text: str, entries: Sequence[OwnerRuleEntry]) -> str:
+        """The decisions file with the new entries appended, a replaced one struck."""
+        return owner_rules.append(
+            text,
+            [
+                owner_rules.OwnerRule(e.text, e.scope, e.replaces, e.created_at, e.url)
+                for e in entries
+            ],
+        )
 
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet

@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, ShellReaper
@@ -40,6 +41,7 @@ from agentic.core.process.application.ports import (
     LaunchAttempt,
     ListedPullRequest,
     MergeCallFailed,
+    OwnerRuleEntry,
     PerfLock,
     PerfRunner,
     Ports,
@@ -81,6 +83,7 @@ from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
     DependencyState,
     MergeOutcome,
+    OwnerRuleElsewhere,
     PullRequest,
     TaskInput,
     TaskState,
@@ -295,6 +298,14 @@ class MemoryKnowledge:
 
     def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
         return knowledge.owner_over_cap(texts)
+
+    def owner_parse(
+        self, comments: Sequence[IssueComment], owner: str
+    ) -> tuple[list[OwnerRuleEntry], list[OwnerRuleElsewhere]]:
+        return FilesystemKnowledge(Path(".")).owner_parse(comments, owner)
+
+    def owner_append(self, text: str, entries: Sequence[OwnerRuleEntry]) -> str:
+        return FilesystemKnowledge(Path(".")).owner_append(text, entries)
 
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
         return knowledge.criteria_regressions(base_texts, head_texts)

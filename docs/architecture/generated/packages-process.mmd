@@ -137,6 +137,8 @@ classDiagram
   }
   class merge {
   }
+  class owner_rules {
+  }
   class perf {
   }
   class plan {
@@ -383,6 +385,9 @@ classDiagram
   merge --> ports
   merge --> presubmit
   merge --> release
+  owner_rules --> checkouts
+  owner_rules --> ports
+  owner_rules --> run_role
   perf --> ports
   perf --> preflight
   plan --> checkouts

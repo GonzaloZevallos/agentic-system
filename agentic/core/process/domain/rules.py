@@ -74,6 +74,7 @@ from .task import (
     FullChecksRecord,
     LapsePauseEntry,
     MergeOutcome,
+    OwnerRuleElsewhere,
     PartRecord,
     PauseEntry,
     PullRequest,
@@ -2379,6 +2380,8 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if pre_pr_important_due(state):
         return FIX_IMPORTANT
+    if owner_rules_due(state):
+        return "owner_rules"
     if full_checks_due(state):
         return "full_checks"
     if copy_review_due(state):
@@ -2386,6 +2389,12 @@ def after_integrate(state: TaskState) -> str | None:
     if final_validation_due(state):
         return "final_validation"
     return "qa_performance" if qa_performance_due(state) else "deliver"
+
+
+def after_owner_rules(state: TaskState) -> str | None:
+    """Always back to the fan-in (GH-431): the step observed the head, so `owner_rules_due`
+    now reads `False` (a commit it made is the `task_head` the fan-in stamps next)."""
+    return None if state.get("escalated") else "integrate"
 
 
 def after_fix_important(state: TaskState) -> str | None:
@@ -5333,6 +5342,26 @@ def tracker_failure_block(items: Sequence[object], exc_class: str, relative: str
     omitted = len(texts) - TRACKER_FAILURE_ITEMS
     if omitted > 0:
         block += f"\n\nand {omitted} more, in the task document at `{relative}`"
+    return block
+
+
+def owner_rules_block(items: Sequence[OwnerRuleElsewhere]) -> str:
+    """The bounded checklist of owner rules the `owner_rules` step could not write (GH-431),
+    for the ready comment: one checkbox per rule, the same bounds as the tracker-work list
+    (ADR-0062); `''` when there is none."""
+    texts = [
+        f"Owner's rule not written ({item['cls']}): {' '.join(item['rule'].split())}"
+        for item in items
+    ]
+    texts = [_MARKER_TEXT.sub("agentic-tracker :", text) for text in texts]
+    lines = [f"- [ ] {_cut(t, TRACKER_FAILURE_ITEM_CHARS)}" for t in texts[:TRACKER_FAILURE_ITEMS]]
+    if not lines:
+        return ""
+    block = "Owner rules the system could not write in this repo; they are yours:\n\n" + "\n".join(
+        lines
+    )
+    if (omitted := len(texts) - TRACKER_FAILURE_ITEMS) > 0:
+        block += f"\n\nand {omitted} more, in the task document"
     return block
 
 
