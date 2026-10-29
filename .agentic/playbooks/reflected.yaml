@@ -485,3 +485,13 @@ tasks:
       - GH-441
   GH-442@review:
     cost_usd: 0.1072
+  GH-434@review:
+    cost_usd: 0.0903
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-434
