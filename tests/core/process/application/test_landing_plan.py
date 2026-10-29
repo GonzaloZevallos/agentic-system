@@ -412,14 +412,12 @@ def test_the_entries_of_an_archived_run_are_not_the_escalation():
     assert not landing.ci_escalation(raw, gh374.HEAD)
 
 
-def test_an_old_escalate_entry_has_no_checks_and_no_upstream_to_read():
+def test_an_old_escalate_entry_has_no_checks_to_read():
     entry = landing.ci_escalation_entry(_gh374(), gh374.HEAD)
     assert entry is not None
     assert landing.escalation_checks(entry, ("web", "api")) == ("web", "api")
-    assert landing.escalation_upstream(entry, gh374.NEW_MASTER) == gh374.NEW_MASTER
-    recorded = {**entry, "checks": ["web"], "upstream": gh374.MASTER}
+    recorded = {**entry, "checks": ["web"]}
     assert landing.escalation_checks(recorded, ("web", "api")) == ("web",)
-    assert landing.escalation_upstream(recorded, gh374.NEW_MASTER) == gh374.MASTER
 
 
 def test_released_by_ci_clears_the_escalation_and_stamps_the_pair_and_nothing_else():

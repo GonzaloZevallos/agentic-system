@@ -12,14 +12,18 @@ from agentic.core.process.application import landing, landing_fix, landing_plan,
 from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.poll import assess_merge
 from agentic.core.process.application.ports import GitError, IssueComment, IssueState, Upstream
+from agentic.core.process.domain import ci
 from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain.task import apply
+from agentic.shared.configuration import Configuration
+from tests.core.process.application import gh374_shape as gh374
 from tests.core.process.application.test_landing_fix import _doc, _land
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg as landing_fix_cfg
 from tests.core.process.application.test_poll import _Locks
 from tests.core.process.application.test_poll_merge import HEAD, _HeldLocks, _ports
 from tests.core.process.application.test_poll_merge import MASTER as MERGE_MASTER
-from tests.fakes import FakeLauncher, MemoryStack
+from tests.fakes import FakeLauncher, MemoryStack, MemoryTracker, memory_ports
 
 HEAD_RUN = "https://github.com/o/r/actions/runs/101"
 BASE_RUN = "https://github.com/o/r/actions/runs/202"
@@ -127,12 +131,6 @@ def test_the_reason_lists_every_name(names):
 
 
 # --- GH-442: the release of a landing escalation only CI caused ---
-
-from agentic.core.process.domain import ci  # noqa: E402
-from agentic.core.process.domain.task import apply  # noqa: E402
-from agentic.shared.configuration import Configuration  # noqa: E402
-from tests.core.process.application import gh374_shape as gh374  # noqa: E402
-from tests.fakes import MemoryTracker, memory_ports  # noqa: E402
 
 
 class _Tracker(MemoryTracker):
@@ -601,7 +599,9 @@ TODAY = (
 )
 
 
-def test_a_depth_one_diagnose_escalation_keeps_todays_line(tmp_path, monkeypatch):
+def test_a_depth_one_diagnose_escalation_is_not_sent_to_land_that_does_not_move_it(
+    tmp_path, monkeypatch
+):
     entry = {
         "head": HEAD,
         "step": "diagnose",
@@ -610,17 +610,44 @@ def test_a_depth_one_diagnose_escalation_keeps_todays_line(tmp_path, monkeypatch
         "verdict": "unlandable",
         "at": "2026-10-13T20:00:00+00:00",
     }
-    line, _, _ = _pair(monkeypatch, tmp_path, _green_base(), _tail(entry))
-    assert line == TODAY
+    line, result, _ = _pair(monkeypatch, tmp_path, _green_base(), _tail(entry))
+    # land answers `not_live` and writes nothing, so resume must not name it (invariant 11).
+    assert (result.kind, result.reason) == ("skipped", "not_live")
+    assert "agentic land" not in line and "only a restart moves" in line
 
 
-def test_a_ledger_escalation_keeps_todays_line_and_never_gets_fresh(tmp_path, monkeypatch):
-    # A ledger escalation is the refusal `open_findings_blocking` after its `escalate_ledger`
-    # entry: the table's step is `none`. The CI world cannot refuse so, so the step is stated.
-    ledger = landing_plan.LandingStep("none", "open_findings_blocking")
-    monkeypatch.setattr(landing_plan, "step_for", lambda *args, **kwargs: ledger)
-    line, _, _ = _pair(monkeypatch, tmp_path, _green_base())
-    assert line == TODAY and "--fresh" not in line
+def test_a_ledger_escalation_is_not_sent_to_land_that_does_not_move_it(tmp_path, monkeypatch):
+    ledger = {
+        "head": HEAD,
+        "step": "escalate_ledger",
+        "refusal": "open_findings_blocking",
+        "at": "2026-10-13T20:00:00+00:00",
+    }
+    document = _tail(ledger)
+    document["escalated"] = "open findings the integrator cannot clear"
+    line, result, _ = _pair(monkeypatch, tmp_path, _green_base(), document)
+    # land holds the step back for the release and answers `needs_restart`: resume says the same.
+    assert (result.kind, result.reason) == ("skipped", "escalated_needs_restart")
+    assert "agentic land" not in line and "only a restart moves" in line
+
+
+def test_a_ci_release_is_one_write_holding_the_stamp_and_the_next_entry(tmp_path, monkeypatch):
+    ports, _ = _red_world(monkeypatch, _green_base(), ancestor=True)
+    writes: list[dict] = []
+    save, record = ports.documents.save, ports.documents.record_closure
+    ports.documents.save = lambda state: (writes.append(dict(state)), save(state))[1]
+    ports.documents.record_closure = lambda t, v: (writes.append(dict(v)), record(t, v))[1]
+
+    result, _ = _land(ports, tmp_path)
+
+    assert result.kind == "dispatched"
+    stamped = [w for w in writes if any("ci_released" in e for e in landing_plan.entries(w))]
+    assert len(writes) == 1 and stamped == writes
+    entries = landing_plan.entries(writes[0])
+    escalate = next(e for e in entries if e["step"] == "escalate")
+    assert entries[-1]["step"] == "rerun" and escalate["ci_released"] == MERGE_MASTER
+    assert len(entries) == 6
+    assert not writes[0].get("escalated")
 
 
 def _gh328() -> dict:

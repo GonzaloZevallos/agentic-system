@@ -250,22 +250,6 @@ def _land(
     if again is None or again.head_oid != head:
         log(f"agentic: land: {task_id}: head moved since the decision ({head})")
         return LandResult("skipped", "head_moved", step.kind)
-    if released:
-        # One write, in the same call that appends the entry and dispatches: the release
-        # is never left undispatched (the head and the merge were checked above).
-        ports.documents.save(apply(state_from(dict(raw)), released))
-        if outcome.decision is None:
-            # Nobody decided: the label goes with the escalation (Nota al tracker, best effort).
-            ports.tracker.drop_label(task_id, NEEDS_HUMAN)
-            log(
-                f"agentic: land: {task_id}: {head} {step.kind}: escalation released, "
-                "the base branch CI is green"
-            )
-        else:
-            log(
-                f"agentic: land: {task_id}: {head} {step.kind}: "
-                "escalation released by a human decision"
-            )
     entry: dict[str, object] = {
         "head": head,
         "step": step.kind,
@@ -291,7 +275,29 @@ def _land(
         entry["restart_why"] = step.restart_why
         if integration_work:
             entry["integration_work"] = True
-    if resumed is None:
+    if released:
+        # One write holds the release (the unescalation, `ci_released` on the `escalate`
+        # entry) and the next step's entry, so no crash leaves a release with no next step
+        # (the head and the merge were checked above).
+        saved = apply(state_from(dict(raw)), released)
+        whole: dict[str, Any] = {
+            **saved,
+            "landing": [*landing_plan.all_entries(saved), entry],
+        }
+        ports.documents.save(state_from(whole))
+        if outcome.decision is None:
+            # Nobody decided: the label goes with the escalation (Nota al tracker, best effort).
+            ports.tracker.drop_label(task_id, NEEDS_HUMAN)
+            log(
+                f"agentic: land: {task_id}: {head} {step.kind}: escalation released, "
+                "the base branch CI is green"
+            )
+        else:
+            log(
+                f"agentic: land: {task_id}: {head} {step.kind}: "
+                "escalation released by a human decision"
+            )
+    elif resumed is None:
         ports.documents.record_closure(
             task_id, {"landing": [*landing_plan.all_entries(current), entry]}
         )

@@ -1063,12 +1063,6 @@ def escalation_checks(entry: Mapping[str, object], required: tuple[str, ...]) ->
     return required
 
 
-def escalation_upstream(entry: Mapping[str, object], current: str | None) -> str | None:
-    """The upstream sha an `escalate` entry was made at: its `upstream`, else `current`."""
-    recorded = entry.get(UPSTREAM_KEY)
-    return recorded if isinstance(recorded, str) and recorded else current
-
-
 def ci_released_for(entry: Mapping[str, object], upstream: str | None) -> bool:
     """Whether `entry` carries the CI release of the pair ending in `upstream`."""
     return upstream is not None and entry.get("ci_released") == upstream

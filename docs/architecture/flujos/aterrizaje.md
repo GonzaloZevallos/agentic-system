@@ -98,11 +98,14 @@ sequenceDiagram
    texto en `Human`). Liberado, el paso se recalcula sobre la vista liberada
    (`landing_plan.released_step`): `sync_master` si la cabeza no contiene el upstream, `rerun`
    si lo contiene, `wait` si la ascendencia no se puede leer. Ese paso pasa de nuevo por
-   `run_kind_admits` y `takes_action` antes de escribir la entrada `landing`; el `ci_released`
-   y la entrada del paso siguiente se guardan en la misma escritura de `record_closure` (la
-   liberación misma se guarda antes, como la de GH-328). Un escalado que no es de CI (libro
+   `run_kind_admits` y `takes_action` antes de escribir la entrada `landing`; la
+   liberación (el desescalado y el `ci_released` de la entrada `escalate`) y la entrada del
+   paso siguiente se guardan en una sola escritura de `documents.save`, así que ningún fallo
+   deja una liberación sin su paso siguiente. Un escalado que no es de CI (libro
    mayor, ADR, diagnóstico de profundidad 1, GH-328) conserva su comportamiento.
    `agentic resume` consulta la misma decisión
    (`agentic/core/process/application/resume.py:_landing_owns_line`) y solo nombra
    `agentic land` si `land` puede mover la tarea; si espera la CI de la base o un comentario
-   humano, lo dice sin mencionar `--fresh`.
+   humano, lo dice sin mencionar `--fresh`, y si la forma del escalado solo la mueve un reinicio
+   (libro mayor, diagnóstico de profundidad 1) lo dice en vez de enviar a `land`, que responde
+   `not_live` o `escalated_needs_restart` sin escribir nada.

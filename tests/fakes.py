@@ -210,6 +210,12 @@ class MemoryDocuments:
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
+        # A save rewrites the whole document, so it replaces the closure values of every key
+        # it carries, as the filesystem adapter does; only keys it does not carry survive.
+        closed = self.closures.get(state["id"])
+        if closed:
+            for key in [k for k in closed if k in state]:
+                del closed[key]
         return self.path_for(state["id"])
 
     def path_for(self, task_id: str) -> Path:

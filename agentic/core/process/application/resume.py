@@ -331,9 +331,9 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
     `agentic land` is named unless the document is escalated and the table's step for it is
     the one `land` holds back (`landing_plan.release_asked`, the step `land` computes over the
     same merge facts); then `landing_plan.release`, the decision `land` asks, says whether
-    `land` can move it. A task `land` would not hold back keeps today's line, whatever the
-    escalation; a held one states the wait that decision gives, or the restart only a human
-    starts when its shape answers `needs_restart`."""
+    `land` can move it. A task `land` moves without asking keeps today's line; one it holds
+    back, or answers `not_live` for, states the wait that decision gives, or the restart only
+    a human starts when its shape answers `needs_restart`."""
     flag = issue_flag(task_id, ports)
     owns = f"{task_id} has a pull request: its branch moved after approval, which the landing owns"
     land = f"{owns}; run `agentic land {flag}`."
@@ -373,16 +373,22 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
         # The escalation itself, taken on this head: `land` answers "already taken" and moves
         # nothing until the base's CI is green and the table gives another step.
         return f"{owns}, and it waits for the base branch CI to turn green."
-    if not landing_plan.release_asked(state, step.kind):
+    asked = landing_plan.release_asked(state, step.kind)
+    if not asked and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
         return land
+    # Either `land` holds the step back for the release, or it answers `not_live` and writes
+    # nothing (a ledger or depth-1 escalation): the shared decision says whether it moves.
     outcome = landing_plan.release(ports, cfg, task_id, state, number, head=head, upstream=master)
-    if outcome.released:
+    if asked and outcome.released:
         return land
     if outcome.why == "needs_restart":
         return (
             f"{owns}, and its escalation is one only a restart moves: `agentic run {flag} --fresh`."
         )
-    return f"{owns}, and " + _LANDING_WAITS[outcome.why] + "."
+    wait = _LANDING_WAITS.get(outcome.why)
+    if wait is None:
+        return f"{owns}, and `agentic land` has nothing to do for it now."
+    return f"{owns}, and {wait}."
 
 
 def _task_checkout(task_id: str, ports: Ports) -> tuple[Path | None, bool]:
