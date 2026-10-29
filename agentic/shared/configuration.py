@@ -200,6 +200,9 @@ class Configuration(BaseModel):
     # The GitHub Project the poller mirrors each issue's stage to (GH-375, ADR-0073), as
     # `<owner>/<number>`. `None` mirrors nothing and makes no call.
     board_project: str | None = None
+    # The login of the owner whose `Owner's rule:` comments may be written into a decisions
+    # file (GH-431). Empty means no owner is configured and nothing is written.
+    owner_login: str = ""
 
     @field_validator("board_project")
     @classmethod

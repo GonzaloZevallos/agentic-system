@@ -45,6 +45,7 @@ PHASES: Mapping[str, tuple[str, ...]] = {
         "final_validation",
         "fix_important",
         "full_checks",
+        "owner_rules",
         "qa_performance",
     ),
 }

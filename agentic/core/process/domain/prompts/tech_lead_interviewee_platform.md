@@ -45,6 +45,7 @@ request:
 - A `## Human` section, when the task document has one, holds what the human decided
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.
+- A live rule in the owner's decisions (`decisiones-del-dueño.md`, whole in the product knowledge you receive) decides the question it covers: apply it without escalating and cite its `D-<hex>` id. Against an ADR it touches, a rule dated after the ADR wins and the task leaves an `outside` finding to amend the ADR; a rule dated before it loses.
 - The engineering standards apply to the code this task adds or touches, not to what
   already exists. Say explicitly where new code will coexist with old shapes.
 - Read-only: you read files and the git history, you write nothing and run no tests.

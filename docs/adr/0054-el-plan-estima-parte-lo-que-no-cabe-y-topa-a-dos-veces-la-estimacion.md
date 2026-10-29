@@ -122,3 +122,28 @@ contestó.
 - **Riesgos conocidos.** Con el tope de tarea por defecto (250 USD), una parte entre 250 y
   300 puede frenar a mitad de obra en ese tope. Sin referencia en el historial decide solo el
   costo declarado: la estimación vuelve a ser su propio juez. La cantidad de archivos no topa.
+
+## Adenda (2026-10-28): un veredicto de ajuste por estimación, sea cual sea la forma (GH-462)
+
+El cubo de referencia del historial se elegía por la forma de la salida (`len(parts) or
+len(subtasks)`). Una misma estimación (38 USD, 21 archivos) se rechazó como 7 subtareas
+("no cabe", cubo de 7) y, en el intento siguiente, como 2 partes ("cabe", cubo de 2): los dos
+rechazos se contradecían y la tarea escalaba en bucle.
+
+- **El cubo se fija por corrida.** `schemas.FitBucket`, que crea `plan_check_for`, guarda la
+  mayor cantidad de subtareas vista en la corrida (los dos intentos de un `run_role` lo
+  comparten). Se anota solo donde hoy se juzga el ajuste: una salida inválida no lo fija. No
+  entra en `TaskState` ni en el documento; un resume juzga desde cero.
+- **Las partes se juzgan contra ese cubo**, si hay uno; si no, contra su propia cantidad (el
+  comportamiento de siempre). Las subtareas se juzgan contra `max(propia, fijada)` y además
+  contra la referencia de su propio cubo, así que el cubo fijado nunca acepta lo que el cubo
+  propio rechaza.
+- **Lo que no cambia.** `plan_fits` sin `FitBucket` devuelve lo de siempre (`_after_delivery`
+  y los demás lectores). La aceptación solo cambia donde antes se rechazaban las dos formas.
+- **Una respuesta humana a una escalación `failure` no exime el ajuste.** Solo la exime una
+  pregunta de ajuste o una escalación `estimate` con partes (`rules.resumed`). Un plan que no
+  cabe se parte; el rechazo lo dice con una frase fija después de la acción
+  (`schemas.SPLIT_NOT_WAIVED`).
+- **Texto al Tech Lead.** El paso de `### Parts` dice que el trabajo que cae después del
+  merge (un workflow posterior, un commit de un bot) sigue siendo una subtarea de esta tarea,
+  nunca una parte.

@@ -122,6 +122,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
             _perf_preface(state),
+            _landing_preface(state, ports),
             unconfirmed,
         )
         if part
@@ -177,6 +178,8 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             ready += f"\n\n{replaced_note}"
         if unconfirmed:
             ready += f"\n\n{unconfirmed}"
+        if elsewhere := rules.owner_rules_block(state.get("owner_rules_elsewhere", [])):
+            ready += f"\n\n{elsewhere}"
         ports.tracker.comment(state["id"], ready)
     except Exception as failed:
         _lapsed(lapses, "ready comment", failed)
@@ -352,6 +355,20 @@ def _perf_preface(state: TaskState) -> str:
         "(reason, spread and load averages per metric below), so the auto-merge is held and "
         f"the pull request is left to the human:\n\n{rows}"
     )
+
+
+def _landing_preface(state: TaskState, ports: Ports) -> str:
+    """The `Verified at landing` block, after `Performance not verified`: what the reviews
+    asked for that only this pull request's CI can show, written by `rules.landing_notes`
+    from the raw findings. The stack is read only when a record asks for something, so a
+    task with none has the body it always had."""
+    records = state.get("findings", [])
+    if not rules.landing_notes(records, ()):
+        return ""
+    gate = rules.ci_gate_names(
+        ports.stack.ci(task_base(state, ports)), state.get("ci_required") or []
+    )
+    return rules.landing_notes(records, gate.names)
 
 
 def _refused(

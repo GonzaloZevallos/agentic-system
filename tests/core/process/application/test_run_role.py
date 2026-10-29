@@ -36,6 +36,7 @@ from agentic.core.process.domain.roles import (
     PRODUCT_ANALYST,
     PROMPTS_DIR,
     ROLES,
+    TECH_LEAD,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_INTERVIEWEE,
     UI_LEAD,
@@ -700,6 +701,25 @@ def test_every_role_reads_the_human_decisions_last_without_declaring_them():
     assert text.endswith("## Developer: api\n\ndone\n\n## Human\n\n### Decision 1\n\nUSD.")
     assert context_for(state, PJM).endswith("## Human\n\n### Decision 1\n\nUSD.")
     assert "## Human" not in context_for({**state, "sections": {}}, PJM)
+
+
+def test_the_human_answer_to_a_failure_escalation_reaches_the_tech_lead_verbatim_and_last():
+    # GH-462: the owner's answer about the plan's shape must be in the resume prompt as the
+    # human wrote it, after every other section, whatever else the document holds.
+    answer = "### Decision 1\n\nBuild this task whole: subtasks, no parts. `fit` is mine.\n\n- one"
+    state = {
+        "title": "Screens",
+        "description": "A UI change produces the new image.",
+        "sections": {"PM": "Six numbers.", "Human": answer},
+        "pause_log": [
+            {"kind": "failure", "value": "check", "section": "Tech Lead"},
+            {"kind": "escalation", "value": "failure"},
+            {"kind": "resumed"},
+        ],
+    }
+    text = context_for(state, TECH_LEAD)
+    assert text.endswith(f"## Human\n\n{answer}")
+    assert text.index("## Original request") < text.index("## Human")
 
 
 async def test_run_role_builds_the_patch_and_the_history(tmp_path):

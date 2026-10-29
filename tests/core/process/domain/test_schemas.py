@@ -912,3 +912,111 @@ def test_the_plan_schema_requires_the_ci_keys_and_leaves_required_paths_optional
     plan = schemas.json_schema(TechPlan, VOCAB)
     assert {"ci_required", "ci_none_reason"} <= set(plan["required"])
     assert "required_paths" not in plan["required"]
+
+
+# --- One fit verdict per estimate, whatever the plan's shape (GH-462) --------------------
+# `FitBucket` pins, for one plan run, the largest subtask count seen: the history's reference
+# no longer depends on whether the output carries parts or subtasks.
+
+SEVEN = ("a", "b", "c", "d", "e", "f", "g")
+
+
+def _two_bucket_history():
+    """Bucket of 7 subtasks (the last bucket) refuses 38 USD; bucket of 2 accepts it."""
+    from agentic.core.process.domain import cost_history
+
+    def doc(cost, n):
+        return {"cost_usd": cost, "subtasks": {f"s{i}": {} for i in range(n)}, "closed_at": "x"}
+
+    return cost_history.build([doc(200, 7)] * 5 + [doc(10, 2)] * 5)
+
+
+def test_fit_bucket_pins_the_largest_subtask_count_for_parts():
+    bucket = schemas.FitBucket()
+    bucket.observe(7)
+    assert bucket.size(_split(1.0, 1)) == 7
+
+
+def test_fit_bucket_gives_parts_their_own_count_when_nothing_was_observed():
+    assert schemas.FitBucket().size(_split(1.0, 1)) == 2
+
+
+def test_fit_bucket_never_lowers_the_size_of_subtasks():
+    bucket = schemas.FitBucket()
+    bucket.observe(7)
+    bucket.observe(3)
+    assert bucket.size(_estimated(1.0, 1, "a", "b", "c")) == 7
+    assert bucket.size(_estimated(1.0, 1, *SEVEN, "h")) == 8
+
+
+def test_a_plan_that_does_not_fit_as_subtasks_is_judged_the_same_as_parts():
+    check = schemas.plan_check_for(_two_bucket_history(), 0.0)
+    with pytest.raises(ValueError, match="does not fit"):
+        check(_estimated(38.0, 21, *SEVEN))
+    check(_split(38.0, 21))  # parts: judged against the pinned bucket, so accepted
+
+
+def test_parts_that_fit_by_their_own_bucket_then_subtasks_that_do_not_are_both_refused():
+    # The one order where the two refusals differ in kind (brief case b): with nothing pinned,
+    # parts are judged at their own count and the subtasks that follow at their own, and the
+    # two buckets disagree on this estimate. No rule can know the subtask count before it is
+    # written; from the second output on the bucket is pinned (see the run's Decisions).
+    check = schemas.plan_check_for(_two_bucket_history(), 0.0)
+    with pytest.raises(ValueError, match=r"\bfits\b"):
+        check(_split(38.0, 21))
+    with pytest.raises(ValueError, match="does not fit"):
+        check(_estimated(38.0, 21, *SEVEN))
+
+
+def test_the_issue_case_parts_that_fit_then_subtasks_are_refused_then_accepted():
+    from agentic.core.process.domain import cost_history
+
+    history = cost_history.build(
+        [{"cost_usd": 10, "subtasks": {f"s{i}": {} for i in range(7)}, "closed_at": "x"}] * 5
+    )
+    check = schemas.plan_check_for(history, 0.0)
+    with pytest.raises(ValueError, match=r"\bfits\b"):
+        check(_split(38.0, 21))
+    check(_estimated(38.0, 21, *SEVEN))  # does not raise
+
+
+def test_an_invalid_output_does_not_pin_the_bucket():
+    check = schemas.plan_check_for(_two_bucket_history(), 0.0)
+    with pytest.raises(ValueError, match="at least one file"):
+        check(_estimated(38.0, 0, *SEVEN, "h", "i"))
+    check(_estimated(38.0, 21, "a", "b", "c"))  # judged on its own bucket (3): fits
+    with pytest.raises(ValueError, match=r"\bfits\b"):
+        check(_split(38.0, 21))  # the pin is 3, not 9
+
+
+def test_the_does_not_fit_refusal_gives_the_action_first_and_the_fixed_sentence():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="does not fit") as e:
+        check(_estimated(151.0, 3))
+    text = str(e.value)
+    assert "write parts, at least two chained tasks, and no subtasks" in text
+    assert text.index("write parts") < text.index(schemas.SPLIT_NOT_WAIVED)
+    assert text.endswith(schemas.SPLIT_NOT_WAIVED)
+    assert "ADR-0054" in schemas.SPLIT_NOT_WAIVED
+
+
+def test_plan_fits_without_a_bucket_judges_by_the_shape_of_the_output():
+    history = _two_bucket_history()
+    assert schemas.plan_fits(_estimated(38.0, 21, *SEVEN), history).fits is False
+    assert schemas.plan_fits(_split(38.0, 21), history).fits is True
+    assert schemas.plan_fits(_split(38.0, 21), history, None).reference_usd == 10.0
+
+
+def test_the_pin_never_accepts_subtasks_that_their_own_bucket_refuses():
+    from agentic.core.process.domain import cost_history
+
+    def doc(cost, n):
+        return {"cost_usd": cost, "subtasks": {f"s{i}": {} for i in range(n)}, "closed_at": "x"}
+
+    # The bucket of 7 is cheap, the bucket of 2 is dear: pinned to 7, two subtasks still
+    # answer to their own reference.
+    history = cost_history.build([doc(10, 7)] * 5 + [doc(200, 2)] * 5)
+    check = schemas.plan_check_for(history, 0.0)
+    check(_estimated(38.0, 21, *SEVEN))
+    with pytest.raises(ValueError, match="does not fit"):
+        check(_estimated(38.0, 21, "a", "b"))

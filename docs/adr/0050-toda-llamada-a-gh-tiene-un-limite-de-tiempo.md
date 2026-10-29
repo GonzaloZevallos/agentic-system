@@ -190,3 +190,18 @@ dueños de una tarea** pueden pedir reintentos.
   `unlabel`, `ensure_label` y `update_pull_request_body`; **nunca** `open_issue`,
   `open_pull_request`, `merge`, `close_*` ni `rerun_failed_ci`. Queda aceptado que un
   comentario se duplique si el 502 llegó después de que se aplicó.
+- **Estado HTTP (GH-438).** El tablero de apostrophe recibía un 502 por mutaciones de ~125
+  alias. `http_status(stderr) -> int | None` lee el estado que imprime `gh` en tres formas:
+  `gh: HTTP nnn` y `gh: <mensaje> (HTTP nnn)` (fuente del `gh` fijado,
+  `pkg/cmd/api/api.go`: `serverError = fmt.Sprintf("HTTP %d", resp.StatusCode)`), la captura
+  `gh: Not Found (HTTP 404)` de gh 2.100.0, y el `non-200 OK status code: 502` de GH-374.
+  Son tres dígitos exactos; cualquier otro texto no es un estado y falla de inmediato.
+- **502, 503 y 504 se reintentan.** `GH_TRANSIENT_STATUSES = {502, 503, 504}`: un gateway que
+  falla, no una respuesta a la pregunta. Con esto `GhTracker` y todo llamador con política
+  reintentan también 503 y 504; sin política nada cambia. 503 y 504 salen de la fuente
+  citada, no de una falla capturada; si `gh` cambia su texto, no se reintenta (el lado
+  seguro). `GH_TRANSIENT_MARKERS` se conserva.
+- **Sufijo `(HTTP nnn)`.** Cuando hay estado, el mensaje de rechazo (también el
+  `ValueError` sin política) y el de agotamiento terminan en ` (HTTP nnn)`, y la excepción lo
+  trae en `status` (`TrackerRefused` y todo `TrackerCallFailed`; `None` por defecto). Nada
+  más de lo que imprimió `gh` se agrega.

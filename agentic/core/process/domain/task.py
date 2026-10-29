@@ -748,6 +748,10 @@ class FindingRecord(TypedDict):
     # What the reviewer reported when the system lowered it (`lower_unbacked_blocks`); the key
     # is absent on a finding the system did not lower.
     reported_severity: NotRequired[Severity]
+    # The checks only the pull request's CI can show, as the reviewer named them (set by
+    # `lower_landing_blocks`); the key is absent unless the list is non-empty, and
+    # `rules.landing_notes` is its one reader.
+    landing_checks: NotRequired[list[str]]
 
 
 class DesignItemRecord(TypedDict):
@@ -914,6 +918,9 @@ class LandingEntry(TypedDict, total=False):
     # GH-328, `diagnose` entries: when a human's decision released the escalation this entry's
     # failure led to (`landing.released`). The retry calendar counts attempts after it.
     released_at: str
+    # GH-442, `escalate` entries: the upstream sha whose CI release (`landing.released_by_ci`)
+    # was recorded for this entry's head, with `released_at` its time. Absent until then.
+    ci_released: str
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
     # entry it is the master sha the diagnosis was made against.
@@ -1009,6 +1016,21 @@ class CloseDocs(TypedDict):
     parent: str
     head: str
     paths: list[str]
+
+
+OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
+"""Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
+`owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
+`template`, `link` and `too_long` are the text limits of invariant 4; `unknown_scope` is a
+marker with a parenthesis the grammar does not name."""
+
+
+class OwnerRuleElsewhere(TypedDict):
+    """An owner rule the `owner_rules` step did not write: its `rule` text as the owner
+    marked it and the closed `cls` of why."""
+
+    rule: str
+    cls: OwnerRuleRejection
 
 
 class FullChecksRecord(TypedDict):
@@ -1155,6 +1177,14 @@ class TaskState(TaskInput, total=False):
     # `None` is how a `pm_final` run clears the previous one. Written to the document only
     # when set, read with `.get`.
     close_docs: NotRequired[CloseDocs | None]
+    # The head the `owner_rules` step last observed (`rules.owner_rules_due` compares it with
+    # the current head; never a record of which rules were written). Written to the document
+    # only when set, read with `.get`.
+    owner_rules_seen: NotRequired[str | None]
+    # The owner rules the step could not write into this repo (a closed class, no free text
+    # beyond the rule itself, which carries no newline), for the ready comment. Written to the
+    # document only when non-empty, read with `.get`.
+    owner_rules_elsewhere: NotRequired[list[OwnerRuleElsewhere]]
     # The full sha `deliver` pushed and when (GH-216): the anchor of the CI wait, read with
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str

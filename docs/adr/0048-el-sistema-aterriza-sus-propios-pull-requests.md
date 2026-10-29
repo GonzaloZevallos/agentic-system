@@ -509,3 +509,38 @@ momento, y `rules.live_landing` es la única función que aplica el corte.
   salte, rompe esta exención.
 - **Sin señales nuevas.** Ninguna medición ni `agentic.landing.step` cambia; un documento sin
   `restorations` devuelve exactamente lo de antes.
+
+## Adenda (GH-442): un escalado que solo causó el CI se libera sin reiniciar
+
+apostrophe GH-374 quedó aprobada, con pull request, y sin salida: el escalado `questions` por `web` rojo
+en el head y en master no lo libera `resume` (que manda a `agentic land`) ni `land` (que manda a
+`agentic run --fresh`). Reiniciar tira el trabajo aprobado, y la regla del dueño (D-03258899) es que
+reiniciar es el último recurso.
+
+- **Una sola decisión.** `landing_plan.release` es el único lugar donde se decide si un escalado de
+  aterrizaje se libera, con el predicado de dominio `landing.ci_escalation(raw, head)`. `resume`, `land`
+  y el poller la llaman y leen `Release.released`; nadie lo infiere de `Release.decision`.
+- **Qué lo libera.** Un escalado de CI (cabeza roja y base roja, `refusal: ci_failed`) se libera cuando el
+  CI de la rama base vuelve a estar verde (`ci.red_names_on_base` sin nombres, sobre
+  `Tracker.branch_ci`), o con un comentario del dueño por la ruta de GH-328. Un tracker, un informe de
+  base o una ascendencia ilegibles son una espera: no se escribe nada ni se gasta presupuesto.
+- **Una vez por par.** La liberación por CI se registra a lo sumo una vez por (head, sha del upstream),
+  como `ci_released` en la entrada `escalate`, en la misma escritura que agrega la entrada del paso que
+  sigue. No escribe `### Decision` ni texto en `Human`: nadie decidió nada (`released_by_ci`).
+  `landing_rules.released` sigue siendo el único constructor de la liberación por decisión humana. Se
+  quita `needs-human` con `Tracker.drop_label`.
+- **El paso que sigue lo da la tabla, nunca un modelo.** Tras la liberación, `landing_plan.released_step`
+  recalcula el paso: `sync_master` si el head no contiene el sha del upstream, `rerun` (uno por el par,
+  aunque ya hubiera uno en el head) si lo contiene, y una espera si la ascendencia no se puede leer.
+  `land` vuelve a pasar `run_kind_admits` y `takes_action` sobre ese paso antes de escribir nada; el
+  poller registra el hijo con el run kind del paso recalculado.
+- **Entradas viejas.** Una entrada `escalate` sin `checks` ni `upstream` usa los nombres de CI requeridos
+  del stack y el upstream actual; su ausencia nunca es un error ni una liberación. Las nuevas guardan
+  los nombres que fallaban y el sha del upstream.
+- **Nunca `--fresh`.** `resume` nombra `agentic land` solo si la decisión compartida dice que `land`
+  puede mover la tarea; si no, dice la espera real (CI de la base o comentario del dueño) o, para una
+  forma que sigue contestando `needs_restart`, el reinicio. `land` no menciona `--fresh` para un
+  escalado de CI que solo espera.
+- **Sin cambios para el resto.** Los escalados de ledger y ADR, el escalado de profundidad 1 tras un
+  diagnóstico entregado y la forma de GH-328 conservan su comportamiento y sus mensajes. Un paso que no
+  es `diagnose` se despacha para un documento escalado exactamente como antes.

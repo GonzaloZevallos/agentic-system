@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, ShellReaper
@@ -21,6 +22,7 @@ from agentic.core.process.application.ports import (
     AddedLine,
     Board,
     BoardSent,
+    BoardWritten,
     BranchPullRequest,
     Checkout,
     CheckRequest,
@@ -40,6 +42,7 @@ from agentic.core.process.application.ports import (
     LaunchAttempt,
     ListedPullRequest,
     MergeCallFailed,
+    OwnerRuleEntry,
     PerfLock,
     PerfRunner,
     Ports,
@@ -81,6 +84,7 @@ from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
     DependencyState,
     MergeOutcome,
+    OwnerRuleElsewhere,
     PullRequest,
     TaskInput,
     TaskState,
@@ -206,6 +210,12 @@ class MemoryDocuments:
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
+        # A save rewrites the whole document, so it replaces the closure values of every key
+        # it carries, as the filesystem adapter does; only keys it does not carry survive.
+        closed = self.closures.get(state["id"])
+        if closed:
+            for key in [k for k in closed if k in state]:
+                del closed[key]
         return self.path_for(state["id"])
 
     def path_for(self, task_id: str) -> Path:
@@ -289,6 +299,20 @@ class MemoryKnowledge:
 
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         return knowledge.criteria_over_cap(texts)
+
+    def owner_files(self) -> tuple[str, ...]:
+        return knowledge.OWNER_DECISIONS
+
+    def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
+        return knowledge.owner_over_cap(texts)
+
+    def owner_parse(
+        self, comments: Sequence[IssueComment], owner: str
+    ) -> tuple[list[OwnerRuleEntry], list[OwnerRuleElsewhere]]:
+        return FilesystemKnowledge(Path(".")).owner_parse(comments, owner)
+
+    def owner_append(self, text: str, entries: Sequence[OwnerRuleEntry]) -> str:
+        return FilesystemKnowledge(Path(".")).owner_append(text, entries)
 
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
         return knowledge.criteria_regressions(base_texts, head_texts)
@@ -1955,7 +1979,8 @@ class FakeBoard:
     """GH-375: the Project board, in memory. Records every call as `(name, argument)`.
     `open` and `closed` are the issues it reads; `fail` (an exception) is raised by every
     method named in `fail_on` (all of them when empty); `unwritten` are issues `write`
-    leaves out of the set it returns, as a partially failed batch would."""
+    leaves out of the set it returns, as a partially failed batch would; `complete` is the
+    flag of the `BoardWritten` it returns (False: a transport cause cut the round short)."""
 
     def __init__(
         self,
@@ -1967,7 +1992,9 @@ class FakeBoard:
         fail_on: Collection[str] = (),
         unwritten: Collection[int] = (),
         limit_reached: bool = False,
+        complete: bool = True,
     ) -> None:
+        self.complete = complete
         self.open = list(open)
         self.closed = list(closed)
         self.project = project
@@ -2002,10 +2029,10 @@ class FakeBoard:
                 return row
         raise ValueError(f"no issue #{number}")
 
-    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+    def write(self, writes: Sequence[FieldWrite]) -> BoardWritten:
         self._enter("write", list(writes))
         self.written.extend(writes)
-        return frozenset(w.issue for w in writes) - self.unwritten
+        return BoardWritten(frozenset(w.issue for w in writes) - self.unwritten, self.complete)
 
 
 class FakeBoardSent:

@@ -39,6 +39,7 @@ from ..domain.task import (
     DependencyState,
     FailureReason,
     MergeOutcome,
+    OwnerRuleElsewhere,
     PullRequest,
     TaskInput,
     TaskState,
@@ -373,6 +374,29 @@ class ProductKnowledge(Protocol):
         text and holds only files the product has."""
         ...
 
+    def owner_files(self) -> tuple[str, ...]:
+        """The names of the owner-decisions files, relative to the product's root, that the
+        live-line cap measures (GH-431). The process side asks and never spells them."""
+        ...
+
+    def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
+        """One message per owner-decisions file with more lines in force than the cap.
+        `texts` is file name -> text and holds only files the product has."""
+        ...
+
+    def owner_parse(
+        self, comments: Sequence[IssueComment], owner: str
+    ) -> tuple[list[OwnerRuleEntry], list[OwnerRuleElsewhere]]:
+        """The rules `owner` marked in `comments` (`Owner's rule:`) and the marked text that
+        cannot be written, each with its closed class (GH-431). A comment of anyone else, and
+        every comment when `owner` is empty, yields nothing (invariant 3)."""
+        ...
+
+    def owner_append(self, text: str, entries: Sequence[OwnerRuleEntry]) -> str:
+        """`text`, a decisions file, with each entry not in it yet appended at the end and the
+        entry it replaces struck through; `text` itself when nothing is new (GH-431)."""
+        ...
+
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
         """One message per criteria document over the line cap at the head and longer than
         at the base (GH-334). Both are file name -> text and hold only files that exist
@@ -670,7 +694,14 @@ class TrackerCallFailed(ValueError):
     """A `gh` call failed for a reason about the transport, not about the question (GH-266,
     GH-290): the base of `TrackerTimedOut` and `TrackerUnreachable`, so a catcher that ends
     one poll round names one class and cannot forget a subtype. A `ValueError`, so every
-    handler that already treats an unreadable read as harmless absorbs it unchanged."""
+    handler that already treats an unreadable read as harmless absorbs it unchanged.
+
+    `status` is the HTTP status `gh` printed on the last failed attempt (GH-438), `None` when
+    it printed none or the call never got an answer."""
+
+    def __init__(self, *args: object, status: int | None = None):
+        super().__init__(*args)
+        self.status = status
 
 
 class TrackerTimedOut(TrackerCallFailed):
@@ -703,7 +734,12 @@ class TrackerRefused(ValueError):
     """`gh` ran and exited non-zero with an answer no retry changes (GH-389): the failure a
     caller's own wording describes. A `ValueError`, so every handler that already treats a
     failed call as one is unchanged; not a `TrackerCallFailed`, which is the transport's.
-    A missing `gh` is none of these: it stays a plain `ValueError`."""
+    A missing `gh` is none of these: it stays a plain `ValueError`. `status` is the HTTP
+    status `gh` printed (GH-438), `None` when it printed none."""
+
+    def __init__(self, *args: object, status: int | None = None):
+        super().__init__(*args)
+        self.status = status
 
 
 class GitError(RuntimeError):
@@ -1224,13 +1260,30 @@ class IssueState:
 
 
 @dataclass(frozen=True)
+class OwnerRuleEntry:
+    """A rule the owner marked, as the knowledge side parsed it (GH-431): `scope` is
+    `product` or `system` (the file it belongs to), `replaces` the id of the entry it
+    supersedes, `created_at` the comment's time and `url` where it came from."""
+
+    text: str
+    scope: Literal["product", "system"]
+    replaces: str | None
+    created_at: str
+    url: str
+
+
+@dataclass(frozen=True)
 class IssueComment:
     """One comment of an issue, with its timestamp (GH-137): `rules.next_attempt_at`'s
     own `since` reads a structured `createdAt`, never a parsed sentence, and `prior`
-    counts comments after the last one a human (not the system) wrote."""
+    counts comments after the last one a human (not the system) wrote. `author` (the
+    login) and `url` (the `#issuecomment-<id>` address) default to empty so every reader
+    that predates them is unchanged (GH-431); empty means the tracker did not say."""
 
     body: str
     created_at: str
+    author: str = ""
+    url: str = ""
 
 
 @dataclass(frozen=True)
@@ -1806,6 +1859,18 @@ class SentMemory:
     unreadable: bool = False
 
 
+@dataclass(frozen=True)
+class BoardWritten:
+    """What one `Board.write` sent (GH-438, ADR-0073 addendum). `written` are the issues whose
+    add and every field write of the round came back without error. `complete` is `False`
+    only for a transport cause: the write deadline, a chunk split down to one issue and given
+    up, a stop, an unreadable body. An error that names an issue never lowers it: that issue
+    is simply not in `written`."""
+
+    written: frozenset[int]
+    complete: bool
+
+
 class Board(Protocol):
     """The GitHub Project the poller mirrors state to (GH-375, ADR-0073). Write-only as far
     as state goes: the only things read from the Project are node ids. Every method may raise
@@ -1828,9 +1893,11 @@ class Board(Protocol):
         """One issue, open or closed."""
         ...
 
-    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
-        """Adds each issue to the Project and writes its fields. Returns the issues whose every
-        mutation came back without error: an issue not in the set is not recorded as sent."""
+    def write(self, writes: Sequence[FieldWrite]) -> BoardWritten:
+        """Adds each issue to the Project and writes its fields, in small requests. Never
+        raises once an issue was sent: it returns what it sent (an issue not in `written` is
+        not recorded as sent) and whether a transport cause cut the round short. With nothing
+        sent, a stop raises its cause."""
         ...
 
 

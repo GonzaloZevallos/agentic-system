@@ -210,7 +210,9 @@ async def _run_graph(cfg: Configuration, ports: Ports, product: Path, box: dict[
     head = ports.workspace.full_head(task.path)
     async with composition.checkpointer(cfg, TASK) as saver:
         app = _graph(ports).compile(checkpointer=saver)
-        seeded = _state(type="feature", branch=f"agentic/{TASK}", task_head=head)
+        seeded = _state(
+            type="feature", branch=f"agentic/{TASK}", task_head=head, owner_rules_seen=head
+        )
         # The fan-in has run: the next node the graph reaches is `full_checks`.
         await app.aupdate_state(_config(product), seeded, as_node="integrate")
         await app.ainvoke(None, config=_config(product))

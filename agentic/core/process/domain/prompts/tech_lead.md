@@ -120,6 +120,7 @@ acceptance criterion.
 - A `## Human` section, when the task document has one, holds what the human decided
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.
+- A live rule in the owner's decisions (`decisiones-del-dueño.md`, whole in the product knowledge you receive) decides the question it covers: apply it without escalating and cite its `D-<hex>` id. Against an ADR it touches, a rule dated after the ADR wins and the task leaves an `outside` finding to amend the ADR; a rule dated before it loses.
 - The behaviour is PM's PRD. A gap in it goes to `### For the next role` as a
   stated assumption, never as a silent choice.
 - Every subtask declares at least one seam; a Developer writes no test elsewhere unless the

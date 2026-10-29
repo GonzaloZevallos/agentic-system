@@ -136,6 +136,28 @@ def red_on_base(head: CiReport, base: CiReport | None, names: tuple[str, ...]) -
     return tuple(name for name in dict.fromkeys(names) if name in on_head and name in on_base)
 
 
+def red_names_on_base(
+    base: CiReport | CiUnreadable | None, names: tuple[str, ...], head: CiReport | None = None
+) -> tuple[str, ...]:
+    """The `names` that are red on the `base` branch's report, in `names` order (GH-442): the
+    one comparison of its kind, over `red_on_base`. With a `head` report only the names that
+    also fail there are kept (GH-371's question); without one, the names red on the base alone.
+    `()` for a base that was not read or could not be: it proves nothing, red or green (see
+    `base_green`)."""
+    if not isinstance(base, CiReport):
+        return ()
+    return red_on_base(head or base, base, names)
+
+
+def base_green(base: CiReport | CiUnreadable | None, names: tuple[str, ...]) -> bool:
+    """Whether the `base` report says every one of `names` is green (GH-442): readable, every
+    name reported and decided, none red. A running or incomplete report, an unreadable one and
+    no names at all are not green, so a base that cannot be judged is a wait, never a release."""
+    if not isinstance(base, CiReport) or not names:
+        return False
+    return not red_names_on_base(base, names) and ci_state(base, names).state == "green"
+
+
 def run_link(report: CiReport, name: str) -> str | None:
     """The link of the first red run of `name` in `report` (its status line when GitHub gave
     no link), `None` when no run of it is red."""

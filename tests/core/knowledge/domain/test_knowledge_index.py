@@ -241,7 +241,14 @@ def test_a_path_outside_the_areas_raises_naming_the_path():
     ):
         with pytest.raises(ValueError, match=path.replace(".", r"\.")):
             area_of(path)
-    assert knowledge_index.AREAS == ("product", "adr", "standards", "design", "writing")
+    assert knowledge_index.AREAS == (
+        "product",
+        "adr",
+        "standards",
+        "design",
+        "writing",
+        "owner",
+    )
 
 
 def test_a_glossary_off_the_always_list_is_refused_not_silently_dropped():
@@ -307,3 +314,96 @@ def test_the_writing_area_adds_no_line_and_no_file_to_the_index():
     assert "writing" not in built.areas
     assert not any("writing" in path for path in built.files)
     assert "writing" in knowledge_index.AREA_SUMMARY
+
+
+# --- GH-431: the owner's decisions and the orchestration rules -----------------------
+
+DECISIONS = "docs/decisiones-del-dueño.md"
+PRODUCT_DECISIONS = "docs/product/decisiones-del-dueño.md"
+ORCHESTRATION = "docs/orquestacion.md"
+REPLACED = "- D-aaaaaaaa: Se parte por encima de 150 USD. (2026-10-02, issue #1)"
+LIVE_RULE = (
+    "- D-bbbbbbbb: Se parte por encima de 300 USD. (2026-10-20, issue #2) Reemplaza: D-aaaaaaaa"
+)
+DECISIONS_TEXT = f"# Decisiones del dueño\n\n{REPLACED}\n{LIVE_RULE}\n"
+
+
+def test_the_owner_paths_are_declared_once_and_normalised():
+    import unicodedata
+
+    assert knowledge.OWNER_DECISIONS == (PRODUCT_DECISIONS, DECISIONS)
+    assert knowledge.ORCHESTRATION == ORCHESTRATION
+    for path in (*knowledge.OWNER_DECISIONS, knowledge.ORCHESTRATION):
+        assert unicodedata.normalize("NFC", path) == path
+    assert knowledge.OWNER_DECISIONS_MAX_LINES == 120
+
+
+def test_a_product_without_owner_files_gets_the_same_index_as_before():
+    plain = index()
+    with_nothing = index(owner={})
+    assert (with_nothing.text, with_nothing.files) == (plain.text, plain.files)
+    assert "decisiones" not in plain.text and "owner" not in plain.areas
+
+
+def test_only_the_live_entries_of_a_decisions_file_go_whole():
+    built = index(owner={DECISIONS: DECISIONS_TEXT})
+    assert "D-bbbbbbbb" in built.always
+    assert "por encima de 150 USD" not in built.always
+    assert built.always.startswith(knowledge.fenced(DECISIONS, owner_rules_live(DECISIONS_TEXT)))
+
+
+def owner_rules_live(text):
+    from agentic.core.knowledge.domain import owner_rules
+
+    return owner_rules.live(text)
+
+
+def test_a_decisions_file_is_read_before_the_brief_and_is_never_delivered_twice():
+    built = index(owner={DECISIONS: DECISIONS_TEXT, PRODUCT_DECISIONS: DECISIONS_TEXT})
+    assert built.always.index(f"`{PRODUCT_DECISIONS}`") < built.always.index(f"`{DECISIONS}`")
+    assert built.always.index(f"`{DECISIONS}`") < built.always.index("`BRIEF.md`")
+    # Not as a capability listed in the index either.
+    assert all("decisiones" not in file for file in built.files)
+    assert built.areas.count("decisiones") == 0
+
+
+def test_a_decisions_file_among_the_capabilities_is_not_listed_twice():
+    built = index(
+        capabilities={"check-ins.md": "# Check-ins\n", "decisiones-del-dueño.md": DECISIONS_TEXT},
+        owner={PRODUCT_DECISIONS: DECISIONS_TEXT},
+    )
+    assert built.always.count("D-bbbbbbbb") == 1
+    assert "decisiones" not in built.files[f"{INDEX}/product.md"]
+
+
+INDEX = knowledge_index.INDEX_DIR
+
+
+def test_orchestration_is_an_entry_of_the_owner_area_and_honours_its_roles():
+    text = "---\nroles: [pm]\n---\n\n# Orquestación\n"
+    built = index(owner={ORCHESTRATION: text})
+    assert "- `.agentic/index/owner.md`: owner -- " in built.areas
+    assert (
+        f"- `{ORCHESTRATION}` | Orquestación | area: owner | roles: pm"
+        in built.files[f"{INDEX}/owner.md"]
+    )
+    assert "Orquestación" not in built.always
+
+
+def test_orchestration_with_an_unknown_role_names_the_file():
+    with pytest.raises(ValueError, match="orquestacion.md.*unknown role"):
+        index(owner={ORCHESTRATION: "---\nroles: [nobody]\n---\n# X\n"})
+
+
+def test_area_of_places_the_owner_files_and_the_adrs():
+    assert area_of(ORCHESTRATION) == "owner"
+    assert area_of("docs/adr/0079-memory.md") == "adr"
+    assert area_of(DECISIONS) == "owner"
+    assert area_of(PRODUCT_DECISIONS) == "owner"
+    with pytest.raises(ValueError, match="outside the areas"):
+        area_of("docs/notas.md")
+
+
+def test_an_owner_input_that_is_not_an_owner_file_is_refused():
+    with pytest.raises(ValueError, match="not an owner file"):
+        index(owner={"docs/notas.md": "# x\n"})

@@ -15,12 +15,17 @@ and writes the files.
 
 from __future__ import annotations
 
+import posixpath
 import re
+import unicodedata
 from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from agentic.core.process.domain.schemas import SLUG
+from agentic.shared.owner_decisions import OWNER_DECISIONS as _OWNER_DECISIONS
+
+from . import owner_rules
 
 PRODUCT_SUBDIR = Path("docs/product")
 ADR_SUBDIR = Path("docs/adr")
@@ -52,6 +57,17 @@ WRITING_HEADING = "## Writing standards"
 # A criteria document never grows silently: past this many lines it is reported, never
 # refused or rewritten (ADR-0055).
 CRITERIA_MAX_LINES = 300
+
+# The owner's decisions (GH-431): the rules the owner gave in answering escalations, one file
+# per scope -- the product's own, and the system's about how it works on any product. Declared
+# once in `agentic.shared.owner_decisions` (NFC; `core.process` may import only `shared`) and
+# re-exported here, so no other production module repeats the literal. The decisions are read
+# whole by every role (only the entries in force, `owner_rules.live`); the orchestration rules
+# are an ordinary indexed entry under the `owner` area.
+OWNER_DECISIONS = _OWNER_DECISIONS
+ORCHESTRATION = unicodedata.normalize("NFC", "docs/orquestacion.md")
+# Past this many lines in force a decisions file is reported, never refused (like the criteria).
+OWNER_DECISIONS_MAX_LINES = 120
 
 # The Brief (ADR-0025): what the human writes once per product, before the first task
 # -- the problem, the jobs and the constraints. A root-level artefact, next to
@@ -194,6 +210,25 @@ def criteria_regressions(base: Mapping[str, str], head: Mapping[str, str]) -> li
         for name, text in head.items()
         if (count := _line_count(text)) > CRITERIA_MAX_LINES
         and count > (before := _line_count(base[name]) if name in base else 0)
+    ]
+
+
+def owner_decisions_path(path: str) -> str | None:
+    """The owner-decisions path a product-relative `path` resolves to, or None. Normalised
+    both ways -- NFC and `..` -- so a spelling of the name cannot be a way around it."""
+    resolved = unicodedata.normalize("NFC", posixpath.normpath(path))
+    return resolved if resolved in OWNER_DECISIONS else None
+
+
+def owner_over_cap(texts: dict[str, str]) -> list[str]:
+    """One message per owner-decisions file with more than `OWNER_DECISIONS_MAX_LINES` lines
+    in force, in input order. The count is of what a role reads (`owner_rules.live`), not of
+    the file: struck and replaced entries cost nothing."""
+    return [
+        f"`{name}`: {count} lines in force (cap {OWNER_DECISIONS_MAX_LINES}); every role reads "
+        "them whole, so strike or merge the rules that no longer apply"
+        for name, text in texts.items()
+        if (count := _line_count(owner_rules.live(text))) > OWNER_DECISIONS_MAX_LINES
     ]
 
 

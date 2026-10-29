@@ -139,7 +139,7 @@ def test_the_rewriters_only_touch_the_entry_they_close_or_resolve():
 # --- no reader of `landing` bypasses the cut ----------------------------------------------------
 
 READERS = {
-    "domain/landing.py": {"released", "migration", "resume_owed"},
+    "domain/landing.py": {"released", "released_by_ci", "migration", "resume_owed"},
     "application/landing_plan.py": {"all_entries"},
     "domain/rules.py": {"live_landing", "important_pass_spent"},
 }

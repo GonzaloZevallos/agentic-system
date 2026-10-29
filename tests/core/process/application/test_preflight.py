@@ -361,7 +361,8 @@ ORIGINAL_PARTS_WORDING = {
         "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again."
         "\n"
         "   If the section `## Human` says the human decided to build this task whole, write\n"
-        "   subtasks and no parts."
+        "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+        "   commit) is still a subtask of this task, never a part."
     ),
     "{{parts_field}}": (
         "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
@@ -409,6 +410,23 @@ def test_a_filled_slot_reaches_the_rendered_prompt(tmp_path):
     text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **values).text
     assert "GH-316" in text
     assert "{{" not in text
+
+
+POST_MERGE_SENTENCE = "is still a subtask of this task, never a part"
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_the_planning_prompts_say_work_after_the_merge_is_a_subtask_not_a_part(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    text = load_prompt(
+        role, Configuration(product_dir=tmp_path), memory_ports(), {}, **PLACEHOLDERS
+    ).text
+    flat = " ".join(text.split())
+    assert "a post-merge workflow, a bot commit) " + POST_MERGE_SENTENCE in flat
+    # A part never reads it: it has no `### Parts` step at all.
+    part = {**PLACEHOLDERS, "parts_step": rules.parts_step_text(("GH-316", 2))}
+    part_text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **part)
+    assert POST_MERGE_SENTENCE not in " ".join(part_text.text.split())
 
 
 REMEDY_SENTENCES = (
@@ -819,3 +837,30 @@ def test_an_override_that_drops_a_placeholder_is_named_with_its_file_and_never_r
     assert "/memory/tech_lead_review.md" in messages[0]
     assert "{{docs_review}}" in messages[0]
     preflight(Configuration(product_dir=PRODUCT), ports)
+
+
+def _rules(count: int) -> str:
+    return "".join(f"- D-{n:08x}: regla {n}\n" for n in range(count))
+
+
+def test_owner_decisions_past_the_live_cap_are_named_at_the_revision_asked():
+    ports = memory_ports()
+    ports.workspace.files[("abc", "docs/decisiones-del-dueño.md")] = _rules(121)
+    ports.workspace.files[("HEAD", "docs/decisiones-del-dueño.md")] = _rules(10)
+    (message,) = module.owner_over_cap(ports, "abc")
+    assert "docs/decisiones-del-dueño.md" in message and "121" in message
+    assert module.owner_over_cap(ports) == []
+
+
+def test_owner_decisions_at_the_cap_or_absent_say_nothing():
+    ports = memory_ports()
+    assert module.owner_over_cap(ports) == []
+    ports.workspace.files[("HEAD", "docs/product/decisiones-del-dueño.md")] = _rules(120)
+    assert module.owner_over_cap(ports) == []
+
+
+def test_the_owner_cap_is_an_advisory_and_preflight_does_not_refuse_over_it():
+    ports = memory_ports()
+    ports.workspace.files[("HEAD", "docs/decisiones-del-dueño.md")] = _rules(500)
+    assert len(module.owner_over_cap(ports)) == 1
+    assert module.over_cap(ports) == []  # the criteria cap, which can refuse a merge, is apart

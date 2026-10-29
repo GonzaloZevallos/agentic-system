@@ -629,6 +629,15 @@ class Finding(BaseModel):
         "branch a problem between subtasks is `subtask`"
     )
     category: FindingCategory
+    landing_checks: list[str] = Field(
+        default_factory=list,
+        description="The CI check names, preferably from the landing gate listed in your "
+        "prompt, whose evidence only the pull request's CI can give. Filling it never "
+        "returns the subtask: the system turns the finding into an `observation` and "
+        "the delivery's pull request body asks for those checks at landing. One "
+        "objection per finding, never mixed with a defect the Developer can fix. An "
+        "empty list when the finding needs no such evidence",
+    )
 
 
 class Review(RoleOutput):
@@ -871,18 +880,58 @@ class FitDecision:
     reference_usd: float | None
 
 
-def plan_fits(data: dict[str, Any], history: History) -> FitDecision:
+# What a refusal of a plan that does not fit says after the action, once: the split is the
+# only way out, and a human's answer to this failure does not change that (ADR-0054).
+SPLIT_NOT_WAIVED = (
+    "A plan that does not fit is split; a human's answer to this failure does not build "
+    "it whole (ADR-0054)."
+)
+
+
+class FitBucket:
+    """The reference bucket of one plan run, pinned to the largest subtask count seen
+    (GH-462). The bucket used to follow the output's shape, so one estimate was judged as
+    subtasks against one bucket and as parts against another, and the two refusals
+    contradicted each other. A run owns one; nothing about it is stored."""
+
+    def __init__(self) -> None:
+        self._pinned = 0
+
+    def observe(self, subtasks: int) -> None:
+        self._pinned = max(self._pinned, subtasks)
+
+    def size(self, data: dict[str, Any]) -> int:
+        """The size the reference is read at for this output: its subtasks, never below the
+        pin; its parts, the pin when there is one and their own count otherwise."""
+        parts = len(data.get("parts") or [])
+        if parts:
+            return self._pinned or parts
+        return max(len(data.get("subtasks") or []), self._pinned)
+
+
+def plan_fits(
+    data: dict[str, Any], history: History, bucket: FitBucket | None = None
+) -> FitDecision:
     """The one place that decides whether a plan's estimate fits one task: the larger of
     the declared cost and the history's reference for the plan's own size (its parts, else
-    its subtasks) against the limits `rules.estimate_fits` holds."""
+    its subtasks) against the limits `rules.estimate_fits` holds. With a `bucket`, the size
+    is the run's pinned one (`FitBucket.size`); subtasks still answer to the reference of
+    their own count, so the pin never makes a plan fit that its own bucket refuses."""
 
     # `rules` imports this module for `TaskType`, so the one function that decides the fit
     # is imported where it is used, never copied here (ADR-0054).
     from .rules import estimate_fits
 
     cost, files = data["estimated_cost_usd"], data["estimated_files"]
-    size = len(data.get("parts") or []) or len(data.get("subtasks") or [])
-    reference = reference_usd(history, size)
+    own = len(data.get("parts") or []) or len(data.get("subtasks") or [])
+    if bucket is None:
+        reference = reference_usd(history, own)
+    else:
+        references = [reference_usd(history, bucket.size(data))]
+        if not data.get("parts"):
+            references.append(reference_usd(history, own))
+        known = [value for value in references if value is not None]
+        reference = max(known) if known else None
     return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
 
 
@@ -916,6 +965,8 @@ def plan_check_for(
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import TRACKER_WITH_PARTS
 
+    bucket = FitBucket()
+
     def check(data: dict[str, Any]) -> None:
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
@@ -945,7 +996,9 @@ def plan_check_for(
                 f"estimated_cost_usd {cost:.2f} is below what the task already spent "
                 f"{spent_usd:.2f}: the estimate is the TOTAL cost, spent included"
             )
-        fits = plan_fits(data, history).fits
+        if subtasks:
+            bucket.observe(len(subtasks))
+        fits = plan_fits(data, history, bucket).fits
         if parts:
             if fit_waived:
                 raise ValueError(
@@ -962,7 +1015,7 @@ def plan_check_for(
             raise ValueError(
                 f"the estimate ({cost:.2f} USD, {files} files) does not fit one task "
                 "(or the history's reference for this size does not): write parts, "
-                "at least two chained tasks, and no subtasks"
+                f"at least two chained tasks, and no subtasks. {SPLIT_NOT_WAIVED}"
             )
         median = bucket_median(history, len(data["subtasks"]))
         if median is not None and cost < 0.5 * median:

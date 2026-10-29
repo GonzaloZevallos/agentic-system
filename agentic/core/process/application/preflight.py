@@ -37,6 +37,8 @@ PLACEHOLDERS = {
     "parts_step": rules.parts_step_text(None),
     "parts_field": rules.parts_field_text(None),
     "tracker_with_parts": rules.TRACKER_WITH_PARTS,
+    # The names of the CI gate in a subtask review; a product with no CI reads this.
+    "landing_gate": rules.NO_LANDING_GATE,
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.
     "product": "product",
@@ -199,6 +201,18 @@ def over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
     (GH-295, ADR-0055); the count itself is `knowledge`'s alone. Never a refusal: what to
     do with the messages is the caller's."""
     return ports.knowledge.over_cap(criteria_texts(ports, revision))
+
+
+def owner_over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
+    """One message per owner-decisions file at `revision` with more lines in force than the
+    cap (GH-431); the count is `knowledge`'s alone. An advisory, like `over_cap`: every role
+    reads these files whole, so growth is a cost to say out loud, never a refusal."""
+    texts = {
+        name: text
+        for name in ports.knowledge.owner_files()
+        if (text := ports.workspace.show(revision, name)) is not None
+    }
+    return ports.knowledge.owner_over_cap(texts)
 
 
 def criteria_regressed(ports: Ports, base: str, head: str) -> list[str]:

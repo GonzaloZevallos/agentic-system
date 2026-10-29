@@ -71,6 +71,13 @@ Lo que el sistema hace, desde el punto de vista de quien lo usa, vive en `docs/p
 - [Retrabajo](product/rework.md)
 - [Fallo de rol](product/role-failures.md)
 
+## Decisiones del dueño y orquestación
+
+- [Decisiones del dueño](decisiones-del-dueño.md): las reglas generales que el dueño dio y que
+  todo rol lee enteras; el archivo de cada producto está en su propio `docs/product/`.
+- [Orquestación](orquestacion.md): qué hace y qué nunca hace quien orquesta el sistema, cómo
+  mergea, traba tareas y usa el entorno local.
+
 ## Decisiones
 
 Cada decisión con costo está en [docs/adr/](adr/), numerada. Las que más se citan arriba: la

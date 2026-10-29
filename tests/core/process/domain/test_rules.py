@@ -1661,6 +1661,24 @@ def test_auto_resumable_is_none_for_an_epoch_whose_last_failure_is_a_stall():
     assert rules.auto_resumable(after_external) is None
 
 
+def test_auto_resumable_never_retakes_a_plan_that_failed_its_check_twice_in_a_row():
+    # Rejected input (GH-462): the Tech Lead's check refused two attempts, the task escalated
+    # as `failure`, a human resumed it and it failed the same way again. The poller does not
+    # retake either pause: `check` is not an external reason.
+    twice = [_failure_entry("check", "Tech Lead"), _failure_entry("check", "Tech Lead")]
+    state = {
+        "pause_log": [
+            *twice,
+            _escalation_entry("failure"),
+            {"kind": "resumed"},
+            *twice,
+            _escalation_entry("failure"),
+        ]
+    }
+    assert rules.auto_resumable(state) is None
+    assert rules.auto_resumable({"pause_log": [*twice, _escalation_entry("failure")]}) is None
+
+
 def test_auto_resumable_returns_the_most_recent_failures_reason():
     state = {
         "pause_log": [

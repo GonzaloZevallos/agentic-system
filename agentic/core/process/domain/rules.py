@@ -13,6 +13,8 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
+from agentic.shared.owner_decisions import OWNER_DECISIONS
+
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
@@ -72,6 +74,7 @@ from .task import (
     FullChecksRecord,
     LapsePauseEntry,
     MergeOutcome,
+    OwnerRuleElsewhere,
     PartRecord,
     PauseEntry,
     PullRequest,
@@ -167,6 +170,37 @@ def lower_unbacked_blocks(
     return settled, lowered
 
 
+def lower_landing_blocks(
+    findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The findings with every one that asks for landing evidence made an `observation`
+    (GH-441), and a line for each. The evidence only the pull request's CI can give does
+    not exist while a subtask is reviewed, so no Developer can supply it: the request is
+    kept, in the record and in the pull request's body, and verified at landing. It reads
+    the structured `landing_checks` and the `severity`, never the prose, so it runs first,
+    whatever the severity or the scope, and `reported_severity` keeps what the reviewer
+    said. Idempotent: a finding that already carries `reported_severity` is left alone."""
+    settled, lowered = [], []
+    for item in findings:
+        if item.get("landing_checks") and "reported_severity" not in item:
+            lowered.append(
+                f"`{item['location']}` {item['severity']} lowered to observation: "
+                "verified at landing"
+            )
+            item = {**item, "reported_severity": item["severity"], "severity": "observation"}
+        settled.append(item)
+    return settled, lowered
+
+
+NO_LANDING_GATE = "none: this product declares no CI"
+
+
+def landing_gate_text(names: Sequence[str]) -> str:
+    """What `{{landing_gate}}` says in a review prompt (GH-441): the names of the CI gate
+    (`ci_gate_names`) as backticked names, or `NO_LANDING_GATE` when the gate is empty."""
+    return ", ".join(f"`{name}`" for name in names) if names else NO_LANDING_GATE
+
+
 def review_markdown(
     category: FindingCategory | None, reason: str, text: str, lowered: Sequence[str] = ()
 ) -> str:
@@ -213,7 +247,40 @@ def _record(subtask_id: str, version: int, item: dict[str, Any]) -> FindingRecor
     }
     if "reported_severity" in item:
         record["reported_severity"] = item["reported_severity"]
+    if item.get("landing_checks"):
+        record["landing_checks"] = list(item["landing_checks"])
     return record
+
+
+LANDING_HEADING = "### Verified at landing"
+_LANDING_NAMES_MAX = 10
+
+
+def landing_notes(records: Sequence[FindingRecord], gate_names: Sequence[str]) -> str:
+    """The `Verified at landing` block of the pull request body: the checks the reviews asked
+    for that only the pull request's CI can show. Reads the raw records, whatever their
+    `status` (a dismissed row's request stands too), never the folded rows, and merges the
+    names in order of appearance without duplicates. A name in `gate_names` (the product's
+    gate, `ci_gate_names`) is written verbatim, at most `_LANDING_NAMES_MAX`; every other name
+    is only counted under a fixed template, so no text the reviewer wrote reaches GitHub.
+    `""` when no record carries the key."""
+    asked: dict[str, None] = {}
+    for record in records:
+        for name in record.get("landing_checks", []):
+            if isinstance(name, str) and name.strip():
+                asked[name.strip()] = None
+    if not asked:
+        return ""
+    gate = set(gate_names)
+    declared = [name for name in asked if name in gate]
+    undeclared = len(asked) - len(declared)
+    lines = [f"- verified at landing: `{name}`" for name in declared[:_LANDING_NAMES_MAX]]
+    if undeclared:
+        lines.append(
+            f"- {undeclared} requested checks are not declared in the product's CI: "
+            "not verified at landing"
+        )
+    return "\n\n".join([LANDING_HEADING, "\n".join(lines)])
 
 
 # Where a `full_checks` finding row sits: `full_checks:<check>`, never a file of the diff.
@@ -2333,6 +2400,41 @@ def pre_pr_important_due(state: TaskState) -> bool:
     return any("reported_severity" not in row for row in rows)
 
 
+def owner_rules_due(state: TaskState) -> bool:
+    """Whether the `owner_rules` step has to observe the task (GH-431): every unit is
+    approved, the pre-PR important pass (which can move the head) has nothing left to run,
+    and the head the step last saw (`owner_rules_seen`) is not the current one -- the
+    integrated `task_head` when the fan-in stamped it, else the reviewed unit's
+    `reviewed_head` (a single subtask has no integration). It is decided by observing the
+    head, never by a record of which rules were written (invariant 7): a rule given after
+    the last observation is found by the next head, not remembered."""
+    if not all_approved(state) or pre_pr_important_due(state):
+        return False
+    head = state.get("task_head")
+    if not head:
+        unit = reviewed_unit_name(state)
+        head = state.get("subtasks", {}).get(unit, {}).get("reviewed_head") if unit else None
+    return bool(head) and not same_commit(state.get("owner_rules_seen"), head)
+
+
+def extend_close_docs(
+    previous: CloseDocs | None,
+    reviewed: str | None,
+    head: str | None,
+    paths: Sequence[str],
+) -> CloseDocs | None:
+    """The `close_docs` record after a close-time commit `head` made on the reviewed head
+    `reviewed` holding `paths` (GH-431): `previous` is extended only when its `parent` is
+    `reviewed` (the new commit sits on the earlier one, so both covers' paths are
+    reviewed); a record on another parent is discarded and the new one starts fresh. `None`
+    when there is no commit or no reviewed head to anchor it."""
+    if head is None or reviewed is None:
+        return None
+    kept = list(previous["paths"]) if previous and same_commit(previous["parent"], reviewed) else []
+    added = [path for path in dict.fromkeys(paths) if path not in kept]
+    return CloseDocs(parent=reviewed, head=head, paths=[*kept, *added])
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -2342,6 +2444,8 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if pre_pr_important_due(state):
         return FIX_IMPORTANT
+    if owner_rules_due(state):
+        return "owner_rules"
     if full_checks_due(state):
         return "full_checks"
     if copy_review_due(state):
@@ -2349,6 +2453,12 @@ def after_integrate(state: TaskState) -> str | None:
     if final_validation_due(state):
         return "final_validation"
     return "qa_performance" if qa_performance_due(state) else "deliver"
+
+
+def after_owner_rules(state: TaskState) -> str | None:
+    """Always back to the fan-in (GH-431): the step observed the head, so `owner_rules_due`
+    now reads `False` (a commit it made is the `task_head` the fan-in stamps next)."""
+    return None if state.get("escalated") else "integrate"
 
 
 def after_fix_important(state: TaskState) -> str | None:
@@ -4428,9 +4538,11 @@ def head_reviewed(
     """Whether `head` is a head Tech Lead's review covers: the unit's `reviewed_head`, or the
     close-time capability commit (`close_docs`) made directly on it -- its `parent` is the
     reviewed head, `head` is its commit and every path it holds is a capability file
-    (`docs/product/*.md`). The one comparison of a pull request head, or `task_head`, with a
-    reviewed one; no reader adds its own id test. A foreign parent, a stale record or a path
-    outside `docs/product/` covers nothing."""
+    (`docs/product/*.md`) or one of the owner-decision files (`OWNER_DECISIONS`: the system's
+    `docs/decisiones-del-dueño.md` is outside `docs/product/`; `docs/orquestacion.md` is
+    never one). The one comparison of a pull request head, or `task_head`, with a reviewed
+    one; no reader adds its own id test. A foreign parent, a stale record or any other path
+    covers nothing."""
     if same_commit(reviewed_head, head):
         return True
     return bool(
@@ -4438,7 +4550,7 @@ def head_reviewed(
         and close_docs.get("paths")
         and same_commit(close_docs.get("parent"), reviewed_head)
         and same_commit(head, close_docs.get("head"))
-        and all(_capability_path(path) for path in close_docs["paths"])
+        and all(_capability_path(path) or path in OWNER_DECISIONS for path in close_docs["paths"])
     )
 
 
@@ -5152,7 +5264,8 @@ _PARTS_STEP = (
     "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
     "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
     "   If the section `## Human` says the human decided to build this task whole, write\n"
-    "   subtasks and no parts."
+    "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+    "   commit) is still a subtask of this task, never a part."
 )
 _PARTS_FIELD = (
     "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
@@ -5294,6 +5407,26 @@ def tracker_failure_block(items: Sequence[object], exc_class: str, relative: str
     omitted = len(texts) - TRACKER_FAILURE_ITEMS
     if omitted > 0:
         block += f"\n\nand {omitted} more, in the task document at `{relative}`"
+    return block
+
+
+def owner_rules_block(items: Sequence[OwnerRuleElsewhere]) -> str:
+    """The bounded checklist of owner rules the `owner_rules` step could not write (GH-431),
+    for the ready comment: one checkbox per rule, the same bounds as the tracker-work list
+    (ADR-0062); `''` when there is none."""
+    texts = [
+        f"Owner's rule not written ({item['cls']}): {' '.join(item['rule'].split())}"
+        for item in items
+    ]
+    texts = [_MARKER_TEXT.sub("agentic-tracker :", text) for text in texts]
+    lines = [f"- [ ] {_cut(t, TRACKER_FAILURE_ITEM_CHARS)}" for t in texts[:TRACKER_FAILURE_ITEMS]]
+    if not lines:
+        return ""
+    block = "Owner rules the system could not write in this repo; they are yours:\n\n" + "\n".join(
+        lines
+    )
+    if (omitted := len(texts) - TRACKER_FAILURE_ITEMS) > 0:
+        block += f"\n\nand {omitted} more, in the task document"
     return block
 
 
