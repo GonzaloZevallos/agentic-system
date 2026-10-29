@@ -748,6 +748,9 @@ class FindingRecord(TypedDict):
     # What the reviewer reported when the system lowered it (`lower_unbacked_blocks`); the key
     # is absent on a finding the system did not lower.
     reported_severity: NotRequired[Severity]
+    # The checks only the pull request's CI can show, as the reviewer named them; the key is
+    # absent unless the reviewer asked for some (`rules.landing_notes` is its one reader).
+    landing_checks: NotRequired[list[str]]
 
 
 class DesignItemRecord(TypedDict):

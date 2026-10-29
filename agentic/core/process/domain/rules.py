@@ -219,6 +219,37 @@ def _record(subtask_id: str, version: int, item: dict[str, Any]) -> FindingRecor
     return record
 
 
+LANDING_HEADING = "### Verified at landing"
+_LANDING_NAMES_MAX = 10
+
+
+def landing_notes(records: Sequence[FindingRecord], gate_names: Sequence[str]) -> str:
+    """The `Verified at landing` block of the pull request body: the checks the reviews asked
+    for that only the pull request's CI can show. Reads the raw records, whatever their
+    `status` (a dismissed row's request stands too), never the folded rows, and merges the
+    names in order of appearance without duplicates. A name in `gate_names` (the product's
+    gate, `ci_gate_names`) is written verbatim, at most `_LANDING_NAMES_MAX`; every other name
+    is only counted under a fixed template, so no text the reviewer wrote reaches GitHub.
+    `""` when no record carries the key."""
+    asked: dict[str, None] = {}
+    for record in records:
+        for name in record.get("landing_checks", []):
+            if isinstance(name, str) and name.strip():
+                asked[name.strip()] = None
+    if not asked:
+        return ""
+    gate = set(gate_names)
+    declared = [name for name in asked if name in gate]
+    undeclared = len(asked) - len(declared)
+    lines = [f"- verified at landing: `{name}`" for name in declared[:_LANDING_NAMES_MAX]]
+    if undeclared:
+        lines.append(
+            f"- {undeclared} requested checks are not declared in the product's CI: "
+            "not verified at landing"
+        )
+    return "\n\n".join([LANDING_HEADING, "\n".join(lines)])
+
+
 # Where a `full_checks` finding row sits: `full_checks:<check>`, never a file of the diff.
 FULL_CHECKS_PREFIX = "full_checks:"
 
