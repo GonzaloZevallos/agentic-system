@@ -25,6 +25,7 @@ from ..domain.task import (
     VERDICT_SYNC,
     VERDICT_UNLANDABLE,
     DiagnosisVerdict,
+    ReleasePatch,
     TaskState,
     apply,
 )
@@ -563,16 +564,21 @@ def released_step(
     `landing.released_by_ci` for a release by CI (stamped with `facts.current_master`),
     `landing.released` for a human's decision, the document as it is for no release. The one
     function the poller and `land` ask, so neither decides the step after a release itself."""
-    view = raw
-    if outcome.released:
-        if outcome.decision is not None:
-            patch = landing.released(raw, outcome.decision, at)
-        elif facts.current_master is not None:
-            patch = landing.released_by_ci(raw, facts.current_master, at)
-        else:
-            patch = {}
-        view = apply(raw, patch) if patch else raw
+    patch = release_patch(raw, outcome, facts.current_master, at)
+    view = apply(raw, patch) if patch else raw
     return step_for(view, refusal, facts, slicing, ancestry)
+
+
+def release_patch(raw: TaskState, outcome: Release, upstream: str | None, at: str) -> ReleasePatch:
+    """What the release `outcome` writes to `raw`, and `{}` for no release: `landing.released`
+    for a human's decision, `landing.released_by_ci` (stamped with `upstream`) for a release by
+    CI. The one place that picks the builder, so `released_step` and `land` write what the step
+    was computed on."""
+    if not outcome.released:
+        return {}
+    if outcome.decision is not None:
+        return landing.released(raw, outcome.decision, at)
+    return landing.released_by_ci(raw, upstream, at) if upstream is not None else {}
 
 
 def pending(

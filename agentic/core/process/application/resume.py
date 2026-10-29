@@ -24,6 +24,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules
 from ..domain.task import TaskState, TrackerFailure, TrackerFailureRecord, apply
+from . import landing_plan
 from .archive import STARTED_OVER
 from .deliver import READY
 from .discard import DISCARDED
@@ -210,6 +211,7 @@ def seed_increment(task_id: str, cfg: Configuration, ports: Ports) -> Seed:
             problems[problems.index(today)] = _moved_line(
                 task_id,
                 ports,
+                cfg,
                 state,
                 (unit, branch, approved, head),
                 descends,
@@ -281,6 +283,7 @@ def _checked(task_id: str, state: TaskState, ports: Ports) -> TaskState:
 def _moved_line(
     task_id: str,
     ports: Ports,
+    cfg: Configuration,
     state: TaskState,
     moved: tuple[str, str, str, str],
     descends: bool,
@@ -303,13 +306,45 @@ def _moved_line(
             f"`agentic run {issue_flag(task_id, ports)} --fresh`."
         )
     if branch == rules.task_branch(task_id) and state.get("pull_request"):
-        return (
-            f"{task_id} has a pull request: its branch moved after approval, which the "
-            f"landing owns; run `agentic land {issue_flag(task_id, ports)}`."
-        )
+        return _landing_owns_line(task_id, ports, cfg, state)
     if reintegration is not None:
         return reintegration
     return f"{unit}: approved at {approved}, but `{branch}` is at {head}"
+
+
+_LANDING_WAITS: dict[landing_plan.ReleaseWhy, str] = {
+    "waiting_on_human": (
+        "it waits for a human comment after the Escalated: comment, the needs-human label "
+        "removed and the issue open"
+    ),
+    "waiting_on_base_ci": (
+        "it waits for the base branch CI to turn green, or an owner comment; then "
+        "`agentic land {flag}` moves it"
+    ),
+    "task_cap": "its task cap is spent: raise the task budget",
+}
+
+
+def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: TaskState) -> str:
+    """The refusal for a task with a pull request whose branch moved after approval (GH-442).
+    `agentic land` is named when the document is not escalated or `landing_plan.release` (the
+    one decision `land` asks) says it can move the task; otherwise the line states the wait
+    that decision gives, or the restart only a human starts when the shape answers it."""
+    flag = issue_flag(task_id, ports)
+    owns = f"{task_id} has a pull request: its branch moved after approval, which the landing owns"
+    number = ports.inbox.issue_of(task_id)
+    if not state.get("escalated") or number is None or not landing_plan.live_entries(state):
+        # Not escalated, or escalated before the landing ever recorded a step: `land` decides
+        # from the pull request, and only an escalation the landing recorded is released.
+        return f"{owns}; run `agentic land {flag}`."
+    outcome = landing_plan.release(ports, cfg, task_id, state, number)
+    if outcome.released:
+        return f"{owns}; run `agentic land {flag}`."
+    if outcome.why == "needs_restart":
+        return (
+            f"{owns}, and its escalation is one only a restart moves: `agentic run {flag} --fresh`."
+        )
+    return f"{owns}, and " + _LANDING_WAITS[outcome.why].format(flag=flag) + "."
 
 
 def _task_checkout(task_id: str, ports: Ports) -> tuple[Path | None, bool]:

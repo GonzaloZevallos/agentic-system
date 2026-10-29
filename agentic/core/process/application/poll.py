@@ -33,7 +33,7 @@ from ..domain import ci, document, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
-from ..domain.landing import LandingStepKind
+from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
 from . import (
     adr_collision,
@@ -362,10 +362,54 @@ def with_red_on_base(
     base = ports.tracker.branch_ci(report.base_ref)
     return replace(
         facts,
-        ci_red_on_base=ci.red_on_base(
-            report, base if isinstance(base, ci.CiReport) else None, facts.ci_required
-        ),
+        ci_red_on_base=ci.red_names_on_base(base, facts.ci_required, report),
     )
+
+
+def _landing_step(
+    ports: Ports,
+    cfg: Configuration | None,
+    task_id: str,
+    raw: TaskState,
+    number: int,
+    refusal: rules.MergeRefusal,
+    facts: rules.MergeFacts,
+    live: frozenset[LandingStepKind],
+    now: datetime,
+) -> LandingStep | None:
+    """The step worth a `land` child for a refused task (`landing_plan.pending`). An escalated
+    document whose table step is the diagnose asks `landing_plan.release` (GH-328, GH-442; the
+    tracker is read only for the CI shape or a failure with attempts); when it is released the
+    step is the one `landing_plan.released_step` gives on the released view, the one `land`
+    recomputes, so the child registers under the run kind of the step it will take."""
+    waiting = (
+        cfg is not None
+        and bool(raw.get("escalated"))
+        and landing_plan.step_for(raw, refusal, facts).kind == "diagnose"
+    )
+    outcome = (
+        landing_plan.release(
+            ports, cfg, task_id, raw, number, head=facts.pr_head, upstream=facts.current_master
+        )
+        if waiting and cfg is not None
+        else None
+    )
+    if outcome is None or not outcome.released or cfg is None or facts.pr_head is None:
+        return landing_plan.pending(raw, refusal, facts, live, now, False)
+    at = now.isoformat()
+    ancestry = (
+        landing_plan.head_ancestry(ports, cfg, facts.pr_head, facts.current_master)
+        if facts.current_master is not None
+        else None
+    )
+    step = landing_plan.released_step(raw, outcome, facts, refusal, at=at, ancestry=ancestry)
+    patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
+    view = apply(raw, patch) if patch else raw
+    if not landing_plan.takes_action(step.kind, live) or landing_rules.already_dispatched(
+        landing_plan.live_entries(view), facts.pr_head, step.kind, facts.current_master
+    ):
+        return None
+    return step
 
 
 def with_ci(
@@ -779,13 +823,9 @@ def gather_merges(
             if lands is not None and decision.reason is not None:
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
-                released = (
-                    cfg is not None
-                    and bool(raw.get("escalated"))
-                    and landing_plan.step_for(raw, decision.reason, facts).kind == "diagnose"
-                    and landing_plan.release(ports, cfg, task_id, raw, number).decision is not None
+                step = _landing_step(
+                    ports, cfg, task_id, raw, number, decision.reason, facts, live, now
                 )
-                step = landing_plan.pending(raw, decision.reason, facts, live, now, released)
                 if step is not None:
                     kind = landing_rules.run_kind_of(step.kind, decision.reason)
                     lands.append(rules.LandCandidate(number, kind))
