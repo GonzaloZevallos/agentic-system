@@ -358,3 +358,22 @@ def test_the_real_orchestration_file_is_indexed_and_the_decisions_file_goes_whol
     assert knowledge.ORCHESTRATION in "".join(built.files.values())
     assert knowledge.OWNER_DECISIONS[1] in built.text
     assert parse_entries(DECISIONS.read_text(encoding="utf-8"))[0].id in built.text
+
+
+def test_the_orchestration_file_declares_the_pjm_and_the_tech_lead_as_its_readers():
+    built = knowledge_index.build_index(
+        {},
+        {},
+        {},
+        None,
+        None,
+        owner={knowledge.ORCHESTRATION: (REPO / knowledge.ORCHESTRATION).read_text("utf-8")},
+    )
+    entry = next(text for text in built.files.values() if knowledge.ORCHESTRATION in text)
+    assert roles.PJM.slug in entry and roles.TECH_LEAD.slug in entry
+
+
+def test_an_orchestration_file_naming_an_unknown_role_is_refused():
+    text = "---\nroles: [pjm, nobody]\n---\n\n# Orquestación\n"
+    with pytest.raises(ValueError, match="nobody"):
+        knowledge_index.build_index({}, {}, {}, None, None, owner={knowledge.ORCHESTRATION: text})
