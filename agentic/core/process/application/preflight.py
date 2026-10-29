@@ -201,6 +201,18 @@ def over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
     return ports.knowledge.over_cap(criteria_texts(ports, revision))
 
 
+def owner_over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
+    """One message per owner-decisions file at `revision` with more lines in force than the
+    cap (GH-431); the count is `knowledge`'s alone. An advisory, like `over_cap`: every role
+    reads these files whole, so growth is a cost to say out loud, never a refusal."""
+    texts = {
+        name: text
+        for name in ports.knowledge.owner_files()
+        if (text := ports.workspace.show(revision, name)) is not None
+    }
+    return ports.knowledge.owner_over_cap(texts)
+
+
 def criteria_regressed(ports: Ports, base: str, head: str) -> list[str]:
     """One message per criteria file that is over the cap at `head` and longer than at
     `base` (GH-334): the verdict the delivery gate and the merge decision share, the

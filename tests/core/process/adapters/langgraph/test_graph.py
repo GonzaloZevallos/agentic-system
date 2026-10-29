@@ -214,6 +214,12 @@ class _Rooted:
     def over_cap(self, texts):
         return self.inner.over_cap(texts)
 
+    def owner_files(self):
+        return self.inner.owner_files()
+
+    def owner_over_cap(self, texts):
+        return self.inner.owner_over_cap(texts)
+
     def regressions(self, base_texts, head_texts):
         return self.inner.regressions(base_texts, head_texts)
 

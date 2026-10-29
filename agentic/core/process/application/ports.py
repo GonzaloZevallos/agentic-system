@@ -373,6 +373,16 @@ class ProductKnowledge(Protocol):
         text and holds only files the product has."""
         ...
 
+    def owner_files(self) -> tuple[str, ...]:
+        """The names of the owner-decisions files, relative to the product's root, that the
+        live-line cap measures (GH-431). The process side asks and never spells them."""
+        ...
+
+    def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
+        """One message per owner-decisions file with more lines in force than the cap.
+        `texts` is file name -> text and holds only files the product has."""
+        ...
+
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
         """One message per criteria document over the line cap at the head and longer than
         at the base (GH-334). Both are file name -> text and hold only files that exist
