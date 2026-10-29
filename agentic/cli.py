@@ -95,6 +95,7 @@ from .core.process.application.preflight import (
     no_forbidden,
     no_setup,
     over_cap,
+    owner_over_cap,
     preflight,
     product_name,
     refuse_its_own_checkout,
@@ -196,7 +197,7 @@ def _warn_over_cap(ports: Ports, revision: str) -> None:
     ADR-0055). Never a refusal, and an unreadable revision says nothing: the stack read
     just before it already refused what could be refused."""
     try:
-        messages = over_cap(ports, revision)
+        messages = [*over_cap(ports, revision), *owner_over_cap(ports, revision)]
     except GitError:
         return
     for message in messages:

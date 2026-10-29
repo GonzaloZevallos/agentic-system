@@ -28,6 +28,7 @@ graph TD;
 	qa_performance(qa_performance)
 	full_checks(full_checks)
 	fix_important(fix_important)
+	owner_rules(owner_rules)
 	deliver(deliver)
 	discard(discard)
 	split(split)
@@ -75,8 +76,11 @@ graph TD;
 	integrate -.-> final_validation;
 	integrate -.-> fix_important;
 	integrate -.-> full_checks;
+	integrate -.-> owner_rules;
 	integrate -.-> pipeline;
 	integrate -.-> qa_performance;
+	owner_rules -.-> escalate;
+	owner_rules -.-> integrate;
 	pause -.-> __end__;
 	pause -.-> classify;
 	pause -.-> consolidate;

@@ -13,6 +13,8 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
+from agentic.shared.owner_decisions import OWNER_DECISIONS
+
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
@@ -72,6 +74,7 @@ from .task import (
     FullChecksRecord,
     LapsePauseEntry,
     MergeOutcome,
+    OwnerRuleElsewhere,
     PartRecord,
     PauseEntry,
     PullRequest,
@@ -2333,6 +2336,41 @@ def pre_pr_important_due(state: TaskState) -> bool:
     return any("reported_severity" not in row for row in rows)
 
 
+def owner_rules_due(state: TaskState) -> bool:
+    """Whether the `owner_rules` step has to observe the task (GH-431): every unit is
+    approved, the pre-PR important pass (which can move the head) has nothing left to run,
+    and the head the step last saw (`owner_rules_seen`) is not the current one -- the
+    integrated `task_head` when the fan-in stamped it, else the reviewed unit's
+    `reviewed_head` (a single subtask has no integration). It is decided by observing the
+    head, never by a record of which rules were written (invariant 7): a rule given after
+    the last observation is found by the next head, not remembered."""
+    if not all_approved(state) or pre_pr_important_due(state):
+        return False
+    head = state.get("task_head")
+    if not head:
+        unit = reviewed_unit_name(state)
+        head = state.get("subtasks", {}).get(unit, {}).get("reviewed_head") if unit else None
+    return bool(head) and not same_commit(state.get("owner_rules_seen"), head)
+
+
+def extend_close_docs(
+    previous: CloseDocs | None,
+    reviewed: str | None,
+    head: str | None,
+    paths: Sequence[str],
+) -> CloseDocs | None:
+    """The `close_docs` record after a close-time commit `head` made on the reviewed head
+    `reviewed` holding `paths` (GH-431): `previous` is extended only when its `parent` is
+    `reviewed` (the new commit sits on the earlier one, so both covers' paths are
+    reviewed); a record on another parent is discarded and the new one starts fresh. `None`
+    when there is no commit or no reviewed head to anchor it."""
+    if head is None or reviewed is None:
+        return None
+    kept = list(previous["paths"]) if previous and same_commit(previous["parent"], reviewed) else []
+    added = [path for path in dict.fromkeys(paths) if path not in kept]
+    return CloseDocs(parent=reviewed, head=head, paths=[*kept, *added])
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -2342,6 +2380,8 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if pre_pr_important_due(state):
         return FIX_IMPORTANT
+    if owner_rules_due(state):
+        return "owner_rules"
     if full_checks_due(state):
         return "full_checks"
     if copy_review_due(state):
@@ -2349,6 +2389,12 @@ def after_integrate(state: TaskState) -> str | None:
     if final_validation_due(state):
         return "final_validation"
     return "qa_performance" if qa_performance_due(state) else "deliver"
+
+
+def after_owner_rules(state: TaskState) -> str | None:
+    """Always back to the fan-in (GH-431): the step observed the head, so `owner_rules_due`
+    now reads `False` (a commit it made is the `task_head` the fan-in stamps next)."""
+    return None if state.get("escalated") else "integrate"
 
 
 def after_fix_important(state: TaskState) -> str | None:
@@ -4428,9 +4474,11 @@ def head_reviewed(
     """Whether `head` is a head Tech Lead's review covers: the unit's `reviewed_head`, or the
     close-time capability commit (`close_docs`) made directly on it -- its `parent` is the
     reviewed head, `head` is its commit and every path it holds is a capability file
-    (`docs/product/*.md`). The one comparison of a pull request head, or `task_head`, with a
-    reviewed one; no reader adds its own id test. A foreign parent, a stale record or a path
-    outside `docs/product/` covers nothing."""
+    (`docs/product/*.md`) or one of the owner-decision files (`OWNER_DECISIONS`: the system's
+    `docs/decisiones-del-dueño.md` is outside `docs/product/`; `docs/orquestacion.md` is
+    never one). The one comparison of a pull request head, or `task_head`, with a reviewed
+    one; no reader adds its own id test. A foreign parent, a stale record or any other path
+    covers nothing."""
     if same_commit(reviewed_head, head):
         return True
     return bool(
@@ -4438,7 +4486,7 @@ def head_reviewed(
         and close_docs.get("paths")
         and same_commit(close_docs.get("parent"), reviewed_head)
         and same_commit(head, close_docs.get("head"))
-        and all(_capability_path(path) for path in close_docs["paths"])
+        and all(_capability_path(path) or path in OWNER_DECISIONS for path in close_docs["paths"])
     )
 
 
@@ -5295,6 +5343,26 @@ def tracker_failure_block(items: Sequence[object], exc_class: str, relative: str
     omitted = len(texts) - TRACKER_FAILURE_ITEMS
     if omitted > 0:
         block += f"\n\nand {omitted} more, in the task document at `{relative}`"
+    return block
+
+
+def owner_rules_block(items: Sequence[OwnerRuleElsewhere]) -> str:
+    """The bounded checklist of owner rules the `owner_rules` step could not write (GH-431),
+    for the ready comment: one checkbox per rule, the same bounds as the tracker-work list
+    (ADR-0062); `''` when there is none."""
+    texts = [
+        f"Owner's rule not written ({item['cls']}): {' '.join(item['rule'].split())}"
+        for item in items
+    ]
+    texts = [_MARKER_TEXT.sub("agentic-tracker :", text) for text in texts]
+    lines = [f"- [ ] {_cut(t, TRACKER_FAILURE_ITEM_CHARS)}" for t in texts[:TRACKER_FAILURE_ITEMS]]
+    if not lines:
+        return ""
+    block = "Owner rules the system could not write in this repo; they are yours:\n\n" + "\n".join(
+        lines
+    )
+    if (omitted := len(texts) - TRACKER_FAILURE_ITEMS) > 0:
+        block += f"\n\nand {omitted} more, in the task document"
     return block
 
 

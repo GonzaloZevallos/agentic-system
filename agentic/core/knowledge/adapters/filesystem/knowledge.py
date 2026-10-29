@@ -9,11 +9,14 @@ leaves the product half consolidated.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...domain import knowledge, knowledge_index
+from agentic.core.process.application.ports import IssueComment, OwnerRuleEntry
+from agentic.core.process.domain.task import OwnerRuleElsewhere
+
+from ...domain import knowledge, knowledge_index, owner_rules
 
 
 class FilesystemKnowledge:
@@ -70,7 +73,15 @@ class FilesystemKnowledge:
             _read_dir(root / knowledge.ADR_SUBDIR) if product else {},
             self.brief(root),
             self._standards_text(root) if standards else None,
+            owner=self._owner(root, product=product),
         )
+
+    def _owner(self, root: Path, *, product: bool) -> dict[str, str]:
+        """The owner files the product has, path -> text. The orchestration rules are an
+        entry of the product's index, so they follow the `product` family; the decisions
+        go whole to every role."""
+        paths = (*knowledge.OWNER_DECISIONS, *((knowledge.ORCHESTRATION,) if product else ()))
+        return {path: text for path in paths if (text := _read(root / path)) is not None}
 
     def read(self, root: Path | None = None) -> str:
         """What always goes whole plus the area index. The standards are not part of it:
@@ -117,6 +128,36 @@ class FilesystemKnowledge:
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
         """The criteria documents a delivery pushes past the line cap (GH-334)."""
         return knowledge.criteria_regressions(base_texts, head_texts)
+
+    def owner_files(self) -> tuple[str, ...]:
+        """The owner-decisions files the live-line cap measures."""
+        return knowledge.OWNER_DECISIONS
+
+    def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
+        """The decisions files with more lines in force than the cap, one message each."""
+        return knowledge.owner_over_cap(texts)
+
+    def owner_parse(
+        self, comments: Sequence[IssueComment], owner: str
+    ) -> tuple[list[OwnerRuleEntry], list[OwnerRuleElsewhere]]:
+        """The owner's marked rules in the comments and the ones that cannot be written."""
+        accepted, rejected = owner_rules.parse(
+            [(c.body, c.author, c.created_at, c.url) for c in comments], owner
+        )
+        return (
+            [OwnerRuleEntry(r.text, r.scope, r.replaces, r.created_at, r.url) for r in accepted],
+            [{"rule": r.text, "cls": r.cls} for r in rejected],
+        )
+
+    def owner_append(self, text: str, entries: Sequence[OwnerRuleEntry]) -> str:
+        """The decisions file with the new entries appended, a replaced one struck."""
+        return owner_rules.append(
+            text,
+            [
+                owner_rules.OwnerRule(e.text, e.scope, e.replaces, e.created_at, e.url)
+                for e in entries
+            ],
+        )
 
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet
@@ -170,6 +211,11 @@ class FilesystemKnowledge:
 
     def _definitions(self, definitions: dict[str, str], root: Path) -> dict[Path, str]:
         for slug in definitions:
+            if knowledge.owner_decisions_path(f"{knowledge.PRODUCT_SUBDIR}/{slug}.md"):
+                raise ValueError(
+                    f"definition {slug!r} resolves to an owner-decisions file; only the owner "
+                    "writes there, and a definition never replaces it"
+                )
             knowledge.check_slug(slug)
         return {
             root / knowledge.PRODUCT_SUBDIR / f"{slug}.md": content.strip() + "\n"

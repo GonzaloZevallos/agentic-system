@@ -50,6 +50,13 @@ def test_board_project_rejects_anything_but_owner_slash_number(bad):
         Configuration.from_sources(PRODUCT, {"AGENTIC_BOARD_PROJECT": bad})
 
 
+def test_owner_login_is_empty_by_default_and_reads_the_environment():
+    # Empty means "no owner configured": nothing is written on anyone's word (GH-431).
+    assert Configuration.from_sources(PRODUCT, {}).owner_login == ""
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_OWNER_LOGIN": "GonzaloZevallos"})
+    assert cfg.owner_login == "GonzaloZevallos"
+
+
 def test_spend_pacing_is_off_by_default_and_the_pace_defaults_to_35():
     cfg = Configuration.from_sources(PRODUCT, {})
     assert cfg.spend_pacing is False

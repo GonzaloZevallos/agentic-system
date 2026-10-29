@@ -199,6 +199,16 @@ def _text(value: object) -> str:
     return value
 
 
+def _comment_author(comment: dict) -> str:
+    """The login of a comment's author: `author.login` in `gh issue view`, `user.login` in
+    the REST shape; empty when neither names one (a deleted account is `null`)."""
+    for key in ("author", "user"):
+        who = comment.get(key)
+        if isinstance(who, dict) and isinstance(who.get("login"), str):
+            return who["login"]
+    return ""
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -487,7 +497,12 @@ class GhTracker:
             return []
         raw = json.loads(self._gh_read("issue", "view", str(number), "--json", "comments"))
         return [
-            IssueComment(body=c.get("body") or "", created_at=c.get("createdAt") or "")
+            IssueComment(
+                body=c.get("body") or "",
+                created_at=c.get("createdAt") or "",
+                author=_comment_author(c),
+                url=c.get("url") or c.get("html_url") or "",
+            )
             for c in raw.get("comments", [])
         ]
 

@@ -12,6 +12,7 @@ Pure: nothing here touches disk. `build_index` returns the texts and the files; 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
@@ -20,18 +21,23 @@ import yaml
 
 from agentic.core.process.domain import roles
 
-from . import knowledge
+from . import knowledge, owner_rules
 
 # The closed set of areas. A path outside them has no entry and raises (invariant: tags
 # come from closed sets declared in one place).
-AREAS = ("product", "adr", "standards", "design", "writing")
+AREAS = ("product", "adr", "standards", "design", "writing", "owner")
 AREA_SUMMARY = {
     "product": "capabilities: what the product does, one file per glossary concept",
     "adr": "decisions already taken, superseded ones left out",
     "standards": "engineering standards, one file per section",
     "design": "design standards, read whole by the design roles",
     "writing": "writing standards, read whole by the two text roles",
+    "owner": (
+        "owner's rules on how the orchestrator runs the system; "
+        "a rule here decides the question it covers"
+    ),
 }
+_OWNER_PATHS = (*knowledge.OWNER_DECISIONS, knowledge.ORCHESTRATION)
 INDEX_DIR = ".agentic/index"
 # What goes whole by name, never by size. The glossaries are the other half of the list,
 # and the caller names them: the root `CONTEXT.md`, or the paths `CONTEXT-MAP.md` links.
@@ -86,6 +92,8 @@ def always_whole(path: str, section: str | None = None, glossaries: Collection[s
 
 def area_of(path: str) -> str:
     """The area a path belongs to, from the path alone."""
+    if _is_owner(path):
+        return "owner"  # before the product prefix: the product's decisions live under it
     if path.startswith(f"{knowledge.PRODUCT_SUBDIR}/"):
         return "product"
     if path.startswith(f"{knowledge.ADR_SUBDIR}/"):
@@ -101,6 +109,13 @@ def area_of(path: str) -> str:
         f"a knowledge file lives under {knowledge.PRODUCT_SUBDIR}/, {knowledge.ADR_SUBDIR}/ "
         f"or is {knowledge.STANDARDS}, {knowledge.DESIGN_STANDARDS} "
         f"or {knowledge.WRITING_STANDARDS}"
+    )
+
+
+def _is_owner(path: str) -> bool:
+    return unicodedata.normalize("NFC", path) in (
+        *knowledge.OWNER_DECISIONS,
+        knowledge.ORCHESTRATION,
     )
 
 
@@ -122,14 +137,27 @@ def build_index(
     standards: str | None,
     *,
     standards_whole: bool = False,
+    owner: dict[str, str] | None = None,
 ) -> KnowledgeIndex:
     """The text a role reads and the index files behind it.
 
     `glossaries` is path -> text, as the adapter reads them; `capabilities` and `adrs`
     are file name -> text. `standards` goes whole (`standards_whole`, chosen by the
     caller: every verifier) or through the index, one file per unmarked section and the
-    marked ones inlined. Superseded ADRs get no entry; their path still works."""
+    marked ones inlined. Superseded ADRs get no entry; their path still works.
+
+    `owner` is path -> text of the owner files the product has (GH-431). A decisions file
+    goes whole before the Brief, with only the entries in force, and is never listed as a
+    capability; the orchestration rules are an entry of the `owner` area."""
     whole: list[str] = []
+    owner = {unicodedata.normalize("NFC", path): text for path, text in (owner or {}).items()}
+    for path in owner:
+        if not _is_owner(path):
+            raise ValueError(f"{path}: not an owner file; they are {', '.join(_OWNER_PATHS)}")
+    # The product's decisions first, then the system's: the narrower scope is read first.
+    for path in knowledge.OWNER_DECISIONS:
+        if path in owner:
+            whole.append(knowledge.fenced(path, owner_rules.live(owner[path])))
     if brief:
         whole.append(_whole_file(knowledge.BRIEF, brief))
     for path in glossaries:
@@ -145,6 +173,8 @@ def build_index(
         for name in sorted(found):
             path = f"{subdir}/{name}"
             text = found[name]
+            if path in knowledge.OWNER_DECISIONS:
+                continue  # delivered whole above, from `owner`; never also as an entry
             area = area_of(path)
             if path in glossaries:
                 continue  # a glossary the map links that lives here: already whole, once
@@ -152,6 +182,16 @@ def build_index(
                 whole.append(knowledge.fenced(path, text))
             elif not (area == "adr" and superseded(text)):
                 entries[area].append((path, _title(text, name), _roles(path, text)))
+
+    if knowledge.ORCHESTRATION in owner:
+        text = owner[knowledge.ORCHESTRATION]
+        entries["owner"].append(
+            (
+                knowledge.ORCHESTRATION,
+                _title(text, knowledge.ORCHESTRATION),
+                _roles(knowledge.ORCHESTRATION, text),
+            )
+        )
 
     standards_block = ""
     if standards is not None and standards_whole:

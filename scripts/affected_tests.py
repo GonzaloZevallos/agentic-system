@@ -114,6 +114,21 @@ TABLE: tuple[Row, ...] = (
     ),
     Row("docs/adr/*", ("tests/test_adr_numbers.py",), "that test lists the ADR directory"),
     Row(
+        "docs/decisiones-del-dueño.md",
+        ("tests/test_owner_decisions.py",),
+        "that test validates the real seed file entry by entry",
+    ),
+    Row(
+        "docs/orquestacion.md",
+        ("tests/test_owner_decisions.py",),
+        "that test builds the knowledge index entry of the real file",
+    ),
+    Row(
+        ".gitattributes",
+        ("tests/test_owner_decisions.py",),
+        "that test checks the merge attribute of the owner-decision paths",
+    ),
+    Row(
         ".agentic/playbooks/*",
         (
             "tests/core/process/application/test_run_role.py",

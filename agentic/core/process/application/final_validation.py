@@ -209,7 +209,7 @@ def _close_docs_patch(
     head = ports.workspace.commit_paths(root, relative, message)
     if head is None:
         return {}
-    return {"close_docs": {"parent": reviewed, "head": head, "paths": relative}}
+    return {"close_docs": rules.extend_close_docs(None, reviewed, head, relative)}
 
 
 def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -> TaskState:

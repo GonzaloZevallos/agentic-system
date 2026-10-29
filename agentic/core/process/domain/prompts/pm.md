@@ -31,6 +31,7 @@ Write, in Markdown, using `###` headings and nothing above `###`:
 - A `## Human` section, when the task document has one, holds what the human decided
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.
+- A live rule in the owner's decisions (`decisiones-del-dueño.md`, whole in the product knowledge you receive) decides the question it covers: apply it without escalating and cite its `D-<hex>` id. Against an ADR it touches, a rule dated after the ADR wins and the task leaves an `outside` finding to amend the ADR; a rule dated before it loses.
 - Your input is the product knowledge, then the task document: the original request,
   the interview, the Product Analyst's full section and, on a second pass, your
   previous verdict. Check that the changes you requested were made before anything else.

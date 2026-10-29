@@ -59,6 +59,7 @@ from ...application.final_validation import final_validation
 from ...application.full_checks import full_checks
 from ...application.integrate import integrate, integrate_turn
 from ...application.limits import RunLimits
+from ...application.owner_rules import owner_rules
 from ...application.plan import plan
 from ...application.ports import Ports, ProductKnowledge, Prompts
 from ...application.pre_pr_fix import fix_important
@@ -362,6 +363,9 @@ def build_graph(
     # `rules.pre_pr_important_due` from `after_integrate`, no role and no model cost, always
     # back to the fan-in, which sends the reopened units to their Developers.
     graph.add_node("fix_important", _system_node(fix_important, shared))
+    # The owner's rules into the decisions file (GH-431): no role, no model; reached through
+    # `rules.owner_rules_due` from `after_integrate`, always back to the fan-in.
+    graph.add_node("owner_rules", _system_node(owner_rules, shared))
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node("split", _system_node(split, shared))
@@ -417,6 +421,7 @@ def build_graph(
         [
             PIPELINE,
             "fix_important",
+            "owner_rules",
             "full_checks",
             "copy_review",
             "final_validation",
@@ -431,6 +436,9 @@ def build_graph(
     )
     graph.add_conditional_edges(
         "fix_important", _route(rules.after_fix_important), [INTEGRATE, ESCALATE]
+    )
+    graph.add_conditional_edges(
+        "owner_rules", _route(rules.after_owner_rules), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges(
         "copy_review", _route(rules.after_copy_review), [INTEGRATE, ESCALATE]

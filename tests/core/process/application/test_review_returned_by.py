@@ -86,4 +86,7 @@ async def test_an_approval_after_a_qa_return_makes_qa_performance_due_again():
     after = apply(state, await review(state, CFG, memory_ports(runner)))
     assert after["subtasks"][INTEGRATION]["status"] == "approved"
     assert rules.qa_performance_due(after)
-    assert rules.after_integrate(after) == "qa_performance"
+    # The new reviewed head is observed by the owner-rules step first, then QA Performance.
+    assert rules.after_integrate(after) == "owner_rules"
+    seen = after["subtasks"][INTEGRATION]["reviewed_head"]
+    assert rules.after_integrate({**after, "owner_rules_seen": seen}) == "qa_performance"

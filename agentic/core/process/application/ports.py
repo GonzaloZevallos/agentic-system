@@ -39,6 +39,7 @@ from ..domain.task import (
     DependencyState,
     FailureReason,
     MergeOutcome,
+    OwnerRuleElsewhere,
     PullRequest,
     TaskInput,
     TaskState,
@@ -371,6 +372,29 @@ class ProductKnowledge(Protocol):
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         """One message per criteria document past the line cap. `texts` is file name ->
         text and holds only files the product has."""
+        ...
+
+    def owner_files(self) -> tuple[str, ...]:
+        """The names of the owner-decisions files, relative to the product's root, that the
+        live-line cap measures (GH-431). The process side asks and never spells them."""
+        ...
+
+    def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
+        """One message per owner-decisions file with more lines in force than the cap.
+        `texts` is file name -> text and holds only files the product has."""
+        ...
+
+    def owner_parse(
+        self, comments: Sequence[IssueComment], owner: str
+    ) -> tuple[list[OwnerRuleEntry], list[OwnerRuleElsewhere]]:
+        """The rules `owner` marked in `comments` (`Owner's rule:`) and the marked text that
+        cannot be written, each with its closed class (GH-431). A comment of anyone else, and
+        every comment when `owner` is empty, yields nothing (invariant 3)."""
+        ...
+
+    def owner_append(self, text: str, entries: Sequence[OwnerRuleEntry]) -> str:
+        """`text`, a decisions file, with each entry not in it yet appended at the end and the
+        entry it replaces struck through; `text` itself when nothing is new (GH-431)."""
         ...
 
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
@@ -1236,13 +1260,30 @@ class IssueState:
 
 
 @dataclass(frozen=True)
+class OwnerRuleEntry:
+    """A rule the owner marked, as the knowledge side parsed it (GH-431): `scope` is
+    `product` or `system` (the file it belongs to), `replaces` the id of the entry it
+    supersedes, `created_at` the comment's time and `url` where it came from."""
+
+    text: str
+    scope: Literal["product", "system"]
+    replaces: str | None
+    created_at: str
+    url: str
+
+
+@dataclass(frozen=True)
 class IssueComment:
     """One comment of an issue, with its timestamp (GH-137): `rules.next_attempt_at`'s
     own `since` reads a structured `createdAt`, never a parsed sentence, and `prior`
-    counts comments after the last one a human (not the system) wrote."""
+    counts comments after the last one a human (not the system) wrote. `author` (the
+    login) and `url` (the `#issuecomment-<id>` address) default to empty so every reader
+    that predates them is unchanged (GH-431); empty means the tracker did not say."""
 
     body: str
     created_at: str
+    author: str = ""
+    url: str = ""
 
 
 @dataclass(frozen=True)

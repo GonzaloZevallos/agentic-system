@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application.develop import develop
+from agentic.core.process.application.owner_rules import owner_rules
 from agentic.core.process.application.plan import plan
 from agentic.core.process.application.qa_performance import qa_performance
 from agentic.core.process.application.review import review
@@ -116,6 +117,8 @@ async def drive(
         if step == "qa_performance":
             state = apply(state, await qa_performance(state, CFG, ports))
             assert rules.after_qa_performance(state) == "integrate"
+        elif step == "owner_rules":
+            state = apply(state, await owner_rules(state, CFG, ports))
         elif step == "pipeline":
             state = apply(state, await develop(state, CFG, ports))
             state = apply(state, await review(state, CFG, ports))
@@ -159,7 +162,7 @@ async def test_a_convened_task_goes_over_budget_is_fixed_and_approved_then_deliv
 
     route, final = await drive(integrated([PLAN]), role, perf)
 
-    assert route == ["qa_performance", "pipeline", "qa_performance", "deliver"]
+    assert route == ["qa_performance", "pipeline", "owner_rules", "qa_performance", "deliver"]
     assert role.slugs == [
         "qa_performance",
         "developer_integrator",
