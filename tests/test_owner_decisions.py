@@ -160,9 +160,9 @@ def test_every_rozan_names_an_adr_in_force():
     cited = {adr for e in parse_entries(DECISIONS.read_text(encoding="utf-8")) for adr in e.rozan}
     assert cited
     for adr in sorted(cited):
-        found = list(ADRS.glob(f"{adr.removeprefix('ADR-')}-*.md"))
-        assert len(found) == 1, adr
-        assert not knowledge_index.superseded(found[0].read_text(encoding="utf-8")), adr
+        names = [n for n in os.listdir(ADRS) if n.startswith(f"{adr.removeprefix('ADR-')}-")]
+        assert len(names) == 1, adr
+        assert not knowledge_index.superseded((ADRS / names[0]).read_text(encoding="utf-8")), adr
 
 
 # The entry that states each number the code enforces, and the constant it must equal.

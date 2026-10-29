@@ -549,6 +549,23 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "docs/README.md",
         "its `docs/*` strings are inputs to the selector under test, not reads of the page",
     ),
+    *(
+        Allowance(
+            test,
+            path,
+            "names the owner file in strings or builds it under `tmp_path`; it never reads "
+            "the real one",
+        )
+        for test in (
+            "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
+            "tests/core/knowledge/domain/test_knowledge_index.py",
+            "tests/core/process/application/test_preflight.py",
+            "tests/core/process/domain/test_master_gain.py",
+            "tests/core/process/domain/test_roles.py",
+            "tests/test_affected_tests.py",
+        )
+        for path in ("docs/decisiones-del-dueño.md", "docs/orquestacion.md")
+    ),
 )
 
 
