@@ -15,7 +15,7 @@ from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import landing, plan_settlement, rules
+from ..domain import ci, landing, plan_settlement, rules
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
 from ..domain.task import (
@@ -26,6 +26,7 @@ from ..domain.task import (
     VERDICT_UNLANDABLE,
     DiagnosisVerdict,
     TaskState,
+    apply,
 )
 from .checkouts import task_base
 from .escalate import ESCALATED, NEEDS_HUMAN
@@ -398,38 +399,47 @@ def stranded_now(ports: Ports, task_id: str, raw: Mapping[str, object]) -> bool:
     return stranded(raw, comments)
 
 
-ReleaseWhy = Literal["released", "waiting_on_human", "needs_restart", "task_cap"]
-"""Why an escalated landing diagnose is or is not released (GH-328): a human's decision
-released it, it waits for one (or for the label to go, or for an open issue), its shape is a
-restart only a human starts, or the task cap is spent. Closed: `land` maps each to its log
-line and its `LandResult.reason`."""
+ReleaseWhy = Literal[
+    "released",
+    "released_by_ci",
+    "waiting_on_human",
+    "waiting_on_base_ci",
+    "needs_restart",
+    "task_cap",
+]
+"""Why an escalated landing is or is not released (GH-328, GH-442): a human's decision released
+it (`released`), the base's CI went green and released a CI escalation (`released_by_ci`), it
+waits for a human (or for the label to go, or for an open issue), a CI escalation waits for the
+base's CI or an owner comment (`waiting_on_base_ci`), its shape is a restart only a human
+starts, or the task cap is spent. Closed: `land` maps each to its log line and its
+`LandResult.reason`."""
 
 
 @dataclass(frozen=True)
 class Release:
-    """`decision` is the human's answer when `why` is `released`, else `None`."""
+    """`released` is the one answer a caller reads: whether the escalation is released. Never
+    infer it from `decision`, which is the human's answer when one released it and `None` for
+    a release by CI (GH-442)."""
 
     decision: str | None
     why: ReleaseWhy
+    released: bool = False
 
 
 def _unreleased(why: ReleaseWhy) -> Release:
     return Release(None, why)
 
 
-def release(ports: Ports, cfg: Configuration, task_id: str, raw: TaskState, number: int) -> Release:
-    """Whether a human's answer releases the escalated landing diagnose of `raw` (GH-328).
-    Only the shape `landing_fix.escalate_failed_diagnosis` leaves is releasable: class
-    `failure` with undelivered diagnose attempts; any other escalation (the depth-1 one, after
-    a delivered diagnosis) is the human's restart, and the tracker is not read for it. The
-    release needs every one of: a non-system comment after the last `Escalated:` comment
-    (`resume.decision_since`, the one reader), the issue open, its labels readable and without
-    `needs-human`, and the task under its cap (`rules.task_spent`, the figure `run_role`
-    measures). A tracker that cannot answer is a wait, never a release."""
+def _owner_release(
+    ports: Ports, cfg: Configuration, task_id: str, raw: TaskState, number: int
+) -> Release:
+    """A human's answer releasing the escalation of `raw`: every one of a non-system comment
+    after the last `Escalated:` comment (`resume.decision_since`, the one reader), the issue
+    open, its labels readable and without `needs-human`, and the task under its cap
+    (`rules.task_spent`, the figure `run_role` measures). A tracker that cannot answer is a
+    wait, never a release."""
     from .resume import decision_since  # resume imports poll, which imports this module
 
-    if raw.get("escalation_class") != "failure" or not landing.diagnose_attempts(raw):
-        return _unreleased("needs_restart")
     try:
         comments = ports.tracker.timestamped_comments(task_id)
     except (ValueError, OSError):
@@ -447,7 +457,122 @@ def release(ports: Ports, cfg: Configuration, task_id: str, raw: TaskState, numb
         return _unreleased("waiting_on_human")
     if rules.task_spent(raw) >= task_cap(cfg):
         return _unreleased("task_cap")
-    return Release(decision, "released")
+    return Release(decision, "released", True)
+
+
+def _escalated_head(raw: TaskState) -> str | None:
+    """The head of the last live `escalate` entry: what the CI shape is judged on when the
+    caller did not say which head it holds."""
+    found = [e for e in live_entries(raw) if e.get("step") == "escalate"]
+    head = found[-1].get("head") if found else None
+    return head if isinstance(head, str) else None
+
+
+def _base_is_green(
+    ports: Ports, raw: TaskState, entry: Mapping[str, object], report: ci.CiReport
+) -> bool:
+    """Whether the base branch's latest CI is green over the names `entry` was about (its
+    `checks`, else the stack's required ones, `rules.ci_gate_names`). Anything unreadable, still
+    running or incomplete is not green."""
+    if not report.base_ref:
+        return False
+    try:
+        declared = ports.stack.ci(task_base(raw, ports))
+        plan = raw.get("ci_required")
+        required = rules.ci_gate_names(declared, plan if isinstance(plan, list) else []).names
+        names = landing.escalation_checks(entry, required)
+        return ci.base_green(ports.tracker.branch_ci(report.base_ref), names)
+    except (ValueError, OSError):
+        return False
+
+
+def release(
+    ports: Ports,
+    cfg: Configuration,
+    task_id: str,
+    raw: TaskState,
+    number: int,
+    *,
+    head: str | None = None,
+    upstream: str | None = None,
+) -> Release:
+    """Whether the escalated landing of `raw` is released (GH-328, GH-442), the one decision
+    `resume`, `land` and the poller ask; they read `Release.released`.
+
+    A CI escalation (`landing.ci_escalation`) is released once per (head, upstream sha) pair
+    when the base branch's CI is green again, or by an owner's comment through the same route
+    as below; otherwise it waits (`waiting_on_base_ci`). `head` and `upstream` are the caller's
+    (`MergeFacts.pr_head`, `current_master`); without them the pull request's report and the
+    workspace's upstream are read. A tracker that cannot answer is a wait.
+
+    Any other escalation keeps its answer (GH-328): only class `failure` with undelivered
+    diagnose attempts is releasable, by a human's answer (`_owner_release`); every other one, the
+    depth-1 escalation after a delivered diagnosis included, is the human's restart, and the
+    tracker is not read for it."""
+    shape = _escalated_head(raw)
+    if shape is not None and head in (None, shape) and landing.ci_escalation(raw, shape):
+        return _ci_release(ports, cfg, task_id, raw, number, shape, upstream)
+    if raw.get("escalation_class") != "failure" or not landing.diagnose_attempts(raw):
+        return _unreleased("needs_restart")
+    return _owner_release(ports, cfg, task_id, raw, number)
+
+
+def _ci_release(
+    ports: Ports,
+    cfg: Configuration,
+    task_id: str,
+    raw: TaskState,
+    number: int,
+    head: str,
+    upstream: str | None,
+) -> Release:
+    wait = _unreleased("waiting_on_base_ci")
+    entry = landing.ci_escalation_entry(raw, head)
+    reference = raw.get("pull_request")
+    if entry is None or not reference:
+        return wait
+    if upstream is None:
+        upstream = ports.workspace.upstream().sha
+    if upstream is None or landing.ci_released_for(entry, upstream):
+        return wait
+    try:
+        report = ports.tracker.ci_report(str(reference))
+    except (ValueError, OSError):
+        report = None
+    if (
+        isinstance(report, ci.CiReport)
+        and rules.same_commit(report.head_sha, head)
+        and _base_is_green(ports, raw, entry, report)
+    ):
+        return Release(None, "released_by_ci", True)
+    owner = _owner_release(ports, cfg, task_id, raw, number)
+    return owner if owner.released else wait
+
+
+def released_step(
+    raw: TaskState,
+    outcome: Release,
+    facts: rules.MergeFacts,
+    refusal: rules.MergeRefusal,
+    *,
+    at: str,
+    slicing: landing.Slice | landing.RestartWhy | Callable[[], landing.SliceInputs] | None = None,
+    ancestry: Ancestry | None = None,
+) -> LandingStep:
+    """The step the table gives on the document as the release `outcome` leaves it (GH-442):
+    `landing.released_by_ci` for a release by CI (stamped with `facts.current_master`),
+    `landing.released` for a human's decision, the document as it is for no release. The one
+    function the poller and `land` ask, so neither decides the step after a release itself."""
+    view = raw
+    if outcome.released:
+        if outcome.decision is not None:
+            patch = landing.released(raw, outcome.decision, at)
+        elif facts.current_master is not None:
+            patch = landing.released_by_ci(raw, facts.current_master, at)
+        else:
+            patch = {}
+        view = apply(raw, patch) if patch else raw
+    return step_for(view, refusal, facts, slicing, ancestry)
 
 
 def pending(
@@ -457,11 +582,12 @@ def pending(
     live: frozenset[LandingStepKind],
     now: datetime | None = None,
     released: bool = False,
+    ancestry: Ancestry | None = None,
 ) -> LandingStep | None:
     """The step worth a `land` child: built (`live`) and not yet dispatched on this head.
     `released` (GH-328) says a human's answer released the escalated diagnose: the gate that
     would skip it for the escalation is not asked."""
-    step = step_for(raw, refusal, facts)
+    step = step_for(raw, refusal, facts, ancestry=ancestry)
     if not takes_action(step.kind, live) or facts.pr_head is None:
         return None
     gate = diagnose_gate(raw, step.kind, now)

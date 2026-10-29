@@ -368,7 +368,9 @@ def test_the_recorded_deadlock_shape_is_the_diagnose_before_any_release():
 def test_a_ci_escalation_is_an_escalated_ci_failed_on_the_head_with_at_most_a_rerun_after_it():
     raw = _gh374()
     assert landing.ci_escalation(raw, gh374.HEAD)
-    assert landing.ci_escalation(_gh374(landing=gh374.document()["landing"][:5]), gh374.HEAD)  # no rerun
+    assert landing.ci_escalation(
+        _gh374(landing=gh374.document()["landing"][:5]), gh374.HEAD
+    )  # no rerun
     assert not landing.ci_escalation(raw, "f" * 40)
     assert not landing.ci_escalation(_gh374(escalated=None), gh374.HEAD)
 
