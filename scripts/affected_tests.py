@@ -115,8 +115,12 @@ TABLE: tuple[Row, ...] = (
     Row("docs/adr/*", ("tests/test_adr_numbers.py",), "that test lists the ADR directory"),
     Row(
         "docs/decisiones-del-dueño.md",
-        ("tests/test_owner_decisions.py",),
-        "that test validates the real seed file entry by entry",
+        (
+            "tests/test_owner_decisions.py",
+            "tests/core/process/application/test_review_landing.py",
+        ),
+        "the first validates the real seed file entry by entry; the second checks that every "
+        "rule a review prompt cites exists in it",
     ),
     Row(
         "docs/orquestacion.md",

@@ -170,6 +170,37 @@ def lower_unbacked_blocks(
     return settled, lowered
 
 
+def lower_landing_blocks(
+    findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The findings with every one that asks for landing evidence made an `observation`
+    (GH-441), and a line for each. The evidence only the pull request's CI can give does
+    not exist while a subtask is reviewed, so no Developer can supply it: the request is
+    kept, in the record and in the pull request's body, and verified at landing. It reads
+    the structured `landing_checks` and the `severity`, never the prose, so it runs first,
+    whatever the severity or the scope, and `reported_severity` keeps what the reviewer
+    said. Idempotent: a finding that already carries `reported_severity` is left alone."""
+    settled, lowered = [], []
+    for item in findings:
+        if item.get("landing_checks") and "reported_severity" not in item:
+            lowered.append(
+                f"`{item['location']}` {item['severity']} lowered to observation: "
+                "verified at landing"
+            )
+            item = {**item, "reported_severity": item["severity"], "severity": "observation"}
+        settled.append(item)
+    return settled, lowered
+
+
+NO_LANDING_GATE = "none: this product declares no CI"
+
+
+def landing_gate_text(names: Sequence[str]) -> str:
+    """What `{{landing_gate}}` says in a review prompt (GH-441): the names of the CI gate
+    (`ci_gate_names`) as backticked names, or `NO_LANDING_GATE` when the gate is empty."""
+    return ", ".join(f"`{name}`" for name in names) if names else NO_LANDING_GATE
+
+
 def review_markdown(
     category: FindingCategory | None, reason: str, text: str, lowered: Sequence[str] = ()
 ) -> str:
@@ -216,6 +247,8 @@ def _record(subtask_id: str, version: int, item: dict[str, Any]) -> FindingRecor
     }
     if "reported_severity" in item:
         record["reported_severity"] = item["reported_severity"]
+    if item.get("landing_checks"):
+        record["landing_checks"] = list(item["landing_checks"])
     return record
 
 
