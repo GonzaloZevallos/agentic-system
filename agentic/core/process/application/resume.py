@@ -317,10 +317,7 @@ _LANDING_WAITS: dict[landing_plan.ReleaseWhy, str] = {
         "it waits for a human comment after the Escalated: comment, the needs-human label "
         "removed and the issue open"
     ),
-    "waiting_on_base_ci": (
-        "it waits for the base branch CI to turn green, or an owner comment; then "
-        "`agentic land {flag}` moves it"
-    ),
+    "waiting_on_base_ci": ("it waits for the base branch CI to turn green, or an owner comment"),
     "task_cap": "its task cap is spent: raise the task budget",
 }
 
@@ -344,7 +341,7 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
         return (
             f"{owns}, and its escalation is one only a restart moves: `agentic run {flag} --fresh`."
         )
-    return f"{owns}, and " + _LANDING_WAITS[outcome.why].format(flag=flag) + "."
+    return f"{owns}, and " + _LANDING_WAITS[outcome.why] + "."
 
 
 def _task_checkout(task_id: str, ports: Ports) -> tuple[Path | None, bool]:

@@ -8,12 +8,17 @@ import dataclasses
 
 import pytest
 
-from agentic.core.process.application import landing, landing_fix, landing_plan
+from agentic.core.process.application import landing, landing_fix, landing_plan, poll, resume
+from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.poll import assess_merge
+from agentic.core.process.application.ports import GitError, Upstream
 from agentic.core.process.domain import landing as landing_rules
 from tests.core.process.application.test_landing_fix import _doc, _land
 from tests.core.process.application.test_merge_ci import _check, _report
-from tests.core.process.application.test_poll_merge import HEAD, _ports
+from tests.core.process.application.test_poll import _cfg as landing_fix_cfg
+from tests.core.process.application.test_poll import _Locks
+from tests.core.process.application.test_poll_merge import HEAD, _HeldLocks, _ports
+from tests.core.process.application.test_poll_merge import MASTER as MERGE_MASTER
 from tests.fakes import FakeLauncher, MemoryStack
 
 HEAD_RUN = "https://github.com/o/r/actions/runs/101"
@@ -123,7 +128,7 @@ def test_the_reason_lists_every_name(names):
 
 # --- GH-442: the release of a landing escalation only CI caused ---
 
-from agentic.core.process.application.ports import IssueComment, IssueState, Upstream  # noqa: E402
+from agentic.core.process.application.ports import IssueComment, IssueState  # noqa: E402
 from agentic.core.process.domain import ci  # noqa: E402
 from agentic.core.process.domain.task import apply  # noqa: E402
 from agentic.shared.configuration import Configuration  # noqa: E402
@@ -316,3 +321,271 @@ def test_the_gh328_release_is_marked_released():
 
     assert _release(_world()).released is True
     assert _release(_world(), _escalated(escalation_class="questions")).released is False
+
+
+# --- GH-442, release-wiring: land, the poller and resume over the released escalation ---
+
+
+def _escalated_landing(*extra: dict) -> dict:
+    """GH-374's landing list on the head the tests' pull request has: three `fix` entries spent,
+    an `escalate` for `ci_failed` and a `rerun` after it."""
+    fixes = [
+        {
+            "head": HEAD,
+            "step": "fix",
+            "refusal": "open_findings_blocking",
+            "at": f"2026-10-13T19:0{n}:00+00:00",
+        }
+        for n in range(3)
+    ]
+    escalate = {
+        "head": HEAD,
+        "step": "escalate",
+        "refusal": "ci_failed",
+        "at": "2026-10-13T20:00:00+00:00",
+    }
+    rerun = {
+        "head": HEAD,
+        "step": "rerun",
+        "refusal": "ci_failed",
+        "at": "2026-10-13T21:14:00+00:00",
+    }
+    return {
+        "escalated": "CI check(s) `web` red on the head and also red on the base branch",
+        "escalation_class": "questions",
+        "landing": [*fixes, escalate, rerun, *extra],
+        "title": "t",
+        "description": "d",
+    }
+
+
+def _red_world(monkeypatch, base, *, ancestor: bool, document=None):
+    """The `web` check red on the head; `base` is master's report. `ancestor` says whether the
+    head already holds the upstream sha. The dispatch is recorded, not run."""
+    ports = _world(monkeypatch, on_base=())
+    ports.tracker.branch_reports["master"] = base
+    ports.documents.save({**ports.documents.last, **(document or _escalated_landing())})
+    if ancestor:
+        ports.workspace.ancestors.add(MERGE_MASTER)
+    dispatched: list[LandingContext] = []
+    monkeypatch.setattr(landing, "_dispatch", dispatched.append)
+    return ports, dispatched
+
+
+def _green_base():
+    return _report(_check(conclusion="SUCCESS"))
+
+
+def _red_base():
+    return _report(_check(conclusion="FAILURE"))
+
+
+@pytest.mark.parametrize(("ancestor", "kind"), [(False, "sync_master"), (True, "rerun")])
+def test_land_releases_a_ci_escalation_once_the_base_is_green_and_takes_the_tables_step(
+    tmp_path, monkeypatch, ancestor, kind
+):
+    ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=ancestor)
+
+    result, lines = _land(ports, tmp_path)
+
+    document = _doc(ports)
+    assert (result.kind, result.step) == ("dispatched", kind), (result, lines)
+    assert [c.step.kind for c in dispatched] == [kind]
+    assert not document.get("escalated") and not document.get("escalation_class")
+    written = landing_plan.entries(document)
+    assert [e["step"] for e in written[-3:]] == ["escalate", "rerun", kind]
+    assert written[-3]["ci_released"] == MERGE_MASTER and "released_at" in written[-3]
+    assert len(written) == 6
+    assert "Human" not in document.get("sections", {})
+    assert ports.tracker.unlabeled == [("GH-5", "needs-human")]
+    assert any("escalation released, the base branch CI is green" in line for line in lines)
+    assert not any("--fresh" in line for line in lines)
+
+
+def test_land_waits_without_a_restart_line_while_the_base_is_red(tmp_path, monkeypatch):
+    ports, dispatched = _red_world(monkeypatch, _red_base(), ancestor=True)
+    before = _doc(ports)
+
+    result, lines = _land(ports, tmp_path)
+
+    assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_base_ci")
+    assert dispatched == [] and _doc(ports) == before and ports.tracker.unlabeled == []
+    assert any(
+        "waiting for the base branch CI to turn green, or an owner comment" in line
+        for line in lines
+    )
+    assert not any("--fresh" in line for line in lines)
+
+
+def test_land_waits_and_writes_nothing_when_ancestry_cannot_be_read(tmp_path, monkeypatch):
+    ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=True)
+
+    def broken(*args, **kwargs):
+        raise GitError("boom")
+
+    monkeypatch.setattr(ports.workspace, "is_ancestor", broken)
+    before = _doc(ports)
+
+    result, _ = _land(ports, tmp_path)
+
+    assert (result.kind, result.reason, result.step) == ("skipped", "not_live", "wait")
+    assert dispatched == [] and _doc(ports) == before
+
+
+def test_land_refuses_a_released_step_the_registered_run_kind_does_not_admit(tmp_path, monkeypatch):
+    ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=True)
+    before = _doc(ports)
+    lines: list[str] = []
+
+    result = landing.land(
+        "GH-5",
+        landing_fix_cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MERGE_MASTER, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: "2026-10-29T09:00:00+00:00",
+        run_kind="land_free",
+        argv0="agentic",
+    )
+
+    assert (result.kind, result.reason) == ("skipped", "run_kind_mismatch")
+    assert dispatched == [] and _doc(ports) == before
+
+
+def test_a_ci_shape_escalated_document_whose_step_is_a_rerun_is_dispatched_as_before(
+    tmp_path, monkeypatch
+):
+    # No `rerun` yet and a head red only on the head: the table says `rerun`, no release is asked.
+    document = _escalated_landing()
+    document["landing"] = document["landing"][:-2]
+    ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=True, document=document)
+    ports.tracker.branch_reports.clear()
+
+    result, _ = _land(ports, tmp_path)
+
+    assert (result.kind, result.step) == ("dispatched", "rerun")
+    assert [c.step.kind for c in dispatched] == ["rerun"]
+    assert [e["step"] for e in landing_plan.entries(_doc(ports))][-1] == "rerun"
+    assert ports.tracker.unlabeled == []
+
+
+def test_the_escalate_entry_carries_the_names_and_the_upstream_it_was_about(tmp_path, monkeypatch):
+    ports = _world(monkeypatch, on_base=("web",))
+
+    _land(ports, tmp_path)
+
+    [entry] = landing_plan.entries(_doc(ports))
+    assert entry["step"] == "escalate"
+    assert entry["checks"] == ["web"] and entry["upstream"] == MERGE_MASTER
+
+
+def _poll(ports, tmp_path):
+    lands: list = []
+    poll.gather_merges(
+        ports,
+        frozenset(),
+        MERGE_MASTER,
+        _Locks(),
+        [],
+        lands,
+        cfg=landing_fix_cfg(tmp_path),
+    )
+    return lands
+
+
+def test_the_poller_registers_the_child_under_the_released_steps_run_kind(tmp_path, monkeypatch):
+    ports, _ = _red_world(monkeypatch, _green_base(), ancestor=True)
+    kind = landing_rules.run_kind_of("rerun", "ci_failed")
+
+    [candidate] = _poll(ports, tmp_path)
+
+    assert candidate.kind == kind
+    assert landing_rules.run_kind_of("diagnose", "ci_failed") != kind
+
+
+def test_the_poller_offers_nothing_for_a_ci_shape_whose_base_is_red(tmp_path, monkeypatch):
+    ports, _ = _red_world(monkeypatch, _red_base(), ancestor=True)
+
+    assert _poll(ports, tmp_path) == []
+
+
+def test_the_poller_reads_the_base_report_for_no_document_outside_the_ci_shape(
+    tmp_path, monkeypatch
+):
+    ports = memory_ports(tracker=_Tracker(), stack=MemoryStack(checks={"tests": "t"}, ci=("web",)))
+    ledger = [{"head": HEAD, "step": "escalate_ledger", "refusal": "open_findings_blocking"}]
+    ports.documents.save(
+        {
+            "id": "GH-5",
+            "status": "ready_for_review",
+            "pull_request": "https://github.com/o/r/pull/5",
+            "escalated": "ledger",
+            "escalation_class": "questions",
+            "landing": ledger,
+            "subtasks": {"only": {"id": "only", "status": "approved", "reviewed_head": HEAD}},
+        }
+    )
+    _poll(ports, tmp_path)
+    assert "branch_ci" not in ports.tracker.reads
+
+
+def _pair(monkeypatch, tmp_path, base, document=None, *, ancestor=True):
+    """`resume`'s line for the document and what `land` then does with it, on one world."""
+    ports, _ = _red_world(monkeypatch, base, ancestor=ancestor, document=document)
+    line = resume._landing_owns_line("GH-5", ports, landing_fix_cfg(tmp_path), _doc(ports))
+    result, lines = _land(ports, tmp_path)
+    return line, result, lines
+
+
+def test_resume_names_land_only_when_land_moves_the_ci_shape(tmp_path, monkeypatch):
+    red_line, red_result, _ = _pair(monkeypatch, tmp_path, _red_base())
+    assert red_result.kind == "skipped" and "agentic land" not in red_line
+    assert "base branch CI" in red_line and "--fresh" not in red_line
+
+    green_line, green_result, _ = _pair(monkeypatch, tmp_path, _green_base())
+    assert green_result.kind == "dispatched" and "agentic land --issue 5" in green_line
+
+
+def _tail(entry: dict) -> dict:
+    document = _escalated_landing()
+    document["landing"] = [*document["landing"], entry]
+    return document
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        _tail(
+            {
+                "head": HEAD,
+                "step": "escalate_ledger",
+                "refusal": "ci_failed",
+                "at": "2026-10-13T20:00:00+00:00",
+            }
+        ),
+        _tail(
+            {
+                "head": HEAD,
+                "step": "diagnose",
+                "refusal": "ci_failed",
+                "delivered": True,
+                "verdict": "unlandable",
+                "at": "2026-10-13T20:00:00+00:00",
+            }
+        ),
+    ],
+    ids=["ledger", "depth_one_diagnose"],
+)
+def test_resume_never_names_land_for_a_shape_land_does_not_move(tmp_path, monkeypatch, document):
+    line, result, _ = _pair(monkeypatch, tmp_path, _green_base(), document)
+    assert ("agentic land" in line) == (result.kind == "dispatched")
+    assert "--fresh" in line or result.kind == "dispatched"
+
+
+def test_resume_keeps_naming_land_for_a_document_that_is_not_escalated(tmp_path, monkeypatch):
+    ports, _ = _red_world(monkeypatch, _red_base(), ancestor=True)
+    state = {**_doc(ports), "escalated": None}
+    line = resume._landing_owns_line("GH-5", ports, landing_fix_cfg(tmp_path), state)
+    assert "agentic land --issue 5" in line
