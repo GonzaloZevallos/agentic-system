@@ -1,3 +1,5 @@
+import unicodedata
+
 import pytest
 
 from agentic.core.knowledge.adapters.filesystem import FilesystemKnowledge
@@ -393,3 +395,76 @@ def test_an_unreadable_default_does_not_stop_the_construction_and_fails_the_read
     adapter = FilesystemKnowledge(tmp_path / "product")
     with pytest.raises(UnicodeDecodeError):
         adapter.standards()
+
+
+# --- GH-431: the owner's decisions and the orchestration rules ----------------------------
+
+RULE = "- D-bbbbbbbb: Una parte se construye entera. (2026-10-20, issue #2)\n"
+OLD = "- D-aaaaaaaa: Se parte sobre 150 USD. (2026-10-02, issue #1) \n"
+
+
+def _owner_product(tmp_path):
+    (tmp_path / "docs" / "product").mkdir(parents=True)
+    (tmp_path / "docs" / "product" / "decisiones-del-dueño.md").write_text(
+        "# Decisiones\n\n" + OLD + RULE.rstrip() + " Reemplaza: D-aaaaaaaa\n", encoding="utf-8"
+    )
+    (tmp_path / "docs" / "product" / "check-ins.md").write_text("# Check-ins\n", encoding="utf-8")
+    (tmp_path / "docs" / "orquestacion.md").write_text("# Orquestación\n", encoding="utf-8")
+    return FilesystemKnowledge(tmp_path)
+
+
+def test_read_gives_the_live_decisions_whole_and_lists_the_orchestration_rules(tmp_path):
+    knowledge = _owner_product(tmp_path)
+    text = knowledge.read()
+    assert "Una parte se construye entera" in text and "sobre 150 USD" not in text
+    assert "owner.md" in text
+    files = knowledge.index_files(None, ["product"])
+    assert "docs/orquestacion.md" in files[".agentic/index/owner.md"]
+    assert "decisiones" not in files[".agentic/index/product.md"]
+
+
+def test_the_decisions_of_the_given_root_are_the_ones_read(tmp_path):
+    knowledge = _owner_product(tmp_path)
+    checkout = tmp_path / "checkout"
+    (checkout / "docs").mkdir(parents=True)
+    (checkout / "docs" / "decisiones-del-dueño.md").write_text(
+        "# S\n" + RULE.replace("bbbbbbbb", "cccccccc"), encoding="utf-8"
+    )
+    text = knowledge.read(checkout)
+    assert "D-cccccccc" in text and "D-bbbbbbbb" not in text
+
+
+@pytest.mark.parametrize("slug", ["decisiones-del-dueño", "../decisiones-del-dueño"])
+def test_consolidate_refuses_a_definition_that_resolves_to_an_owner_decisions_file(tmp_path, slug):
+    knowledge = _owner_product(tmp_path)
+    before = (tmp_path / "docs" / "product" / "decisiones-del-dueño.md").read_text()
+    verdict = {
+        "definitions": [
+            {"capability": "check-ins", "content": "## Jobs\n"},
+            {"capability": unicodedata.normalize("NFD", slug), "content": "## Jobs\n\nx\n"},
+        ],
+        "glossary": [],
+    }
+    with pytest.raises(ValueError, match="owner"):
+        knowledge.consolidate(verdict)
+    assert (tmp_path / "docs" / "product" / "decisiones-del-dueño.md").read_text() == before
+    assert (tmp_path / "docs" / "product" / "check-ins.md").read_text() == "# Check-ins\n"
+
+
+def test_owner_over_cap_counts_the_live_lines_and_none_at_the_cap(tmp_path):
+    knowledge = FilesystemKnowledge(tmp_path)
+    line = "- D-{:08x}: regla\n"
+    at_cap = "".join(line.format(n) for n in range(120))
+    over = at_cap + line.format(999)
+    assert knowledge.owner_over_cap({"docs/decisiones-del-dueño.md": at_cap}) == []
+    (message,) = knowledge.owner_over_cap({"docs/decisiones-del-dueño.md": over})
+    assert "docs/decisiones-del-dueño.md" in message and "121" in message and "120" in message
+    # Struck and replaced entries are not counted: only what a role reads.
+    struck = "".join(f"- ~~D-{n:08x}: regla~~\n" for n in range(200))
+    assert knowledge.owner_over_cap({"docs/decisiones-del-dueño.md": struck + at_cap}) == []
+
+
+def test_owner_files_are_the_knowledge_constants(tmp_path):
+    from agentic.core.knowledge.domain import knowledge as domain
+
+    assert FilesystemKnowledge(tmp_path).owner_files() == domain.OWNER_DECISIONS

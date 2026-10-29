@@ -290,6 +290,12 @@ class MemoryKnowledge:
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         return knowledge.criteria_over_cap(texts)
 
+    def owner_files(self) -> tuple[str, ...]:
+        return knowledge.OWNER_DECISIONS
+
+    def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
+        return knowledge.owner_over_cap(texts)
+
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
         return knowledge.criteria_regressions(base_texts, head_texts)
 

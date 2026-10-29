@@ -70,7 +70,15 @@ class FilesystemKnowledge:
             _read_dir(root / knowledge.ADR_SUBDIR) if product else {},
             self.brief(root),
             self._standards_text(root) if standards else None,
+            owner=self._owner(root, product=product),
         )
+
+    def _owner(self, root: Path, *, product: bool) -> dict[str, str]:
+        """The owner files the product has, path -> text. The orchestration rules are an
+        entry of the product's index, so they follow the `product` family; the decisions
+        go whole to every role."""
+        paths = (*knowledge.OWNER_DECISIONS, *((knowledge.ORCHESTRATION,) if product else ()))
+        return {path: text for path in paths if (text := _read(root / path)) is not None}
 
     def read(self, root: Path | None = None) -> str:
         """What always goes whole plus the area index. The standards are not part of it:
@@ -117,6 +125,14 @@ class FilesystemKnowledge:
     def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
         """The criteria documents a delivery pushes past the line cap (GH-334)."""
         return knowledge.criteria_regressions(base_texts, head_texts)
+
+    def owner_files(self) -> tuple[str, ...]:
+        """The owner-decisions files the live-line cap measures."""
+        return knowledge.OWNER_DECISIONS
+
+    def owner_over_cap(self, texts: dict[str, str]) -> list[str]:
+        """The decisions files with more lines in force than the cap, one message each."""
+        return knowledge.owner_over_cap(texts)
 
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet
@@ -170,6 +186,11 @@ class FilesystemKnowledge:
 
     def _definitions(self, definitions: dict[str, str], root: Path) -> dict[Path, str]:
         for slug in definitions:
+            if knowledge.owner_decisions_path(f"{knowledge.PRODUCT_SUBDIR}/{slug}.md"):
+                raise ValueError(
+                    f"definition {slug!r} resolves to an owner-decisions file; only the owner "
+                    "writes there, and a definition never replaces it"
+                )
             knowledge.check_slug(slug)
         return {
             root / knowledge.PRODUCT_SUBDIR / f"{slug}.md": content.strip() + "\n"
