@@ -72,8 +72,10 @@ Aplica ADR-0074 (generada y escrita) y ADR-0021 (el alcance de mypy).
   fragilidad aceptada: un nodo (o un módulo) sin grupo hace fallar el generador, nombrándolo e
   imprimiendo la línea a agregar, en vez de caer en un grupo por defecto que ocultaría el
   olvido.
-- **Los `.mmd` heredados están exentos** hasta la parte 4. Cada ruta exenta se nombra completa;
-  ninguna exención cubre una carpeta ni un patrón.
+- **Los `.mmd` heredados quedan fuera** hasta la parte 4: `check_budget` sólo recorre `*.md`, y
+  no hay ninguna lista de exenciones. Si alguna página `.md` llegara a necesitar una exención,
+  se nombraría completa, con la subtarea que la quita; ninguna exención cubre una carpeta ni un
+  patrón.
 - **Las páginas del grafo de roles** las emite `render.py` desde nodos y aristas simples: un
   overview con las fases como nodos, una página por fase, una de escalado (`escalate`, `pause`)
   y una de `land`, que existe sólo si `land` es un subcomando de `cli.build_parser()`.
