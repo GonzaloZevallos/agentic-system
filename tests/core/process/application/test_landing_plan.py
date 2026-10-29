@@ -8,8 +8,10 @@ import pytest
 
 from agentic.core.process.application import landing_plan
 from agentic.core.process.application.ports import IssueComment, IssueState
-from agentic.core.process.domain import adr_numbers, landing, rules
+from agentic.core.process.domain import adr_numbers, ci, landing, rules
+from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
+from tests.core.process.application import gh374_shape as gh374
 from tests.fakes import MemoryTracker, memory_ports
 
 HEAD = "a" * 40
@@ -344,3 +346,185 @@ def test_step_for_asks_until_the_escalation_is_resolved_then_waits():
     assert _adr_step({"landing": [_asked("escalate_adr", resolved_at="t")]}).kind == "none"
     other_head = _asked("escalate_adr", head="c" * 40, resolved_at="t")
     assert _adr_step({"landing": [other_head]}).kind == "escalate_adr"
+
+
+# --- GH-442: a landing escalation only CI caused is released by the table, never by a restart ---
+
+
+def _gh374(**over) -> dict:
+    return gh374.document(**over)
+
+
+def _step(raw: dict, ancestry=None, facts=None) -> landing.LandingStep:
+    return landing_plan.step_for(raw, "ci_failed", facts or gh374.facts(), ancestry=ancestry)
+
+
+def test_the_recorded_deadlock_shape_is_the_diagnose_before_any_release():
+    """Red first: the table sends the exhausted `ci_failed` of GH-374 to a restart's path."""
+    step = _step(_gh374())
+    assert step.kind == "diagnose"
+
+
+def test_a_ci_escalation_is_an_escalated_ci_failed_on_the_head_with_at_most_a_rerun_after_it():
+    raw = _gh374()
+    assert landing.ci_escalation(raw, gh374.HEAD)
+    assert landing.ci_escalation(_gh374(landing=gh374.document()["landing"][:5]), gh374.HEAD)  # no rerun
+    assert not landing.ci_escalation(raw, "f" * 40)
+    assert not landing.ci_escalation(_gh374(escalated=None), gh374.HEAD)
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        {"head": gh374.HEAD, "step": "escalate_ledger", "refusal": "ci_failed"},
+        {"head": gh374.HEAD, "step": "escalate_adr", "refusal": "ci_failed"},
+        {"head": gh374.HEAD, "step": "diagnose", "refusal": "ci_failed", "delivered": True},
+        {"head": gh374.HEAD, "step": "rerun", "refusal": "ci_failed"},
+        {"head": "f" * 40, "step": "rerun", "refusal": "ci_failed"},
+    ],
+    ids=["ledger", "adr", "delivered_diagnose", "second_rerun", "rerun_on_another_head"],
+)
+def test_an_entry_after_the_escalation_that_is_not_its_one_rerun_makes_it_no_ci_escalation(after):
+    assert not landing.ci_escalation(
+        _gh374(landing=[*gh374.document()["landing"], after]), gh374.HEAD
+    )
+
+
+@pytest.mark.parametrize(
+    "escalate",
+    [
+        {**gh374.ESCALATE, "refusal": "open_findings_blocking"},
+        {**gh374.ESCALATE, "step": "escalate_ledger"},
+        {**gh374.ESCALATE, "head": "f" * 40},
+    ],
+    ids=["other_refusal", "ledger_step", "other_head"],
+)
+def test_only_an_escalate_entry_for_ci_failed_on_the_head_is_a_ci_escalation(escalate):
+    raw = _gh374(landing=[*gh374.document()["landing"][:4], escalate])
+    assert not landing.ci_escalation(raw, gh374.HEAD)
+
+
+def test_the_entries_of_an_archived_run_are_not_the_escalation():
+    archived = {**gh374.ESCALATE, "at": "2026-10-19T00:00:00+00:00"}
+    raw = _gh374(landing=[archived, *gh374.document()["landing"][:4]])
+    assert not landing.ci_escalation(raw, gh374.HEAD)
+
+
+def test_an_old_escalate_entry_has_no_checks_and_no_upstream_to_read():
+    entry = landing.ci_escalation_entry(_gh374(), gh374.HEAD)
+    assert entry is not None
+    assert landing.escalation_checks(entry, ("web", "api")) == ("web", "api")
+    assert landing.escalation_upstream(entry, gh374.NEW_MASTER) == gh374.NEW_MASTER
+    recorded = {**entry, "checks": ["web"], "upstream": gh374.MASTER}
+    assert landing.escalation_checks(recorded, ("web", "api")) == ("web",)
+    assert landing.escalation_upstream(recorded, gh374.NEW_MASTER) == gh374.MASTER
+
+
+def test_released_by_ci_clears_the_escalation_and_stamps_the_pair_and_nothing_else():
+    raw = _gh374()
+    patch = landing.released_by_ci(raw, gh374.NEW_MASTER, gh374.RELEASED_AT)
+    assert patch["escalated"] is None and patch["escalation_class"] is None
+    assert "sections" not in patch
+    released = apply(raw, patch)
+    assert released["sections"] == raw["sections"]
+    assert released["sections"]["Human"].encode() == gh374.HUMAN.encode()
+    stamped = [e for e in released["landing"] if e["step"] == "escalate"]
+    assert [(e["ci_released"], e["released_at"]) for e in stamped] == [
+        (gh374.NEW_MASTER, gh374.RELEASED_AT)
+    ]
+    assert len(released["landing"]) == len(raw["landing"])
+
+
+def test_a_second_release_of_the_same_pair_writes_nothing():
+    raw = _gh374()
+    released = apply(raw, landing.released_by_ci(raw, gh374.NEW_MASTER, gh374.RELEASED_AT))
+    assert landing.released_by_ci(released, gh374.NEW_MASTER, gh374.RELEASED_AT) == {}
+    again = {**released, "escalated": "again"}
+    assert landing.released_by_ci(again, gh374.NEW_MASTER, "2026-10-30T00:00:00+00:00") == {}
+
+
+def _released(upstream: str = gh374.NEW_MASTER) -> dict:
+    raw = _gh374()
+    return apply(raw, landing.released_by_ci(raw, upstream, gh374.RELEASED_AT))
+
+
+def test_the_marker_survives_a_rewrite_of_the_landing_list():
+    rewritten = landing.resolve_open(_released()["landing"], "2026-10-30T00:00:00+00:00", 1.0)
+    assert any(e.get("ci_released") == gh374.NEW_MASTER for e in rewritten)
+
+
+@pytest.mark.parametrize(
+    ("ancestry", "kind"),
+    [(False, "sync_master"), (True, "rerun"), (None, "wait")],
+    ids=["head_lacks_upstream", "head_has_upstream", "ancestry_unreadable"],
+)
+def test_after_a_ci_release_the_table_syncs_reruns_or_waits_by_the_ancestry(ancestry, kind):
+    assert _step(_released(), lambda: ancestry).kind == kind
+
+
+def test_a_marker_for_another_upstream_changes_nothing():
+    assert _step(_released(gh374.MASTER), lambda: False).kind == "diagnose"
+
+
+def test_the_sync_and_the_rerun_of_a_release_are_each_owed_once():
+    synced = {"head": gh374.HEAD, "step": "sync_master", "refusal": "ci_failed"}
+    raw = _released()
+    after_sync = {**raw, "landing": [*raw["landing"], synced]}
+    assert _step(after_sync, lambda: False).kind == "diagnose"
+    rerun = {**gh374.RERUN, "at": "2026-10-29T09:00:01+00:00"}
+    after_rerun = {**raw, "landing": [*raw["landing"], rerun]}
+    assert _step(after_rerun, lambda: True).kind == "diagnose"
+
+
+def test_the_rerun_before_the_release_does_not_spend_the_one_the_release_owes():
+    assert [e["step"] for e in _released()["landing"]][-1] == "rerun"
+    assert _step(_released(), lambda: True).kind == "rerun"
+
+
+def test_the_marker_never_changes_a_refusal_that_is_not_ci_failed():
+    raw = _released()
+    step = landing_plan.step_for(raw, "merge_conflict", gh374.facts(), ancestry=lambda: True)
+    assert step.kind == landing_plan.step_for(_gh374(), "merge_conflict", gh374.facts()).kind
+
+
+def test_the_ancestry_is_not_read_without_the_marker():
+    def boom() -> bool:
+        raise AssertionError("read")
+
+    assert _step(_gh374(), boom).kind == "diagnose"
+
+
+def test_a_rerun_recorded_before_the_release_is_not_a_dispatch_of_the_one_it_owes():
+    entries = landing_plan.live_entries(_released())
+    assert not landing.already_dispatched(entries, gh374.HEAD, "rerun", gh374.NEW_MASTER)
+    plain = landing_plan.live_entries(_gh374())
+    assert landing.already_dispatched(plain, gh374.HEAD, "rerun", gh374.NEW_MASTER)
+    new = [*entries, {**gh374.RERUN, "at": "2026-10-29T09:00:01+00:00"}]
+    assert landing.already_dispatched(new, gh374.HEAD, "rerun", gh374.NEW_MASTER)
+
+
+def _report(*checks: ci.CiCheck) -> ci.CiReport:
+    return gh374.report(*checks)
+
+
+@pytest.mark.parametrize(
+    ("base", "red", "green"),
+    [
+        (_report(gh374.web("FAILURE")), ("web",), False),
+        (_report(gh374.web("SUCCESS")), (), True),
+        (_report(gh374.web(None)), (), False),
+        (_report(), (), False),
+        (ci.CiUnreadable("gh_unavailable"), (), False),
+        (None, (), False),
+    ],
+    ids=["red", "green", "running", "check_missing", "unreadable", "not_read"],
+)
+def test_the_base_is_green_only_for_a_readable_complete_green_report(base, red, green):
+    assert ci.red_names_on_base(base, ("web",)) == red
+    assert ci.base_green(base, ("web",)) is green
+
+
+def test_red_names_on_base_compared_with_a_head_keeps_only_the_names_red_on_both():
+    head = _report(gh374.web("FAILURE"), ci.CiCheck("api", "COMPLETED", "FAILURE", "x"))
+    base = _report(gh374.web("FAILURE"), ci.CiCheck("api", "COMPLETED", "SUCCESS", "y"))
+    assert ci.red_names_on_base(base, ("web", "api"), head) == ("web",)

@@ -216,6 +216,11 @@ class LandingSpent:
     # GH-395: `sync_master` entries answering `ci_blocked_by_conflict` on the current head and
     # upstream sha (the pair): the one sync a conflicting head's missing CI is owed.
     conflict_ci_syncs_on_pair: int = 0
+    # GH-442: a CI release (`released_by_ci`) was recorded for the current head and upstream sha
+    # and neither its `sync_master` nor its `rerun` has been recorded since; and whether the head
+    # holds the upstream sha (`Workspace.is_ancestor`, `None`: unreadable, or not asked).
+    ci_release_due: bool = False
+    head_has_upstream: bool | None = None
 
     @property
     def unlandable(self) -> bool:
@@ -321,6 +326,15 @@ def landing_step(
                 return step("fix_important", important_units)
             return step("file_followups_and_land")
         case "ci_failed":
+            if spent.ci_release_due:
+                # GH-442: the base's CI went green after the escalation, which released it.
+                # The head takes master in, or is rerun once for the pair; never decided by a
+                # model, and an ancestry that cannot be read is a wait.
+                if spent.head_has_upstream is None:
+                    return step("wait")
+                if spent.head_has_upstream is False:
+                    return _sync(step, exhausted, spent, conflicting=False)
+                return step("rerun")
             if _red_on_base_only(facts):
                 return step("escalate")
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
@@ -809,9 +823,16 @@ def already_dispatched(
     other units to land on the same head. An `escalate_adr` is taken only once it is resolved
     (GH-412): an entry recorded without its comment posted does not silence the next round."""
 
+    stamped = _release_time(landing, head) if step == "rerun" else None
+
     def taken(entry: Mapping[str, object]) -> bool:
         if entry.get("head") != head or entry.get("step") != step or "lacks" in entry:
             return False
+        if stamped is not None:
+            # GH-442: a rerun recorded before the CI release is not the one the release owes.
+            at = _aware(entry.get("at"))
+            if at is not None and at < stamped:
+                return False
         if step == "diagnose":
             return entry.get("delivered") is True and entry.get(VERDICT_KEY) != VERDICT_SYNC
         if step == "sync_master":
@@ -850,6 +871,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         "slice_pull_request",
         "restart_why",
         "released_at",
+        "ci_released",
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
@@ -993,6 +1015,122 @@ def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
         "landing": written,
         "sections": {HUMAN: rules.human_section(_with_sections(raw), str(reason), decision)},
     }
+
+
+def _last_escalate(
+    entries: Sequence[Mapping[str, object]], head: str | None = None
+) -> tuple[int, Mapping[str, object]] | None:
+    """The last `escalate` entry of `entries` (of `head`, when given) and its position."""
+    for index in range(len(entries) - 1, -1, -1):
+        entry = entries[index]
+        if entry.get("step") == "escalate" and (head is None or entry.get("head") == head):
+            return index, entry
+    return None
+
+
+def ci_escalation_entry(raw: Mapping[str, object], head: str | None) -> Mapping[str, object] | None:
+    """The live `escalate` entry when `raw` is a landing escalation only CI caused (GH-442), else
+    `None`: the document is escalated, the last live `escalate` entry is for `ci_failed` on
+    `head`, and nothing after it is anything but one `rerun` on the same head -- so no
+    `escalate_ledger`, `escalate_adr` or delivered `diagnose` follows it. Pure."""
+    if head is None or not raw.get("escalated"):
+        return None
+    live = live_entries(raw)
+    found = _last_escalate(live)
+    if found is None:
+        return None
+    index, entry = found
+    if entry.get("refusal") != "ci_failed" or entry.get("head") != head:
+        return None
+    after = live[index + 1 :]
+    if len(after) > 1 or any(e.get("step") != "rerun" or e.get("head") != head for e in after):
+        return None
+    return entry
+
+
+def ci_escalation(raw: Mapping[str, object], head: str | None) -> bool:
+    """Whether `raw` is escalated for CI alone on `head` (`ci_escalation_entry`): the one
+    predicate the landing's release asks, so no caller holds a second copy of the condition."""
+    return ci_escalation_entry(raw, head) is not None
+
+
+def escalation_checks(entry: Mapping[str, object], required: tuple[str, ...]) -> tuple[str, ...]:
+    """The check names an `escalate` entry was about: its `checks`, else `required` (the stack's
+    gate names), for an entry written before it recorded them. Their absence is not an error."""
+    checks = entry.get("checks")
+    if isinstance(checks, list) and checks and all(isinstance(c, str) for c in checks):
+        return tuple(str(c) for c in checks)
+    return required
+
+
+def escalation_upstream(entry: Mapping[str, object], current: str | None) -> str | None:
+    """The upstream sha an `escalate` entry was made at: its `upstream`, else `current`."""
+    recorded = entry.get(UPSTREAM_KEY)
+    return recorded if isinstance(recorded, str) and recorded else current
+
+
+def ci_released_for(entry: Mapping[str, object], upstream: str | None) -> bool:
+    """Whether `entry` carries the CI release of the pair ending in `upstream`."""
+    return upstream is not None and entry.get("ci_released") == upstream
+
+
+def released_by_ci(raw: Mapping[str, object], upstream: str, at: str) -> ReleasePatch:
+    """The one patch that releases a landing escalation because the base's CI went green
+    (GH-442): `unescalated`, and `ci_released` (the upstream sha) with `released_at` stamped on
+    the last `escalate` entry, so the pair is released once. No `Human` text and no `### Decision`:
+    nobody decided anything. `{}` when the document is not escalated or the entry already carries
+    this pair, so a second call writes nothing. Never writes `cost_usd`. `released` stays the only
+    builder of a release from a human's decision."""
+    if not raw.get("escalated"):
+        return {}
+    entries = raw.get("landing")
+    written = (
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    found = _last_escalate(written)
+    if found is None or ci_released_for(found[1], upstream):
+        return {}
+    index, entry = found
+    written[index] = {**entry_of(entry), "ci_released": upstream, "released_at": at}
+    cleared = unescalated(raw)
+    return {
+        "escalated": cleared["escalated"],
+        "escalation_class": cleared["escalation_class"],
+        "status": cleared["status"],
+        "pause_log": cleared["pause_log"],
+        "landing": written,
+    }
+
+
+def _release_time(entries: Sequence[Mapping[str, object]], head: str | None) -> datetime | None:
+    """When the last `escalate` entry of `head` was CI-released, `None` when it was not."""
+    found = _last_escalate(entries, head)
+    if found is None or not isinstance(found[1].get("ci_released"), str):
+        return None
+    return _aware(found[1].get("released_at"))
+
+
+def ci_release_due(
+    entries: Sequence[Mapping[str, object]], head: str | None, upstream: str | None
+) -> bool:
+    """Whether a CI release is waiting for its step (GH-442): the last `escalate` entry of `head`
+    carries `ci_released` equal to `upstream`, no `sync_master` came after it and no `rerun` of
+    the head was recorded since the release (a time that cannot be read counts as recorded)."""
+    found = _last_escalate(entries, head) if head is not None else None
+    if found is None or not ci_released_for(found[1], upstream):
+        return False
+    index, entry = found
+    stamp = _aware(entry.get("released_at"))
+    for later in entries[index + 1 :]:
+        if later.get("step") == "sync_master":
+            return False
+        if later.get("step") == "rerun" and later.get("head") == head:
+            at = _aware(later.get("at"))
+            if stamp is None or at is None or at >= stamp:
+                return False
+    return True
 
 
 def _with_sections(raw: Mapping[str, object]) -> TaskState:

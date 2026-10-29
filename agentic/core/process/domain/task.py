@@ -914,6 +914,9 @@ class LandingEntry(TypedDict, total=False):
     # GH-328, `diagnose` entries: when a human's decision released the escalation this entry's
     # failure led to (`landing.released`). The retry calendar counts attempts after it.
     released_at: str
+    # GH-442, `escalate` entries: the upstream sha whose CI release (`landing.released_by_ci`)
+    # was recorded for this entry's head, with `released_at` its time. Absent until then.
+    ci_released: str
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
     # entry it is the master sha the diagnosis was made against.

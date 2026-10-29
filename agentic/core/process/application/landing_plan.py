@@ -129,11 +129,29 @@ def _readings(
     return last, served.get(upstream, 0) if upstream is not None else 0, due
 
 
+Ancestry = Callable[[], bool | None]
+"""Whether the head holds the upstream sha, read only when a CI release is waiting for its step
+(`landing.ci_release_due`); `None` from it is an ancestry that could not be read."""
+
+
+def head_ancestry(ports: Ports, cfg: Configuration, head: str, upstream: str) -> Ancestry:
+    """The `Ancestry` over git: `upstream` an ancestor of `head`. A git failure is unreadable."""
+
+    def read() -> bool | None:
+        try:
+            return ports.workspace.is_ancestor(cfg.product_dir, upstream, head)
+        except GitError:
+            return None
+
+    return read
+
+
 def spent(
     raw: Mapping[str, object],
     head: str | None,
     waited_s: float | None,
     upstream: str | None = None,
+    ancestry: Ancestry | None = None,
 ) -> landing.LandingSpent:
     """The passes, syncs and reruns on `head` the `landing` list records. `passes` is the
     `re_review` and `fix` entries and nothing else: a `sync_master` is never a pass (GH-330).
@@ -162,6 +180,7 @@ def spent(
         return upstream is not None and entry.get(UPSTREAM_KEY) == upstream
 
     last_verdict, verdict_syncs, due = _readings(epoch, upstream)
+    release_due = landing.ci_release_due(live, head, upstream)
     return landing.LandingSpent(
         passes=count(lambda e: e.get("step") in ("re_review", "fix")),
         syncs=count_epoch(lambda e: e.get("step") == "sync_master"),
@@ -190,6 +209,8 @@ def spent(
         verdict_sync_due=due,
         last_verdict=last_verdict,
         checks_rerun_on_head=_gate_reran(raw, head),
+        ci_release_due=release_due,
+        head_has_upstream=ancestry() if release_due and ancestry is not None else None,
     )
 
 
@@ -234,14 +255,16 @@ def step_for(
     refusal: rules.MergeRefusal,
     facts: rules.MergeFacts,
     slicing: landing.Slice | landing.RestartWhy | Callable[[], landing.SliceInputs] | None = None,
+    ancestry: Ancestry | None = None,
 ) -> LandingStep:
     """The one question every caller asks: `landing_step` over the document's spent budgets.
     `slicing` is what `landing_step` decides a slice from at the exhaustion (`slice_inputs`,
-    read lazily), `None` as before GH-297."""
+    read lazily), `None` as before GH-297. `ancestry` (GH-442) is read only for a document whose
+    CI release is waiting for its step."""
     return landing.landing_step(
         refusal,
         facts,
-        spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master),
+        spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master, ancestry),
         landing.blocking_owners(raw),
         important_units=landing.important_owners(raw),
         slicing=slicing,
