@@ -11,7 +11,7 @@ import pytest
 from agentic.core.process.application import landing, landing_fix, landing_plan, poll, resume
 from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.poll import assess_merge
-from agentic.core.process.application.ports import GitError, Upstream
+from agentic.core.process.application.ports import GitError, IssueComment, IssueState, Upstream
 from agentic.core.process.domain import landing as landing_rules
 from tests.core.process.application.test_landing_fix import _doc, _land
 from tests.core.process.application.test_merge_ci import _check, _report
@@ -128,7 +128,6 @@ def test_the_reason_lists_every_name(names):
 
 # --- GH-442: the release of a landing escalation only CI caused ---
 
-from agentic.core.process.application.ports import IssueComment, IssueState  # noqa: E402
 from agentic.core.process.domain import ci  # noqa: E402
 from agentic.core.process.domain.task import apply  # noqa: E402
 from agentic.shared.configuration import Configuration  # noqa: E402
@@ -385,6 +384,12 @@ def test_land_releases_a_ci_escalation_once_the_base_is_green_and_takes_the_tabl
     tmp_path, monkeypatch, ancestor, kind
 ):
     ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=ancestor)
+    # GH-374 before the release: the refusal is `ci_failed`, conflicts are not True, nothing is
+    # red on the base, and the escalated document's table step is the diagnose.
+    before = poll.assess_merge(ports, "GH-5", _doc(ports), 5, frozenset(), MERGE_MASTER)
+    assert before.decision.reason == "ci_failed" and before.facts.conflicts is not True
+    assert before.facts.ci_red_on_base == ()
+    assert landing_plan.step_for(_doc(ports), "ci_failed", before.facts).kind == "diagnose"
 
     result, lines = _land(ports, tmp_path)
 
@@ -531,12 +536,40 @@ def test_the_poller_reads_the_base_report_for_no_document_outside_the_ci_shape(
     assert "branch_ci" not in ports.tracker.reads
 
 
-def _pair(monkeypatch, tmp_path, base, document=None, *, ancestor=True):
-    """`resume`'s line for the document and what `land` then does with it, on one world."""
-    ports, _ = _red_world(monkeypatch, base, ancestor=ancestor, document=document)
-    line = resume._landing_owns_line("GH-5", ports, landing_fix_cfg(tmp_path), _doc(ports))
+BRANCH = "agentic/GH-5"
+APPROVED_AT = "2026-10-13T22:00:00+00:00"
+ANSWERED_AT = "2026-10-13T23:00:00+00:00"
+
+
+def _with_branch(document: dict) -> dict:
+    """`document` as `resume --from-document` finds an approved task whose pull request is open:
+    the integration approved at the pull request's head, and the task branch past it."""
+    unit = {"status": "approved", "branch": BRANCH, "base": "b0", "reviewed_head": HEAD}
+    return {
+        **document,
+        "branch": BRANCH,
+        "subtasks": {"only": {"status": "approved"}, "integration": unit},
+    }
+
+
+def _pair(monkeypatch, tmp_path, base, document=None, *, ancestor=True, comments=()):
+    """The line `resume --from-document` refuses with (through `seed_increment` and
+    `_moved_line`) and what `land` then does, over one document and one world."""
+    ports, dispatched = _red_world(
+        monkeypatch,
+        base,
+        ancestor=ancestor,
+        document=_with_branch(document or _escalated_landing()),
+    )
+    ports.workspace.existing_branches[BRANCH] = ("c" * 40, "b0")
+    ports.workspace.ancestors.add(HEAD)
+    if comments:
+        ports.tracker.timestamped["GH-5"] = [IssueComment(b, at) for b, at in comments]
+        ports.tracker.states[5] = IssueState("OPEN", "", (), None, ())
+    with pytest.raises(ValueError) as refused:
+        resume.seed_increment("GH-5", landing_fix_cfg(tmp_path), ports)
     result, lines = _land(ports, tmp_path)
-    return line, result, lines
+    return str(refused.value).splitlines()[-1].removeprefix("- "), result, lines
 
 
 def test_resume_names_land_only_when_land_moves_the_ci_shape(tmp_path, monkeypatch):
@@ -548,40 +581,83 @@ def test_resume_names_land_only_when_land_moves_the_ci_shape(tmp_path, monkeypat
     assert green_result.kind == "dispatched" and "agentic land --issue 5" in green_line
 
 
+def test_resume_does_not_tell_a_ci_shape_whose_step_is_a_rerun_to_wait(tmp_path, monkeypatch):
+    document = _escalated_landing()
+    document["landing"] = document["landing"][:-2]
+    line, result, _ = _pair(monkeypatch, tmp_path, _green_base(), document)
+    assert result.step == "rerun" and "agentic land --issue 5" in line
+    assert "waits" not in line
+
+
 def _tail(entry: dict) -> dict:
     document = _escalated_landing()
     document["landing"] = [*document["landing"], entry]
     return document
 
 
-@pytest.mark.parametrize(
-    "document",
-    [
-        _tail(
-            {
-                "head": HEAD,
-                "step": "escalate_ledger",
-                "refusal": "ci_failed",
-                "at": "2026-10-13T20:00:00+00:00",
-            }
-        ),
-        _tail(
-            {
-                "head": HEAD,
-                "step": "diagnose",
-                "refusal": "ci_failed",
-                "delivered": True,
-                "verdict": "unlandable",
-                "at": "2026-10-13T20:00:00+00:00",
-            }
-        ),
-    ],
-    ids=["ledger", "depth_one_diagnose"],
+TODAY = (
+    "GH-5 has a pull request: its branch moved after approval, which the landing owns; "
+    "run `agentic land --issue 5`."
 )
-def test_resume_never_names_land_for_a_shape_land_does_not_move(tmp_path, monkeypatch, document):
-    line, result, _ = _pair(monkeypatch, tmp_path, _green_base(), document)
-    assert ("agentic land" in line) == (result.kind == "dispatched")
-    assert "--fresh" in line or result.kind == "dispatched"
+
+
+def test_a_depth_one_diagnose_escalation_keeps_todays_line(tmp_path, monkeypatch):
+    entry = {
+        "head": HEAD,
+        "step": "diagnose",
+        "refusal": "ci_failed",
+        "delivered": True,
+        "verdict": "unlandable",
+        "at": "2026-10-13T20:00:00+00:00",
+    }
+    line, _, _ = _pair(monkeypatch, tmp_path, _green_base(), _tail(entry))
+    assert line == TODAY
+
+
+def test_a_ledger_escalation_keeps_todays_line_and_never_gets_fresh(tmp_path, monkeypatch):
+    # A ledger escalation is the refusal `open_findings_blocking` after its `escalate_ledger`
+    # entry: the table's step is `none`. The CI world cannot refuse so, so the step is stated.
+    ledger = landing_plan.LandingStep("none", "open_findings_blocking")
+    monkeypatch.setattr(landing_plan, "step_for", lambda *args, **kwargs: ledger)
+    line, _, _ = _pair(monkeypatch, tmp_path, _green_base())
+    assert line == TODAY and "--fresh" not in line
+
+
+def _gh328() -> dict:
+    """GH-320's shape: the diagnoser never delivered, so the task escalated as `failure`."""
+    document = _escalated_landing()
+    document["escalation_class"] = "failure"
+    document["escalated"] = "Landing Diagnoser did not deliver"
+    document["landing"] = [
+        *document["landing"][:3],
+        document["landing"][-1],
+        {
+            "head": HEAD,
+            "step": "diagnose",
+            "refusal": "ci_failed",
+            "failure": "max_turns",
+            "at": "2026-10-13T21:30:00+00:00",
+        },
+    ]
+    return document
+
+
+def test_the_gh328_shape_waits_for_a_human_and_resume_does_not_name_land(tmp_path, monkeypatch):
+    line, result, _ = _pair(monkeypatch, tmp_path, _green_base(), _gh328())
+    assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_human")
+    assert "agentic land" not in line and "--fresh" not in line and "human comment" in line
+
+
+def test_the_gh328_shape_with_an_owner_comment_is_moved_by_land_and_resume_names_it(
+    tmp_path, monkeypatch
+):
+    comments = [
+        ("Escalated: Landing Diagnoser did not deliver", APPROVED_AT),
+        ("go on", ANSWERED_AT),
+    ]
+    line, result, _ = _pair(monkeypatch, tmp_path, _green_base(), _gh328(), comments=comments)
+    assert (result.kind, result.step) == ("dispatched", "diagnose")
+    assert "agentic land --issue 5" in line
 
 
 def test_resume_keeps_naming_land_for_a_document_that_is_not_escalated(tmp_path, monkeypatch):

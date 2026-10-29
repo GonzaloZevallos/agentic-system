@@ -188,7 +188,7 @@ def _land(
     except ValueError:
         now = None
     released: ReleasePatch = {}
-    if step.kind == "diagnose" and raw.get("escalated"):
+    if landing_plan.release_asked(raw, step.kind):
         outcome = landing_plan.release(ports, cfg, task_id, raw, number, head=head, upstream=master)
         if not outcome.released:
             return _waiting_on_human(task_id, head, outcome.why, log)

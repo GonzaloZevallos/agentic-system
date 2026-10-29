@@ -88,3 +88,21 @@ sequenceDiagram
    El rechazo `adr_number_taken` no pasa por `exhausted()`: es `renumber` cuando la regla decide
    la colisión y quedan renumeraciones (`LANDING_RENUMBERS_MAX`); si no, una sola `escalate_adr`
    por (cabeza, rechazo), y después `none`. Nunca `diagnose` ni `restart` (ADR-0049, adenda GH-412).
+7. **Un escalado se libera por una sola decisión (GH-442).** Un documento escalado cuyo paso
+   de la tabla es `diagnose` no se despacha: `agentic/core/process/application/landing.py:_land`
+   (y el poller, en `gather_merges`) preguntan a
+   `agentic/core/process/application/landing_plan.py:release` si el escalado se libera, bajo la
+   condición `landing_plan.release_asked`. La respuesta (`Release.released`) es verdadera por
+   una decisión humana (`landing.released`) o, si el escalado lo causó solo el CI, porque el CI
+   de la rama base volvió a verde (`landing.released_by_ci`, que no escribe `### Decision` ni
+   texto en `Human`). Liberado, el paso se recalcula sobre la vista liberada
+   (`landing_plan.released_step`): `sync_master` si la cabeza no contiene el upstream, `rerun`
+   si lo contiene, `wait` si la ascendencia no se puede leer. Ese paso pasa de nuevo por
+   `run_kind_admits` y `takes_action` antes de escribir la entrada `landing`; el `ci_released`
+   y la entrada del paso siguiente se guardan en la misma escritura de `record_closure` (la
+   liberación misma se guarda antes, como la de GH-328). Un escalado que no es de CI (libro
+   mayor, ADR, diagnóstico de profundidad 1, GH-328) conserva su comportamiento.
+   `agentic resume` consulta la misma decisión
+   (`agentic/core/process/application/resume.py:_landing_owns_line`) y solo nombra
+   `agentic land` si `land` puede mover la tarea; si espera la CI de la base o un comentario
+   humano, lo dice sin mencionar `--fresh`.

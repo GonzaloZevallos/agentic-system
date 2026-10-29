@@ -23,6 +23,7 @@ from typing import Literal, cast, get_type_hints
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules
+from ..domain import landing as landing_rules
 from ..domain.task import TaskState, TrackerFailure, TrackerFailureRecord, apply
 from . import landing_plan
 from .archive import STARTED_OVER
@@ -39,6 +40,9 @@ from .poll import (
     RETAKEN,
     RETAKEN_AFTER_CRASH,
     RETAKEN_ORPHANED,
+    Abandoned,
+    StackUnreadable,
+    assess_merge,
 )
 from .ports import GitError, Ports, Workspace
 from .run_role import task_cap
@@ -324,19 +328,56 @@ _LANDING_WAITS: dict[landing_plan.ReleaseWhy, str] = {
 
 def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: TaskState) -> str:
     """The refusal for a task with a pull request whose branch moved after approval (GH-442).
-    `agentic land` is named when the document is not escalated or `landing_plan.release` (the
-    one decision `land` asks) says it can move the task; otherwise the line states the wait
-    that decision gives, or the restart only a human starts when the shape answers it."""
+    `agentic land` is named unless the document is escalated and the table's step for it is
+    the one `land` holds back (`landing_plan.release_asked`, the step `land` computes over the
+    same merge facts); then `landing_plan.release`, the decision `land` asks, says whether
+    `land` can move it. A task `land` would not hold back keeps today's line, whatever the
+    escalation; a held one states the wait that decision gives, or the restart only a human
+    starts when its shape answers `needs_restart`."""
     flag = issue_flag(task_id, ports)
     owns = f"{task_id} has a pull request: its branch moved after approval, which the landing owns"
+    land = f"{owns}; run `agentic land {flag}`."
     number = ports.inbox.issue_of(task_id)
     if not state.get("escalated") or number is None or not landing_plan.live_entries(state):
-        # Not escalated, or escalated before the landing ever recorded a step: `land` decides
-        # from the pull request, and only an escalation the landing recorded is released.
-        return f"{owns}; run `agentic land {flag}`."
-    outcome = landing_plan.release(ports, cfg, task_id, state, number)
+        return land
+    try:
+        master = ports.workspace.upstream().sha
+    except GitError:
+        return land
+    if master is None:
+        return land
+    try:
+        assessed = assess_merge(ports, task_id, state, number, frozenset(), master)
+    except StackUnreadable:
+        return land
+    if isinstance(assessed, Abandoned) or assessed.decision.reason is None:
+        return land
+    facts, refusal = assessed.facts, assessed.decision.reason
+    head = facts.pr_head
+    if assessed.decision.kind != "refuse" or head is None:
+        return land
+    step = landing_plan.step_for(
+        state,
+        refusal,
+        facts,
+        lambda: landing_plan.slice_inputs(state, cfg, ports, master, head),
+        landing_plan.head_ancestry(ports, cfg, head, master),
+    )
+    if (
+        step.kind == "escalate"
+        and state.get("escalated")
+        and landing_rules.already_dispatched(
+            landing_plan.live_entries(state), head, step.kind, master
+        )
+    ):
+        # The escalation itself, taken on this head: `land` answers "already taken" and moves
+        # nothing until the base's CI is green and the table gives another step.
+        return f"{owns}, and it waits for the base branch CI to turn green."
+    if not landing_plan.release_asked(state, step.kind):
+        return land
+    outcome = landing_plan.release(ports, cfg, task_id, state, number, head=head, upstream=master)
     if outcome.released:
-        return f"{owns}; run `agentic land {flag}`."
+        return land
     if outcome.why == "needs_restart":
         return (
             f"{owns}, and its escalation is one only a restart moves: `agentic run {flag} --fresh`."

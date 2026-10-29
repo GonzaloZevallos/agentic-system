@@ -382,10 +382,8 @@ def _landing_step(
     tracker is read only for the CI shape or a failure with attempts); when it is released the
     step is the one `landing_plan.released_step` gives on the released view, the one `land`
     recomputes, so the child registers under the run kind of the step it will take."""
-    waiting = (
-        cfg is not None
-        and bool(raw.get("escalated"))
-        and landing_plan.step_for(raw, refusal, facts).kind == "diagnose"
+    waiting = cfg is not None and landing_plan.release_asked(
+        raw, landing_plan.step_for(raw, refusal, facts).kind
     )
     outcome = (
         landing_plan.release(

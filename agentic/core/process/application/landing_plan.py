@@ -487,6 +487,14 @@ def _base_is_green(
         return False
 
 
+def release_asked(raw: Mapping[str, object], kind: LandingStepKind) -> bool:
+    """Whether the escalated document `raw` is held back by its escalation at the table's step
+    `kind`: only a `diagnose` is (GH-328), every other step is dispatched as if the document
+    were not escalated. The one condition `land`, the poller and `resume` ask before they ask
+    `release`, so none holds a copy of it."""
+    return kind == "diagnose" and bool(raw.get("escalated"))
+
+
 def release(
     ports: Ports,
     cfg: Configuration,
