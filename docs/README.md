@@ -37,7 +37,16 @@ Flujos clave, como diagramas de secuencia:
 
 ## Diagramas generados
 
-- [Grafo de roles](architecture/generated/role-graph.md), de `agentic.composition:graph`.
+- [Grafo de roles](architecture/generated/role-graph.md), de `agentic.composition:graph`, con
+  una página por fase:
+  [classify](architecture/generated/role-graph-classify.md),
+  [define](architecture/generated/role-graph-define.md),
+  [plan](architecture/generated/role-graph-plan.md),
+  [build](architecture/generated/role-graph-build.md),
+  [review](architecture/generated/role-graph-review.md),
+  [deliver](architecture/generated/role-graph-deliver.md),
+  [escalado y reanudación](architecture/generated/role-graph-escalation.md) y
+  [land](architecture/generated/role-graph-land.md).
 - Paquetes por módulo:
   [process](architecture/generated/packages-process.mmd),
   [knowledge](architecture/generated/packages-knowledge.mmd),

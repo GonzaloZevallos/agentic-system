@@ -59,3 +59,26 @@ Aplica ADR-0074 (generada y escrita) y ADR-0021 (el alcance de mypy).
 - Una tarea con base anterior a este merge no tiene el bloque `docs` (el stack rige desde la
   tarea siguiente) y puede terminar con los archivos generados viejos: se resuelve con un
   pase `fix` mecánico guiado por la línea `run ... and commit` que imprime `check.py`.
+
+## Addendum (GH-430): cómo aplica agentic-system el presupuesto de diagrama
+
+- **El chequeo corre dentro de `scripts/docs/generate.py`**, el comando que declara `docs.generate`
+  en `.agentic/stack.yaml`: termina corriendo `diagram_budget` (`scripts/docs/render.py`) sobre
+  cada `.md` bajo `docs/architecture/`. Así lo ven la puerta de entrega, el merge y CI, y no
+  sólo `scripts/docs/check.py`, que no cambia. Si hay exceso, sale con 1 y dice que el arreglo es
+  partir la página, no regenerar.
+- **`scripts/docs/groups.py`** es sólo datos, una entrada por línea y ordenada: `PHASES` agrupa
+  los nodos del grafo de roles por fase y `CLUSTERS` queda vacío hasta la parte 2. Es una
+  fragilidad aceptada: un nodo (o un módulo) sin grupo hace fallar el generador, nombrándolo e
+  imprimiendo la línea a agregar, en vez de caer en un grupo por defecto que ocultaría el
+  olvido.
+- **Los `.mmd` heredados quedan fuera** hasta la parte 4: `check_budget` sólo recorre `*.md`, y
+  no hay ninguna lista de exenciones. Si alguna página `.md` llegara a necesitar una exención,
+  se nombraría completa, con la subtarea que la quita; ninguna exención cubre una carpeta ni un
+  patrón.
+- **Las páginas del grafo de roles** las emite `render.py` desde nodos y aristas simples: un
+  overview con las fases como nodos, una página por fase, una de escalado (`escalate`, `pause`)
+  y una de `land`, que existe sólo si `land` es un subcomando de `cli.build_parser()`.
+- **`define` queda cerca del límite**, unas 30 aristas. El próximo cambio que la pase la parte
+  en `PHASES`, por significado: `define` y `design` (`ux_flow`, `ux_walk`, `ui_screens`,
+  `design_review`, `write_copy`) es la primera candidata.

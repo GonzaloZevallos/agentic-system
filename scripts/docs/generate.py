@@ -54,12 +54,25 @@ def cli_helps() -> list[tuple[tuple[str, ...], str]]:
     return helps
 
 
-def role_graph_mermaid() -> str:
-    """LangGraph's drawing of the compiled graph, subgraphs expanded (`xray=True`). The graph
-    is compiled with no checkpointer: nothing here opens a database."""
-    from agentic import composition
+Edges = list[tuple[str, str, bool]]
 
-    return composition.graph.compile().get_graph(xray=True).draw_mermaid()
+
+def _plain(graph: Any) -> tuple[list[str], Edges]:
+    """The nodes and the `(source, target, conditional)` edges of a LangGraph drawable graph,
+    read from its `.nodes` and `.edges`; never from the text of `draw_mermaid()` (ADR-0076)."""
+    return list(graph.nodes), [(e.source, e.target, bool(e.conditional)) for e in graph.edges]
+
+
+def role_graph_inputs() -> tuple[list[str], Edges, list[str], Edges, bool]:
+    """What `render.role_graph_pages` takes: the nodes and edges of the compiled task graph
+    (subgraphs expanded, `xray=True`; no checkpointer, so no database is opened), those of the
+    `develop -> review` branch, and whether the CLI has the `land` subcommand."""
+    from agentic import cli, composition
+
+    nodes, edges = _plain(composition.graph.compile().get_graph(xray=True))
+    branch_nodes, branch_edges = _plain(branch_graph().get_graph())
+    has_land = render.has_subcommand(cli.build_parser().root, "land")
+    return nodes, edges, branch_nodes, branch_edges, has_land
 
 
 def branch_graph() -> Any:
@@ -71,10 +84,6 @@ def branch_graph() -> Any:
         raise RuntimeError("drawing the graph asks for no ports")
 
     return pipeline_branch(no_ports, arm_for=lambda cfg: "")
-
-
-def pipeline_branch_mermaid() -> str:
-    return str(branch_graph().get_graph().draw_mermaid())
 
 
 def _pyreverse(name: str, targets: Sequence[Path], ignore: bool = True) -> dict[str, str]:
@@ -197,14 +206,19 @@ def _remove_stale(root: Path, kept: Sequence[str]) -> None:
 
 def generate(
     root: Path, layers: Mapping[str, tuple[str, ...]] = render.LAYERS
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Write every generated file under `root`. `layers` maps each module to draw (its
-    packages and its classes) to its layers. Returns the relative paths written, sorted, and
-    the names of the class diagrams among them."""
+    packages and its classes) to its layers. Returns the relative paths written, sorted, the
+    names of the class diagrams among them and the keys of the role-graph pages among them:
+    what `render.outputs` takes."""
     from agentic.core.knowledge.domain import stack
 
+    try:
+        role_pages = render.role_graph_pages(*role_graph_inputs())
+    except ValueError as error:
+        raise GenerateError(str(error)) from error
     texts: dict[str, str] = {
-        render.ROLE_GRAPH: render.role_graph(role_graph_mermaid(), pipeline_branch_mermaid()),
+        **role_pages,
         render.CLI_REFERENCE: render.cli_reference(cli_helps()),
         render.STACK_REFERENCE: render.stack_reference(stack.KEY_REFERENCE),
     }
@@ -223,7 +237,28 @@ def generate(
     for relative in written:
         _write(root, relative, texts[relative])
     _remove_stale(root, written)
-    return written, tuple(sorted(names))
+    if message := budget_message(render.check_budget(root)):
+        raise GenerateError(message)
+    return written, tuple(sorted(names)), tuple(sorted(role_pages))
+
+
+def budget_message(overages: Sequence[tuple[str, render.Overage]]) -> str:
+    """One line per page over `DIAGRAM_BUDGET` (file, block, kind, counts against the limits)
+    and the fix, or an empty text when there is none."""
+    if not overages:
+        return ""
+    budget = render.DIAGRAM_BUDGET
+    lines = [
+        f"{relative}: block {over.block} ({over.kind}) has {over.nodes} nodes, {over.edges} "
+        f"edges, {over.classes} classes; the budget is {budget.nodes} nodes, {budget.edges} "
+        f"edges, {budget.classes} classes (over: {', '.join(over.limits)})"
+        for relative, over in overages
+    ]
+    lines.append(
+        "The fix is to split the page by meaning into smaller `.md` pages; regenerating does "
+        "not fix it."
+    )
+    return "\n".join(lines)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

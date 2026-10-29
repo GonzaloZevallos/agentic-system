@@ -129,4 +129,5 @@ pyreverse, una vista por módulo y una de clases por capa:
   [aplicación](generated/classes-measurement-application.mmd) y
   [adaptadores](generated/classes-measurement-adapters.mmd).
 
-El grafo de roles está en [role-graph.md](generated/role-graph.md).
+El grafo de roles está en [role-graph.md](generated/role-graph.md), que resume las fases y
+enlaza una página por fase.

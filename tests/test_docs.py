@@ -7,10 +7,13 @@ repo, which the docs check deletes and restores while pytest runs (invariants 2 
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import importlib.util
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Iterator
@@ -21,10 +24,10 @@ import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.domain.docs import Docs
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts" / "docs"
-SEPARATOR = ":"
 
 
 @pytest.fixture(scope="module")
@@ -61,9 +64,9 @@ def test_generation_is_byte_deterministic_and_equals_outputs(
     render, generate = scripts
     layers = {"knowledge": ("domain", "adapters")}
     first, second = tmp_path / "first", tmp_path / "second"
-    written, names = generate.generate(first, layers)
-    again, _ = generate.generate(second, layers)
-    assert written == again == render.outputs(names, modules=("knowledge",))
+    written, names, role_pages = generate.generate(first, layers)
+    again, _, _ = generate.generate(second, layers)
+    assert written == again == render.outputs(names, role_pages, modules=("knowledge",))
     assert sorted(_tree(first)) == list(written)
     assert _tree(first) == _tree(second)
     for relative, content in _tree(first).items():
@@ -91,37 +94,28 @@ def full_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
+def _role_keys(scripts: tuple[ModuleType, ModuleType]) -> list[str]:
+    """The role-graph page paths the pure renderer returns for the real graph, in this process:
+    the independent side of the comparison with the files a subprocess run wrote."""
+    render, generate = scripts
+    return sorted(render.role_graph_pages(*generate.role_graph_inputs()))
+
+
+def _run_classes(files: Iterable[str]) -> list[str]:
+    return [Path(name).stem.removeprefix("classes-") for name in files if "/classes-" in name]
+
+
 def test_minimal_environment_run_writes_every_output_under_root(
     scripts: tuple[ModuleType, ModuleType], full_run: Path
 ) -> None:
     render, _ = scripts
     files = sorted(_tree(full_run))
-    classes = [Path(name).stem.removeprefix("classes-") for name in files if "/classes-" in name]
-    assert files == list(render.outputs(classes))
+    assert files == list(render.outputs(_run_classes(files), _role_keys(scripts)))
 
 
-def _declarations(mermaid: str) -> list[tuple[str, str]]:
-    """(enclosing subgraph or root, label) of each node a flowchart declares."""
-    stack: list[str] = []
-    found: list[tuple[str, str]] = []
-    for line in mermaid.splitlines():
-        text = line.strip()
-        if text.startswith("subgraph "):
-            stack.append(text.split()[1])
-        elif text == "end":
-            stack.pop()
-        elif m := re.match(r"^(\w+)[(\[]", text):
-            found.append((stack[-1] if stack else "", m.group(1)))
-    return found
-
-
-def _expected(nodes: Iterable[str]) -> list[tuple[str, str]]:
-    """(subgraph or root, label) of each node name, split on LangGraph's separator."""
-    expected = []
-    for name in nodes:
-        parent, _, leaf = name.rpartition(SEPARATOR)
-        expected.append((parent.replace(SEPARATOR, "_"), leaf))
-    return sorted(expected)
+def _declared(mermaid: str) -> list[str]:
+    """The ids a `graph TD` block declares with a label, in order."""
+    return re.findall(r'^    (\w+)\["', mermaid, re.MULTILINE)
 
 
 def test_role_graph_nodes_are_the_compiled_graphs_and_the_pipeline_branch(
@@ -130,21 +124,34 @@ def test_role_graph_nodes_are_the_compiled_graphs_and_the_pipeline_branch(
     from agentic import composition
 
     _, generate = scripts
-    text = (full_run / "docs/architecture/generated/role-graph.md").read_text()
-    blocks = re.findall(r"```mermaid\n(.*?)```", text, re.DOTALL)
-    assert len(blocks) == 2
+    pages = {
+        relative: content.decode()
+        for relative, content in _tree(full_run).items()
+        if Path(relative).name.startswith("role-graph")
+    }
+    real: set[str] = set()
+    branch: list[str] = []
+    for relative, text in pages.items():
+        if relative.endswith("role-graph.md"):
+            continue  # the overview draws phases, not nodes
+        blocks = re.findall(r"```mermaid\n(.*?)```", text, re.DOTALL)
+        for number, block in enumerate(blocks):
+            for identifier in _declared(block):
+                if identifier.startswith("branch_"):
+                    branch.append(identifier)
+                elif not identifier.startswith("phase_"):
+                    assert number == 0, (relative, identifier)
+                    real.add(identifier)
     task_nodes = composition.graph.compile().get_graph(xray=True).nodes
-    declared = _declarations(blocks[0])
-    assert len(declared) == len(task_nodes)
-    assert sorted(declared) == _expected(task_nodes)
-    assert {"classify", "pipeline", "deliver"} <= {label for _, label in declared}
+    assert real == {re.sub(r"\W", "_", name) for name in task_nodes}
+    assert {"classify", "pipeline", "deliver", "escalate", "pause"} <= real
     # `develop` and `review` live in the graph the `pipeline` node runs for each subtask,
-    # which the task graph does not expand: they are the second block.
+    # which the task graph does not expand: they are the `branch_` block of the build page.
     branch_nodes = generate.branch_graph().get_graph().nodes
-    branch = _declarations(blocks[1])
-    assert len(branch) == len(branch_nodes)
-    assert sorted(branch) == _expected(branch_nodes)
-    assert {"develop", "review"} <= {label for _, label in branch}
+    assert sorted(branch) == sorted(f"branch_{name}" for name in branch_nodes)
+    assert {"branch_develop", "branch_review"} <= set(branch)
+    shared = set(branch_nodes) - {"__start__", "__end__"}
+    assert not shared & set(task_nodes)
 
 
 def test_merging_pyreverse_runs_keeps_each_block_once_and_sorts(
@@ -351,10 +358,7 @@ def _pages() -> dict[str, str]:
 @pytest.fixture(scope="module")
 def generated_files(scripts: tuple[ModuleType, ModuleType], full_run: Path) -> frozenset[str]:
     render, _ = scripts
-    classes = [
-        Path(name).stem.removeprefix("classes-") for name in _tree(full_run) if "/classes-" in name
-    ]
-    return frozenset(render.outputs(classes))
+    return frozenset(render.outputs(_run_classes(_tree(full_run)), _role_keys(scripts)))
 
 
 def test_every_written_page_exists_and_is_not_under_the_owned_paths() -> None:
@@ -372,6 +376,67 @@ def test_every_relative_link_of_the_written_pages_resolves(generated_files: froz
     assert problems == []
     linked = {t for text in _pages().values() for t in _LINK.findall(text)}
     assert any("generated/role-graph.md" in target for target in linked)
+
+
+def test_every_relative_link_of_every_generated_page_resolves(
+    generated_files: frozenset[str], full_run: Path
+) -> None:
+    problems = [
+        problem
+        for relative, content in _tree(full_run).items()
+        if relative.endswith(".md")
+        for problem in broken_links(relative, content.decode(), generated_files)
+    ]
+    assert problems == []
+    assert any(name.endswith("role-graph-build.md") for name in generated_files)
+
+
+def _graph_with(
+    monkeypatch: pytest.MonkeyPatch, generate: ModuleType, extra: str, branch: str = "develop"
+) -> None:
+    nodes = ["__start__", "classify", extra, "__end__"]
+    inputs = (nodes, [("__start__", "classify", False)], [branch], [], False)
+    monkeypatch.setattr(generate, "role_graph_inputs", lambda: inputs)
+
+
+def test_generate_refuses_a_node_in_no_phase_naming_it_and_the_line_to_add(
+    scripts: tuple[ModuleType, ModuleType], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, generate = scripts
+    _graph_with(monkeypatch, generate, "mystery")
+    with pytest.raises(generate.GenerateError) as raised:
+        generate.generate(tmp_path, {})
+    message = str(raised.value)
+    assert "'mystery'" in message and '"mystery",' in message and "groups.py" in message
+    assert not any(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("name", ["phase_build", "branch_x"])
+def test_generate_refuses_a_node_with_a_reserved_prefix(
+    scripts: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    _, generate = scripts
+    _graph_with(monkeypatch, generate, name)
+    with pytest.raises(generate.GenerateError, match=name):
+        generate.generate(tmp_path, {})
+    _graph_with(monkeypatch, generate, "plan", branch=name)
+    with pytest.raises(generate.GenerateError, match=name):
+        generate.generate(tmp_path, {})
+
+
+def test_main_exits_one_naming_the_node_in_no_phase(
+    scripts: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _, generate = scripts
+    _graph_with(monkeypatch, generate, "mystery")
+    assert generate.main(["--root", str(tmp_path)]) == 1
+    assert "mystery" in capsys.readouterr().err
 
 
 def test_a_link_to_nothing_is_refused(generated_files: frozenset[str]) -> None:
@@ -443,3 +508,467 @@ def test_every_written_page_is_in_spanish() -> None:
     low = {page: share for page, text in _pages().items() if (share := spanish_share(text)) < 0.15}
     assert low == {}
     assert spanish_share("The system reads the task from the issue and then runs the roles.") < 0.05
+
+
+def _flow(*lines: str) -> str:
+    return "flowchart TD\n" + "\n".join(f"    {line}" for line in lines) + "\n"
+
+
+def _counts(render: ModuleType, text: str) -> tuple[int, int, int]:
+    """(nodes, edges, classes) of the first overage of `text` measured against a zero budget."""
+    found = render.diagram_counts(text)
+    assert len(found) == 1
+    return found[0]
+
+
+def test_a_chain_counts_one_edge_per_arrow(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    assert _counts(render, _flow("a --> b --> c")) == (3, 2, 0)
+
+
+def test_an_ampersand_expands_to_one_edge_per_pair(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    assert _counts(render, _flow("a --> b & c")) == (3, 2, 0)
+    assert _counts(render, _flow("a & b --> c")) == (3, 2, 0)
+
+
+def test_edge_labels_are_not_nodes_or_arrows(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    assert _counts(render, _flow("a -->|x --> y| b", "b -. x .-> c")) == (3, 2, 0)
+    assert _counts(render, _flow("a -- text --> b")) == (2, 1, 0)
+
+
+def test_langgraph_frontmatter_and_comments_are_skipped(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    text = (
+        "---\nconfig:\n  flowchart:\n    curve: linear\n---\n"
+        "%% a comment --> b\ngraph TD;\n\ta([a]) --> b;\n"
+    )
+    assert _counts(render, text) == (2, 1, 0)
+
+
+def test_a_ghost_declared_with_a_shape_counts_once(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    text = _flow('phase_x["x (fase) --> [y]"]', "phase_x --> a", "a{c}", "d(e)", "f([g])")
+    assert _counts(render, text) == (4, 1, 0)
+
+
+def test_subgraph_styles_and_classes_are_not_counted(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    text = _flow(
+        "subgraph inner [Inner]",
+        "a --> b",
+        "end",
+        "classDef hot fill:#f00",
+        "style a fill:#fff",
+        "linkStyle 0 stroke:#f00",
+        "class a,b hot",
+        'click a "https://x" "t"',
+        "inner --> c",
+    )
+    assert _counts(render, text) == (4, 2, 0)
+
+
+def test_a_sequence_diagram_and_c4_are_ignored(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    sequence = "sequenceDiagram\n" + "".join(
+        f"    A->>B: m{n}\n    B-->>A: r{n}\n" for n in range(40)
+    )
+    assert render.diagram_budget(f"```mermaid\n{sequence}```\n") == []
+    assert render.diagram_counts(sequence) == []
+    c4 = "C4Context\n" + "".join(
+        f'    Person(p{n}, "p")\n    Rel(p{n}, s, "uses")\n' for n in range(40)
+    )
+    assert render.diagram_budget(f"```mermaid\n{c4}```\n") == []
+
+
+def _classes(count: int) -> str:
+    return "classDiagram\n" + "".join(f"  class C{n} {{\n  }}\n" for n in range(count))
+
+
+def test_a_class_diagram_is_over_budget_at_sixteen_classes(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    assert render.diagram_budget(_classes(15)) == []
+    [over] = render.diagram_budget(_classes(16))
+    assert (over.kind, over.classes, over.limits) == ("classDiagram", 16, ("classes",))
+
+
+def test_a_flowchart_is_over_budget_past_twenty_nodes_or_thirty_edges(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    budget = render.DIAGRAM_BUDGET
+    assert (budget.nodes, budget.edges, budget.classes) == (20, 30, 15)
+    # 20 nodes and 30 edges: a ring of 20 plus 10 chords.
+    ring = [f"n{k} --> n{(k + 1) % 20}" for k in range(20)]
+    chords = [f"n{k} --> n{(k + 5) % 20}" for k in range(10)]
+    assert render.diagram_budget(_flow(*ring, *chords)) == []
+    [by_nodes] = render.diagram_budget(_flow(*ring, "n20 --> n0"))
+    assert (by_nodes.nodes, by_nodes.limits) == (21, ("nodes",))
+    [by_edges] = render.diagram_budget(_flow(*ring, *chords, "n0 --> n10"))
+    assert (by_edges.edges, by_edges.limits) == (31, ("edges",))
+    [second] = render.diagram_budget(
+        f"```mermaid\n{_flow('a --> b')}```\n\n```mermaid\n{_flow(*ring, 'n20 --> n0')}```\n"
+    )
+    assert second.block == 2 and second.kind == "flowchart"
+
+
+def _write_page(root: Path, relative: str, nodes: int) -> None:
+    page = root / relative
+    page.parent.mkdir(parents=True, exist_ok=True)
+    body = _flow(*(f"n{k} --> n{k + 1}" for k in range(nodes - 1)))
+    page.write_text(f"# T\n\n```mermaid\n{body}```\n")
+
+
+def test_check_budget_names_the_written_pages_over_budget(
+    scripts: tuple[ModuleType, ModuleType], tmp_path: Path
+) -> None:
+    render, _ = scripts
+    _write_page(tmp_path, "docs/architecture/written.md", 21)
+    _write_page(tmp_path, "docs/architecture/generated/page.md", 21)
+    _write_page(tmp_path, "docs/architecture/generated/role-graph.md", 21)
+    _write_page(tmp_path, "docs/architecture/ok.md", 20)
+    (tmp_path / "docs/architecture/generated/big.mmd").write_text(
+        _flow(*(f"a{k} --> a{k + 1}" for k in range(40)))
+    )
+    found = render.check_budget(tmp_path)
+    assert [name for name, _ in found] == [
+        "docs/architecture/generated/page.md",
+        "docs/architecture/generated/role-graph.md",
+        "docs/architecture/written.md",
+    ]
+    assert all(over.nodes == 21 for _, over in found)
+    assert not hasattr(render, "_EXEMPT")
+
+
+def test_the_written_pages_are_within_the_budget(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    assert render.check_budget(REPO) == []
+    counts = _counts(render, (REPO / "docs/architecture/componentes.md").read_text())
+    assert counts == (5, 9, 0)
+
+
+def test_every_generated_page_is_within_the_budget(
+    scripts: tuple[ModuleType, ModuleType], full_run: Path
+) -> None:
+    render, _ = scripts
+    checked = 0
+    for relative, content in _tree(full_run).items():
+        if relative.endswith(".md") and "```mermaid" in content.decode():
+            assert render.diagram_budget(content.decode()) == [], relative
+            checked += 1
+    assert checked >= 6
+
+
+def test_the_generator_reports_a_page_over_budget_and_says_to_split(
+    scripts: tuple[ModuleType, ModuleType], tmp_path: Path
+) -> None:
+    render, generate = scripts
+    _write_page(tmp_path, "docs/architecture/big.md", 21)
+    message = generate.budget_message(render.check_budget(tmp_path))
+    assert "docs/architecture/big.md" in message
+    assert "block 1" in message and "21 nodes" in message and "20" in message
+    assert "split the page by meaning" in message and "regenerating" in message
+    assert generate.budget_message([]) == ""
+
+
+def test_the_docs_check_fails_when_the_generate_command_finds_a_page_over_budget(
+    tmp_path: Path,
+) -> None:
+    command = f"{shlex.quote(sys.executable)} -c " + shlex.quote(
+        "import sys; sys.path.insert(0, 'scripts/docs'); import render, pathlib; "
+        "sys.exit(1 if render.check_budget(pathlib.Path('.')) else 0)"
+    )
+    shutil.copytree(
+        SCRIPTS, tmp_path / "scripts" / "docs", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    _write_page(tmp_path, "docs/architecture/big.md", 21)
+    _write_page(tmp_path, "docs/architecture/ok.md", 3)
+    block = Docs(generate=command, paths=("docs/architecture/generated/**",))
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    failed = subprocess.run(
+        ["sh", "-c", stack.docs_command(block)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert failed.returncode == 1
+    assert "docs generate exited 1" in failed.stdout
+    (tmp_path / "docs/architecture/big.md").unlink()
+    ok = subprocess.run(
+        ["sh", "-c", stack.docs_command(block)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ok.returncode == 0, ok.stdout
+
+
+Edge = tuple[str, str, bool]
+TOY_NODES = ["__start__", "classify", "define", "validate", "__end__"]
+
+
+def _toy_edges(conditional: bool) -> list[Edge]:
+    return [
+        ("__start__", "classify", False),
+        ("__start__", "define", False),
+        ("classify", "define", conditional),
+        ("classify", "validate", False),
+        ("define", "validate", False),
+        ("validate", "classify", True),
+        ("validate", "__end__", False),
+    ]
+
+
+def _toy_pages(
+    render: ModuleType, conditional: bool = True, has_land: bool = False
+) -> dict[str, str]:
+    result: dict[str, str] = render.role_graph_pages(
+        TOY_NODES, _toy_edges(conditional), [], [], has_land
+    )
+    return result
+
+
+DEFINE_PAGE = """\
+Esta página muestra los nodos de la fase `define` del grafo de roles y las aristas que la unen con \
+otras fases; \
+un nodo `<fase> (fase)` es otra fase, que se detalla en su página. \
+Una flecha punteada es una arista condicional y una llena es fija.
+
+- Padre: [Grafo de roles](role-graph.md)
+- Hermanas:
+  - [classify](role-graph-classify.md)
+  - [deliver](role-graph-deliver.md)
+
+```mermaid
+graph TD
+    __end__["__end__"]
+    __start__["__start__"]
+    define["define"]
+    phase_classify["classify (fase)"]
+    validate["validate"]
+    __start__ --> define
+    define --> validate
+    phase_classify -.-> define
+    phase_classify --> validate
+    validate --> __end__
+    validate -.-> phase_classify
+```
+"""
+
+
+def test_a_two_phase_toy_graph_renders_the_expected_pages(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = _toy_pages(render)
+    base = "docs/architecture/generated/"
+    assert sorted(pages) == [
+        base + name
+        for name in (
+            "role-graph-classify.md",
+            "role-graph-define.md",
+            "role-graph-deliver.md",
+            "role-graph.md",
+        )
+    ]
+    assert pages[base + "role-graph-define.md"] == DEFINE_PAGE
+    assert all(not render.diagram_budget(text) for text in pages.values())
+    assert all("click" not in text for text in pages.values())
+
+
+def test_a_conditional_edge_changes_the_page_when_it_is_fixed(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    fixed = _toy_pages(render, conditional=False)[
+        "docs/architecture/generated/role-graph-define.md"
+    ]
+    assert fixed == DEFINE_PAGE.replace("phase_classify -.-> define", "phase_classify --> define")
+
+
+def test_terminals_are_drawn_as_themselves_and_never_as_a_ghost(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = _toy_pages(render)
+    define = pages["docs/architecture/generated/role-graph-define.md"]
+    assert "__start__ --> define" in define and "validate --> __end__" in define
+    assert "phase_deliver" not in define and "phase_classify[" in define
+    overview = pages["docs/architecture/generated/role-graph.md"]
+    assert "__start__ --> phase_classify" in overview
+    assert "phase_define --> phase_deliver" not in overview
+    assert "phase_define --> __end__" in overview
+    assert "phase___" not in overview
+
+
+def test_the_overview_collapses_the_edges_of_two_phases_to_one(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    overview = _toy_pages(render, conditional=False)["docs/architecture/generated/role-graph.md"]
+    # classify -> define fixed and classify -> validate fixed: one fixed edge; the conditional
+    # validate -> classify is the only edge back.
+    assert overview.count("phase_classify --> phase_define") == 1
+    assert overview.count("phase_define -.-> phase_classify") == 1
+    assert "phase_classify -.-> phase_define" not in overview
+    mixed = _toy_pages(render)["docs/architecture/generated/role-graph.md"]
+    assert mixed.count("phase_classify -.-> phase_define") == 1
+
+
+def test_an_edge_to_escalate_is_listed_under_the_diagram_and_not_drawn(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = render.role_graph_pages(
+        ["classify", "define", "escalate", "pause"],
+        [
+            ("classify", "define", False),
+            ("define", "escalate", True),
+            ("classify", "escalate", True),
+            ("escalate", "pause", False),
+            ("pause", "define", True),
+            ("pause", "classify", True),
+        ],
+        [],
+        [],
+        False,
+    )
+    define = pages["docs/architecture/generated/role-graph-define.md"]
+    assert "Pueden escalar: `define`" in define
+    assert "escalate" not in define.split("```")[1] and "pause" not in define.split("```")[1]
+    assert (
+        "Pueden escalar: `classify`" in pages["docs/architecture/generated/role-graph-classify.md"]
+    )
+    page = pages["docs/architecture/generated/role-graph-escalation.md"]
+    diagram = page.split("```")[1]
+    assert "escalate --> pause" in diagram
+    assert diagram.count("pause -.->") == 2
+    assert "phase_define" in diagram and "phase_classify" in diagram
+    overview = pages["docs/architecture/generated/role-graph.md"]
+    assert "phase_define -.-> phase_escalation" in overview
+    assert "phase_escalation -.-> phase_classify" in overview
+
+
+def test_the_build_page_carries_the_pipeline_branch_with_prefixed_ids(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = render.role_graph_pages(
+        ["pipeline", "integrate"],
+        [("pipeline", "integrate", False)],
+        ["__start__", "develop", "review"],
+        [("__start__", "develop", False), ("develop", "review", True)],
+        False,
+    )
+    build = pages["docs/architecture/generated/role-graph-build.md"]
+    blocks = re.findall(r"```mermaid\n(.*?)```", build, re.DOTALL)
+    assert len(blocks) == 2
+    assert 'branch_develop["develop"]' in blocks[1]
+    assert "branch_develop -.-> branch_review" in blocks[1]
+    assert "branch___start__" in blocks[1]
+    assert "branch_" not in blocks[0]
+
+
+def test_a_node_in_no_phase_is_refused_with_the_line_to_add(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    with pytest.raises(ValueError, match=r"'mystery' is in no phase.*\"mystery\",.*groups\.py"):
+        render.role_graph_pages(["classify", "mystery"], [], [], [], False)
+    with pytest.raises(ValueError, match="'stray'"):
+        render.role_graph_pages(["classify"], [("classify", "stray", False)], [], [], False)
+
+
+def test_a_node_with_a_reserved_prefix_is_refused(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    for name in ("phase_define", "branch_develop"):
+        with pytest.raises(ValueError, match=name):
+            render.role_graph_pages(["classify", name], [], [], [], False)
+    with pytest.raises(ValueError, match="phase_x"):
+        render.role_graph_pages(["classify"], [], ["develop", "phase_x"], [], False)
+
+
+def test_a_node_inside_a_subgraph_is_grouped_by_its_outermost_ancestor(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = render.role_graph_pages(
+        ["pipeline:develop", "pipeline:inner:review", "classify"],
+        [("classify", "pipeline:develop", False)],
+        [],
+        [],
+        False,
+    )
+    build = pages["docs/architecture/generated/role-graph-build.md"]
+    assert 'pipeline_develop["pipeline:develop"]' in build
+    assert 'pipeline_inner_review["pipeline:inner:review"]' in build
+    assert "phase_classify -.->" not in build and "phase_classify --> pipeline_develop" in build
+
+
+def _toy_cli(*commands: str) -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="toy")
+    sub = root.add_subparsers(dest="command")
+    for name in commands:
+        sub.add_parser(name)
+    return root
+
+
+def test_the_land_page_exists_only_when_the_cli_has_the_land_subcommand(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    with_land, without = _toy_cli("run", "land"), _toy_cli("run", "resume")
+    assert render.has_subcommand(with_land, "land") is True
+    assert render.has_subcommand(without, "land") is False
+    assert render.has_subcommand(argparse.ArgumentParser(prog="bare"), "land") is False
+    land = "docs/architecture/generated/role-graph-land.md"
+    pages = _toy_pages(render, has_land=render.has_subcommand(with_land, "land"))
+    assert land in pages and "(../flujos/aterrizaje.md)" in pages[land]
+    assert "```" not in pages[land]
+    assert "[land](role-graph-land.md)" in pages["docs/architecture/generated/role-graph.md"]
+    absent = _toy_pages(render, has_land=render.has_subcommand(without, "land"))
+    assert land not in absent
+    assert all("role-graph-land" not in text for text in absent.values())
+
+
+def test_outputs_lists_exactly_the_role_graph_keys_it_is_given(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    keys = sorted(_toy_pages(render, has_land=True))
+    written = render.outputs((), modules=(), role_graph=keys)
+    assert set(keys) <= set(written)
+    assert set(written) - set(keys) == {render.CLI_REFERENCE, render.STACK_REFERENCE}
+    assert render.outputs((), modules=(), role_graph=[]) == (
+        render.CLI_REFERENCE,
+        render.STACK_REFERENCE,
+    )
+
+
+def test_every_toy_page_starts_with_a_sentence_and_links_resolve_among_the_pages(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = _toy_pages(render, has_land=True)
+    names = {Path(path).name for path in pages}
+    for path, text in pages.items():
+        assert text.startswith("Esta página "), path
+        for target in re.findall(r"\]\(([^)#]+)\)", text):
+            assert target in names or target == "../flujos/aterrizaje.md", (path, target)

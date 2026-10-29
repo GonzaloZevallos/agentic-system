@@ -21,8 +21,43 @@ class Docs:
     paths: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class DiagramBudget:
+    """The most a Mermaid diagram under `docs/architecture/` may hold before GitHub renders
+    it as an unreadable wall: flowchart/graph `nodes` and `edges`, classDiagram `classes`.
+    Going over means strictly more than the number."""
+
+    nodes: int
+    edges: int
+    classes: int
+
+
+DIAGRAM_BUDGET = DiagramBudget(nodes=20, edges=30, classes=15)
+
+
 def _owned(docs: Docs) -> str:
     return ", ".join(f"`{path}`" for path in docs.paths)
+
+
+def _budget_plan_sentence() -> str:
+    budget = DIAGRAM_BUDGET
+    return (
+        f" A Mermaid diagram over budget ({budget.nodes} nodes or {budget.edges} edges for a "
+        f"flowchart or graph, {budget.classes} classes for a classDiagram) is split by "
+        "meaning, never by count alone; each split page is a `.md` that starts by saying in "
+        "Spanish what it shows and lists its parent and siblings."
+    )
+
+
+def _budget_review_bullet() -> str:
+    budget = DIAGRAM_BUDGET
+    return (
+        f"\n- A diagram under `docs/architecture/` over budget (more than {budget.nodes} nodes "
+        f"or {budget.edges} edges in a flowchart or graph, more than {budget.classes} classes "
+        "in a classDiagram) is an `important` finding. Its evidence is the counted nodes, "
+        "edges and classes against the budget. The fix is to split it by meaning into `.md` "
+        "pages that say what they show and list their parent and siblings."
+    )
 
 
 def plan_text(docs: Docs | None) -> str:
@@ -43,6 +78,7 @@ def plan_text(docs: Docs | None) -> str:
         f"them by running `{docs.generate}`. The prose is in Spanish (Rioplatense); code, "
         "identifiers and diagram names stay in English; every claim cites the file or symbol "
         "it rests on. You never write the files; the Developer of the subtask does."
+        f"{_budget_plan_sentence()}"
     )
 
 
@@ -67,6 +103,7 @@ def review_text(docs: Docs | None) -> str:
         "to create it and the subtask did not.\n"
         f"- Generated files under {_owned(docs)} belong to the `docs` check: never ask for a "
         f"hand edit, the fix is to run `{docs.generate}`."
+        f"{_budget_review_bullet()}"
     )
 
 
