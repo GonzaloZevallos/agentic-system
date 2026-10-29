@@ -23,6 +23,7 @@ from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
+from .escalate import NEEDS_HUMAN
 from .landing_plan import LandingContext
 from .poll import Abandoned, StackUnreadable, assess_merge
 from .ports import GitError, Launcher, Ports, RunLock, Upstream
@@ -154,8 +155,13 @@ def _land(
     head = facts.pr_head
     if head is None:
         return LandResult("skipped", "no_head")
-    integration_work = False
     resumed = landing_slice.open_entry(landing_plan.live_entries(raw), head)
+    read: list[landing_rules.SliceInputs] = []
+
+    def slice_inputs() -> landing_rules.SliceInputs:
+        read.append(landing_plan.slice_inputs(raw, cfg, ports, master, head))
+        return read[-1]
+
     if resumed is not None:
         # A slice a crash or a CI wait left open: continued as recorded, never decided again.
         units = resumed.get("slice_units")
@@ -165,20 +171,12 @@ def _land(
             tuple(str(u) for u in units) if isinstance(units, list) else (),
         )
     else:
-        read: list[landing_rules.SliceInputs] = []
-
-        def slice_inputs() -> landing_rules.SliceInputs:
-            read.append(landing_plan.slice_inputs(raw, cfg, ports, master, head))
-            return read[-1]
-
-        step = landing_plan.step_for(raw, decision.reason, facts, slice_inputs)
-        # What the restart comment calls "(integration work)": the integrator's paths are
-        # what kept every slice from landing (stamped on the diagnose entry, read by landing_fix).
-        integration_work = (
-            step.kind == "diagnose"
-            and step.restart_why is not None
-            and bool(read)
-            and landing_rules.integration_blocked(read[-1])
+        step = landing_plan.step_for(
+            raw,
+            decision.reason,
+            facts,
+            slice_inputs,
+            landing_plan.head_ancestry(ports, cfg, head, master),
         )
     if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
         return _refused(task_id, raw, run_kind, step.kind, head, log)
@@ -190,11 +188,37 @@ def _land(
     except ValueError:
         now = None
     released: ReleasePatch = {}
-    if step.kind == "diagnose" and raw.get("escalated"):
-        outcome = landing_plan.release(ports, cfg, task_id, raw, number)
-        if outcome.decision is None:
+    if landing_plan.release_asked(raw, step.kind):
+        outcome = landing_plan.release(ports, cfg, task_id, raw, number, head=head, upstream=master)
+        if not outcome.released:
             return _waiting_on_human(task_id, head, outcome.why, log)
-        released = landing_rules.released(raw, outcome.decision, clock())
+        # The step after the release is the table's on the document as the release leaves it
+        # (a sync, a rerun, a wait), never the diagnose the escalated view gave; it must be
+        # one this run may take before anything is written.
+        at = clock()
+        released = landing_plan.release_patch(raw, outcome, master, at)
+        step = landing_plan.released_step(
+            raw,
+            outcome,
+            facts,
+            decision.reason,
+            at=at,
+            slicing=slice_inputs,
+            ancestry=landing_plan.head_ancestry(ports, cfg, head, master),
+        )
+        if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
+            return _refused(task_id, raw, run_kind, step.kind, head, log)
+        if not landing_plan.takes_action(step.kind, live):
+            log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
+            return LandResult("skipped", "not_live", step.kind)
+    # What the restart comment calls "(integration work)": the integrator's paths are what kept
+    # every slice from landing (stamped on the diagnose entry, read by landing_fix).
+    integration_work = (
+        step.kind == "diagnose"
+        and step.restart_why is not None
+        and bool(read)
+        and landing_rules.integration_blocked(read[-1])
+    )
     # The document as the release leaves it: the gate and the entry below read this view, the
     # file keeps the escalation until everything else has agreed (head, merge).
     current: TaskState = apply(raw, released) if released else raw
@@ -226,11 +250,6 @@ def _land(
     if again is None or again.head_oid != head:
         log(f"agentic: land: {task_id}: head moved since the decision ({head})")
         return LandResult("skipped", "head_moved", step.kind)
-    if released:
-        # One write, in the same call that appends the entry and dispatches: the release
-        # is never left undispatched (the head and the merge were checked above).
-        ports.documents.save(apply(state_from(dict(raw)), released))
-        log(f"agentic: land: {task_id}: {head} diagnose: escalation released by a human decision")
     entry: dict[str, object] = {
         "head": head,
         "step": step.kind,
@@ -241,13 +260,44 @@ def _land(
         # A sync: what it is for, `deliver` resolves it only if the head holds this sha. A
         # diagnosis: the master it is made against, which its `sync` verdict is served for.
         entry[UPSTREAM_KEY] = upstream.sha
+    if step.kind == "escalate":
+        # What the escalation was about, so its release reads the same names and pair
+        # (`landing.escalation_checks`): the failing checks and the master they were seen at.
+        verdict = facts.ci_verdict
+        entry["checks"] = list(
+            dict.fromkeys(check.name for check in (verdict.failing if verdict else ()))
+        )
+        if upstream.sha is not None:
+            entry[UPSTREAM_KEY] = upstream.sha
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:
         entry["restart_why"] = step.restart_why
         if integration_work:
             entry["integration_work"] = True
-    if resumed is None:
+    if released:
+        # One write holds the release (the unescalation, `ci_released` on the `escalate`
+        # entry) and the next step's entry, so no crash leaves a release with no next step
+        # (the head and the merge were checked above).
+        saved = apply(state_from(dict(raw)), released)
+        whole: dict[str, Any] = {
+            **saved,
+            "landing": [*landing_plan.all_entries(saved), entry],
+        }
+        ports.documents.save(state_from(whole))
+        if outcome.decision is None:
+            # Nobody decided: the label goes with the escalation (Nota al tracker, best effort).
+            ports.tracker.drop_label(task_id, NEEDS_HUMAN)
+            log(
+                f"agentic: land: {task_id}: {head} {step.kind}: escalation released, "
+                "the base branch CI is green"
+            )
+        else:
+            log(
+                f"agentic: land: {task_id}: {head} {step.kind}: "
+                "escalation released by a human decision"
+            )
+    elif resumed is None:
         ports.documents.record_closure(
             task_id, {"landing": [*landing_plan.all_entries(current), entry]}
         )
@@ -288,7 +338,12 @@ _WAITING_ON: dict[landing_plan.ReleaseWhy, tuple[str, str]] = {
         "restart it with `agentic run --fresh`: a comment does not release this one",
     ),
     "task_cap": ("escalated_task_cap", "raise the task budget: the task cap is spent"),
+    "waiting_on_base_ci": (
+        "escalated_waiting_on_base_ci",
+        "waiting for the base branch CI to turn green, or an owner comment",
+    ),
     "released": ("escalated_waiting_on_human", ""),
+    "released_by_ci": ("escalated_waiting_on_human", ""),
 }
 
 
