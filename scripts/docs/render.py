@@ -12,6 +12,8 @@ from __future__ import annotations
 import inspect
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 from agentic.core.knowledge.domain.stack import (
     Computed,
@@ -19,6 +21,7 @@ from agentic.core.knowledge.domain.stack import (
     Disabled,
     KeyReference,
 )
+from agentic.core.process.domain.docs import DIAGRAM_BUDGET
 
 GENERATED = "docs/architecture/generated"
 REFERENCE = "docs/reference"
@@ -38,6 +41,35 @@ MAX_EDGES = 400
 
 _FENCE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 _EDGE = re.compile(r"-\.(?:[^\n]*?\.)?->|-->|==>|--\|>|\.\.\|>|\.\.>|--\*|--o|\*--|o--|<\|--|<--")
+# Pages `check_budget` does not measure, each named in full. Subtask C2 of GH-434 removes
+# this one, once the role graph is split into pages that fit the budget.
+_EXEMPT: frozenset[str] = frozenset({"docs/architecture/generated/role-graph.md"})
+
+_ARCHITECTURE = "docs/architecture"
+_QUOTED = re.compile(r'"[^"]*"')
+_SHAPE = re.compile(r"\[[^\[\]]*\]|\([^()]*\)|\{[^{}]*\}")
+_PIPED_LABEL = re.compile(r"\|[^|]*\|")
+_TEXT_LABEL = re.compile(
+    r"(?<![-=.])(?:--|==)\s+[^<>\n]*?\s+(-->|---|==>)|-\.\s+[^<>\n]*?\s+\.-(>?)"
+)
+_ARROW = re.compile(r"<-->|-{2,}>|={2,}>|-\.+->|-{3,}|-\.+-|--[ox](?=\s|$)")
+_IGNORED_LINE = re.compile(r"(?:subgraph|end|classDef|style|linkStyle|class|click|direction)\b")
+_CLASS_LINE = re.compile(r"class\s+([^\s{:]+)")
+_NODE_ID = re.compile(r"\w+")
+_DECLARED = re.compile(r"(\w+)§")
+
+
+@dataclass(frozen=True)
+class Overage:
+    """A Mermaid block over `DIAGRAM_BUDGET`: its 1-based `block` number in the page, its
+    `kind`, what was counted, and which of `limits` (`nodes`, `edges`, `classes`) it passed."""
+
+    block: int
+    kind: str
+    nodes: int
+    edges: int
+    classes: int
+    limits: tuple[str, ...]
 
 
 def packages_path(module: str) -> str:
@@ -73,6 +105,136 @@ def mermaid_limits(text: str) -> None:
         edges = len(_EDGE.findall(block))
         if edges > MAX_EDGES:
             raise ValueError(f"mermaid block {number} has {edges} edges; the limit is {MAX_EDGES}")
+
+
+def _bare_arrow(match: re.Match[str]) -> str:
+    """The arrow of a `-- text -->` or `-. text .->` edge, without its text."""
+    return f" {match.group(1)} " if match.group(1) else f" -.-{match.group(2)} "
+
+
+def _blocks(text: str) -> list[str]:
+    return _FENCE.findall(text) if "```mermaid" in text else [text]
+
+
+def _kind(block: str) -> str | None:
+    """`flowchart`, `classDiagram`, or None for a diagram the budget ignores. Skips a leading
+    `---…---` frontmatter, blank lines and `%%` comments."""
+    lines = block.splitlines()
+    position = 0
+    if lines and lines[0].strip() == "---":
+        closing = next((n for n in range(1, len(lines)) if lines[n].strip() == "---"), None)
+        position = len(lines) if closing is None else closing + 1
+    for line in lines[position:]:
+        word = line.strip()
+        if not word or word.startswith("%%"):
+            continue
+        first = word.split(None, 1)[0].rstrip(";")
+        if first in ("flowchart", "graph"):
+            return "flowchart"
+        return "classDiagram" if first == "classDiagram" else None
+    return None
+
+
+def _flowchart(block: str) -> tuple[int, int]:
+    """(nodes, edges) of a flowchart `block` without frontmatter (see `_body`): edges per
+    line, a chain or an `&` expanded; nodes the distinct ids that are an edge endpoint or are
+    declared with a shape."""
+    nodes: set[str] = set()
+    edges = 0
+    for raw in block.splitlines()[1:]:
+        for statement in raw.split(";"):
+            line = statement.strip()
+            if not line or line.startswith("%%") or _IGNORED_LINE.match(line):
+                continue
+            line = _QUOTED.sub('""', line)
+            previous = None
+            while previous != line:
+                previous, line = line, _SHAPE.sub("§", line)
+            line = _TEXT_LABEL.sub(_bare_arrow, _PIPED_LABEL.sub("", line))
+            parts = _ARROW.split(line)
+            if len(parts) == 1:
+                declared = _DECLARED.match(line)
+                if declared:
+                    nodes.add(declared.group(1))
+                continue
+            groups = [
+                [found.group(0) for token in part.split("&") if (found := _NODE_ID.search(token))]
+                for part in parts
+            ]
+            for before, after in zip(groups, groups[1:], strict=False):
+                edges += len(before) * len(after)
+            nodes.update(identifier for group in groups for identifier in group)
+    return len(nodes), edges
+
+
+def _kinds_and_counts(text: str) -> list[tuple[int, str, int, int, int]]:
+    found: list[tuple[int, str, int, int, int]] = []
+    for number, block in enumerate(_blocks(text), start=1):
+        kind = _kind(block)
+        if kind == "flowchart":
+            body = _body(block)
+            nodes, edges = _flowchart(body)
+            found.append((number, kind, nodes, edges, 0))
+        elif kind == "classDiagram":
+            declared = {
+                match.group(1)
+                for line in block.splitlines()
+                if (match := _CLASS_LINE.match(line.strip()))
+            }
+            found.append((number, kind, 0, 0, len(declared)))
+    return found
+
+
+def _body(block: str) -> str:
+    """The block without its frontmatter, the type line first."""
+    lines = block.splitlines()
+    if lines and lines[0].strip() == "---":
+        closing = next(
+            (n for n in range(1, len(lines)) if lines[n].strip() == "---"), len(lines) - 1
+        )
+        lines = lines[closing + 1 :]
+    while lines and (not lines[0].strip() or lines[0].strip().startswith("%%")):
+        lines = lines[1:]
+    return "\n".join(lines)
+
+
+def diagram_counts(text: str) -> list[tuple[int, int, int]]:
+    """(nodes, edges, classes) of each block the budget measures, in order."""
+    return [(nodes, edges, classes) for _, _, nodes, edges, classes in _kinds_and_counts(text)]
+
+
+def diagram_budget(text: str) -> list[Overage]:
+    """The blocks of `text` (a page of fenced blocks, or a bare diagram) over
+    `DIAGRAM_BUDGET`, in order. Only flowchart/graph and classDiagram are measured; the type is
+    decided before counting, so a sequence diagram or a C4 one is never over budget."""
+    budget = DIAGRAM_BUDGET
+    over: list[Overage] = []
+    for number, kind, nodes, edges, classes in _kinds_and_counts(text):
+        limits = tuple(
+            name
+            for name, count, most in (
+                ("nodes", nodes, budget.nodes),
+                ("edges", edges, budget.edges),
+                ("classes", classes, budget.classes),
+            )
+            if count > most
+        )
+        if limits:
+            over.append(Overage(number, kind, nodes, edges, classes, limits))
+    return over
+
+
+def check_budget(root: Path) -> list[tuple[str, Overage]]:
+    """Every `.md` under `root/docs/architecture/` with a block over budget, as (relative
+    path, overage), sorted. `.mmd` files are not measured and `_EXEMPT` pages are skipped."""
+    found: list[tuple[str, Overage]] = []
+    base = root / _ARCHITECTURE
+    for page in sorted(base.rglob("*.md")) if base.is_dir() else []:
+        relative = page.relative_to(root).as_posix()
+        if relative in _EXEMPT:
+            continue
+        found.extend((relative, over) for over in diagram_budget(page.read_text(encoding="utf-8")))
+    return found
 
 
 def role_graph(mermaid: str, branch: str) -> str:

@@ -223,7 +223,28 @@ def generate(
     for relative in written:
         _write(root, relative, texts[relative])
     _remove_stale(root, written)
+    if message := budget_message(render.check_budget(root)):
+        raise GenerateError(message)
     return written, tuple(sorted(names))
+
+
+def budget_message(overages: Sequence[tuple[str, render.Overage]]) -> str:
+    """One line per page over `DIAGRAM_BUDGET` (file, block, kind, counts against the limits)
+    and the fix, or an empty text when there is none."""
+    if not overages:
+        return ""
+    budget = render.DIAGRAM_BUDGET
+    lines = [
+        f"{relative}: block {over.block} ({over.kind}) has {over.nodes} nodes, {over.edges} "
+        f"edges, {over.classes} classes; the budget is {budget.nodes} nodes, {budget.edges} "
+        f"edges, {budget.classes} classes (over: {', '.join(over.limits)})"
+        for relative, over in overages
+    ]
+    lines.append(
+        "The fix is to split the page by meaning into smaller `.md` pages; regenerating does "
+        "not fix it."
+    )
+    return "\n".join(lines)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

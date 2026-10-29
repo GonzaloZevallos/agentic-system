@@ -11,6 +11,8 @@ import fnmatch
 import importlib.util
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Iterator
@@ -21,6 +23,7 @@ import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.domain.docs import Docs
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts" / "docs"
@@ -443,3 +446,198 @@ def test_every_written_page_is_in_spanish() -> None:
     low = {page: share for page, text in _pages().items() if (share := spanish_share(text)) < 0.15}
     assert low == {}
     assert spanish_share("The system reads the task from the issue and then runs the roles.") < 0.05
+
+
+def _flow(*lines: str) -> str:
+    return "flowchart TD\n" + "\n".join(f"    {line}" for line in lines) + "\n"
+
+
+def _counts(render: ModuleType, text: str) -> tuple[int, int, int]:
+    """(nodes, edges, classes) of the first overage of `text` measured against a zero budget."""
+    found = render.diagram_counts(text)
+    assert len(found) == 1
+    return found[0]
+
+
+def test_a_chain_counts_one_edge_per_arrow(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    assert _counts(render, _flow("a --> b --> c")) == (3, 2, 0)
+
+
+def test_an_ampersand_expands_to_one_edge_per_pair(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    assert _counts(render, _flow("a --> b & c")) == (3, 2, 0)
+    assert _counts(render, _flow("a & b --> c")) == (3, 2, 0)
+
+
+def test_edge_labels_are_not_nodes_or_arrows(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    assert _counts(render, _flow("a -->|x --> y| b", "b -. x .-> c")) == (3, 2, 0)
+    assert _counts(render, _flow("a -- text --> b")) == (2, 1, 0)
+
+
+def test_langgraph_frontmatter_and_comments_are_skipped(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    text = (
+        "---\nconfig:\n  flowchart:\n    curve: linear\n---\n"
+        "%% a comment --> b\ngraph TD;\n\ta([a]) --> b;\n"
+    )
+    assert _counts(render, text) == (2, 1, 0)
+
+
+def test_a_ghost_declared_with_a_shape_counts_once(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    text = _flow('phase_x["x (fase) --> [y]"]', "phase_x --> a", "a{c}", "d(e)", "f([g])")
+    assert _counts(render, text) == (4, 1, 0)
+
+
+def test_subgraph_styles_and_classes_are_not_counted(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    text = _flow(
+        "subgraph inner [Inner]",
+        "a --> b",
+        "end",
+        "classDef hot fill:#f00",
+        "style a fill:#fff",
+        "linkStyle 0 stroke:#f00",
+        "class a,b hot",
+        'click a "https://x" "t"',
+        "inner --> c",
+    )
+    assert _counts(render, text) == (4, 2, 0)
+
+
+def test_a_sequence_diagram_and_c4_are_ignored(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    sequence = "sequenceDiagram\n" + "".join(
+        f"    A->>B: m{n}\n    B-->>A: r{n}\n" for n in range(40)
+    )
+    assert render.diagram_budget(f"```mermaid\n{sequence}```\n") == []
+    assert render.diagram_counts(sequence) == []
+    c4 = "C4Context\n" + "".join(
+        f'    Person(p{n}, "p")\n    Rel(p{n}, s, "uses")\n' for n in range(40)
+    )
+    assert render.diagram_budget(f"```mermaid\n{c4}```\n") == []
+
+
+def _classes(count: int) -> str:
+    return "classDiagram\n" + "".join(f"  class C{n} {{\n  }}\n" for n in range(count))
+
+
+def test_a_class_diagram_is_over_budget_at_sixteen_classes(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    assert render.diagram_budget(_classes(15)) == []
+    [over] = render.diagram_budget(_classes(16))
+    assert (over.kind, over.classes, over.limits) == ("classDiagram", 16, ("classes",))
+
+
+def test_a_flowchart_is_over_budget_past_twenty_nodes_or_thirty_edges(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    budget = render.DIAGRAM_BUDGET
+    assert (budget.nodes, budget.edges, budget.classes) == (20, 30, 15)
+    # 20 nodes and 30 edges: a ring of 20 plus 10 chords.
+    ring = [f"n{k} --> n{(k + 1) % 20}" for k in range(20)]
+    chords = [f"n{k} --> n{(k + 5) % 20}" for k in range(10)]
+    assert render.diagram_budget(_flow(*ring, *chords)) == []
+    [by_nodes] = render.diagram_budget(_flow(*ring, "n20 --> n0"))
+    assert (by_nodes.nodes, by_nodes.limits) == (21, ("nodes",))
+    [by_edges] = render.diagram_budget(_flow(*ring, *chords, "n0 --> n10"))
+    assert (by_edges.edges, by_edges.limits) == (31, ("edges",))
+    [second] = render.diagram_budget(
+        f"```mermaid\n{_flow('a --> b')}```\n\n```mermaid\n{_flow(*ring, 'n20 --> n0')}```\n"
+    )
+    assert second.block == 2 and second.kind == "flowchart"
+
+
+def _write_page(root: Path, relative: str, nodes: int) -> None:
+    page = root / relative
+    page.parent.mkdir(parents=True, exist_ok=True)
+    body = _flow(*(f"n{k} --> n{k + 1}" for k in range(nodes - 1)))
+    page.write_text(f"# T\n\n```mermaid\n{body}```\n")
+
+
+def test_check_budget_names_the_written_pages_over_budget(
+    scripts: tuple[ModuleType, ModuleType], tmp_path: Path
+) -> None:
+    render, _ = scripts
+    _write_page(tmp_path, "docs/architecture/written.md", 21)
+    _write_page(tmp_path, "docs/architecture/generated/page.md", 21)
+    _write_page(tmp_path, "docs/architecture/generated/role-graph.md", 21)
+    _write_page(tmp_path, "docs/architecture/ok.md", 20)
+    (tmp_path / "docs/architecture/generated/big.mmd").write_text(
+        _flow(*(f"a{k} --> a{k + 1}" for k in range(40)))
+    )
+    found = render.check_budget(tmp_path)
+    assert [name for name, _ in found] == [
+        "docs/architecture/generated/page.md",
+        "docs/architecture/written.md",
+    ]
+    assert all(over.nodes == 21 for _, over in found)
+    assert render._EXEMPT == frozenset({"docs/architecture/generated/role-graph.md"})
+
+
+def test_the_written_pages_are_within_the_budget(scripts: tuple[ModuleType, ModuleType]) -> None:
+    render, _ = scripts
+    assert render.check_budget(REPO) == []
+    counts = _counts(render, (REPO / "docs/architecture/componentes.md").read_text())
+    assert counts == (5, 9, 0)
+
+
+def test_the_generator_reports_a_page_over_budget_and_says_to_split(
+    scripts: tuple[ModuleType, ModuleType], tmp_path: Path
+) -> None:
+    render, generate = scripts
+    _write_page(tmp_path, "docs/architecture/big.md", 21)
+    message = generate.budget_message(render.check_budget(tmp_path))
+    assert "docs/architecture/big.md" in message
+    assert "block 1" in message and "21 nodes" in message and "20" in message
+    assert "split the page by meaning" in message and "regenerating" in message
+    assert generate.budget_message([]) == ""
+
+
+def test_the_docs_check_fails_when_the_generate_command_finds_a_page_over_budget(
+    tmp_path: Path,
+) -> None:
+    command = f"{shlex.quote(sys.executable)} -c " + shlex.quote(
+        "import sys; sys.path.insert(0, 'scripts/docs'); import render, pathlib; "
+        "sys.exit(1 if render.check_budget(pathlib.Path('.')) else 0)"
+    )
+    shutil.copytree(
+        SCRIPTS, tmp_path / "scripts" / "docs", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    _write_page(tmp_path, "docs/architecture/big.md", 21)
+    _write_page(tmp_path, "docs/architecture/ok.md", 3)
+    block = Docs(generate=command, paths=("docs/architecture/generated/**",))
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    failed = subprocess.run(
+        ["sh", "-c", stack.docs_command(block)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert failed.returncode == 1
+    assert "docs generate exited 1" in failed.stdout
+    (tmp_path / "docs/architecture/big.md").unlink()
+    ok = subprocess.run(
+        ["sh", "-c", stack.docs_command(block)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ok.returncode == 0, ok.stdout
