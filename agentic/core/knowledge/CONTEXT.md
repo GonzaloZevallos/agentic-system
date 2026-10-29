@@ -81,6 +81,11 @@ Los documentos que explican cómo funciona un producto, en Markdown y Mermaid de
 _Avoid_: wiki, manual, documentación de usuario (esa es de Tech Writer), diagramas (son una parte)
 _Campo_: technical documentation / docs-as-code; la clave se llama `docs` en el archivo
 
+**Presupuesto de diagrama**:
+Lo máximo que puede tener un diagrama Mermaid, generado o escrito, bajo `docs/architecture/`: 20 nodos y 30 aristas en un `flowchart`/`graph`, 15 clases en un `classDiagram`. No se miden los `sequenceDiagram` ni los C4. Pasarse (estrictamente más que el número) se arregla partiendo el diagrama por significado en páginas `.md` que dicen qué muestran y listan a su padre y sus hermanas, nunca por cantidad sola. En el código es `DIAGRAM_BUDGET`.
+_Avoid_: presupuesto de chequeo (eso son los segundos de un chequeo)
+_Campo_: diagram size limit; sin término de arte
+
 **Diseño del producto**:
 Lo que el producto declara en su stack para que UX y UI Lead vean pantallas: dónde está su prototipo, cómo se levanta su app de muestra y cómo se sacan sus comparaciones. Es opcional, como la preparación del entorno: un producto sin diseño declarado corre igual, pero sin recorrido real ni comparaciones, y el documento de la tarea lo dice.
 _Avoid_: design system (es una parte del diseño, la de tokens y componentes), mockups

@@ -87,3 +87,21 @@ código, prosa revisada para el resto, y una puerta que falla cuando la doc est�
   escrita, pero no la puerta sobre lo generado, que sigue aplicando.
 - **La doc escrita sólo está tan al día como la mantiene la revisión.** No hay una puerta que
   compare un diagrama escrito con el código.
+
+## Addendum (GH-430): presupuesto de diagrama
+
+- **Los números.** Un diagrama Mermaid bajo `docs/architecture/` tiene como máximo 20 nodos y
+  30 aristas si es un `flowchart` o `graph`, y 15 clases si es un `classDiagram`. Los números
+  viven una sola vez, como `DIAGRAM_BUDGET` en `agentic/core/process/domain/docs.py`; los textos
+  de `plan_text` y `review_text` y todo chequeo los leen de ahí.
+- **Por qué.** GitHub dibuja un diagrama más grande como una pared ilegible: las etiquetas se
+  encogen y las aristas se cruzan. Un diagrama que no se puede leer no documenta nada.
+- **Qué se mide.** Nodos y aristas de `flowchart`/`graph`, y clases de `classDiagram`. El tipo
+  se decide antes de contar.
+- **Qué se ignora.** `sequenceDiagram` y los diagramas C4: su tamaño crece con el flujo que
+  cuentan, y partirlos por número rompería la secuencia.
+- **Excederse es estrictamente más que el número.** Llegar justo a 20 nodos no es exceso.
+- **La salida es partir por significado**, nunca por cantidad sola: cada página partida es un
+  `.md` que dice en español qué muestra y lista a su padre y a sus hermanas. `plan_text` lo pide
+  al Tech Lead y `review_text` marca el exceso como hallazgo `important`, con los nodos,
+  aristas y clases contados como evidencia.

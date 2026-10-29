@@ -2,7 +2,15 @@
 review rule and the conflict line. Each is empty for a product that declares none, which is
 what keeps every rendered text of such a product what it was before."""
 
-from agentic.core.process.domain.docs import Docs, conflict_line, plan_text, review_text
+from agentic.core.process.domain import docs as docs_module
+from agentic.core.process.domain.docs import (
+    DIAGRAM_BUDGET,
+    DiagramBudget,
+    Docs,
+    conflict_line,
+    plan_text,
+    review_text,
+)
 
 DOCS = Docs(
     generate="uv run python tools/diagrams.py",
@@ -89,3 +97,80 @@ def test_the_conflict_line_regenerates_instead_of_merging_by_hand():
     assert "`docs/architecture/generated/**`" in line
     assert "do not merge them by hand" in line
     assert "run `uv run python tools/diagrams.py` and commit its output" in line
+
+
+# The texts as they were before the diagram budget (GH-430), captured from the code at that
+# commit: the budget rule only appends to them.
+PLAN_BEFORE = (
+    "\nThis product declares technical docs (`docs:` in `.agentic/stack.yaml`). When a subtask "
+    "changes architecture (a container, a component, a contract between modules, the data model "
+    "or a key flow), that same subtask updates the written docs: the C4 context, container and "
+    "component views and the sequence diagrams of key flows, in Mermaid, under "
+    "`docs/architecture/`, and the technical sections of `docs/README.md` (architecture, API or "
+    "CLI reference, ADR index). If `docs/README.md` does not exist at the base, the first "
+    "architecture subtask creates it. Generated files under `docs/architecture/generated/**`, "
+    "`docs/api/*.md` are never edited by hand: the brief has the Developer regenerate them by "
+    "running `uv run python tools/diagrams.py`. The prose is in Spanish (Rioplatense); code, "
+    "identifiers and diagram names stay in English; every claim cites the file or symbol it "
+    "rests on. You never write the files; the Developer of the subtask does."
+)
+REVIEW_BEFORE = (
+    "\n\nThis product declares technical docs (`docs:`). Review `docs/architecture/` and "
+    "`docs/README.md` against the code, on the diff:\n\n"
+    "- A boundary changed in the diff (a container, a component, a contract between modules, the "
+    "data model or a key flow) with no change under `docs/architecture/` or `docs/README.md` in "
+    "the same subtask is a `blocking` finding. Its evidence is the cited import, signature or "
+    "model line plus an empty `git diff --stat <base> -- docs/architecture docs/README.md`.\n"
+    "- A claim with no file or symbol reference, and prose not in Spanish, are `important` "
+    "findings, judged only on the lines the diff adds or changes under those targets. Anything "
+    "else in a doc the diff touches is scope `outside`.\n"
+    "- A stale `docs/README.md` is raised only when the file exists at the base. A missing one "
+    "is never `blocking` by itself; it is `important` only when the plan said to create it and "
+    "the subtask did not.\n"
+    "- Generated files under `docs/architecture/generated/**`, `docs/api/*.md` belong to the "
+    "`docs` check: never ask for a hand edit, the fix is to run "
+    "`uv run python tools/diagrams.py`."
+)
+CONFLICT_BEFORE = (
+    " For conflicted files under `docs/architecture/generated/**`, `docs/api/*.md`, do not merge "
+    "them by hand: take either side, run `uv run python tools/diagrams.py` and commit its output."
+)
+
+
+def test_the_diagram_budget_is_twenty_nodes_thirty_edges_fifteen_classes():
+    assert (DIAGRAM_BUDGET.nodes, DIAGRAM_BUDGET.edges, DIAGRAM_BUDGET.classes) == (20, 30, 15)
+
+
+def test_the_conflict_line_is_what_it_was_before_the_budget():
+    assert conflict_line(DOCS) == CONFLICT_BEFORE
+
+
+def test_the_plan_text_keeps_its_old_text_as_a_prefix_and_adds_the_budget_rule():
+    text = plan_text(DOCS)
+    assert text.startswith(PLAN_BEFORE)
+    tail = text[len(PLAN_BEFORE) :]
+    for number in (DIAGRAM_BUDGET.nodes, DIAGRAM_BUDGET.edges, DIAGRAM_BUDGET.classes):
+        assert str(number) in tail
+    assert "by meaning, never by count alone" in tail
+    assert "in Spanish what it shows" in tail
+    assert "parent and siblings" in tail
+
+
+def test_the_review_text_keeps_its_old_text_as_a_prefix_and_adds_the_budget_bullet():
+    text = review_text(DOCS)
+    assert text.startswith(REVIEW_BEFORE)
+    tail = text[len(REVIEW_BEFORE) :]
+    assert tail.startswith("\n- ")
+    for number in (DIAGRAM_BUDGET.nodes, DIAGRAM_BUDGET.edges, DIAGRAM_BUDGET.classes):
+        assert str(number) in tail
+    assert "`important`" in tail
+    assert "counted nodes, edges and classes" in tail
+    assert "parent and siblings" in tail
+
+
+def test_the_budget_numbers_in_the_texts_follow_the_constant(monkeypatch):
+    monkeypatch.setattr(
+        docs_module, "DIAGRAM_BUDGET", DiagramBudget(nodes=71, edges=72, classes=73)
+    )
+    for text in (plan_text(DOCS), review_text(DOCS)):
+        assert "71" in text and "72" in text and "73" in text
