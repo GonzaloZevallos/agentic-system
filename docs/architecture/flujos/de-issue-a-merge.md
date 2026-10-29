@@ -62,8 +62,9 @@ sequenceDiagram
    orden en que arrancan las subtareas lo decide
    `agentic/core/process/application/schedule.py:run_subtasks`.
 6. **Integración y entrega.** `integrate` une las ramas de las subtareas; los pasos finales
-   (`final_validation`, `copy_review`, `qa_performance`, `full_checks`) corren según el
-   plan; `deliver` empuja la rama y abre el pull request con `Tracker.open_pull_request`
+   (`final_validation`, `copy_review`, `qa_performance`, `owner_rules`, `full_checks`)
+   corren según el plan; `owner_rules` anexa en la rama de la tarea las reglas que el dueño
+   marcó con `Owner's rule:` en el issue (`agentic/core/process/application/owner_rules.py`); `deliver` empuja la rama y abre el pull request con `Tracker.open_pull_request`
    (`agentic/core/process/application/deliver.py:deliver`).
 7. **Merge.** En rondas siguientes el poller reúne los pull requests entregados
    (`agentic/core/process/application/poll.py:gather_merges`) y lanza

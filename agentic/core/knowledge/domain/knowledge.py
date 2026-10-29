@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from agentic.core.process.domain.schemas import SLUG
+from agentic.shared.owner_decisions import OWNER_DECISIONS as _OWNER_DECISIONS
 
 from . import owner_rules
 
@@ -59,13 +60,11 @@ CRITERIA_MAX_LINES = 300
 
 # The owner's decisions (GH-431): the rules the owner gave in answering escalations, one file
 # per scope -- the product's own, and the system's about how it works on any product. Declared
-# here once, NFC-normalised, and nowhere else as a literal. The decisions are read whole by
-# every role (only the entries in force, `owner_rules.live`); the orchestration rules are an
-# ordinary indexed entry under the `owner` area.
-OWNER_DECISIONS = (
-    unicodedata.normalize("NFC", "docs/product/decisiones-del-dueño.md"),
-    unicodedata.normalize("NFC", "docs/decisiones-del-dueño.md"),
-)
+# once in `agentic.shared.owner_decisions` (NFC; `core.process` may import only `shared`) and
+# re-exported here, so no other production module repeats the literal. The decisions are read
+# whole by every role (only the entries in force, `owner_rules.live`); the orchestration rules
+# are an ordinary indexed entry under the `owner` area.
+OWNER_DECISIONS = _OWNER_DECISIONS
 ORCHESTRATION = unicodedata.normalize("NFC", "docs/orquestacion.md")
 # Past this many lines in force a decisions file is reported, never refused (like the criteria).
 OWNER_DECISIONS_MAX_LINES = 120

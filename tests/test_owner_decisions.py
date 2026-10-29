@@ -2,18 +2,14 @@
 read the way a rules module reads it, the constants its entries state, the merge attribute that
 lets parallel branches append, and the prompts that tell a role to apply a live rule.
 
-`rules-domain` (a sibling subtask) owns `parse_file` and `entry_id`; they are not on this branch,
-so `parse_entries` and `entry_id` below follow the same format and the same normalisation. When
-the branches integrate they should be swapped for the production functions."""
+The seed is read with the production `owner_rules.parse_file` and `owner_rules.entry_id`, so a
+format drift between what `append` writes and what the seed holds shows here."""
 
 from __future__ import annotations
 
-import hashlib
 import os
-import re
 import subprocess
 import unicodedata
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -27,56 +23,8 @@ REPO = Path(__file__).resolve().parent.parent
 DECISIONS = REPO / "docs" / "decisiones-del-dueño.md"
 ADRS = REPO / "docs" / "adr"
 
-_HEADING = re.compile(
-    r"### (?P<id>D-[0-9a-f]{8}) · (?P<date>\d{4}-\d{2}-\d{2})"
-    r"(?: \(reemplazada por (?P<by>D-[0-9a-f]{8})\))?"
-)
-_METADATA = ("Origen:", "Reemplaza:", "Rozan:")
-
-
-def entry_id(text: str) -> str:
-    normal = re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip().casefold()
-    return "D-" + hashlib.sha256(normal.encode("utf-8")).hexdigest()[:8]
-
-
-@dataclass(frozen=True)
-class Entry:
-    id: str
-    text: str
-    struck: bool
-    replaces: str | None
-    rozan: tuple[str, ...]
-    raw: str
-
-
-def parse_entries(text: str) -> list[Entry]:
-    lines = text.splitlines()
-    starts = [i for i, line in enumerate(lines) if _HEADING.fullmatch(line.rstrip())]
-    entries = []
-    for n, start in enumerate(starts):
-        end = starts[n + 1] if n + 1 < len(starts) else len(lines)
-        body = lines[start + 1 : end]
-        heading = _HEADING.fullmatch(lines[start].rstrip())
-        assert heading is not None
-        rule = next((x.strip() for x in body if x.strip() and not x.startswith(_METADATA)), "")
-        struck = re.fullmatch(r"~~(.*)~~", rule)
-        replaces = next(
-            (x.split(":", 1)[1].strip() for x in body if x.startswith("Reemplaza:")), None
-        )
-        rozan = tuple(
-            a for x in body if x.startswith("Rozan:") for a in re.findall(r"ADR-\d{4}", x)
-        )
-        entries.append(
-            Entry(
-                heading["id"],
-                struck.group(1) if struck else rule,
-                bool(struck),
-                replaces,
-                rozan,
-                "\n".join(lines[start:end]).strip(),
-            )
-        )
-    return entries
+parse_entries = owner_rules.parse_file
+entry_id = owner_rules.entry_id
 
 
 def problems(text: str) -> list[str]:
@@ -92,14 +40,10 @@ def problems(text: str) -> list[str]:
         if entry.replaces and entry.replaces not in ids:
             found.append(f"{entry.id}: Reemplaza: {entry.replaces} points to no entry")
     for entry_id_ in ids:
-        copies = {_unstruck(e.raw) for e in entries if e.id == entry_id_}
+        copies = {(e.date, e.text, e.replaces, e.rozan) for e in entries if e.id == entry_id_}
         if len(copies) > 1:
             found.append(f"{entry_id_}: repeated with different text")
     return found
-
-
-def _unstruck(raw: str) -> str:
-    return re.sub(r"~~|\s\(reemplazada por D-[0-9a-f]{8}\)", "", raw)
 
 
 def attributes_problems(text: str) -> list[str]:
@@ -151,7 +95,7 @@ def test_a_repeated_id_is_reported_unless_the_copies_differ_only_by_the_strike()
     rid = entry_id("Una regla.")
     plain = f"### {rid} · 2026-10-28\nUna regla.\n"
     struck = f"### {rid} · 2026-10-28 (reemplazada por D-aaaaaaaa)\n~~Una regla.~~\n"
-    other = f"### {rid} · 2026-10-28\nUna regla.\nOrigen: otro\n"
+    other = f"### {rid} · 2026-10-28\nUna regla.\nRozan: ADR-0001\n"
     assert problems(plain + "\n" + struck) == []
     assert problems(plain + "\n" + other) == [f"{rid}: repeated with different text"]
 
@@ -377,3 +321,9 @@ def test_an_orchestration_file_naming_an_unknown_role_is_refused():
     text = "---\nroles: [pjm, nobody]\n---\n\n# Orquestación\n"
     with pytest.raises(ValueError, match="nobody"):
         knowledge_index.build_index({}, {}, {}, None, None, owner={knowledge.ORCHESTRATION: text})
+
+
+def test_the_owner_paths_are_one_tuple_declared_in_shared_and_reexported_by_knowledge():
+    from agentic.shared import owner_decisions
+
+    assert knowledge.OWNER_DECISIONS is owner_decisions.OWNER_DECISIONS

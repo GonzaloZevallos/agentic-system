@@ -560,7 +560,9 @@ ALLOWANCES: tuple[Allowance, ...] = (
             "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
             "tests/core/knowledge/domain/test_knowledge_index.py",
             "tests/core/process/application/test_preflight.py",
+            "tests/core/process/domain/test_head_reviewed.py",
             "tests/core/process/domain/test_master_gain.py",
+            "tests/core/process/domain/test_owner_rules_rules.py",
             "tests/core/process/domain/test_roles.py",
             "tests/test_affected_tests.py",
         )

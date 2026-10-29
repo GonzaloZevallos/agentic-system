@@ -86,7 +86,9 @@ y no lo dirige.
   (`agentic/core/knowledge/domain/flags.py`) y el stack del producto con sus chequeos
   (`agentic/core/knowledge/domain/stack.py`). Este último define las claves de
   `.agentic/stack.yaml` en `KEYS` y su descripción en `KEY_REFERENCE`, de donde sale la
-  [referencia de `stack.yaml`](../reference/stack-yaml.md).
+  [referencia de `stack.yaml`](../reference/stack-yaml.md). Las decisiones del dueño
+  (`agentic/core/knowledge/domain/owner_rules.py`) se leen, se anexan y se vigencian ahí:
+  todo rol recibe entera la parte vigente de `decisiones-del-dueño.md`.
 - `adapters/filesystem/`: `FilesystemKnowledge` implementa `ProductKnowledge`
   (`agentic/core/knowledge/adapters/filesystem/knowledge.py:FilesystemKnowledge`) y
   `FilesystemFlags` implementa `FlagVocabulary`
