@@ -8,6 +8,7 @@ format drift between what `append` writes and what the seed holds shows here."""
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import unicodedata
 from pathlib import Path
@@ -40,10 +41,26 @@ def problems(text: str) -> list[str]:
         if entry.replaces and entry.replaces not in ids:
             found.append(f"{entry.id}: Reemplaza: {entry.replaces} points to no entry")
     for entry_id_ in ids:
-        copies = {(e.date, e.text, e.replaces, e.rozan) for e in entries if e.id == entry_id_}
+        copies = {_unstruck(block) for rid, block in _blocks(text) if rid == entry_id_}
         if len(copies) > 1:
             found.append(f"{entry_id_}: repeated with different text")
     return found
+
+
+def _blocks(text: str) -> list[tuple[str, str]]:
+    """(id, raw block) of each entry, the block running to the next entry's heading."""
+    heading = re.compile(r"### (D-[0-9a-f]{8}) ·")
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if heading.match(line)]
+    ends = [*starts[1:], len(lines)]
+    return [
+        (heading.match(lines[a])[1], "\n".join(lines[a:b]).strip())  # type: ignore[index]
+        for a, b in zip(starts, ends, strict=True)
+    ]
+
+
+def _unstruck(raw: str) -> str:
+    return re.sub(r"~~|\s\(reemplazada por D-[0-9a-f]{8}\)", "", raw)
 
 
 def attributes_problems(text: str) -> list[str]:
@@ -95,7 +112,7 @@ def test_a_repeated_id_is_reported_unless_the_copies_differ_only_by_the_strike()
     rid = entry_id("Una regla.")
     plain = f"### {rid} · 2026-10-28\nUna regla.\n"
     struck = f"### {rid} · 2026-10-28 (reemplazada por D-aaaaaaaa)\n~~Una regla.~~\n"
-    other = f"### {rid} · 2026-10-28\nUna regla.\nRozan: ADR-0001\n"
+    other = f"### {rid} · 2026-10-28\nUna regla.\nOrigen: otro\n"
     assert problems(plain + "\n" + struck) == []
     assert problems(plain + "\n" + other) == [f"{rid}: repeated with different text"]
 
