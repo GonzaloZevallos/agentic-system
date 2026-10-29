@@ -94,20 +94,23 @@ def full_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
+def _role_keys(scripts: tuple[ModuleType, ModuleType]) -> list[str]:
+    """The role-graph page paths the pure renderer returns for the real graph, in this process:
+    the independent side of the comparison with the files a subprocess run wrote."""
+    render, generate = scripts
+    return sorted(render.role_graph_pages(*generate.role_graph_inputs()))
+
+
+def _run_classes(files: Iterable[str]) -> list[str]:
+    return [Path(name).stem.removeprefix("classes-") for name in files if "/classes-" in name]
+
+
 def test_minimal_environment_run_writes_every_output_under_root(
     scripts: tuple[ModuleType, ModuleType], full_run: Path
 ) -> None:
     render, _ = scripts
     files = sorted(_tree(full_run))
-    assert files == list(render.outputs(*_run_names(files)))
-
-
-def _run_names(files: Iterable[str]) -> tuple[list[str], list[str]]:
-    """(class diagram names, role-graph page paths) among the files one run wrote: what the
-    run itself returns, read back from disk because the run was a subprocess."""
-    classes = [Path(name).stem.removeprefix("classes-") for name in files if "/classes-" in name]
-    pages = [name for name in files if Path(name).name.startswith("role-graph")]
-    return classes, pages
+    assert files == list(render.outputs(_run_classes(files), _role_keys(scripts)))
 
 
 def _declared(mermaid: str) -> list[str]:
@@ -355,7 +358,7 @@ def _pages() -> dict[str, str]:
 @pytest.fixture(scope="module")
 def generated_files(scripts: tuple[ModuleType, ModuleType], full_run: Path) -> frozenset[str]:
     render, _ = scripts
-    return frozenset(render.outputs(*_run_names(_tree(full_run))))
+    return frozenset(render.outputs(_run_classes(_tree(full_run)), _role_keys(scripts)))
 
 
 def test_every_written_page_exists_and_is_not_under_the_owned_paths() -> None:
@@ -386,6 +389,54 @@ def test_every_relative_link_of_every_generated_page_resolves(
     ]
     assert problems == []
     assert any(name.endswith("role-graph-build.md") for name in generated_files)
+
+
+def _graph_with(
+    monkeypatch: pytest.MonkeyPatch, generate: ModuleType, extra: str, branch: str = "develop"
+) -> None:
+    nodes = ["__start__", "classify", extra, "__end__"]
+    inputs = (nodes, [("__start__", "classify", False)], [branch], [], False)
+    monkeypatch.setattr(generate, "role_graph_inputs", lambda: inputs)
+
+
+def test_generate_refuses_a_node_in_no_phase_naming_it_and_the_line_to_add(
+    scripts: tuple[ModuleType, ModuleType], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, generate = scripts
+    _graph_with(monkeypatch, generate, "mystery")
+    with pytest.raises(generate.GenerateError) as raised:
+        generate.generate(tmp_path, {})
+    message = str(raised.value)
+    assert "'mystery'" in message and '"mystery",' in message and "groups.py" in message
+    assert not any(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("name", ["phase_build", "branch_x"])
+def test_generate_refuses_a_node_with_a_reserved_prefix(
+    scripts: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    _, generate = scripts
+    _graph_with(monkeypatch, generate, name)
+    with pytest.raises(generate.GenerateError, match=name):
+        generate.generate(tmp_path, {})
+    _graph_with(monkeypatch, generate, "plan", branch=name)
+    with pytest.raises(generate.GenerateError, match=name):
+        generate.generate(tmp_path, {})
+
+
+def test_main_exits_one_naming_the_node_in_no_phase(
+    scripts: tuple[ModuleType, ModuleType],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _, generate = scripts
+    _graph_with(monkeypatch, generate, "mystery")
+    assert generate.main(["--root", str(tmp_path)]) == 1
+    assert "mystery" in capsys.readouterr().err
 
 
 def test_a_link_to_nothing_is_refused(generated_files: frozenset[str]) -> None:
