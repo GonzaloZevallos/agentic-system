@@ -483,3 +483,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-441
+  GH-442@review:
+    cost_usd: 0.1072

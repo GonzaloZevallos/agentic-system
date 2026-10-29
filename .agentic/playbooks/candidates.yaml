@@ -943,3 +943,32 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When two entry points must agree on a decision, call one shared function with the same trigger condition, and test every plan invariant against each shape (ledger, depth-1, CI) before delivering.
+  confidence: medium
+  seen_in:
+  - GH-442
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T10:46:26.758+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Never silence ruff with noqa E402 to place imports mid-file; put every import in the file header.
+  confidence: medium
+  seen_in:
+  - GH-442
+  sources:
+  - finding
+  added_at: '2026-10-29T10:46:26.758+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: When the plan says a state change is recorded in the same write as another, persist both in a single save and add a test that no write leaves one without the other.
+  confidence: medium
+  seen_in:
+  - GH-442
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T10:46:26.758+00:00'
