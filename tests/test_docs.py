@@ -670,7 +670,10 @@ def _toy_pages(
 
 
 DEFINE_PAGE = """\
-Esta página muestra los nodos de la fase `define` del grafo de roles y las aristas que la unen con otras fases; un nodo `<fase> (fase)` es otra fase, que se detalla en su página. Una flecha punteada es una arista condicional y una llena es fija.
+Esta página muestra los nodos de la fase `define` del grafo de roles y las aristas que la unen con \
+otras fases; \
+un nodo `<fase> (fase)` es otra fase, que se detalla en su página. \
+Una flecha punteada es una arista condicional y una llena es fija.
 
 - Padre: [Grafo de roles](role-graph.md)
 - Hermanas:
