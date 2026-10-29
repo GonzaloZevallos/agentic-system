@@ -28,7 +28,6 @@ from agentic.core.process.domain.docs import Docs
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts" / "docs"
-SEPARATOR = ":"
 
 
 @pytest.fixture(scope="module")
@@ -65,9 +64,9 @@ def test_generation_is_byte_deterministic_and_equals_outputs(
     render, generate = scripts
     layers = {"knowledge": ("domain", "adapters")}
     first, second = tmp_path / "first", tmp_path / "second"
-    written, names = generate.generate(first, layers)
-    again, _ = generate.generate(second, layers)
-    assert written == again == render.outputs(names, modules=("knowledge",))
+    written, names, role_pages = generate.generate(first, layers)
+    again, _, _ = generate.generate(second, layers)
+    assert written == again == render.outputs(names, role_pages, modules=("knowledge",))
     assert sorted(_tree(first)) == list(written)
     assert _tree(first) == _tree(second)
     for relative, content in _tree(first).items():
@@ -100,32 +99,20 @@ def test_minimal_environment_run_writes_every_output_under_root(
 ) -> None:
     render, _ = scripts
     files = sorted(_tree(full_run))
+    assert files == list(render.outputs(*_run_names(files)))
+
+
+def _run_names(files: Iterable[str]) -> tuple[list[str], list[str]]:
+    """(class diagram names, role-graph page paths) among the files one run wrote: what the
+    run itself returns, read back from disk because the run was a subprocess."""
     classes = [Path(name).stem.removeprefix("classes-") for name in files if "/classes-" in name]
-    assert files == list(render.outputs(classes))
+    pages = [name for name in files if Path(name).name.startswith("role-graph")]
+    return classes, pages
 
 
-def _declarations(mermaid: str) -> list[tuple[str, str]]:
-    """(enclosing subgraph or root, label) of each node a flowchart declares."""
-    stack: list[str] = []
-    found: list[tuple[str, str]] = []
-    for line in mermaid.splitlines():
-        text = line.strip()
-        if text.startswith("subgraph "):
-            stack.append(text.split()[1])
-        elif text == "end":
-            stack.pop()
-        elif m := re.match(r"^(\w+)[(\[]", text):
-            found.append((stack[-1] if stack else "", m.group(1)))
-    return found
-
-
-def _expected(nodes: Iterable[str]) -> list[tuple[str, str]]:
-    """(subgraph or root, label) of each node name, split on LangGraph's separator."""
-    expected = []
-    for name in nodes:
-        parent, _, leaf = name.rpartition(SEPARATOR)
-        expected.append((parent.replace(SEPARATOR, "_"), leaf))
-    return sorted(expected)
+def _declared(mermaid: str) -> list[str]:
+    """The ids a `graph TD` block declares with a label, in order."""
+    return re.findall(r'^    (\w+)\["', mermaid, re.MULTILINE)
 
 
 def test_role_graph_nodes_are_the_compiled_graphs_and_the_pipeline_branch(
@@ -134,21 +121,34 @@ def test_role_graph_nodes_are_the_compiled_graphs_and_the_pipeline_branch(
     from agentic import composition
 
     _, generate = scripts
-    text = (full_run / "docs/architecture/generated/role-graph.md").read_text()
-    blocks = re.findall(r"```mermaid\n(.*?)```", text, re.DOTALL)
-    assert len(blocks) == 2
+    pages = {
+        relative: content.decode()
+        for relative, content in _tree(full_run).items()
+        if Path(relative).name.startswith("role-graph")
+    }
+    real: set[str] = set()
+    branch: list[str] = []
+    for relative, text in pages.items():
+        if relative.endswith("role-graph.md"):
+            continue  # the overview draws phases, not nodes
+        blocks = re.findall(r"```mermaid\n(.*?)```", text, re.DOTALL)
+        for number, block in enumerate(blocks):
+            for identifier in _declared(block):
+                if identifier.startswith("branch_"):
+                    branch.append(identifier)
+                elif not identifier.startswith("phase_"):
+                    assert number == 0, (relative, identifier)
+                    real.add(identifier)
     task_nodes = composition.graph.compile().get_graph(xray=True).nodes
-    declared = _declarations(blocks[0])
-    assert len(declared) == len(task_nodes)
-    assert sorted(declared) == _expected(task_nodes)
-    assert {"classify", "pipeline", "deliver"} <= {label for _, label in declared}
+    assert real == {re.sub(r"\W", "_", name) for name in task_nodes}
+    assert {"classify", "pipeline", "deliver", "escalate", "pause"} <= real
     # `develop` and `review` live in the graph the `pipeline` node runs for each subtask,
-    # which the task graph does not expand: they are the second block.
+    # which the task graph does not expand: they are the `branch_` block of the build page.
     branch_nodes = generate.branch_graph().get_graph().nodes
-    branch = _declarations(blocks[1])
-    assert len(branch) == len(branch_nodes)
-    assert sorted(branch) == _expected(branch_nodes)
-    assert {"develop", "review"} <= {label for _, label in branch}
+    assert sorted(branch) == sorted(f"branch_{name}" for name in branch_nodes)
+    assert {"branch_develop", "branch_review"} <= set(branch)
+    shared = set(branch_nodes) - {"__start__", "__end__"}
+    assert not shared & set(task_nodes)
 
 
 def test_merging_pyreverse_runs_keeps_each_block_once_and_sorts(
@@ -355,10 +355,7 @@ def _pages() -> dict[str, str]:
 @pytest.fixture(scope="module")
 def generated_files(scripts: tuple[ModuleType, ModuleType], full_run: Path) -> frozenset[str]:
     render, _ = scripts
-    classes = [
-        Path(name).stem.removeprefix("classes-") for name in _tree(full_run) if "/classes-" in name
-    ]
-    return frozenset(render.outputs(classes))
+    return frozenset(render.outputs(*_run_names(_tree(full_run))))
 
 
 def test_every_written_page_exists_and_is_not_under_the_owned_paths() -> None:
@@ -376,6 +373,19 @@ def test_every_relative_link_of_the_written_pages_resolves(generated_files: froz
     assert problems == []
     linked = {t for text in _pages().values() for t in _LINK.findall(text)}
     assert any("generated/role-graph.md" in target for target in linked)
+
+
+def test_every_relative_link_of_every_generated_page_resolves(
+    generated_files: frozenset[str], full_run: Path
+) -> None:
+    problems = [
+        problem
+        for relative, content in _tree(full_run).items()
+        if relative.endswith(".md")
+        for problem in broken_links(relative, content.decode(), generated_files)
+    ]
+    assert problems == []
+    assert any(name.endswith("role-graph-build.md") for name in generated_files)
 
 
 def test_a_link_to_nothing_is_refused(generated_files: frozenset[str]) -> None:
@@ -583,10 +593,11 @@ def test_check_budget_names_the_written_pages_over_budget(
     found = render.check_budget(tmp_path)
     assert [name for name, _ in found] == [
         "docs/architecture/generated/page.md",
+        "docs/architecture/generated/role-graph.md",
         "docs/architecture/written.md",
     ]
     assert all(over.nodes == 21 for _, over in found)
-    assert render._EXEMPT == frozenset({"docs/architecture/generated/role-graph.md"})
+    assert not hasattr(render, "_EXEMPT")
 
 
 def test_the_written_pages_are_within_the_budget(scripts: tuple[ModuleType, ModuleType]) -> None:
@@ -594,6 +605,18 @@ def test_the_written_pages_are_within_the_budget(scripts: tuple[ModuleType, Modu
     assert render.check_budget(REPO) == []
     counts = _counts(render, (REPO / "docs/architecture/componentes.md").read_text())
     assert counts == (5, 9, 0)
+
+
+def test_every_generated_page_is_within_the_budget(
+    scripts: tuple[ModuleType, ModuleType], full_run: Path
+) -> None:
+    render, _ = scripts
+    checked = 0
+    for relative, content in _tree(full_run).items():
+        if relative.endswith(".md") and "```mermaid" in content.decode():
+            assert render.diagram_budget(content.decode()) == [], relative
+            checked += 1
+    assert checked >= 6
 
 
 def test_the_generator_reports_a_page_over_budget_and_says_to_split(

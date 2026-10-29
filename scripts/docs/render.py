@@ -50,9 +50,6 @@ MAX_EDGES = 400
 
 _FENCE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 _EDGE = re.compile(r"-\.(?:[^\n]*?\.)?->|-->|==>|--\|>|\.\.\|>|\.\.>|--\*|--o|\*--|o--|<\|--|<--")
-# Pages `check_budget` does not measure, each named in full. Subtask C2 of GH-434 removes
-# this one, once the role graph is split into pages that fit the budget.
-_EXEMPT: frozenset[str] = frozenset({"docs/architecture/generated/role-graph.md"})
 
 _ARCHITECTURE = "docs/architecture"
 _QUOTED = re.compile(r'"[^"]*"')
@@ -91,15 +88,14 @@ def classes_path(name: str) -> str:
 
 
 def outputs(
-    class_diagrams: Iterable[str] = (),
+    class_diagrams: Iterable[str],
+    role_graph: Iterable[str],
     modules: Iterable[str] = MODULES,
-    role_graph: Iterable[str] = (ROLE_GRAPH,),
 ) -> tuple[str, ...]:
     """The relative paths the generator writes, sorted. `class_diagrams` are the names of the
     class diagrams it wrote (a layer with no class has none, one over the limit has two),
     which only the run can know; `modules` are the modules drawn; `role_graph` are the keys
-    `role_graph_pages` returned, the only list of role-graph pages there is. Its default is
-    transitional: subtask C2 of GH-434 removes it."""
+    `role_graph_pages` returned, the only list of role-graph pages there is."""
     paths = {CLI_REFERENCE, STACK_REFERENCE}
     paths.update(role_graph)
     paths.update(packages_path(module) for module in modules)
@@ -240,13 +236,11 @@ def diagram_budget(text: str) -> list[Overage]:
 
 def check_budget(root: Path) -> list[tuple[str, Overage]]:
     """Every `.md` under `root/docs/architecture/` with a block over budget, as (relative
-    path, overage), sorted. `.mmd` files are not measured and `_EXEMPT` pages are skipped."""
+    path, overage), sorted. `.mmd` files are not measured."""
     found: list[tuple[str, Overage]] = []
     base = root / _ARCHITECTURE
     for page in sorted(base.rglob("*.md")) if base.is_dir() else []:
         relative = page.relative_to(root).as_posix()
-        if relative in _EXEMPT:
-            continue
         found.extend((relative, over) for over in diagram_budget(page.read_text(encoding="utf-8")))
     return found
 
@@ -538,22 +532,6 @@ def _escalation_page(
         f"fase. {_LEGEND}"
     )
     return _page(sentence, role_graph_path(phase), paths, block.fence())
-
-
-def role_graph(mermaid: str, branch: str) -> str:
-    """The role graph page: LangGraph's own `draw_mermaid()` text of the task graph and of
-    the `develop -> review` graph inside its `pipeline` node, each in a fence."""
-    return (
-        "# Grafo de roles\n\n"
-        "Generado por `scripts/docs/generate.py` desde `agentic.composition:graph` "
-        "(`get_graph(xray=True).draw_mermaid()`). No se edita a mano.\n\n"
-        f"```mermaid\n{mermaid.rstrip()}\n```\n\n"
-        "## Rama `pipeline`\n\n"
-        "El nodo `pipeline` corre, por cada subtarea, este grafo propio "
-        "(`agentic.core.process.adapters.langgraph.graph:pipeline_branch`), que el grafo de "
-        "arriba no expande.\n\n"
-        f"```mermaid\n{branch.rstrip()}\n```\n"
-    )
 
 
 def cli_reference(helps: Sequence[tuple[tuple[str, ...], str]]) -> str:
