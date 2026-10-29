@@ -100,7 +100,8 @@ def test_every_mypy_file_exists():
 MYPY_TEST_ENTRIES = frozenset({"tests/fakes.py", "tests/conformance.py"})
 # The scripts the scope admits: the read-only poller-journal measure (GH-362) and the gate
 # duration by concurrency table (GH-361), and the pure renderer and the stale check of the
-# docs generator (GH-400; `generate.py` imports `render` by name and stays out). Other scripts
+# docs generator (GH-400; `generate.py` imports `render` by name and stays out), and its phase
+# table (GH-430). Other scripts
 # are not checked, so none is admitted.
 MYPY_SCRIPT_ENTRIES = frozenset(
     {
@@ -108,6 +109,7 @@ MYPY_SCRIPT_ENTRIES = frozenset(
         "scripts/gate_concurrency.py",
         "scripts/docs/render.py",
         "scripts/docs/check.py",
+        "scripts/docs/groups.py",
     }
 )
 
