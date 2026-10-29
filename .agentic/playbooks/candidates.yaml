@@ -906,3 +906,40 @@ candidates:
   - finding
   - return
   added_at: '2026-10-29T01:43:38.163+00:00'
+- slug: developer_integrator
+  category: process-suite-red
+  lesson: Before you deliver, run the full non-LLM suite on the integrated tree, including repo-wide guard tests such as coverage tables, not only the tests of the subtasks you merged.
+  confidence: medium
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: 'After merging subtasks, re-verify each plan invariant on the integrated tree with its own check, and grep for duplicated declarations: each subtask can satisfy it alone while the merge breaks it.'
+  confidence: medium
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: Do not add a type ignore in integration code or test helpers. Express the narrowing in code, for example bind the match once and handle None, so the checker is satisfied rather than silenced.
+  confidence: low
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a module or a step to a flow, update the hand-written architecture and flow docs that list it in the same change, not only the generated diagrams.
+  confidence: medium
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  added_at: '2026-10-29T05:49:22.185+00:00'
