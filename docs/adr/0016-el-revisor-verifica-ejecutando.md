@@ -170,3 +170,33 @@ de la entrada que haría posible encontrar algo ahí. El guardia de esta lectura
 subir** en el brazo B respecto del brazo A: si sube, lo que la subtarea liviana no vio llegó
 sin filtrar hasta la integración, y eso sí cuenta contra B aunque su propio puntaje binario
 empate.
+
+## Adenda (2026-10-29): la evidencia de aterrizaje baja a observación, sin devolver ni escalar
+
+En apostrophe GH-385, GH-429 y GH-448 el revisor de subtarea pidió evidencia que solo da el
+CI del pull request (línea base de cobertura, tiempo de pared, e2e en shards) como
+`blocking`. Mientras se revisa una subtarea ese pull request no existe: lo abre la entrega
+después de la aprobación (D-d506fe31). Ningún Developer puede arreglar el pedido, así que
+tras dos devoluciones la tarea escalaba con "un humano tiene que abrir el PR". La regla del
+dueño (D-7e11ef60) dice de dónde sale esa evidencia: de la primera corrida verde del pull
+request.
+
+- **El campo.** `Finding.landing_checks` es una lista de nombres de checks de CI, con
+  `default_factory=list`. Un revisor la llena solo para pedir evidencia de aterrizaje y los
+  prompts de revisión (`tech_lead_review`, `tech_lead_review_light`) le dan la compuerta con
+  `{{landing_gate}}`: los nombres de `ci_gate_names(...)` o `none: this product declares no
+  CI`. No se agrega categoría: `CATEGORIES` y las etiquetas de medición no cambian.
+- **El orden de las bajadas.** `rules.lower_landing_blocks` corre primero en `review()`:
+  todo hallazgo con `landing_checks` no vacío pasa a `observation`, sea cual sea su
+  severidad y su alcance, con `reported_severity` igual a lo que dijo el revisor. Después
+  `lower_unbacked_blocks` y, al final, `ci.ci_findings`, que por eso nunca se baja. La
+  decisión lee solo `severity` y `landing_checks`, nunca el texto. La conversión no cuenta
+  como devolución, no escala, no reintenta el rol y no depende de que el producto declare
+  `ci:`.
+- **La clave del registro.** `FindingRecord.landing_checks` se escribe solo cuando la lista
+  no está vacía, con la misma regla de omisión que `reported_severity`: un documento sin el
+  campo no cambia.
+- **El riesgo conocido.** Un revisor que bloquea solo en prosa, sin llenar el campo, sigue
+  el camino de antes y escala. Es a propósito: el sistema no lee la prosa.
+- **Hash y esquema.** Cambian el hash de los dos prompts de revisión y el esquema de salida
+  estructurada de `Review`: es un cambio observable de la corrida, no un cambio de formato.

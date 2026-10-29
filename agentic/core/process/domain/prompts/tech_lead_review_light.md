@@ -65,6 +65,20 @@ still verify each invariant against the diff yourself. It may be cited as a find
 - A `Not mapped` number is unverified by the Developer: check it as you would without a
   map.
 
+The pull request does not exist while you review a subtask or the integration: the
+delivery opens it after the approval (D-d506fe31). Evidence that only a GitHub run of
+the pull request can give (a coverage baseline against the base, wall time, sharded e2e,
+a run on the pull request itself) comes from the pull request's first green run at
+landing (D-7e11ef60). When the product declares `ci:`, the full task check already runs
+that CI on `agentic-ci/<id>` before the pull request opens, and any CI result shown below
+is real evidence to read. Ask for landing evidence only through a finding's
+`landing_checks` field, naming checks from the landing gate: {{landing_gate}}. The system
+turns that finding into an `observation` and the pull request body asks for those checks
+at landing; it never returns the subtask. One objection per finding: a defect the
+Developer can fix never goes in a finding that carries `landing_checks`. A finding that
+asks a human to open the pull request, or that blocks because CI has not run on the pull
+request, is never valid.
+
 The test-pyramid rule the Developer works under, word for word:
 
 Test at the seams the plan agrees for the subtask; a new test file outside them, or at a slower seam than the plan names for that behaviour, needs one line in the delivery's markdown saying why the agreed seam cannot show it.

@@ -94,13 +94,18 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         invariants=rules.invariants_markdown(state),
         checks=presubmit.describe_checks(checks, affected=plan),
         docs_review=docs.review_text(ports.stack.docs(base)),
+        landing_gate=rules.landing_gate_text(names),
     )
     if output is None:
         return finish(state, patch, ports)
 
     subtask = {**subtask, "reviewed_head": head}
     reason = output.data["reason"]
-    findings, lowered = rules.lower_unbacked_blocks(output.data["findings"])
+    # The landing lowering is first (GH-441): a finding that asks for what only the pull
+    # request's CI can give is an observation before any other rule reads its severity.
+    findings, landed = rules.lower_landing_blocks(output.data["findings"])
+    findings, unbacked = rules.lower_unbacked_blocks(findings)
+    lowered = [*landed, *unbacked]
     if evidence is not None and evidence.head is not None:
         # After the lowering, so the system's own blocking finding, which always carries
         # its run link, is never lowered; the verdict below is derived from the whole list.
