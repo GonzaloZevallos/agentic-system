@@ -896,3 +896,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-28T19:33:33.807+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, run each stated invariant against the brief's combined cases. If two cannot both hold, record it under Decisions and assumptions with the test output; never ship a test asserting the violation.
+  confidence: medium
+  seen_in:
+  - GH-429
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T01:43:38.163+00:00'
