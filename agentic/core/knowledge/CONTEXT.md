@@ -106,3 +106,8 @@ _Campo_: sin término de arte
 Los comandos con que un producto deja listo un checkout recién creado para que se pueda trabajar y correr sus chequeos en él: crear su entorno virtual, instalar dependencias, compilar lo que haga falta. Los declara el producto en su stack y los corre el sistema una sola vez, cuando el checkout nace, antes de que entre ningún rol. Es opcional: un producto sin dependencias no prepara nada, y el sistema avisa al arrancar que entonces no puede prometer aislamiento entre subtareas.
 _Avoid_: bootstrap, instalación, build (el build es del producto y puede ser un chequeo)
 _Campo_: setup — estándar; la clave se llama igual en el archivo
+
+**Decisiones del dueño**:
+Las reglas generales que el dueño dio al contestar un escalado o por mensaje, guardadas como criterio en un archivo por alcance: `docs/product/decisiones-del-dueño.md` en cada producto y `docs/decisiones-del-dueño.md` en agentic-system. Todo rol las lee enteras, solo las vigentes, antes que el resto del conocimiento. Una regla vigente decide la pregunta que cubre sin escalar; contra un ADR que toca, gana la fechada después. Cada entrada tiene un id por contenido, solo se agrega al final y corregir es reemplazar.
+_Avoid_: memoria del orquestador, preferencias
+_Campo_: decision log — estándar en ingeniería (ADR); acá es del dueño y se lee entero, no se busca
