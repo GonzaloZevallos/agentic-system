@@ -7,6 +7,7 @@ repo, which the docs check deletes and restores while pytest runs (invariants 2 
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import importlib.util
 import os
@@ -641,3 +642,256 @@ def test_the_docs_check_fails_when_the_generate_command_finds_a_page_over_budget
         check=False,
     )
     assert ok.returncode == 0, ok.stdout
+
+
+Edge = tuple[str, str, bool]
+TOY_NODES = ["__start__", "classify", "define", "validate", "__end__"]
+
+
+def _toy_edges(conditional: bool) -> list[Edge]:
+    return [
+        ("__start__", "classify", False),
+        ("__start__", "define", False),
+        ("classify", "define", conditional),
+        ("classify", "validate", False),
+        ("define", "validate", False),
+        ("validate", "classify", True),
+        ("validate", "__end__", False),
+    ]
+
+
+def _toy_pages(
+    render: ModuleType, conditional: bool = True, has_land: bool = False
+) -> dict[str, str]:
+    result: dict[str, str] = render.role_graph_pages(
+        TOY_NODES, _toy_edges(conditional), [], [], has_land
+    )
+    return result
+
+
+DEFINE_PAGE = """\
+Esta página muestra los nodos de la fase `define` del grafo de roles y las aristas que la unen con otras fases; un nodo `<fase> (fase)` es otra fase, que se detalla en su página. Una flecha punteada es una arista condicional y una llena es fija.
+
+- Padre: [Grafo de roles](role-graph.md)
+- Hermanas:
+  - [classify](role-graph-classify.md)
+  - [deliver](role-graph-deliver.md)
+
+```mermaid
+graph TD
+    __end__["__end__"]
+    __start__["__start__"]
+    define["define"]
+    phase_classify["classify (fase)"]
+    validate["validate"]
+    __start__ --> define
+    define --> validate
+    phase_classify -.-> define
+    phase_classify --> validate
+    validate --> __end__
+    validate -.-> phase_classify
+```
+"""
+
+
+def test_a_two_phase_toy_graph_renders_the_expected_pages(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = _toy_pages(render)
+    base = "docs/architecture/generated/"
+    assert sorted(pages) == [
+        base + name
+        for name in (
+            "role-graph-classify.md",
+            "role-graph-define.md",
+            "role-graph-deliver.md",
+            "role-graph.md",
+        )
+    ]
+    assert pages[base + "role-graph-define.md"] == DEFINE_PAGE
+    assert all(not render.diagram_budget(text) for text in pages.values())
+    assert all("click" not in text for text in pages.values())
+
+
+def test_a_conditional_edge_changes_the_page_when_it_is_fixed(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    fixed = _toy_pages(render, conditional=False)[
+        "docs/architecture/generated/role-graph-define.md"
+    ]
+    assert fixed == DEFINE_PAGE.replace("phase_classify -.-> define", "phase_classify --> define")
+
+
+def test_terminals_are_drawn_as_themselves_and_never_as_a_ghost(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = _toy_pages(render)
+    define = pages["docs/architecture/generated/role-graph-define.md"]
+    assert "__start__ --> define" in define and "validate --> __end__" in define
+    assert "phase_deliver" not in define and "phase_classify[" in define
+    overview = pages["docs/architecture/generated/role-graph.md"]
+    assert "__start__ --> phase_classify" in overview
+    assert "phase_define --> phase_deliver" not in overview
+    assert "phase_define --> __end__" in overview
+    assert "phase___" not in overview
+
+
+def test_the_overview_collapses_the_edges_of_two_phases_to_one(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    overview = _toy_pages(render, conditional=False)["docs/architecture/generated/role-graph.md"]
+    # classify -> define fixed and classify -> validate fixed: one fixed edge; the conditional
+    # validate -> classify is the only edge back.
+    assert overview.count("phase_classify --> phase_define") == 1
+    assert overview.count("phase_define -.-> phase_classify") == 1
+    assert "phase_classify -.-> phase_define" not in overview
+    mixed = _toy_pages(render)["docs/architecture/generated/role-graph.md"]
+    assert mixed.count("phase_classify -.-> phase_define") == 1
+
+
+def test_an_edge_to_escalate_is_listed_under_the_diagram_and_not_drawn(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = render.role_graph_pages(
+        ["classify", "define", "escalate", "pause"],
+        [
+            ("classify", "define", False),
+            ("define", "escalate", True),
+            ("classify", "escalate", True),
+            ("escalate", "pause", False),
+            ("pause", "define", True),
+            ("pause", "classify", True),
+        ],
+        [],
+        [],
+        False,
+    )
+    define = pages["docs/architecture/generated/role-graph-define.md"]
+    assert "Pueden escalar: `define`" in define
+    assert "escalate" not in define.split("```")[1] and "pause" not in define.split("```")[1]
+    assert (
+        "Pueden escalar: `classify`" in pages["docs/architecture/generated/role-graph-classify.md"]
+    )
+    page = pages["docs/architecture/generated/role-graph-escalation.md"]
+    diagram = page.split("```")[1]
+    assert "escalate --> pause" in diagram
+    assert diagram.count("pause -.->") == 2
+    assert "phase_define" in diagram and "phase_classify" in diagram
+    overview = pages["docs/architecture/generated/role-graph.md"]
+    assert "phase_define -.-> phase_escalation" in overview
+    assert "phase_escalation -.-> phase_classify" in overview
+
+
+def test_the_build_page_carries_the_pipeline_branch_with_prefixed_ids(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = render.role_graph_pages(
+        ["pipeline", "integrate"],
+        [("pipeline", "integrate", False)],
+        ["__start__", "develop", "review"],
+        [("__start__", "develop", False), ("develop", "review", True)],
+        False,
+    )
+    build = pages["docs/architecture/generated/role-graph-build.md"]
+    blocks = re.findall(r"```mermaid\n(.*?)```", build, re.DOTALL)
+    assert len(blocks) == 2
+    assert 'branch_develop["develop"]' in blocks[1]
+    assert "branch_develop -.-> branch_review" in blocks[1]
+    assert "branch___start__" in blocks[1]
+    assert "branch_" not in blocks[0]
+
+
+def test_a_node_in_no_phase_is_refused_with_the_line_to_add(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    with pytest.raises(ValueError, match=r"'mystery' is in no phase.*\"mystery\",.*groups\.py"):
+        render.role_graph_pages(["classify", "mystery"], [], [], [], False)
+    with pytest.raises(ValueError, match="'stray'"):
+        render.role_graph_pages(["classify"], [("classify", "stray", False)], [], [], False)
+
+
+def test_a_node_with_a_reserved_prefix_is_refused(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    for name in ("phase_define", "branch_develop"):
+        with pytest.raises(ValueError, match=name):
+            render.role_graph_pages(["classify", name], [], [], [], False)
+    with pytest.raises(ValueError, match="phase_x"):
+        render.role_graph_pages(["classify"], [], ["develop", "phase_x"], [], False)
+
+
+def test_a_node_inside_a_subgraph_is_grouped_by_its_outermost_ancestor(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = render.role_graph_pages(
+        ["pipeline:develop", "pipeline:inner:review", "classify"],
+        [("classify", "pipeline:develop", False)],
+        [],
+        [],
+        False,
+    )
+    build = pages["docs/architecture/generated/role-graph-build.md"]
+    assert 'pipeline_develop["pipeline:develop"]' in build
+    assert 'pipeline_inner_review["pipeline:inner:review"]' in build
+    assert "phase_classify -.->" not in build and "phase_classify --> pipeline_develop" in build
+
+
+def _toy_cli(*commands: str) -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="toy")
+    sub = root.add_subparsers(dest="command")
+    for name in commands:
+        sub.add_parser(name)
+    return root
+
+
+def test_the_land_page_exists_only_when_the_cli_has_the_land_subcommand(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    with_land, without = _toy_cli("run", "land"), _toy_cli("run", "resume")
+    assert render.has_subcommand(with_land, "land") is True
+    assert render.has_subcommand(without, "land") is False
+    assert render.has_subcommand(argparse.ArgumentParser(prog="bare"), "land") is False
+    land = "docs/architecture/generated/role-graph-land.md"
+    pages = _toy_pages(render, has_land=render.has_subcommand(with_land, "land"))
+    assert land in pages and "(../flujos/aterrizaje.md)" in pages[land]
+    assert "```" not in pages[land]
+    assert "[land](role-graph-land.md)" in pages["docs/architecture/generated/role-graph.md"]
+    absent = _toy_pages(render, has_land=render.has_subcommand(without, "land"))
+    assert land not in absent
+    assert all("role-graph-land" not in text for text in absent.values())
+
+
+def test_outputs_lists_exactly_the_role_graph_keys_it_is_given(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    keys = sorted(_toy_pages(render, has_land=True))
+    written = render.outputs((), modules=(), role_graph=keys)
+    assert set(keys) <= set(written)
+    assert set(written) - set(keys) == {render.CLI_REFERENCE, render.STACK_REFERENCE}
+    assert render.outputs((), modules=(), role_graph=[]) == (
+        render.CLI_REFERENCE,
+        render.STACK_REFERENCE,
+    )
+
+
+def test_every_toy_page_starts_with_a_sentence_and_links_resolve_among_the_pages(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    pages = _toy_pages(render, has_land=True)
+    names = {Path(path).name for path in pages}
+    for path, text in pages.items():
+        assert text.startswith("Esta página "), path
+        for target in re.findall(r"\]\(([^)#]+)\)", text):
+            assert target in names or target == "../flujos/aterrizaje.md", (path, target)
