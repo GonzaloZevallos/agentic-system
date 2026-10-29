@@ -670,7 +670,14 @@ class TrackerCallFailed(ValueError):
     """A `gh` call failed for a reason about the transport, not about the question (GH-266,
     GH-290): the base of `TrackerTimedOut` and `TrackerUnreachable`, so a catcher that ends
     one poll round names one class and cannot forget a subtype. A `ValueError`, so every
-    handler that already treats an unreadable read as harmless absorbs it unchanged."""
+    handler that already treats an unreadable read as harmless absorbs it unchanged.
+
+    `status` is the HTTP status `gh` printed on the last failed attempt (GH-438), `None` when
+    it printed none or the call never got an answer."""
+
+    def __init__(self, *args: object, status: int | None = None):
+        super().__init__(*args)
+        self.status = status
 
 
 class TrackerTimedOut(TrackerCallFailed):
@@ -703,7 +710,12 @@ class TrackerRefused(ValueError):
     """`gh` ran and exited non-zero with an answer no retry changes (GH-389): the failure a
     caller's own wording describes. A `ValueError`, so every handler that already treats a
     failed call as one is unchanged; not a `TrackerCallFailed`, which is the transport's.
-    A missing `gh` is none of these: it stays a plain `ValueError`."""
+    A missing `gh` is none of these: it stays a plain `ValueError`. `status` is the HTTP
+    status `gh` printed (GH-438), `None` when it printed none."""
+
+    def __init__(self, *args: object, status: int | None = None):
+        super().__init__(*args)
+        self.status = status
 
 
 class GitError(RuntimeError):
