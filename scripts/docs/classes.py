@@ -257,8 +257,8 @@ def _grouping_of(grouping: Mapping[str, str], context: str, layer: str) -> str:
     if key not in grouping:
         raise ValueError(
             f"{key!r} has no grouping: add the line "
-            f'`    "{key}": "<{"|".join(GROUPINGS)}>",` to CLASS_GROUPING in scripts/docs/groups.py, '
-            "sorted"
+            f'`    "{key}": "<{"|".join(GROUPINGS)}>",` to CLASS_GROUPING in '
+            "scripts/docs/groups.py, sorted"
         )
     if grouping[key] not in GROUPINGS:
         raise ValueError(
