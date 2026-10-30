@@ -1338,9 +1338,8 @@ def test_a_package_layer_over_the_budget_is_refused_naming_the_layer_and_the_fix
     assert "'domain'" in message and f"{budget.classes + 1} modules" in message
     assert "add groups" in message
     outside = [f"agentic.p{n:02d}.x" for n in range(budget.nodes)]
-    with pytest.raises(
-        ValueError, match=r"layer 'domain' of .* has 21 nodes and 20 edges.*add groups"
-    ):
+    counts = f"{budget.nodes + 1} nodes and {budget.nodes} edges"
+    with pytest.raises(ValueError, match=rf"layer 'domain' of .* has {counts}.*add groups"):
         packages.build_pages(
             _flat_world(["domain.a"], outside),
             _flat_imports({"domain.a": tuple(outside)}),
