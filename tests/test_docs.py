@@ -1162,7 +1162,7 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
         found = {c for q, c in groups.CLUSTERS.items() if q.startswith(layer + ".")}
         assert 0 < len(found) <= most, (layer, found)
     pages = packages.build_pages(on_disk, imported, groups.CLUSTERS)
-    assert len(pages) <= 30
+    assert len(pages) <= 27
     texts = render.package_pages(pages)
     for path, text in texts.items():
         assert render.diagram_budget(text) == [], path
@@ -1194,3 +1194,38 @@ def test_packages_process_mmd_is_gone_from_outputs_and_from_the_tree(
     assert old not in _tree(full_run)
     assert not (REPO / old).exists()
     assert render.package_page_path("index") in _tree(full_run)
+
+
+def test_a_cluster_name_that_is_not_lowercase_words_is_refused_naming_it(
+    packages: ModuleType,
+) -> None:
+    with pytest.raises(ValueError, match="'Bad-Name' must be lowercase words"):
+        packages.build_pages(
+            _world(["domain.a"]), _imports({"domain.a": ()}), {"domain.a": "Bad-Name"}
+        )
+
+
+def test_an_adapter_page_over_budget_is_refused_naming_the_page_and_its_counts(
+    packages: ModuleType,
+) -> None:
+    outside = [f"agentic.p{n:02d}.x" for n in range(35)]
+    modules = ["adapters.git.a"]
+    imports = {f"{PROCESS}.adapters.git.a": set(outside)}
+    with pytest.raises(ValueError) as caught:
+        packages.build_pages(_world(modules, outside), imports, {})
+    message = str(caught.value)
+    assert "'adapters-git' has 36 nodes and 35 edges" in message
+    assert "split it by meaning in CLUSTERS" in message
+
+
+def test_a_layer_page_over_budget_is_refused_naming_the_page_and_its_counts(
+    packages: ModuleType,
+) -> None:
+    names = [f"domain.m{n:02d}" for n in range(21)]
+    with pytest.raises(ValueError) as caught:
+        packages.build_pages(
+            _world(names),
+            _imports({name: () for name in names}),
+            {name: f"c{n:02d}" for n, name in enumerate(names)},
+        )
+    assert "'domain' has 21 nodes and 0 edges" in str(caught.value)

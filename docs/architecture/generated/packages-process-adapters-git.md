@@ -1,4 +1,4 @@
-Esta página muestra los módulos del adaptador `adapters.git` y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete, con su página.
+Esta página muestra los módulos del adaptador `adapters.git` y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera (por ejemplo `agentic.shared`).
 
 - Padre: [Paquetes de process](packages-process.md)
 - Hermanas:

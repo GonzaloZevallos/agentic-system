@@ -379,12 +379,20 @@ def _target_end(
     return _package_end(sub)
 
 
+_PACKAGE_NODES = (
+    "con su página si es un paquete de `process`, sin ella si es de fuera (por ejemplo "
+    "`agentic.shared`)."
+)
+
+
 def _cluster_sentence(layer: str, cluster: str, how: str, parts: tuple[int, int] | None) -> str:
+    nodes = f"un nodo `<nombre> (grupo)` es otro grupo de `{layer}`"
+    if layer == "application":
+        nodes += ", `<nombre> (grupo de domain)` un grupo de `domain`"
     text = (
         f"Esta página muestra los módulos del grupo `{cluster}` de `{layer}` y los imports "
-        f"que hacen; un nodo `<nombre> (grupo)` es otro grupo de `{layer}`, "
-        "`<nombre> (grupo de domain)` un grupo de `domain` y `<nombre> (paquete)` otro paquete, "
-        "cada uno con su página."
+        f"que hacen; {nodes} (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: "
+        f"{_PACKAGE_NODES}"
     )
     if how == "domain":
         text += (
@@ -456,6 +464,6 @@ def _adapter_page(graph: _Graph, sub: str) -> Page:
     )
     sentence = (
         f"Esta página muestra {what} y los imports que hacen; un nodo `<nombre> (paquete)` es "
-        "otro paquete, con su página."
+        f"otro paquete: {_PACKAGE_NODES}"
     )
     return _checked(draw, _key(sub), sub, sentence, INDEX, _others(graph, sub))
