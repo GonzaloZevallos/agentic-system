@@ -1,4 +1,4 @@
-Esta página muestra los módulos sueltos de `adapters`, los que no están en ningún tipo de adaptador, y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera (por ejemplo `agentic.shared`).
+Esta página muestra los módulos sueltos de `adapters`, los que no están en ningún tipo de adaptador, y los imports que hacen; un nodo `<nombre> (paquete)` es otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera.
 
 - Padre: [Paquetes de process](packages-process.md)
 - Hermanas:
