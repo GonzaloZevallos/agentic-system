@@ -1481,3 +1481,20 @@ def test_generate_refuses_dot_it_cannot_read_and_a_module_in_no_cluster(
     monkeypatch.setattr(groups, "CLUSTERS", {})
     with pytest.raises(generate.GenerateError, match=r'"domain.ghost_module": "<cluster>",'):
         generate.class_pages("process", "domain")
+
+
+def test_generate_refuses_an_unwritten_layer_whose_class_page_is_over_budget_and_writes_nothing(
+    scripts: tuple[ModuleType, ModuleType], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The class pages of a layer still drawn as `.mmd` are only built, not written; they are
+    measured in memory all the same, and a page over `DIAGRAM_BUDGET` fails naming its path."""
+    render, generate = scripts
+    assert ("knowledge", "domain") in generate.LEGACY_MMD
+    path = f"{render.GENERATED}/classes-knowledge-domain-all.md"
+    names = [f"m__C{n:02d}" for n in range(render.DIAGRAM_BUDGET.classes + 1)]
+    fat = "```mermaid\nclassDiagram\n" + "".join(f"    class {n}\n" for n in names) + "```\n"
+    monkeypatch.setattr(generate, "class_pages", lambda context, layer: {path: fat})
+    with pytest.raises(generate.GenerateError, match=re.escape(path)) as raised:
+        generate.generate(tmp_path, {"knowledge": ("domain",)})
+    assert "classes" in str(raised.value)
+    assert not (tmp_path / render.GENERATED).exists()

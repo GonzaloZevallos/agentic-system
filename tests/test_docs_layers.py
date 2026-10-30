@@ -112,7 +112,7 @@ def test_a_layer_with_no_grouping_line_raises_naming_it_and_the_line_to_add() ->
 
 def test_a_layer_grouped_page_over_the_budget_fails_naming_the_layer() -> None:
     names = [f"a.C{n:02d}" for n in range(BUDGET + 1)]
-    with pytest.raises(ValueError, match=r"knowledge/domain has 16 public classes"):
+    with pytest.raises(ValueError, match=rf"knowledge/domain has {BUDGET + 1} public classes"):
         _pages(_parsed("knowledge", "domain", names), "knowledge", "domain")
 
 
