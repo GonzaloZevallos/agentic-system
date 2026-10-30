@@ -242,18 +242,18 @@ def diagram_budget(text: str) -> list[Overage]:
     decided before counting, so a sequence diagram or a C4 one is never over budget."""
     budget = DIAGRAM_BUDGET
     over: list[Overage] = []
-    for number, kind, nodes, edges, classes in _kinds_and_counts(text):
+    for number, kind, nodes, edges, declared in _kinds_and_counts(text):
         limits = tuple(
             name
             for name, count, most in (
                 ("nodes", nodes, budget.nodes),
                 ("edges", edges, budget.edges),
-                ("classes", classes, budget.classes),
+                ("classes", declared, budget.classes),
             )
             if count > most
         )
         if limits:
-            over.append(Overage(number, kind, nodes, edges, classes, limits))
+            over.append(Overage(number, kind, nodes, edges, declared, limits))
     return over
 
 
@@ -482,9 +482,8 @@ def class_pages(model: Mapping[str, classes.ClassPage]) -> dict[str, str]:
         titles = {class_page_path(other): model[other].title for other in model}
         here = class_page_path(key)
         if page.parent is None:
-            links = [
-                f"  - [{titles[path]}]({Path(path).name})" for path in sorted(titles) if path != here
-            ]
+            others = [path for path in sorted(titles) if path != here]
+            links = [f"  - [{titles[path]}]({Path(path).name})" for path in others]
             result[here] = f"{page.sentence}\n\n" + "\n".join(["- Páginas:", *links]) + "\n"
             continue
         family = {class_page_path(page.parent): titles[class_page_path(page.parent)]}

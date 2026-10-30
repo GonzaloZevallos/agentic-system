@@ -1348,3 +1348,119 @@ def test_a_package_layer_over_the_budget_is_refused_naming_the_layer_and_the_fix
             KNOWLEDGE,
             ("domain",),
         )
+
+
+# --- The class pages and the removed `.mmd` (GH-430 part 3): `render.class_pages` ---
+
+DOMAIN = "agentic.core.process.domain"
+
+
+def _dot(nodes: Iterable[str], edges: Iterable[tuple[str, str, str]] = ()) -> str:
+    lines = ['digraph "classes_x" {', "rankdir=BT", 'charset="utf-8"']
+    lines += [f'"{DOMAIN}.{n}" [color="black", label=<x>, shape="record"];' for n in nodes]
+    lines += [
+        f'"{DOMAIN}.{s}" -> "{DOMAIN}.{t}" [arrowhead="{head}", arrowtail="none"];'
+        for s, t, head in edges
+    ]
+    return "\n".join([*lines, "}"])
+
+
+def _class_texts(
+    scripts: tuple[ModuleType, ModuleType], dot: str, clusters: dict[str, str]
+) -> dict[str, str]:
+    render, _ = scripts
+    classes = sys.modules["classes"]
+    return render.class_pages(classes.pages(*classes.parse(dot), clusters))
+
+
+def test_class_pages_draw_qualified_ids_labels_the_four_arrows_and_the_other_pages(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    dot = _dot(
+        ["a.Pair", "b.Pair", "a.Base", "a.Child", "c.Far", "a.Owner", "a.Part"],
+        [
+            ("a.Child", "a.Base", "empty"),
+            ("a.Pair", "b.Pair", "vee"),
+            ("a.Part", "a.Owner", "odiamond"),
+            ("a.Owner", "a.Part", "diamond"),
+            ("a.Child", "c.Far", "vee"),
+        ],
+    )
+    texts = _class_texts(scripts, dot, {"domain.a": "one", "domain.b": "one", "domain.c": "two"})
+    one = texts["docs/architecture/generated/classes-process-domain-one.md"]
+    assert one.startswith("Esta página muestra las clases públicas")
+    assert '    class a__Pair["a.Pair"]' in one and '    class b__Pair["b.Pair"]' in one
+    assert '    class a__Base["Base"]' in one
+    for arrow in (
+        "a__Child --|> a__Base",
+        "a__Pair --> b__Pair",
+        "a__Owner o-- a__Part",
+        "a__Part *-- a__Owner",
+    ):
+        assert f"    {arrow}\n" in one, arrow
+    assert "c__Far" not in one.split("## Relaciones con otras páginas")[0]
+    tail = one.split("## Relaciones con otras páginas")[1]
+    assert "`a.Child` se asocia con `c.Far`" in tail
+    assert "[domain: two](classes-process-domain-two.md)" in tail
+    index = texts["docs/architecture/generated/classes-process-domain.md"]
+    assert "[domain: one](classes-process-domain-one.md)" in index and "```" not in index
+    assert "- Padre: [Clases de domain](classes-process-domain.md)" in one
+    for text in texts.values():
+        assert "click " not in text and "href" not in text
+
+
+def test_a_class_cluster_over_the_budget_is_written_as_numbered_pages_each_within_it(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    names = [f"m.C{n:02d}" for n in range(render.DIAGRAM_BUDGET.classes + 1)]
+    texts = _class_texts(scripts, _dot(names), {"domain.m": "big"})
+    pages = {Path(path).name for path in texts}
+    assert pages == {
+        "classes-process-domain.md",
+        "classes-process-domain-big-1.md",
+        "classes-process-domain-big-2.md",
+    }
+    for path, text in texts.items():
+        assert render.diagram_budget(text) == [], path
+    assert "por cantidad" in texts["docs/architecture/generated/classes-process-domain-big-1.md"]
+
+
+def test_the_three_replaced_mmd_files_are_gone_from_outputs_and_from_the_tree(
+    scripts: tuple[ModuleType, ModuleType], full_run: Path
+) -> None:
+    render, _ = scripts
+    gone = [
+        f"docs/architecture/generated/{name}.mmd"
+        for name in ("classes-process-domain", "packages-knowledge", "packages-measurement")
+    ]
+    written = render.outputs(
+        _run_classes(_tree(full_run)), _role_keys(scripts), _package_keys(scripts)
+    )
+    tree = _tree(full_run)
+    for old in gone:
+        assert old not in written and old not in tree and not (REPO / old).exists(), old
+    for new in (
+        "classes-process-domain.md",
+        "packages-knowledge.md",
+        "packages-knowledge-domain.md",
+        "packages-measurement.md",
+        "packages-measurement-adapters.md",
+    ):
+        assert f"docs/architecture/generated/{new}" in tree, new
+
+
+def test_generate_refuses_dot_it_cannot_read_and_a_module_in_no_cluster(
+    scripts: tuple[ModuleType, ModuleType], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, generate = scripts
+    groups = sys.modules["groups"]
+    bad = 'digraph "x" {\nsomething unexpected\n}'
+    monkeypatch.setattr(generate, "_pyreverse", lambda *a, **k: {"classes_x.dot": bad})
+    with pytest.raises(generate.GenerateError, match="something unexpected"):
+        generate.domain_class_pages()
+    good = _dot(["ghost_module.Thing"])
+    monkeypatch.setattr(generate, "_pyreverse", lambda *a, **k: {"classes_x.dot": good})
+    monkeypatch.setattr(groups, "CLUSTERS", {})
+    with pytest.raises(generate.GenerateError, match=r'"domain.ghost_module": "<cluster>",'):
+        generate.domain_class_pages()
