@@ -40,9 +40,10 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- `schemas.Answers` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.Classification` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.Consolidation` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.Consultation` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.CopyDraft` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.CopyReview` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
+- [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - `schemas.Answers` hereda de `schemas.RoleOutput`
+  - `schemas.Classification` hereda de `schemas.RoleOutput`
+  - `schemas.Consolidation` hereda de `schemas.RoleOutput`
+  - `schemas.Consultation` hereda de `schemas.RoleOutput`
+  - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
+  - `schemas.CopyReview` hereda de `schemas.RoleOutput`

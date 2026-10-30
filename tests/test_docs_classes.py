@@ -41,12 +41,19 @@ def _dot(nodes: Sequence[str], edges: Sequence[tuple[str, str, str]] = ()) -> st
     return "\n".join([*lines, "}"])
 
 
-def _pages(parsed: Any, clusters: Any = groups.CLUSTERS) -> dict[str, Any]:
-    return classes.pages(*parsed, clusters)
+def _pages(
+    parsed: Any,
+    clusters: Any = groups.CLUSTERS,
+    context: str = "process",
+    layer: str = "domain",
+    grouping: Any = groups.CLASS_GROUPING,
+    separate: Any = (),
+) -> dict[str, Any]:
+    return classes.pages(*parsed, context, layer, grouping, clusters, separate)
 
 
 def test_the_domain_fixture_parses_to_public_qualified_classes_and_two_kinds() -> None:
-    nodes, relations = classes.parse(_fixture("process-domain.dot"))
+    nodes, relations = classes.parse(_fixture("process-domain.dot"), "process", "domain")
     assert [n.qname for n in nodes] == [
         "check_schedule.CheckPriority",
         "check_schedule.Entry",
@@ -82,7 +89,7 @@ def test_a_private_class_and_its_edges_are_not_on_any_page() -> None:
     """`PUB_ONLY` filters members, not classes: the real run emits `playbook._Shelves`."""
     text = _fixture("process-domain.dot")
     assert "playbook._Shelves" in text
-    nodes, relations = classes.parse(text)
+    nodes, relations = classes.parse(text, "process", "domain")
     assert all(not n.name.startswith("_") for n in nodes)
     assert all("_Shelves" not in r.source + r.target for r in relations)
 
@@ -99,20 +106,20 @@ def test_every_pyreverse_edge_kind_is_told_apart_by_its_arrowhead() -> None:
     for edge_type, kind in expected.items():
         head = ARROWS[edge_type]["arrowhead"]
         text = _dot(["a.A", "a.B"], [("a.A", "a.B", head)])
-        assert {r.kind for r in classes.parse(text)[1]} == {kind}
+        assert {r.kind for r in classes.parse(text, "process", "domain")[1]} == {kind}
     assert len({ARROWS[t]["arrowhead"] for t in expected}) == 4
 
 
 def test_an_edge_of_a_kind_it_cannot_tell_raises_naming_the_edge() -> None:
     text = _dot(["a.A", "a.B"], [("a.A", "a.B", ARROWS[EdgeType.USES]["arrowhead"])])
     with pytest.raises(ValueError, match=r"cannot tell the kind.*a\.A.*a\.B"):
-        classes.parse(text)
+        classes.parse(text, "process", "domain")
 
 
 def test_an_edge_to_a_class_that_is_not_in_the_output_raises_naming_it() -> None:
     text = _dot(["a.A"], [("a.A", "a.Ghost", "vee")])
     with pytest.raises(ValueError, match=r"not a class of the output.*a\.Ghost"):
-        classes.parse(text)
+        classes.parse(text, "process", "domain")
 
 
 @pytest.mark.parametrize(
@@ -126,15 +133,15 @@ def test_an_edge_to_a_class_that_is_not_in_the_output_raises_naming_it() -> None
 )
 def test_a_name_it_cannot_place_raises_naming_it(qname: str) -> None:
     with pytest.raises(ValueError, match="is not a class of") as raised:
-        classes.canonical(qname)
+        classes.canonical(qname, "process", "domain")
     assert repr(qname) in str(raised.value)
     with pytest.raises(ValueError, match="is not a class of"):
-        classes.parse(f'"{qname}" [label=<x>];')
+        classes.parse(f'"{qname}" [label=<x>];', "process", "domain")
 
 
 def test_a_line_that_is_not_dot_raises() -> None:
     with pytest.raises(ValueError, match="cannot read this line.*surprise"):
-        classes.parse('digraph "x" {\nsurprise\n}')
+        classes.parse('digraph "x" {\nsurprise\n}', "process", "domain")
 
 
 @pytest.mark.parametrize(
@@ -150,7 +157,7 @@ def test_node_id_is_module_double_underscore_class() -> None:
 
 
 def test_homonyms_on_one_page_stay_two_nodes_with_qualified_labels() -> None:
-    result = _pages(classes.parse(_fixture("process-domain.dot")))
+    result = _pages(classes.parse(_fixture("process-domain.dot"), "process", "domain"))
     page = result["process-domain-checks"]
     entries = [(i, label) for i, label in page.nodes if label.endswith("Entry")]
     assert entries == [
@@ -164,8 +171,8 @@ def test_homonyms_on_one_page_stay_two_nodes_with_qualified_labels() -> None:
 
 
 def test_the_two_fixtures_merge_with_each_class_once() -> None:
-    domain = classes.parse(_fixture("process-domain.dot"))
-    board = classes.parse(_fixture("process-domain-board.dot"))
+    domain = classes.parse(_fixture("process-domain.dot"), "process", "domain")
+    board = classes.parse(_fixture("process-domain-board.dot"), "process", "domain")
     assert [n.qname for n in board[0]] == ["board.Card", "board.FieldWrite", "board.IssueFacts"]
     merged = classes.merge(domain, board)
     assert len(merged[0]) == len(domain[0]) + 3
@@ -179,18 +186,20 @@ def test_shuffled_input_lines_give_identical_pages() -> None:
     random.Random(7).shuffle(body)
     shuffled = "\n".join([*lines[:3], *body, lines[-1]])
     assert shuffled != "\n".join(lines)
-    assert _pages(classes.parse(shuffled)) == _pages(classes.parse("\n".join(lines)))
+    assert _pages(classes.parse(shuffled, "process", "domain")) == _pages(
+        classes.parse("\n".join(lines), "process", "domain")
+    )
 
 
 def test_parse_dedupes_relations_by_source_target_and_kind() -> None:
     """`Interview` has three attributes of type `Role` in the real run: one relation."""
     text = _fixture("process-domain.dot")
     assert text.count('"agentic.core.process.domain.roles.Interview" ->') == 3
-    relations = classes.parse(text)[1]
+    relations = classes.parse(text, "process", "domain")[1]
     assert sum(1 for r in relations if r.source == "roles.Interview") == 1
     lines = text.splitlines()
     doubled = "\n".join([*lines[:-1], *lines[3:-1], lines[-1]])
-    assert classes.parse(doubled)[1] == relations
+    assert classes.parse(doubled, "process", "domain")[1] == relations
 
 
 def _crowd(count: int) -> tuple[list[str], str]:
@@ -200,10 +209,10 @@ def _crowd(count: int) -> tuple[list[str], str]:
 
 def test_a_cluster_over_the_budget_splits_into_pages_made_by_chunks() -> None:
     names, text = _crowd(2 * BUDGET + 1)
-    result = _pages(classes.parse(text), {"domain.a": "big"})
+    result = _pages(classes.parse(text, "process", "domain"), {"domain.a": "big"})
     expected = packages.chunks(names)
     assert len(expected) >= 3
-    keys = [key for key in result if key != "index"]
+    keys = [key for key in result if key != "process-domain"]
     assert keys == [f"process-domain-big-{n}" for n in range(1, len(expected) + 1)]
     assert [[i for i, _ in result[k].nodes] for k in keys] == [
         [n.replace(".", "__") for n in chunk] for chunk in expected
@@ -215,17 +224,17 @@ def test_a_cluster_over_the_budget_splits_into_pages_made_by_chunks() -> None:
         assert page.sentence.startswith("Esta página muestra")
         parte = f"dividió por cantidad: esta es la parte {number} de {len(keys)}"
         assert parte in page.sentence
-        assert page.parent == "index"
+        assert page.parent == "process-domain"
         assert page.siblings == tuple(k for k in keys if k != key)
 
 
 def test_a_cluster_at_the_budget_is_one_page_and_is_not_said_to_be_split() -> None:
     _, text = _crowd(BUDGET)
-    result = _pages(classes.parse(text), {"domain.a": "big"})
-    assert list(result) == ["index", "process-domain-big"]
+    result = _pages(classes.parse(text, "process", "domain"), {"domain.a": "big"})
+    assert list(result) == ["process-domain", "process-domain-big"]
     assert "por cantidad" not in result["process-domain-big"].sentence
     _, over = _crowd(BUDGET + 1)
-    assert len(_pages(classes.parse(over), {"domain.a": "big"})) == 3
+    assert len(_pages(classes.parse(over, "process", "domain"), {"domain.a": "big"})) == 3
 
 
 def test_a_relation_to_a_class_on_another_page_is_listed_not_drawn() -> None:
@@ -237,7 +246,7 @@ def test_a_relation_to_a_class_on_another_page_is_listed_not_drawn() -> None:
         (first[0], last[-1], "empty"),
         (last[-2], last[-1], "vee"),
     ]
-    result = _pages(classes.parse(_dot(names, edges)), {"domain.a": "big"})
+    result = _pages(classes.parse(_dot(names, edges), "process", "domain"), {"domain.a": "big"})
     one, end = result["process-domain-big-1"], result[f"process-domain-big-{len(runs)}"]
     ident = classes.node_id
     assert one.edges == ((ident("a", first[0][2:]), ident("a", first[1][2:]), "associates"),)
@@ -251,7 +260,9 @@ def test_a_relation_to_a_class_on_another_page_is_listed_not_drawn() -> None:
 
 def test_a_relation_between_two_clusters_is_listed_on_both_pages() -> None:
     text = _dot(["a.A", "b.B"], [("a.A", "b.B", "odiamond")])
-    result = _pages(classes.parse(text), {"domain.a": "one", "domain.b": "two"})
+    result = _pages(
+        classes.parse(text, "process", "domain"), {"domain.a": "one", "domain.b": "two"}
+    )
     wanted = (("a.A", "b.B", "aggregates"),)
     assert result["process-domain-one"].elsewhere == wanted
     assert result["process-domain-two"].elsewhere == wanted
@@ -259,20 +270,20 @@ def test_a_relation_between_two_clusters_is_listed_on_both_pages() -> None:
 
 
 def test_each_page_has_a_spanish_sentence_a_parent_and_its_siblings() -> None:
-    result = _pages(classes.parse(_fixture("process-domain.dot")))
-    assert result["index"].parent is None and result["index"].siblings == ()
-    assert result["index"].sentence.startswith("Esta página es el índice")
-    keys = [k for k in result if k != "index"]
+    result = _pages(classes.parse(_fixture("process-domain.dot"), "process", "domain"))
+    assert result["process-domain"].parent is None and result["process-domain"].siblings == ()
+    assert result["process-domain"].sentence.startswith("Esta página es el índice")
+    keys = [k for k in result if k != "process-domain"]
     assert keys == sorted(keys)
     for key in keys:
         page = result[key]
         assert page.sentence.startswith("Esta página muestra")
-        assert page.parent == "index"
+        assert page.parent == "process-domain"
         assert page.siblings == tuple(k for k in keys if k != key)
 
 
 def test_a_module_with_no_cluster_raises_naming_it_and_the_line_to_add() -> None:
-    parsed = classes.parse(_dot(["mystery.M"]))
+    parsed = classes.parse(_dot(["mystery.M"]), "process", "domain")
     with pytest.raises(ValueError) as raised:
         _pages(parsed, {"domain.other": "x"})
     message = str(raised.value)
@@ -282,10 +293,12 @@ def test_a_module_with_no_cluster_raises_naming_it_and_the_line_to_add() -> None
 
 
 def test_a_relation_to_a_class_that_was_not_given_raises_naming_it() -> None:
-    nodes, _ = classes.parse(_dot(["a.A"]))
+    nodes, _ = classes.parse(_dot(["a.A"]), "process", "domain")
     relation = classes.Relation("a.A", "a.Ghost", "associates")
     with pytest.raises(ValueError, match=r"a\.Ghost"):
-        classes.pages(nodes, [relation], {"domain.a": "x"})
+        classes.pages(
+            nodes, [relation], "process", "domain", groups.CLASS_GROUPING, {"domain.a": "x"}
+        )
 
 
 def test_a_relation_kind_outside_the_four_raises() -> None:
@@ -295,9 +308,11 @@ def test_a_relation_kind_outside_the_four_raises() -> None:
 
 def test_the_board_classes_of_the_second_run_land_on_a_page() -> None:
     merged = classes.merge(
-        classes.parse(_fixture("process-domain.dot")),
-        classes.parse(_fixture("process-domain-board.dot")),
+        classes.parse(_fixture("process-domain.dot"), "process", "domain"),
+        classes.parse(_fixture("process-domain-board.dot"), "process", "domain"),
     )
     result = _pages(merged)
-    on_pages = {label for key, page in result.items() if key != "index" for _, label in page.nodes}
+    on_pages = {
+        label for key, page in result.items() if key != "process-domain" for _, label in page.nodes
+    }
     assert {"Card", "FieldWrite", "IssueFacts"} <= on_pages

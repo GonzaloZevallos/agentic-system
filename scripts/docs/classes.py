@@ -1,12 +1,13 @@
-"""The class diagrams of `agentic/core/process/domain`, as pages of plain data (GH-430 part 3).
+"""The class diagrams of one layer of a core module, as pages of plain data (GH-430 parts 3 and 4).
 
-Pure: the text of pyreverse's `-o dot` output and the `CLUSTERS` table in, a mapping of page key
-to `ClassPage` out. No file is read and pyreverse is never run (`generate.py` is the only
-caller); `render.py` turns each `ClassPage` into a `.md` file.
+Pure: the text of pyreverse's `-o dot` output of a layer (`agentic/core/<context>/<layer>`) and
+the grouping tables of `groups.py` in, a mapping of page key to `ClassPage` out. No file is
+read and pyreverse is never run (`generate.py` is the only caller); `render.py` turns each
+`ClassPage` into a `.md` file.
 
 Why dot: pyreverse's mmd output keeps only the last name of a class, so homonyms (`Entry`,
 `Pair`, `Verdict`...) merge; the dot output keeps the qualified name. A class is identified by
-`canonical` (`module.Class`, relative to the domain package) and drawn under `node_id`
+`canonical` (`module.Class`, relative to the layer package) and drawn under `node_id`
 (`module__Class`); its label is the short name unless another class on the same page has it,
 then `module.Class`. Two homonyms are never merged.
 
@@ -14,14 +15,16 @@ What the real run showed (pyreverse 4.1.3 over `agentic/core/process/domain`, `-
 --filter-mode PUB_ONLY`), which the parser relies on:
 
 - The relation kind is the edge's `arrowhead`: `empty` inheritance, `vee` association,
-  `odiamond` aggregation and `diamond` composition (pylint's `dot_printer.ARROWS`). The domain
-  run emits only the first two; the other layers emit aggregation; no layer emits composition.
+  `odiamond` aggregation and `diamond` composition (pylint's `dot_printer.ARROWS`). The runs
+  emit the first three; no layer emits composition.
 - `PUB_ONLY` filters members, not classes: a private class (`_Shelves`) is emitted with its
   edges. A page shows public classes only, so `parse` drops every class named `_<x>` and the
   edges that touch it, by that rule and no other.
 - An edge direction is the dot one: inheritance and association run from the class that
   declares it to the base or the type; aggregation runs from the part to the owner.
 - Every edge of the real run has both ends among its nodes; one that does not fails `parse`.
+- A layer run lists the classes of the layer only; a class of another layer or context in it
+  fails `parse` naming it, so two homonyms of two layers are two nodes on two pages.
 """
 
 from __future__ import annotations
@@ -34,8 +37,10 @@ import packages
 
 from agentic.core.process.domain.docs import DIAGRAM_BUDGET
 
-DOMAIN = "agentic.core.process.domain"
-INDEX = "index"
+CORE = "agentic.core"
+TOP = "toplevel"
+ALL = "all"
+GROUPINGS = ("clusters", "kind", "layer")
 KINDS = ("inherits", "composes", "aggregates", "associates")
 
 _ARROWHEADS = {
@@ -52,7 +57,7 @@ _ARROWHEAD = re.compile(r'arrowhead="(?P<head>[a-z]+)"')
 
 @dataclass(frozen=True)
 class ClassNode:
-    """A class of the domain: `qname` is its canonical `module.Class`, `module` the part
+    """A class of a layer: `qname` is its canonical `module.Class`, `module` the part
     before the last dot and `name` the short name."""
 
     qname: str
@@ -95,14 +100,27 @@ class ClassPage:
     elsewhere: tuple[tuple[str, str, str], ...]
 
 
-def canonical(qname: str) -> str:
-    """`qname` relative to the domain package: `<DOMAIN>.<module>.<Class>` becomes
-    `<module>.<Class>`. A name outside the domain, or with no module part, raises."""
-    prefix = DOMAIN + "."
+def package_of(context: str, layer: str) -> str:
+    """The Python package a layer's dot run is over: `agentic.core.<context>.<layer>`."""
+    return f"{CORE}.{context}.{layer}"
+
+
+def layer_key(context: str, layer: str) -> str:
+    """The key of the index page of a layer, `<context>-<layer>`; its pages are
+    `<context>-<layer>-<group>[-<n>]`."""
+    return f"{context}-{layer}"
+
+
+def canonical(qname: str, context: str, layer: str) -> str:
+    """`qname` relative to the layer package: `agentic.core.<context>.<layer>.<module>.<Class>`
+    becomes `<module>.<Class>` (`module` may have dots: `claude_sdk.hooks`). A name outside the
+    layer, or with no module part, raises."""
+    prefix = package_of(context, layer) + "."
     rest = qname.removeprefix(prefix)
     if rest == qname or "." not in rest or not all(rest.split(".")):
         raise ValueError(
-            f"{qname!r} is not a class of {DOMAIN}: expected `{prefix}<module>.<Class>`"
+            f"{qname!r} is not a class of {package_of(context, layer)}: "
+            f"expected `{prefix}<module>.<Class>`"
         )
     return rest
 
@@ -119,8 +137,8 @@ def node_id(module: str, name: str) -> str:
     return qualified.replace(".", "__")
 
 
-def _node(qname: str) -> ClassNode:
-    name = canonical(qname)
+def _node(qname: str, context: str, layer: str) -> ClassNode:
+    name = canonical(qname, context, layer)
     module, _, short = name.rpartition(".")
     return ClassNode(name, module, short)
 
@@ -140,11 +158,12 @@ def _kind(attrs: str, line: str) -> str:
     return kind
 
 
-def parse(dot_text: str) -> Parsed:
-    """The public classes and relations of one pyreverse dot output.
+def parse(dot_text: str, context: str, layer: str) -> Parsed:
+    """The public classes and relations of one pyreverse dot output over
+    `agentic/core/<context>/<layer>`.
 
     Nodes are unique and sorted; relations are unique by `(source, target, kind)` and sorted.
-    A line that is neither a node, an edge nor the dot frame, an id outside the domain, an edge
+    A line that is neither a node, an edge nor the dot frame, an id outside the layer, an edge
     of an unknown kind and an edge whose end is not a node of the text raise `ValueError`
     naming it. Private classes and the edges that touch them are dropped (see the module)."""
     nodes: dict[str, ClassNode] = {}
@@ -155,13 +174,14 @@ def parse(dot_text: str) -> Parsed:
             continue
         edge = _EDGE.fullmatch(text)
         if edge:
-            source, target = canonical(edge["source"]), canonical(edge["target"])
+            source = canonical(edge["source"], context, layer)
+            target = canonical(edge["target"], context, layer)
             edges.append((source, target, _kind(edge["attrs"], text), text))
             continue
         node = _NODE.fullmatch(text)
         if node is None:
             raise ValueError(f"cannot read this line of the dot output: {line}")
-        found = _node(node["id"])
+        found = _node(node["id"], context, layer)
         nodes[found.qname] = found
     for source, target, _, text in edges:
         if source not in nodes or target not in nodes:
@@ -183,8 +203,8 @@ def _ordered(nodes: Iterable[ClassNode], relations: Iterable[Relation]) -> Parse
 
 
 def merge(*parsed: Parsed) -> Parsed:
-    """The classes and relations of several runs, each class and each relation once, by
-    canonical name."""
+    """The classes and relations of several runs of one layer, each class and each relation
+    once, by canonical name."""
     nodes: dict[str, ClassNode] = {}
     relations: set[Relation] = set()
     for run_nodes, run_relations in parsed:
@@ -204,69 +224,168 @@ def labels(nodes: Iterable[ClassNode]) -> dict[str, str]:
     return {node.qname: node.name if count[node.name] == 1 else node.qname for node in found}
 
 
-def _cluster_of(node: ClassNode, clusters: Mapping[str, str]) -> str:
-    key = f"domain.{node.module}"
+def _group_of(
+    node: ClassNode,
+    context: str,
+    layer: str,
+    grouping: str,
+    clusters: Mapping[str, str],
+) -> str:
+    """The group a class belongs to: its cluster (`clusters`), its adapter kind (`kind`) or the
+    whole layer (`layer`)."""
+    key = f"{layer}.{node.module}"
+    if grouping == "layer":
+        return ALL
+    if grouping == "kind":
+        if layer != packages.ADAPTERS:
+            raise ValueError(
+                f"{context}/{layer} is grouped by `kind`, which only `{packages.ADAPTERS}` has"
+            )
+        return packages.subpackage(key).partition(".")[2] or TOP
     if key not in clusters:
-        known = sorted({v for k, v in clusters.items() if k.startswith("domain.")})
+        known = sorted({v for k, v in clusters.items() if k.startswith(f"{layer}.")})
         raise ValueError(
-            f"process module {key!r} is in no cluster: add the line "
-            f'`    "{key}": "<cluster>",` to CLUSTERS in scripts/docs/groups.py, '
-            f"sorted (the clusters of domain are: {', '.join(known)})"
+            f"{context} module {key!r} is in no cluster: add the line "
+            f'`    "{key}": "<cluster>",` to the cluster table of {context} in '
+            f"scripts/docs/groups.py, sorted (the clusters of {layer} are: {', '.join(known)})"
         )
     return clusters[key]
 
 
-def _sentence(cluster: str, part: tuple[int, int] | None) -> str:
+def _grouping_of(grouping: Mapping[str, str], context: str, layer: str) -> str:
+    key = f"{context}/{layer}"
+    if key not in grouping:
+        raise ValueError(
+            f"{key!r} has no grouping: add the line "
+            f'`    "{key}": "<{"|".join(GROUPINGS)}>",` to CLASS_GROUPING in '
+            "scripts/docs/groups.py, sorted"
+        )
+    if grouping[key] not in GROUPINGS:
+        raise ValueError(
+            f"{key!r} is grouped by {grouping[key]!r} in CLASS_GROUPING; the groupings are "
+            f"{', '.join(GROUPINGS)}"
+        )
+    return grouping[key]
+
+
+def _sentence(
+    group: str,
+    package: str,
+    part: tuple[int, int] | None,
+    separate: tuple[str, ...],
+) -> str:
+    scope = (
+        f"de todos los módulos de `{package}`"
+        if group == ALL
+        else f"de los módulos del grupo `{group}` de `{package}`"
+    )
     text = (
-        f"Esta página muestra las clases públicas de los módulos del grupo `{cluster}` de "
-        f"`{DOMAIN}` y sus relaciones (herencia, composición, agregación y asociación); las "
-        "relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. "
-        "Cada clase se identifica por su módulo y su nombre: si dos clases de la página se "
-        "llaman igual, la etiqueta incluye el módulo."
+        f"Esta página muestra las clases públicas {scope} y sus relaciones (herencia, "
+        "composición, agregación y asociación); las relaciones con clases de otras páginas no "
+        "se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su "
+        "nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo."
     )
     if part is not None:
         text += (
             f" El grupo se dividió por cantidad: esta es la parte {part[0]} de {part[1]}, con "
             "las clases en orden alfabético por módulo y clase."
         )
+    if separate:
+        names = ", ".join(f"`{module}`" for module in separate)
+        text += (
+            f" Las relaciones entre las clases de {names} y las demás clases de la capa no se "
+            "dibujan: pyreverse analizó ese archivo en una corrida aparte."
+        )
     return text
 
 
-def _index_sentence() -> str:
+def _index_sentence(package: str, grouping: str) -> str:
+    how = {
+        "clusters": "una página por grupo de módulos, definido en `scripts/docs/groups.py`",
+        "kind": "una página por tipo de adaptador y una para los módulos sueltos",
+        "layer": "una página con toda la capa",
+    }[grouping]
     return (
-        f"Esta página es el índice de los diagramas de clases de `{DOMAIN}`: una página por "
-        "grupo de `CLUSTERS` (en `scripts/docs/groups.py`), dividida por cantidad cuando el "
-        "grupo tiene más clases de las que caben en un diagrama."
+        f"Esta página es el índice de los diagramas de clases de `{package}`: {how}, dividida "
+        "por cantidad cuando el grupo tiene más clases de las que caben en un diagrama."
     )
 
 
-def pages(
-    nodes: Iterable[ClassNode], relations: Iterable[Relation], clusters: Mapping[str, str]
-) -> dict[str, ClassPage]:
-    """The class pages, by key: `index`, then one page per cluster of `domain`
-    (`process-domain-<cluster>`), or `process-domain-<cluster>-<n>` when the cluster has more
-    than `DIAGRAM_BUDGET.classes` classes: the classes, ordered by module then class, are split
-    by `packages.chunks`. A class takes the cluster of its module; a module with no entry in
-    `clusters` raises naming it and the line to add. A relation whose ends are on two pages is
-    in `elsewhere` of both and not in `edges`."""
-    found = sorted(set(nodes), key=lambda node: (node.module, node.name))
-    by_cluster: dict[str, list[ClassNode]] = {}
+_Group = tuple[str, str, str, tuple[int, int] | None, list[ClassNode]]
+
+
+def _groups(
+    found: list[ClassNode],
+    key: str,
+    layer: str,
+    grouping: str,
+    clusters: Mapping[str, str],
+    context: str,
+) -> list[_Group]:
+    """`(page key, title, group, part, classes)` for each page, in key order."""
+    by_group: dict[str, list[ClassNode]] = {}
     for node in found:
-        by_cluster.setdefault(_cluster_of(node, clusters), []).append(node)
-    groups: list[tuple[str, str, str, tuple[int, int] | None, list[ClassNode]]] = []
-    for cluster in sorted(by_cluster):
-        members = by_cluster[cluster]
-        base = f"process-domain-{cluster}"
+        by_group.setdefault(_group_of(node, context, layer, grouping, clusters), []).append(node)
+    groups: list[_Group] = []
+    for group in sorted(by_group):
+        members = by_group[group]
+        base = f"{key}-{group}"
+        title = f"{layer}: {group}"
         if len(members) <= DIAGRAM_BUDGET.classes:
-            groups.append((base, f"domain: {cluster}", cluster, None, members))
+            groups.append((base, title, group, None, members))
             continue
+        if grouping == "layer":
+            raise ValueError(
+                f"{context}/{layer} has {len(members)} public classes, over the "
+                f"{DIAGRAM_BUDGET.classes} of a diagram: group it by clusters, with a table of "
+                "modules in scripts/docs/groups.py and the line "
+                f'`    "{context}/{layer}": "clusters",` in CLASS_GROUPING'
+            )
         by_name = {node.qname: node for node in members}
         runs = packages.chunks([node.qname for node in members])
         for number, run in enumerate(runs, start=1):
-            title = f"domain: {cluster} (parte {number})"
             split = (number, len(runs))
-            groups.append((f"{base}-{number}", title, cluster, split, [by_name[q] for q in run]))
-    page_of = {node.qname: key for key, _, _, _, members in groups for node in members}
+            groups.append(
+                (
+                    f"{base}-{number}",
+                    f"{layer}: {group} (parte {number})",
+                    group,
+                    split,
+                    [by_name[q] for q in run],
+                )
+            )
+    return groups
+
+
+def pages(
+    nodes: Iterable[ClassNode],
+    relations: Iterable[Relation],
+    context: str,
+    layer: str,
+    grouping: Mapping[str, str],
+    clusters: Mapping[str, str],
+    separate: Iterable[str] = (),
+) -> dict[str, ClassPage]:
+    """The class pages of one layer, by key: the index `<context>-<layer>`, then one page per
+    group, `<context>-<layer>-<group>`, or `<context>-<layer>-<group>-<n>` when the group has
+    more than `DIAGRAM_BUDGET.classes` classes: the classes, ordered by module then class, are
+    split by `packages.chunks`.
+
+    `grouping` is `CLASS_GROUPING`: the line of `<context>/<layer>` says whether a class takes
+    the cluster of its module (`clusters`, from the table `clusters`, keyed `<layer>.<module>`),
+    its adapter kind (`kind`, `packages.subpackage`) or the one page of the layer (`layer`,
+    which fails if it is over the budget). A layer with no line, a module with no cluster and a
+    layer over the budget raise naming what to add. A relation whose ends are on two pages is
+    in `elsewhere` of both and not in `edges`. `separate` are the modules whose file had a run
+    of its own: each page with one of them says its relations with the rest of the layer are
+    not drawn. No class gives no page at all."""
+    found = sorted(set(nodes), key=lambda node: (node.module, node.name))
+    if not found:
+        return {}
+    how = _grouping_of(grouping, context, layer)
+    key = layer_key(context, layer)
+    listed = _groups(found, key, layer, how, clusters, context)
+    page_of = {node.qname: page for page, _, _, _, members in listed for node in members}
     ordered = sorted(set(relations), key=lambda rel: (rel.source, rel.target, rel.kind))
     for rel in ordered:
         for end in (rel.source, rel.target):
@@ -275,13 +394,15 @@ def pages(
                     f"relation {rel.source} -> {rel.target} ({rel.kind}) has an end, {end!r}, "
                     "that is not one of the classes given"
                 )
-    keys = [key for key, *_ in groups]
+    keys = [page for page, *_ in listed]
+    package = package_of(context, layer)
     result = {
-        INDEX: ClassPage(
-            INDEX, f"Clases de {DOMAIN.rsplit('.', 1)[-1]}", _index_sentence(), None, (), (), (), ()
+        key: ClassPage(
+            key, f"Clases de {layer}", _index_sentence(package, how), None, (), (), (), ()
         )
     }
-    for key, title, cluster, part, members in groups:
+    apart = set(separate)
+    for page, title, group, part, members in listed:
         label = labels(members)
         ids = {node.qname: node_id(node.module, node.name) for node in members}
         drawn = tuple(
@@ -294,12 +415,13 @@ def pages(
             for rel in ordered
             if (rel.source in ids) != (rel.target in ids)
         )
-        result[key] = ClassPage(
-            key,
+        modules = tuple(sorted({node.module for node in members} & apart))
+        result[page] = ClassPage(
+            page,
             title,
-            _sentence(cluster, part),
-            INDEX,
-            tuple(other for other in keys if other != key),
+            _sentence(group, package, part, modules),
+            key,
+            tuple(other for other in keys if other != page),
             tuple(sorted((ids[node.qname], label[node.qname]) for node in members)),
             tuple(sorted(drawn)),
             elsewhere,

@@ -53,13 +53,23 @@ Flujos clave, como diagramas de secuencia:
   [application](architecture/generated/packages-process-application.md) y
   [adapters](architecture/generated/packages-process-adapters.md), cada una con las de sus
   grupos o sus tipos de adaptador.
-- Clases de `process/domain`: el
-  [índice](architecture/generated/classes-process-domain.md) primero y, debajo, una página
-  por grupo de `CLUSTERS`, partida por cantidad si el grupo es grande.
+- Clases de `process`: los índices
+  [domain](architecture/generated/classes-process-domain.md),
+  [application](architecture/generated/classes-process-application.md) y
+  [adapters](architecture/generated/classes-process-adapters.md) primero y, debajo de cada uno,
+  una página por grupo de `CLUSTERS` (o por tipo de adaptador), partida por cantidad si el
+  grupo es grande.
+- Clases de `knowledge`: los índices
+  [domain](architecture/generated/classes-knowledge-domain.md) y
+  [adapters](architecture/generated/classes-knowledge-adapters.md), con sus páginas debajo.
+- Clases de `measurement`: los índices
+  [domain](architecture/generated/classes-measurement-domain.md),
+  [application](architecture/generated/classes-measurement-application.md) y
+  [adapters](architecture/generated/classes-measurement-adapters.md), con sus páginas debajo.
 - Paquetes de `knowledge` y `measurement`: los índices
   [knowledge](architecture/generated/packages-knowledge.md) y
   [measurement](architecture/generated/packages-measurement.md), con una página por capa.
-- Clases de los otros módulos y capas, en `docs/architecture/generated/`; el índice está en
+- El resto de la documentación de componentes está en
   [componentes](architecture/componentes.md).
 
 ## Referencias

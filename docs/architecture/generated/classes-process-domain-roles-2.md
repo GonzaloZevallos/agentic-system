@@ -38,12 +38,13 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- `schemas.Delivery` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.DesignDraft` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.DesignReview` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.Diagnosis` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.FinalValidation` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.InterviewTurn` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.PRD` hereda de `schemas.RoleOutput` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
-- `schemas.SolutionTurn` hereda de `schemas.InterviewTurn` (en [domain: roles (parte 3)](classes-process-domain-roles-3.md))
+- [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - `schemas.Delivery` hereda de `schemas.RoleOutput`
+  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
+  - `schemas.DesignReview` hereda de `schemas.RoleOutput`
+  - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
+  - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
+  - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
+  - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
+  - `schemas.PRD` hereda de `schemas.RoleOutput`
+  - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`

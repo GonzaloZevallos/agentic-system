@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -38,9 +39,7 @@ HELP_WIDTH = 100
 # merged in (ADR-0076). The package diagrams lack its node: a single-file run draws none.
 PYREVERSE_IGNORE = "board.py"
 PYREVERSE_FLAGS = ("-k", "--filter-mode", "PUB_ONLY")
-# The class pages of `process/domain` come from the dot output (it keeps qualified class
-# names, so homonyms are never merged); the other layers keep their mmd until GH-430 part 4.
-DOT_LAYER = ("process", "domain")
+PARALLEL_RUNS = 8
 
 
 class GenerateError(Exception):
@@ -111,11 +110,9 @@ def package_page_inputs() -> tuple[dict[str, bool], dict[str, set[str]]]:
     return on_disk, imported
 
 
-def _pyreverse(
-    name: str, targets: Sequence[Path], ignore: bool = True, output: str = "mmd"
-) -> dict[str, str]:
-    """Run pyreverse over `targets` with the fixed project name `name`, writing `output` (`mmd`
-    or `dot`); the files it wrote."""
+def _pyreverse(name: str, targets: Sequence[Path], ignore: bool = True) -> dict[str, str]:
+    """Run pyreverse over `targets` with the fixed project name `name`, writing dot (it keeps
+    the qualified name of every class, so homonyms are never merged); the files it wrote."""
     environment = {"PYTHONHASHSEED": "0", "PATH": os.environ.get("PATH", "")}
     if "HOME" in os.environ:
         environment["HOME"] = os.environ["HOME"]
@@ -125,7 +122,7 @@ def _pyreverse(
             "-m",
             "pylint.pyreverse.main",
             "-o",
-            output,
+            "dot",
             *PYREVERSE_FLAGS,
             *(("--ignore", PYREVERSE_IGNORE) if ignore else ()),
             "-p",
@@ -159,85 +156,54 @@ def _module_dir(module: str) -> Path:
     return REPO / "agentic" / "core" / module
 
 
-def _diagram(name: str, targets: Sequence[Path], kind: str, ignore: bool = True) -> str:
-    files = _pyreverse(name, targets, ignore)
-    try:
-        return render.select_mermaid(files, kind)
-    except ValueError as error:
-        raise GenerateError(f"pyreverse emitted no mmd for {name}: {error}") from error
+def cluster_table(context: str) -> Mapping[str, str]:
+    """The table of clusters of `context` in `groups.py`; empty for a context with none."""
+    tables = {"process": groups.CLUSTERS, "measurement": groups.MEASUREMENT_CLUSTERS}
+    return tables.get(context, {})
 
 
-def _with_ignored(diagram: str, name: str, files: Sequence[Path]) -> str:
-    """`diagram` plus the classes of the files pyreverse crashes on in company."""
-    extras = [
-        _diagram(name, [file], "classes", ignore=False)
-        for file in files
-        if file.name == PYREVERSE_IGNORE
-    ]
-    return render.merge_mermaid([diagram, *extras]) if extras else diagram
-
-
-def domain_class_pages() -> dict[str, str]:
-    """The class pages of `process/domain`: pyreverse's dot output over the layer, plus a run
-    over `board.py` alone (the layer run skips it, see `PYREVERSE_IGNORE`), parsed by
-    `classes.parse` and merged by qualified name. The relations between the classes of
-    `board.py` and the rest of the layer are lost, as they are with mmd (ADR-0076)."""
-    module, layer = DOT_LAYER
-    name = f"{module}-{layer}"
-    directory = _module_dir(module) / layer
-    runs = [(_pyreverse(name, [directory], output="dot"), name)]
+def class_pages(context: str, layer: str) -> dict[str, str]:
+    """The class pages of `agentic/core/<context>/<layer>`: pyreverse's dot output over the
+    layer, plus a run over each file named `PYREVERSE_IGNORE` alone (the layer run skips it, see
+    there), parsed by `classes.parse` and merged by qualified name. The relations between the
+    classes of such a file and the rest of the layer are not drawn (ADR-0076),
+    and the pages that hold them say so. Relative path -> text; empty when the layer is not
+    there or has no public class."""
+    name = f"{context}-{layer}"
+    directory = _module_dir(context) / layer
+    if not directory.is_dir():
+        return {}
+    runs = [(_pyreverse(name, [directory]), name, False)]
     runs += [
-        (_pyreverse(name, [file], ignore=False, output="dot"), f"{name} ({file.name})")
+        (_pyreverse(name, [file], ignore=False), f"{name} ({file.name})", True)
         for file in sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
         if file.name == PYREVERSE_IGNORE
     ]
     parsed = []
-    for files, label in runs:
+    separate: set[str] = set()
+    for files, label, alone in runs:
         found = sorted(file for file in files if file.startswith("classes_"))
         if len(found) != 1:
             raise GenerateError(f"pyreverse wrote {len(found)} `classes_*.dot` files for {label}")
         try:
-            parsed.append(classes.parse(files[found[0]]))
+            run = classes.parse(files[found[0]], context, layer)
         except ValueError as error:
             raise GenerateError(f"{label}: {error}") from error
+        parsed.append(run)
+        if alone:
+            separate.update(node.module for node in run[0])
     try:
-        pages = classes.pages(*classes.merge(*parsed), groups.CLUSTERS)
+        model = classes.pages(
+            *classes.merge(*parsed),
+            context,
+            layer,
+            groups.CLASS_GROUPING,
+            cluster_table(context),
+            separate,
+        )
     except ValueError as error:
         raise GenerateError(str(error)) from error
-    return render.class_pages(pages)
-
-
-def class_diagrams(module: str, layers: Sequence[str]) -> dict[str, str]:
-    """`<module>-<layer>[-<n>]` -> class diagram, for each layer that exists and has a class.
-    A layer over the Mermaid limit is split in at most two chunks of consecutive source files
-    in alphabetical order; if two are not enough this refuses."""
-    found: dict[str, str] = {}
-    for layer in layers:
-        directory = _module_dir(module) / layer
-        if not directory.is_dir():
-            continue
-        name = f"{module}-{layer}"
-        every = sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
-        whole = _with_ignored(_diagram(name, [directory], "classes"), name, every)
-        if not render.has_classes(whole):
-            continue
-        try:
-            render.mermaid_limits(whole)
-        except ValueError:
-            middle = (len(every) + 1) // 2
-            for number, chunk in enumerate((every[:middle], every[middle:]), start=1):
-                diagram = _with_ignored(_diagram(name, chunk, "classes"), name, chunk)
-                try:
-                    render.mermaid_limits(diagram)
-                except ValueError as error:
-                    raise GenerateError(
-                        f"{name} is over the Mermaid limit even in two chunks: {error}"
-                    ) from error
-                if render.has_classes(diagram):
-                    found[f"{name}-{number}"] = diagram
-        else:
-            found[name] = whole
-    return found
+    return render.class_pages(model)
 
 
 def _write(root: Path, relative: str, text: str) -> None:
@@ -266,13 +232,12 @@ def _remove_stale(root: Path, kept: Sequence[str]) -> None:
 
 def generate(
     root: Path, layers: Mapping[str, tuple[str, ...]] = render.LAYERS
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Write every generated file under `root`. `layers` maps each module to draw (its
     packages and its classes) to its layers; every package diagram is a page built from the
-    import reader, and the class diagrams of `process/domain` are pages built from pyreverse's
-    dot output. Returns the relative paths written, sorted, the names of the `.mmd` class
-    diagrams among them and the paths of the role-graph pages and of the package and class
-    pages among them: what `render.outputs` takes."""
+    import reader, and every class diagram is a page built from pyreverse's dot output.
+    Returns the relative paths written, sorted, the paths of the role-graph pages among them
+    and the paths of the package and class pages among them: what `render.outputs` takes."""
     from agentic.core.knowledge.domain import stack
 
     try:
@@ -294,7 +259,18 @@ def generate(
             package_texts.update(render.package_pages(model, module))
     except ValueError as error:
         raise GenerateError(str(error)) from error
-    class_texts = domain_class_pages() if DOT_LAYER[1] in layers.get(DOT_LAYER[0], ()) else {}
+    class_texts: dict[str, str] = {}
+    # Every pyreverse run is its own subprocess, independent of the others: the layers go in
+    # parallel and their results are read in the order of `layers`, so nothing written depends
+    # on which run finishes first.
+    with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
+        page_jobs = [
+            pool.submit(class_pages, module, layer)
+            for module, module_layers in layers.items()
+            for layer in module_layers
+        ]
+        for job in page_jobs:
+            class_texts.update(job.result())
     texts: dict[str, str] = {
         **role_pages,
         **package_texts,
@@ -302,12 +278,6 @@ def generate(
         render.CLI_REFERENCE: render.cli_reference(cli_helps()),
         render.STACK_REFERENCE: render.stack_reference(stack.KEY_REFERENCE),
     }
-    names: list[str] = []
-    for module, module_layers in layers.items():
-        mmd_layers = tuple(layer for layer in module_layers if (module, layer) != DOT_LAYER)
-        for name, diagram in class_diagrams(module, mmd_layers).items():
-            texts[render.classes_path(name)] = diagram
-            names.append(name)
     for relative, text in texts.items():
         try:
             render.mermaid_limits(text)
@@ -321,7 +291,6 @@ def generate(
         raise GenerateError(message)
     return (
         written,
-        tuple(sorted(names)),
         tuple(sorted(role_pages)),
         tuple(sorted({*package_texts, *class_texts})),
     )

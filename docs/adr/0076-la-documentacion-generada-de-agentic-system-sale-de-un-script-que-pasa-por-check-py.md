@@ -122,3 +122,27 @@ El diagrama de clases del dominio de `process` (180 clases en una sola página) 
   `imports_of` como las de `process`: un índice y una página por capa. Una capa que pasa del
   presupuesto hace fallar el generador, nombrándola y pidiendo agregar grupos. Se borran
   `packages-knowledge.mmd`, `packages-measurement.mmd` y `classes-process-domain.mmd`.
+
+## Addendum (GH-430, parte 4): terminó la exención de los `.mmd`
+
+La exención de los `.mmd` heredados (parte 1) terminó: no queda ningún `.mmd` bajo
+`docs/architecture/generated/`, `check_budget` mide todo diagrama de `docs/architecture/**` sin
+excepción y un test falla si reaparece uno. Cada diagrama de clases es ahora una página `.md`
+construida con la salida `dot` de pyreverse, y se borraron `merge_mermaid`, `select_mermaid`,
+`classes_path`, `has_classes`, `class_diagrams` y la corrida `-o mmd`: `generate.py` pide siempre
+`dot` y el límite de la parte 1 (dos trozos por archivo) deja de existir.
+
+- **El agrupamiento por capa vive en `CLASS_GROUPING`** (`scripts/docs/groups.py`), una línea
+  por `(contexto, capa)`, ordenada, con valor `clusters` (las tablas de módulos de `CLUSTERS`),
+  `kind` (un tipo de adaptador por página, más una página para los módulos sueltos) o `layer`
+  (una página con toda la capa). Una capa sin línea hace fallar el generador, nombrándola.
+- **La partición es por significado hasta el módulo, y por cantidad sólo dentro de un grupo que
+  el tamaño de un solo módulo hace pasar del presupuesto de clases de un diagrama
+  (`DIAGRAM_BUDGET.classes`)** (el caso de `ports.py` dentro de
+  `support`); en ese caso la página va numerada.
+- **Las relaciones de un archivo dibujado en su propia corrida de pyreverse** (`board.py`, que
+  astroid no puede analizar junto con otro módulo) **con el resto de su capa no se dibujan**, y la
+  página que contiene sus clases lo dice; la nota sale de las corridas que el generador hizo, no
+  de un texto escrito a mano.
+- **Una relación hacia una clase de otra página** se lista debajo del diagrama, agrupada por
+  página de destino.

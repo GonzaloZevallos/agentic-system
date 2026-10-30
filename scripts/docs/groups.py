@@ -6,6 +6,8 @@ that is in no phase fails the generator by name, with the line to add; there is 
 group (ADR-0076).
 
 `CLUSTERS` does the same for the modules of the process package diagrams (GH-430 part 2).
+`CLASS_GROUPING` says how the class pages of each layer are grouped and `MEASUREMENT_CLUSTERS`
+holds the clusters of the one layer of `measurement` that needs them (GH-430 part 4).
 """
 
 from __future__ import annotations
@@ -160,4 +162,33 @@ CLUSTERS: Mapping[str, str] = {
     "domain.system_lessons": "playbook",
     "domain.task": "state",
     "domain.turn_notice": "roles",
+}
+
+# How the class pages of each layer are grouped, keyed `<context>/<layer>`: `clusters` takes the
+# cluster of each module from `CLUSTERS` (process) or `MEASUREMENT_CLUSTERS` (measurement), `kind`
+# one page per adapter kind with the loose modules in `toplevel`, `layer` the whole layer in one
+# page (it fails when the layer has more classes than a diagram holds). One entry per line,
+# sorted; a layer with no entry fails the generator by name, with the line to paste.
+CLASS_GROUPING: Mapping[str, str] = {
+    "knowledge/adapters": "layer",
+    "knowledge/domain": "layer",
+    "measurement/adapters": "layer",
+    "measurement/application": "layer",
+    "measurement/domain": "clusters",
+    "process/adapters": "kind",
+    "process/application": "clusters",
+    "process/domain": "clusters",
+}
+
+# The cluster of each module of `agentic/core/measurement/domain`, keyed like `CLUSTERS`
+# (`domain.<module>`): the layer has 26 public classes, more than a diagram holds. One entry per
+# line, sorted; a module with a class and no entry fails the generator by name.
+MEASUREMENT_CLUSTERS: Mapping[str, str] = {
+    "domain.dashboards": "langfuse",
+    "domain.evaluation": "scorecard",
+    "domain.findings_report": "reports",
+    "domain.playbook_window": "reports",
+    "domain.role_usage": "reports",
+    "domain.scorecard": "scorecard",
+    "domain.task_scores": "langfuse",
 }
