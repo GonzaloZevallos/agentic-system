@@ -379,10 +379,7 @@ def _target_end(
     return _package_end(sub)
 
 
-_PACKAGE_NODES = (
-    "con su página si es un paquete de `process`, sin ella si es de fuera (por ejemplo "
-    "`agentic.shared`)."
-)
+_PACKAGE_NODES = "con su página si es un paquete de `process`, sin ella si es de fuera."
 
 
 def _cluster_sentence(layer: str, cluster: str, how: str, parts: tuple[int, int] | None) -> str:
