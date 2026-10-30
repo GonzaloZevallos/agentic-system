@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import classes
 import groups
 import packages
 
@@ -39,9 +40,12 @@ ESCALATION = "escalation"
 CLI_REFERENCE = f"{REFERENCE}/cli.md"
 STACK_REFERENCE = f"{REFERENCE}/stack-yaml.md"
 MODULES = ("process", "knowledge", "measurement")
-# The modules whose package diagram is a pyreverse `.mmd`; `process` has its own pages, built
-# from the import reader (`packages.py`, GH-430 part 2).
-PACKAGE_MODULES = ("knowledge", "measurement")
+# The layers of the modules whose package pages have no groups (`packages.build_pages`, GH-430
+# part 3); `process` has grouped pages (part 2). Every package diagram is a page now.
+FLAT_PACKAGES: Mapping[str, tuple[str, ...]] = {
+    "knowledge": ("domain", "adapters"),
+    "measurement": ("domain", "application", "adapters"),
+}
 # The layer directories each module may have (ADR-0010); a layer that is not there, or has
 # no class, writes nothing.
 LAYERS: Mapping[str, tuple[str, ...]] = {
@@ -82,15 +86,20 @@ class Overage:
     limits: tuple[str, ...]
 
 
-def packages_path(module: str) -> str:
-    return f"{GENERATED}/packages-{module}.mmd"
-
-
-def package_page_path(key: str) -> str:
-    """The file of one page key of `packages.build_pages`; `index` is the index of the pages."""
+def package_page_path(key: str, module: str = "process") -> str:
+    """The file of one page key of `packages.build_pages` for `module`; `index` is the index
+    of the pages."""
     if key == packages.INDEX:
-        return f"{GENERATED}/packages-process.md"
-    return f"{GENERATED}/packages-process-{key}.md"
+        return f"{GENERATED}/packages-{module}.md"
+    return f"{GENERATED}/packages-{module}-{key}.md"
+
+
+def class_page_path(key: str) -> str:
+    """The file of one page key of `classes.pages`: the index of the class diagrams of
+    `process/domain` is `classes-process-domain.md`, a cluster page `classes-<key>.md`."""
+    if key == classes.INDEX:
+        return f"{GENERATED}/classes-process-domain.md"
+    return f"{GENERATED}/classes-{key}.md"
 
 
 def classes_path(name: str) -> str:
@@ -102,17 +111,17 @@ def outputs(
     class_diagrams: Iterable[str],
     role_graph: Iterable[str],
     package_pages: Iterable[str],
-    modules: Iterable[str] = PACKAGE_MODULES,
+    class_pages: Iterable[str] = (),
 ) -> tuple[str, ...]:
     """The relative paths the generator writes, sorted. `class_diagrams` are the names of the
-    class diagrams it wrote (a layer with no class has none, one over the limit has two),
-    which only the run can know; `modules` are the modules whose package diagram is a pyreverse
-    file; `role_graph` and `package_pages` are the keys `role_graph_pages` and `package_pages`
-    returned, the only lists of those pages there are."""
+    pyreverse `.mmd` class diagrams it wrote (a layer with no class has none, one over the
+    limit has two), which only the run can know; `role_graph`, `package_pages` and
+    `class_pages` are the paths `role_graph_pages`, `package_pages` and `class_pages` returned,
+    the only lists of those pages there are."""
     paths = {CLI_REFERENCE, STACK_REFERENCE}
     paths.update(role_graph)
     paths.update(package_pages)
-    paths.update(packages_path(module) for module in modules)
+    paths.update(class_pages)
     paths.update(classes_path(name) for name in class_diagrams)
     return tuple(sorted(paths))
 
@@ -367,34 +376,35 @@ def _page(sentence: str, here: str, pages: Mapping[str, str], body: str) -> str:
     return f"{sentence}\n\n{_navigation(here, pages)}\n{body}".rstrip("\n") + "\n"
 
 
-def _tree(key: str, model: Mapping[str, packages.Page], depth: int) -> list[str]:
+def _tree(key: str, model: Mapping[str, packages.Page], depth: int, module: str) -> list[str]:
     """The list item of the page `key` and, nested under it, those of its children."""
     page = model[key]
-    lines = [f"{'  ' * depth}- [{page.title}]({Path(package_page_path(key)).name})"]
+    lines = [f"{'  ' * depth}- [{page.title}]({Path(package_page_path(key, module)).name})"]
     for child in page.children:
-        lines.extend(_tree(child, model, depth + 1))
+        lines.extend(_tree(child, model, depth + 1, module))
     return lines
 
 
-def _package_navigation(page: packages.Page, model: Mapping[str, packages.Page]) -> str:
+def _package_navigation(
+    page: packages.Page, model: Mapping[str, packages.Page], module: str
+) -> str:
     """The Markdown list of a package page: the index lists every page nested under its
     parent; any other page lists its parent and its siblings, and its children below."""
     if page.parent is None:
-        return (
-            "\n".join(["- Páginas:", *(line for c in page.children for line in _tree(c, model, 1))])
-            + "\n"
-        )
+        nested = (line for c in page.children for line in _tree(c, model, 1, module))
+        return "\n".join(["- Páginas:", *nested]) + "\n"
     family = {page.parent, page.key, *page.siblings}
-    titles = {package_page_path(key): model[key].title for key in family}
-    text = _navigation(package_page_path(page.key), titles, package_page_path(page.parent))
+    titles = {package_page_path(key, module): model[key].title for key in family}
+    here, parent = package_page_path(page.key, module), package_page_path(page.parent, module)
+    text = _navigation(here, titles, parent)
     if page.children:
-        kids = [f"  - {_tree(child, model, 0)[0][2:]}" for child in page.children]
+        kids = [f"  - {_tree(child, model, 0, module)[0][2:]}" for child in page.children]
         text += "\n".join(["- Grupos:", *kids]) + "\n"
     return text
 
 
-def package_pages(model: Mapping[str, packages.Page]) -> dict[str, str]:
-    """The process package pages as files: relative path -> text. Each is its Spanish
+def package_pages(model: Mapping[str, packages.Page], module: str = "process") -> dict[str, str]:
+    """The package pages of `module` as files: relative path -> text. Each is its Spanish
     sentence, the Markdown navigation (the parent and the siblings; the index lists every page)
     and one `graph TD` block with no `click`; the nodes and edges come from `packages`."""
     result: dict[str, str] = {}
@@ -405,8 +415,83 @@ def package_pages(model: Mapping[str, packages.Page]) -> dict[str, str]:
             block.node((identifier, label))
         for source, target in page.edges:
             block.edge((source, labels[source]), (target, labels[target]), False)
-        navigation = _package_navigation(page, model)
-        result[package_page_path(key)] = f"{page.sentence}\n\n{navigation}\n{block.fence()}"
+        navigation = _package_navigation(page, model, module)
+        text = f"{page.sentence}\n\n{navigation}\n{block.fence()}"
+        result[package_page_path(key, module)] = text
+    return result
+
+
+# What each relation kind says, as the Mermaid arrow from `source` to `target` (the dot
+# direction, see `classes.py`) and as a Spanish phrase. Aggregation and composition run from
+# the part to the owner in dot, so Mermaid draws the owner first.
+_ARROWS = {
+    "inherits": ("{s} --|> {t}", "`{s}` hereda de `{t}`"),
+    "associates": ("{s} --> {t}", "`{s}` se asocia con `{t}`"),
+    "aggregates": ("{t} o-- {s}", "`{t}` agrega a `{s}`"),
+    "composes": ("{t} *-- {s}", "`{t}` compone a `{s}`"),
+}
+
+
+def _class_diagram(page: classes.ClassPage) -> str:
+    lines = ["classDiagram"]
+    lines.extend(f'    class {identifier}["{label}"]' for identifier, label in page.nodes)
+    lines.extend(
+        f"    {_ARROWS[kind][0].format(s=source, t=target)}" for source, target, kind in page.edges
+    )
+    return f"```mermaid\n{chr(10).join(lines)}\n```\n"
+
+
+def _owner(model: Mapping[str, classes.ClassPage]) -> dict[str, str]:
+    """The page key of each canonical class name, from the nodes of every page."""
+    found: dict[str, str] = {}
+    for key, page in model.items():
+        for identifier, _ in page.nodes:
+            found[identifier] = key
+    return found
+
+
+def _elsewhere(page: classes.ClassPage, model: Mapping[str, classes.ClassPage]) -> str:
+    """The relations of `page` the diagram does not draw, as a Markdown list; each says where
+    the class on the other page is drawn. Empty when there are none."""
+    if not page.elsewhere:
+        return ""
+    owner = _owner(model)
+
+    def where(qname: str) -> str:
+        module, _, name = qname.rpartition(".")
+        found = owner[classes.node_id(module, name)]
+        return f"[{model[found].title}]({Path(class_page_path(found)).name})"
+
+    here = {identifier for identifier, _ in page.nodes}
+    items = []
+    for source, target, kind in page.elsewhere:
+        module, _, name = source.rpartition(".")
+        other = target if classes.node_id(module, name) in here else source
+        phrase = _ARROWS[kind][1].format(s=source, t=target)
+        items.append(f"- {phrase} (en {where(other)})")
+    return "\n## Relaciones con otras páginas\n\n" + "\n".join(items) + "\n"
+
+
+def class_pages(model: Mapping[str, classes.ClassPage]) -> dict[str, str]:
+    """The class pages of `process/domain` as files: relative path -> text. Each is its Spanish
+    sentence, the Markdown navigation (the index lists every page; any other lists its parent
+    and its siblings), one `classDiagram` block with qualified ids, labels from `classes.labels`
+    and no `click`, and, under it, the list `Relaciones con otras páginas`."""
+    result: dict[str, str] = {}
+    for key, page in model.items():
+        titles = {class_page_path(other): model[other].title for other in model}
+        here = class_page_path(key)
+        if page.parent is None:
+            links = [
+                f"  - [{titles[path]}]({Path(path).name})" for path in sorted(titles) if path != here
+            ]
+            result[here] = f"{page.sentence}\n\n" + "\n".join(["- Páginas:", *links]) + "\n"
+            continue
+        family = {class_page_path(page.parent): titles[class_page_path(page.parent)]}
+        family.update({class_page_path(k): model[k].title for k in (key, *page.siblings)})
+        navigation = _navigation(here, family, class_page_path(page.parent))
+        body = _class_diagram(page) + _elsewhere(page, model)
+        result[here] = f"{page.sentence}\n\n{navigation}\n{body}"
     return result
 
 

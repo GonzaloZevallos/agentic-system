@@ -53,10 +53,13 @@ Flujos clave, como diagramas de secuencia:
   [application](architecture/generated/packages-process-application.md) y
   [adapters](architecture/generated/packages-process-adapters.md), cada una con las de sus
   grupos o sus tipos de adaptador.
-- Paquetes de los otros módulos:
-  [knowledge](architecture/generated/packages-knowledge.mmd),
-  [measurement](architecture/generated/packages-measurement.mmd).
-- Clases por módulo y capa, en `docs/architecture/generated/`; el índice está en
+- Clases de `process/domain`: el
+  [índice](architecture/generated/classes-process-domain.md) primero y, debajo, una página
+  por grupo de `CLUSTERS`, partida por cantidad si el grupo es grande.
+- Paquetes de `knowledge` y `measurement`: los índices
+  [knowledge](architecture/generated/packages-knowledge.md) y
+  [measurement](architecture/generated/packages-measurement.md), con una página por capa.
+- Clases de los otros módulos y capas, en `docs/architecture/generated/`; el índice está en
   [componentes](architecture/componentes.md).
 
 ## Referencias

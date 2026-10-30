@@ -47,7 +47,7 @@ def scripts() -> Iterator[tuple[ModuleType, ModuleType]]:
         yield loaded[0], loaded[1]
     finally:
         sys.path.remove(str(SCRIPTS))
-        for name in ("render", "generate", "groups", "imports", "packages"):
+        for name in ("render", "generate", "groups", "imports", "packages", "classes"):
             sys.modules.pop(name, None)
 
 
@@ -63,11 +63,11 @@ def test_generation_is_byte_deterministic_and_equals_outputs(
     scripts: tuple[ModuleType, ModuleType], tmp_path: Path
 ) -> None:
     render, generate = scripts
-    layers = {"knowledge": ("domain", "adapters")}
+    layers = {"process": ("domain",), "knowledge": ("domain", "adapters")}
     first, second = tmp_path / "first", tmp_path / "second"
     written, names, role_pages, package_paths = generate.generate(first, layers)
     again, _, _, _ = generate.generate(second, layers)
-    assert written == again == render.outputs(names, role_pages, package_paths, ("knowledge",))
+    assert written == again == render.outputs(names, role_pages, package_paths)
     assert sorted(_tree(first)) == list(written)
     assert _tree(first) == _tree(second)
     for relative, content in _tree(first).items():
@@ -102,21 +102,49 @@ def _role_keys(scripts: tuple[ModuleType, ModuleType]) -> list[str]:
     return sorted(render.role_graph_pages(*generate.role_graph_inputs()))
 
 
-def _package_pages(scripts: tuple[ModuleType, ModuleType]) -> dict[str, str]:
-    """The process package pages the pure builder returns for the real tree, in this process:
-    no pyreverse and nothing written."""
+def _package_pages(
+    scripts: tuple[ModuleType, ModuleType], module: str = "process"
+) -> dict[str, str]:
+    """The package pages of `module` the pure builder returns for the real tree, in this
+    process: no pyreverse and nothing written."""
     render, generate = scripts
     groups, packages = sys.modules["groups"], sys.modules["packages"]
     on_disk, imported = generate.package_page_inputs()
-    return render.package_pages(packages.build_pages(on_disk, imported, groups.CLUSTERS))
+    if module == "process":
+        return render.package_pages(packages.build_pages(on_disk, imported, groups.CLUSTERS))
+    model = packages.build_pages(
+        on_disk, imported, {}, f"agentic.core.{module}", render.FLAT_PACKAGES[module]
+    )
+    return render.package_pages(model, module)
 
 
 def _package_keys(scripts: tuple[ModuleType, ModuleType]) -> list[str]:
-    return sorted(_package_pages(scripts))
+    """The paths of the package pages of every module and the class pages of process/domain,
+    each from its own pure builder; the class pages need one pyreverse run, made once."""
+    _, generate = scripts
+    paths = {
+        path
+        for module in ("process", "knowledge", "measurement")
+        for path in _package_pages(scripts, module)
+    }
+    return sorted(paths | set(_class_page_texts(generate)))
+
+
+_CLASS_PAGES: dict[str, str] = {}
+
+
+def _class_page_texts(generate: ModuleType) -> dict[str, str]:
+    if not _CLASS_PAGES:
+        _CLASS_PAGES.update(generate.domain_class_pages())
+    return _CLASS_PAGES
 
 
 def _run_classes(files: Iterable[str]) -> list[str]:
-    return [Path(name).stem.removeprefix("classes-") for name in files if "/classes-" in name]
+    return [
+        Path(name).stem.removeprefix("classes-")
+        for name in files
+        if "/classes-" in name and name.endswith(".mmd")
+    ]
 
 
 def test_minimal_environment_run_writes_every_output_under_root(
@@ -970,10 +998,10 @@ def test_outputs_lists_exactly_the_role_graph_keys_it_is_given(
 ) -> None:
     render, _ = scripts
     keys = sorted(_toy_pages(render, has_land=True))
-    written = render.outputs((), modules=(), role_graph=keys, package_pages=[])
+    written = render.outputs((), role_graph=keys, package_pages=[])
     assert set(keys) <= set(written)
     assert set(written) - set(keys) == {render.CLI_REFERENCE, render.STACK_REFERENCE}
-    assert render.outputs((), modules=(), role_graph=[], package_pages=[]) == (
+    assert render.outputs((), role_graph=[], package_pages=[]) == (
         render.CLI_REFERENCE,
         render.STACK_REFERENCE,
     )
@@ -1190,7 +1218,7 @@ def test_packages_process_mmd_is_gone_from_outputs_and_from_the_tree(
     render, _ = scripts
     old = "docs/architecture/generated/packages-process.mmd"
     assert old not in render.outputs([], _role_keys(scripts), _package_keys(scripts))
-    assert "process" not in render.PACKAGE_MODULES
+    assert not hasattr(render, "PACKAGE_MODULES") and not hasattr(render, "packages_path")
     assert old not in _tree(full_run)
     assert not (REPO / old).exists()
     assert render.package_page_path("index") in _tree(full_run)

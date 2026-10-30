@@ -23,6 +23,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import classes
 import groups
 import imports
 import packages
@@ -36,7 +37,10 @@ HELP_WIDTH = 100
 # fine. So the layer runs skip it and its classes come from a run over that file alone,
 # merged in (ADR-0076). The package diagrams lack its node: a single-file run draws none.
 PYREVERSE_IGNORE = "board.py"
-PYREVERSE_FLAGS = ("-o", "mmd", "-k", "--filter-mode", "PUB_ONLY")
+PYREVERSE_FLAGS = ("-k", "--filter-mode", "PUB_ONLY")
+# The class pages of `process/domain` come from the dot output (it keeps qualified class
+# names, so homonyms are never merged); the other layers keep their mmd until GH-430 part 4.
+DOT_LAYER = ("process", "domain")
 
 
 class GenerateError(Exception):
@@ -94,7 +98,7 @@ def branch_graph() -> Any:
 def package_page_inputs() -> tuple[dict[str, bool], dict[str, set[str]]]:
     """What `packages.build_pages` takes besides `CLUSTERS`: every module under `agentic/` on
     disk, mapped to whether it is a package `__init__` (named by its package), and the names
-    `imports_of` reads from each process file."""
+    `imports_of` reads from each file of `process`, `knowledge` and `measurement`."""
     on_disk: dict[str, bool] = {}
     imported: dict[str, set[str]] = {}
     for file in sorted((REPO / "agentic").rglob("*.py")):
@@ -102,13 +106,16 @@ def package_page_inputs() -> tuple[dict[str, bool], dict[str, set[str]]]:
         is_package = parts[-1] == "__init__"
         name = ".".join(parts[:-1] if is_package else parts)
         on_disk[name] = is_package
-        if name.startswith(packages.PROCESS + ".") and not is_package:
+        if not is_package and any(name.startswith(f"agentic.core.{m}.") for m in render.MODULES):
             imported[name] = imports.imports_of(file, REPO)
     return on_disk, imported
 
 
-def _pyreverse(name: str, targets: Sequence[Path], ignore: bool = True) -> dict[str, str]:
-    """Run pyreverse over `targets` with the fixed project name `name`; the files it wrote."""
+def _pyreverse(
+    name: str, targets: Sequence[Path], ignore: bool = True, output: str = "mmd"
+) -> dict[str, str]:
+    """Run pyreverse over `targets` with the fixed project name `name`, writing `output` (`mmd`
+    or `dot`); the files it wrote."""
     environment = {"PYTHONHASHSEED": "0", "PATH": os.environ.get("PATH", "")}
     if "HOME" in os.environ:
         environment["HOME"] = os.environ["HOME"]
@@ -117,6 +124,8 @@ def _pyreverse(name: str, targets: Sequence[Path], ignore: bool = True) -> dict[
             sys.executable,
             "-m",
             "pylint.pyreverse.main",
+            "-o",
+            output,
             *PYREVERSE_FLAGS,
             *(("--ignore", PYREVERSE_IGNORE) if ignore else ()),
             "-p",
@@ -166,6 +175,36 @@ def _with_ignored(diagram: str, name: str, files: Sequence[Path]) -> str:
         if file.name == PYREVERSE_IGNORE
     ]
     return render.merge_mermaid([diagram, *extras]) if extras else diagram
+
+
+def domain_class_pages() -> dict[str, str]:
+    """The class pages of `process/domain`: pyreverse's dot output over the layer, plus a run
+    over `board.py` alone (the layer run skips it, see `PYREVERSE_IGNORE`), parsed by
+    `classes.parse` and merged by qualified name. The relations between the classes of
+    `board.py` and the rest of the layer are lost, as they are with mmd (ADR-0076)."""
+    module, layer = DOT_LAYER
+    name = f"{module}-{layer}"
+    directory = _module_dir(module) / layer
+    runs = [(_pyreverse(name, [directory], output="dot"), name)]
+    runs += [
+        (_pyreverse(name, [file], ignore=False, output="dot"), f"{name} ({file.name})")
+        for file in sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
+        if file.name == PYREVERSE_IGNORE
+    ]
+    parsed = []
+    for files, label in runs:
+        found = sorted(file for file in files if file.startswith("classes_"))
+        if len(found) != 1:
+            raise GenerateError(f"pyreverse wrote {len(found)} `classes_*.dot` files for {label}")
+        try:
+            parsed.append(classes.parse(files[found[0]]))
+        except ValueError as error:
+            raise GenerateError(f"{label}: {error}") from error
+    try:
+        pages = classes.pages(*classes.merge(*parsed), groups.CLUSTERS)
+    except ValueError as error:
+        raise GenerateError(str(error)) from error
+    return render.class_pages(pages)
 
 
 def class_diagrams(module: str, layers: Sequence[str]) -> dict[str, str]:
@@ -229,11 +268,11 @@ def generate(
     root: Path, layers: Mapping[str, tuple[str, ...]] = render.LAYERS
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Write every generated file under `root`. `layers` maps each module to draw (its
-    packages and its classes) to its layers; `process` has no pyreverse package diagram, its
-    package pages are built from the import reader whenever it is among them. Returns the
-    relative paths written, sorted, the names of the class diagrams among them and the paths of
-    the role-graph pages and of the process package pages among them: what `render.outputs`
-    takes."""
+    packages and its classes) to its layers; every package diagram is a page built from the
+    import reader, and the class diagrams of `process/domain` are pages built from pyreverse's
+    dot output. Returns the relative paths written, sorted, the names of the `.mmd` class
+    diagrams among them and the paths of the role-graph pages and of the package and class
+    pages among them: what `render.outputs` takes."""
     from agentic.core.knowledge.domain import stack
 
     try:
@@ -241,27 +280,32 @@ def generate(
     except ValueError as error:
         raise GenerateError(str(error)) from error
     package_texts: dict[str, str] = {}
-    if "process" in layers:
-        try:
-            on_disk, imported = package_page_inputs()
-            package_texts = render.package_pages(
-                packages.build_pages(on_disk, imported, groups.CLUSTERS)
-            )
-        except ValueError as error:
-            raise GenerateError(str(error)) from error
+    try:
+        on_disk, imported = package_page_inputs()
+        for module in layers:
+            if module == "process":
+                model = packages.build_pages(on_disk, imported, groups.CLUSTERS)
+            elif module in render.FLAT_PACKAGES:
+                model = packages.build_pages(
+                    on_disk, imported, {}, f"agentic.core.{module}", render.FLAT_PACKAGES[module]
+                )
+            else:
+                continue
+            package_texts.update(render.package_pages(model, module))
+    except ValueError as error:
+        raise GenerateError(str(error)) from error
+    class_texts = domain_class_pages() if DOT_LAYER[1] in layers.get(DOT_LAYER[0], ()) else {}
     texts: dict[str, str] = {
         **role_pages,
         **package_texts,
+        **class_texts,
         render.CLI_REFERENCE: render.cli_reference(cli_helps()),
         render.STACK_REFERENCE: render.stack_reference(stack.KEY_REFERENCE),
     }
     names: list[str] = []
     for module, module_layers in layers.items():
-        if module in render.PACKAGE_MODULES:
-            texts[render.packages_path(module)] = _diagram(
-                module, [_module_dir(module)], "packages"
-            )
-        for name, diagram in class_diagrams(module, module_layers).items():
+        mmd_layers = tuple(layer for layer in module_layers if (module, layer) != DOT_LAYER)
+        for name, diagram in class_diagrams(module, mmd_layers).items():
             texts[render.classes_path(name)] = diagram
             names.append(name)
     for relative, text in texts.items():
@@ -275,7 +319,12 @@ def generate(
     _remove_stale(root, written)
     if message := budget_message(render.check_budget(root)):
         raise GenerateError(message)
-    return written, tuple(sorted(names)), tuple(sorted(role_pages)), tuple(sorted(package_texts))
+    return (
+        written,
+        tuple(sorted(names)),
+        tuple(sorted(role_pages)),
+        tuple(sorted({*package_texts, *class_texts})),
+    )
 
 
 def budget_message(overages: Sequence[tuple[str, render.Overage]]) -> str:
