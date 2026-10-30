@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import groups
+import packages
 
 from agentic.core.knowledge.domain.stack import (
     Computed,
@@ -38,6 +39,9 @@ ESCALATION = "escalation"
 CLI_REFERENCE = f"{REFERENCE}/cli.md"
 STACK_REFERENCE = f"{REFERENCE}/stack-yaml.md"
 MODULES = ("process", "knowledge", "measurement")
+# The modules whose package diagram is a pyreverse `.mmd`; `process` has its own pages, built
+# from the import reader (`packages.py`, GH-430 part 2).
+PACKAGE_MODULES = ("knowledge", "measurement")
 # The layer directories each module may have (ADR-0010); a layer that is not there, or has
 # no class, writes nothing.
 LAYERS: Mapping[str, tuple[str, ...]] = {
@@ -82,6 +86,13 @@ def packages_path(module: str) -> str:
     return f"{GENERATED}/packages-{module}.mmd"
 
 
+def package_page_path(key: str) -> str:
+    """The file of one page key of `packages.build_pages`; `index` is the index of the pages."""
+    if key == packages.INDEX:
+        return f"{GENERATED}/packages-process.md"
+    return f"{GENERATED}/packages-process-{key}.md"
+
+
 def classes_path(name: str) -> str:
     """`name` is `<module>-<layer>` or `<module>-<layer>-<n>`."""
     return f"{GENERATED}/classes-{name}.mmd"
@@ -90,14 +101,17 @@ def classes_path(name: str) -> str:
 def outputs(
     class_diagrams: Iterable[str],
     role_graph: Iterable[str],
-    modules: Iterable[str] = MODULES,
+    package_pages: Iterable[str],
+    modules: Iterable[str] = PACKAGE_MODULES,
 ) -> tuple[str, ...]:
     """The relative paths the generator writes, sorted. `class_diagrams` are the names of the
     class diagrams it wrote (a layer with no class has none, one over the limit has two),
-    which only the run can know; `modules` are the modules drawn; `role_graph` are the keys
-    `role_graph_pages` returned, the only list of role-graph pages there is."""
+    which only the run can know; `modules` are the modules whose package diagram is a pyreverse
+    file; `role_graph` and `package_pages` are the keys `role_graph_pages` and `package_pages`
+    returned, the only lists of those pages there are."""
     paths = {CLI_REFERENCE, STACK_REFERENCE}
     paths.update(role_graph)
+    paths.update(package_pages)
     paths.update(packages_path(module) for module in modules)
     paths.update(classes_path(name) for name in class_diagrams)
     return tuple(sorted(paths))
@@ -329,18 +343,18 @@ class _Block:
         return _fence(self.labels, self.edges)
 
 
-def _navigation(here: str, pages: Mapping[str, str]) -> str:
-    """The Markdown list of the parent (the overview) and the siblings of the page `here`;
-    the overview lists its children."""
+def _navigation(here: str, pages: Mapping[str, str], parent: str = ROLE_GRAPH) -> str:
+    """The Markdown list of the `parent` and the siblings of the page `here`; `pages` maps each
+    path to its title. The overview (`here` is the `parent`) lists its children."""
 
     def link(path: str) -> str:
         return f"[{pages[path]}]({Path(path).name})"
 
-    if here == ROLE_GRAPH:
-        children = [f"  - {link(path)}" for path in sorted(pages) if path != ROLE_GRAPH]
+    if here == parent:
+        children = [f"  - {link(path)}" for path in sorted(pages) if path != parent]
         return "\n".join(["- Fases:", *children]) + "\n"
-    siblings = [f"  - {link(path)}" for path in sorted(pages) if path not in (here, ROLE_GRAPH)]
-    lines = [f"- Padre: {link(ROLE_GRAPH)}"]
+    siblings = [f"  - {link(path)}" for path in sorted(pages) if path not in (here, parent)]
+    lines = [f"- Padre: {link(parent)}"]
     if siblings:
         lines.extend(["- Hermanas:", *siblings])
     return "\n".join(lines) + "\n"
@@ -351,6 +365,49 @@ _LEGEND = "Una flecha punteada es una arista condicional y una llena es fija."
 
 def _page(sentence: str, here: str, pages: Mapping[str, str], body: str) -> str:
     return f"{sentence}\n\n{_navigation(here, pages)}\n{body}".rstrip("\n") + "\n"
+
+
+def _tree(key: str, model: Mapping[str, packages.Page], depth: int) -> list[str]:
+    """The list item of the page `key` and, nested under it, those of its children."""
+    page = model[key]
+    lines = [f"{'  ' * depth}- [{page.title}]({Path(package_page_path(key)).name})"]
+    for child in page.children:
+        lines.extend(_tree(child, model, depth + 1))
+    return lines
+
+
+def _package_navigation(page: packages.Page, model: Mapping[str, packages.Page]) -> str:
+    """The Markdown list of a package page: the index lists every page nested under its
+    parent; any other page lists its parent and its siblings, and its children below."""
+    if page.parent is None:
+        return (
+            "\n".join(["- Páginas:", *(line for c in page.children for line in _tree(c, model, 1))])
+            + "\n"
+        )
+    family = {page.parent, page.key, *page.siblings}
+    titles = {package_page_path(key): model[key].title for key in family}
+    text = _navigation(package_page_path(page.key), titles, package_page_path(page.parent))
+    if page.children:
+        kids = [f"  - {_tree(child, model, 0)[0][2:]}" for child in page.children]
+        text += "\n".join(["- Grupos:", *kids]) + "\n"
+    return text
+
+
+def package_pages(model: Mapping[str, packages.Page]) -> dict[str, str]:
+    """The process package pages as files: relative path -> text. Each is its Spanish
+    sentence, the Markdown navigation (the parent and the siblings; the index lists every page)
+    and one `graph TD` block with no `click`; the nodes and edges come from `packages`."""
+    result: dict[str, str] = {}
+    for key, page in model.items():
+        block = _Block()
+        labels = dict(page.nodes)
+        for identifier, label in page.nodes:
+            block.node((identifier, label))
+        for source, target in page.edges:
+            block.edge((source, labels[source]), (target, labels[target]), False)
+        navigation = _package_navigation(page, model)
+        result[package_page_path(key)] = f"{page.sentence}\n\n{navigation}\n{block.fence()}"
+    return result
 
 
 def role_graph_pages(

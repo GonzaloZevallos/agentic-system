@@ -47,8 +47,13 @@ Flujos clave, como diagramas de secuencia:
   [deliver](architecture/generated/role-graph-deliver.md),
   [escalado y reanudación](architecture/generated/role-graph-escalation.md) y
   [land](architecture/generated/role-graph-land.md).
-- Paquetes por módulo:
-  [process](architecture/generated/packages-process.mmd),
+- Paquetes de `process`: el
+  [índice](architecture/generated/packages-process.md) primero y, debajo, sus páginas:
+  [domain](architecture/generated/packages-process-domain.md),
+  [application](architecture/generated/packages-process-application.md) y
+  [adapters](architecture/generated/packages-process-adapters.md), cada una con las de sus
+  grupos o sus tipos de adaptador.
+- Paquetes de los otros módulos:
   [knowledge](architecture/generated/packages-knowledge.mmd),
   [measurement](architecture/generated/packages-measurement.mmd).
 - Clases por módulo y capa, en `docs/architecture/generated/`; el índice está en

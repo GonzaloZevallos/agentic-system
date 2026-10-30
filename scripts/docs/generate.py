@@ -1,8 +1,10 @@
 """Write the generated documentation of agentic-system, deterministically (GH-400, ADR-0076).
 
 `uv run python scripts/docs/generate.py [--root DIR]` writes, under `DIR`, the role graph, the
-packages and classes of the three modules, the CLI reference and the stack reference. `DIR`
-defaults to the repository this file lives in, never to the working directory. What is
+packages and classes of the three modules, the CLI reference and the stack reference. The
+packages of `process` come from the import reader (`imports.py`), everything else from
+pyreverse. `DIR` defaults to the repository this file lives in, never to the working
+directory. What is
 written is decided by `render.py`, next to this file (Python puts the script's directory on
 `sys.path`); this file is the edge that builds the inputs: the argparse tree, the compiled
 graph (without a checkpointer: no SQLite file is opened) and the pyreverse runs. It writes
@@ -21,6 +23,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import groups
+import imports
+import packages
 import render
 
 REPO = Path(__file__).resolve().parents[2]
@@ -84,6 +89,22 @@ def branch_graph() -> Any:
         raise RuntimeError("drawing the graph asks for no ports")
 
     return pipeline_branch(no_ports, arm_for=lambda cfg: "")
+
+
+def package_page_inputs() -> tuple[dict[str, bool], dict[str, set[str]]]:
+    """What `packages.build_pages` takes besides `CLUSTERS`: every module under `agentic/` on
+    disk, mapped to whether it is a package `__init__` (named by its package), and the names
+    `imports_of` reads from each process file."""
+    on_disk: dict[str, bool] = {}
+    imported: dict[str, set[str]] = {}
+    for file in sorted((REPO / "agentic").rglob("*.py")):
+        parts = file.relative_to(REPO).with_suffix("").parts
+        is_package = parts[-1] == "__init__"
+        name = ".".join(parts[:-1] if is_package else parts)
+        on_disk[name] = is_package
+        if name.startswith(packages.PROCESS + ".") and not is_package:
+            imported[name] = imports.imports_of(file, REPO)
+    return on_disk, imported
 
 
 def _pyreverse(name: str, targets: Sequence[Path], ignore: bool = True) -> dict[str, str]:
@@ -206,25 +227,40 @@ def _remove_stale(root: Path, kept: Sequence[str]) -> None:
 
 def generate(
     root: Path, layers: Mapping[str, tuple[str, ...]] = render.LAYERS
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Write every generated file under `root`. `layers` maps each module to draw (its
-    packages and its classes) to its layers. Returns the relative paths written, sorted, the
-    names of the class diagrams among them and the keys of the role-graph pages among them:
-    what `render.outputs` takes."""
+    packages and its classes) to its layers; `process` has no pyreverse package diagram, its
+    package pages are built from the import reader whenever it is among them. Returns the
+    relative paths written, sorted, the names of the class diagrams among them and the paths of
+    the role-graph pages and of the process package pages among them: what `render.outputs`
+    takes."""
     from agentic.core.knowledge.domain import stack
 
     try:
         role_pages = render.role_graph_pages(*role_graph_inputs())
     except ValueError as error:
         raise GenerateError(str(error)) from error
+    package_texts: dict[str, str] = {}
+    if "process" in layers:
+        try:
+            on_disk, imported = package_page_inputs()
+            package_texts = render.package_pages(
+                packages.build_pages(on_disk, imported, groups.CLUSTERS)
+            )
+        except ValueError as error:
+            raise GenerateError(str(error)) from error
     texts: dict[str, str] = {
         **role_pages,
+        **package_texts,
         render.CLI_REFERENCE: render.cli_reference(cli_helps()),
         render.STACK_REFERENCE: render.stack_reference(stack.KEY_REFERENCE),
     }
     names: list[str] = []
     for module, module_layers in layers.items():
-        texts[render.packages_path(module)] = _diagram(module, [_module_dir(module)], "packages")
+        if module in render.PACKAGE_MODULES:
+            texts[render.packages_path(module)] = _diagram(
+                module, [_module_dir(module)], "packages"
+            )
         for name, diagram in class_diagrams(module, module_layers).items():
             texts[render.classes_path(name)] = diagram
             names.append(name)
@@ -239,7 +275,7 @@ def generate(
     _remove_stale(root, written)
     if message := budget_message(render.check_budget(root)):
         raise GenerateError(message)
-    return written, tuple(sorted(names)), tuple(sorted(role_pages))
+    return written, tuple(sorted(names)), tuple(sorted(role_pages)), tuple(sorted(package_texts))
 
 
 def budget_message(overages: Sequence[tuple[str, render.Overage]]) -> str:
