@@ -1229,3 +1229,94 @@ def test_a_layer_page_over_budget_is_refused_naming_the_page_and_its_counts(
             {name: f"c{n:02d}" for n, name in enumerate(names)},
         )
     assert "'domain' has 21 nodes and 0 edges" in str(caught.value)
+
+
+# --- The package pages of knowledge and measurement (GH-430 part 3): one page per layer ---
+
+KNOWLEDGE = "agentic.core.knowledge"
+
+
+def _flat_world(
+    modules: Iterable[str], outside: Iterable[str] = (), root: str = KNOWLEDGE
+) -> dict[str, bool]:
+    disk = {"agentic": True, "agentic.core": True, root: True}
+    for layer in ("domain", "application", "adapters"):
+        disk[f"{root}.{layer}"] = True
+    disk.update({f"{root}.{name}": False for name in modules})
+    disk.update({name: False for name in outside})
+    return disk
+
+
+def _flat_imports(
+    modules: dict[str, tuple[str, ...]], root: str = KNOWLEDGE
+) -> dict[str, set[str]]:
+    return {f"{root}.{name}": set(targets) for name, targets in modules.items()}
+
+
+def test_a_package_without_groups_gets_an_index_and_one_page_per_layer(
+    packages: ModuleType,
+) -> None:
+    pages = packages.build_pages(
+        _flat_world(["domain.a", "domain.b", "adapters.git.c"], ["agentic.core.process.domain.x"]),
+        _flat_imports(
+            {
+                "domain.a": (f"{KNOWLEDGE}.domain.b", "agentic.core.process.domain.x"),
+                "domain.b": (),
+                "adapters.git.c": (f"{KNOWLEDGE}.domain.a",),
+            }
+        ),
+        {},
+        KNOWLEDGE,
+        ("domain", "adapters"),
+    )
+    assert sorted(pages) == ["adapters", "domain", "index"]
+    assert pages["index"].children == ("domain", "adapters")
+    assert _labels(pages["index"]) == ["adapters (paquete)", "domain (paquete)"]
+    assert len(pages["index"].edges) == 1
+    domain, adapters = pages["domain"], pages["adapters"]
+    assert domain.parent == "index" and domain.siblings == ("adapters",)
+    assert _labels(domain) == ["agentic.core.process (paquete)", "domain.a", "domain.b"]
+    assert _labels(adapters) == ["domain (paquete)", "adapters.git.c"]  # sorted by id
+    assert "agentic.core.knowledge" in domain.sentence and "domain" in domain.sentence
+
+
+def test_a_package_layer_that_is_missing_or_unknown_is_refused_naming_it(
+    packages: ModuleType,
+) -> None:
+    with pytest.raises(ValueError, match=r"'application\.x' is in no layer"):
+        packages.build_pages(
+            _flat_world(["domain.a", "application.x"]),
+            _flat_imports({"domain.a": (), "application.x": ()}),
+            {},
+            KNOWLEDGE,
+            ("domain", "adapters"),
+        )
+
+
+def test_a_package_layer_over_the_budget_is_refused_naming_the_layer_and_the_fix(
+    packages: ModuleType,
+) -> None:
+    budget = packages.DIAGRAM_BUDGET
+    names = [f"domain.m{n:02d}" for n in range(budget.classes + 1)]
+    with pytest.raises(ValueError) as caught:
+        packages.build_pages(
+            _flat_world(names),
+            _flat_imports({name: () for name in names}),
+            {},
+            KNOWLEDGE,
+            ("domain", "adapters"),
+        )
+    message = str(caught.value)
+    assert "'domain'" in message and f"{budget.classes + 1} modules" in message
+    assert "add groups" in message
+    outside = [f"agentic.p{n:02d}.x" for n in range(budget.nodes)]
+    with pytest.raises(
+        ValueError, match=r"layer 'domain' of .* has 21 nodes and 20 edges.*add groups"
+    ):
+        packages.build_pages(
+            _flat_world(["domain.a"], outside),
+            _flat_imports({"domain.a": tuple(outside)}),
+            {},
+            KNOWLEDGE,
+            ("domain",),
+        )

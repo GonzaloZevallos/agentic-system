@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from agentic.core.process.domain.docs import DIAGRAM_BUDGET
@@ -211,8 +211,15 @@ def build_pages(
     on_disk: Mapping[str, bool],
     imports: Mapping[str, Iterable[str]],
     clusters: Mapping[str, str],
+    root: str = PROCESS,
+    layers: Sequence[str] | None = None,
 ) -> dict[str, Page]:
-    """Every page of the process package diagrams, by key.
+    """Every page of the package diagrams of `root`, by key.
+
+    With `layers` None, `root` is the process package and the pages are the grouped ones
+    described below. With `layers` given (`knowledge` and `measurement`, which have no
+    `clusters`), there is an `index` page and one page per layer that has a module, with no
+    groups: see `_flat_pages`. A layer over the budget raises, naming it.
 
     `on_disk` maps each qualified module name under `agentic/` to whether it is a package
     `__init__` (a package maps to its package name); `imports` maps each process module, by
@@ -225,6 +232,10 @@ def build_pages(
     paste. A cluster of more than 15 modules, or whose page is over `DIAGRAM_BUDGET`, is split
     once into `ceil(n / 15)` pages (at least two) of consecutive modules in alphabetical order,
     each saying so; a page still over budget raises, naming the cluster."""
+    if layers is not None:
+        return _flat_pages(on_disk, imports, root, tuple(layers))
+    if root != PROCESS:
+        raise ValueError(f"the grouped pages are those of {PROCESS}; {root!r} needs its layers")
     graph = _Graph(on_disk, imports, clusters)
     pages = {INDEX: _index(graph)}
     for sub in graph.subpackages:
@@ -465,3 +476,73 @@ def _adapter_page(graph: _Graph, sub: str) -> Page:
         f"otro paquete: {_PACKAGE_NODES}"
     )
     return _checked(draw, _key(sub), sub, sentence, INDEX, _others(graph, sub))
+
+
+def _flat_pages(
+    on_disk: Mapping[str, bool],
+    imports: Mapping[str, Iterable[str]],
+    root: str,
+    layers: tuple[str, ...],
+) -> dict[str, Page]:
+    """The pages of a package with no groups: `index` (its layers and the imports between
+    them) and one page per layer with a module (`<layer>`: its modules, the imports they make,
+    each target in another layer or outside the package collapsed to one ghost). A module whose
+    layer is not in `layers` raises, and so does a layer with more than `DIAGRAM_BUDGET.classes`
+    modules or a page over the budget, naming the layer and saying to add groups."""
+    prefix = root + "."
+    modules: dict[str, set[str]] = {}
+    for name, names in imports.items():
+        if not name.startswith(prefix):
+            continue
+        relative = name.removeprefix(prefix)
+        if relative.split(".")[0] not in layers:
+            raise ValueError(
+                f"{root} module {relative!r} is in no layer: the layers of {root} are "
+                f"{', '.join(layers)}"
+            )
+        modules[relative] = {t for t in names if t != name and t in on_disk and not on_disk[t]}
+    present = [layer for layer in layers if any(m.split(".")[0] == layer for m in modules)]
+    short = root.rsplit(".", 1)[-1]
+    index = _Draw()
+    for layer in present:
+        index.node(_package_end(layer))
+    pages: dict[str, Page] = {}
+    for layer in present:
+        draw = _Draw()
+        own = sorted(m for m in modules if m.split(".")[0] == layer)
+        if len(own) > MAX_PART:
+            raise ValueError(
+                f"layer {layer!r} of {root} has {len(own)} modules; the budget is {MAX_PART} "
+                f"per page: add groups for {root} (CLUSTERS in scripts/docs/groups.py)"
+            )
+        for source in own:
+            here = _own_end(source)
+            draw.node(here)
+            for target in sorted(modules[source]):
+                if not target.startswith(prefix):
+                    draw.edge(here, _package_end(_outside(target)))
+                    continue
+                relative = target.removeprefix(prefix)
+                other = relative.split(".")[0]
+                draw.edge(here, _own_end(relative) if other == layer else _package_end(other))
+                index.edge(_package_end(layer), _package_end(other))
+        if draw.over():
+            raise ValueError(
+                f"layer {layer!r} of {root} has {len(draw.nodes)} nodes and {len(draw.edges)} "
+                f"edges; the budget is {DIAGRAM_BUDGET.nodes} nodes and {DIAGRAM_BUDGET.edges} "
+                f"edges: add groups for {root} (CLUSTERS in scripts/docs/groups.py)"
+            )
+        sentence = (
+            f"Esta página muestra los módulos de la capa `{layer}` de `{root}` y los imports que "
+            "hacen; un nodo `<nombre> (paquete)` es otra capa del paquete o un paquete de fuera, "
+            "que no se detalla aquí."
+        )
+        others = [other for other in present if other != layer]
+        pages[layer] = draw.page(layer, f"{short}: {layer}", sentence, INDEX, others)
+    names = "`, `".join(present)
+    sentence = (
+        f"Esta página muestra las capas de `{root}` (`{names}`), con una flecha por cada capa "
+        "que importa a otra. Cada capa tiene su página, con sus módulos y los imports que hacen."
+    )
+    pages[INDEX] = index.page(INDEX, f"Paquetes de {short}", sentence, None, (), present)
+    return pages
