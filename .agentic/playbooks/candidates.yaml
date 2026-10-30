@@ -972,3 +972,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-29T10:46:26.758+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: For every guard that raises or rejects input (name checks, budget limits), write a test that feeds it an input it must reject and asserts the error. Passing happy-path tests do not exercise it.
+  confidence: medium
+  seen_in:
+  - GH-435
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-30T05:08:46.219+00:00'
