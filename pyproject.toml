@@ -91,6 +91,8 @@ files = [
     "scripts/gate_concurrency.py",
     "scripts/docs/render.py",
     "scripts/docs/groups.py",
+    "scripts/docs/imports.py",
+    "scripts/docs/packages.py",
     "scripts/docs/check.py",
     "tests/fakes.py",
     "tests/conformance.py",

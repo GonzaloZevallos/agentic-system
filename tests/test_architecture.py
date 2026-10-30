@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 import agentic
+from tests.docs_scripts import imports
 
 PACKAGE = Path(agentic.__file__).parent
 OUTSIDE = ("langgraph", "langchain_core", "claude_agent_sdk", "opentelemetry", "subprocess")
@@ -33,27 +34,6 @@ ALLOWED_LAYERS = {
     None: {"domain", "application"},
     "adapters": set(LAYERS),
 }
-
-
-def imports_of(path: Path) -> set[str]:
-    """Every module a file names. `from X import a, b` counts as `X`, `X.a` and `X.b`:
-    `a` may be a submodule, and a package name alone says nothing about its layer."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            if node.level:  # relative: resolve against the file's package
-                base = path.parent
-                for _ in range(node.level - 1):
-                    base = base.parent
-                prefix = ".".join(base.relative_to(PACKAGE.parent).parts)
-                module = f"{prefix}.{module}" if module else prefix
-            names.add(module)
-            names.update(f"{module}.{alias.name}" for alias in node.names)
-    return names
 
 
 def place(module: str) -> tuple[str, str | None] | None:
@@ -85,7 +65,7 @@ def violations(path: Path) -> set[str]:
         return set()
     module, layer = here
     bad = set()
-    for name in imports_of(path):
+    for name in imports.imports_of(path, PACKAGE.parent):
         if layer != "adapters" and name.startswith(OUTSIDE):
             bad.add(name)
         there = place(name)
@@ -181,7 +161,7 @@ DRIVER_HOME = Path("core") / "measurement" / "adapters" / "langfuse"
 
 
 def _imports_driver(path: Path) -> bool:
-    return any(name.split(".")[0] in CONFINED for name in imports_of(path))
+    return any(name.split(".")[0] in CONFINED for name in imports.imports_of(path, PACKAGE.parent))
 
 
 def _top_level_imports(path: Path) -> set[str]:

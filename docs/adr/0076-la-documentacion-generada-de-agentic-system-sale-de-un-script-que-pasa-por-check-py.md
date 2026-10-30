@@ -82,3 +82,15 @@ Aplica ADR-0074 (generada y escrita) y ADR-0021 (el alcance de mypy).
 - **`define` queda cerca del límite**, unas 30 aristas. El próximo cambio que la pase la parte
   en `PHASES`, por significado: `define` y `design` (`ux_flow`, `ux_walk`, `ui_screens`,
   `design_review`, `write_copy`) es la primera candidata.
+
+## Addendum (GH-430, parte 2): los paquetes de `process` salen del lector de imports
+
+Los diagramas de paquetes de `process` ya no los dibuja pyreverse: pyreverse pierde la ruta del
+paquete y funde los módulos homónimos (`domain.landing` y `application.landing` quedaban en un
+solo nodo), y el diagrama de 236 aristas no se podía leer. `scripts/docs/packages.py` los
+construye con `imports_of` (`scripts/docs/imports.py`, el mismo lector que usa
+`tests/test_architecture.py`) y con `CLUSTERS`, de `scripts/docs/groups.py`: un índice, una
+página por subpaquete y una por grupo de `domain` y de `application`. Cada página dibuja sólo
+los imports que hacen sus módulos; lo demás es un nodo fantasma por grupo o por paquete. Los
+paquetes de `knowledge` y `measurement` siguen con pyreverse.
+

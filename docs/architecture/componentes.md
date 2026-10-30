@@ -114,11 +114,14 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
 
 ## Los diagramas generados
 
-`scripts/docs/generate.py` dibuja los paquetes y las clases públicas de cada módulo con
-pyreverse, una vista por módulo y una de clases por capa:
+`scripts/docs/generate.py` dibuja las clases públicas de cada módulo con pyreverse, una vista
+por capa, y los paquetes de `knowledge` y `measurement` también con pyreverse. Los paquetes de
+`process` salen del lector de imports (`scripts/docs/imports.py`), no de pyreverse, que pierde la
+ruta del paquete y funde los módulos homónimos:
 
-- paquetes (Mermaid puro): [process](generated/packages-process.mmd),
-  [knowledge](generated/packages-knowledge.mmd) y
+- paquetes de `process`, páginas partidas por subpaquete y por grupo, con el
+  [índice](generated/packages-process.md) primero;
+- paquetes (Mermaid puro): [knowledge](generated/packages-knowledge.mmd) y
   [measurement](generated/packages-measurement.mmd);
 - clases de `process`: [dominio](generated/classes-process-domain.mmd),
   [aplicación](generated/classes-process-application.mmd) y
