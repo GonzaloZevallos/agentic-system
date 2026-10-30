@@ -1212,6 +1212,18 @@ def test_the_index_links_every_process_page_and_each_page_its_parent_and_sibling
             assert "- Padre: [" in text, path
 
 
+def test_the_package_pages_of_every_module_are_the_committed_ones(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    """Parameterising build_pages by root and layers must not move a byte of the process
+    pages, and the knowledge and measurement pages must be the ones in the tree."""
+    for module in ("process", "knowledge", "measurement"):
+        texts = _package_pages(scripts, module)
+        assert texts, module
+        for path, text in texts.items():
+            assert (REPO / path).read_text(encoding="utf-8") == text, path
+
+
 def test_packages_process_mmd_is_gone_from_outputs_and_from_the_tree(
     scripts: tuple[ModuleType, ModuleType], full_run: Path
 ) -> None:
