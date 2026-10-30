@@ -115,16 +115,19 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
 ## Los diagramas generados
 
 `scripts/docs/generate.py` dibuja las clases públicas de cada módulo con pyreverse, una vista
-por capa, y los paquetes de `knowledge` y `measurement` también con pyreverse. Los paquetes de
-`process` salen del lector de imports (`scripts/docs/imports.py`), no de pyreverse, que pierde la
-ruta del paquete y funde los módulos homónimos:
+por capa, salvo el dominio de `process`. Los paquetes de `process`, `knowledge` y `measurement`
+salen del lector de imports (`scripts/docs/imports.py`), no de pyreverse, que pierde la ruta del
+paquete y funde los módulos homónimos; las clases del dominio de `process` salen de la salida
+`dot` de pyreverse, que conserva el nombre calificado de cada clase:
 
 - paquetes de `process`, páginas partidas por subpaquete y por grupo, con el
   [índice](generated/packages-process.md) primero;
-- paquetes (Mermaid puro): [knowledge](generated/packages-knowledge.mmd) y
-  [measurement](generated/packages-measurement.mmd);
-- clases de `process`: [dominio](generated/classes-process-domain.mmd),
-  [aplicación](generated/classes-process-application.mmd) y
+- paquetes de `knowledge` y `measurement`, una página por capa, con los índices
+  [knowledge](generated/packages-knowledge.md) y
+  [measurement](generated/packages-measurement.md);
+- clases del dominio de `process`, una página por grupo, con el
+  [índice](generated/classes-process-domain.md) primero;
+- clases de `process`: [aplicación](generated/classes-process-application.mmd) y
   [adaptadores](generated/classes-process-adapters.mmd);
 - clases de `knowledge`: [dominio](generated/classes-knowledge-domain.mmd) y
   [adaptadores](generated/classes-knowledge-adapters.mmd);

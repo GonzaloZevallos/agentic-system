@@ -47,7 +47,7 @@ def scripts() -> Iterator[tuple[ModuleType, ModuleType]]:
         yield loaded[0], loaded[1]
     finally:
         sys.path.remove(str(SCRIPTS))
-        for name in ("render", "generate", "groups", "imports", "packages"):
+        for name in ("render", "generate", "groups", "imports", "packages", "classes"):
             sys.modules.pop(name, None)
 
 
@@ -63,11 +63,11 @@ def test_generation_is_byte_deterministic_and_equals_outputs(
     scripts: tuple[ModuleType, ModuleType], tmp_path: Path
 ) -> None:
     render, generate = scripts
-    layers = {"knowledge": ("domain", "adapters")}
+    layers = {"process": ("domain",), "knowledge": ("domain", "adapters")}
     first, second = tmp_path / "first", tmp_path / "second"
     written, names, role_pages, package_paths = generate.generate(first, layers)
     again, _, _, _ = generate.generate(second, layers)
-    assert written == again == render.outputs(names, role_pages, package_paths, ("knowledge",))
+    assert written == again == render.outputs(names, role_pages, package_paths)
     assert sorted(_tree(first)) == list(written)
     assert _tree(first) == _tree(second)
     for relative, content in _tree(first).items():
@@ -102,21 +102,49 @@ def _role_keys(scripts: tuple[ModuleType, ModuleType]) -> list[str]:
     return sorted(render.role_graph_pages(*generate.role_graph_inputs()))
 
 
-def _package_pages(scripts: tuple[ModuleType, ModuleType]) -> dict[str, str]:
-    """The process package pages the pure builder returns for the real tree, in this process:
-    no pyreverse and nothing written."""
+def _package_pages(
+    scripts: tuple[ModuleType, ModuleType], module: str = "process"
+) -> dict[str, str]:
+    """The package pages of `module` the pure builder returns for the real tree, in this
+    process: no pyreverse and nothing written."""
     render, generate = scripts
     groups, packages = sys.modules["groups"], sys.modules["packages"]
     on_disk, imported = generate.package_page_inputs()
-    return render.package_pages(packages.build_pages(on_disk, imported, groups.CLUSTERS))
+    if module == "process":
+        return render.package_pages(packages.build_pages(on_disk, imported, groups.CLUSTERS))
+    model = packages.build_pages(
+        on_disk, imported, {}, f"agentic.core.{module}", render.FLAT_PACKAGES[module]
+    )
+    return render.package_pages(model, module)
 
 
 def _package_keys(scripts: tuple[ModuleType, ModuleType]) -> list[str]:
-    return sorted(_package_pages(scripts))
+    """The paths of the package pages of every module and the class pages of process/domain,
+    each from its own pure builder; the class pages need one pyreverse run, made once."""
+    _, generate = scripts
+    paths = {
+        path
+        for module in ("process", "knowledge", "measurement")
+        for path in _package_pages(scripts, module)
+    }
+    return sorted(paths | set(_class_page_texts(generate)))
+
+
+_CLASS_PAGES: dict[str, str] = {}
+
+
+def _class_page_texts(generate: ModuleType) -> dict[str, str]:
+    if not _CLASS_PAGES:
+        _CLASS_PAGES.update(generate.domain_class_pages())
+    return _CLASS_PAGES
 
 
 def _run_classes(files: Iterable[str]) -> list[str]:
-    return [Path(name).stem.removeprefix("classes-") for name in files if "/classes-" in name]
+    return [
+        Path(name).stem.removeprefix("classes-")
+        for name in files
+        if "/classes-" in name and name.endswith(".mmd")
+    ]
 
 
 def test_minimal_environment_run_writes_every_output_under_root(
@@ -970,10 +998,10 @@ def test_outputs_lists_exactly_the_role_graph_keys_it_is_given(
 ) -> None:
     render, _ = scripts
     keys = sorted(_toy_pages(render, has_land=True))
-    written = render.outputs((), modules=(), role_graph=keys, package_pages=[])
+    written = render.outputs((), role_graph=keys, package_pages=[])
     assert set(keys) <= set(written)
     assert set(written) - set(keys) == {render.CLI_REFERENCE, render.STACK_REFERENCE}
-    assert render.outputs((), modules=(), role_graph=[], package_pages=[]) == (
+    assert render.outputs((), role_graph=[], package_pages=[]) == (
         render.CLI_REFERENCE,
         render.STACK_REFERENCE,
     )
@@ -1184,13 +1212,25 @@ def test_the_index_links_every_process_page_and_each_page_its_parent_and_sibling
             assert "- Padre: [" in text, path
 
 
+def test_the_package_pages_of_every_module_are_the_committed_ones(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    """Parameterising build_pages by root and layers must not move a byte of the process
+    pages, and the knowledge and measurement pages must be the ones in the tree."""
+    for module in ("process", "knowledge", "measurement"):
+        texts = _package_pages(scripts, module)
+        assert texts, module
+        for path, text in texts.items():
+            assert (REPO / path).read_text(encoding="utf-8") == text, path
+
+
 def test_packages_process_mmd_is_gone_from_outputs_and_from_the_tree(
     scripts: tuple[ModuleType, ModuleType], full_run: Path
 ) -> None:
     render, _ = scripts
     old = "docs/architecture/generated/packages-process.mmd"
     assert old not in render.outputs([], _role_keys(scripts), _package_keys(scripts))
-    assert "process" not in render.PACKAGE_MODULES
+    assert not hasattr(render, "PACKAGE_MODULES") and not hasattr(render, "packages_path")
     assert old not in _tree(full_run)
     assert not (REPO / old).exists()
     assert render.package_page_path("index") in _tree(full_run)
@@ -1229,3 +1269,209 @@ def test_a_layer_page_over_budget_is_refused_naming_the_page_and_its_counts(
             {name: f"c{n:02d}" for n, name in enumerate(names)},
         )
     assert "'domain' has 21 nodes and 0 edges" in str(caught.value)
+
+
+# --- The package pages of knowledge and measurement (GH-430 part 3): one page per layer ---
+
+KNOWLEDGE = "agentic.core.knowledge"
+
+
+def _flat_world(
+    modules: Iterable[str], outside: Iterable[str] = (), root: str = KNOWLEDGE
+) -> dict[str, bool]:
+    disk = {"agentic": True, "agentic.core": True, root: True}
+    for layer in ("domain", "application", "adapters"):
+        disk[f"{root}.{layer}"] = True
+    disk.update({f"{root}.{name}": False for name in modules})
+    disk.update({name: False for name in outside})
+    return disk
+
+
+def _flat_imports(
+    modules: dict[str, tuple[str, ...]], root: str = KNOWLEDGE
+) -> dict[str, set[str]]:
+    return {f"{root}.{name}": set(targets) for name, targets in modules.items()}
+
+
+def test_a_package_without_groups_gets_an_index_and_one_page_per_layer(
+    packages: ModuleType,
+) -> None:
+    pages = packages.build_pages(
+        _flat_world(["domain.a", "domain.b", "adapters.git.c"], ["agentic.core.process.domain.x"]),
+        _flat_imports(
+            {
+                "domain.a": (f"{KNOWLEDGE}.domain.b", "agentic.core.process.domain.x"),
+                "domain.b": (),
+                "adapters.git.c": (f"{KNOWLEDGE}.domain.a",),
+            }
+        ),
+        {},
+        KNOWLEDGE,
+        ("domain", "adapters"),
+    )
+    assert sorted(pages) == ["adapters", "domain", "index"]
+    assert pages["index"].children == ("domain", "adapters")
+    assert _labels(pages["index"]) == ["adapters (paquete)", "domain (paquete)"]
+    assert len(pages["index"].edges) == 1
+    domain, adapters = pages["domain"], pages["adapters"]
+    assert domain.parent == "index" and domain.siblings == ("adapters",)
+    assert _labels(domain) == ["agentic.core.process (paquete)", "domain.a", "domain.b"]
+    assert _labels(adapters) == ["domain (paquete)", "adapters.git.c"]  # sorted by id
+    assert "agentic.core.knowledge" in domain.sentence and "domain" in domain.sentence
+
+
+def test_a_package_layer_that_is_missing_or_unknown_is_refused_naming_it(
+    packages: ModuleType,
+) -> None:
+    with pytest.raises(ValueError, match=r"'application\.x' is in no layer"):
+        packages.build_pages(
+            _flat_world(["domain.a", "application.x"]),
+            _flat_imports({"domain.a": (), "application.x": ()}),
+            {},
+            KNOWLEDGE,
+            ("domain", "adapters"),
+        )
+
+
+def test_a_package_layer_over_the_budget_is_refused_naming_the_layer_and_the_fix(
+    packages: ModuleType,
+) -> None:
+    budget = packages.DIAGRAM_BUDGET
+    names = [f"domain.m{n:02d}" for n in range(budget.classes + 1)]
+    with pytest.raises(ValueError) as caught:
+        packages.build_pages(
+            _flat_world(names),
+            _flat_imports({name: () for name in names}),
+            {},
+            KNOWLEDGE,
+            ("domain", "adapters"),
+        )
+    message = str(caught.value)
+    assert "'domain'" in message and f"{budget.classes + 1} modules" in message
+    assert "add groups" in message
+    outside = [f"agentic.p{n:02d}.x" for n in range(budget.nodes)]
+    counts = f"{budget.nodes + 1} nodes and {budget.nodes} edges"
+    with pytest.raises(ValueError, match=rf"layer 'domain' of .* has {counts}.*add groups"):
+        packages.build_pages(
+            _flat_world(["domain.a"], outside),
+            _flat_imports({"domain.a": tuple(outside)}),
+            {},
+            KNOWLEDGE,
+            ("domain",),
+        )
+
+
+# --- The class pages and the removed `.mmd` (GH-430 part 3): `render.class_pages` ---
+
+DOMAIN = "agentic.core.process.domain"
+
+
+def _dot(nodes: Iterable[str], edges: Iterable[tuple[str, str, str]] = ()) -> str:
+    lines = ['digraph "classes_x" {', "rankdir=BT", 'charset="utf-8"']
+    lines += [f'"{DOMAIN}.{n}" [color="black", label=<x>, shape="record"];' for n in nodes]
+    lines += [
+        f'"{DOMAIN}.{s}" -> "{DOMAIN}.{t}" [arrowhead="{head}", arrowtail="none"];'
+        for s, t, head in edges
+    ]
+    return "\n".join([*lines, "}"])
+
+
+def _class_texts(
+    scripts: tuple[ModuleType, ModuleType], dot: str, clusters: dict[str, str]
+) -> dict[str, str]:
+    render, _ = scripts
+    classes = sys.modules["classes"]
+    return render.class_pages(classes.pages(*classes.parse(dot), clusters))
+
+
+def test_class_pages_draw_qualified_ids_labels_the_four_arrows_and_the_other_pages(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    dot = _dot(
+        ["a.Pair", "b.Pair", "a.Base", "a.Child", "c.Far", "a.Owner", "a.Part"],
+        [
+            ("a.Child", "a.Base", "empty"),
+            ("a.Pair", "b.Pair", "vee"),
+            ("a.Part", "a.Owner", "odiamond"),
+            ("a.Owner", "a.Part", "diamond"),
+            ("a.Child", "c.Far", "vee"),
+        ],
+    )
+    texts = _class_texts(scripts, dot, {"domain.a": "one", "domain.b": "one", "domain.c": "two"})
+    one = texts["docs/architecture/generated/classes-process-domain-one.md"]
+    assert one.startswith("Esta página muestra las clases públicas")
+    assert '    class a__Pair["a.Pair"]' in one and '    class b__Pair["b.Pair"]' in one
+    assert '    class a__Base["Base"]' in one
+    for arrow in (
+        "a__Child --|> a__Base",
+        "a__Pair --> b__Pair",
+        "a__Owner o-- a__Part",
+        "a__Part *-- a__Owner",
+    ):
+        assert f"    {arrow}\n" in one, arrow
+    assert "c__Far" not in one.split("## Relaciones con otras páginas")[0]
+    tail = one.split("## Relaciones con otras páginas")[1]
+    assert "`a.Child` se asocia con `c.Far`" in tail
+    assert "[domain: two](classes-process-domain-two.md)" in tail
+    index = texts["docs/architecture/generated/classes-process-domain.md"]
+    assert "[domain: one](classes-process-domain-one.md)" in index and "```" not in index
+    assert "- Padre: [Clases de domain](classes-process-domain.md)" in one
+    for text in texts.values():
+        assert "click " not in text and "href" not in text
+
+
+def test_a_class_cluster_over_the_budget_is_written_as_numbered_pages_each_within_it(
+    scripts: tuple[ModuleType, ModuleType],
+) -> None:
+    render, _ = scripts
+    names = [f"m.C{n:02d}" for n in range(render.DIAGRAM_BUDGET.classes + 1)]
+    texts = _class_texts(scripts, _dot(names), {"domain.m": "big"})
+    pages = {Path(path).name for path in texts}
+    assert pages == {
+        "classes-process-domain.md",
+        "classes-process-domain-big-1.md",
+        "classes-process-domain-big-2.md",
+    }
+    for path, text in texts.items():
+        assert render.diagram_budget(text) == [], path
+    assert "por cantidad" in texts["docs/architecture/generated/classes-process-domain-big-1.md"]
+
+
+def test_the_three_replaced_mmd_files_are_gone_from_outputs_and_from_the_tree(
+    scripts: tuple[ModuleType, ModuleType], full_run: Path
+) -> None:
+    render, _ = scripts
+    gone = [
+        f"docs/architecture/generated/{name}.mmd"
+        for name in ("classes-process-domain", "packages-knowledge", "packages-measurement")
+    ]
+    written = render.outputs(
+        _run_classes(_tree(full_run)), _role_keys(scripts), _package_keys(scripts)
+    )
+    tree = _tree(full_run)
+    for old in gone:
+        assert old not in written and old not in tree and not (REPO / old).exists(), old
+    for new in (
+        "classes-process-domain.md",
+        "packages-knowledge.md",
+        "packages-knowledge-domain.md",
+        "packages-measurement.md",
+        "packages-measurement-adapters.md",
+    ):
+        assert f"docs/architecture/generated/{new}" in tree, new
+
+
+def test_generate_refuses_dot_it_cannot_read_and_a_module_in_no_cluster(
+    scripts: tuple[ModuleType, ModuleType], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, generate = scripts
+    groups = sys.modules["groups"]
+    bad = 'digraph "x" {\nsomething unexpected\n}'
+    monkeypatch.setattr(generate, "_pyreverse", lambda *a, **k: {"classes_x.dot": bad})
+    with pytest.raises(generate.GenerateError, match="something unexpected"):
+        generate.domain_class_pages()
+    good = _dot(["ghost_module.Thing"])
+    monkeypatch.setattr(generate, "_pyreverse", lambda *a, **k: {"classes_x.dot": good})
+    monkeypatch.setattr(groups, "CLUSTERS", {})
+    with pytest.raises(generate.GenerateError, match=r'"domain.ghost_module": "<cluster>",'):
+        generate.domain_class_pages()

@@ -93,6 +93,7 @@ files = [
     "scripts/docs/groups.py",
     "scripts/docs/imports.py",
     "scripts/docs/packages.py",
+    "scripts/docs/classes.py",
     "scripts/docs/check.py",
     "tests/fakes.py",
     "tests/conformance.py",

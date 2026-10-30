@@ -94,3 +94,31 @@ página por subpaquete y una por grupo de `domain` y de `application`. Cada pág
 los imports que hacen sus módulos; lo demás es un nodo fantasma por grupo o por paquete. Los
 paquetes de `knowledge` y `measurement` siguen con pyreverse.
 
+
+## Addendum (GH-430, parte 3): las clases del dominio de `process` salen de la salida `dot`
+
+El diagrama de clases del dominio de `process` (180 clases en una sola página) ya no es un
+`.mmd`: son páginas `.md`, una por grupo de `CLUSTERS`, partidas por cantidad (con
+`packages.chunks`, la única regla de partición) cuando el grupo pasa del presupuesto. La salida
+`mmd` de pyreverse deja sólo el último nombre de cada clase, así que `Entry`, `Pair`, `Subtask`,
+`Verdict`, `Rejected` y `Refusal` se fundían; la salida `dot` conserva el nombre calificado.
+`scripts/docs/classes.py` la lee, sin I/O, y `generate.py` es el único que corre pyreverse.
+
+- **Cómo se decide cada relación (corrida real, pyreverse 4.1.3, `-o dot -k --filter-mode
+  PUB_ONLY`).** El tipo es el atributo `arrowhead` de la arista: `empty` herencia, `vee`
+  asociación, `odiamond` agregación y `diamond` composición (`dot_printer.ARROWS` de pylint). La
+  corrida sobre el dominio sólo emite las dos primeras. `PUB_ONLY` filtra miembros, no clases:
+  una clase privada sale con sus aristas, y `parse` descarta toda clase `_<x>` y sus aristas.
+- **No se construyó ningún respaldo con `mmd`.** Los cuatro tipos se distinguen en `dot` y no hay
+  aristas hacia clases filtradas; si una corrida futura lo contradice, la subtarea vuelve como
+  calibración del plan.
+- **`board.py` va en una corrida aparte**, como con `mmd` (astroid se cae si lo analiza junto
+  con otro módulo; `PYREVERSE_IGNORE` lo salta por nombre de archivo). Sus clases se unen por
+  nombre calificado, pero las relaciones entre ellas y el resto del dominio se pierden, igual
+  que hoy.
+- **Una relación hacia una clase de otra página no se dibuja:** se lista debajo del diagrama,
+  en «Relaciones con otras páginas», con un enlace a la página de la otra clase.
+- **`knowledge` y `measurement`** tienen páginas de paquetes sin grupos, construidas con
+  `imports_of` como las de `process`: un índice y una página por capa. Una capa que pasa del
+  presupuesto hace fallar el generador, nombrándola y pidiendo agregar grupos. Se borran
+  `packages-knowledge.mmd`, `packages-measurement.mmd` y `classes-process-domain.mmd`.
