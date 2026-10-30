@@ -65,9 +65,9 @@ def test_generation_is_byte_deterministic_and_equals_outputs(
     render, generate = scripts
     layers = {"process": ("domain",), "knowledge": ("domain", "adapters")}
     first, second = tmp_path / "first", tmp_path / "second"
-    written, names, role_pages, package_paths = generate.generate(first, layers)
-    again, _, _, _ = generate.generate(second, layers)
-    assert written == again == render.outputs(names, role_pages, package_paths)
+    written, role_pages, package_paths = generate.generate(first, layers)
+    again, _, _ = generate.generate(second, layers)
+    assert written == again == render.outputs(role_pages, package_paths)
     assert sorted(_tree(first)) == list(written)
     assert _tree(first) == _tree(second)
     for relative, content in _tree(first).items():
@@ -137,17 +137,8 @@ def _class_page_texts(generate: ModuleType) -> dict[str, str]:
     if not _CLASS_PAGES:
         for module, module_layers in sys.modules["render"].LAYERS.items():
             for layer in module_layers:
-                if (module, layer) not in generate.LEGACY_MMD:
-                    _CLASS_PAGES.update(generate.class_pages(module, layer))
+                _CLASS_PAGES.update(generate.class_pages(module, layer))
     return _CLASS_PAGES
-
-
-def _run_classes(files: Iterable[str]) -> list[str]:
-    return [
-        Path(name).stem.removeprefix("classes-")
-        for name in files
-        if "/classes-" in name and name.endswith(".mmd")
-    ]
 
 
 def test_minimal_environment_run_writes_every_output_under_root(
@@ -155,7 +146,7 @@ def test_minimal_environment_run_writes_every_output_under_root(
 ) -> None:
     render, _ = scripts
     files = sorted(_tree(full_run))
-    expected = render.outputs(_run_classes(files), _role_keys(scripts), _package_keys(scripts))
+    expected = render.outputs(_role_keys(scripts), _package_keys(scripts))
     assert files == list(expected)
 
 
@@ -200,29 +191,15 @@ def test_role_graph_nodes_are_the_compiled_graphs_and_the_pipeline_branch(
     assert not shared & set(task_nodes)
 
 
-def test_merging_pyreverse_runs_keeps_each_block_once_and_sorts(
-    scripts: tuple[ModuleType, ModuleType],
-) -> None:
-    render, _ = scripts
-    first = "classDiagram\n  class B {\n  }\n  class A {\n  }\n  B --|> A\n"
-    second = "classDiagram\n  class C {\n  }\n  class A {\n  }\n  C --|> A\n  B --|> A\n"
-    merged = render.merge_mermaid([first, second])
-    assert merged == (
-        "classDiagram\n  class A {\n  }\n  class B {\n  }\n  class C {\n  }\n"
-        "  B --|> A\n  C --|> A\n"
-    )
-    assert render.merge_mermaid([second, first]) == merged
-
-
 def test_every_generated_mermaid_block_is_within_the_limits(
     scripts: tuple[ModuleType, ModuleType], full_run: Path
 ) -> None:
     render, _ = scripts
     checked = 0
     for relative, content in _tree(full_run).items():
-        if relative.endswith((".md", ".mmd")):
+        if relative.endswith(".md"):
             text = content.decode()
-            if "```mermaid" in text or relative.endswith(".mmd"):
+            if "```mermaid" in text:
                 render.mermaid_limits(text)
                 checked += 1
     assert checked >= 5
@@ -404,9 +381,7 @@ def _pages() -> dict[str, str]:
 @pytest.fixture(scope="module")
 def generated_files(scripts: tuple[ModuleType, ModuleType], full_run: Path) -> frozenset[str]:
     render, _ = scripts
-    return frozenset(
-        render.outputs(_run_classes(_tree(full_run)), _role_keys(scripts), _package_keys(scripts))
-    )
+    return frozenset(render.outputs(_role_keys(scripts), _package_keys(scripts)))
 
 
 def test_every_written_page_exists_and_is_not_under_the_owned_paths() -> None:
@@ -691,12 +666,28 @@ def test_check_budget_names_the_written_pages_over_budget(
     )
     found = render.check_budget(tmp_path)
     assert [name for name, _ in found] == [
+        "docs/architecture/generated/big.mmd",
         "docs/architecture/generated/page.md",
         "docs/architecture/generated/role-graph.md",
         "docs/architecture/written.md",
     ]
-    assert all(over.nodes == 21 for _, over in found)
+    assert found[0][1].nodes == 41 and all(over.nodes == 21 for _, over in found[1:])
     assert not hasattr(render, "_EXEMPT")
+
+
+def test_no_mmd_file_is_left_under_the_generated_docs(
+    scripts: tuple[ModuleType, ModuleType], full_run: Path, tmp_path: Path
+) -> None:
+    """Every class diagram is a `.md` page now: a `.mmd` in the repository, or one the
+    generator would write, fails; `generate()` deletes a stale one it finds under `root`."""
+    render, generate = scripts
+    assert sorted((REPO / render.GENERATED).rglob("*.mmd")) == []
+    assert [name for name in _tree(full_run) if name.endswith(".mmd")] == []
+    stale = tmp_path / render.GENERATED / "classes-old.mmd"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("classDiagram\n")
+    generate.generate(tmp_path, {})
+    assert not stale.exists()
 
 
 def test_the_written_pages_are_within_the_budget(scripts: tuple[ModuleType, ModuleType]) -> None:
@@ -1001,10 +992,10 @@ def test_outputs_lists_exactly_the_role_graph_keys_it_is_given(
 ) -> None:
     render, _ = scripts
     keys = sorted(_toy_pages(render, has_land=True))
-    written = render.outputs((), role_graph=keys, package_pages=[])
+    written = render.outputs(role_graph=keys, package_and_class_pages=[])
     assert set(keys) <= set(written)
     assert set(written) - set(keys) == {render.CLI_REFERENCE, render.STACK_REFERENCE}
-    assert render.outputs((), role_graph=[], package_pages=[]) == (
+    assert render.outputs(role_graph=[], package_and_class_pages=[]) == (
         render.CLI_REFERENCE,
         render.STACK_REFERENCE,
     )
@@ -1232,7 +1223,7 @@ def test_packages_process_mmd_is_gone_from_outputs_and_from_the_tree(
 ) -> None:
     render, _ = scripts
     old = "docs/architecture/generated/packages-process.mmd"
-    assert old not in render.outputs([], _role_keys(scripts), _package_keys(scripts))
+    assert old not in render.outputs(_role_keys(scripts), _package_keys(scripts))
     assert not hasattr(render, "PACKAGE_MODULES") and not hasattr(render, "packages_path")
     assert old not in _tree(full_run)
     assert not (REPO / old).exists()
@@ -1451,9 +1442,7 @@ def test_the_three_replaced_mmd_files_are_gone_from_outputs_and_from_the_tree(
         f"docs/architecture/generated/{name}.mmd"
         for name in ("classes-process-domain", "packages-knowledge", "packages-measurement")
     ]
-    written = render.outputs(
-        _run_classes(_tree(full_run)), _role_keys(scripts), _package_keys(scripts)
-    )
+    written = render.outputs(_role_keys(scripts), _package_keys(scripts))
     tree = _tree(full_run)
     for old in gone:
         assert old not in written and old not in tree and not (REPO / old).exists(), old
@@ -1483,13 +1472,12 @@ def test_generate_refuses_dot_it_cannot_read_and_a_module_in_no_cluster(
         generate.class_pages("process", "domain")
 
 
-def test_generate_refuses_an_unwritten_layer_whose_class_page_is_over_budget_and_writes_nothing(
+def test_generate_refuses_a_class_page_over_budget_naming_its_path(
     scripts: tuple[ModuleType, ModuleType], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The class pages of a layer still drawn as `.mmd` are only built, not written; they are
-    measured in memory all the same, and a page over `DIAGRAM_BUDGET` fails naming its path."""
+    """Every class page is measured, whatever its layer, and a page over `DIAGRAM_BUDGET`
+    fails naming its path and the counts."""
     render, generate = scripts
-    assert ("knowledge", "domain") in generate.LEGACY_MMD
     path = f"{render.GENERATED}/classes-knowledge-domain-all.md"
     names = [f"m__C{n:02d}" for n in range(render.DIAGRAM_BUDGET.classes + 1)]
     fat = "```mermaid\nclassDiagram\n" + "".join(f"    class {n}\n" for n in names) + "```\n"
@@ -1497,4 +1485,3 @@ def test_generate_refuses_an_unwritten_layer_whose_class_page_is_over_budget_and
     with pytest.raises(generate.GenerateError, match=re.escape(path)) as raised:
         generate.generate(tmp_path, {"knowledge": ("domain",)})
     assert "classes" in str(raised.value)
-    assert not (tmp_path / render.GENERATED).exists()

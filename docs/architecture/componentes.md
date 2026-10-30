@@ -114,26 +114,25 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
 
 ## Los diagramas generados
 
-`scripts/docs/generate.py` dibuja las clases públicas de cada módulo con pyreverse, una vista
-por capa, salvo el dominio de `process`. Los paquetes de `process`, `knowledge` y `measurement`
-salen del lector de imports (`scripts/docs/imports.py`), no de pyreverse, que pierde la ruta del
-paquete y funde los módulos homónimos; las clases del dominio de `process` salen de la salida
-`dot` de pyreverse, que conserva el nombre calificado de cada clase:
+`scripts/docs/generate.py` dibuja las clases públicas de cada módulo y capa a partir de la
+salida `dot` de pyreverse, que conserva el nombre calificado de cada clase. Los paquetes de
+`process`, `knowledge` y `measurement` salen del lector de imports (`scripts/docs/imports.py`),
+no de pyreverse, que pierde la ruta del paquete y funde los módulos homónimos:
 
 - paquetes de `process`, páginas partidas por subpaquete y por grupo, con el
   [índice](generated/packages-process.md) primero;
 - paquetes de `knowledge` y `measurement`, una página por capa, con los índices
   [knowledge](generated/packages-knowledge.md) y
   [measurement](generated/packages-measurement.md);
-- clases del dominio de `process`, una página por grupo, con el
-  [índice](generated/classes-process-domain.md) primero;
-- clases de `process`: [aplicación](generated/classes-process-application.mmd) y
-  [adaptadores](generated/classes-process-adapters.mmd);
-- clases de `knowledge`: [dominio](generated/classes-knowledge-domain.mmd) y
-  [adaptadores](generated/classes-knowledge-adapters.mmd);
-- clases de `measurement`: [dominio](generated/classes-measurement-domain.mmd),
-  [aplicación](generated/classes-measurement-application.mmd) y
-  [adaptadores](generated/classes-measurement-adapters.mmd).
+- clases de `process`, una página por grupo o por tipo de adaptador, con los índices
+  [domain](generated/classes-process-domain.md),
+  [application](generated/classes-process-application.md) y
+  [adapters](generated/classes-process-adapters.md) primero;
+- clases de `knowledge`, con los índices [domain](generated/classes-knowledge-domain.md) y
+  [adapters](generated/classes-knowledge-adapters.md);
+- clases de `measurement`, con los índices [domain](generated/classes-measurement-domain.md),
+  [application](generated/classes-measurement-application.md) y
+  [adapters](generated/classes-measurement-adapters.md).
 
 El grafo de roles está en [role-graph.md](generated/role-graph.md), que resume las fases y
 enlaza una página por fase.

@@ -101,33 +101,19 @@ def class_page_path(key: str) -> str:
     return f"{GENERATED}/classes-{key}.md"
 
 
-def classes_path(name: str) -> str:
-    """`name` is `<module>-<layer>` or `<module>-<layer>-<n>`."""
-    return f"{GENERATED}/classes-{name}.mmd"
-
-
-def outputs(
-    class_diagrams: Iterable[str],
-    role_graph: Iterable[str],
-    package_pages: Iterable[str],
-    class_pages: Iterable[str] = (),
-) -> tuple[str, ...]:
-    """The relative paths the generator writes, sorted. `class_diagrams` are the names of the
-    pyreverse `.mmd` class diagrams it wrote (a layer with no class has none, one over the
-    limit has two), which only the run can know; `role_graph`, `package_pages` and
-    `class_pages` are the paths `role_graph_pages`, `package_pages` and `class_pages` returned,
-    the only lists of those pages there are."""
+def outputs(role_graph: Iterable[str], package_and_class_pages: Iterable[str]) -> tuple[str, ...]:
+    """The relative paths the generator writes, sorted: the two references, plus `role_graph`
+    and `package_and_class_pages`, the paths `role_graph_pages`, `package_pages` and
+    `class_pages` returned, the only lists of those pages there are."""
     paths = {CLI_REFERENCE, STACK_REFERENCE}
     paths.update(role_graph)
-    paths.update(package_pages)
-    paths.update(class_pages)
-    paths.update(classes_path(name) for name in class_diagrams)
+    paths.update(package_and_class_pages)
     return tuple(sorted(paths))
 
 
 def mermaid_limits(text: str) -> None:
     """Raise `ValueError` when a Mermaid block of `text` is over 40000 characters or 400
-    edges. `text` is a file of fenced blocks, or a bare diagram (a `.mmd` file)."""
+    edges. `text` is a file of fenced blocks, or a bare diagram."""
     blocks = _FENCE.findall(text) if "```mermaid" in text else [text]
     for number, block in enumerate(blocks, start=1):
         if len(block) > MAX_CHARACTERS:
@@ -257,11 +243,12 @@ def diagram_budget(text: str) -> list[Overage]:
 
 
 def check_budget(root: Path) -> list[tuple[str, Overage]]:
-    """Every `.md` under `root/docs/architecture/` with a block over budget, as (relative
-    path, overage), sorted. `.mmd` files are not measured."""
+    """Every diagram file (`.md` or `.mmd`) under `root/docs/architecture/` with a block over
+    budget, as (relative path, overage), sorted; no file is exempt."""
     found: list[tuple[str, Overage]] = []
     base = root / _ARCHITECTURE
-    for page in sorted(base.rglob("*.md")) if base.is_dir() else []:
+    pages = [file for file in base.rglob("*") if file.suffix in (".md", ".mmd")]
+    for page in sorted(pages) if base.is_dir() else []:
         relative = page.relative_to(root).as_posix()
         found.extend((relative, over) for over in diagram_budget(page.read_text(encoding="utf-8")))
     return found
@@ -744,42 +731,3 @@ def stack_reference(references: Sequence[KeyReference]) -> str:
             lines.append(f"- **Lector**: `{reader.__module__}.{reader.__qualname__}`")
         parts.append("\n".join(lines) + "\n")
     return "\n".join(parts)
-
-
-def select_mermaid(files: Mapping[str, str], kind: str) -> str:
-    """The one pyreverse output of `kind` (`packages` or `classes`) among `files`, a mapping
-    of file name to text; raises when there is not exactly one."""
-    found = sorted(name for name in files if name.startswith(f"{kind}_") and name.endswith(".mmd"))
-    if len(found) != 1:
-        raise ValueError(f"pyreverse wrote {len(found)} `{kind}_*.mmd` files, expected one")
-    return files[found[0]]
-
-
-def has_classes(diagram: str) -> bool:
-    """Whether a pyreverse class diagram declares any class."""
-    return any(line.startswith("  class ") for line in diagram.splitlines())
-
-
-def merge_mermaid(parts: Sequence[str]) -> str:
-    """One pyreverse diagram out of several runs over parts of the same code: the header of
-    the first, then every block once (the first of a name) and every relation once, both
-    sorted so the result does not depend on the order of the runs."""
-    header = parts[0].splitlines()[0] if parts and parts[0] else "classDiagram"
-    blocks: dict[str, str] = {}
-    relations: set[str] = set()
-    for part in parts:
-        lines = part.splitlines()
-        position = 1
-        while position < len(lines):
-            line = lines[position]
-            if line.startswith("  class "):
-                end = position
-                while end < len(lines) - 1 and lines[end] != "  }" and line.endswith("{"):
-                    end += 1
-                blocks.setdefault(line, "\n".join(lines[position : end + 1]))
-                position = end
-            elif line.strip():
-                relations.add(line)
-            position += 1
-    body = [blocks[key] for key in sorted(blocks)] + sorted(relations)
-    return "\n".join([header, *body]) + "\n"

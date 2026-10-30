@@ -40,20 +40,6 @@ HELP_WIDTH = 100
 PYREVERSE_IGNORE = "board.py"
 PYREVERSE_FLAGS = ("-k", "--filter-mode", "PUB_ONLY")
 PARALLEL_RUNS = 8
-# The class pages of every layer come from the dot output (it keeps qualified class names, so
-# homonyms are never merged). Until the pages are written (GH-430 part 4, second subtask) these
-# layers keep their `.mmd` and their pages are only built and checked in memory.
-LEGACY_MMD = frozenset(
-    {
-        ("knowledge", "adapters"),
-        ("knowledge", "domain"),
-        ("measurement", "adapters"),
-        ("measurement", "application"),
-        ("measurement", "domain"),
-        ("process", "adapters"),
-        ("process", "application"),
-    }
-)
 
 
 class GenerateError(Exception):
@@ -124,11 +110,9 @@ def package_page_inputs() -> tuple[dict[str, bool], dict[str, set[str]]]:
     return on_disk, imported
 
 
-def _pyreverse(
-    name: str, targets: Sequence[Path], ignore: bool = True, output: str = "mmd"
-) -> dict[str, str]:
-    """Run pyreverse over `targets` with the fixed project name `name`, writing `output` (`mmd`
-    or `dot`); the files it wrote."""
+def _pyreverse(name: str, targets: Sequence[Path], ignore: bool = True) -> dict[str, str]:
+    """Run pyreverse over `targets` with the fixed project name `name`, writing dot (it keeps
+    the qualified name of every class, so homonyms are never merged); the files it wrote."""
     environment = {"PYTHONHASHSEED": "0", "PATH": os.environ.get("PATH", "")}
     if "HOME" in os.environ:
         environment["HOME"] = os.environ["HOME"]
@@ -138,7 +122,7 @@ def _pyreverse(
             "-m",
             "pylint.pyreverse.main",
             "-o",
-            output,
+            "dot",
             *PYREVERSE_FLAGS,
             *(("--ignore", PYREVERSE_IGNORE) if ignore else ()),
             "-p",
@@ -172,24 +156,6 @@ def _module_dir(module: str) -> Path:
     return REPO / "agentic" / "core" / module
 
 
-def _diagram(name: str, targets: Sequence[Path], kind: str, ignore: bool = True) -> str:
-    files = _pyreverse(name, targets, ignore)
-    try:
-        return render.select_mermaid(files, kind)
-    except ValueError as error:
-        raise GenerateError(f"pyreverse emitted no mmd for {name}: {error}") from error
-
-
-def _with_ignored(diagram: str, name: str, files: Sequence[Path]) -> str:
-    """`diagram` plus the classes of the files pyreverse crashes on in company."""
-    extras = [
-        _diagram(name, [file], "classes", ignore=False)
-        for file in files
-        if file.name == PYREVERSE_IGNORE
-    ]
-    return render.merge_mermaid([diagram, *extras]) if extras else diagram
-
-
 def cluster_table(context: str) -> Mapping[str, str]:
     """The table of clusters of `context` in `groups.py`; empty for a context with none."""
     tables = {"process": groups.CLUSTERS, "measurement": groups.MEASUREMENT_CLUSTERS}
@@ -200,16 +166,16 @@ def class_pages(context: str, layer: str) -> dict[str, str]:
     """The class pages of `agentic/core/<context>/<layer>`: pyreverse's dot output over the
     layer, plus a run over each file named `PYREVERSE_IGNORE` alone (the layer run skips it, see
     there), parsed by `classes.parse` and merged by qualified name. The relations between the
-    classes of such a file and the rest of the layer are lost, as they are with mmd (ADR-0076),
+    classes of such a file and the rest of the layer are not drawn (ADR-0076),
     and the pages that hold them say so. Relative path -> text; empty when the layer is not
     there or has no public class."""
     name = f"{context}-{layer}"
     directory = _module_dir(context) / layer
     if not directory.is_dir():
         return {}
-    runs = [(_pyreverse(name, [directory], output="dot"), name, False)]
+    runs = [(_pyreverse(name, [directory]), name, False)]
     runs += [
-        (_pyreverse(name, [file], ignore=False, output="dot"), f"{name} ({file.name})", True)
+        (_pyreverse(name, [file], ignore=False), f"{name} ({file.name})", True)
         for file in sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
         if file.name == PYREVERSE_IGNORE
     ]
@@ -240,39 +206,6 @@ def class_pages(context: str, layer: str) -> dict[str, str]:
     return render.class_pages(model)
 
 
-def class_diagrams(module: str, layers: Sequence[str]) -> dict[str, str]:
-    """`<module>-<layer>[-<n>]` -> class diagram, for each layer that exists and has a class.
-    A layer over the Mermaid limit is split in at most two chunks of consecutive source files
-    in alphabetical order; if two are not enough this refuses."""
-    found: dict[str, str] = {}
-    for layer in layers:
-        directory = _module_dir(module) / layer
-        if not directory.is_dir():
-            continue
-        name = f"{module}-{layer}"
-        every = sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
-        whole = _with_ignored(_diagram(name, [directory], "classes"), name, every)
-        if not render.has_classes(whole):
-            continue
-        try:
-            render.mermaid_limits(whole)
-        except ValueError:
-            middle = (len(every) + 1) // 2
-            for number, chunk in enumerate((every[:middle], every[middle:]), start=1):
-                diagram = _with_ignored(_diagram(name, chunk, "classes"), name, chunk)
-                try:
-                    render.mermaid_limits(diagram)
-                except ValueError as error:
-                    raise GenerateError(
-                        f"{name} is over the Mermaid limit even in two chunks: {error}"
-                    ) from error
-                if render.has_classes(diagram):
-                    found[f"{name}-{number}"] = diagram
-        else:
-            found[name] = whole
-    return found
-
-
 def _write(root: Path, relative: str, text: str) -> None:
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -299,13 +232,12 @@ def _remove_stale(root: Path, kept: Sequence[str]) -> None:
 
 def generate(
     root: Path, layers: Mapping[str, tuple[str, ...]] = render.LAYERS
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Write every generated file under `root`. `layers` maps each module to draw (its
     packages and its classes) to its layers; every package diagram is a page built from the
-    import reader, and the class pages are built from pyreverse's dot output (those of the
-    layers in `LEGACY_MMD` are only checked, not written). Returns the relative paths written,
-    sorted, the names of the `.mmd` class diagrams among them and the paths of the role-graph
-    pages and of the package and class pages among them: what `render.outputs` takes."""
+    import reader, and every class diagram is a page built from pyreverse's dot output.
+    Returns the relative paths written, sorted, the paths of the role-graph pages among them
+    and the paths of the package and class pages among them: what `render.outputs` takes."""
     from agentic.core.knowledge.domain import stack
 
     try:
@@ -328,34 +260,17 @@ def generate(
     except ValueError as error:
         raise GenerateError(str(error)) from error
     class_texts: dict[str, str] = {}
-    unwritten: dict[str, str] = {}
     # Every pyreverse run is its own subprocess, independent of the others: the layers go in
     # parallel and their results are read in the order of `layers`, so nothing written depends
     # on which run finishes first.
     with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
         page_jobs = [
-            ((module, layer), pool.submit(class_pages, module, layer))
+            pool.submit(class_pages, module, layer)
             for module, module_layers in layers.items()
             for layer in module_layers
         ]
-        mmd_jobs = [
-            pool.submit(
-                class_diagrams,
-                module,
-                tuple(layer for layer in module_layers if (module, layer) in LEGACY_MMD),
-            )
-            for module, module_layers in layers.items()
-        ]
-        for key, job in page_jobs:
-            (unwritten if key in LEGACY_MMD else class_texts).update(job.result())
-        mmd_diagrams = [job.result() for job in mmd_jobs]
-    waiting = [
-        (relative, over)
-        for relative, text in sorted(unwritten.items())
-        for over in render.diagram_budget(text)
-    ]
-    if message := budget_message(waiting):
-        raise GenerateError(message)
+        for job in page_jobs:
+            class_texts.update(job.result())
     texts: dict[str, str] = {
         **role_pages,
         **package_texts,
@@ -363,11 +278,6 @@ def generate(
         render.CLI_REFERENCE: render.cli_reference(cli_helps()),
         render.STACK_REFERENCE: render.stack_reference(stack.KEY_REFERENCE),
     }
-    names: list[str] = []
-    for diagrams in mmd_diagrams:
-        for name, diagram in diagrams.items():
-            texts[render.classes_path(name)] = diagram
-            names.append(name)
     for relative, text in texts.items():
         try:
             render.mermaid_limits(text)
@@ -381,7 +291,6 @@ def generate(
         raise GenerateError(message)
     return (
         written,
-        tuple(sorted(names)),
         tuple(sorted(role_pages)),
         tuple(sorted({*package_texts, *class_texts})),
     )
