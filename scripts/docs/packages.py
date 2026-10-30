@@ -26,7 +26,7 @@ PROCESS = "agentic.core.process"
 LAYERS = ("domain", "application")
 ADAPTERS = "adapters"
 INDEX = "index"
-MAX_PART = 15
+MAX_PART = DIAGRAM_BUDGET.classes
 
 _CLUSTER_NAME = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*")
 Ends = tuple[tuple[str, str], ...]
@@ -288,8 +288,9 @@ def _cluster_key(layer: str, cluster: str, part: int | None) -> str:
     return base if part is None else f"{base}-{part}"
 
 
-def _chunks(modules: list[str]) -> list[list[str]]:
-    """`modules` in `ceil(n / 15)` (at least two) runs of consecutive names, as even as can be."""
+def chunks(modules: list[str]) -> list[list[str]]:
+    """`modules` in `ceil(n / DIAGRAM_BUDGET.classes)` (at least two) runs of consecutive names, as
+    even as can be; the one rule that splits a list by count, for package pages and class pages."""
     count = max(2, math.ceil(len(modules) / MAX_PART))
     size = math.ceil(len(modules) / count)
     return [modules[start : start + size] for start in range(0, len(modules), size)]
@@ -303,7 +304,7 @@ def _splits(graph: _Graph, layer: str, cluster: str) -> bool:
 def _part_keys(graph: _Graph, layer: str, cluster: str) -> list[str]:
     if not _splits(graph, layer, cluster):
         return [_cluster_key(layer, cluster, None)]
-    count = len(_chunks(graph.cluster_modules(layer, cluster)))
+    count = len(chunks(graph.cluster_modules(layer, cluster)))
     return [_cluster_key(layer, cluster, number) for number in range(1, count + 1)]
 
 
@@ -421,18 +422,18 @@ def _cluster_pages(graph: _Graph, layer: str, cluster: str) -> dict[str, Page]:
             keys[0], title, sentence, layer, [key for key in siblings_of if key != keys[0]]
         )
         return {keys[0]: page}
-    chunks = _chunks(modules)
+    runs = chunks(modules)
     found: dict[str, Page] = {}
-    for number, (key, chunk) in enumerate(zip(keys, chunks, strict=True), start=1):
-        draw, how = _draw_cluster(graph, layer, cluster, chunk, (number, chunks))
+    for number, (key, chunk) in enumerate(zip(keys, runs, strict=True), start=1):
+        draw, how = _draw_cluster(graph, layer, cluster, chunk, (number, runs))
         if how is None:
             raise ValueError(
                 f"cluster {layer}.{cluster} has {len(modules)} modules and part {number} of "
-                f"{len(chunks)} has {len(draw.nodes)} nodes and {len(draw.edges)} edges, over "
+                f"{len(runs)} has {len(draw.nodes)} nodes and {len(draw.edges)} edges, over "
                 f"the budget of {DIAGRAM_BUDGET.nodes} nodes and {DIAGRAM_BUDGET.edges} edges: "
                 f"split `{layer}.{cluster}` by meaning in CLUSTERS (scripts/docs/groups.py)"
             )
-        sentence = _cluster_sentence(layer, cluster, how, (number, len(chunks)))
+        sentence = _cluster_sentence(layer, cluster, how, (number, len(runs)))
         found[key] = draw.page(
             key,
             f"{title} (parte {number})",

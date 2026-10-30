@@ -25,3 +25,6 @@ def load(name: str, module_name: str) -> ModuleType:
 
 
 imports = load("imports", "docs_imports")
+packages = load("packages", "packages")  # `classes` imports it by that name
+classes = load("classes", "classes")
+groups = load("groups", "groups")

@@ -1,0 +1,7 @@
+digraph "classes_process-domain-board" {
+rankdir=BT
+charset="utf-8"
+"agentic.core.process.domain.board.Card" [color="black", fontcolor="black", label=<Card>, shape="record", style="solid"];
+"agentic.core.process.domain.board.FieldWrite" [color="black", fontcolor="black", label=<FieldWrite>, shape="record", style="solid"];
+"agentic.core.process.domain.board.IssueFacts" [color="black", fontcolor="black", label=<IssueFacts>, shape="record", style="solid"];
+}

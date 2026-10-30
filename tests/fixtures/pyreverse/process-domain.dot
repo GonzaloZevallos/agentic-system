@@ -1,0 +1,33 @@
+digraph "classes_process-domain" {
+rankdir=BT
+charset="utf-8"
+"agentic.core.process.domain.schemas.Answers" [color="black", fontcolor="black", label=<Answers>, shape="record", style="solid"];
+"agentic.core.process.domain.check_schedule.CheckPriority" [color="black", fontcolor="black", label=<CheckPriority>, shape="record", style="solid"];
+"agentic.core.process.domain.schemas.Classification" [color="black", fontcolor="black", label=<Classification>, shape="record", style="solid"];
+"agentic.core.process.domain.check_schedule.Entry" [color="black", fontcolor="black", label=<Entry>, shape="record", style="solid"];
+"agentic.core.process.domain.coverage.Entry" [color="black", fontcolor="black", label=<Entry>, shape="record", style="solid"];
+"agentic.core.process.domain.roles.Interview" [color="black", fontcolor="black", label=<Interview>, shape="record", style="solid"];
+"agentic.core.process.domain.cost_history.Pair" [color="black", fontcolor="black", label=<Pair>, shape="record", style="solid"];
+"agentic.core.process.domain.roles.Pair" [color="black", fontcolor="black", label=<Pair>, shape="record", style="solid"];
+"agentic.core.process.domain.playbook.Playbook" [color="black", fontcolor="black", label=<Playbook>, shape="record", style="solid"];
+"agentic.core.process.domain.coverage.Refusal" [color="black", fontcolor="black", label=<Refusal>, shape="record", style="solid"];
+"agentic.core.process.domain.coverage.Rejected" [color="black", fontcolor="black", label=<Rejected>, shape="record", style="solid"];
+"agentic.core.process.domain.check_schedule.Request" [color="black", fontcolor="black", label=<Request>, shape="record", style="solid"];
+"agentic.core.process.domain.roles.Role" [color="black", fontcolor="black", label=<Role>, shape="record", style="solid"];
+"agentic.core.process.domain.schemas.RoleOutput" [color="black", fontcolor="black", label=<RoleOutput>, shape="record", style="solid"];
+"agentic.core.process.domain.stall.Verdict" [color="black", fontcolor="black", label=<Verdict>, shape="record", style="solid"];
+"agentic.core.process.domain.schemas.Verdict" [color="black", fontcolor="black", label=<Verdict>, shape="record", style="solid"];
+"agentic.core.process.domain.playbook._Shelves" [color="black", fontcolor="black", label=<_Shelves>, shape="record", style="solid"];
+"agentic.core.process.domain.schemas.Answers" -> "agentic.core.process.domain.schemas.RoleOutput" [arrowhead="empty", arrowtail="none"];
+"agentic.core.process.domain.schemas.Classification" -> "agentic.core.process.domain.schemas.RoleOutput" [arrowhead="empty", arrowtail="none"];
+"agentic.core.process.domain.schemas.Verdict" -> "agentic.core.process.domain.schemas.RoleOutput" [arrowhead="empty", arrowtail="none"];
+"agentic.core.process.domain.check_schedule.Entry" -> "agentic.core.process.domain.check_schedule.CheckPriority" [arrowhead="vee", arrowtail="none", fontcolor="green", label="priority", style="solid"];
+"agentic.core.process.domain.check_schedule.Request" -> "agentic.core.process.domain.check_schedule.CheckPriority" [arrowhead="vee", arrowtail="none", fontcolor="green", label="priority", style="solid"];
+"agentic.core.process.domain.coverage.Rejected" -> "agentic.core.process.domain.coverage.Refusal" [arrowhead="vee", arrowtail="none", fontcolor="green", label="refusal", style="solid"];
+"agentic.core.process.domain.playbook._Shelves" -> "agentic.core.process.domain.playbook.Playbook" [arrowhead="vee", arrowtail="none", fontcolor="green", label="playbook", style="solid"];
+"agentic.core.process.domain.roles.Interview" -> "agentic.core.process.domain.roles.Role" [arrowhead="vee", arrowtail="none", fontcolor="green", label="interviewer", style="solid"];
+"agentic.core.process.domain.roles.Interview" -> "agentic.core.process.domain.roles.Role" [arrowhead="vee", arrowtail="none", fontcolor="green", label="interviewee", style="solid"];
+"agentic.core.process.domain.roles.Interview" -> "agentic.core.process.domain.roles.Role" [arrowhead="vee", arrowtail="none", fontcolor="green", label="author", style="solid"];
+"agentic.core.process.domain.roles.Pair" -> "agentic.core.process.domain.roles.Role" [arrowhead="vee", arrowtail="none", fontcolor="green", label="by", style="solid"];
+"agentic.core.process.domain.roles.Pair" -> "agentic.core.process.domain.roles.Role" [arrowhead="vee", arrowtail="none", fontcolor="green", label="to", style="solid"];
+}
