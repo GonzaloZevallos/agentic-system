@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,7 @@ HELP_WIDTH = 100
 # merged in (ADR-0076). The package diagrams lack its node: a single-file run draws none.
 PYREVERSE_IGNORE = "board.py"
 PYREVERSE_FLAGS = ("-k", "--filter-mode", "PUB_ONLY")
+PARALLEL_RUNS = 8
 # The class pages of every layer come from the dot output (it keeps qualified class names, so
 # homonyms are never merged). Until the pages are written (GH-430 part 4, second subtask) these
 # layers keep their `.mmd` and their pages are only built and checked in memory.
@@ -327,10 +329,26 @@ def generate(
         raise GenerateError(str(error)) from error
     class_texts: dict[str, str] = {}
     unwritten: dict[str, str] = {}
-    for module, module_layers in layers.items():
-        for layer in module_layers:
-            target = unwritten if (module, layer) in LEGACY_MMD else class_texts
-            target.update(class_pages(module, layer))
+    # Every pyreverse run is its own subprocess, independent of the others: the layers go in
+    # parallel and their results are read in the order of `layers`, so nothing written depends
+    # on which run finishes first.
+    with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
+        page_jobs = [
+            ((module, layer), pool.submit(class_pages, module, layer))
+            for module, module_layers in layers.items()
+            for layer in module_layers
+        ]
+        mmd_jobs = [
+            pool.submit(
+                class_diagrams,
+                module,
+                tuple(layer for layer in module_layers if (module, layer) in LEGACY_MMD),
+            )
+            for module, module_layers in layers.items()
+        ]
+        for key, job in page_jobs:
+            (unwritten if key in LEGACY_MMD else class_texts).update(job.result())
+        mmd_diagrams = [job.result() for job in mmd_jobs]
     waiting = [
         (relative, over)
         for relative, text in sorted(unwritten.items())
@@ -346,9 +364,8 @@ def generate(
         render.STACK_REFERENCE: render.stack_reference(stack.KEY_REFERENCE),
     }
     names: list[str] = []
-    for module, module_layers in layers.items():
-        mmd_layers = tuple(layer for layer in module_layers if (module, layer) in LEGACY_MMD)
-        for name, diagram in class_diagrams(module, mmd_layers).items():
+    for diagrams in mmd_diagrams:
+        for name, diagram in diagrams.items():
             texts[render.classes_path(name)] = diagram
             names.append(name)
     for relative, text in texts.items():
