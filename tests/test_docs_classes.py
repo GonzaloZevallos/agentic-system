@@ -18,10 +18,12 @@ import pytest
 from pylint.pyreverse.dot_printer import ARROWS
 from pylint.pyreverse.printer import EdgeType
 
+from agentic.core.process.domain.docs import DIAGRAM_BUDGET
 from tests.docs_scripts import classes, groups, packages
 
 FIXTURES = Path(__file__).parent / "fixtures" / "pyreverse"
 DOMAIN = "agentic.core.process.domain"
+BUDGET = DIAGRAM_BUDGET.classes
 
 
 def _fixture(name: str) -> str:
@@ -197,43 +199,54 @@ def _crowd(count: int) -> tuple[list[str], str]:
 
 
 def test_a_cluster_over_the_budget_splits_into_pages_made_by_chunks() -> None:
-    names, text = _crowd(31)
+    names, text = _crowd(2 * BUDGET + 1)
     result = _pages(classes.parse(text), {"domain.a": "big"})
     expected = packages.chunks(names)
+    assert len(expected) >= 3
     keys = [key for key in result if key != "index"]
-    assert keys == ["process-domain-big-1", "process-domain-big-2", "process-domain-big-3"]
+    assert keys == [f"process-domain-big-{n}" for n in range(1, len(expected) + 1)]
     assert [[i for i, _ in result[k].nodes] for k in keys] == [
         [n.replace(".", "__") for n in chunk] for chunk in expected
     ]
-    assert [len(chunk) for chunk in expected] == [11, 11, 9]
+    assert sum(len(chunk) for chunk in expected) == len(names)
+    assert all(0 < len(chunk) <= BUDGET for chunk in expected)
     for number, key in enumerate(keys, start=1):
         page = result[key]
         assert page.sentence.startswith("Esta página muestra")
-        assert f"dividió por cantidad: esta es la parte {number} de 3" in page.sentence
+        parte = f"dividió por cantidad: esta es la parte {number} de {len(keys)}"
+        assert parte in page.sentence
         assert page.parent == "index"
         assert page.siblings == tuple(k for k in keys if k != key)
 
 
 def test_a_cluster_at_the_budget_is_one_page_and_is_not_said_to_be_split() -> None:
-    _, text = _crowd(15)
+    _, text = _crowd(BUDGET)
     result = _pages(classes.parse(text), {"domain.a": "big"})
     assert list(result) == ["index", "process-domain-big"]
     assert "por cantidad" not in result["process-domain-big"].sentence
-    _, over = _crowd(16)
+    _, over = _crowd(BUDGET + 1)
     assert len(_pages(classes.parse(over), {"domain.a": "big"})) == 3
 
 
 def test_a_relation_to_a_class_on_another_page_is_listed_not_drawn() -> None:
-    names, _ = _crowd(31)
-    edges = [("a.C00", "a.C01", "vee"), ("a.C00", "a.C30", "empty"), ("a.C29", "a.C30", "vee")]
+    names, _ = _crowd(2 * BUDGET + 1)
+    runs = packages.chunks(names)
+    first, last = runs[0], runs[-1]
+    edges = [
+        (first[0], first[1], "vee"),
+        (first[0], last[-1], "empty"),
+        (last[-2], last[-1], "vee"),
+    ]
     result = _pages(classes.parse(_dot(names, edges)), {"domain.a": "big"})
-    first, last = result["process-domain-big-1"], result["process-domain-big-3"]
-    assert first.edges == (("a__C00", "a__C01", "associates"),)
-    assert first.elsewhere == (("a.C00", "a.C30", "inherits"),)
-    assert last.edges == (("a__C29", "a__C30", "associates"),)
-    assert last.elsewhere == (("a.C00", "a.C30", "inherits"),)
-    middle = result["process-domain-big-2"]
-    assert middle.edges == () and middle.elsewhere == ()
+    one, end = result["process-domain-big-1"], result[f"process-domain-big-{len(runs)}"]
+    ident = classes.node_id
+    assert one.edges == ((ident("a", first[0][2:]), ident("a", first[1][2:]), "associates"),)
+    assert one.elsewhere == ((first[0], last[-1], "inherits"),)
+    assert end.edges == ((ident("a", last[-2][2:]), ident("a", last[-1][2:]), "associates"),)
+    assert end.elsewhere == ((first[0], last[-1], "inherits"),)
+    for number in range(2, len(runs)):
+        middle = result[f"process-domain-big-{number}"]
+        assert middle.edges == () and middle.elsewhere == ()
 
 
 def test_a_relation_between_two_clusters_is_listed_on_both_pages() -> None:
