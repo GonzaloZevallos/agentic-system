@@ -992,3 +992,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-30T07:29:07.951+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before you deliver, grep the whole diff, ADRs and docs prose included, for each figure an invariant says no file may copy, and cite the named constant instead of the number.
+  confidence: medium
+  seen_in:
+  - GH-437
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-30T10:05:37.763+00:00'
