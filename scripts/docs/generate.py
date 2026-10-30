@@ -38,9 +38,20 @@ HELP_WIDTH = 100
 # merged in (ADR-0076). The package diagrams lack its node: a single-file run draws none.
 PYREVERSE_IGNORE = "board.py"
 PYREVERSE_FLAGS = ("-k", "--filter-mode", "PUB_ONLY")
-# The class pages of `process/domain` come from the dot output (it keeps qualified class
-# names, so homonyms are never merged); the other layers keep their mmd until GH-430 part 4.
-DOT_LAYER = ("process", "domain")
+# The class pages of every layer come from the dot output (it keeps qualified class names, so
+# homonyms are never merged). Until the pages are written (GH-430 part 4, second subtask) these
+# layers keep their `.mmd` and their pages are only built and checked in memory.
+LEGACY_MMD = frozenset(
+    {
+        ("knowledge", "adapters"),
+        ("knowledge", "domain"),
+        ("measurement", "adapters"),
+        ("measurement", "application"),
+        ("measurement", "domain"),
+        ("process", "adapters"),
+        ("process", "application"),
+    }
+)
 
 
 class GenerateError(Exception):
@@ -177,34 +188,54 @@ def _with_ignored(diagram: str, name: str, files: Sequence[Path]) -> str:
     return render.merge_mermaid([diagram, *extras]) if extras else diagram
 
 
-def domain_class_pages() -> dict[str, str]:
-    """The class pages of `process/domain`: pyreverse's dot output over the layer, plus a run
-    over `board.py` alone (the layer run skips it, see `PYREVERSE_IGNORE`), parsed by
-    `classes.parse` and merged by qualified name. The relations between the classes of
-    `board.py` and the rest of the layer are lost, as they are with mmd (ADR-0076)."""
-    module, layer = DOT_LAYER
-    name = f"{module}-{layer}"
-    directory = _module_dir(module) / layer
-    runs = [(_pyreverse(name, [directory], output="dot"), name)]
+def cluster_table(context: str) -> Mapping[str, str]:
+    """The table of clusters of `context` in `groups.py`; empty for a context with none."""
+    tables = {"process": groups.CLUSTERS, "measurement": groups.MEASUREMENT_CLUSTERS}
+    return tables.get(context, {})
+
+
+def class_pages(context: str, layer: str) -> dict[str, str]:
+    """The class pages of `agentic/core/<context>/<layer>`: pyreverse's dot output over the
+    layer, plus a run over each file named `PYREVERSE_IGNORE` alone (the layer run skips it, see
+    there), parsed by `classes.parse` and merged by qualified name. The relations between the
+    classes of such a file and the rest of the layer are lost, as they are with mmd (ADR-0076),
+    and the pages that hold them say so. Relative path -> text; empty when the layer is not
+    there or has no public class."""
+    name = f"{context}-{layer}"
+    directory = _module_dir(context) / layer
+    if not directory.is_dir():
+        return {}
+    runs = [(_pyreverse(name, [directory], output="dot"), name, False)]
     runs += [
-        (_pyreverse(name, [file], ignore=False, output="dot"), f"{name} ({file.name})")
+        (_pyreverse(name, [file], ignore=False, output="dot"), f"{name} ({file.name})", True)
         for file in sorted(directory.rglob("*.py"), key=lambda file: file.as_posix())
         if file.name == PYREVERSE_IGNORE
     ]
     parsed = []
-    for files, label in runs:
+    separate: set[str] = set()
+    for files, label, alone in runs:
         found = sorted(file for file in files if file.startswith("classes_"))
         if len(found) != 1:
             raise GenerateError(f"pyreverse wrote {len(found)} `classes_*.dot` files for {label}")
         try:
-            parsed.append(classes.parse(files[found[0]]))
+            run = classes.parse(files[found[0]], context, layer)
         except ValueError as error:
             raise GenerateError(f"{label}: {error}") from error
+        parsed.append(run)
+        if alone:
+            separate.update(node.module for node in run[0])
     try:
-        pages = classes.pages(*classes.merge(*parsed), groups.CLUSTERS)
+        model = classes.pages(
+            *classes.merge(*parsed),
+            context,
+            layer,
+            groups.CLASS_GROUPING,
+            cluster_table(context),
+            separate,
+        )
     except ValueError as error:
         raise GenerateError(str(error)) from error
-    return render.class_pages(pages)
+    return render.class_pages(model)
 
 
 def class_diagrams(module: str, layers: Sequence[str]) -> dict[str, str]:
@@ -269,10 +300,10 @@ def generate(
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Write every generated file under `root`. `layers` maps each module to draw (its
     packages and its classes) to its layers; every package diagram is a page built from the
-    import reader, and the class diagrams of `process/domain` are pages built from pyreverse's
-    dot output. Returns the relative paths written, sorted, the names of the `.mmd` class
-    diagrams among them and the paths of the role-graph pages and of the package and class
-    pages among them: what `render.outputs` takes."""
+    import reader, and the class pages are built from pyreverse's dot output (those of the
+    layers in `LEGACY_MMD` are only checked, not written). Returns the relative paths written,
+    sorted, the names of the `.mmd` class diagrams among them and the paths of the role-graph
+    pages and of the package and class pages among them: what `render.outputs` takes."""
     from agentic.core.knowledge.domain import stack
 
     try:
@@ -294,7 +325,19 @@ def generate(
             package_texts.update(render.package_pages(model, module))
     except ValueError as error:
         raise GenerateError(str(error)) from error
-    class_texts = domain_class_pages() if DOT_LAYER[1] in layers.get(DOT_LAYER[0], ()) else {}
+    class_texts: dict[str, str] = {}
+    unwritten: dict[str, str] = {}
+    for module, module_layers in layers.items():
+        for layer in module_layers:
+            target = unwritten if (module, layer) in LEGACY_MMD else class_texts
+            target.update(class_pages(module, layer))
+    waiting = [
+        (relative, over)
+        for relative, text in sorted(unwritten.items())
+        for over in render.diagram_budget(text)
+    ]
+    if message := budget_message(waiting):
+        raise GenerateError(message)
     texts: dict[str, str] = {
         **role_pages,
         **package_texts,
@@ -304,7 +347,7 @@ def generate(
     }
     names: list[str] = []
     for module, module_layers in layers.items():
-        mmd_layers = tuple(layer for layer in module_layers if (module, layer) != DOT_LAYER)
+        mmd_layers = tuple(layer for layer in module_layers if (module, layer) in LEGACY_MMD)
         for name, diagram in class_diagrams(module, mmd_layers).items():
             texts[render.classes_path(name)] = diagram
             names.append(name)

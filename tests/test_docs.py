@@ -135,7 +135,10 @@ _CLASS_PAGES: dict[str, str] = {}
 
 def _class_page_texts(generate: ModuleType) -> dict[str, str]:
     if not _CLASS_PAGES:
-        _CLASS_PAGES.update(generate.domain_class_pages())
+        for module, module_layers in sys.modules["render"].LAYERS.items():
+            for layer in module_layers:
+                if (module, layer) not in generate.LEGACY_MMD:
+                    _CLASS_PAGES.update(generate.class_pages(module, layer))
     return _CLASS_PAGES
 
 
@@ -1381,7 +1384,10 @@ def _class_texts(
 ) -> dict[str, str]:
     render, _ = scripts
     classes = sys.modules["classes"]
-    return render.class_pages(classes.pages(*classes.parse(dot), clusters))
+    parsed = classes.parse(dot, "process", "domain")
+    return render.class_pages(
+        classes.pages(*parsed, "process", "domain", sys.modules["groups"].CLASS_GROUPING, clusters)
+    )
 
 
 def test_class_pages_draw_qualified_ids_labels_the_four_arrows_and_the_other_pages(
@@ -1412,7 +1418,7 @@ def test_class_pages_draw_qualified_ids_labels_the_four_arrows_and_the_other_pag
     assert "c__Far" not in one.split("## Relaciones con otras páginas")[0]
     tail = one.split("## Relaciones con otras páginas")[1]
     assert "`a.Child` se asocia con `c.Far`" in tail
-    assert "[domain: two](classes-process-domain-two.md)" in tail
+    assert "- [domain: two](classes-process-domain-two.md)\n  - `a.Child` se asocia" in tail
     index = texts["docs/architecture/generated/classes-process-domain.md"]
     assert "[domain: one](classes-process-domain-one.md)" in index and "```" not in index
     assert "- Padre: [Clases de domain](classes-process-domain.md)" in one
@@ -1469,9 +1475,9 @@ def test_generate_refuses_dot_it_cannot_read_and_a_module_in_no_cluster(
     bad = 'digraph "x" {\nsomething unexpected\n}'
     monkeypatch.setattr(generate, "_pyreverse", lambda *a, **k: {"classes_x.dot": bad})
     with pytest.raises(generate.GenerateError, match="something unexpected"):
-        generate.domain_class_pages()
+        generate.class_pages("process", "domain")
     good = _dot(["ghost_module.Thing"])
     monkeypatch.setattr(generate, "_pyreverse", lambda *a, **k: {"classes_x.dot": good})
     monkeypatch.setattr(groups, "CLUSTERS", {})
     with pytest.raises(generate.GenerateError, match=r'"domain.ghost_module": "<cluster>",'):
-        generate.domain_class_pages()
+        generate.class_pages("process", "domain")

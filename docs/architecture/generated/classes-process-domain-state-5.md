@@ -34,5 +34,7 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- `task.TaskState` se asocia con `task.FullChecksRecord` (en [domain: state (parte 3)](classes-process-domain-state-3.md))
-- `task.TaskState` se asocia con `task.InterviewStats` (en [domain: state (parte 4)](classes-process-domain-state-4.md))
+- [domain: state (parte 3)](classes-process-domain-state-3.md)
+  - `task.TaskState` se asocia con `task.FullChecksRecord`
+- [domain: state (parte 4)](classes-process-domain-state-4.md)
+  - `task.TaskState` se asocia con `task.InterviewStats`

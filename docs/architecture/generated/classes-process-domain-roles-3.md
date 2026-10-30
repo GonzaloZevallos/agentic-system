@@ -45,18 +45,20 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- `schemas.Answers` hereda de `schemas.RoleOutput` (en [domain: roles (parte 1)](classes-process-domain-roles-1.md))
-- `schemas.Classification` hereda de `schemas.RoleOutput` (en [domain: roles (parte 1)](classes-process-domain-roles-1.md))
-- `schemas.Consolidation` hereda de `schemas.RoleOutput` (en [domain: roles (parte 1)](classes-process-domain-roles-1.md))
-- `schemas.Consultation` hereda de `schemas.RoleOutput` (en [domain: roles (parte 1)](classes-process-domain-roles-1.md))
-- `schemas.CopyDraft` hereda de `schemas.RoleOutput` (en [domain: roles (parte 1)](classes-process-domain-roles-1.md))
-- `schemas.CopyReview` hereda de `schemas.RoleOutput` (en [domain: roles (parte 1)](classes-process-domain-roles-1.md))
-- `schemas.Delivery` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.DesignDraft` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.DesignReview` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.Diagnosis` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.FinalValidation` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.InterviewTurn` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.PRD` hereda de `schemas.RoleOutput` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
-- `schemas.SolutionTurn` hereda de `schemas.InterviewTurn` (en [domain: roles (parte 2)](classes-process-domain-roles-2.md))
+- [domain: roles (parte 1)](classes-process-domain-roles-1.md)
+  - `schemas.Answers` hereda de `schemas.RoleOutput`
+  - `schemas.Classification` hereda de `schemas.RoleOutput`
+  - `schemas.Consolidation` hereda de `schemas.RoleOutput`
+  - `schemas.Consultation` hereda de `schemas.RoleOutput`
+  - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
+  - `schemas.CopyReview` hereda de `schemas.RoleOutput`
+- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
+  - `schemas.Delivery` hereda de `schemas.RoleOutput`
+  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
+  - `schemas.DesignReview` hereda de `schemas.RoleOutput`
+  - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
+  - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
+  - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
+  - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
+  - `schemas.PRD` hereda de `schemas.RoleOutput`
+  - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`

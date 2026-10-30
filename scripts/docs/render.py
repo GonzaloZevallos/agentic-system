@@ -95,10 +95,9 @@ def package_page_path(key: str, module: str = "process") -> str:
 
 
 def class_page_path(key: str) -> str:
-    """The file of one page key of `classes.pages`: the index of the class diagrams of
-    `process/domain` is `classes-process-domain.md`, a cluster page `classes-<key>.md`."""
-    if key == classes.INDEX:
-        return f"{GENERATED}/classes-process-domain.md"
+    """The file of one page key of `classes.pages`: `classes-<key>.md`, the key being
+    `<context>-<layer>` for the index of a layer and `<context>-<layer>-<group>[-<n>]` for
+    a page."""
     return f"{GENERATED}/classes-{key}.md"
 
 
@@ -451,32 +450,33 @@ def _owner(model: Mapping[str, classes.ClassPage]) -> dict[str, str]:
 
 
 def _elsewhere(page: classes.ClassPage, model: Mapping[str, classes.ClassPage]) -> str:
-    """The relations of `page` the diagram does not draw, as a Markdown list; each says where
-    the class on the other page is drawn. Empty when there are none."""
+    """The relations of `page` the diagram does not draw, as a Markdown list grouped by the
+    page where the class on the other end is drawn: one item per page, linked, and under it its
+    relations, sorted, none left out. Empty when there are none."""
     if not page.elsewhere:
         return ""
     owner = _owner(model)
-
-    def where(qname: str) -> str:
-        module, _, name = qname.rpartition(".")
-        found = owner[classes.node_id(module, name)]
-        return f"[{model[found].title}]({Path(class_page_path(found)).name})"
-
     here = {identifier for identifier, _ in page.nodes}
-    items = []
+    by_page: dict[str, list[str]] = {}
     for source, target, kind in page.elsewhere:
         module, _, name = source.rpartition(".")
         other = target if classes.node_id(module, name) in here else source
-        phrase = _ARROWS[kind][1].format(s=source, t=target)
-        items.append(f"- {phrase} (en {where(other)})")
+        module, _, name = other.rpartition(".")
+        found = owner[classes.node_id(module, name)]
+        by_page.setdefault(found, []).append(_ARROWS[kind][1].format(s=source, t=target))
+    items = []
+    for found in sorted(by_page):
+        items.append(f"- [{model[found].title}]({Path(class_page_path(found)).name})")
+        items.extend(f"  - {phrase}" for phrase in sorted(by_page[found]))
     return "\n## Relaciones con otras páginas\n\n" + "\n".join(items) + "\n"
 
 
 def class_pages(model: Mapping[str, classes.ClassPage]) -> dict[str, str]:
-    """The class pages of `process/domain` as files: relative path -> text. Each is its Spanish
+    """The class pages of one layer as files: relative path -> text. Each is its Spanish
     sentence, the Markdown navigation (the index lists every page; any other lists its parent
     and its siblings), one `classDiagram` block with qualified ids, labels from `classes.labels`
-    and no `click`, and, under it, the list `Relaciones con otras páginas`."""
+    and no `click`, and, under it, the list `Relaciones con otras páginas`, grouped by the page
+    where the other class is drawn."""
     result: dict[str, str] = {}
     for key, page in model.items():
         titles = {class_page_path(other): model[other].title for other in model}

@@ -84,7 +84,7 @@ def _outside(name: str) -> str:
     return ".".join(parts[:3] if parts[:2] == ["agentic", "core"] else parts[:2])
 
 
-def _subpackage(relative: str) -> str:
+def subpackage(relative: str) -> str:
     """`domain`, `application`, `adapters` (a loose module) or `adapters.<kind>`."""
     parts = relative.split(".")
     return ".".join(parts[:2]) if parts[0] == ADAPTERS and len(parts) > 2 else parts[0]
@@ -179,11 +179,11 @@ class _Graph:
             layer: sorted({c for m, c in self.cluster.items() if m.startswith(f"{layer}.")})
             for layer in LAYERS
         }
-        kinds = {_subpackage(m) for m in self.modules if m.startswith(f"{ADAPTERS}.")}
+        kinds = {subpackage(m) for m in self.modules if m.startswith(f"{ADAPTERS}.")}
         self.subpackages = [*LAYERS, ADAPTERS, *sorted(kinds - {ADAPTERS})]
 
-    def modules_of(self, subpackage: str) -> list[str]:
-        return [m for m in self.modules if _subpackage(m) == subpackage]
+    def modules_of(self, sub: str) -> list[str]:
+        return [m for m in self.modules if subpackage(m) == sub]
 
     def cluster_modules(self, layer: str, cluster: str) -> list[str]:
         return [m for m in self.modules_of(layer) if self.cluster[m] == cluster]
@@ -193,7 +193,7 @@ class _Graph:
         module outside process; the one end every page may draw for a target it does not
         detail."""
         relative = _relative(target)
-        return _package_end(_outside(target) if relative is None else _subpackage(relative))
+        return _package_end(_outside(target) if relative is None else subpackage(relative))
 
 
 def _own_end(relative: str) -> End:
@@ -256,7 +256,7 @@ def _index(graph: _Graph) -> Page:
         for target in graph.targets[source]:
             relative = _relative(target)
             if relative is not None:
-                draw.edge(_package_end(_subpackage(source)), _package_end(_subpackage(relative)))
+                draw.edge(_package_end(subpackage(source)), _package_end(subpackage(relative)))
     sentence = (
         "Esta página muestra los paquetes de `agentic.core.process`: `domain`, `application`, "
         "`adapters` y cada tipo de adaptador, con una flecha por cada paquete que importa a "
@@ -282,7 +282,7 @@ def _layer_page(graph: _Graph, layer: str) -> Page:
         here = _cluster_end(layer, graph.cluster[source], layer)
         for target in graph.targets[source]:
             relative = _relative(target)
-            if relative is not None and _subpackage(relative) == layer:
+            if relative is not None and subpackage(relative) == layer:
                 draw.edge(here, _cluster_end(layer, graph.cluster[relative], layer))
     sentence = (
         f"Esta página muestra los grupos de módulos de `{layer}` y una flecha por cada grupo "
@@ -375,7 +375,7 @@ def _target_end(
     relative = _relative(target)
     if relative is None:
         return graph.sub_end(target)
-    sub = _subpackage(relative)
+    sub = subpackage(relative)
     if sub == layer:
         other = graph.cluster[relative]
         if other != cluster:
@@ -462,7 +462,7 @@ def _adapter_page(graph: _Graph, sub: str) -> Page:
         draw.node(here)
         for target in graph.targets[source]:
             relative = _relative(target)
-            if relative is not None and _subpackage(relative) == sub:
+            if relative is not None and subpackage(relative) == sub:
                 draw.edge(here, _own_end(relative))
             else:
                 draw.edge(here, graph.sub_end(target))

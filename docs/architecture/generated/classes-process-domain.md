@@ -1,4 +1,4 @@
-Esta página es el índice de los diagramas de clases de `agentic.core.process.domain`: una página por grupo de `CLUSTERS` (en `scripts/docs/groups.py`), dividida por cantidad cuando el grupo tiene más clases de las que caben en un diagrama.
+Esta página es el índice de los diagramas de clases de `agentic.core.process.domain`: una página por grupo de módulos, definido en `scripts/docs/groups.py`, dividida por cantidad cuando el grupo tiene más clases de las que caben en un diagrama.
 
 - Páginas:
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
