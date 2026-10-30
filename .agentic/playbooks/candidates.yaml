@@ -982,3 +982,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-30T05:08:46.219+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan names a single source for a number, derive it from that source in tests too, never as a literal. Before you deliver, grep your added lines for the numbers and for expected strings that embed them.
+  confidence: medium
+  seen_in:
+  - GH-436
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-30T07:29:07.951+00:00'

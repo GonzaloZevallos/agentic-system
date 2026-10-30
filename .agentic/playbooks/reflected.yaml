@@ -497,3 +497,5 @@ tasks:
       - GH-434
   GH-435@review:
     cost_usd: 0.0917
+  GH-436@review:
+    cost_usd: 0.1037
