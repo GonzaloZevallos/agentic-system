@@ -150,6 +150,11 @@ TABLE: tuple[Row, ...] = (
         "catalogue of Langfuse's schema",
     ),
     Row(
+        "tests/fixtures/imports/*",
+        ("tests/test_imports.py",),
+        "the fixture package whose imports the reader is pinned against",
+    ),
+    Row(
         "tests/fixtures/pre_performance_document.md",
         ("tests/core/process/domain/test_schemas.py",),
         "an old task document that must still parse with no performance scenarios",
