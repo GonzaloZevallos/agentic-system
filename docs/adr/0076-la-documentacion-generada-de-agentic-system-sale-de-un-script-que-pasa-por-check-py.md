@@ -137,7 +137,8 @@ construida con la salida `dot` de pyreverse, y se borraron `merge_mermaid`, `sel
   `kind` (un tipo de adaptador por página, más una página para los módulos sueltos) o `layer`
   (una página con toda la capa). Una capa sin línea hace fallar el generador, nombrándola.
 - **La partición es por significado hasta el módulo, y por cantidad sólo dentro de un grupo que
-  el tamaño de un solo módulo hace pasar de 15 clases** (el caso de `ports.py` dentro de
+  el tamaño de un solo módulo hace pasar del presupuesto de clases de un diagrama
+  (`DIAGRAM_BUDGET.classes`)** (el caso de `ports.py` dentro de
   `support`); en ese caso la página va numerada.
 - **Las relaciones de un archivo dibujado en su propia corrida de pyreverse** (`board.py`, que
   astroid no puede analizar junto con otro módulo) **con el resto de su capa no se dibujan**, y la
