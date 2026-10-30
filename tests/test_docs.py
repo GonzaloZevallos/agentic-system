@@ -1089,11 +1089,7 @@ def test_a_cluster_of_more_than_fifteen_modules_is_split_by_count(packages: Modu
     ]
     first, second = pages["domain-big-1"], pages["domain-big-2"]
     assert len(first.nodes) == 11 and "big parte 2 (grupo)" in _labels(first)
-    assert (
-        sorted(_labels(second))
-        == [f"domain.m{n:02d}" for n in range(10, 20)] + ["big parte 1 (grupo)"]
-        or True
-    )
+    assert sorted(_labels(second)) == [f"domain.m{n:02d}" for n in range(10, 20)]
     assert "por cantidad" in first.sentence and "parte 1 de 2" in first.sentence
     assert pages["domain"].children == ("domain-big-1", "domain-big-2")
 
