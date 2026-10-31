@@ -1041,3 +1041,21 @@ candidates:
   - finding
   - return
   added_at: '2026-10-31T18:23:59.517+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you add an outcome or state, trace it through every place that stores, reuses, renders or reports it (reuse keys, tables, refusal text, replies) and check that none flattens it into an old one.
+  confidence: medium
+  seen_in:
+  - GH-451
+  sources:
+  - finding
+  added_at: '2026-10-31T21:01:58.425+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a port, adapter or other public surface, update the hand-written docs that list it in the same change, not only the generated docs.
+  confidence: medium
+  seen_in:
+  - GH-451
+  sources:
+  - finding
+  added_at: '2026-10-31T21:01:58.425+00:00'
