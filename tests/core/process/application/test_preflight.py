@@ -30,8 +30,8 @@ from agentic.core.process.application.run_role import load_prompt
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.docs import Docs, plan_text, review_text
 from agentic.core.process.domain.presubmit import RerunForm
-from agentic.core.process.domain.run_check import Verification, WallOverCeiling
 from agentic.core.process.domain.roles import ROLES
+from agentic.core.process.domain.run_check import Verification, WallOverCeiling
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryPrompts, MemoryStack, memory_ports

@@ -23,10 +23,10 @@ from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.presubmit import CheckResult, RerunForm
-from ..domain.run_check import Verification
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
+from ..domain.run_check import Verification
 from ..domain.scratch import (
     OwnerKind,
     PartitionListing,

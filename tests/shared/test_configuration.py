@@ -381,7 +381,9 @@ def test_the_verification_wall_ceiling_defaults_to_an_hour():
 
 def test_the_ceiling_is_set_from_the_environment():
     env = {"AGENTIC_VERIFICATION_WALL_MAX_S": "7200"}
-    assert Configuration.from_sources({"product_dir": "/tmp/p"}, env).verification_wall_max_s == 7200
+    assert (
+        Configuration.from_sources({"product_dir": "/tmp/p"}, env).verification_wall_max_s == 7200
+    )
 
 
 def test_a_ceiling_below_the_check_timeout_is_rejected():
@@ -397,6 +399,4 @@ def test_a_ceiling_equal_to_the_check_timeout_is_accepted():
 
 def test_raising_the_check_timeout_past_the_default_ceiling_is_rejected():
     with pytest.raises(ValueError, match="verification_wall_max_s"):
-        Configuration.from_sources(
-            {"product_dir": "/tmp/p"}, {"AGENTIC_CHECK_TIMEOUT_S": "4000"}
-        )
+        Configuration.from_sources({"product_dir": "/tmp/p"}, {"AGENTIC_CHECK_TIMEOUT_S": "4000"})
