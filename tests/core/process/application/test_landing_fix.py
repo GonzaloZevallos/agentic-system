@@ -2074,7 +2074,7 @@ def test_an_entry_carries_no_ci_logs_but_the_closed_record():
     assert "ci_logs" not in landing_rules.entry_of({"ci_logs": free_text})
 
 
-def test_a_read_that_raises_leaves_the_diagnosis_going_without_an_excerpt(tmp_path):
+def test_a_read_that_raises_leaves_the_diagnosis_going_with_a_closed_cause_and_no_excerpt(tmp_path):
     class Raising:
         def failed_job_logs(self, reference, head):
             raise OSError("gh is gone")
@@ -2086,7 +2086,7 @@ def test_a_read_that_raises_leaves_the_diagnosis_going_without_an_excerpt(tmp_pa
 
     assert "CiLog" not in runner.calls[0]["prompt"]
     assert _diagnoses(ports)[0].get("delivered") is True
-    assert "ci_logs" not in _diagnoses(ports)[0]
+    assert _diagnoses(ports)[0]["ci_logs"] == [{"job": "ci", "bytes": 0, "cause": "unreadable"}]
     assert any("CI logs not read (OSError)" in line for line in lines)
 
 

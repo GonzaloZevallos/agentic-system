@@ -548,8 +548,9 @@ they were for every run without a CI log (GH-449, invariant 6)."""
 
 def _ci_excerpt(context: LandingContext, reference: str) -> tuple[str, list[dict[str, object]]]:
     """The failed jobs' log excerpt for the diagnosis and the closed record of the read
-    (`{job, bytes, cause}` per job), or `("", [])` with no `CiLogs` or when the read raised:
-    reading the logs never fails the step (GH-449). The excerpt is for `run_role`'s
+    (`{job, bytes, cause}` per job), or `("", [])` with no `CiLogs`. A read that raised gives no
+    excerpt and one `unreadable` record, so the ledger still says why: reading the logs never
+    fails the step (GH-449). The excerpt is for `run_role`'s
     `extra_input` alone."""
     logs = context.ports.ci_logs
     if logs is None:
@@ -561,7 +562,7 @@ def _ci_excerpt(context: LandingContext, reference: str) -> tuple[str, list[dict
         context.log(
             f"agentic: land: {context.task_id}: diagnose: CI logs not read ({type(exc).__name__})"
         )
-        return "", []
+        return "", [{"job": "ci", "bytes": 0, "cause": "unreadable"}]
     notice = CI_LOG_NOTICE if excerpt else ""
     return notice + excerpt, [
         {"job": log.job, "bytes": log.bytes, "cause": log.cause} for log in read
