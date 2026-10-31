@@ -72,7 +72,7 @@ from agentic.core.process.domain import rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment, JobLog
-from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
@@ -625,13 +625,13 @@ class MemorySampleApp:
     wants a refusal passes a `str`. `stopped` keeps every handle `stop` was called with,
     in order, so a test can tell the app never outlived the node."""
 
-    def __init__(self, result: SampleAppHandle | str | None = None) -> None:
+    def __init__(self, result: SampleAppHandle | NotReady | str | None = None) -> None:
         default = SampleAppHandle(lines=("Listening on http://localhost:4242",), token=None)
         self.result = result or default
         self.started: list[tuple[str, Path]] = []
         self.stopped: list[SampleAppHandle] = []
 
-    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | NotReady | str:
         self.started.append((command, cwd))
         return self.result
 

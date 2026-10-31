@@ -11,6 +11,7 @@ Esta página muestra las clases públicas de los módulos del grupo `shell` de `
 ```mermaid
 classDiagram
     class shell__commands__ShellCommands["ShellCommands"]
+    class shell__load_reader__ShellLoadReader["ShellLoadReader"]
     class shell__perf_runner__PerfShellRunner["PerfShellRunner"]
     class shell__reaper__ShellReaper["ShellReaper"]
     class shell__sample_app__ShellSampleApp["ShellSampleApp"]

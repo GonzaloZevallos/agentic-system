@@ -43,6 +43,25 @@ NO_COMPARE_NOTE = "no `compare` command: no comparisons"
 SAMPLE_APP_READY_S = 20.0
 
 
+@dataclass(frozen=True)
+class NotReady:
+    """The sample app was still running and had printed nothing when `SAMPLE_APP_READY_S` ran
+    out (GH-451): the wait lapsed, which is not the command failing. `load` is the machine's
+    one-minute load average then, None where it has none. A command that exited, or printed
+    its refusal, is a `str` of its own and never this."""
+
+    command: str
+    waited_s: float
+    load: float | None
+
+    def said(self) -> str:
+        load = "unknown" if self.load is None else f"{self.load:.1f}"
+        return (
+            f"`{self.command}` was not ready after {self.waited_s:g} s (machine load {load}): "
+            "the wait ran out, the command did not fail, so this says nothing of the code"
+        )
+
+
 def design_rules(design: Design | None) -> tuple[str, ...]:
     """A permission rule for the lead that may run `compare`, mirroring
     `roles.check_rules`: one `Bash` prefix per declared command, so the lead's own

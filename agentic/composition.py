@@ -260,7 +260,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         # No task yet: a port is built per node, before a task is known, so the scratch of
         # a check is filed under `_untasked` until `bind_task` names the task.
         commands=ShellCommands(product_key, reaper, stop_flag, scratch=scratch),
-        sample_app=ShellSampleApp(),
+        sample_app=ShellSampleApp(load_reader),
         reaper=reaper,
         check_scheduler=FilesystemCheckLedger(cfg.check_ledger_dir, product_key, reaper, limits),
         perf_runner=PerfShellRunner(product_key, reaper, stop_flag, load_reader),

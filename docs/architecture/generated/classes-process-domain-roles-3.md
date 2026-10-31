@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__Part["Part"]
     class schemas__PerfBudget["PerfBudget"]
     class schemas__PerfScenario["PerfScenario"]
     class schemas__PlatformAnswers["PlatformAnswers"]
@@ -52,8 +53,8 @@ classDiagram
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
-  - `schemas.CopyReview` hereda de `schemas.RoleOutput`
 - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
+  - `schemas.CopyReview` hereda de `schemas.RoleOutput`
   - `schemas.Delivery` hereda de `schemas.RoleOutput`
   - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
   - `schemas.DesignReview` hereda de `schemas.RoleOutput`

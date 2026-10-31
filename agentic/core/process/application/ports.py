@@ -18,7 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, JobLog
-from ..domain.design import Design
+from ..domain.design import Design, NotReady
 from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
@@ -678,10 +678,11 @@ class SampleApp(Protocol):
     adapter starts its own process group and collects output for up to
     `design.SAMPLE_APP_READY_S`; a fake stands in for tests."""
 
-    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
-        """A handle to walk, or a refusal: the last lines of output when the command
-        exited, or did not print anything, before the deadline. Not a role failure --
-        the node writes the refusal into the lead's own section instead."""
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | NotReady | str:
+        """A handle to walk, a refusal (the last lines of output of a command that exited),
+        or `NotReady` when the command was still running but had printed nothing before the
+        deadline: the wait lapsed, the command did not fail (GH-451). Not a role failure --
+        the node writes either into the lead's own section instead."""
         ...
 
     def stop(self, handle: SampleAppHandle) -> None:
