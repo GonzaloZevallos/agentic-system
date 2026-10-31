@@ -369,3 +369,34 @@ def test_the_scratch_floor_defaults_to_2048_mb_and_reads_its_environment():
 def test_the_scratch_floor_must_be_a_non_negative_number_of_mb(bad):
     with pytest.raises(ValueError):
         Configuration.from_sources(PRODUCT, {"AGENTIC_SCRATCH_FLOOR_MB": bad})
+
+
+# --- verification_wall_max_s (ADR-0065, addendum GH-451) ----------------------------------
+
+
+def test_the_verification_wall_ceiling_defaults_to_an_hour():
+    cfg = Configuration.from_sources({"product_dir": "/tmp/p"}, {})
+    assert cfg.verification_wall_max_s == 3600.0
+
+
+def test_the_ceiling_is_set_from_the_environment():
+    env = {"AGENTIC_VERIFICATION_WALL_MAX_S": "7200"}
+    assert Configuration.from_sources({"product_dir": "/tmp/p"}, env).verification_wall_max_s == 7200
+
+
+def test_a_ceiling_below_the_check_timeout_is_rejected():
+    env = {"AGENTIC_CHECK_TIMEOUT_S": "900", "AGENTIC_VERIFICATION_WALL_MAX_S": "899"}
+    with pytest.raises(ValueError, match="verification_wall_max_s"):
+        Configuration.from_sources({"product_dir": "/tmp/p"}, env)
+
+
+def test_a_ceiling_equal_to_the_check_timeout_is_accepted():
+    env = {"AGENTIC_CHECK_TIMEOUT_S": "900", "AGENTIC_VERIFICATION_WALL_MAX_S": "900"}
+    assert Configuration.from_sources({"product_dir": "/tmp/p"}, env).verification_wall_max_s == 900
+
+
+def test_raising_the_check_timeout_past_the_default_ceiling_is_rejected():
+    with pytest.raises(ValueError, match="verification_wall_max_s"):
+        Configuration.from_sources(
+            {"product_dir": "/tmp/p"}, {"AGENTIC_CHECK_TIMEOUT_S": "4000"}
+        )

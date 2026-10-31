@@ -7,8 +7,9 @@ here reads a clock, a file or a port."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from . import presubmit
 
@@ -21,6 +22,74 @@ DESCRIPTION = (
     "the rest and reuses your passes on the same tree. The exit status, the output and the "
     "time come from the system, never from you."
 )
+
+
+class Outcome(StrEnum):
+    """What a call of the tool on a declared verification came to, the closed set the system's
+    evidence line names (ADR-0065, addendum GH-451). `not_ready` and `unverified` are not
+    failures of the code: they never reach `flakes` and never count as a return."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    NOT_READY = "not_ready"
+    UNVERIFIED = "unverified"
+    NOT_DECLARED = "not_declared"
+
+
+@dataclass(frozen=True)
+class Verification:
+    """One declared verification: the command the product runs and the wall it may take, in
+    seconds. Both come from `stack.yaml`, never from a role of the run."""
+
+    command: str
+    wall_s: float
+
+
+class WallOverCeiling(ValueError):
+    """A declared wall above the system's ceiling. A `ValueError`, so the CLI refuses with it;
+    it is never clipped to the ceiling."""
+
+
+def resolve_wall(
+    name: str, declared: Mapping[str, float], check_timeout_s: float, ceiling: float
+) -> float:
+    """The wall of one check or verification, the only place a wall of seconds is decided: the
+    figure the product declared for `name`, or `check_timeout_s` when it declared none. A figure
+    above `ceiling` (`Configuration.verification_wall_max_s`) raises `WallOverCeiling`, naming
+    both; it is rejected and never recorded as the ceiling."""
+    wall = declared.get(name, check_timeout_s)
+    if wall > ceiling:
+        raise WallOverCeiling(
+            f"{name!r} declares a wall of {wall:g} s, above the ceiling of {ceiling:g} s "
+            "(`verification_wall_max_s`, set by the owner in `.env`): lower the figure in "
+            "`.agentic/stack.yaml` or raise the ceiling"
+        )
+    return wall
+
+
+def call_timeout_s(walls: Sequence[float], wait_max_s: float, witness_s: float) -> float:
+    """How long one `run_check` call may take as a whole: the largest wall twice (a
+    `not_ready` run is retried once), the readiness wait twice, and the witness."""
+    return max(walls, default=0.0) * 2 + 2 * wait_max_s + witness_s
+
+
+def saturated(before: float | None, after: float | None, cores: int) -> bool:
+    """Whether the machine was too loaded for a `not_ready` to be the code's: the larger of the
+    two load readings is at least the core count. A reading that could not be taken is None and
+    counts as not saturated, so a machine that cannot be read never excuses a red."""
+    readings = [load for load in (before, after) if load is not None]
+    return max(readings, default=0.0) >= cores
+
+
+def description(verifications: Sequence[str]) -> str:
+    """The tool's description: `DESCRIPTION` as it always was when the product declares no
+    verification, and with their names after it when it does."""
+    if not verifications:
+        return DESCRIPTION
+    return (
+        f"{DESCRIPTION} It also runs the product's declared verifications, which take longer "
+        f"than a Bash step may: {', '.join(verifications)}."
+    )
 
 
 @dataclass(frozen=True)
