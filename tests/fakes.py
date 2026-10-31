@@ -28,6 +28,7 @@ from agentic.core.process.application.ports import (
     CheckRequest,
     CheckResults,
     CheckScheduler,
+    CiLogs,
     CommandResult,
     Commands,
     FastForwardView,
@@ -69,7 +70,7 @@ from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
-from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
+from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment, JobLog
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
@@ -1879,6 +1880,19 @@ class MemoryScratch:
         self.leftovers = [x for x in self.leftovers if x.name not in decision.leftovers]
 
 
+class FakeCiLogs:
+    """GH-449: no test reads a real CI log. `failed_job_logs` answers `logs` and records the
+    `(reference, head)` it was asked for."""
+
+    def __init__(self, logs: list[JobLog] | None = None) -> None:
+        self.logs = list(logs or [])
+        self.asked: list[tuple[str, str]] = []
+
+    def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
+        self.asked.append((reference, head))
+        return list(self.logs)
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of
@@ -2073,6 +2087,7 @@ def memory_ports(
     board_sent: BoardSent | None = None,
     scratch: Scratch | None = None,
     free_space: FreeSpace | None = None,
+    ci_logs: CiLogs | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2096,7 +2111,7 @@ def memory_ports(
         board_sent=board_sent,
         scratch=scratch,
         free_space=free_space,
-        ci_logs=None,
+        ci_logs=ci_logs,
     )
 
 
