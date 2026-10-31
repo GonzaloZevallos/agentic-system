@@ -1002,3 +1002,32 @@ candidates:
   - finding
   - return
   added_at: '2026-10-30T10:05:37.763+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: For every failure path the brief names, such as an exception or a timeout, record the closed outcome the brief requires and assert it in the test. Do not assert that nothing is recorded.
+  confidence: medium
+  seen_in:
+  - GH-449
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-31T08:57:14.432+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: After you add files such as fixtures or new paths, run the declared tests check in its affected-only form. Register the new paths in any input table the selector reads before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-449
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-31T08:57:14.432+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: When a record has a known closed shape, type it with a TypedDict or a literal type at its source. Do not widen it to a dict of object and then re-validate it by hand.
+  confidence: low
+  seen_in:
+  - GH-449
+  sources:
+  - finding
+  added_at: '2026-10-31T08:57:14.432+00:00'
