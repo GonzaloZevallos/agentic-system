@@ -271,10 +271,13 @@ WEB_OUT = "  ✓ 216 [mobile] works\n  ✓ 217 [mobile] last\n"
 CHECKS_WEB = {"unit": "pytest", "web-e2e": "playwright test"}
 
 
-def deferring_ports(output: str, cause_read=None, *, covers=None, ci=("unit", "web"), **more):
+def deferring_ports(
+    output: str, cause_read=None, *, covers=None, ci=("unit", "web"), commands_override=None, **more
+):
     stack = MemoryStack(checks=CHECKS_WEB, delivery_checks=("unit",), ci=ci)
     stack.declared_ci_covers = {"web-e2e": COVER} if covers is None else covers
-    commands = MemoryCommands(**{"playwright test": [CommandResult(-9, output, timed_out=True)]})
+    timed_out = commands_override or CommandResult(-9, output, timed_out=True)
+    commands = MemoryCommands(**{"playwright test": [timed_out]})
     read = cause_read if cause_read is not None else report(job("unit"), sha="f" * 40)
     return memory_ports(stack=stack, commands=commands, tracker=Tracker(read), **more)
 
@@ -317,6 +320,18 @@ async def test_a_check_without_a_cover_and_a_product_without_ci_keep_a_timeout_r
         patch = await run(state_of(), ports)
         assert patch["full_checks"]["passed"] is False
         assert "deferred" not in patch["full_checks"]
+
+
+async def test_a_timed_out_check_whose_output_was_lost_is_never_deferred():
+    for lost in (
+        CommandResult(-9, "", timed_out=True),  # nothing captured
+        CommandResult(-9, WEB_OUT, timed_out=True, truncated=True),  # the drain gave up
+    ):
+        ports = deferring_ports(WEB_OUT, commands_override=lost)
+        patch = await run(state_of(), ports)
+        record = patch["full_checks"]
+        assert record["passed"] is False and "deferred" not in record
+        assert patch["subtasks"][INTEGRATION]["returned_by"] == "full_checks"
 
 
 async def test_a_deferral_settles_no_open_full_checks_finding():

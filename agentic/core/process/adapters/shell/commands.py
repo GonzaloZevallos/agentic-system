@@ -129,18 +129,23 @@ class ShellCommands:
             try:
                 output, _ = process.communicate(timeout=timeout_s)
             except subprocess.TimeoutExpired:
-                output = self._kill_and_drain(process, token, cwd)
+                output, drained = self._kill_and_drain(process, token, cwd)
                 if self._stop.is_set():
                     raise RunStopped from None
-                return CommandResult(process.returncode or -1, output, timed_out=True)
+                return CommandResult(
+                    process.returncode or -1, output, timed_out=True, truncated=not drained
+                )
             if self._stop.is_set():
                 raise RunStopped
             return CommandResult(process.returncode, output or "")
         finally:
             self._reap_token(token)
 
-    def _kill_and_drain(self, process: subprocess.Popen[str], token: str, cwd: Path) -> str:
-        """Stops the check's whole group and what carries its mark, and returns what it wrote.
+    def _kill_and_drain(
+        self, process: subprocess.Popen[str], token: str, cwd: Path
+    ) -> tuple[str, bool]:
+        """Stops the check's whole group and what carries its mark, and returns what it wrote
+        and whether that is all of it (False when the drain gave up and the output was dropped).
         On return the check's process has ended."""
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -153,8 +158,8 @@ class ShellCommands:
         except subprocess.TimeoutExpired:
             # A descendant that left the group still holds the pipe: give up on it.
             process.kill()
-            return ""
-        return output or ""
+            return "", False
+        return output or "", True
 
     def _reap_token(self, token: str) -> None:
         """Stop what still carries the check's mark: one stderr line per process stopped."""

@@ -573,6 +573,10 @@ class CommandResult:
     # stdout and stderr, interleaved as the command wrote them.
     output: str
     timed_out: bool = False
+    # True when `output` is known not to be all of what the command wrote: the adapter could
+    # not drain the pipe after killing a timed-out command (GH-453). A truncated output is
+    # never read as proof that no test failed.
+    truncated: bool = False
 
     @property
     def passed(self) -> bool:

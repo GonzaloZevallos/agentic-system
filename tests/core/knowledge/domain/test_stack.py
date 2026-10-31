@@ -1,6 +1,5 @@
+import operator
 import re
-from collections.abc import MutableMapping
-from typing import cast
 
 import pytest
 import yaml
@@ -722,7 +721,7 @@ def test_a_declared_cover_is_kept_by_check_name_and_cannot_be_changed():
     found = stack.ci_covers(cover_data(), "x")
     assert found == {"web-e2e": stack.CiCover(job="e2e", failed=COVER_PATTERN)}
     with pytest.raises(TypeError):
-        cast(MutableMapping[str, stack.CiCover], found)["tests"] = stack.CiCover("x", "y")
+        operator.setitem(found, "tests", stack.CiCover("x", "y"))
 
 
 def test_ci_covers_is_a_key_the_file_may_declare_and_needs_neither_ci_nor_rerun_checks():

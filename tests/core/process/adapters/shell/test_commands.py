@@ -186,10 +186,16 @@ def test_without_a_reaper_the_setsid_escapee_outlives_the_check(worktrees, check
     result, alive, fd = _run_watching(commands, checkout, _escapee(pidfile, SETSID), pidfile)
     try:
         assert result.timed_out and alive
+        assert result.truncated  # the drain gave up: its output is not all of what it wrote
         assert not _gone(fd)
     finally:
         _kill(fd)  # the teardown's reap would also find it by its mark
         os.close(fd)
+
+
+def test_a_timed_out_check_whose_pipe_drains_is_not_truncated(commands, checkout):
+    result = commands.run(checkout, f"echo seen; {SLEEP} 300", timeout_s=1)
+    assert result.timed_out and not result.truncated and "seen" in result.output
 
 
 def test_a_check_that_ends_normally_leaves_no_redirected_background_process(commands, checkout):
