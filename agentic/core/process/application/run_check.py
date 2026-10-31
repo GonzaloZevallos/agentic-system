@@ -15,8 +15,8 @@ import time
 from collections.abc import Callable, Mapping
 
 from ..domain import run_check
-from ..domain.presubmit import CheckResult
-from ..domain.run_check import CheckRun, Verification, resolve_wall
+from ..domain.presubmit import CheckResult, tail
+from ..domain.run_check import CheckRun, Outcome, Verification, VerificationCall, resolve_wall
 from .presubmit import CheckoutPresubmit
 
 
@@ -48,6 +48,8 @@ class RunCheck:
         *,
         verifications: Mapping[str, Verification] | None = None,
         clock: Callable[[], float] = time.time,
+        load: Callable[[], float | None] | None = None,
+        cores: int | None = None,
     ) -> None:
         assert gate.reuse is not None, "run_check needs a presubmit that carries a Reuse"
         self.gate = gate
@@ -55,6 +57,13 @@ class RunCheck:
         # but under their own wall, and never stored. Their walls travel in `gate.timeouts`.
         self.verifications: Mapping[str, Verification] = verifications or {}
         self.clock = clock
+        # The machine's load and core count around a verification, for the evidence line only
+        # (ADR-0065 addendum): a reader that cannot answer, or none, is a load "not read".
+        self._load = load
+        self._cores = cores
+        # One entry per call on a verification, a refused name included, in order: what the
+        # system writes into the Developer's section, never what the model says it ran.
+        self.calls: list[VerificationCall] = []
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -93,6 +102,9 @@ class RunCheck:
             command = verification.command
         if command is None:
             known = [*self.names, *self.verifications]
+            self.calls.append(
+                VerificationCall(name, Outcome.NOT_DECLARED, 0.0, None, None, None, "")
+            )
             return CheckRun(name, refused=run_check.unknown_check(name, known))
         workspace = gate.ports.workspace
         committed = workspace.head(gate.path) != gate.before
@@ -106,12 +118,14 @@ class RunCheck:
         # (ADR-0070): without one a `{workers}` in the command would reach the shell as text.
         # Its place in the queue is its own, apart from the delivery gate's.
         with gate._share(fresh=True):
+            before = self._read_load() if verification is not None else None
             # The witness runs before the check, in this same call: its agreement is what
             # lets the pass be stored. A disagreement does not stop the check, as at the gate.
             witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
             row = gate._run(name, command)
+            after = self._read_load() if verification is not None else None
         if verification is not None:
-            return self._verified(name, row, witness_reason)
+            return self._verified(name, row, witness_reason, (before, after))
         passed, reused = row["passed"], bool(row.get("reused", False))
         key = gate._key(name, command)
         store = gate.ports.check_results
@@ -146,8 +160,34 @@ class RunCheck:
             witness=self._witness_line(witness_reason),
         )
 
-    def _verified(self, name: str, row: CheckResult, witness_reason: str | None) -> CheckRun:
-        """What the system measured of a verification: its row, and never a stored pass."""
+    def _read_load(self) -> float | None:
+        return self._load() if self._load is not None else None
+
+    def evidence(self) -> str | None:
+        """The block of the verification calls for the Developer's section; None when there
+        were none, so a delivery that ran no verification writes the section it always did."""
+        return run_check.evidence_markdown(self.calls)
+
+    def _verified(
+        self,
+        name: str,
+        row: CheckResult,
+        witness_reason: str | None,
+        load: tuple[float | None, float | None],
+    ) -> CheckRun:
+        """What the system measured of a verification: its row, and never a stored pass. The
+        call is recorded here, with the load read around the run."""
+        self.calls.append(
+            VerificationCall(
+                name,
+                Outcome.PASSED if row["passed"] else Outcome.FAILED,
+                row.get("duration_s", 0.0),
+                load[0],
+                load[1],
+                self._cores,
+                tail(row["output"]),
+            )
+        )
         return CheckRun(
             name,
             passed=row["passed"],

@@ -237,6 +237,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             lead.append(record)
             if fast_names:
                 lead.append(f"Delivery tier: fast ({', '.join(f'`{name}`' for name in fast)})")
+        # The verifications the Developer ran through `run_check`, as the system measured
+        # them (ADR-0065 addendum): beside the checks' results, whatever the summary says.
+        if check_tool is not None and (verified_runs := check_tool.evidence()) is not None:
+            lead.append(verified_runs)
         block = coverage.render(output.data.get("coverage", []), mapped)
         if lead or block:
             text = [*lead, output.text, *([block] if block else [])]

@@ -169,3 +169,50 @@ def render(run: CheckRun) -> str:
     lines.append(f"duration: {run.duration_s:.1f} s")
     lines.append(f"output:\n{presubmit.tail(run.output)}")
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class VerificationCall:
+    """One call of the tool on a verification, as the system measured it: what the reviewer
+    reads about it in the Developer's section (ADR-0065 addendum, GH-451). `load_before` and
+    `load_after` are None when the load could not be read, and `cores` when the core count is
+    not known; a name that is not declared ran nothing, so its duration is 0 and its tail empty."""
+
+    name: str
+    outcome: Outcome
+    duration_s: float
+    load_before: float | None
+    load_after: float | None
+    cores: int | None
+    tail: str
+
+
+def evidence_line(call: VerificationCall) -> str:
+    """The system's line for one call: name, outcome, duration, the load around the run with
+    the cores it is read against, and the tail of the log. The Developer's `summary` is not in
+    it and cannot change it."""
+    if call.load_before is None and call.load_after is None:
+        load = "load not read"
+    else:
+        shown = [f"{v:.2f}" if v is not None else "?" for v in (call.load_before, call.load_after)]
+        load = f"load {shown[0]} before, {shown[1]} after"
+        if call.cores is not None:
+            load += f", {call.cores} cores"
+    line = f"- `{call.name}`: outcome `{call.outcome.value}`, {call.duration_s:.1f} s, {load}."
+    if not call.tail:
+        return line
+    return f"{line} It printed:\n\n```text\n{call.tail}\n```"
+
+
+def evidence_markdown(calls: Sequence[VerificationCall]) -> str | None:
+    """The block the Developer's section carries for the verifications it ran, one entry per
+    call in order; None when there were none, so a section without them is today's."""
+    if not calls:
+        return None
+    return "\n\n".join(
+        [
+            "### Verifications\n\nRun by the system when the Developer called `run_check` on "
+            "them: the reviewer reads these lines, never the summary.",
+            *(evidence_line(call) for call in calls),
+        ]
+    )
