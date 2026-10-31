@@ -133,3 +133,28 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Subclaves**: `generate`, `paths`
 - **Qué es**: mapping of `generate` and `paths`: the command that rewrites generated docs and the globs it owns
 - **Lector**: `agentic.core.knowledge.domain.stack.docs`
+
+## `verifications`
+
+- **Presencia**: opcional
+- **Se lee como**: `dict[str, Verification]`
+- **Si falta**: mapa vacío (`{}`)
+- **Subclaves**: `command`, `wall_s`
+- **Qué es**: mapping of verification name to a mapping of `command` and `wall_s`: a long run the Developer's `run_check` takes to completion
+- **Lector**: `agentic.core.knowledge.domain.stack.verifications`
+
+## `check_timeouts`
+
+- **Presencia**: opcional
+- **Se lee como**: `dict[str, float]`
+- **Si falta**: mapa vacío (`{}`)
+- **Qué es**: mapping of check name to a positive number of seconds: the wall of that check
+- **Lector**: `agentic.core.knowledge.domain.stack.check_timeouts`
+
+## `not_ready_exit`
+
+- **Presencia**: opcional
+- **Se lee como**: `dict[str, int]`
+- **Si falta**: mapa vacío (`{}`)
+- **Qué es**: mapping of check or verification name to the exit code (1 to 255) that says the environment was not ready
+- **Lector**: `agentic.core.knowledge.domain.stack.not_ready_exit`

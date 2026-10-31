@@ -83,3 +83,51 @@ marcan `reused`, y las filas reutilizadas nunca entran en una muestra de duraci�
 herramienta `run_check` comparte con la puerta la misma `Reuse`, así que lo que guarda es lo
 que la puerta lee. Un producto con un stage0 `+dirty` no recibe la herramienta y corre
 exactamente los comandos de antes.
+
+## Adenda (2026-10-31): verificaciones declaradas, sus topes de pared y `not_ready`
+
+GH-451. Tres tareas de apostrophe escalaron con el código terminado porque la verificación del
+brief dura más que un paso del Developer (10 min en primer plano) y un proceso en background no
+se puede leer ni sobrevive al cierre del stream (ADR-0052): lo corrió una persona a mano.
+`run_check` ya espera dentro de `HookActivity`, así que se amplía la herramienta en lugar de abrir
+el background al modelo. Esta adenda fija el contrato; la ejecución, la línea de evidencia y la
+lectura de carga son de las subtareas siguientes de la misma tarea.
+
+- **Verificación declarada.** `stack.yaml` puede declarar `verifications: {nombre: {command,
+  wall_s}}`. El modelo sigue pasando solo un nombre; el comando sale del archivo del producto, nunca
+  de un texto de un rol. Un nombre que coincide con un chequeo de `checks` (incluido el reservado
+  `docs`) se rechaza al cargar. Sin `verifications`, `check_timeouts` ni `not_ready_exit` el
+  producto resuelve los mismos topes, la misma `DESCRIPTION` y el mismo hash de prompt de Developer
+  que antes.
+- **Dos límites, dos dueños.**
+  1. **Por chequeo o verificación: lo declara el producto.** `wall_s` en cada verificación y
+     `check_timeouts: {chequeo: segundos}` en cada chequeo, ambos positivos y finitos. Sin
+     declaración vale `Configuration.check_timeout_s`, como hoy.
+  2. **Techo: lo fija el sistema.** `Configuration.verification_wall_max_s` (3600 s por defecto,
+     nunca menor que `check_timeout_s`), que el dueño ajusta por `AGENTIC_VERIFICATION_WALL_MAX_S`
+     en su `.env`. Ningún producto ni rol lo cambia.
+- **Fuera de rango se rechaza, nunca se recorta.** Un valor sobre el techo corta la corrida en la
+  Puerta de arranque (`preflight`) con el nombre y las dos cifras. La resolución de todo tope es la
+  función única `resolve_wall` de `process/domain/run_check.py`; ningún adaptador ni hook escribe un
+  literal de segundos. El tope de una llamada de `run_check` es `call_timeout_s` = mayor tope × 2 +
+  2 × espera máxima + testigo, para que `MCP_TOOL_TIMEOUT` cubra el reintento.
+- **`not_ready`.** `not_ready_exit: {nombre: 1..255}` declara el código de salida que dice «el
+  entorno no estuvo listo» (la convención es 75). Un chequeo o verificación que sale con él se
+  reintenta una vez. La carga se lee antes y después por el puerto `LoadReader` (el de `perf_runner`)
+  y `saturated(antes, después, núcleos)` es `max(antes, después) ≥ núcleos`; una lectura que no se
+  pudo tomar cuenta como no saturada. Un 75 sin saturación es `failed`; saturado en los dos intentos
+  es `unverified`. El resultado es el enum cerrado `Outcome`: `passed`, `failed`, `not_ready`,
+  `unverified`, `not_declared`.
+- **Sin registro en `flakes`.** Un `not_ready` o `unverified` nunca se escribe en `flakes`, nunca abre
+  un issue de flakiness, nunca se informa como `passed: no` y nunca cuenta como devolución. La regla
+  es heurística (la propia verificación sube la carga de «después»): a veces dará `unverified` donde
+  correspondía un rojo, y el humano lo ve en el PR.
+- **Nombres.** Toda clave que nombra un chequeo o una verificación (`delivery_checks`,
+  `affected_checks`, `rerun_checks`, `check_budgets`, `check_timeouts`, `not_ready_exit`) se valida
+  con la misma función, `stack_checks.require_declared`, contra los nombres declarados.
+  `check_timeouts` solo nombra chequeos (una verificación lleva su `wall_s`); `not_ready_exit` nombra
+  ambos.
+- **Orden de despliegue.** (1) se mergea esta tarea; (2) se actualizan explícitamente los stage0 de
+  los dos productos; (3) recién entonces apostrophe declara sus claves y hace que `compare.sh` salga
+  con 75 cuando la app no está lista. Si un producto declara antes, sus corridas fallan al cargar
+  porque las claves desconocidas se rechazan.

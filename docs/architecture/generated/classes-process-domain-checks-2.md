@@ -1,8 +1,9 @@
-Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 2, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 3, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
+  - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
@@ -19,6 +20,9 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
+    class coverage__Entry["Entry"]
+    class coverage__Parsed["Parsed"]
+    class coverage__Refusal["Refusal"]
     class coverage__Rejected["Rejected"]
     class performance__Limit["Limit"]
     class performance__Measurement["Measurement"]
@@ -27,16 +31,6 @@ classDiagram
     class performance__Run["Run"]
     class performance__Scenario["Scenario"]
     class presubmit__AffectedPlan["AffectedPlan"]
-    class presubmit__BudgetBreach["BudgetBreach"]
-    class presubmit__CheckResult["CheckResult"]
-    class presubmit__RerunForm["RerunForm"]
-    class presubmit__WitnessResult["WitnessResult"]
-    class run_check__CheckRun["CheckRun"]
-    class suppressions__Forbidden["Forbidden"]
+    coverage__Rejected --> coverage__Refusal
     performance__MetricResult --> performance__Limit
 ```
-
-## Relaciones con otras páginas
-
-- [domain: checks (parte 1)](classes-process-domain-checks-1.md)
-  - `coverage.Rejected` se asocia con `coverage.Refusal`

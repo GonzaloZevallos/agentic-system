@@ -151,3 +151,20 @@ checks:
 #     volume: 10000
 #     volume_unit: rows              # rows | days | months | years
 #     limits: {list_ms: {limit: 300, unit: ms}, list_queries: {limit: 4, unit: queries}}
+#
+# `verifications`, `check_timeouts` and `not_ready_exit`: optional (ADR-0065, addendum). A
+# verification is a run longer than a Developer's foreground step, which the Developer asks
+# `run_check` for by name and which the system runs to its `wall_s` seconds, returning the
+# exit code and the log. Its name may not be one of `checks`. `check_timeouts` gives a check
+# its own wall in seconds, instead of the system's default. `not_ready_exit` gives a check or a
+# verification the exit code (1 to 255, by convention 75) that means "the environment was not
+# ready", which is retried once and is never counted as a code failure. A wall above the
+# ceiling the system's owner sets (`AGENTIC_VERIFICATION_WALL_MAX_S`, 3600 s by default) is
+# refused when a run starts, never clipped.
+#
+# verifications:
+#   compare: {command: scripts/design/compare.sh --strict, wall_s: 900}
+# check_timeouts:
+#   tests: 900
+# not_ready_exit:
+#   compare: 75

@@ -288,6 +288,11 @@ Un nombre de chequeo del CI que los criterios de hecho del issue necesitan en ve
 En el código se llama `ci_required`, `ci_plan_only` y `ci_gate_names`.
 _Avoid_: chequeo declarado (eso es el `ci` del stack), criterio de CI
 
+**Verificación declarada**:
+Una corrida larga que el producto declara en `verifications` de su stack (`{command, wall_s}`) y que el Developer pide a la herramienta `run_check` por su nombre, porque dura más que un paso en primer plano. El sistema la corre hasta su tope (`wall_s`, nunca sobre el techo `verification_wall_max_s` que fija el dueño: un valor mayor se rechaza en el arranque, jamás se recorta) y le devuelve el exit code y el log. Dentro de ella, **`not_ready`** es el resultado de una corrida que salió con el código que el producto declara en `not_ready_exit` (por convención 75): se reintenta una vez, y si la carga de la máquina estaba saturada en los dos intentos es `unverified`. Ni `not_ready` ni `unverified` son un fallo del código: nunca entran en `flakes`, nunca abren un issue de flakiness ni cuentan como devolución. Un producto sin `verifications` se comporta como antes. Ver ADR-0065, adenda de 2026-10-31.
+_Avoid_: job en background (el modelo no tiene uno: la herramienta espera), chequeo largo (un chequeo es lo que corre la puerta), flake (un `not_ready` no es uno)
+_Campo_: long-running verification / readiness probe — EX_TEMPFAIL (75) como convención de «reintentar más tarde»
+
 **Presupuesto de chequeo**:
 Los segundos que un producto declara para un chequeo suyo. Se compara una sola vez, en el *Chequeo completo de la tarea*, contra la duración de la fila que decidió el veredicto de ese chequeo (la del reintento verde si fue un Flake; un pase reutilizado cuenta con la duración guardada; un chequeo que agotó su tiempo nunca se compara), y nunca en la puerta de entrega, la de merge ni el aterrizaje. Si un chequeo lo pasa, el sistema escribe el exceso en el registro del chequeo completo; no devuelve ni bloquea nada, y no es una fila de la tabla de hallazgos. Un producto sin presupuestos se comporta como antes.
 En el código se llama `check_budgets`, la clave del stack, y `over_budget`, el campo del registro `full_checks`.
