@@ -866,3 +866,128 @@ def test_parallel_checks_accepts_checks_that_do_not_read_the_owned_paths():
 
 def test_docs_is_a_key_the_file_may_declare():
     assert "docs" in stack.KEYS
+
+
+# --- verifications, check_timeouts and not_ready_exit (ADR-0065, addendum GH-451) ------------
+
+
+def verification_data(**more):
+    return {
+        "checks": {"tests": "pytest", "lint": "ruff check ."},
+        "verifications": {
+            "compare": {"command": "scripts/design/compare.sh --strict", "wall_s": 900},
+            "e2e": {"command": "npm run e2e", "wall_s": 1500.5},
+        },
+        "check_timeouts": {"tests": 900, "lint": 60},
+        "not_ready_exit": {"compare": 75, "tests": 75},
+        **more,
+    }
+
+
+def test_a_stack_with_the_new_keys_loads_and_exposes_each_of_them():
+    data = verification_data()
+    found = stack.verifications(data, "x")
+    assert list(found) == ["compare", "e2e"]
+    assert found["compare"].command == "scripts/design/compare.sh --strict"
+    assert found["compare"].wall_s == 900
+    assert found["e2e"].wall_s == 1500.5
+    assert stack.check_timeouts(data, "x") == {"tests": 900, "lint": 60}
+    assert stack.not_ready_exit(data, "x") == {"compare": 75, "tests": 75}
+    assert stack.checks(data, "x") == {"tests": "pytest", "lint": "ruff check ."}
+
+
+def test_a_stack_without_the_new_keys_declares_none_of_them():
+    data = {"checks": {"tests": "pytest"}, "delivery_checks": ["tests"]}
+    assert stack.verifications(data, "x") == {}
+    assert stack.check_timeouts(data, "x") == {}
+    assert stack.not_ready_exit(data, "x") == {}
+    assert stack.check_budgets(data, "x") == {}
+
+
+def test_the_new_keys_are_keys_the_file_may_declare_in_the_reference_too():
+    for key in ("verifications", "check_timeouts", "not_ready_exit"):
+        assert key in stack.KEYS
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "match"),
+    [
+        ("check_timeouts", {"e2e": 60}, r"'e2e' under `check_timeouts` is not a check declared"),
+        ("not_ready_exit", {"nope": 75}, r"'nope' under `not_ready_exit` is not a check declared"),
+        ("check_timeouts", {"compare": 60}, r"'compare' under `check_timeouts` is not a check"),
+        ("check_timeouts", {"tests": 0}, "positive number of seconds"),
+        ("check_timeouts", {"tests": -1}, "positive number of seconds"),
+        ("check_timeouts", {"tests": True}, "positive number of seconds"),
+        ("check_timeouts", {"tests": "60"}, "positive number of seconds"),
+        ("check_timeouts", {"tests": float("inf")}, "positive number of seconds"),
+        ("check_timeouts", {}, "declared empty"),
+        ("check_timeouts", [("tests", 5)], "mapping of checks to seconds"),
+        ("not_ready_exit", {"tests": 0}, "an exit code from 1 to 255"),
+        ("not_ready_exit", {"tests": 256}, "an exit code from 1 to 255"),
+        ("not_ready_exit", {"tests": True}, "an exit code from 1 to 255"),
+        ("not_ready_exit", {"tests": 75.5}, "an exit code from 1 to 255"),
+        ("not_ready_exit", {"tests": "75"}, "an exit code from 1 to 255"),
+        ("not_ready_exit", {}, "declared empty"),
+        ("verifications", {}, "declared empty"),
+        ("verifications", ["compare"], "mapping of verifications"),
+        ("verifications", {"compare": "run.sh"}, "mapping of"),
+        ("verifications", {"compare": {"command": "x"}}, "`wall_s`"),
+        ("verifications", {"compare": {"wall_s": 5}}, "`command`"),
+        ("verifications", {"compare": {"command": " ", "wall_s": 5}}, "`command`"),
+        ("verifications", {"compare": {"command": "x", "wall_s": 0}}, "positive number of seconds"),
+        ("verifications", {"compare": {"command": "x", "wall_s": True}}, "positive number"),
+        ("verifications", {"compare": {"command": "x", "wall_s": "9"}}, "positive number"),
+        ("verifications", {"compare": {"command": "x", "wall_s": 5, "z": 1}}, "unknown key"),
+        ("verifications", {"tests": {"command": "x", "wall_s": 5}}, "collides with a check"),
+    ],
+)
+def test_a_malformed_or_unknown_declaration_is_rejected_at_load(key, value, match):
+    data = verification_data(**{key: value})
+    reader = getattr(stack, key)
+    with pytest.raises(ValueError, match=match):
+        reader(data, "stack.yaml")
+
+
+def test_a_verification_that_collides_with_the_reserved_docs_check_is_rejected():
+    data = verification_data(docs={"generate": "echo hi", "paths": ["docs/generated/**"]})
+    data["verifications"] = {"docs": {"command": "x", "wall_s": 5}}
+    with pytest.raises(ValueError, match="collides with a check"):
+        stack.verifications(data, "stack.yaml")
+
+
+def test_not_ready_exit_may_name_a_verification_and_so_may_no_other_key_than_it_allows():
+    data = verification_data(not_ready_exit={"e2e": 75})
+    assert stack.not_ready_exit(data, "x") == {"e2e": 75}
+
+
+def test_every_key_that_names_a_check_is_validated_by_the_one_function(monkeypatch):
+    from agentic.core.knowledge.domain import stack_checks
+
+    seen = []
+    real = stack_checks.require_declared
+
+    def spy(name, key, known, source):
+        seen.append(key)
+        return real(name, key, known, source)
+
+    monkeypatch.setattr(stack_checks, "require_declared", spy)
+    data = verification_data(
+        delivery_checks=["tests"],
+        check_budgets={"tests": 5},
+        affected_checks={"tests": "pytest --base {base}"},
+        rerun_checks={"tests": {"command": "pytest --lf", "test_id": r"(\S+)"}},
+    )
+    stack.delivery_checks(data, "x")
+    stack.check_budgets(data, "x")
+    stack.affected_checks(data, "x")
+    stack.rerun_checks(data, "x")
+    stack.check_timeouts(data, "x")
+    stack.not_ready_exit(data, "x")
+    assert set(seen) == {
+        "delivery_checks",
+        "check_budgets",
+        "affected_checks",
+        "rerun_checks",
+        "check_timeouts",
+        "not_ready_exit",
+    }

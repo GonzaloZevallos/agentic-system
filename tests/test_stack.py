@@ -31,7 +31,7 @@ from typing import Any, get_type_hints
 
 import yaml
 
-from agentic.core.knowledge.domain import stack
+from agentic.core.knowledge.domain import stack, stack_checks
 from tests.fakes import real_commands
 
 REPO = Path(__file__).resolve().parent.parent
@@ -864,6 +864,7 @@ SUB_KEYS = {
     "design": stack.DESIGN_KEYS,
     "performance": stack.PERFORMANCE_KEYS,
     "rerun_checks": stack.RERUN_KEYS,
+    "verifications": stack_checks.VERIFICATION_KEYS,
 }
 # A valid declaration of each key a default may depend on.
 DECLARED = {"docs": {"generate": "echo hi", "paths": ["docs/generated/**"]}}
