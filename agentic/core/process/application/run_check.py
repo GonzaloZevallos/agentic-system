@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
-from typing import Any
+from dataclasses import replace
 
 from ..domain import presubmit, run_check
 from ..domain.presubmit import CheckResult, tail
@@ -157,15 +157,18 @@ class RunCheck:
             except OSError:
                 # As at the gate: a store that cannot be written is only a miss later.
                 reason = "the store could not be written"
-        return CheckRun(
-            name,
-            passed=passed,
-            reused=reused,
-            output=row["output"],
-            duration_s=row.get("duration_s", 0.0),
-            unrecorded=reason,
-            witness=self._witness_line(witness_reason),
-            **self._readiness_fields(row, outcome),
+        return self._measured(
+            CheckRun(
+                name,
+                passed=passed,
+                reused=reused,
+                output=row["output"],
+                duration_s=row.get("duration_s", 0.0),
+                unrecorded=reason,
+                witness=self._witness_line(witness_reason),
+            ),
+            row,
+            outcome,
         )
 
     def _classified(self, name: str) -> bool:
@@ -226,28 +229,29 @@ class RunCheck:
                 tail(row["output"]),
             )
         )
-        return CheckRun(
-            name,
-            passed=row["passed"],
-            output=row["output"],
-            duration_s=row.get("duration_s", 0.0),
-            unrecorded=run_check.UNRECORDED_VERIFICATION,
-            witness=self._witness_line(witness_reason),
-            **self._readiness_fields(row, outcome),
+        return self._measured(
+            CheckRun(
+                name,
+                passed=row["passed"],
+                output=row["output"],
+                duration_s=row.get("duration_s", 0.0),
+                unrecorded=run_check.UNRECORDED_VERIFICATION,
+                witness=self._witness_line(witness_reason),
+            ),
+            row,
+            outcome,
         )
 
-    def _readiness_fields(self, row: CheckResult, outcome: Outcome | None) -> dict[str, Any]:
-        """The outcome and the load a call measured, for `CheckRun`; empty for a command the
-        product declared no `not_ready_exit` for, so its reply is what it was."""
+    def _measured(self, run: CheckRun, row: CheckResult, outcome: Outcome | None) -> CheckRun:
+        """`run` with the outcome and the load a call measured; the load only for a command the
+        product declared a `not_ready_exit` for, so every other reply is what it was."""
         ready = self.gate.readiness
-        fields: dict[str, Any] = {"outcome": outcome}
-        if ready is not None and "load_before" in row:
-            fields |= {
-                "load_before": row["load_before"],
-                "load_after": row.get("load_after"),
-                "cores": ready.cores,
-            }
-        return fields
+        run = replace(run, outcome=outcome)
+        if ready is None or "load_before" not in row:
+            return run
+        return replace(
+            run, load_before=row["load_before"], load_after=row.get("load_after"), cores=ready.cores
+        )
 
     def _witness_line(self, reason: str | None) -> str | None:
         if self.gate.witness is None:
