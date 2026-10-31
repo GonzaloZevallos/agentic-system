@@ -220,7 +220,9 @@ class CheckTool(Protocol):
     """The Developer's `run_check` tool (ADR-0065, GH-359): given the name the model chose,
     runs that declared check through the system and answers with the text the model reads.
     Blocking, within `timeout_s` for one call; the harness runs it off the event loop.
-    `names` are the declared checks, all of them."""
+    `names` are the declared checks, all of them. A tool of a product that declares
+    verifications (ADR-0065 addendum, GH-451) also has `verification_names`, which the
+    harness reads, when it is there, for the tool's description."""
 
     names: tuple[str, ...]
     timeout_s: float

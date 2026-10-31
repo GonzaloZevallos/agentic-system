@@ -25,7 +25,7 @@ from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
-from .run_check import RunCheck
+from .run_check import RunCheck, resolved_walls
 from .run_role import finish, run_role, with_context
 
 
@@ -124,6 +124,17 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     # or a `+dirty` stage0 (no fingerprint: today's `commands.run` calls, exactly, and a
     # reuse the tool's description would promise in vain), gets no tool.
     reuse = delivery_presubmit.reuse
+    # The verifications the product declares and the wall of each, with a check's own
+    # `check_timeouts` figure (ADR-0065 addendum, GH-451): the tool alone gets them, so the
+    # delivery gate and the merge gate run what they always did. Resolved here at the base,
+    # through `resolve_wall`, with the ceiling the owner set.
+    verifications = ports.stack.verifications(base)
+    walls = resolved_walls(
+        verifications,
+        ports.stack.check_timeouts(base),
+        cfg.check_timeout_s,
+        cfg.verification_wall_max_s,
+    )
     check_tool = (
         RunCheck(
             CheckoutPresubmit(
@@ -136,7 +147,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 reuse=reuse,
-            )
+                timeouts=walls,
+            ),
+            verifications=verifications,
         )
         if reuse is not None
         and reuse_rules.fingerprint(reuse.setup, reuse.stage0_version, cfg.check_timeout_s)

@@ -23,6 +23,10 @@ DESCRIPTION = (
     "time come from the system, never from you."
 )
 
+# Why a verification's pass is not stored: it is not a check the gate declares, so there is no
+# result of it the gate could ever reuse (ADR-0065 addendum, GH-451).
+UNRECORDED_VERIFICATION = "a verification is not a declared check"
+
 
 class Outcome(StrEnum):
     """What a call of the tool on a declared verification came to, the closed set the system's

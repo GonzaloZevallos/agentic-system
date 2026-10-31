@@ -120,6 +120,7 @@ class CheckoutPresubmit:
         reuse: Reuse | None = None,
         rerun_forms: Mapping[str, RerunForm] | None = None,
         flake_gate: FlakeGate = "delivery",
+        timeouts: Mapping[str, float] | None = None,
     ):
         self.ports = ports
         self.path = path
@@ -164,6 +165,10 @@ class CheckoutPresubmit:
         # these defaults so every construction site compiles untouched.
         self.rerun_forms: Mapping[str, RerunForm] = rerun_forms or {}
         self.flake_gate: FlakeGate = flake_gate
+        # The wall of the checks and verifications whose product declared one, by name, already
+        # resolved by `run_check.resolve_wall` (ADR-0065 addendum, GH-451); every other command
+        # gets `check_timeout_s`. Empty is the presubmit of before, byte for byte.
+        self.timeouts: Mapping[str, float] = timeouts or {}
         # Set once per call on a clean, moved tree (`_prepare_reuse`): the tree, the
         # environment fingerprint, and whether this checkout may store what it runs.
         self._tree: str | None = None
@@ -206,6 +211,12 @@ class CheckoutPresubmit:
 
     @property
     def timeout_s(self) -> float:
+        # A declared wall longer than the default keeps the share held while its command may
+        # still be running, and its one `not_ready` retry; nothing declared leaves this as is.
+        longest = max(self.timeouts.values(), default=0.0)
+        return max(self._timeout_s(), longest * 2 + (self.check_timeout_s if self.witness else 0))
+
+    def _timeout_s(self) -> float:
         witness = self.check_timeout_s if self.witness else 0
         if self.parallel:
             # Every check runs at once, each under its own `check_timeout_s`: the
@@ -595,11 +606,10 @@ class CheckoutPresubmit:
         started = time.monotonic()
         declared, command = command, self._sized(command)
         self._declared[(name, command)] = declared
-        result = self.ports.commands.run(
-            self.path, command, self.check_timeout_s, env=self._grant_env()
-        )
+        wall = self.timeouts.get(name, self.check_timeout_s)
+        result = self.ports.commands.run(self.path, command, wall, env=self._grant_env())
         duration_s = time.monotonic() - started
-        output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
+        output = presubmit.said(result.output, result.timed_out, wall)
         row: CheckResult = {
             "name": name,
             "command": command,

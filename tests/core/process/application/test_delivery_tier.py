@@ -211,6 +211,24 @@ async def test_the_developer_gets_the_run_check_tool_when_the_system_has_a_finge
     assert runner.calls[0]["check_tool"] is not None
 
 
+async def test_the_tool_carries_the_products_verifications_and_their_walls(cfg):
+    from agentic.core.process.domain.run_check import Verification
+    from tests.fakes import MemoryCheckResults
+
+    runner = ScriptedRunner(developer=[delivered()])
+    stack = MemoryStack(
+        checks=CHECKS,
+        verifications={"compare": Verification("compare.sh", 900.0)},
+        check_timeouts={"pytest": 1200.0},
+    )
+    ports = memory_ports(runner, stack=stack, check_results=MemoryCheckResults())
+    state, _ = building(ports)
+    await develop(state, cfg, ports)
+    tool = runner.calls[0]["check_tool"]
+    assert tool.verification_names == ("compare",)
+    assert tool.gate.timeouts == {"compare": 900.0, "pytest": 1200.0}
+
+
 async def test_a_dirty_stage0_offers_no_tool_and_runs_exactly_todays_commands(cfg):
     from agentic.shared.stage0 import CHECKOUT
     from tests.fakes import MemoryCheckResults

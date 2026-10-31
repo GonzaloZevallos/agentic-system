@@ -16,7 +16,7 @@ import anyio
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server, tool
 
 from ...application.ports import CheckTool, RunStopped
-from ...domain.run_check import DESCRIPTION
+from ...domain.run_check import description
 from .hooks import HookActivity
 
 SERVER = "agentic"
@@ -30,7 +30,10 @@ def check_server(check: CheckTool, activity: HookActivity | None = None) -> McpS
 
 
 def run_check_tool(check: CheckTool, activity: HookActivity | None = None) -> SdkMcpTool[Any]:
-    @tool(TOOL, DESCRIPTION, {"name": str})
+    # A tool that declares no verification has the description it always had (invariant 5).
+    verifications = getattr(check, "verification_names", ())
+
+    @tool(TOOL, description(verifications), {"name": str})
     async def run_check(args: dict[str, Any]) -> dict[str, Any]:
         with activity.running() if activity is not None else nullcontext():
             try:
@@ -44,5 +47,7 @@ def run_check_tool(check: CheckTool, activity: HookActivity | None = None) -> Sd
 
 
 def tool_timeout_ms(check: CheckTool) -> str:
-    """`MCP_TOOL_TIMEOUT` for an attempt that carries `check`: the longest one call can take."""
+    """`MCP_TOOL_TIMEOUT` for an attempt that carries `check`: the longest one call can take,
+    which is `check.timeout_s`, itself `call_timeout_s` over the walls the product declared
+    (ADR-0065 addendum, GH-451): the harness never kills a call inside its wall or its retry."""
     return str(int(check.timeout_s * 1000))
