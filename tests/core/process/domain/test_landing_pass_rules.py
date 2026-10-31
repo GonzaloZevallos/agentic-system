@@ -78,6 +78,16 @@ def test_each_kind_by_unit_state_has_one_target(kind, unit, based):
 def test_an_open_pass_never_resumes_a_task_that_is_not_a_pull_request_task():
     raw = killed()
     assert rules.landing_pass({**raw, "pull_request": None}) is None
+    assert (
+        rules.landing_pass(
+            {
+                **raw,
+                "pull_request": None,
+                "subtasks": {n: {**u, "status": "returned"} for n, u in raw["subtasks"].items()},
+            }
+        )
+        == "reopened"
+    )
 
 
 def test_a_resolved_entry_or_one_before_the_pull_request_is_no_pass():
@@ -149,9 +159,11 @@ def test_an_unstarted_pass_is_owed_to_land_and_is_not_taken():
     assert rules.landing_pass(raw) == "unstarted" and not landing.resume_owed(raw, NOW)
     assert rules.resume_target(raw) is None
     head, entries = raw["landing"][-1]["head"], raw["landing"]
-    assert landing.already_dispatched(entries, head, "fix", None) is True  # unaware of units
-    assert landing.already_dispatched(entries, head, "fix", None, approved=True) is False
+    assert (
+        landing.already_dispatched(entries, head, "fix", None) is True
+    )  # not told it is unstarted
+    assert landing.already_dispatched(entries, head, "fix", None, unstarted=True) is False
     # an entry the executor stamped, or one for another head, is as before
     started = killed()["landing"]
-    assert landing.already_dispatched(started, head, "fix", None, approved=True) is True
-    assert landing.already_dispatched(entries, "d" * 40, "fix", None, approved=True) is False
+    assert landing.already_dispatched(started, head, "fix", None) is True
+    assert landing.already_dispatched(entries, "d" * 40, "fix", None, unstarted=True) is False

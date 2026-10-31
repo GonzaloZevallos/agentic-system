@@ -19,7 +19,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
-from ..domain.rules import RunKind, all_approved
+from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
@@ -237,7 +237,7 @@ def _land(
         head,
         step.kind,
         master,
-        approved=all_approved(current),
+        unstarted=landing_rules.landing_pass(current) == "unstarted",
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)

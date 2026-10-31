@@ -611,7 +611,7 @@ def pending(
             facts.pr_head,
             step.kind,
             facts.current_master,
-            approved=rules.all_approved(raw),
+            unstarted=landing.landing_pass(raw) == "unstarted",
         )
     ):
         return None

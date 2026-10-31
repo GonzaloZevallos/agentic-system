@@ -816,7 +816,7 @@ def already_dispatched(
     step: str,
     upstream: str | None,
     *,
-    approved: bool = False,
+    unstarted: bool = False,
 ) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
@@ -829,27 +829,18 @@ def already_dispatched(
     executor, a refused one is retried until `SLICE_REFUSALS_MAX`, and a landed one leaves
     other units to land on the same head. An `escalate_adr` is taken only once it is resolved
     (GH-412): an entry recorded without its comment posted does not silence the next round.
-    With `approved` (every unit approved, `rules.all_approved`) an open, stage-reopening last
-    entry with no `cost_base` is the `unstarted` pass (GH-450): recorded, the executor never
-    reopened anything, so it is not taken and `land` runs it again on the same entry."""
+    With `unstarted` (`rules.landing_pass` says the pass is `unstarted`, GH-450) the last entry
+    is recorded and the executor never reopened anything, so it is not taken and `land` runs it
+    again on the same entry."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
-    last = landing[-1] if landing else None
-    unstarted = (
-        last
-        if approved
-        and last is not None
-        and last.get("step") in rules.STAGE_REOPENING_STEPS
-        and last.get("cost_base") is None
-        and not entry_closed_or_before_pr(last)
-        else None
-    )
+    unstarted_entry = landing[-1] if unstarted and landing else None
 
     def taken(entry: Mapping[str, object]) -> bool:
         if entry.get("head") != head or entry.get("step") != step or "lacks" in entry:
             return False
-        if entry is unstarted:
+        if entry is unstarted_entry:
             return False  # GH-450: recorded, the executor never reopened anything
         if stamped is not None:
             # GH-442: a rerun recorded before the CI release is not the one the release owes.
@@ -866,12 +857,6 @@ def already_dispatched(
         return True
 
     return step != "land_slice" and any(taken(entry) for entry in landing)
-
-
-def entry_closed_or_before_pr(entry: Mapping[str, object]) -> bool:
-    """Whether `entry` says nothing about a pass in flight on the pull request: closed
-    (`rules.entry_closed`) or written before it (`rules.before_pr`)."""
-    return rules.entry_closed(entry) or rules.before_pr(entry)
 
 
 def landing_open(state: TaskState) -> bool:

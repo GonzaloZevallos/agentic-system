@@ -2955,16 +2955,17 @@ LandingPass = Literal["reopened", "unfinished", "unstarted"]
 
 def landing_pass(state: TaskState) -> LandingPass | None:
     """What a landing pass on a pull-request task is (GH-450), from the last live entry when
-    it is open, not `before_pr`, and the task has a `pull_request`; `None` otherwise.
+    it is open and not `before_pr`; `None` otherwise. `unfinished` and `unstarted` need the
+    task's `pull_request` (every road that reads `reopened` already checks it).
     `reopened`: some unit is `returned`, `pending` or `delivered` (`landing_open`).
     `unfinished`: a stage-reopening step with `cost_base` (the executor ran) and every unit
     approved: the units finished, the stage above them (fan-in, full checks, deliver) was cut.
     `unstarted`: the same without `cost_base`: the entry was written and nothing reopened.
     The one place that decides it; no caller rebuilds it from `landing_open` and another test."""
-    if not state.get("pull_request"):
-        return None
     if landing_open(state):
         return "reopened"
+    if not state.get("pull_request"):
+        return None
     entries = live_landing(state)
     if not entries or entry_closed(entries[-1]) or before_pr(entries[-1]):
         return None
