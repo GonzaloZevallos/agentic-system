@@ -12,6 +12,7 @@ import contextlib
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import time
@@ -142,6 +143,64 @@ def bounded_run(
     if check and returncode:
         raise subprocess.CalledProcessError(returncode, args, output=stdout, stderr=stderr)
     return subprocess.CompletedProcess(args, returncode, stdout, stderr)
+
+
+@dataclass(frozen=True)
+class StreamRead:
+    """What `bounded_stream` read: at most `max_bytes` of stdout in `data`, `truncated` bytes
+    past that counted and dropped, the exit code (-1 when the child was still running and was
+    killed) and whether the wait ended at the timeout."""
+
+    data: bytes
+    truncated: int
+    returncode: int
+    timed_out: bool
+
+
+def bounded_stream(
+    args: Sequence[str], *, cwd: Path | str | None, max_bytes: int, timeout_s: float
+) -> StreamRead:
+    """Runs `args` and reads its stdout as a stream (GH-449): keeps the first `max_bytes`,
+    counts and discards the rest, gives up at `timeout_s` seconds having killed the child's
+    process group. Memory is bounded by `max_bytes`, whatever the child prints. stderr is
+    never read; no stdin."""
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    assert proc.stdout is not None  # stdout=PIPE
+    fd = proc.stdout.fileno()
+    deadline = time.monotonic() + timeout_s
+    kept = bytearray()
+    dropped = 0
+    timed_out = False
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                timed_out = True
+                break
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            room = max_bytes - len(kept)
+            kept += chunk[:room]
+            dropped += max(len(chunk) - room, 0)
+        if timed_out:
+            _kill_group(proc)
+    finally:
+        proc.stdout.close()
+        try:
+            proc.wait(timeout=GH_DRAIN_S)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+    return StreamRead(
+        bytes(kept), dropped, -1 if proc.returncode is None else proc.returncode, timed_out
+    )
 
 
 def http_status(stderr: str) -> int | None:
@@ -355,7 +414,9 @@ __all__ = [
     "GH_TRANSIENT_STATUSES",
     "GH_UNREACHABLE_MARKERS",
     "GhRetry",
+    "StreamRead",
     "bounded_run",
+    "bounded_stream",
     "http_status",
     "print_line",
     "run_gh",

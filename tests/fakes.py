@@ -2096,6 +2096,7 @@ def memory_ports(
         board_sent=board_sent,
         scratch=scratch,
         free_space=free_space,
+        ci_logs=None,
     )
 
 
