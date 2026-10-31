@@ -166,6 +166,7 @@ def options_for(
     check_tool: CheckTool | None = None,
     check_results_dir: Path | None = None,
     writable: tuple[Path, ...] = (),
+    max_turns: int | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -188,7 +189,7 @@ def options_for(
         cwd=cwd,
         model=model,
         effort=role.effort,
-        max_turns=role.max_turns,
+        max_turns=role.max_turns if max_turns is None else max_turns,
         output_format={"type": "json_schema", "schema": inline_refs(json_schema)},
         setting_sources=[],  # ignore project CLAUDE.md and settings
         # None but the Developer's `run_check` (see the module docstring)
@@ -337,6 +338,7 @@ class ClaudeSdkRunner:
         guard: SchemaGuard | None = None,
         forbidden: Sequence[Forbidden] | None = None,
         check_tool: CheckTool | None = None,
+        max_turns: int | None = None,
     ) -> RawResult:
         """One attempt, marked with `owner_task` (the parent task, never a subtask) and a
         token of its own, and reaped once its stream is closed, whichever way it ended."""
@@ -357,6 +359,7 @@ class ClaudeSdkRunner:
                     owner_task=owner_task,
                     token=token,
                     resume=resume,
+                    max_turns=role.max_turns if max_turns is None else max_turns,
                     max_budget_usd=max_budget_usd,
                     presubmit=presubmit,
                     guard=guard,
@@ -429,6 +432,7 @@ class ClaudeSdkRunner:
         owner_task: str,
         token: str,
         resume: str | None,
+        max_turns: int,
         max_budget_usd: float | None,
         presubmit: Presubmit | None,
         guard: SchemaGuard | None,
@@ -489,6 +493,7 @@ class ClaudeSdkRunner:
             json_schema=json_schema,
             cwd=cwd,
             resume=resume,
+            max_turns=max_turns,
             max_budget_usd=max_budget_usd,
             traceparent=self.telemetry.traceparent(),
             partial=self.verbose,
@@ -634,7 +639,7 @@ class ClaudeSdkRunner:
                             cost, session = _left_behind(result)
                             if exc.subtype == "error_max_turns":
                                 raise AttemptFailed(
-                                    max_turns_motive(role.max_turns, _reported_error(exc)),
+                                    max_turns_motive(max_turns, _reported_error(exc)),
                                     cost,
                                     session,
                                     reason="max_turns",
@@ -708,7 +713,7 @@ class ClaudeSdkRunner:
         cost, session = _left_behind(result)
         if result.subtype == "error_max_turns":
             raise AttemptFailed(
-                max_turns_motive(role.max_turns, _reported_result(result)),
+                max_turns_motive(max_turns, _reported_result(result)),
                 cost,
                 session,
                 reason="max_turns",

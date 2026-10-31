@@ -30,6 +30,6 @@ classDiagram
     class rules__SpendRun["SpendRun"]
     class task__Carried["Carried"]
     class task__ChangesRequested["ChangesRequested"]
+    class task__CiLogRecord["CiLogRecord"]
     class task__CloseDocs["CloseDocs"]
-    class task__DependencyState["DependencyState"]
 ```

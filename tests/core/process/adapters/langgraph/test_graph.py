@@ -1130,6 +1130,7 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
             "cost_usd": 0.02,
             "session_id": "",
             "reason": "other",
+            "max_turns": PRODUCT_ANALYST.max_turns,
             "slug": "product_analyst",
             "section": "Product Analyst",
             "cold_fallback": False,

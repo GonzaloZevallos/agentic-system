@@ -31,6 +31,7 @@ from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import (
     DEVELOPER,
+    LANDING_DIAGNOSER,
     PJM,
     PM,
     PRODUCT_ANALYST,
@@ -148,6 +149,7 @@ async def test_retry_passes_the_error_and_sums_cost():
             "cost_usd": 0.05,
             "session_id": "",
             "reason": "other",
+            "max_turns": PJM.max_turns,
             "slug": "pjm",
             "section": "PjM",
             "cold_fallback": False,
@@ -412,6 +414,81 @@ async def test_a_max_turns_cut_with_no_session_appends_the_message_to_the_prompt
     assert retry["resume"] == "caller-session"
     assert retry["prompt"] == f"task\n\n{rules.turn_cut_retry_message(DEVELOPER)}"
     assert out.cost_usd == pytest.approx(1.0)
+
+
+def _diagnosis(session: str = "diag") -> RawResult:
+    return RawResult(
+        {"markdown": "### Why\n\nx.", "reason": "r", "verdict": "sync"}, 0.4, 3, session
+    )
+
+
+async def _run_diagnoser(runner: ScriptedRunner) -> Output:
+    return await run_with_retry(
+        LANDING_DIAGNOSER,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=1,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=runner,
+        owner_task="GH-1",
+    )
+
+
+async def test_a_diagnoser_cut_by_max_turns_retries_with_the_raised_cap_and_delivers():
+    # GH-449: the base cap and the retry cap are the rule's, and each attempt records the
+    # cap it ran with: the cut attempt on its Failure, the delivering one on the RoleRun.
+    cut = AttemptFailed("run failed (max_turns)", 0.4, session_id="sess-cut", reason="max_turns")
+    runner = ScriptedRunner(landing_diagnoser=[cut, _diagnosis()])
+    out = await _run_diagnoser(runner)
+    assert [c["max_turns"] for c in runner.calls] == [24, 64]
+    assert out.failures[0]["max_turns"] == 24
+    assert (
+        run_record({"id": "GH-1"}, LANDING_DIAGNOSER, "Landing Diagnoser", out)["max_turns"] == 64
+    )
+    assert runner.calls[1]["prompt"] == rules.turn_cut_retry_message(LANDING_DIAGNOSER)
+
+
+async def test_a_diagnoser_cut_twice_is_a_role_failure_with_max_turns_as_the_last_reason():
+    cut = AttemptFailed("run failed (max_turns)", 0.4, session_id="sess-cut", reason="max_turns")
+    runner = ScriptedRunner(landing_diagnoser=[cut, cut])
+    with pytest.raises(RoleFailure) as info:
+        await _run_diagnoser(runner)
+    assert info.value.failures[-1]["reason"] == "max_turns"
+    assert [f["max_turns"] for f in info.value.failures] == [24, 64]
+
+
+async def test_a_diagnoser_failing_for_another_reason_retries_with_the_base_cap():
+    bad = AttemptFailed("structured output missing", 0.1, session_id="s", reason="schema")
+    runner = ScriptedRunner(landing_diagnoser=[bad, _diagnosis()])
+    out = await _run_diagnoser(runner)
+    assert [c["max_turns"] for c in runner.calls] == [24, 24]
+    assert (
+        run_record({"id": "GH-1"}, LANDING_DIAGNOSER, "Landing Diagnoser", out)["max_turns"] == 24
+    )
+
+
+@pytest.mark.parametrize(
+    "role", [r for r in ROLES if r.slug != "landing_diagnoser"], ids=lambda r: r.slug
+)
+async def test_every_other_role_retries_a_max_turns_cut_with_its_own_unchanged_cap(role):
+    cut = AttemptFailed("run failed (max_turns)", 0.4, session_id="sess-cut", reason="max_turns")
+    runner = ScriptedRunner(**{role.slug: [cut, cut]})
+    with pytest.raises(RoleFailure):
+        await run_with_retry(
+            role,
+            "task",
+            system_prompt="s",
+            model="m",
+            retries=1,
+            vocabulary={},
+            cwd=Path("/p"),
+            runner=runner,
+            owner_task="GH-1",
+        )
+    assert [c["max_turns"] for c in runner.calls] == [role.max_turns, role.max_turns]
+    assert runner.calls[1]["prompt"] == rules.turn_cut_retry_message(role)
 
 
 @pytest.mark.parametrize(
@@ -1732,3 +1809,62 @@ async def test_a_stage0_update_between_two_roles_changes_nothing_the_second_one_
     assert runner.slugs == ["developer", "pm"]
     assert "{{docs_review}}" not in runner.prompts("pm")[0]
     assert patch["prompts"]["pm"] == prompt_hash(original)
+
+
+# --- GH-449: the extra input a caller hands one run, appended to what the model is told -----
+
+EXCERPT = '<CiLog job="check">\nFAILED tests/test_x.py::test_y - AssertionError\n</CiLog>\n'
+
+
+async def _failing(role, ports, runner, **kwargs):
+    """The run with every attempt cut: what is told to the model is on `runner.calls`."""
+    state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
+    cfg = Configuration(product_dir=Path("/product"), role_retries=1)
+    return await run_role(state, role, cfg, ports, **PLACEHOLDERS, **kwargs)
+
+
+async def test_the_extra_input_follows_the_prompt_in_the_first_attempt_and_a_cold_retry():
+    stale = AttemptFailed("no session", 0.02, session_id="", reason="sdk")
+    runner = ScriptedRunner(
+        landing_diagnoser=[stale, RawResult(delivered().structured_output, 0.03)]
+    )
+    ports = memory_ports(runner)
+
+    await _failing(
+        LANDING_DIAGNOSER,
+        ports,
+        runner,
+        resume="dead-id",
+        prompt="DELTA",
+        cold_prompt="COLD CONTEXT",
+        extra_input=EXCERPT,
+    )
+
+    first, retry = runner.calls
+    assert first["prompt"] == "DELTA\n\n" + EXCERPT
+    assert retry["resume"] is None
+    assert retry["prompt"] == "COLD CONTEXT\n\n" + EXCERPT
+
+
+async def test_a_retry_with_no_session_to_continue_carries_the_excerpt_with_the_error():
+    cut = AttemptFailed("cut", 0.02, session_id="", reason="max_turns")
+    runner = ScriptedRunner(landing_diagnoser=[cut, RawResult(delivered().structured_output, 0.03)])
+
+    await _failing(LANDING_DIAGNOSER, memory_ports(runner), runner, extra_input=EXCERPT)
+
+    first, retry = runner.calls
+    assert EXCERPT in first["prompt"] and EXCERPT in retry["prompt"]
+
+
+@pytest.mark.parametrize("role", ROLES, ids=lambda role: role.slug)
+async def test_no_extra_input_leaves_every_roles_prompt_and_hash_as_they_were(role):
+    told = []
+    for kwargs in ({}, {"extra_input": ""}):
+        runner = ScriptedRunner(**{role.slug: [AttemptFailed("x"), AttemptFailed("y")]})
+        ports = memory_ports(runner)
+        _, patch = await _failing(role, ports, runner, **kwargs)
+        expected = load_prompt(role, CFG, ports, ports.flags.load(), **PLACEHOLDERS)
+        assert patch["prompts"] == {role.slug: expected.hash}
+        told.append((runner.calls[0]["system_prompt"], runner.calls[0]["prompt"]))
+        assert told[-1][0] == expected.text
+    assert told[0] == told[1]

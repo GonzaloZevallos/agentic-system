@@ -17,7 +17,7 @@ from typing import Any, Literal, Protocol
 
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
-from ..domain.ci import CiReport, CiUnreadable, Containment
+from ..domain.ci import CiReport, CiUnreadable, Containment, JobLog
 from ..domain.design import Design
 from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
@@ -116,8 +116,9 @@ class RawResult:
     # as delivering (`ClaudeSdkRunner.run_once`'s six raise sites read the same
     # `turns.value` this field carries), because a cut is the population that can
     # refute the assumption `domain/turn_notice.py`'s docstring states: an attempt cut
-    # by `max_turns` whose recorded `main_thread_turns` sits below that role's own
-    # `max_turns` refutes "count >= consumed turns".
+    # by `max_turns` whose recorded `main_thread_turns` sits below the cap that same attempt
+    # ran with (`Failure.max_turns`, `rules.retry_turns`; `role.max_turns` only for a record
+    # without the field) refutes "count >= consumed turns".
     main_thread_turns: int = 0
     # The processes the reaper stopped when this attempt's session ended (GH-282,
     # ADR-0052): what a role left running in the background. Empty when there were none,
@@ -260,7 +261,8 @@ class RoleRunner(Protocol):
     `None` or empty is the explicit no-op -- the cage is installed and denies nothing,
     the same shape `presubmit`/`guard` absent already have. `check_tool`, when given,
     is the `run_check` tool the Developer and its integrator may call (ADR-0065); every
-    other role runs with no tool beyond its built-ins.
+    other role runs with no tool beyond its built-ins. `max_turns` is the cap of this one
+    attempt (`rules.retry_turns`, GH-449): `None` is `role.max_turns`.
 
     `owner_task` is the parent task's id, never a subtask's (GH-282, ADR-0052): the mark
     every process of this attempt carries, so its leftovers can be found and stopped when
@@ -282,6 +284,7 @@ class RoleRunner(Protocol):
         guard: SchemaGuard | None = None,
         forbidden: Sequence[Forbidden] | None = None,
         check_tool: CheckTool | None = None,
+        max_turns: int | None = None,
     ) -> RawResult: ...
 
 
@@ -1955,6 +1958,18 @@ class CheckScheduler(Protocol):
         ...
 
 
+class CiLogs(Protocol):
+    """The logs of the red jobs of a pull request head (GH-449), a port of its own so
+    `Tracker` and its fakes stay as they were."""
+
+    def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
+        """One `JobLog` per red job of `reference`'s pull request (at most four), read only
+        when the CI report belongs to `head` (`rules.same_commit`); each is bounded in bytes
+        and time. Never raises: a log that was not read says why in `cause`. The text is for one
+        prompt and is never stored."""
+        ...
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -1992,3 +2007,6 @@ class Ports:
     # how every checkout ran before.
     scratch: Scratch | None = None
     free_space: FreeSpace | None = None
+    # The logs of the red jobs of a pull request head, for the Landing Diagnoser (GH-449).
+    # `None` reads none and makes no call, which is how every landing ran before it existed.
+    ci_logs: CiLogs | None = None

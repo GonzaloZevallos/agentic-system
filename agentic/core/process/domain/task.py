@@ -446,6 +446,11 @@ class Failure(TypedDict):
     # Why the attempt failed, from the closed set (`FailureReason`); absent on a
     # failure recorded before this field existed.
     reason: NotRequired[FailureReason]
+    # The turn cap this attempt ran with, from `rules.retry_turns` (GH-449): the one a
+    # reader compares `main_thread_turns` against, never the role's own `max_turns`, which
+    # the retry after a `max_turns` cut can exceed. Absent on a failure recorded before
+    # this field existed, which reads as `role.max_turns`.
+    max_turns: NotRequired[int]
     # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
     # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
     # only a wait hint, never the reason. Absent on any other failure and on one recorded
@@ -542,10 +547,11 @@ class RoleRun(TypedDict):
     # `turns` counts the role's alone, so this is what explains a dear two-turn run.
     cost_by_model: dict[str, float]
     turns: int
-    # The role's own `max_turns` at the time it ran (not the output's, which knows
-    # nothing about the cap): what `agentic.role.max_turns` reads, so a calibration can
-    # compare `turns` against the budget it actually ran under. Absent on a run
-    # recorded before this field existed; read with `.get()`, no sample emitted then.
+    # The turn cap the delivering attempt ran with (`rules.retry_turns`, GH-449): the role's
+    # own `max_turns`, or the higher one the attempt after a `max_turns` cut gets from
+    # `RETRY_TURNS`. What `agentic.role.max_turns` reads, so a calibration can compare
+    # `turns` against the budget it actually ran under. Absent on a run recorded before
+    # this field existed; read with `.get()`, no sample emitted then.
     max_turns: NotRequired[int]
     # `Role.slug`: `role` alone cannot tell the six roles named "Tech Lead" apart.
     # Absent on a run recorded before this field existed; read with `.get(..., "unknown")`.
@@ -944,6 +950,21 @@ class LandingEntry(TypedDict, total=False):
     # `diagnose` entries: the integrator's paths kept every slice from landing (the restart
     # comment's `(integration work)`).
     integration_work: bool
+    # GH-449, `diagnose` entries: what reading each red job's CI log gave, `{job, bytes, cause}`
+    # with `cause` from the closed `ci.JobLogCause`. Never the text of the log.
+    ci_logs: list[CiLogRecord]
+
+
+JobLogCause = Literal["read", "unreadable", "empty", "other_head", "timed_out"]
+
+
+class CiLogRecord(TypedDict):
+    """What reading one red job's CI log gave, as a `diagnose` entry keeps it (GH-449): the
+    job, the bytes read and the closed cause. Never the text of the log."""
+
+    job: str
+    bytes: int
+    cause: JobLogCause
 
 
 class EstimateRecord(TypedDict):

@@ -11,6 +11,7 @@ import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from agentic.shared.owner_decisions import OWNER_DECISIONS
@@ -1528,6 +1529,25 @@ _TURN_CAP_FACT = (
     "may have moved since — a review may have run its checks there, or the worktree "
     "may have been recreated."
 )
+
+
+# The absolute turn cap handed to the CLI on the attempt after a `max_turns` cut, by role
+# slug (GH-449, ADR-0004 addendum). A closed table: a role not in it retries with the cap
+# it started with. Absolute and not a delta because the CLI's counting of a resumed
+# session (cumulative or per invocation) was never measured; 64 leaves at least 40 new
+# turns over the diagnoser's base of 24 either way.
+RETRY_TURNS: Mapping[str, int] = MappingProxyType({"landing_diagnoser": 64})
+
+
+def retry_turns(role: Role, failures: Sequence[Failure]) -> int:
+    """The turn cap of the next attempt of `role`: its table value when the last failure
+    was the harness cutting on `max_turns` and the slug is in `RETRY_TURNS`, `role.max_turns`
+    otherwise. It reads the role, the slug and the last failure's reason, and no observed
+    counter (`main_thread_turns`, `num_turns`): a measurement of the last attempt never
+    sets the cap of the next one."""
+    if failures and failures[-1].get("reason") == "max_turns":
+        return RETRY_TURNS.get(role.slug, role.max_turns)
+    return role.max_turns
 
 
 def turn_cut_retry_message(role: Role) -> str:
