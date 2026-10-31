@@ -166,7 +166,10 @@ TABLE: tuple[Row, ...] = (
     ),
     Row(
         "tests/core/process/domain/fixtures/GH-484.yaml",
-        ("tests/core/process/domain/test_landing_pass_rules.py",),
+        (
+            "tests/core/process/domain/test_landing_pass_rules.py",
+            "tests/core/process/application/test_resume.py",
+        ),
         "apostrophe#484's frontmatter as a kill left it: the landing pass rules read it",
     ),
 )

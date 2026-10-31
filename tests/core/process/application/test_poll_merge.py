@@ -17,6 +17,7 @@ from agentic.core.process.application.ports import (
     Upstream,
 )
 from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.landing import LandingStepKind
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import (
@@ -812,6 +813,41 @@ def test_a_not_ready_task_whose_resume_was_spawned_a_moment_ago_is_not_a_land_ca
     ports = _stuck(resume_spawns=1, resume_spawned_at="2026-10-14T00:00:00+00:00")
     assert _lands(ports, datetime(2026, 10, 14, 0, 1, tzinfo=UTC)) == []
     assert _lands(ports, datetime(2026, 10, 14, 0, 6, tzinfo=UTC)) == [5]
+
+
+def _unstarted(**entry):
+    """Every unit approved, the last entry recorded and never stamped (GH-450): nothing for
+    `resume_owed`, a pass `land` owes."""
+    return _ports(
+        5,
+        status="developing",
+        landing=[{**REOPENED, **entry}],
+        subtasks={"only": {"id": "only", "status": "approved", "reviewed_head": HEAD}},
+    )
+
+
+def test_a_not_ready_task_with_an_unstarted_pass_is_a_land_candidate():
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    ports = _unstarted()
+    assert not landing_rules.resume_owed(ports.documents.load("GH-5"), now)
+    assert _lands(ports, now) == [5]
+
+
+def test_an_unstarted_pass_of_a_locked_task_enqueues_nothing():
+    lands: list[rules.LandCandidate] = []
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    poll.gather_merges(
+        _unstarted(), frozenset(), MASTER, _Locks(alive={"GH-5"}), [], lands, now=now
+    )
+    assert lands == []
+
+
+def test_a_resolved_or_stamped_all_approved_entry_is_not_an_unstarted_candidate():
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    assert _lands(_unstarted(resolved_at="2026-10-14T00:00:00+00:00"), now) == []
+    # stamped: `unfinished`, owed through `resume_owed`, not through the unstarted branch
+    stamped = _unstarted(cost_base=1.0, resume_spawns=2)
+    assert _lands(stamped, now) == []
 
 
 def test_a_not_ready_task_with_no_open_landing_is_not_a_land_candidate():
