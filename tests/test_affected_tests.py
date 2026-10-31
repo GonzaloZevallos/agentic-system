@@ -374,12 +374,22 @@ def test_a_syntax_error_in_the_tree_cannot_be_decided():
 PATH_PREFIXES = ("docs/", ".agentic/", ".github/", "observability/", "scripts/", "agentic/")
 PATH_SUFFIXES = (".md", ".yaml", ".yml", ".json", ".toml", ".example")
 PATH_CALLS = frozenset({"Path", "open", "read_text", "read_bytes", "glob", "rglob", "iterdir"})
+TEMP_NAMES = frozenset({"tmp_path", "tmp_path_factory", "tmpdir", "tmpdir_factory"})
+TEMPFILE_CALLS = frozenset(
+    {"mkdtemp", "mkstemp", "gettempdir", "TemporaryDirectory", "NamedTemporaryFile"}
+)
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+PATH_KEEPERS = frozenset({"resolve", "absolute", "expanduser"})  # the receiver is the path
+PATH_WALKS = frozenset({"glob", "rglob", "iterdir"})  # the receiver is the root of the walk
+PATH_WRAPPERS = frozenset({"sorted", "list", "tuple", "set", "reversed"})
 ANCHORS = frozenset({"ROOT", "REPO", "CORE", "PACKAGE"})
 
 
 class Allowance(NamedTuple):
     """`test` (a glob) names a repo file in `path` (a glob) without reading the real one:
-    it builds that name under `tmp_path`, or only mentions it in a message."""
+    it only mentions it in a message, or builds it under a temporary directory the guard
+    cannot tell is one because the path arrives through a helper or a fixture (a path built
+    from `tmp_path` or `tempfile` inside the test itself is skipped before it gets here)."""
 
     test: str
     path: str
@@ -428,21 +438,11 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "names the owned glob as a string of a `docs:` block; it never reads the files",
     ),
     Allowance(
-        "tests/core/knowledge/domain/test_stack_docs_check.py",
-        "docs/architecture/generated/*",
-        "names the owned glob as a string of a `docs:` block; it never reads the files",
-    ),
-    Allowance(
         "tests/core/knowledge/domain/test_stack.py",
         "docs/architecture/generated/*",
         "names the owned glob as a string of a `docs:` block; it never reads the files",
     ),
     Allowance(
-        "tests/core/knowledge/domain/test_stack_docs_check.py",
-        "docs/reference/*",
-        "names the second owned glob as a string of a `docs:` block; it never reads the files",
-    ),
-    Allowance(
         "tests/test_affected_tests.py",
         "docs/architecture/generated/*",
         "names the owned globs in this very table; it never reads the files",
@@ -453,55 +453,39 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "names the owned globs in this very table; it never reads the files",
     ),
     Allowance(
-        "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
-        "BRIEF.md",
-        "builds BRIEF.md under tmp_path, the same name as the repo's",
-    ),
-    Allowance(
-        "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
-        "*CODING_STANDARDS.md",
-        "builds CODING_STANDARDS.md under tmp_path, the same name as the repo's",
-    ),
-    Allowance(
-        "tests/core/knowledge/adapters/git/test_stack.py",
-        "*README.md",
-        "commits a README.md into a throwaway repo",
-    ),
-    Allowance(
         "tests/core/process/adapters/git/test_workspace.py",
         "*README.md",
-        "makes its own repos under tmp_path with a README.md",
+        "writes a README.md into the repo of the `product` fixture, which makes it under tmp_path; "
+        "the path arrives through that fixture",
     ),
     Allowance(
         "tests/core/process/adapters/git/test_workspace.py",
         ".gitignore",
-        "makes its own repos under tmp_path with a .gitignore",
+        "writes a .gitignore into the repo of the `product` fixture, which makes it under "
+        "tmp_path; the path arrives through that fixture",
     ),
     Allowance(
         "tests/core/process/application/test_merge_for_real.py",
         "*CODING_STANDARDS.md",
-        "writes CODING_STANDARDS.md into a throwaway product",
+        "writes CODING_STANDARDS.md into `checkout.path`, a task checkout the `world` fixture "
+        "makes under tmp_path; the path arrives through that fixture",
     ),
-    Allowance("tests/test_cli.py", "BRIEF.md", "writes BRIEF.md into a tmp_path product"),
+    Allowance(
+        "tests/test_cli.py",
+        "BRIEF.md",
+        "writes BRIEF.md into the product made by the `product(tmp_path, ...)` helper; the path "
+        "arrives through that helper",
+    ),
     Allowance(
         "tests/test_affected_tests.py",
         ".agentic/playbooks/*",
         "names these paths in the allowances above; it never opens them",
     ),
     Allowance(
-        "tests/test_reflect_records.py",
-        ".agentic/playbooks/*",
-        "writes the playbook files under a tmp_path root, the same names as the repo's",
-    ),
-    Allowance(
-        "tests/core/process/application/test_run_role.py",
-        ".agentic/playbooks/*",
-        "writes playbook summaries under a tmp_path checkout, the same names as the repo's",
-    ),
-    Allowance(
         "tests/test_affected_tests.py",
         "langgraph.json",
-        "writes a langgraph.json into a throwaway repo to provoke a refusal",
+        "writes a langgraph.json into the repo of the `repo` fixture (above), which makes it under "
+        "tmp_path; the path arrives through that fixture",
     ),
     Allowance(
         "tests/test_affected_tests.py",
@@ -512,11 +496,6 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "tests/test_affected_tests.py",
         "observability/collector/otel-collector.yaml",
         "names the path in the assertion that the guard rejects an uncovered read",
-    ),
-    Allowance(
-        "tests/test_stack.py",
-        "agentic/core/knowledge/domain/*",
-        "reads the repo-root CODING_STANDARDS.md, not the package default of the same name",
     ),
     Allowance(
         "tests/test_affected_tests.py",
@@ -553,8 +532,8 @@ ALLOWANCES: tuple[Allowance, ...] = (
         Allowance(
             test,
             path,
-            "names the owner file in strings or builds it under `tmp_path`; it never reads "
-            "the real one",
+            "names the owner file in strings and in the keys of a fake; it never reads the real "
+            "one",
         )
         for test in (
             "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
@@ -567,6 +546,8 @@ ALLOWANCES: tuple[Allowance, ...] = (
             "tests/test_affected_tests.py",
         )
         for path in ("docs/decisiones-del-dueño.md", "docs/orquestacion.md")
+        if (test, path)
+        != ("tests/core/process/application/test_preflight.py", "docs/orquestacion.md")
     ),
 )
 
@@ -636,9 +617,203 @@ def _assignments(tree: ast.Module) -> tuple[dict[str, list[str]], set[str]]:
     return names, rooted
 
 
+class _Origins:
+    """Which expressions of a module are derived from a temporary directory: `tmp_path` and
+    its siblings, and `tempfile`. A name is temporary only if every binding of it in its own
+    function scope is a temporary expression; one other binding unmarks it. A name the scope
+    does not bind is looked up in the enclosing scopes, then the module. A name a function
+    receives is temporary only when it is called as one of the sources: what a test passes
+    to a helper is not seen (the allowances name those helpers)."""
+
+    def __init__(self, tree: ast.Module) -> None:
+        self.nodes = list(ast.walk(tree))
+        self.parents = {id(c): n for n in self.nodes for c in ast.iter_child_nodes(n)}
+        self.tempfile_modules = {"tempfile"}
+        self.tempfile_calls: set[str] = set()
+        self.bindings: dict[tuple[int, str], list[ast.expr | bool]] = {}
+        self.deciding: set[tuple[int, str]] = set()
+        self.decided: dict[tuple[int, str], bool] = {}
+        self.tree = tree
+        taken: set[int] = set()
+        for node in self.nodes:
+            self._import(node)
+            self._bind(node, taken)
+        for node in self.nodes:
+            if (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Store)
+                and id(node) not in taken
+            ):
+                self._add(node, node.id, False)
+
+    def _import(self, node: ast.AST) -> None:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "tempfile":
+                    self.tempfile_modules.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "tempfile":
+            for alias in node.names:
+                if alias.name in TEMPFILE_CALLS:
+                    self.tempfile_calls.add(alias.asname or alias.name)
+
+    def scope(self, node: ast.AST) -> ast.AST:
+        """The innermost function or lambda around the node, else the module. A class body
+        and a comprehension bind in the function that holds them."""
+        parent = self.parents.get(id(node))
+        while parent is not None and not isinstance(parent, SCOPES):
+            parent = self.parents.get(id(parent))
+        return parent if parent is not None else self.tree
+
+    def _add(self, node: ast.AST, name: str, value: ast.expr | bool) -> None:
+        self.bindings.setdefault((id(self.scope(node)), name), []).append(value)
+
+    def _target(self, target: ast.expr, value: ast.expr | bool, taken: set[int]) -> None:
+        if isinstance(target, ast.Name):
+            taken.add(id(target))
+            self._add(target, target.id, value)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            paired = (
+                isinstance(value, (ast.Tuple, ast.List))
+                and len(value.elts) == len(target.elts)
+                and not any(isinstance(e, ast.Starred) for e in (*value.elts, *target.elts))
+            )
+            for index, element in enumerate(target.elts):
+                item = (
+                    value.elts[index]
+                    if paired and isinstance(value, (ast.Tuple, ast.List))
+                    else False
+                )
+                self._target(element, item, taken)
+
+    def _bind(self, node: ast.AST, taken: set[int]) -> None:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                self._target(target, node.value, taken)
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            self._target(node.target, node.value, taken)
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            self._target(node.target, node.iter, taken)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            self._target(node.optional_vars, node.context_expr, taken)
+        elif isinstance(node, ast.arg):
+            self._add(node, node.arg, node.arg in TEMP_NAMES)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            self._add(node, node.name, False)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            self._add(node, node.name, False)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                self._add(node, (alias.asname or alias.name).split(".")[0], False)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            self._add(node, node.name, False)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            self._add(node, node.rest, False)
+
+    def _name(self, node: ast.Name) -> bool:
+        scope = self.scope(node)
+        while True:
+            key = (id(scope), node.id)
+            if key in self.bindings:
+                return self._decide(key)
+            if scope is self.tree:
+                return node.id in TEMP_NAMES
+            scope = self.scope(scope)
+
+    def _decide(self, key: tuple[int, str]) -> bool:
+        if key in self.decided:
+            return self.decided[key]
+        if key in self.deciding:
+            return False  # a name built on itself is not proven temporary
+        self.deciding.add(key)
+        verdict = all(
+            value if isinstance(value, bool) else self.temporary(value)
+            for value in self.bindings[key]
+        )
+        self.deciding.discard(key)
+        self.decided[key] = verdict
+        return verdict
+
+    def _tempfile_call(self, node: ast.Call) -> bool:
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id in self.tempfile_calls
+        return (
+            isinstance(func, ast.Attribute)
+            and func.attr in TEMPFILE_CALLS
+            and isinstance(func.value, ast.Name)
+            and func.value.id in self.tempfile_modules
+        )
+
+    def temporary(self, node: ast.AST) -> bool:
+        """Whether the expression is a path (or the paths of a walk) under a temporary
+        directory: the leftmost operand of the path spine is one."""
+        if isinstance(node, ast.Name):
+            return self._name(node)
+        if isinstance(node, ast.BinOp):
+            return isinstance(node.op, ast.Div) and self.temporary(node.left)
+        if isinstance(node, ast.Attribute):
+            return node.attr in {"parent", "parents", "name"} and self.temporary(node.value)
+        if isinstance(node, ast.Subscript):
+            return self.temporary(node.value)
+        if isinstance(node, (ast.Tuple, ast.List)):
+            return bool(node.elts) and all(self.temporary(e) for e in node.elts)
+        if isinstance(node, ast.IfExp):
+            return self.temporary(node.body) and self.temporary(node.orelse)
+        if isinstance(node, ast.Call):
+            func = node.func
+            if self._tempfile_call(node):
+                return True
+            if isinstance(func, ast.Name) and func.id == "Path":
+                return bool(node.args) and self.temporary(node.args[0])
+            if isinstance(func, ast.Name) and func.id in PATH_WRAPPERS:
+                return bool(node.args) and self.temporary(node.args[0])
+            if isinstance(func, ast.Attribute):
+                spine = PATH_KEEPERS | PATH_WALKS | {"joinpath"}
+                return func.attr in spine and self.temporary(func.value)
+        return False
+
+
+def _spine(node: ast.AST, skip: set[int]) -> None:
+    """Add the nodes of a path expression's spine to `skip`: the same cases `_chain`
+    follows, and no other (a call argument or an attribute like `.name` ends it)."""
+    skip.add(id(node))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        _spine(node.left, skip)
+        _spine(node.right, skip)
+    elif isinstance(node, ast.JoinedStr):
+        skip.update(id(v) for v in node.values if isinstance(v, ast.Constant))
+    elif isinstance(node, ast.Attribute) and node.attr in {"parent", "parents"}:
+        _spine(node.value, skip)
+    elif isinstance(node, ast.Subscript):
+        _spine(node.value, skip)
+    elif isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "Path":
+            for arg in node.args:
+                _spine(arg, skip)
+        elif isinstance(func, ast.Attribute) and func.attr in PATH_KEEPERS | PATH_WALKS:
+            _spine(func.value, skip)
+        elif isinstance(func, ast.Attribute) and func.attr == "joinpath":
+            _spine(func.value, skip)
+            for arg in node.args:
+                _spine(arg, skip)
+
+
+def _temporary_spines(tree: ast.Module) -> set[int]:
+    """The ids of every node that lies on the path spine of a temporary expression: it
+    names a place under a temporary directory, never a repo file."""
+    origins = _Origins(tree)
+    skip: set[int] = set()
+    for node in origins.nodes:
+        if isinstance(node, ast.expr) and id(node) not in skip and origins.temporary(node):
+            _spine(node, skip)
+    return skip
+
+
 def _evidence(test: str, tree: ast.Module) -> set[Evidence]:
     names, rooted = _assignments(tree)
     found: set[Evidence] = set()
+    skip = _temporary_spines(tree)
     inner_divs = {
         id(child)
         for node in ast.walk(tree)
@@ -653,6 +828,8 @@ def _evidence(test: str, tree: ast.Module) -> set[Evidence]:
             found.add(Evidence(test, "/".join(chain), scan, recursive))
 
     for node in ast.walk(tree):
+        if id(node) in skip:
+            continue
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             text = node.value
             plain = not any(c in text for c in " \n{}")
@@ -759,19 +936,32 @@ def _uncovered(
     table: tuple,
     allowances: tuple,
     found,
+    memo: dict[str, dict] | None = None,
 ) -> list[tuple[str, str]]:
     """(test, file read) for every repo file a test reads that nothing covers: not a
     fallback glob, not a table row listing the test, not the import closure, not a named
-    allowance."""
+    allowance. `memo` keeps what does not depend on the allowances (the closures of the
+    graph) between calls that share `found` and `table`."""
     missing: set[tuple[str, str]] = set()
-    for source, path, _ in reads:
-        for test in _readers(source, found):
+    cache = {} if memo is None else memo
+    targets: dict[int, set[str]] = cache.setdefault("targets", {})
+    closure: dict[str, set[str]] = cache.setdefault("closure", {})
+    readers: dict[str, set[str]] = cache.setdefault("readers", {})
+    for source, path in sorted({(s, p) for s, p, _ in reads}):
+        if source not in readers:
+            readers[source] = _readers(source, found)
+        for test in readers[source]:
             rows = [row for row in table if script.matches(row.glob, path)]
             module = script.module_name(path)
+            for row in rows:
+                if id(row) not in targets:
+                    targets[id(row)] = script.targets_of(row, found)
+            if module not in closure and script.in_graph(path):
+                closure[module] = script.reaching([module], found)
             covered = (
                 any(script.matches(glob, path) for glob in fallback)
-                or any(test in script.targets_of(row, found) for row in rows)
-                or (script.in_graph(path) and test in script.reaching([module], found))
+                or any(test in targets[id(row)] for row in rows)
+                or (script.in_graph(path) and test in closure[module])
                 or any(
                     script.matches(a.test, source) and script.matches(a.path, path)
                     for a in allowances
@@ -780,6 +970,33 @@ def _uncovered(
             if not covered:
                 missing.add((test, path))
     return sorted(missing)
+
+
+def _dead_allowances(
+    reads: list[tuple[str, str, str]],
+    fallback: tuple[str, ...],
+    table: tuple,
+    allowances: tuple[Allowance, ...],
+    found,
+) -> list[Allowance]:
+    """The allowances that cover nothing: walking them in order, one is dead when taking it
+    out of those still standing leaves `_uncovered` as it is, and a dead one is out for the
+    rest of the walk. Of two that cover the same pair, the first is the one reported."""
+    # Only a read nothing else covers can need an allowance, so the walk replays just those
+    # through `_uncovered`: the answer is the one it gives for every read, in a fraction of
+    # the time.
+    memo: dict[str, dict] = {}
+    open_pairs = set(_uncovered(reads, fallback, table, (), found, memo))
+    reads = [r for r in reads if any((t, r[1]) in open_pairs for t in memo["readers"][r[0]])]
+    alive = list(range(len(allowances)))
+    baseline = _uncovered(reads, fallback, table, allowances, found, memo)
+    dead: list[Allowance] = []
+    for index, allowance in enumerate(allowances):
+        rest = tuple(allowances[i] for i in alive if i != index)
+        if _uncovered(reads, fallback, table, rest, found, memo) == baseline:
+            alive.remove(index)
+            dead.append(allowance)
+    return dead
 
 
 def _declared_fallback() -> tuple[str, ...]:
@@ -832,6 +1049,14 @@ def test_every_repo_file_a_test_reads_is_covered_on_the_real_tree(real):
     )
 
 
+def test_no_allowance_is_dead_on_the_real_tree(real):
+    _, reads, found = real
+    dead = _dead_allowances(reads, _fallback(), script.TABLE, ALLOWANCES, found)
+    assert dead == [], "these allowances cover nothing any more, remove them:\n" + "\n".join(
+        f"{a.test} {a.path} -- {a.reason}" for a in dead
+    )
+
+
 def test_the_guard_rejects_a_read_nothing_covers(real):
     _, reads, found = real
     uncovered = _uncovered(reads, _fallback(), (), (), found)
@@ -861,6 +1086,177 @@ def test_the_evidence_finds_a_read_through_an_anchor_a_literal_and_a_walk():
     assert ("docs/x.md", None) in found
     assert ("observability/y.yaml", None) in found
     assert ("agentic", "*.py") in found
+
+
+def _parts(source: str) -> set[str]:
+    return {e.parts for e in _evidence("tests/test_x.py", ast.parse(source))}
+
+
+def test_a_tmp_path_expression_leaves_no_evidence_not_even_its_literal():
+    # the shape of tests/core/process/adapters/filesystem/test_prompts.py:84
+    source = (
+        "def test_a(tmp_path):\n"
+        "    (tmp_path / '.agentic/playbooks/summaries/10.md').write_text('x')\n"
+        "    assert (tmp_path / 'docs/x.md').exists()\n"
+    )
+    assert _evidence("tests/test_x.py", ast.parse(source)) == set()
+
+
+def test_a_tmp_path_read_is_not_matched_to_the_repo_file_of_the_same_name():
+    tracked = [".agentic/playbooks/summaries/10.md"]
+    found = script.graph({"tests/test_x.py": ""})
+    source = (
+        "def test_a(tmp_path):\n    (tmp_path / '.agentic/playbooks/summaries/10.md').read_text()\n"
+    )
+    reads = [
+        ("tests/test_x.py", path, item.parts)
+        for item in _evidence("tests/test_x.py", ast.parse(source))
+        for path in _files_read(item, tracked)
+    ]
+    assert _uncovered(reads, (), (), (), found) == []
+
+
+def test_a_read_anchored_at_the_repo_is_still_reported_when_nothing_covers_it():
+    source = "def test_a():\n    (ROOT / 'docs/x.md').read_text()\n"
+    found = script.graph({"tests/test_x.py": ""})
+    reads = [
+        ("tests/test_x.py", path, item.parts)
+        for item in _evidence("tests/test_x.py", ast.parse(source))
+        for path in _files_read(item, ["docs/x.md"])
+    ]
+    assert _uncovered(reads, (), (), (), found) == [("tests/test_x.py", "docs/x.md")]
+
+
+def test_a_name_bound_from_tmp_path_carries_the_mark_to_what_is_built_on_it():
+    source = (
+        "def test_a(tmp_path):\n    root = tmp_path / 'x'\n    (root / 'docs/x.md').read_text()\n"
+    )
+    assert _parts(source) == set()
+
+
+def test_a_name_the_function_receives_is_not_temporary_even_when_a_test_passes_a_tmp_path():
+    # named residual: `helper(tmp_path)` is a false positive a reasoned allowance covers
+    source = "def helper(root):\n    (root / 'docs/x.md').read_text()\n"
+    assert "docs/x.md" in _parts(source)
+
+
+def test_one_unmarked_binding_of_a_name_in_its_scope_unmarks_it():
+    source = (
+        "def test_a(tmp_path):\n"
+        "    root = tmp_path / 'x'\n"
+        "    root = ROOT\n"
+        "    (root / 'docs/x.md').read_text()\n"
+    )
+    assert "docs/x.md" in _parts(source)
+
+
+def test_a_nested_function_binding_does_not_mark_the_outer_scope_name():
+    source = (
+        "def test_a(tmp_path):\n"
+        "    root = ROOT\n"
+        "    def inner():\n"
+        "        root = tmp_path / 'x'\n"
+        "        return (root / 'docs/inner.md').read_text()\n"
+        "    (root / 'docs/outer.md').read_text()\n"
+    )
+    parts = _parts(source)
+    assert "docs/outer.md" in parts and "docs/inner.md" not in parts
+
+
+def test_a_loop_over_a_repo_root_and_a_tmp_path_is_not_temporary():
+    source = (
+        "def test_a(tmp_path):\n"
+        "    for root in (REPO, tmp_path):\n"
+        "        (root / 'docs/x.md').read_text()\n"
+    )
+    assert "docs/x.md" in _parts(source)
+
+
+def test_a_copy_from_the_repo_to_tmp_path_leaves_only_the_repo_side():
+    source = "def test_a(tmp_path):\n    shutil.copy(REPO / 'docs/x.md', tmp_path / 'docs/x.md')\n"
+    found = _evidence("tests/test_x.py", ast.parse(source))
+    assert [e.parts for e in found] == ["docs/x.md"]
+    assert len(found) == 1
+
+
+def test_a_repo_read_nested_in_a_tmp_path_expression_still_leaves_evidence():
+    source = "def test_a(tmp_path):\n    tmp_path / (ROOT / 'docs/x.md').name\n"
+    assert "docs/x.md" in _parts(source)
+
+
+def test_a_path_under_a_tempfile_directory_leaves_no_evidence():
+    source = (
+        "import tempfile\n"
+        "from pathlib import Path\n"
+        "from tempfile import mkdtemp\n"
+        "def test_a():\n"
+        "    with tempfile.TemporaryDirectory() as d:\n"
+        "        (Path(d) / 'docs/x.md').read_text()\n"
+        "    (Path(mkdtemp()) / 'docs/y.md').read_text()\n"
+    )
+    assert _parts(source) == set()
+
+
+def test_a_glob_over_a_tmp_path_directory_leaves_no_evidence():
+    source = "def test_a(tmp_path):\n    list((tmp_path / 'docs').glob('*.md'))\n"
+    assert _evidence("tests/test_x.py", ast.parse(source)) == set()
+
+
+def test_the_real_tree_keeps_a_read_anchored_at_this_file_s_location(real):
+    _, reads, _ = real
+    assert any(t == "tests/test_adr_numbers.py" and p.startswith("docs/adr/") for t, p, _ in reads)
+
+
+def _table(glob: str, *targets: str) -> tuple:
+    return (script.Row(glob, targets, "covers it"),)
+
+
+def _dead(allowances: tuple[Allowance, ...], table: tuple = ()) -> list[Allowance]:
+    reads = [("tests/test_x.py", "docs/x.md", "docs/x.md")]
+    found = script.graph({"tests/test_x.py": ""})
+    return _dead_allowances(reads, (), table, allowances, found)
+
+
+def test_an_allowance_over_a_read_a_table_row_covers_is_dead():
+    named = Allowance("tests/test_x.py", "docs/x.md", "names it")
+    assert _dead((named,), _table("docs/x.md", "tests/test_x.py")) == [named]
+
+
+def test_the_only_cover_of_a_read_is_not_dead():
+    named = Allowance("tests/test_x.py", "docs/x.md", "names it")
+    assert _dead((named,)) == []
+
+
+def test_of_two_allowances_over_the_same_pair_only_the_first_is_dead():
+    first = Allowance("tests/test_x.py", "docs/x.md", "names it")
+    second = Allowance("tests/test_x.py", "docs/*", "names the glob")
+    assert _dead((first, second)) == [first]
+
+
+def test_an_allowance_over_a_pair_no_test_reads_is_dead():
+    other = Allowance("tests/test_x.py", "docs/y.md", "names another page")
+    assert _dead((other,)) == [other]
+
+
+def test_removing_every_dead_allowance_leaves_the_uncovered_reads_unchanged():
+    reads = [
+        ("tests/test_x.py", "docs/x.md", "docs/x.md"),
+        ("tests/test_x.py", "docs/y.md", "docs/y.md"),
+    ]
+    found = script.graph({"tests/test_x.py": ""})
+    table = _table("docs/x.md", "tests/test_x.py")
+    allowances = (
+        Allowance("tests/test_x.py", "docs/x.md", "table covers it"),
+        Allowance("tests/test_x.py", "docs/y.md", "the glob after it covers y as well"),
+        Allowance("tests/test_x.py", "docs/*", "the last cover of y"),
+        Allowance("tests/test_x.py", "docs/z.md", "nothing reads it"),
+    )
+    dead = _dead_allowances(reads, (), table, allowances, found)
+    kept = tuple(a for a in allowances if a not in dead)
+    assert _uncovered(reads, (), table, kept, found) == _uncovered(
+        reads, (), table, allowances, found
+    )
+    assert dead == [allowances[0], allowances[1], allowances[3]]
 
 
 # Rows whose glob legitimately reaches paths the fallback also matches: a `.py` under the
