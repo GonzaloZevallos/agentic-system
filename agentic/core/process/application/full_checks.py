@@ -15,7 +15,11 @@ and nothing else, and the fan-in goes on.
 A product that declares `ci:` (GH-376) does not run the suite here: the integrated head is
 published to its own ref (`rules.ci_ref`) and the node waits for the declared jobs on exactly
 that head (`ci.full_tier_verdict`), recording their verdict. Any way the CI cannot be used
-runs the local tier above instead, and the record and the section say why."""
+runs the local tier above instead, and the record and the section say why.
+
+In that fallback a check that timed out and that the stack maps to a CI job (`ci_covers`, GH-453)
+is deferred when `presubmit.deferred_verdict` says so: its row is marked `deferred`, it is no
+failure and no pass, and the merge asks that job for the verdict."""
 
 from __future__ import annotations
 

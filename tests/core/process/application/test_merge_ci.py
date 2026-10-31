@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agentic.core.process.application import landing_plan, merge
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.ports import CommandResult, Upstream
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
 from agentic.core.process.domain.presubmit import CiCover
 from tests.core.process.application.test_poll import _cfg
@@ -428,3 +428,16 @@ def test_a_deferred_check_the_stack_no_longer_covers_is_uncovered(tmp_path):
     _run(ports, tmp_path)
 
     assert ports.commands.ran
+
+
+@pytest.mark.parametrize("jobs", [(_check("e2e", "SKIPPED", run=2),), ()])
+def test_an_uncovered_deferral_whose_local_rerun_times_out_never_merges(tmp_path, jobs):
+    ports = _deferring(_report(_check(), *jobs))
+    ports.commands.queues["run tests"] = [CommandResult(-9, "  ✓ 217 [mobile] last\n", True)]
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind != "merged"
+    assert ports.tracker.merge_calls == []
+    assert _doc(ports).get("auto_merge_via") != "ci"
+    assert _doc(ports)["merge_checks"]["passed"] is False
