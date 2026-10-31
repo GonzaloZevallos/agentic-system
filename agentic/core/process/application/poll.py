@@ -829,12 +829,14 @@ def gather_merges(
                     lands.append(rules.LandCandidate(number, kind))
                 elif decision.reason == "not_ready" and (
                     landing_rules.resume_owed(raw, now)
+                    or landing_rules.landing_pass(raw) == "unstarted"
                     or landing_plan.stranded_now(ports, task_id, raw)
                 ):
                     # A `not_ready` task whose reopened pass lost its resume child owes
                     # one: `land` respawns it (GH-242). So does a stranded diagnose, which
-                    # `land` frees and retries on the calendar (GH-257). No step: it can
-                    # spend a model, so it counts.
+                    # `land` frees and retries on the calendar (GH-257), and a pass recorded
+                    # whose executor never reopened anything (`unstarted`, GH-450): `land`
+                    # runs it on the same entry. No step: it can spend a model, so it counts.
                     lands.append(rules.LandCandidate(number, landing_rules.run_kind_of(None, None)))
         else:
             found.append(number)

@@ -2648,9 +2648,11 @@ def run_ended(status: Status) -> bool:
 def resumed_status(state: TaskState) -> Status:
     """The status the task had before the escalation overwrote it, derived from what the
     state holds, since the document keeps only `waiting_on_human` too."""
-    if state.get("pull_request") and not landing_open(state):
-        # An owed publication is not delivered yet: `deliver` is what sets the end status.
-        return "developing" if _publication_owed(state) else "ready_for_review"
+    if state.get("pull_request"):
+        # An owed publication is not delivered yet (`deliver` sets the end status), and a
+        # landing pass a run must continue is not an end either (GH-450).
+        owed = _publication_owed(state) or landing_pass_live(state)
+        return "developing" if owed else "ready_for_review"
     if state.get("status") == "discarded":
         # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
         # (a diagnosis, PM's ruling) would otherwise read as a definition ready to plan.
@@ -2939,6 +2941,44 @@ def landing_open(state: TaskState) -> bool:
     )
 
 
+STAGE_REOPENING_STEPS: frozenset[str] = frozenset(
+    {"fix", "fix_important", "sync_master", "re_review", "renumber"}
+)
+"""The `landing` steps that reopen the stage under the pull request (GH-450): a Developer pass
+on the units, an upstream merge, a re-review, a renumbering. A kill after the units finished
+leaves every unit `approved` and the entry open; `landing_pass` reads that from this set. Lives
+here because `domain.landing` imports this module; the domain table test classifies every
+`LandingStepKind` as in it or not."""
+
+LandingPass = Literal["reopened", "unfinished", "unstarted"]
+
+
+def landing_pass(state: TaskState) -> LandingPass | None:
+    """What a landing pass on a pull-request task is (GH-450), from the last live entry when
+    it is open, not `before_pr`, and the task has a `pull_request`; `None` otherwise.
+    `reopened`: some unit is `returned`, `pending` or `delivered` (`landing_open`).
+    `unfinished`: a stage-reopening step with `cost_base` (the executor ran) and every unit
+    approved: the units finished, the stage above them (fan-in, full checks, deliver) was cut.
+    `unstarted`: the same without `cost_base`: the entry was written and nothing reopened.
+    The one place that decides it; no caller rebuilds it from `landing_open` and another test."""
+    if not state.get("pull_request"):
+        return None
+    if landing_open(state):
+        return "reopened"
+    entries = live_landing(state)
+    if not entries or entry_closed(entries[-1]) or before_pr(entries[-1]):
+        return None
+    last = entries[-1]
+    if last.get("step") not in STAGE_REOPENING_STEPS or not all_approved(state):
+        return None
+    return "unfinished" if last.get("cost_base") is not None else "unstarted"
+
+
+def landing_pass_live(state: TaskState) -> bool:
+    """A landing pass whose work a run must continue (GH-450): `reopened` or `unfinished`."""
+    return landing_pass(state) in ("reopened", "unfinished")
+
+
 def approved_head(state: TaskState) -> str | None:
     """The head the task may publish (GH-373): the one its last review approved, or the
     close-time capability commit made right on top of it (`head_reviewed`). On a tiered
@@ -3004,8 +3044,11 @@ def resume_target(state: TaskState) -> str | None:
     still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`."""
     if state.get("escalated"):
         return None
-    if state.get("pull_request") and not landing_open(state):
-        return "deliver" if _publication_owed(state) else None
+    if state.get("pull_request"):
+        if _publication_owed(state):
+            return "deliver"
+        if not landing_pass_live(state):
+            return None
     if state.get("status") == "split":
         return None  # an end like a pull request: the parts are other tasks now
     if state.get("status") == "tracker_only":

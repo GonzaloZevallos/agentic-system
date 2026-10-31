@@ -19,7 +19,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
-from ..domain.rules import RunKind
+from ..domain.rules import RunKind, all_approved
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
@@ -233,7 +233,11 @@ def _land(
         landing_fix.escalate_failed_diagnosis(context)
         return LandResult("dispatched", step=step.kind)
     if resumed is None and landing_rules.already_dispatched(
-        landing_plan.live_entries(current), head, step.kind, master
+        landing_plan.live_entries(current),
+        head,
+        step.kind,
+        master,
+        approved=all_approved(current),
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -297,7 +301,9 @@ def _land(
                 f"agentic: land: {task_id}: {head} {step.kind}: "
                 "escalation released by a human decision"
             )
-    elif resumed is None:
+    elif resumed is None and not _is_unstarted_entry(current, head, step.kind):
+        # An `unstarted` pass (GH-450) keeps its entry: the executor stamps it, no pass is
+        # counted twice.
         ports.documents.record_closure(
             task_id, {"landing": [*landing_plan.all_entries(current), entry]}
         )
@@ -325,6 +331,17 @@ def _land(
         log(f"agentic: land: {task_id}: {head} {step.kind}: git failed: {exc}")
         return LandResult("stopped", f"git_error: {exc}", step.kind)
     return LandResult("dispatched", step=step.kind)
+
+
+def _is_unstarted_entry(document: TaskState, head: str, kind: LandingStepKind) -> bool:
+    """The last live `landing` entry is the `unstarted` pass (`rules.landing_pass`, GH-450)
+    keyed `(head, kind)`: the step reuses it instead of appending a second one."""
+    entries = landing_plan.live_entries(document)
+    return (
+        landing_rules.landing_pass(document) == "unstarted"
+        and entries[-1].get("head") == head
+        and entries[-1].get("step") == kind
+    )
 
 
 _WAITING_ON: dict[landing_plan.ReleaseWhy, tuple[str, str]] = {
@@ -486,7 +503,7 @@ def _recover(
         return LandResult("dispatched", step=step)
     spent = last.get("resume_spawns", 0)
     if (
-        landing_rules.landing_open(raw)
+        landing_rules.landing_pass_live(raw)
         and not raw.get("escalated")
         and isinstance(spent, int)
         and spent >= landing_rules.LANDING_RESUME_SPAWNS_MAX
