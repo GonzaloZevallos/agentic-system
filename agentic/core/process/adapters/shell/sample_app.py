@@ -17,8 +17,9 @@ from pathlib import Path
 
 from agentic.shared.environment import without_own_configuration, without_own_toolchain
 
-from ...application.ports import SampleAppHandle
-from ...domain.design import SAMPLE_APP_READY_S
+from ...application.ports import LoadReader, SampleAppHandle
+from ...domain.design import SAMPLE_APP_READY_S, NotReady
+from .load_reader import ShellLoadReader
 
 # How long to wait for a killed process's last output to drain, same budget
 # `ShellCommands.run` gives a timed-out check.
@@ -31,7 +32,10 @@ _SETTLE_S = 0.5
 
 
 class ShellSampleApp:
-    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
+    def __init__(self, load: LoadReader | None = None) -> None:
+        self._load = load or ShellLoadReader()
+
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | NotReady | str:
         process = subprocess.Popen(
             ["bash", "-c", command],
             cwd=cwd,
@@ -72,10 +76,13 @@ class ShellSampleApp:
         exit_code = process.poll()  # before `_kill`: once killed, every exit reads -9
         if exit_code is None and printed:
             return SampleAppHandle(lines=printed, token=process)
+        load = self._load.one_minute()
         self._kill(process)
+        if exit_code is None:
+            # Still running and silent: the wait lapsed, the command did not fail (GH-451).
+            return NotReady(command, SAMPLE_APP_READY_S, load)
         tail = "\n".join(printed) or "(no output)"
-        detail = "printed nothing in time" if exit_code is None else f"exited {exit_code}"
-        return f"`{command}` {detail}:\n{tail}"
+        return f"`{command}` exited {exit_code}:\n{tail}"
 
     def stop(self, handle: SampleAppHandle) -> None:
         self._kill(handle.token)

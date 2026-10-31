@@ -44,8 +44,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
-from ...application.ports import ProcessReaper, RunStopped, StopFlag
+from ...application.ports import LoadReader, ProcessReaper, RunStopped, StopFlag
 from ...domain import performance, reaping
+from .load_reader import ShellLoadReader
 
 # How long to wait for the output of a command already killed.
 _DRAIN_S = 5.0
@@ -54,10 +55,17 @@ _EXTRA_ENV = ("PERF_VOLUME", "PERF_VOLUME_UNIT")
 
 
 class PerfShellRunner:
-    def __init__(self, product_key: str, reaper: ProcessReaper, stop: StopFlag) -> None:
+    def __init__(
+        self,
+        product_key: str,
+        reaper: ProcessReaper,
+        stop: StopFlag,
+        load: LoadReader | None = None,
+    ) -> None:
         self._product = product_key
         self._reaper = reaper
         self._stop = stop
+        self._load = load or ShellLoadReader()
 
     def run(
         self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
@@ -71,7 +79,7 @@ class PerfShellRunner:
         process: subprocess.Popen[str] | None = None
         try:
             env = self._environment(checkout, scratch, extra_env, token)
-            before = _load()
+            before = self._load.one_minute()
             process = subprocess.Popen(
                 ["bash", "-c", command],
                 cwd=checkout,
@@ -93,11 +101,17 @@ class PerfShellRunner:
                 self._kill_and_drain(process, token, checkout)
                 if self._stop.is_set():
                     raise RunStopped from None
-                return performance.Run(None, process.returncode or -1, True, before, _load())
+                return performance.Run(
+                    None, process.returncode or -1, True, before, self._load.one_minute()
+                )
             if self._stop.is_set():
                 raise RunStopped
             return performance.Run(
-                performance.parse_line(output or ""), process.returncode, False, before, _load()
+                performance.parse_line(output or ""),
+                process.returncode,
+                False,
+                before,
+                self._load.one_minute(),
             )
         finally:
             if process is not None:
@@ -151,10 +165,3 @@ class PerfShellRunner:
 def _kill_group(pgid: int) -> None:
     with contextlib.suppress(ProcessLookupError):  # it ended before the kill
         os.killpg(pgid, signal.SIGKILL)
-
-
-def _load() -> float | None:
-    try:
-        return os.getloadavg()[0]
-    except OSError:
-        return None

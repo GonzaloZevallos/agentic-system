@@ -3,8 +3,16 @@ the sample app PM's early final validation walks (ADR-0040), and the reaper of w
 a role left running (ADR-0052)."""
 
 from .commands import ShellCommands
+from .load_reader import ShellLoadReader
 from .reaper import ShellReaper
 from .sample_app import ShellSampleApp
 from .stop import EventStopFlag, NullStopFlag
 
-__all__ = ["EventStopFlag", "NullStopFlag", "ShellCommands", "ShellReaper", "ShellSampleApp"]
+__all__ = [
+    "EventStopFlag",
+    "NullStopFlag",
+    "ShellCommands",
+    "ShellLoadReader",
+    "ShellReaper",
+    "ShellSampleApp",
+]

@@ -15,6 +15,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__UpstreamMerge["UpstreamMerge"]
     class ports__Workspace["Workspace"]
     class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
     class preflight__ScratchInARepository["ScratchInARepository"]

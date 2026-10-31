@@ -110,6 +110,12 @@ class CheckRun:
     refused: str | None = None
     unrecorded: str | None = None
     witness: str | None = None
+    # Set for a verification and for a check whose product declared a `not_ready_exit`
+    # (GH-451); None for every other check, whose reply is what it always was.
+    outcome: Outcome | None = None
+    load_before: float | None = None
+    load_after: float | None = None
+    cores: int | None = None
 
 
 def unknown_check(name: str, declared: Sequence[str]) -> str:
@@ -153,15 +159,26 @@ def unrecorded_reason(
     return None
 
 
+def _load(figure: float | None) -> str:
+    return "unknown" if figure is None else f"{figure:.1f}"
+
+
 def render(run: CheckRun) -> str:
     """The reply the model reads: every figure is the system's."""
     if run.refused is not None:
         return run.refused
-    lines = [
-        f"check: {run.name}",
-        f"passed: {'yes' if run.passed else 'no'}",
-        f"reused: {'yes' if run.reused else 'no'}",
-    ]
+    lines = [f"check: {run.name}"]
+    if run.outcome is not None:
+        lines.append(f"outcome: {run.outcome}")
+    # A machine too loaded to say is never reported as a red (invariant of GH-451).
+    if run.outcome not in (Outcome.NOT_READY, Outcome.UNVERIFIED):
+        lines.append(f"passed: {'yes' if run.passed else 'no'}")
+    lines.append(f"reused: {'yes' if run.reused else 'no'}")
+    if run.cores is not None:
+        lines.append(
+            f"load before: {_load(run.load_before)}, after: {_load(run.load_after)}, "
+            f"cores: {run.cores}"
+        )
     if run.witness is not None:
         lines.append(f"witness: {run.witness}")
     if run.unrecorded is not None:

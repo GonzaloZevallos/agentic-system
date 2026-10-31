@@ -22,6 +22,7 @@ classDiagram
     class perf__PerfRefused["PerfRefused"]
     class perf__Report["Report"]
     class presubmit__CheckoutPresubmit["CheckoutPresubmit"]
+    class presubmit__Readiness["Readiness"]
     class presubmit__Reuse["Reuse"]
     class run_check__RunCheck["RunCheck"]
     class schema_guard__RoleSchemaGuard["RoleSchemaGuard"]
@@ -32,3 +33,4 @@ classDiagram
 
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`
+  - `presubmit.Readiness` se asocia con `ports.LoadReader`

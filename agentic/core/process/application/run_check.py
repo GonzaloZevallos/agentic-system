@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from typing import Any
 
-from ..domain import run_check
+from ..domain import presubmit, run_check
 from ..domain.presubmit import CheckResult, tail
 from ..domain.run_check import CheckRun, Outcome, Verification, VerificationCall, resolve_wall
 from .presubmit import CheckoutPresubmit
@@ -118,14 +119,20 @@ class RunCheck:
         # (ADR-0070): without one a `{workers}` in the command would reach the shell as text.
         # Its place in the queue is its own, apart from the delivery gate's.
         with gate._share(fresh=True):
-            before = self._read_load() if verification is not None else None
+            # A command with a `not_ready_exit` has its load read by the gate's classification
+            # (in the row); one read of ours would only repeat it.
+            measured = verification is not None and not self._classified(name)
+            before = self._read_load() if measured else None
             # The witness runs before the check, in this same call: its agreement is what
             # lets the pass be stored. A disagreement does not stop the check, as at the gate.
             witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
             row = gate._run(name, command)
-            after = self._read_load() if verification is not None else None
+            after = self._read_load() if measured else None
+            outcome: Outcome | None = None
+            if self._classified(name):
+                row, outcome = self._settle(name, command, row)
         if verification is not None:
-            return self._verified(name, row, witness_reason, (before, after))
+            return self._verified(name, row, witness_reason, outcome, (before, after))
         passed, reused = row["passed"], bool(row.get("reused", False))
         key = gate._key(name, command)
         store = gate.ports.check_results
@@ -158,33 +165,64 @@ class RunCheck:
             duration_s=row.get("duration_s", 0.0),
             unrecorded=reason,
             witness=self._witness_line(witness_reason),
+            **self._readiness_fields(row, outcome),
         )
 
+    def _classified(self, name: str) -> bool:
+        ready = self.gate.readiness
+        return ready is not None and name in ready.exits
+
     def _read_load(self) -> float | None:
-        return self._load() if self._load is not None else None
+        """The load for the evidence line: the reader the caller gave, else the readiness
+        reader the gate classifies with (the `LoadReader` port, the only `getloadavg`)."""
+        if self._load is not None:
+            return self._load()
+        ready = self.gate.readiness
+        return ready.load.one_minute() if ready is not None else None
 
     def evidence(self) -> str | None:
         """The block of the verification calls for the Developer's section; None when there
         were none, so a delivery that ran no verification writes the section it always did."""
         return run_check.evidence_markdown(self.calls)
 
+    def _settle(
+        self, name: str, command: str, first: CheckResult
+    ) -> tuple[CheckResult, run_check.Outcome]:
+        """What a command with a declared `not_ready_exit` came to. A `not_ready` first row is
+        run once more in this same call, judged by the gate's own `flake_verdict`; the pair is
+        never recorded as a flake. A second `not_ready` is `unverified`: the machine could not
+        say, which is neither a pass nor a red."""
+        if not first.get("not_ready", False):
+            return first, Outcome.PASSED if first["passed"] else Outcome.FAILED
+        again = self.gate._execute(name, command)
+        if presubmit.flake_verdict(first, again) == "flake":
+            return again, Outcome.PASSED
+        return again, Outcome.UNVERIFIED if again.get("not_ready", False) else Outcome.FAILED
+
     def _verified(
         self,
         name: str,
         row: CheckResult,
         witness_reason: str | None,
+        outcome: Outcome | None,
         load: tuple[float | None, float | None],
     ) -> CheckRun:
         """What the system measured of a verification: its row, and never a stored pass. The
-        call is recorded here, with the load read around the run."""
+        call is recorded here, with the load the gate's classification read when the command
+        has a `not_ready_exit` and the load read around the run otherwise."""
+        outcome = outcome or (Outcome.PASSED if row["passed"] else Outcome.FAILED)
+        ready = self.gate.readiness
+        before = row["load_before"] if "load_before" in row else load[0]
+        after = row.get("load_after", load[1]) if "load_before" in row else load[1]
+        cores = self._cores if self._cores is not None else (ready.cores if ready else None)
         self.calls.append(
             VerificationCall(
                 name,
-                Outcome.PASSED if row["passed"] else Outcome.FAILED,
+                outcome,
                 row.get("duration_s", 0.0),
-                load[0],
-                load[1],
-                self._cores,
+                before,
+                after,
+                cores,
                 tail(row["output"]),
             )
         )
@@ -195,7 +233,21 @@ class RunCheck:
             duration_s=row.get("duration_s", 0.0),
             unrecorded=run_check.UNRECORDED_VERIFICATION,
             witness=self._witness_line(witness_reason),
+            **self._readiness_fields(row, outcome),
         )
+
+    def _readiness_fields(self, row: CheckResult, outcome: Outcome | None) -> dict[str, Any]:
+        """The outcome and the load a call measured, for `CheckRun`; empty for a command the
+        product declared no `not_ready_exit` for, so its reply is what it was."""
+        ready = self.gate.readiness
+        fields: dict[str, Any] = {"outcome": outcome}
+        if ready is not None and "load_before" in row:
+            fields |= {
+                "load_before": row["load_before"],
+                "load_after": row.get("load_after"),
+                "cores": ready.cores,
+            }
+        return fields
 
     def _witness_line(self, reason: str | None) -> str | None:
         if self.gate.witness is None:

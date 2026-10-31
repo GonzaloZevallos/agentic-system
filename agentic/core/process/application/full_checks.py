@@ -42,7 +42,7 @@ from ..domain.task import (
 )
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout_in_thread
 from .ports import GitError, Ports
-from .presubmit import CheckoutPresubmit, reuse_of
+from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .run_role import finish
 
 SECTION = "Full checks"
@@ -108,6 +108,7 @@ async def _local_full_checks(
         parallel=ports.stack.parallel_checks(base),
         reuse=reuse_of(ports, base),
         flake_gate="full_checks",
+        readiness=readiness_of(ports, base, cfg.check_cores),
     )
     head = workspace.full_head(task.path)
     started = time.monotonic()

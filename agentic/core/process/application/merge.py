@@ -45,7 +45,7 @@ from .ports import (
     TrackerUnreachable,
     Upstream,
 )
-from .presubmit import CheckoutPresubmit, reuse_of
+from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .release import release_checkout
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
@@ -403,6 +403,7 @@ def run_checks(
                 parallel=ports.stack.parallel_checks(base),
                 reuse=reuse_of(ports, base),
                 flake_gate="merge",
+                readiness=readiness_of(ports, base, cfg.check_cores),
             )
             gate()
     except GitError as exc:

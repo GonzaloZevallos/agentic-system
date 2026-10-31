@@ -42,6 +42,7 @@ from agentic.core.process.application.ports import (
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
+    LoadReader,
     MergeCallFailed,
     OwnerRuleEntry,
     PerfLock,
@@ -71,7 +72,7 @@ from agentic.core.process.domain import rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment, JobLog
-from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
@@ -624,13 +625,13 @@ class MemorySampleApp:
     wants a refusal passes a `str`. `stopped` keeps every handle `stop` was called with,
     in order, so a test can tell the app never outlived the node."""
 
-    def __init__(self, result: SampleAppHandle | str | None = None) -> None:
+    def __init__(self, result: SampleAppHandle | NotReady | str | None = None) -> None:
         default = SampleAppHandle(lines=("Listening on http://localhost:4242",), token=None)
         self.result = result or default
         self.started: list[tuple[str, Path]] = []
         self.stopped: list[SampleAppHandle] = []
 
-    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | NotReady | str:
         self.started.append((command, cwd))
         return self.result
 
@@ -1757,6 +1758,20 @@ class MemoryRunRegistry:
         return waits, list(self.land_wait_notes)
 
 
+class FakeLoadReader:
+    """The machine's load, scripted: each `one_minute` hands back the next figure of `readings`
+    (the last one repeats), so a test says what the load was before and after a command."""
+
+    def __init__(self, *readings: float | None) -> None:
+        self.readings = list(readings) or [0.0]
+        self.reads = 0
+
+    def one_minute(self) -> float | None:
+        index = min(self.reads, len(self.readings) - 1)
+        self.reads += 1
+        return self.readings[index]
+
+
 class FakePerfRunner:
     """GH-318: records each `run` as `(checkout, command, extra_env, timeout_s)` and answers
     the next `Run` of `script`, or a clean empty one; never starts a process. With a `stop` flag
@@ -2109,6 +2124,7 @@ def memory_ports(
     scratch: Scratch | None = None,
     free_space: FreeSpace | None = None,
     ci_logs: CiLogs | None = None,
+    load_reader: LoadReader | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2133,6 +2149,7 @@ def memory_ports(
         scratch=scratch,
         free_space=free_space,
         ci_logs=ci_logs,
+        load_reader=load_reader,
     )
 
 

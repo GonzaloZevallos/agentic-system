@@ -18,7 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, JobLog
-from ..domain.design import Design
+from ..domain.design import Design, NotReady
 from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
@@ -678,10 +678,11 @@ class SampleApp(Protocol):
     adapter starts its own process group and collects output for up to
     `design.SAMPLE_APP_READY_S`; a fake stands in for tests."""
 
-    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
-        """A handle to walk, or a refusal: the last lines of output when the command
-        exited, or did not print anything, before the deadline. Not a role failure --
-        the node writes the refusal into the lead's own section instead."""
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | NotReady | str:
+        """A handle to walk, a refusal (the last lines of output of a command that exited),
+        or `NotReady` when the command was still running but had printed nothing before the
+        deadline: the wait lapsed, the command did not fail (GH-451). Not a role failure --
+        the node writes either into the lead's own section instead."""
         ...
 
     def stop(self, handle: SampleAppHandle) -> None:
@@ -1765,6 +1766,15 @@ class ProcessReaper(Protocol):
         ...
 
 
+class LoadReader(Protocol):
+    """The machine's one-minute load average (GH-451): the one reading `PerfRunner` stamps on
+    a run and `run_check` classifies a `not_ready` by (ADR-0065 addendum)."""
+
+    def one_minute(self) -> float | None:
+        """The one-minute load average, or None where the machine has none."""
+        ...
+
+
 class PerfRunner(Protocol):
     """Runs one `seed`, `measure` or `setup` command of a performance scenario (GH-318,
     ADR-0059) in `checkout`, with `extra_env` on top of a scrubbed environment, and returns
@@ -2030,3 +2040,6 @@ class Ports:
     # The logs of the red jobs of a pull request head, for the Landing Diagnoser (GH-449).
     # `None` reads none and makes no call, which is how every landing ran before it existed.
     ci_logs: CiLogs | None = None
+    # The machine's load average, which classifies a `not_ready` (GH-451). `None` reads no load,
+    # so no exit is ever excused by one: a red stays red.
+    load_reader: LoadReader | None = None
