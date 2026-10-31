@@ -61,6 +61,26 @@ class CiUnreadable:
     cause: Literal["gh_unavailable", "gh_unreadable"]
 
 
+JobLogCause = Literal["read", "unreadable", "empty", "other_head", "timed_out"]
+
+
+@dataclass(frozen=True)
+class JobLog:
+    """What one read of a red job's log gave (GH-449). `cause` is the closed answer: `read`
+    (`text` holds the log, at most the byte cap), `unreadable` (the tool or its answer
+    failed), `empty`, `other_head` (the job belongs to another commit than the one being
+    judged: nothing was downloaded) or `timed_out`. `bytes` is what `text` holds in bytes;
+    `truncated_bytes` what was left unread past the cap and not retained. Never persisted: the
+    text goes to one prompt and nowhere else (invariant 4 of the plan)."""
+
+    job: str
+    link: str
+    text: str
+    bytes: int
+    cause: JobLogCause
+    truncated_bytes: int
+
+
 @dataclass(frozen=True)
 class CiVerdict:
     """`failing` is the red runs of the declared checks, in declared order; `missing` the
@@ -107,6 +127,12 @@ def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     else:
         state = "green"
     return CiVerdict(state, tuple(failing), tuple(missing))
+
+
+def red_checks(report: CiReport) -> tuple[CiCheck, ...]:
+    """Every run of `report` that is red whatever its name, in report order: decided and not
+    green, with the reading of red `ci_state` has. What a log is fetched for (GH-449)."""
+    return tuple(check for check in report.checks if not _pending(check) and not _green(check))
 
 
 def pending_names(report: CiReport, declared: tuple[str, ...]) -> tuple[str, ...]:
