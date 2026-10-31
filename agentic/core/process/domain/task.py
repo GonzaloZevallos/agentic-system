@@ -1026,6 +1026,10 @@ class FullCheckEntry(TypedDict):
     # Seconds the check ran, as `check_durations` summed them (GH-365); absent when the check
     # has no sample (a reused pass, or no result).
     duration_s: NotRequired[float]
+    # True when the check timed out and a gating CI job covers its suite (GH-453): the entry
+    # stays `passed: false`, is no failure and no pass, and the merge asks CI for the verdict.
+    # Absent on every other check and on every record written before it.
+    deferred: NotRequired[bool]
 
 
 class CloseDocs(TypedDict):
@@ -1080,6 +1084,9 @@ class FullChecksRecord(TypedDict):
     ran_on: NotRequired[Literal["ci", "local"]]
     # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
     ci_fallback: NotRequired[FallbackCause]
+    # The checks deferred to CI (GH-453), a declared name each; written only when there is one,
+    # so a record without a deferral is as it always was.
+    deferred: NotRequired[list[str]]
 
 
 class TaskState(TaskInput, total=False):

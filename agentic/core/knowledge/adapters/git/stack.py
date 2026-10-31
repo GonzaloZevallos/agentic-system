@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
@@ -10,7 +11,7 @@ import yaml
 from ....process.domain.design import Design
 from ....process.domain.docs import Docs
 from ....process.domain.performance import Scenario
-from ....process.domain.presubmit import RerunForm
+from ....process.domain.presubmit import CiCover, RerunForm
 from ....process.domain.suppressions import Forbidden
 from ...domain import stack
 
@@ -54,6 +55,10 @@ class GitStack:
     def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
         data, source = self._declaration(revision)
         return stack.rerun_checks(data, source)
+
+    def ci_covers(self, revision: str) -> Mapping[str, CiCover]:
+        data, source = self._declaration(revision)
+        return stack.ci_covers(data, source)
 
     def check_budgets(self, revision: str) -> dict[str, float]:
         data, source = self._declaration(revision)

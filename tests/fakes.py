@@ -75,7 +75,7 @@ from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
-from agentic.core.process.domain.presubmit import CheckResult, RerunForm
+from agentic.core.process.domain.presubmit import CheckResult, CiCover, RerunForm
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -447,6 +447,9 @@ class MemoryStack:
         self.declared_delivery_checks = delivery_checks
         # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
         self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
+        # Empty is a product with no `ci_covers` (GH-453): nothing is ever deferred. A test
+        # sets entries on this mapping.
+        self.declared_ci_covers: dict[str, CiCover] = {}
         # Empty is a product with no check budget (GH-365): every verdict of today.
         self.declared_check_budgets = {} if check_budgets is None else check_budgets
         # Empty is a product that declares no `merge_inert`: the merge gate of today.
@@ -495,6 +498,10 @@ class MemoryStack:
     def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_rerun_checks
+
+    def ci_covers(self, revision: str) -> dict[str, CiCover]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_ci_covers
 
     def check_budgets(self, revision: str) -> dict[str, float]:
         # Not tracked in `revisions` either, `witness`'s own reason.

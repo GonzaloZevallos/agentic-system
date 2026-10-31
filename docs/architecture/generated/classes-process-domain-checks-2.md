@@ -19,7 +19,6 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class coverage__Rejected["Rejected"]
     class performance__Limit["Limit"]
     class performance__Measurement["Measurement"]
     class performance__MetricResult["MetricResult"]
@@ -29,14 +28,10 @@ classDiagram
     class presubmit__AffectedPlan["AffectedPlan"]
     class presubmit__BudgetBreach["BudgetBreach"]
     class presubmit__CheckResult["CheckResult"]
+    class presubmit__CiCover["CiCover"]
     class presubmit__RerunForm["RerunForm"]
     class presubmit__WitnessResult["WitnessResult"]
     class run_check__CheckRun["CheckRun"]
     class suppressions__Forbidden["Forbidden"]
     performance__MetricResult --> performance__Limit
 ```
-
-## Relaciones con otras páginas
-
-- [domain: checks (parte 1)](classes-process-domain-checks-1.md)
-  - `coverage.Rejected` se asocia con `coverage.Refusal`

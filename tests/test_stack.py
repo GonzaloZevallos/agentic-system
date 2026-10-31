@@ -864,6 +864,7 @@ SUB_KEYS = {
     "design": stack.DESIGN_KEYS,
     "performance": stack.PERFORMANCE_KEYS,
     "rerun_checks": stack.RERUN_KEYS,
+    "ci_covers": stack.COVER_KEYS,
 }
 # A valid declaration of each key a default may depend on.
 DECLARED = {"docs": {"generate": "echo hi", "paths": ["docs/generated/**"]}}

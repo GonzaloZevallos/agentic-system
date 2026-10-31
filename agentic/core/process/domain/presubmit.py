@@ -97,6 +97,13 @@ class CheckResult(TypedDict):
     # True on a row whose command hit `check_timeout_s`: a fact, so the rerun rule never
     # reads prose to decide that a timed-out check is not rerun.
     timed_out: NotRequired[bool]
+    # True on a row whose `output` is known not to be the whole of what the command wrote
+    # (GH-453): the system could not drain it after the kill. Set by the system, never by the
+    # model; absent otherwise. A truncated row is never deferred.
+    truncated: NotRequired[bool]
+    # True on a `full_checks` row that timed out while a gating CI job covers its suite
+    # (GH-453): set only through `deferred_verdict`, never stored in the check-result store.
+    deferred: NotRequired[bool]
 
 
 FlakeVerdict = Literal["pass", "flake", "fail"]
@@ -118,6 +125,60 @@ class RerunForm:
 
     command: str
     test_id: str
+
+
+@dataclass(frozen=True)
+class CiCover:
+    """The CI job that runs the same suite as one local check, and the regex of a failed line
+    in that check's output (`ci_covers`, GH-453). Validated when the stack is parsed."""
+
+    job: str
+    failed: str
+
+
+# Why a `full_checks` run that wanted CI ran locally, for the causes a timeout may be deferred
+# on (GH-453): CI produced no verdict for that head (`no_run`, `not_started`) or could not be
+# read (`gh_unavailable`, `gh_unreadable`). Every other cause (`publish_failed`, `untrusted`,
+# or none) keeps a timeout red.
+DEFERRABLE = frozenset({"no_run", "not_started", "gh_unavailable", "gh_unreadable"})
+# The most output a timed-out check may have written and still be deferred. The task documents
+# of apostrophe GH-388 and GH-528 keep only the tail of the web-e2e log, so the whole size is
+# estimated from it: 217 list-reporter lines of at most ~250 bytes, about 55 KB. One MiB is
+# ~20 times that and bounds the scan: more output than this is never judged here.
+DEFER_MAX_BYTES = 1_048_576
+
+
+def deferred_verdict(
+    row: CheckResult, gate: FlakeGate, cause: str | None, cover: CiCover | None
+) -> bool:
+    """Whether a timed-out row is deferred to the CI job that covers its suite (GH-453), the
+    one decision of it: True only at the `full_checks` gate, for a fallback `cause` in
+    `DEFERRABLE`, a check with a `cover`, a row that `timed_out`, whose captured output is
+    whole (not `truncated`), not empty and at most `DEFER_MAX_BYTES`, and none of whose lines
+    matches `cover.failed` (a red test is a red test, wherever in the output it is). It takes
+    no CI report: when it runs, CI gave none for this head. Any doubt, a pattern that does
+    not compile included, is not a deferral."""
+    if gate != "full_checks" or cause not in DEFERRABLE or cover is None:
+        return False
+    if not row.get("timed_out", False) or row.get("truncated", False):
+        return False
+    output = row["output"]
+    if not output.strip() or len(output) > DEFER_MAX_BYTES:
+        return False
+    if len(output.encode("utf-8", "replace")) > DEFER_MAX_BYTES:
+        return False
+    try:
+        failed = re.compile(cover.failed)
+    except re.error:
+        return False
+    return not any(failed.search(line) for line in output.splitlines())
+
+
+def record_passed(rows: Sequence[Mapping[str, object]]) -> bool:
+    """The `passed` of a record (GH-453), the one builder of it: every row passed or is
+    `deferred`. A deferred row is not a failure here, and is never a pass either: it stays
+    `passed: false` on its own entry. With no deferred row it is `all(row["passed"])`."""
+    return all(bool(row.get("passed")) or bool(row.get("deferred")) for row in rows)
 
 
 def flake_verdict(first: CheckResult, rerun: CheckResult | None) -> FlakeVerdict:
@@ -611,7 +672,7 @@ def merge_checks_record(
         failed_step not in _EARLY_STEPS
         and bool(declared)
         and results is not None
-        and all(result["passed"] for result in decided)
+        and record_passed(decided)
         and (witness is None or witness["passed"])
     )
     by_name = {result["name"]: result for result in decided}

@@ -319,3 +319,40 @@ def test_tier_section_says_the_full_suite_reuses_a_pass_only_on_the_developers_o
     assert "reuses your pass only when the integrated tree is yours" in " ".join(
         tier_section(["tests"], ["e2e"]).split()
     )
+
+
+# --- a deferred row is not a failure (GH-453) -----------------------------------------------------
+
+
+def deferred_record(version=3, head=HEAD, failed=()):
+    out = record(head, version=version)
+    out["results"].append({"name": "web-e2e", "passed": False, "deferred": True})
+    out["deferred"] = ["web-e2e"]
+    out["passed"] = not failed
+    for name in failed:
+        out["results"].append({"name": name, "passed": False})
+    return out
+
+
+def test_a_record_whose_only_non_passing_row_is_deferred_returns_nothing():
+    patch = rules.full_checks_return(state(task_head=HEAD), deferred_record(), 3)
+    assert patch == {"full_checks": deferred_record()}
+
+
+def test_a_deferred_row_next_to_a_red_one_returns_only_the_red_one():
+    mixed = deferred_record(failed=("types",))
+    patch = rules.full_checks_return(state(task_head=HEAD), mixed, 3)
+    assert [f["location"] for f in patch["findings"]] == ["full_checks:types"]
+    assert "web-e2e" not in patch["subtasks"]["integration"]["reason"]
+
+
+def test_an_open_row_stays_open_under_a_record_with_a_deferred_row():
+    red = state(task_head=HEAD)
+    red = apply(red, rules.full_checks_return(red, RED, 3))
+    assert statuses(red) == [(2, "open")]
+    deferred = apply(red, rules.full_checks_return(red, deferred_record(version=3), 3))
+    assert rules.full_checks_green_version(deferred) == 0
+    assert statuses(deferred) == [(2, "open")]
+    # The same state under a plain green record does close it: the guard is the deferral.
+    plain = apply(red, {"full_checks": record(MOVED, version=3)})
+    assert statuses(plain) == [(2, "fixed")]

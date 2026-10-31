@@ -609,6 +609,10 @@ class CheckoutPresubmit:
         }
         if result.timed_out:
             row["timed_out"] = True
+        # A timed-out command with nothing captured gives no proof of any test: the note
+        # `said()` adds is not its output, so it counts as lost (GH-453).
+        if result.truncated or (result.timed_out and not result.output.strip()):
+            row["truncated"] = True
         if mode is not None:
             row["mode"] = mode
         return row
