@@ -462,6 +462,7 @@ _SAMPLE: dict[object, object] = {
     float: 1.5,
     bool: True,
     list[str]: ["a"],
+    list[dict[str, object]]: [{"job": "check", "bytes": 1, "cause": "read"}],
     FailureReason: "account_limit",
     DiagnosisVerdict: "sync",
 }
