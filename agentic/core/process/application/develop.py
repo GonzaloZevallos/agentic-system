@@ -24,8 +24,8 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
-from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
-from .run_check import RunCheck
+from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, readiness_of, reuse_of
+from .run_check import RunCheck, resolved_walls
 from .run_role import finish, run_role, with_context
 
 
@@ -117,6 +117,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         reuse=reuse_of(ports, base),
         rerun_forms=ports.stack.rerun_checks(base),
         flake_gate="delivery",
+        readiness=readiness_of(ports, base, cfg.check_cores),
     )
     # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
     # presubmit of its own that shares the gate's checkout, witness, budget and `Reuse`, so
@@ -124,6 +125,17 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     # or a `+dirty` stage0 (no fingerprint: today's `commands.run` calls, exactly, and a
     # reuse the tool's description would promise in vain), gets no tool.
     reuse = delivery_presubmit.reuse
+    # The verifications the product declares and the wall of each, with a check's own
+    # `check_timeouts` figure (ADR-0065 addendum, GH-451): the tool alone gets them, so the
+    # delivery gate and the merge gate run what they always did. Resolved here at the base,
+    # through `resolve_wall`, with the ceiling the owner set.
+    verifications = ports.stack.verifications(base)
+    walls = resolved_walls(
+        verifications,
+        ports.stack.check_timeouts(base),
+        cfg.check_timeout_s,
+        cfg.verification_wall_max_s,
+    )
     check_tool = (
         RunCheck(
             CheckoutPresubmit(
@@ -136,7 +148,15 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 reuse=reuse,
-            )
+                timeouts=walls,
+                readiness=readiness_of(ports, base, cfg.check_cores),
+            ),
+            verifications=verifications,
+            # The system's own `LoadReader` and the Cupo de chequeo's cores, so a line for a
+            # verification carries the load and the cores even when the product declared no
+            # `not_ready_exit` (the gate's classification is then not in play).
+            load=ports.load_reader.one_minute if ports.load_reader is not None else None,
+            cores=cfg.check_cores,
         )
         if reuse is not None
         and reuse_rules.fingerprint(reuse.setup, reuse.stage0_version, cfg.check_timeout_s)
@@ -224,6 +244,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             lead.append(record)
             if fast_names:
                 lead.append(f"Delivery tier: fast ({', '.join(f'`{name}`' for name in fast)})")
+        # The verifications the Developer ran through `run_check`, as the system measured
+        # them (ADR-0065 addendum): beside the checks' results, whatever the summary says.
+        if check_tool is not None and (verified_runs := check_tool.evidence()) is not None:
+            lead.append(verified_runs)
         block = coverage.render(output.data.get("coverage", []), mapped)
         if lead or block:
             text = [*lead, output.text, *([block] if block else [])]

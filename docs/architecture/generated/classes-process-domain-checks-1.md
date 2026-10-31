@@ -1,8 +1,9 @@
-Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 2, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 3, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
+  - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
@@ -31,10 +32,6 @@ classDiagram
     class ci__FullTierVerdict["FullTierVerdict"]
     class ci__JobLog["JobLog"]
     class coverage__Entry["coverage.Entry"]
-    class coverage__Parsed["Parsed"]
-    class coverage__Refusal["Refusal"]
-    class coverage__Rejected["Rejected"]
     check_schedule__Entry --> check_schedule__CheckPriority
     check_schedule__Request --> check_schedule__CheckPriority
-    coverage__Rejected --> coverage__Refusal
 ```

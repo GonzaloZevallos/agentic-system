@@ -4,6 +4,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 - Hermanas:
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
+  - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)

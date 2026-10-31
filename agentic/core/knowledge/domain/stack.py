@@ -70,6 +70,17 @@ run. It is per check and never per tier: under `parallel_checks` a tier's wall t
 of its checks. Absent it reads as `{}`: no budget, every verdict as before. Present and empty, or
 any shape that is not that, fails at load.
 
+**`verifications`**, **`check_timeouts`** and **`not_ready_exit`**: optional (ADR-0065, addendum
+GH-451). `verifications` maps a name to `{command, wall_s}`: a run longer than a Developer's
+foreground step, which `run_check` takes to completion within `wall_s` seconds; its name may not
+collide with a check's. `check_timeouts` maps a check's name to the wall, in seconds, that check
+may take instead of `Configuration.check_timeout_s`. `not_ready_exit` maps a check's or a
+verification's name to the exit code (1 to 255; the convention is 75) that says the environment
+was not ready. Every name goes through `stack_checks.require_declared`, the one function that
+also reads `check_budgets`, `delivery_checks`, `affected_checks` and `rerun_checks`. A wall
+above the ceiling `Configuration.verification_wall_max_s` is refused at preflight, never
+clipped. Absent they read as `{}`.
+
 **`performance`**: optional (GH-318, ADR-0059). A mapping of scenario name to the `seed` and
 `measure` one-line commands, the `volume` and its `volume_unit` (`rows|days|months|years`)
 they must run against, and the `limits` of its metrics (`{limit, unit: ms|queries|kb}`; the
@@ -119,7 +130,10 @@ from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.presubmit import CiCover, RerunForm
 from agentic.core.process.domain.presubmit import FlakeGate as FlakeGate
+from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.suppressions import Forbidden
+
+from . import stack_checks
 
 # What a product copies to start, shown by the error when it declared nothing. It is a
 # template and no longer a default: no run ever falls back to it (issue #36).
@@ -145,6 +159,9 @@ KEYS = (
     "check_budgets",
     "merge_inert",
     "docs",
+    "verifications",
+    "check_timeouts",
+    "not_ready_exit",
 )
 # The reserved name of the check a `docs` block adds to `checks`: no other module builds it.
 DOCS_CHECK = "docs"
@@ -456,11 +473,7 @@ def affected_checks(data: object, source: object) -> dict[str, str]:
     found = _commands(declared, source, "affected_checks")
     known = _known_checks(data, source)
     for name, command in found.items():
-        if name not in known:
-            raise ValueError(
-                f"{source}: {name!r} under `affected_checks` is not a check declared under "
-                f"`checks`; expected one of {', '.join(known)}"
-            )
+        stack_checks.require_declared(name, "affected_checks", known, source)
         if BASE_TOKEN not in command:
             raise ValueError(
                 f"{source}: the command for {name!r} under `affected_checks` has no "
@@ -514,11 +527,7 @@ def delivery_checks(data: object, source: object) -> tuple[str, ...]:
     for position, name in enumerate(names):
         if name in names[:position]:
             raise ValueError(f"{source}: {name!r} is declared twice under `delivery_checks`")
-        if name not in known:
-            raise ValueError(
-                f"{source}: {name!r} under `delivery_checks` is not a check declared under "
-                f"`checks`; expected one of {', '.join(known)}"
-            )
+        stack_checks.require_declared(name, "delivery_checks", known, source)
     if docs(data, source) is not None and DOCS_CHECK not in names:
         names.append(DOCS_CHECK)
     return tuple(names)
@@ -544,11 +553,7 @@ def rerun_checks(data: object, source: object) -> dict[str, RerunForm]:
     known = _known_checks(data, source)
     forms: dict[str, RerunForm] = {}
     for name, body in found.items():
-        if name not in known:
-            raise ValueError(
-                f"{source}: {name!r} under `rerun_checks` is not a check declared under "
-                f"`checks`; expected one of {', '.join(known)}"
-            )
+        stack_checks.require_declared(name, "rerun_checks", known, source)
         forms[name] = _rerun_form(name, body, source)
     return forms
 
@@ -571,11 +576,7 @@ def ci_covers(data: object, source: object) -> Mapping[str, CiCover]:
     known = _known_checks(data, source)
     covers: dict[str, CiCover] = {}
     for name, body in found.items():
-        if name not in known:
-            raise ValueError(
-                f"{source}: {name!r} under `ci_covers` is not a check declared under "
-                f"`checks`; expected one of {', '.join(known)}"
-            )
+        stack_checks.require_declared(name, "ci_covers", known, source)
         covers[name] = _ci_cover(name, body, source)
     return MappingProxyType(covers)
 
@@ -611,27 +612,42 @@ def check_budgets(data: object, source: object) -> dict[str, float]:
     if "check_budgets" not in declared:
         return {}
     found = _declared_nonempty(declared, source, "check_budgets")
-    if not isinstance(found, dict):
-        raise ValueError(f"{source}: expected `check_budgets`, a mapping of checks to seconds")
-    if not delivery_checks(data, source):
-        raise ValueError(
-            f"{source}: `check_budgets` requires `delivery_checks`: a budget is compared only "
-            "on the once-per-task full run on the integrated head that tiers create"
-        )
-    known = _known_checks(data, source)
-    budgets: dict[str, float] = {}
-    for name, seconds in found.items():
-        if name not in known:
-            raise ValueError(
-                f"{source}: {name!r} under `check_budgets` is not a check declared under "
-                f"`checks`; expected one of {', '.join(known)}"
-            )
-        if isinstance(seconds, bool) or not isinstance(seconds, int | float) or seconds <= 0:
-            raise ValueError(
-                f"{source}: {name!r} under `check_budgets` expects a positive number of seconds"
-            )
-        budgets[str(name)] = seconds
-    return budgets
+    tiered = bool(delivery_checks(data, source)) if isinstance(found, dict) else False
+    return stack_checks.parse_check_budgets(found, source, _known_checks(data, source), tiered)
+
+
+def verifications(data: object, source: object) -> dict[str, Verification]:
+    """Verification name -> its command and wall, in the file's order (ADR-0065, addendum
+    GH-451). Empty when the product declares none. Present, a non-empty mapping of
+    `{command, wall_s}` whose names collide with no check; every other shape fails at load."""
+    declared = _declared(data, source)
+    if "verifications" not in declared:
+        return {}
+    found = _declared_nonempty(declared, source, "verifications")
+    return stack_checks.parse_verifications(found, source, _known_checks(data, source))
+
+
+def check_timeouts(data: object, source: object) -> dict[str, float]:
+    """Check name -> the wall, in seconds, the product gives it (ADR-0065, addendum GH-451).
+    Empty when the product declares none: every check keeps `Configuration.check_timeout_s`.
+    The ceiling is the system's and is read at preflight, not here."""
+    declared = _declared(data, source)
+    if "check_timeouts" not in declared:
+        return {}
+    found = _declared_nonempty(declared, source, "check_timeouts")
+    return stack_checks.parse_check_timeouts(found, source, _known_checks(data, source))
+
+
+def not_ready_exit(data: object, source: object) -> dict[str, int]:
+    """Name of a check or a verification -> the exit code that says the environment was not
+    ready (ADR-0065, addendum GH-451). Empty when the product declares none: no exit code
+    reads as `not_ready`."""
+    declared = _declared(data, source)
+    if "not_ready_exit" not in declared:
+        return {}
+    found = _declared_nonempty(declared, source, "not_ready_exit")
+    known = [*_known_checks(data, source), *verifications(data, source)]
+    return stack_checks.parse_not_ready_exit(found, source, known)
 
 
 def _rerun_form(name: str, body: object, source: object) -> RerunForm:
@@ -1138,5 +1154,28 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         Disabled(),
         "mapping of `generate` and `paths`: the command that rewrites generated docs and the "
         "globs it owns",
+    ),
+    KeyReference(
+        "verifications",
+        verifications,
+        stack_checks.VERIFICATION_KEYS,
+        Computed(),
+        "mapping of verification name to a mapping of `command` and `wall_s`: a long run the "
+        "Developer's `run_check` takes to completion",
+    ),
+    KeyReference(
+        "check_timeouts",
+        check_timeouts,
+        (),
+        Computed(),
+        "mapping of check name to a positive number of seconds: the wall of that check",
+    ),
+    KeyReference(
+        "not_ready_exit",
+        not_ready_exit,
+        (),
+        Computed(),
+        "mapping of check or verification name to the exit code (1 to 255) that says the "
+        "environment was not ready",
     ),
 )

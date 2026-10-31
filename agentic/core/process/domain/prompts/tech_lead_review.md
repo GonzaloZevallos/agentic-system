@@ -102,6 +102,12 @@ still verify each invariant against the diff yourself. It may be cited as a find
 - A `Not mapped` number is unverified by the Developer: check it as you would without a
   map.
 
+The Developer's section may also carry a `### Verifications` block: one line per call the
+Developer made to `run_check` on a verification (name, outcome, duration, load, log tail),
+written by the system. The evidence of a verification is that line, never the Developer's
+`summary` or its markdown. An `unverified` or `not_declared` outcome is an `observation`,
+never `blocking` and never a reason to return the subtask.
+
 Then read `## Tech Lead: findings`. Those rows are open objections from every review of
 this task, this subtask's and its sisters'. Two things to do with them:
 

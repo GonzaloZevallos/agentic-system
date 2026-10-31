@@ -28,6 +28,7 @@ from agentic.core.process.application.ports import (
     FreeSpace,
     Inbox,
     Launcher,
+    LoadReader,
     PerfLock,
     PerfRunner,
     Ports,
@@ -53,6 +54,7 @@ from tests.fakes import (
     FakeCiLogs,
     FakeFreeSpace,
     FakeLauncher,
+    FakeLoadReader,
     FakePerfLock,
     FakePerfRunner,
     FakeReaper,
@@ -89,6 +91,7 @@ _check_results: CheckResults = MemoryCheckResults()
 _launcher: Launcher = FakeLauncher()
 _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
+_load_reader: LoadReader = FakeLoadReader()
 _perf_lock: PerfLock = FakePerfLock()
 _check_scheduler: CheckScheduler = FakeCheckScheduler()
 _scratch: Scratch = MemoryScratch()
@@ -139,6 +142,7 @@ COVERED: dict[str, type] = {
     "Launcher": FakeLauncher,
     "ProcessReaper": FakeReaper,
     "PerfRunner": FakePerfRunner,
+    "LoadReader": FakeLoadReader,
     "PerfLock": FakePerfLock,
     "CheckScheduler": FakeCheckScheduler,
     "Scratch": MemoryScratch,

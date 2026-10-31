@@ -25,7 +25,7 @@ from .checkouts import task_base
 from .landing_plan import LandingContext
 from .poll import ci_gate, read_criteria
 from .ports import GitError, MergeCallFailed, TrackerUnreachable
-from .presubmit import CheckoutPresubmit, reuse_of
+from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .release import release_checkout
 from .resume import state_from
 
@@ -148,6 +148,7 @@ def _checks_pass(
             parallel=ports.stack.parallel_checks(base),
             reuse=reuse_of(ports, base),
             flake_gate="merge",
+            readiness=readiness_of(ports, base, cfg.check_cores),
         )
         gate()
     record = presubmit.merge_checks_record(

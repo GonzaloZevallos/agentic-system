@@ -10,6 +10,7 @@ from agentic.shared.stage0 import CHECKOUT
 
 from ..domain import docs, rules
 from ..domain.roles import ROLES
+from ..domain.run_check import resolve_wall
 from .checkouts import task_base
 from .ports import Ports
 from .run_role import load_prompt
@@ -69,12 +70,25 @@ def preflight(cfg: Configuration, ports: Ports) -> None:
     refuse_its_own_checkout(cfg, ports)
     refuse_scratch_in_a_repository(cfg, ports)
     declared_stack(ports)
+    refuse_walls_over_ceiling(cfg, ports)
     # Not inside `declared_stack`: that one is also read at a task's base, where a task
     # older than the key has no name to find and must still resume (issue #47).
     ports.stack.product()
     vocabulary = ports.flags.load()
     for role in ROLES:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
+
+
+def refuse_walls_over_ceiling(cfg: Configuration, ports: Ports, revision: str = "HEAD") -> None:
+    """Refuse a product that declares a wall above the system's ceiling (ADR-0065 addendum,
+    GH-451): a `wall_s` of a verification or a `check_timeouts` figure over
+    `cfg.verification_wall_max_s` raises `WallOverCeiling`, naming the figure and the ceiling,
+    before a role is paid. The figure is rejected and never clipped; the resolution is
+    `run_check.resolve_wall`'s alone."""
+    declared = {name: v.wall_s for name, v in ports.stack.verifications(revision).items()}
+    declared.update(ports.stack.check_timeouts(revision))
+    for name in declared:
+        resolve_wall(name, declared, cfg.check_timeout_s, cfg.verification_wall_max_s)
 
 
 # Where each Tech Lead prompt that carries the rules for written docs holds them.
@@ -114,7 +128,8 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     HEAD by default, the commit a task starting now would be measured against; there is
     no task yet at preflight. `checks`, `witness`, `parallel_checks`, `affected_checks`,
     `affected_fallback` (ADR-0046), `delivery_checks`, `rerun_checks` (ADR-0066),
-    `check_budgets`, `merge_inert` (GH-353), `forbidden` and `design` are all loaded here
+    `check_budgets`, `verifications`, `check_timeouts`, `not_ready_exit` (GH-451), `merge_inert`
+    (GH-353), `forbidden` and `design` are all loaded here
     for validation only, so a broken one fails here and not when a worktree is born or a Developer
     delivers halfway through the run (issues #36, #37, #38; ADR-0040) -- the
     return expression stays `setup`'s alone, so `no_setup`'s warning does not move."""
@@ -126,6 +141,9 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     ports.stack.delivery_checks(revision)
     ports.stack.rerun_checks(revision)
     ports.stack.check_budgets(revision)
+    ports.stack.verifications(revision)
+    ports.stack.check_timeouts(revision)
+    ports.stack.not_ready_exit(revision)
     ports.stack.merge_inert(revision)
     ports.stack.forbidden(revision)
     ports.stack.design(revision)

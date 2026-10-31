@@ -4,6 +4,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 - Hermanas:
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
+  - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
@@ -20,6 +21,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 ```mermaid
 classDiagram
     class design__Design["Design"]
+    class design__NotReady["NotReady"]
     class docs__DiagramBudget["DiagramBudget"]
     class docs__Docs["Docs"]
     class roles__Interview["Interview"]
@@ -33,7 +35,6 @@ classDiagram
     class schemas__Consultation["Consultation"]
     class schemas__CopyDraft["CopyDraft"]
     class schemas__CopyFinding["CopyFinding"]
-    class schemas__CopyReview["CopyReview"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
@@ -46,4 +47,3 @@ classDiagram
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
-  - `schemas.CopyReview` hereda de `schemas.RoleOutput`

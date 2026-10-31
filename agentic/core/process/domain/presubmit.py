@@ -97,6 +97,13 @@ class CheckResult(TypedDict):
     # True on a row whose command hit `check_timeout_s`: a fact, so the rerun rule never
     # reads prose to decide that a timed-out check is not rerun.
     timed_out: NotRequired[bool]
+    # What a command with a declared `not_ready_exit` measured (GH-451): its exit, the load
+    # before and after, and `not_ready` when it exited with that code on a saturated machine.
+    # Set by the system, absent on every command with no declared exit.
+    exit_code: NotRequired[int]
+    load_before: NotRequired[float | None]
+    load_after: NotRequired[float | None]
+    not_ready: NotRequired[bool]
     # True on a row whose `output` is known not to be the whole of what the command wrote
     # (GH-453): the system could not drain it after the kill. Set by the system, never by the
     # model; absent otherwise. A truncated row is never deferred.
@@ -238,6 +245,9 @@ def rerun_command(
     delivery gate, only when it exists and `failed_ids` found at least one id in the
     failure; every other case reruns the full command (ADR-0066)."""
     if first["passed"] or first.get("timed_out", False) or first.get("rerun", False):
+        return None
+    # A machine too loaded to say is not a red a rerun may turn into a flake (GH-451).
+    if first.get("not_ready", False):
         return None
     if gate == "delivery" and form is not None and failed_ids(first["output"], form.test_id):
         return form.command

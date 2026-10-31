@@ -29,14 +29,21 @@ from typing import Any
 from agentic.shared.configuration import Configuration
 
 from ..domain import plan_settlement, rules
-from ..domain.design import NO_SAMPLE_APP_NOTE, Design, compare_facts, design_facts, design_rules
+from ..domain.design import (
+    NO_SAMPLE_APP_NOTE,
+    Design,
+    NotReady,
+    compare_facts,
+    design_facts,
+    design_rules,
+)
 from ..domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL, UI_LEAD_FINAL, UX_LEAD_FINAL
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import Ports, SampleAppHandle
 from .run_role import Output, finish, run_role, with_context
 
-Started = SampleAppHandle | str | None
+Started = SampleAppHandle | NotReady | str | None
 
 
 async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
@@ -82,7 +89,7 @@ async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -
         patch = apply(patch, _close_docs_patch(state, ports, task.path, output.data, reviewed))
         return finish(state, patch, ports)
     finally:
-        if not isinstance(started, str) and started is not None:
+        if isinstance(started, SampleAppHandle):
             ports.sample_app.stop(started)
 
 
@@ -105,8 +112,9 @@ async def _ux_lead_final(
     facts = _app_facts(design_block, started)
     prompt = with_context(state, UX_LEAD_FINAL, ports, cwd, facts)
     output, patch = await run_role(state, UX_LEAD_FINAL, cfg, ports, cwd=cwd, prompt=prompt)
-    if design_block is None or design_block.sample_app is None or isinstance(started, str):
-        note = started if isinstance(started, str) else NO_SAMPLE_APP_NOTE
+    refusal = _refusal(started)
+    if design_block is None or design_block.sample_app is None or refusal is not None:
+        note = refusal if refusal is not None else NO_SAMPLE_APP_NOTE
         written = patch["sections"][UX_LEAD_FINAL.name]
         patch = apply(
             patch,
@@ -130,12 +138,20 @@ def _design_items_patch(role_slug: str, output: Output | None) -> TaskState:
     }
 
 
+def _refusal(started: Started) -> str | None:
+    """What the lead reads when the app did not start: the command's own refusal, or the
+    lapse of the wait said as such, which is not the command failing (GH-451)."""
+    if isinstance(started, NotReady):
+        return started.said()
+    return started if isinstance(started, str) else None
+
+
 def _app_facts(design_block: Design | None, started: Started) -> str:
     if design_block is None or design_block.sample_app is None:
         return NO_SAMPLE_APP_NOTE
-    if isinstance(started, str):
-        return started
-    assert started is not None
+    if (refusal := _refusal(started)) is not None:
+        return refusal
+    assert isinstance(started, SampleAppHandle)
     return "The sample app's first lines on start:\n\n" + "\n".join(started.lines)
 
 

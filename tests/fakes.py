@@ -42,6 +42,7 @@ from agentic.core.process.application.ports import (
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
+    LoadReader,
     MergeCallFailed,
     OwnerRuleEntry,
     PerfLock,
@@ -71,7 +72,7 @@ from agentic.core.process.domain import rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment, JobLog
-from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
@@ -79,6 +80,7 @@ from agentic.core.process.domain.presubmit import CheckResult, CiCover, RerunFor
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
+from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
@@ -404,6 +406,9 @@ class MemoryStack:
         merge_inert: tuple[str, ...] = (),
         check_budgets: dict[str, float] | None = None,
         docs: Docs | None = None,
+        verifications: dict[str, Verification] | None = None,
+        check_timeouts: dict[str, float] | None = None,
+        not_ready_exit: dict[str, int] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -452,6 +457,11 @@ class MemoryStack:
         self.declared_ci_covers: dict[str, CiCover] = {}
         # Empty is a product with no check budget (GH-365): every verdict of today.
         self.declared_check_budgets = {} if check_budgets is None else check_budgets
+        # Empty is a product that declares no verification, wall or not-ready exit code
+        # (ADR-0065 addendum, GH-451): every run of today.
+        self.declared_verifications = {} if verifications is None else verifications
+        self.declared_check_timeouts = {} if check_timeouts is None else check_timeouts
+        self.declared_not_ready_exit = {} if not_ready_exit is None else not_ready_exit
         # Empty is a product that declares no `merge_inert`: the merge gate of today.
         self.declared_merge_inert = merge_inert
         # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
@@ -506,6 +516,18 @@ class MemoryStack:
     def check_budgets(self, revision: str) -> dict[str, float]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_check_budgets
+
+    def verifications(self, revision: str) -> dict[str, Verification]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_verifications
+
+    def check_timeouts(self, revision: str) -> dict[str, float]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_check_timeouts
+
+    def not_ready_exit(self, revision: str) -> dict[str, int]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_not_ready_exit
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -610,13 +632,13 @@ class MemorySampleApp:
     wants a refusal passes a `str`. `stopped` keeps every handle `stop` was called with,
     in order, so a test can tell the app never outlived the node."""
 
-    def __init__(self, result: SampleAppHandle | str | None = None) -> None:
+    def __init__(self, result: SampleAppHandle | NotReady | str | None = None) -> None:
         default = SampleAppHandle(lines=("Listening on http://localhost:4242",), token=None)
         self.result = result or default
         self.started: list[tuple[str, Path]] = []
         self.stopped: list[SampleAppHandle] = []
 
-    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | NotReady | str:
         self.started.append((command, cwd))
         return self.result
 
@@ -1743,6 +1765,20 @@ class MemoryRunRegistry:
         return waits, list(self.land_wait_notes)
 
 
+class FakeLoadReader:
+    """The machine's load, scripted: each `one_minute` hands back the next figure of `readings`
+    (the last one repeats), so a test says what the load was before and after a command."""
+
+    def __init__(self, *readings: float | None) -> None:
+        self.readings = list(readings) or [0.0]
+        self.reads = 0
+
+    def one_minute(self) -> float | None:
+        index = min(self.reads, len(self.readings) - 1)
+        self.reads += 1
+        return self.readings[index]
+
+
 class FakePerfRunner:
     """GH-318: records each `run` as `(checkout, command, extra_env, timeout_s)` and answers
     the next `Run` of `script`, or a clean empty one; never starts a process. With a `stop` flag
@@ -2095,6 +2131,7 @@ def memory_ports(
     scratch: Scratch | None = None,
     free_space: FreeSpace | None = None,
     ci_logs: CiLogs | None = None,
+    load_reader: LoadReader | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2119,6 +2156,7 @@ def memory_ports(
         scratch=scratch,
         free_space=free_space,
         ci_logs=ci_logs,
+        load_reader=load_reader,
     )
 
 

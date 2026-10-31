@@ -84,6 +84,11 @@ class Configuration(BaseModel):
     # How long one product check may run inside the presubmit before it counts as
     # failed (issue #22). The presubmit's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)
+    # The ceiling of any wall a product declares for a check or a verification (`stack.yaml`,
+    # ADR-0065 addendum, GH-451): the system's, set by the owner in `.env`. A declared figure
+    # above it is refused at preflight and never clipped; never below `check_timeout_s`, the
+    # wall a check has when its product declares none.
+    verification_wall_max_s: float = Field(default=3600.0, gt=0)
     # How long a role attempt may go with no sign of life before the watchdog kills it
     # and fails it as a stall (GH-299, ADR-0057): above the longest legitimate silence,
     # which the in-flight hook counter and the pending-tool rule cover on their own, so
@@ -227,6 +232,16 @@ class Configuration(BaseModel):
     # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
     # Declared, not measured: a few parallel runs' worth of build and test scratch.
     scratch_floor_mb: int = Field(default=2048, ge=0)
+
+    @model_validator(mode="after")
+    def _ceiling_covers_the_check_timeout(self) -> Configuration:
+        if self.verification_wall_max_s < self.check_timeout_s:
+            raise ValueError(
+                f"verification_wall_max_s ({self.verification_wall_max_s:g}) is below "
+                f"check_timeout_s ({self.check_timeout_s:g}): a check with no declared wall "
+                "would already be over the ceiling"
+            )
+        return self
 
     @model_validator(mode="after")
     def _parallel_within_role_slots(self) -> Configuration:

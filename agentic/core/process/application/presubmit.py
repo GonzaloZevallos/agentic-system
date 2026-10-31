@@ -19,7 +19,7 @@ from pathlib import Path
 from agentic.shared.stage0 import CHECKOUT
 
 from ..domain import check_results as reuse_rules
-from ..domain import presubmit
+from ..domain import presubmit, run_check
 from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
 from ..domain.presubmit import (
     AffectedPlan,
@@ -31,7 +31,7 @@ from ..domain.presubmit import (
 )
 from ..domain.task import FlakeRecord, GateRecord, TaskState
 from .checkouts import task_base
-from .ports import CheckRequest, GitError, Grant, Ports
+from .ports import CheckRequest, CommandResult, GitError, Grant, LoadReader, Ports
 from .preflight import criteria_regressed, product_name
 
 # The delivery hook's own guard budget (`hooks.GUARD_TIMEOUT_S`, pinned equal by a test): a
@@ -99,6 +99,26 @@ def _stage0_version(ports: Ports) -> str:
     return sha if committed else f"{sha}{reuse_rules.DIRTY}"
 
 
+@dataclass(frozen=True)
+class Readiness:
+    """What classifies a `not_ready` (ADR-0065 addendum, GH-451): the exit each declared command
+    gives for "the environment was not ready", the reader of the machine's load, and its cores
+    (the Cupo de chequeo's own, `Configuration.check_cores`)."""
+
+    exits: Mapping[str, int]
+    load: LoadReader
+    cores: int
+
+
+def readiness_of(ports: Ports, base: str, cores: int) -> Readiness | None:
+    """The readiness of the product at `base`, or None when it declares no `not_ready_exit` or
+    the system composed no reader: the gate of before, byte for byte."""
+    exits = ports.stack.not_ready_exit(base)
+    if not exits or ports.load_reader is None:
+        return None
+    return Readiness(exits, ports.load_reader, cores)
+
+
 class CheckoutPresubmit:
     """The `Presubmit` over one Developer's checkout. One per Developer run: the
     refusals it has left carry over to the retry."""
@@ -120,6 +140,8 @@ class CheckoutPresubmit:
         reuse: Reuse | None = None,
         rerun_forms: Mapping[str, RerunForm] | None = None,
         flake_gate: FlakeGate = "delivery",
+        timeouts: Mapping[str, float] | None = None,
+        readiness: Readiness | None = None,
     ):
         self.ports = ports
         self.path = path
@@ -164,6 +186,13 @@ class CheckoutPresubmit:
         # these defaults so every construction site compiles untouched.
         self.rerun_forms: Mapping[str, RerunForm] = rerun_forms or {}
         self.flake_gate: FlakeGate = flake_gate
+        # The wall of the checks and verifications whose product declared one, by name, already
+        # resolved by `run_check.resolve_wall` (ADR-0065 addendum, GH-451); every other command
+        # gets `check_timeout_s`. Empty is the presubmit of before, byte for byte.
+        self.timeouts: Mapping[str, float] = timeouts or {}
+        # The exit that means "not ready" and the load that excuses it, or None: no command is
+        # classified and none reads the load (GH-451). Keyword-only, so every site compiles.
+        self.readiness = readiness
         # Set once per call on a clean, moved tree (`_prepare_reuse`): the tree, the
         # environment fingerprint, and whether this checkout may store what it runs.
         self._tree: str | None = None
@@ -206,6 +235,12 @@ class CheckoutPresubmit:
 
     @property
     def timeout_s(self) -> float:
+        # A declared wall longer than the default keeps the share held while its command may
+        # still be running, and its one `not_ready` retry; nothing declared leaves this as is.
+        longest = max(self.timeouts.values(), default=0.0)
+        return max(self._timeout_s(), longest * 2 + (self.check_timeout_s if self.witness else 0))
+
+    def _timeout_s(self) -> float:
         witness = self.check_timeout_s if self.witness else 0
         if self.parallel:
             # Every check runs at once, each under its own `check_timeout_s`: the
@@ -595,11 +630,12 @@ class CheckoutPresubmit:
         started = time.monotonic()
         declared, command = command, self._sized(command)
         self._declared[(name, command)] = declared
-        result = self.ports.commands.run(
-            self.path, command, self.check_timeout_s, env=self._grant_env()
-        )
+        wall = self.timeouts.get(name, self.check_timeout_s)
+        code = self.readiness.exits.get(name) if self.readiness is not None else None
+        before = self.readiness.load.one_minute() if self.readiness and code is not None else None
+        result = self.ports.commands.run(self.path, command, wall, env=self._grant_env())
         duration_s = time.monotonic() - started
-        output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
+        output = presubmit.said(result.output, result.timed_out, wall)
         row: CheckResult = {
             "name": name,
             "command": command,
@@ -615,4 +651,22 @@ class CheckoutPresubmit:
             row["truncated"] = True
         if mode is not None:
             row["mode"] = mode
+        if self.readiness is not None and code is not None:
+            self._classify(row, result, code, before, self.readiness)
         return row
+
+    @staticmethod
+    def _classify(
+        row: CheckResult, result: CommandResult, code: int, before: float | None, ready: Readiness
+    ) -> None:
+        """What a command with a declared `not_ready_exit` measured: its exit, the load either
+        side of it, and `not_ready` when it gave that exit on a saturated machine. A timed-out
+        command is never `not_ready`: its exit is the kill's."""
+        after = ready.load.one_minute()
+        row["exit_code"], row["load_before"], row["load_after"] = result.exit_code, before, after
+        if (
+            not result.timed_out
+            and result.exit_code == code
+            and run_check.saturated(before, after, ready.cores)
+        ):
+            row["not_ready"] = True

@@ -12,6 +12,7 @@ from ....process.domain.design import Design
 from ....process.domain.docs import Docs
 from ....process.domain.performance import Scenario
 from ....process.domain.presubmit import CiCover, RerunForm
+from ....process.domain.run_check import Verification
 from ....process.domain.suppressions import Forbidden
 from ...domain import stack
 
@@ -63,6 +64,18 @@ class GitStack:
     def check_budgets(self, revision: str) -> dict[str, float]:
         data, source = self._declaration(revision)
         return stack.check_budgets(data, source)
+
+    def verifications(self, revision: str) -> dict[str, Verification]:
+        data, source = self._declaration(revision)
+        return stack.verifications(data, source)
+
+    def check_timeouts(self, revision: str) -> dict[str, float]:
+        data, source = self._declaration(revision)
+        return stack.check_timeouts(data, source)
+
+    def not_ready_exit(self, revision: str) -> dict[str, int]:
+        data, source = self._declaration(revision)
+        return stack.not_ready_exit(data, source)
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         """The globs master may gain without a recorded pass going stale. A revision that

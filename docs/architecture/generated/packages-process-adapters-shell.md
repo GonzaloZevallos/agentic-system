@@ -18,6 +18,7 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_adapters__shell__commands["adapters.shell.commands"]
     m_adapters__shell__inhibitor["adapters.shell.inhibitor"]
+    m_adapters__shell__load_reader["adapters.shell.load_reader"]
     m_adapters__shell__perf_runner["adapters.shell.perf_runner"]
     m_adapters__shell__reaper["adapters.shell.reaper"]
     m_adapters__shell__sample_app["adapters.shell.sample_app"]
@@ -27,8 +28,10 @@ graph TD
     m_adapters__shell__commands --> g_pkg__domain
     m_adapters__shell__perf_runner --> g_pkg__application
     m_adapters__shell__perf_runner --> g_pkg__domain
+    m_adapters__shell__perf_runner --> m_adapters__shell__load_reader
     m_adapters__shell__reaper --> g_pkg__domain
     m_adapters__shell__sample_app --> g_pkg__agentic__shared
     m_adapters__shell__sample_app --> g_pkg__application
     m_adapters__shell__sample_app --> g_pkg__domain
+    m_adapters__shell__sample_app --> m_adapters__shell__load_reader
 ```
