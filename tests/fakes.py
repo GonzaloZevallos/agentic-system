@@ -42,6 +42,7 @@ from agentic.core.process.application.ports import (
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
+    LoadReader,
     MergeCallFailed,
     OwnerRuleEntry,
     PerfLock,
@@ -1757,6 +1758,20 @@ class MemoryRunRegistry:
         return waits, list(self.land_wait_notes)
 
 
+class FakeLoadReader:
+    """The machine's load, scripted: each `one_minute` hands back the next figure of `readings`
+    (the last one repeats), so a test says what the load was before and after a command."""
+
+    def __init__(self, *readings: float | None) -> None:
+        self.readings = list(readings) or [0.0]
+        self.reads = 0
+
+    def one_minute(self) -> float | None:
+        index = min(self.reads, len(self.readings) - 1)
+        self.reads += 1
+        return self.readings[index]
+
+
 class FakePerfRunner:
     """GH-318: records each `run` as `(checkout, command, extra_env, timeout_s)` and answers
     the next `Run` of `script`, or a clean empty one; never starts a process. With a `stop` flag
@@ -2109,6 +2124,7 @@ def memory_ports(
     scratch: Scratch | None = None,
     free_space: FreeSpace | None = None,
     ci_logs: CiLogs | None = None,
+    load_reader: LoadReader | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2133,6 +2149,7 @@ def memory_ports(
         scratch=scratch,
         free_space=free_space,
         ci_logs=ci_logs,
+        load_reader=load_reader,
     )
 
 

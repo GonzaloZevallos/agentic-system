@@ -55,6 +55,7 @@ from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import (
     NullStopFlag,
     ShellCommands,
+    ShellLoadReader,
     ShellReaper,
     ShellSampleApp,
 )
@@ -206,6 +207,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
     reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
     project = cfg.board_owner_and_number
     stack = GitStack(cfg.product_dir)
+    load_reader = ShellLoadReader()
     limits = Limits(
         cores=cfg.check_cores,
         share_min=cfg.check_share_min,
@@ -261,7 +263,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         sample_app=ShellSampleApp(),
         reaper=reaper,
         check_scheduler=FilesystemCheckLedger(cfg.check_ledger_dir, product_key, reaper, limits),
-        perf_runner=PerfShellRunner(product_key, reaper, stop_flag),
+        perf_runner=PerfShellRunner(product_key, reaper, stop_flag, load_reader),
+        load_reader=load_reader,
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path, stop_flag),
         check_results=FilesystemCheckResults(cfg.check_results_dir),
         # GH-375: the Project mirror exists only when a project is configured; its memory

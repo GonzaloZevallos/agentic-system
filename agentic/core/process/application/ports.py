@@ -1765,6 +1765,15 @@ class ProcessReaper(Protocol):
         ...
 
 
+class LoadReader(Protocol):
+    """The machine's one-minute load average (GH-451): the one reading `PerfRunner` stamps on
+    a run and `run_check` classifies a `not_ready` by (ADR-0065 addendum)."""
+
+    def one_minute(self) -> float | None:
+        """The one-minute load average, or None where the machine has none."""
+        ...
+
+
 class PerfRunner(Protocol):
     """Runs one `seed`, `measure` or `setup` command of a performance scenario (GH-318,
     ADR-0059) in `checkout`, with `extra_env` on top of a scrubbed environment, and returns
@@ -2030,3 +2039,6 @@ class Ports:
     # The logs of the red jobs of a pull request head, for the Landing Diagnoser (GH-449).
     # `None` reads none and makes no call, which is how every landing ran before it existed.
     ci_logs: CiLogs | None = None
+    # The machine's load average, which classifies a `not_ready` (GH-451). `None` reads no load,
+    # so no exit is ever excused by one: a red stays red.
+    load_reader: LoadReader | None = None

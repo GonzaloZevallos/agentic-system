@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from typing import Any
 
-from ..domain import run_check
+from ..domain import presubmit, run_check
 from ..domain.presubmit import CheckResult
-from ..domain.run_check import CheckRun, Verification, resolve_wall
+from ..domain.run_check import CheckRun, Outcome, Verification, resolve_wall
 from .presubmit import CheckoutPresubmit
 
 
@@ -110,8 +111,11 @@ class RunCheck:
             # lets the pass be stored. A disagreement does not stop the check, as at the gate.
             witness_reason = gate._run_witness(gate.witness) if gate.witness is not None else None
             row = gate._run(name, command)
+            outcome: Outcome | None = None
+            if gate.readiness is not None and name in gate.readiness.exits:
+                row, outcome = self._settle(name, command, row)
         if verification is not None:
-            return self._verified(name, row, witness_reason)
+            return self._verified(name, row, witness_reason, outcome)
         passed, reused = row["passed"], bool(row.get("reused", False))
         key = gate._key(name, command)
         store = gate.ports.check_results
@@ -144,9 +148,26 @@ class RunCheck:
             duration_s=row.get("duration_s", 0.0),
             unrecorded=reason,
             witness=self._witness_line(witness_reason),
+            **self._readiness_fields(row, outcome),
         )
 
-    def _verified(self, name: str, row: CheckResult, witness_reason: str | None) -> CheckRun:
+    def _settle(
+        self, name: str, command: str, first: CheckResult
+    ) -> tuple[CheckResult, run_check.Outcome]:
+        """What a command with a declared `not_ready_exit` came to. A `not_ready` first row is
+        run once more in this same call, judged by the gate's own `flake_verdict`; the pair is
+        never recorded as a flake. A second `not_ready` is `unverified`: the machine could not
+        say, which is neither a pass nor a red."""
+        if not first.get("not_ready", False):
+            return first, Outcome.PASSED if first["passed"] else Outcome.FAILED
+        again = self.gate._execute(name, command)
+        if presubmit.flake_verdict(first, again) == "flake":
+            return again, Outcome.PASSED
+        return again, Outcome.UNVERIFIED if again.get("not_ready", False) else Outcome.FAILED
+
+    def _verified(
+        self, name: str, row: CheckResult, witness_reason: str | None, outcome: Outcome | None
+    ) -> CheckRun:
         """What the system measured of a verification: its row, and never a stored pass."""
         return CheckRun(
             name,
@@ -155,7 +176,23 @@ class RunCheck:
             duration_s=row.get("duration_s", 0.0),
             unrecorded=run_check.UNRECORDED_VERIFICATION,
             witness=self._witness_line(witness_reason),
+            **self._readiness_fields(
+                row, outcome or (Outcome.PASSED if row["passed"] else Outcome.FAILED)
+            ),
         )
+
+    def _readiness_fields(self, row: CheckResult, outcome: Outcome | None) -> dict[str, Any]:
+        """The outcome and the load a call measured, for `CheckRun`; empty for a command the
+        product declared no `not_ready_exit` for, so its reply is what it was."""
+        ready = self.gate.readiness
+        fields: dict[str, Any] = {"outcome": outcome}
+        if ready is not None and "load_before" in row:
+            fields |= {
+                "load_before": row["load_before"],
+                "load_after": row.get("load_after"),
+                "cores": ready.cores,
+            }
+        return fields
 
     def _witness_line(self, reason: str | None) -> str | None:
         if self.gate.witness is None:

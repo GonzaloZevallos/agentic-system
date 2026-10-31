@@ -24,7 +24,7 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
-from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
+from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, readiness_of, reuse_of
 from .run_check import RunCheck, resolved_walls
 from .run_role import finish, run_role, with_context
 
@@ -117,6 +117,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         reuse=reuse_of(ports, base),
         rerun_forms=ports.stack.rerun_checks(base),
         flake_gate="delivery",
+        readiness=readiness_of(ports, base, cfg.check_cores),
     )
     # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
     # presubmit of its own that shares the gate's checkout, witness, budget and `Reuse`, so
@@ -148,6 +149,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 witness=ports.stack.witness(base),
                 reuse=reuse,
                 timeouts=walls,
+                readiness=readiness_of(ports, base, cfg.check_cores),
             ),
             verifications=verifications,
         )
