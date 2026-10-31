@@ -74,7 +74,8 @@ assumption about the SDK, and the headroom guarantee above holds only under it. 
 falsifier: an attempt cut by `max_turns` whose recorded `main_thread_turns` (the
 counter's own final value, carried through `RawResult` -> `AttemptFailed` -> `Failure`
 -> `RoleRun` -> the task document frontmatter, on every attempt and not only the
-delivering one) is below that role's own `max_turns`. Such a record would mean the
+delivering one) is below the cap that same attempt ran with (`Failure.max_turns`; the
+role's own `max_turns` for a record without the field). Such a record would mean the
 counter can lag the cap after all, and would invalidate both positions above.
 
 **What `turn_notice_firings` now measures, and what replaces it as the forward

@@ -116,8 +116,9 @@ class RawResult:
     # as delivering (`ClaudeSdkRunner.run_once`'s six raise sites read the same
     # `turns.value` this field carries), because a cut is the population that can
     # refute the assumption `domain/turn_notice.py`'s docstring states: an attempt cut
-    # by `max_turns` whose recorded `main_thread_turns` sits below that role's own
-    # `max_turns` refutes "count >= consumed turns".
+    # by `max_turns` whose recorded `main_thread_turns` sits below the cap that same attempt
+    # ran with (`Failure.max_turns`, `rules.retry_turns`; `role.max_turns` only for a record
+    # without the field) refutes "count >= consumed turns".
     main_thread_turns: int = 0
     # The processes the reaper stopped when this attempt's session ended (GH-282,
     # ADR-0052): what a role left running in the background. Empty when there were none,

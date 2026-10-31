@@ -568,3 +568,32 @@ rama, que reemplazan el documento y `rules.resume_source`) y, en la adenda quint
 barrera por ola" (una subtarea arranca cuando `rules.next_to_start` la habilita, sin esperar
 al resto de su ola). La revisión dentro de la rama, el fan-in del sistema y la vuelta de una
 devolución por `integrate` siguen como se dijeron.
+
+## Adenda (2026-10-31): el tope de turnos del Landing Diagnoser y su reintento
+
+GH-449. El Landing Diagnoser escaló dos veces en apostrophe el 2026-10-30 (#388 y #480) con
+`max_turns`: su tope era 12 y el reintento corría con el mismo 12.
+
+**Decisión.**
+
+- El tope base del Landing Diagnoser pasa de 12 a 24.
+- El intento posterior a un corte por `max_turns` recibe 64, de la tabla cerrada
+  `rules.RETRY_TURNS` (`{"landing_diagnoser": 64}`). `rules.retry_turns(role, failures)` es la
+  única función que calcula el tope de un intento: lee la tabla, el slug y si el último fallo
+  fue `max_turns`, y ningún contador observado (`main_thread_turns`, `num_turns`).
+- 64 es absoluto, no un delta: deja al menos 40 turnos nuevos tanto si el CLI cuenta los turnos
+  de una sesión reanudada de forma acumulada como si los cuenta por invocación.
+- Ningún otro rol cambia su tope, ni el texto de su reintento.
+
+**Supuesto nombrado.** Esa semántica de la sesión reanudada no se midió: los intentos cortados
+de apostrophe#388 y #480 no se guardaron, así que no hay conteo de turnos de esas corridas. El
+64 está elegido para que no importe.
+
+**Cómo se recalibra.** Cada intento guarda el tope con el que corrió: `Failure.max_turns` en un
+intento cortado y `RoleRun.max_turns` (`agentic.role.max_turns`) en el que entregó. Leer
+`main_thread_turns` por intento junto a ese tope es la medición que corrige el 24 y el 64. Un
+registro sin el campo se lee con `role.max_turns`.
+
+**Consecuencias.** `RoleRunner.run_once` recibe el tope del intento (`max_turns`, `None` es
+`role.max_turns`). El prompt del sistema sigue mostrando `role.max_turns` en `{{max_turns}}`, el
+mismo en todos los intentos.
