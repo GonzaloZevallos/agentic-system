@@ -1000,6 +1000,7 @@ async def run_role(
     forbidden: Sequence[Forbidden] | None = None,
     check_tool: CheckTool | None = None,
     tiers: str = "",
+    extra_input: str = "",
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -1018,7 +1019,11 @@ async def run_role(
     doc): `run_role` never builds one on its own, since only the caller knows what a
     message it did not build should contain (ADR-0004, sixth addendum) — a caller that
     passes `resume` with no `cold_prompt` keeps today's retry, which tries the same
-    session again."""
+    session again.
+
+    `extra_input` (GH-449) is text the caller read at run time, appended as its own block to
+    the message of every attempt, `cold_prompt` included. Empty, nothing changes. It is for
+    the prompt only: it never reaches the system prompt, its hash, the patch or a span."""
     section = section or role.name
     vocabulary = ports.flags.load()
     try:
@@ -1047,6 +1052,9 @@ async def run_role(
         prompt = context_for(
             state, role, knowledge, standards, extra_sections, state.get("subtask_id"), design
         )
+    if extra_input:
+        prompt = f"{prompt}\n\n{extra_input}"
+        cold_prompt = None if cold_prompt is None else f"{cold_prompt}\n\n{extra_input}"
     try:
         output = await run_with_retry(
             role,

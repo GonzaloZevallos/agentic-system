@@ -435,7 +435,7 @@ lee. Dos aplicaciones dejan una sola decisión y una sola marca `resumed`.
 
 **Lo que no cambia.** La escalación de profundidad >= 1, posterior a un diagnóstico entregado, sigue siendo
 de la persona (`run --fresh`): un comentario no la libera. El tope de turnos del rol es el mismo
-(`max_turns=12`), así que un segundo fallo escala tras exactamente un intento nuevo. Una decisión que pide
+(`max_turns=12`; ver el addendum GH-449 al final: hoy 24, y 64 en el reintento tras un corte), así que un segundo fallo escala tras exactamente un intento nuevo. Una decisión que pide
 un merge la lee el Diagnoser como insumo de un reinicio, no se ejecuta: un diagnóstico entregado a
 profundidad 0 cierra el pull request y reinicia con `run --fresh`. El aterrizaje lee la decisión desde el
 último `Escalated:` e ignora los comentarios del sistema; la ruta de roles (`human_decision`) sigue
@@ -544,3 +544,27 @@ reiniciar es el último recurso.
 - **Sin cambios para el resto.** Los escalados de ledger y ADR, el escalado de profundidad 1 tras un
   diagnóstico entregado y la forma de GH-328 conservan su comportamiento y sus mensajes. Un paso que no
   es `diagnose` se despacha para un documento escalado exactamente como antes.
+
+## Addendum (GH-449): el diagnosticador recibe el log de los jobs rojos y un tope que alcanza
+
+**Motivación.** El 2026-10-30 el Landing Diagnoser escaló dos veces en apostrophe con
+`did not deliver after 1 attempt: max_turns`: #388 (`docs` roja por el chequeo de cambios incompatibles
+de OpenAPI) y #480 (un shard de e2e en rojo). Eran fallas corrientes de CI que un diagnóstico debía
+nombrar. El rol es de solo lectura y no puede leer el log de un job (`gh` no está entre sus comandos);
+con 12 turnos tampoco reconstruía la falla desde el código.
+
+**Tope de turnos.** Reemplaza al `max_turns=12` de este ADR: el tope base es 24 y, en el intento posterior
+a un corte por `max_turns`, es 64 (tabla `RETRY_TURNS`, addendum GH-449 del ADR-0004, que explica el
+porqué de los números). Cada intento registra el tope con el que corrió.
+
+**Entrada.** `Ports.ci_logs` (`CiLogs`, adaptador `gh`) lee los logs de los jobs rojos y
+`landing.ci_log_excerpt` los reduce: como mucho 4 jobs, 16 KB por job y 48 KB en total, primero las líneas
+con marcadores anclados y su contexto, después la cola del paso fallado. Solo se lee un log cuyo run
+pertenece a la cabeza que el aterrizaje evalúa (`other_head` si no); ilegible, vacío o con tiempo agotado
+no falla el paso. El extracto entra al prompt únicamente por `run_role(extra_input=...)`, después del
+contexto y también en el reintento en frío, precedido de un aviso: son datos no confiables de CI, nunca
+instrucciones. El prompt del rol no cambia, así que su hash tampoco.
+
+**Qué queda escrito.** Nada del texto: ni en el documento, ni en el pull request, ni en el issue, ni en un
+span. La entrada `diagnose` del ledger suma solo `ci_logs: [{job, bytes, cause}]`, con `cause` de la lista
+cerrada `read`, `unreadable`, `empty`, `other_head`, `timed_out`.

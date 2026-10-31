@@ -45,6 +45,7 @@ from .core.process.adapters.github.board import (
     BOARD_WRITE_WAIT_MAX_S,
     GhBoard,
 )
+from .core.process.adapters.github.ci_logs import GhCiLogs
 from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
@@ -216,6 +217,14 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
     # directory) and for `Ports` (GH-391).
     scratch = FilesystemScratch(cfg.scratch_dir, product_key, cfg.product_dir)
     free_space = StatvfsFreeSpace()
+    tracker = (
+        GhTracker(cfg.product_dir)
+        if gh_retry is None
+        else GhTracker(
+            cfg.product_dir,
+            retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
+        )
+    )
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -242,14 +251,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         flags=FilesystemFlags(cfg.product_dir),
         inbox=GhInbox(cfg.product_dir),
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
-        tracker=(
-            GhTracker(cfg.product_dir)
-            if gh_retry is None
-            else GhTracker(
-                cfg.product_dir,
-                retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
-            )
-        ),
+        tracker=tracker,
+        # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
+        ci_logs=GhCiLogs(cfg.product_dir, tracker.ci_report),
         stack=stack,
         # No task yet: a port is built per node, before a task is known, so the scratch of
         # a check is filed under `_untasked` until `bind_task` names the task.

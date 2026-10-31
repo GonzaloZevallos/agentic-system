@@ -949,6 +949,9 @@ class LandingEntry(TypedDict, total=False):
     # `diagnose` entries: the integrator's paths kept every slice from landing (the restart
     # comment's `(integration work)`).
     integration_work: bool
+    # GH-449, `diagnose` entries: what reading each red job's CI log gave, `{job, bytes, cause}`
+    # with `cause` from the closed `ci.JobLogCause`. Never the text of the log.
+    ci_logs: list[dict[str, object]]
 
 
 class EstimateRecord(TypedDict):
