@@ -11,6 +11,7 @@ Esta página muestra las clases públicas de los módulos del grupo `definition`
   - [application: support (parte 3)](classes-process-application-support-3.md)
   - [application: support (parte 4)](classes-process-application-support-4.md)
   - [application: support (parte 5)](classes-process-application-support-5.md)
+  - [application: support (parte 6)](classes-process-application-support-6.md)
 
 ```mermaid
 classDiagram

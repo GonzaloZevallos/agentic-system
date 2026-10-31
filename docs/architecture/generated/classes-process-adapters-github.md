@@ -11,7 +11,9 @@ Esta página muestra las clases públicas de los módulos del grupo `github` de 
 ```mermaid
 classDiagram
     class github__board__GhBoard["GhBoard"]
+    class github__ci_logs__GhCiLogs["GhCiLogs"]
     class github__inbox__GhInbox["GhInbox"]
     class github__run__GhRetry["GhRetry"]
+    class github__run__StreamRead["StreamRead"]
     class github__tracker__GhTracker["GhTracker"]
 ```
