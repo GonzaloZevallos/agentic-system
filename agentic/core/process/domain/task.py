@@ -547,10 +547,11 @@ class RoleRun(TypedDict):
     # `turns` counts the role's alone, so this is what explains a dear two-turn run.
     cost_by_model: dict[str, float]
     turns: int
-    # The role's own `max_turns` at the time it ran (not the output's, which knows
-    # nothing about the cap): what `agentic.role.max_turns` reads, so a calibration can
-    # compare `turns` against the budget it actually ran under. Absent on a run
-    # recorded before this field existed; read with `.get()`, no sample emitted then.
+    # The turn cap the delivering attempt ran with (`rules.retry_turns`, GH-449): the role's
+    # own `max_turns`, or the higher one the attempt after a `max_turns` cut gets from
+    # `RETRY_TURNS`. What `agentic.role.max_turns` reads, so a calibration can compare
+    # `turns` against the budget it actually ran under. Absent on a run recorded before
+    # this field existed; read with `.get()`, no sample emitted then.
     max_turns: NotRequired[int]
     # `Role.slug`: `role` alone cannot tell the six roles named "Tech Lead" apart.
     # Absent on a run recorded before this field existed; read with `.get(..., "unknown")`.
