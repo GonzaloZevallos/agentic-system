@@ -33,11 +33,8 @@ classDiagram
     class coverage__Entry["coverage.Entry"]
     class coverage__Parsed["Parsed"]
     class coverage__Refusal["Refusal"]
+    class coverage__Rejected["Rejected"]
     check_schedule__Entry --> check_schedule__CheckPriority
     check_schedule__Request --> check_schedule__CheckPriority
+    coverage__Rejected --> coverage__Refusal
 ```
-
-## Relaciones con otras páginas
-
-- [domain: checks (parte 2)](classes-process-domain-checks-2.md)
-  - `coverage.Rejected` se asocia con `coverage.Refusal`

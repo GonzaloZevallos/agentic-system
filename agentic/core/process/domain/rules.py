@@ -377,10 +377,13 @@ def qa_settles(record: FindingRecord, approved_version: int) -> bool:
 
 def full_checks_green_version(state: TaskState) -> int:
     """The version of the latest `full_checks` run when it passed, `0` otherwise (no run, or
-    the latest one red). The only reader of that fact for the fold: `full_checks_settles` is
-    the writer's one decision."""
+    the latest one red, or one that deferred a check to CI, GH-453: a deferral proves nothing
+    yet, so it settles no `full_checks:<check>` row). The only reader of that fact for the
+    fold: `full_checks_settles` is the writer's one decision."""
     recorded = state.get("full_checks")
-    return recorded["version"] if recorded and recorded["passed"] else 0
+    if not recorded or not recorded["passed"] or recorded.get("deferred"):
+        return 0
+    return recorded["version"]
 
 
 def full_checks_settles(record: FindingRecord, green_version: int) -> bool:
@@ -2508,7 +2511,11 @@ def after_qa_performance(state: TaskState) -> str | None:
 def _failed_names(record: FullChecksRecord) -> list[str]:
     """The checks a run failed, in the order recorded; the step it stopped at when it failed
     before any check ran (a worktree, a setup), and `checks` when it says nothing else."""
-    names = [entry["name"] for entry in record["results"] if not entry["passed"]]
+    names = [
+        entry["name"]
+        for entry in record["results"]
+        if not entry["passed"] and not entry.get("deferred", False)
+    ]
     return names or [record.get("failed_step") or "checks"]
 
 
@@ -2518,7 +2525,11 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
     "full_checks"`, one blocking `plan` row per failed check at `full_checks:<check>` with a
     fixed claim, and the return counts on `pair_for(target)`; at its limit the same patch
     escalates as a pair at its limit. The record travels with it, so the state and the
-    document hold the run the rows came from."""
+    document hold the run the rows came from. A deferred row (GH-453) is not a failure: a
+    record whose only non-passing rows are deferred is a passed one, and its patch holds the
+    record alone, with no return, no finding and no change of status."""
+    if record["passed"]:
+        return {"full_checks": record}
     subtasks = state.get("subtasks", {})
     target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks))
     names = _failed_names(record)

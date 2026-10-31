@@ -1,4 +1,6 @@
 import re
+from collections.abc import MutableMapping
+from typing import cast
 
 import pytest
 import yaml
@@ -694,6 +696,112 @@ def test_check_budgets_without_delivery_checks_is_refused_naming_the_full_run():
     del data["delivery_checks"]
     with pytest.raises(ValueError, match="stack.yaml: `check_budgets` requires `delivery_checks`"):
         stack.check_budgets(data, "stack.yaml")
+
+
+# --- ci_covers (GH-453) --------------------------------------------------------------------
+
+COVER_PATTERN = r"^\s+✘\s+\d+"
+DOCS_BLOCK = {"generate": "python gen.py", "paths": ["docs/architecture/generated/**"]}
+
+
+def cover_data(entry=None, **more):
+    return {
+        "checks": {"tests": "pytest", "web-e2e": "npx playwright test"},
+        "ci_covers": {"web-e2e": {"job": "e2e", "failed": COVER_PATTERN}}
+        if entry is None
+        else entry,
+        **more,
+    }
+
+
+def test_an_absent_ci_covers_declares_none():
+    assert stack.ci_covers({"checks": {"tests": "pytest"}}, "x") == {}
+
+
+def test_a_declared_cover_is_kept_by_check_name_and_cannot_be_changed():
+    found = stack.ci_covers(cover_data(), "x")
+    assert found == {"web-e2e": stack.CiCover(job="e2e", failed=COVER_PATTERN)}
+    with pytest.raises(TypeError):
+        cast(MutableMapping[str, stack.CiCover], found)["tests"] = stack.CiCover("x", "y")
+
+
+def test_ci_covers_is_a_key_the_file_may_declare_and_needs_neither_ci_nor_rerun_checks():
+    assert "ci_covers" in stack.KEYS
+    stack.checks(cover_data(), "x")  # an unknown key would raise here
+    assert stack.rerun_checks(cover_data(), "x") == {}
+
+
+def test_the_job_need_not_be_one_of_the_declared_ci_names():
+    data = cover_data(ci=["ci-ok"])
+    assert stack.ci_covers(data, "x")["web-e2e"].job == "e2e"
+
+
+def test_the_reserved_docs_check_may_be_covered():
+    data = cover_data({"docs": {"job": "docs", "failed": "stale"}}, docs=DOCS_BLOCK)
+    assert stack.ci_covers(data, "x")["docs"].job == "docs"
+
+
+def refuse_cover(data, match):
+    with pytest.raises(ValueError, match=match):
+        stack.ci_covers(data, "stack.yaml")
+
+
+def test_a_cover_for_a_check_that_is_not_declared_is_refused():
+    refuse_cover(
+        cover_data({"e2e": {"job": "e2e", "failed": "x"}}),
+        r"'e2e' under `ci_covers` is not a check declared under `checks`",
+    )
+
+
+@pytest.mark.parametrize("job", ["", "  ", None, 3, ["e2e"]])
+def test_a_job_that_is_not_a_non_empty_name_is_refused(job):
+    refuse_cover(cover_data({"web-e2e": {"job": job, "failed": "x"}}), r"`job`")
+
+
+@pytest.mark.parametrize("failed", ["", None, 3])
+def test_a_failed_pattern_that_is_not_a_non_empty_string_is_refused(failed):
+    refuse_cover(cover_data({"web-e2e": {"job": "e2e", "failed": failed}}), r"`failed`")
+
+
+@pytest.mark.parametrize("bad", [None, {}, [], "e2e", {"web-e2e": "e2e"}, {"web-e2e": {}}])
+def test_an_empty_or_misshapen_ci_covers_is_refused(bad):
+    data = cover_data()
+    data["ci_covers"] = bad
+    refuse_cover(data, r"`ci_covers`")
+
+
+def test_an_unknown_sub_key_under_ci_covers_is_refused():
+    entry = {"web-e2e": {"job": "e2e", "failed": "x", "extra": 1}}
+    refuse_cover(cover_data(entry), r"unknown key\(s\) extra under `ci_covers`")
+
+
+@pytest.mark.parametrize("pattern", ["(", "(?P<a>x", "[a-"])
+def test_a_failed_pattern_that_does_not_compile_is_refused(pattern):
+    refuse_cover(
+        cover_data({"web-e2e": {"job": "e2e", "failed": pattern}}), r"`failed`.*does not compile"
+    )
+
+
+def test_a_failed_pattern_longer_than_200_characters_is_refused():
+    refuse_cover(
+        cover_data({"web-e2e": {"job": "e2e", "failed": "a" * 201}}),
+        r"`failed`.*at most 200 characters",
+    )
+    stack.ci_covers(cover_data({"web-e2e": {"job": "e2e", "failed": "a" * 200}}), "x")
+
+
+@pytest.mark.parametrize("pattern", [r"(a+)+", r"(\w+\s)*", r"(?:\d+,)+x", r"(a{2,})+", r"(a|bc)+"])
+def test_a_failed_pattern_with_a_nested_repetition_is_refused(pattern):
+    refuse_cover(
+        cover_data({"web-e2e": {"job": "e2e", "failed": pattern}}), r"`failed`.*quantified group"
+    )
+
+
+@pytest.mark.parametrize(
+    "pattern", [COVER_PATTERN, r"(?m)^\s+(?:✘|FAILED)", r"\bfailed\b", r"a(b|c)"]
+)
+def test_an_ordinary_failed_pattern_is_accepted_without_a_capturing_group(pattern):
+    stack.ci_covers(cover_data({"web-e2e": {"job": "e2e", "failed": pattern}}), "x")
 
 
 # --- docs (the stack contract for generated docs) ------------------------------------------

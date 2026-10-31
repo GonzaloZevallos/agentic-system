@@ -109,6 +109,15 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Qué es**: mapping of check name to a mapping of `command` and `test_id`: the failed-tests-only form of the check
 - **Lector**: `agentic.core.knowledge.domain.stack.rerun_checks`
 
+## `ci_covers`
+
+- **Presencia**: opcional
+- **Se lee como**: `Mapping[str, CiCover]`
+- **Si falta**: el valor que calcula el lector
+- **Subclaves**: `job`, `failed`
+- **Qué es**: mapping of check name to a mapping of `job` and `failed`: the CI job that runs the same suite and the pattern of a failed line, so a full check that times out is deferred to it
+- **Lector**: `agentic.core.knowledge.domain.stack.ci_covers`
+
 ## `check_budgets`
 
 - **Presencia**: opcional

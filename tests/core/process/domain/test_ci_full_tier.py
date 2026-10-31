@@ -111,3 +111,51 @@ def test_an_unreadable_ci_waits_until_the_bound_then_names_its_cause(
     assert verdict(unreadable, BOUND - 1) == FullTierVerdict("waiting", (), NAMES, None)
     at_bound = verdict(unreadable, BOUND)
     assert (at_bound.state, at_bound.cause) == ("unreachable", unreadable.cause)
+
+
+# --- covering_state (GH-453): what the CI says about the job that covers a deferred check ----
+
+
+def covering(read, job="e2e", head=HEAD):
+    return ci.covering_state(read, job, head)
+
+
+@pytest.mark.parametrize(
+    ("checks", "state"),
+    [
+        ([run("e2e", "SUCCESS")], "covered"),
+        ([run("e2e", "NEUTRAL")], "covered"),
+        ([run("e2e", "FAILURE")], "red"),
+        ([run("e2e", "TIMED_OUT")], "red"),
+        ([run("e2e", "SUCCESS"), run("e2e", "FAILURE")], "red"),
+        ([run("e2e", None, status="IN_PROGRESS")], "pending"),
+        ([run("e2e", "PENDING")], "pending"),
+        ([run("e2e", "SUCCESS"), run("e2e", None, status="QUEUED")], "pending"),
+        ([run("e2e", "FAILURE"), run("e2e", None, status="QUEUED")], "red"),
+        ([run("e2e", "SKIPPED")], "uncovered"),
+        ([run("e2e", "SUCCESS"), run("e2e", "SKIPPED")], "uncovered"),
+        ([run("unit", "SUCCESS")], "uncovered"),
+        ([], "uncovered"),
+        ([run("e2e (3.12)", "SUCCESS")], "uncovered"),
+    ],
+)
+def test_covering_state_of_the_job_on_the_head(checks, state):
+    assert covering(report(*checks)) == state
+
+
+def test_a_report_of_another_head_does_not_cover_even_when_green():
+    assert covering(report(run("e2e", "SUCCESS"), sha=OTHER)) == "uncovered"
+    assert covering(report(run("e2e", "SUCCESS"), sha=HEAD[:12])) == "covered"
+
+
+@pytest.mark.parametrize(
+    "read", [CiUnreadable("gh_unavailable"), CiUnreadable("gh_unreadable"), None]
+)
+def test_an_unreadable_or_absent_report_does_not_cover(read):
+    assert covering(read) == "uncovered"
+
+
+def test_covering_state_leaves_ci_state_reading_a_skip_as_red():
+    skipped = report(run("e2e", "SKIPPED"))
+    assert ci.ci_state(skipped, ("e2e",)).state == "red"
+    assert covering(skipped) == "uncovered"
