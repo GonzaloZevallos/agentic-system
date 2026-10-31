@@ -160,6 +160,7 @@ def merge_task(
             fresh,
         )
         facts = with_red_on_base(ports, facts, report)
+        facts = _with_deferral(ports, facts, document, base, head, report)
         # GH-334: the criteria caps, read once on this one master and only when no refusal
         # ahead of them has already ruled the pull request out.
         if head is not None and (criteria or rules.criteria_probe_wanted(facts)):
@@ -287,6 +288,38 @@ def _gain(ports: Ports, row_master: str, master: str) -> tuple[str, ...] | None:
         return None
 
 
+def _with_deferral(
+    ports: Ports,
+    facts: rules.MergeFacts,
+    document: TaskState,
+    base: str,
+    head: str | None,
+    report: ci.CiReport | ci.CiUnreadable | None,
+) -> rules.MergeFacts:
+    """`facts` plus what the CI says about the jobs covering the checks the latest `full_checks`
+    record deferred (GH-453). Read only from a record whose head is the pull request head
+    (`same_commit`): any other imposes nothing. Each job is judged only by `ci.covering_state`;
+    a deferred check the stack no longer maps to a job is uncovered. A stack whose `ci_covers`
+    cannot be read covers nothing."""
+    record = document.get("full_checks")
+    deferred = record.get("deferred") if record else None
+    if not record or not deferred or head is None or not rules.same_commit(record["head"], head):
+        return facts
+    try:
+        covers = ports.stack.ci_covers(base)
+    except ValueError:
+        covers = {}
+    jobs = [covers[name].job if name in covers else None for name in deferred]
+    states = [
+        ci.covering_state(report, job, head) if job is not None else "uncovered" for job in jobs
+    ]
+    return replace(
+        facts,
+        deferral=rules.deferral_state(states),
+        deferral_jobs=tuple(dict.fromkeys(job for job in jobs if job is not None)),
+    )
+
+
 def _merges_on_ci(facts: rules.MergeFacts) -> bool:
     """The `merge` rested on the CI alone: declared by the stack (a name only the plan
     required is never enough, GH-371), green on this head and fresh. The same four facts
@@ -297,6 +330,7 @@ def _merges_on_ci(facts: rules.MergeFacts) -> bool:
         and facts.ci_verdict.state == "green"
         and facts.ci_fresh is True
         and facts.ci_untrusted is False
+        and facts.deferral != "uncovered"
     )
 
 
@@ -635,6 +669,8 @@ def _ci_evidence(
     """What a CI refusal says, from structured facts only: one line per failing check
     (name, conclusion, link) with no tail, the declared names never reported, or `gh` and
     the cause class of an unreadable report."""
+    if facts.deferral in ("red", "pending") and isinstance(report, ci.CiReport):
+        return _deferral_evidence(facts, report)
     verdict = facts.ci_verdict
     if reason == "ci_failed" and verdict is not None:
         return "\n".join(
@@ -652,6 +688,18 @@ def _ci_evidence(
         return f"CI checks still pending: {', '.join(facts.ci_required)}"
     cause = facts.ci_unreadable.cause if facts.ci_unreadable is not None else "gh_unreadable"
     return f"`gh` could not read the CI report ({cause})"
+
+
+def _deferral_evidence(facts: rules.MergeFacts, report: ci.CiReport) -> str:
+    """What a refusal on a deferral says (GH-453): the covering jobs of the deferred checks
+    that are not green, name, conclusion and link, from the report alone."""
+    runs = [check for check in report.checks if check.name in facts.deferral_jobs]
+    lines = [
+        f"- {check.name} {check.conclusion or check.status} {check.link}"
+        for check in runs
+        if check.conclusion != "SUCCESS"
+    ]
+    return "\n".join([f"The CI job covering a deferred check ({facts.deferral}):", *lines])
 
 
 def _adr_evidence(facts: rules.MergeFacts) -> str:
