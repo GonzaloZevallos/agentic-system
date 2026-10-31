@@ -97,6 +97,26 @@ def description(verifications: Sequence[str]) -> str:
 
 
 @dataclass(frozen=True)
+class Retry:
+    """The first run of a call the system ran again because it was `not_ready` (ADR-0065
+    addendum, GH-451): the figures of the run whose saturated load justified the retry, which
+    the second run's own figures would otherwise replace."""
+
+    duration_s: float
+    load_before: float | None
+    load_after: float | None
+
+
+def retry_text(retry: Retry) -> str:
+    """One phrase for a `Retry`, for the reply and for the system's line."""
+    shown = [f"{v:.2f}" if v is not None else "?" for v in (retry.load_before, retry.load_after)]
+    return (
+        f"retried once after a not_ready (first run: {retry.duration_s:.1f} s, "
+        f"load {shown[0]} before, {shown[1]} after)"
+    )
+
+
+@dataclass(frozen=True)
 class CheckRun:
     """One call of the tool as the system measured it. `refused` is set when nothing ran
     (an unknown name); `unrecorded` is the reason a pass was not stored, or None when it
@@ -116,6 +136,7 @@ class CheckRun:
     load_before: float | None = None
     load_after: float | None = None
     cores: int | None = None
+    retry: Retry | None = None
 
 
 def unknown_check(name: str, declared: Sequence[str]) -> str:
@@ -183,6 +204,8 @@ def render(run: CheckRun) -> str:
         lines.append(f"witness: {run.witness}")
     if run.unrecorded is not None:
         lines.append(f"not recorded: {run.unrecorded}")
+    if run.retry is not None:
+        lines.append(f"retried: {retry_text(run.retry)}")
     lines.append(f"duration: {run.duration_s:.1f} s")
     lines.append(f"output:\n{presubmit.tail(run.output)}")
     return "\n".join(lines)
@@ -202,6 +225,7 @@ class VerificationCall:
     load_after: float | None
     cores: int | None
     tail: str
+    retry: Retry | None = None
 
 
 def evidence_line(call: VerificationCall) -> str:
@@ -216,6 +240,8 @@ def evidence_line(call: VerificationCall) -> str:
         if call.cores is not None:
             load += f", {call.cores} cores"
     line = f"- `{call.name}`: outcome `{call.outcome.value}`, {call.duration_s:.1f} s, {load}."
+    if call.retry is not None:
+        line += f" It was {retry_text(call.retry)}; the figures above are the second run's."
     if not call.tail:
         return line
     return f"{line} It printed:\n\n```text\n{call.tail}\n```"

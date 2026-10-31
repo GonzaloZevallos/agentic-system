@@ -77,3 +77,22 @@ async def test_with_no_call_on_a_verification_the_section_is_todays(cfg):
     )
     assert all("Verifications" not in text for text in (declared, none_declared, called_a_check))
     assert declared.count("### ") == none_declared.count("### ") == called_a_check.count("### ")
+
+
+async def test_a_product_with_no_not_ready_exit_still_gets_the_load_and_the_cores_on_the_line(cfg):
+    from tests.fakes import FakeLoadReader
+
+    runner = CallingRunner(("compare",), developer=[delivered()])
+    stack = MemoryStack(checks=CHECKS, verifications={"compare": COMPARE})
+    ports = memory_ports(
+        runner,
+        stack=stack,
+        check_results=MemoryCheckResults(),
+        load_reader=FakeLoadReader(2.0, 3.5),
+    )
+    state, _ = building(ports)
+    patch = await develop(state, cfg, ports)
+    text = patch["sections"]["Developer: api"]
+    assert "load 2.00 before, 3.50 after" in text
+    assert f"{cfg.check_cores} cores" in text
+    assert "load not read" not in text

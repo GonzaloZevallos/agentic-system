@@ -152,6 +152,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 readiness=readiness_of(ports, base, cfg.check_cores),
             ),
             verifications=verifications,
+            # The system's own `LoadReader` and the Cupo de chequeo's cores, so a line for a
+            # verification carries the load and the cores even when the product declared no
+            # `not_ready_exit` (the gate's classification is then not in play).
+            load=ports.load_reader.one_minute if ports.load_reader is not None else None,
+            cores=cfg.check_cores,
         )
         if reuse is not None
         and reuse_rules.fingerprint(reuse.setup, reuse.stage0_version, cfg.check_timeout_s)

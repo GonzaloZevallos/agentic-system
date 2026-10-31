@@ -17,7 +17,14 @@ from dataclasses import replace
 
 from ..domain import presubmit, run_check
 from ..domain.presubmit import CheckResult, tail
-from ..domain.run_check import CheckRun, Outcome, Verification, VerificationCall, resolve_wall
+from ..domain.run_check import (
+    CheckRun,
+    Outcome,
+    Retry,
+    Verification,
+    VerificationCall,
+    resolve_wall,
+)
 from .presubmit import CheckoutPresubmit
 
 
@@ -129,10 +136,11 @@ class RunCheck:
             row = gate._run(name, command)
             after = self._read_load() if measured else None
             outcome: Outcome | None = None
+            retry: Retry | None = None
             if self._classified(name):
-                row, outcome = self._settle(name, command, row)
+                row, outcome, retry = self._settle(name, command, row)
         if verification is not None:
-            return self._verified(name, row, witness_reason, outcome, (before, after))
+            return self._verified(name, row, witness_reason, outcome, (before, after), retry)
         passed, reused = row["passed"], bool(row.get("reused", False))
         key = gate._key(name, command)
         store = gate.ports.check_results
@@ -169,6 +177,7 @@ class RunCheck:
             ),
             row,
             outcome,
+            retry,
         )
 
     def _classified(self, name: str) -> bool:
@@ -190,17 +199,23 @@ class RunCheck:
 
     def _settle(
         self, name: str, command: str, first: CheckResult
-    ) -> tuple[CheckResult, run_check.Outcome]:
+    ) -> tuple[CheckResult, Outcome, Retry | None]:
         """What a command with a declared `not_ready_exit` came to. A `not_ready` first row is
         run once more in this same call, judged by the gate's own `flake_verdict`; the pair is
         never recorded as a flake. A second `not_ready` is `unverified`: the machine could not
         say, which is neither a pass nor a red."""
         if not first.get("not_ready", False):
-            return first, Outcome.PASSED if first["passed"] else Outcome.FAILED
+            return first, Outcome.PASSED if first["passed"] else Outcome.FAILED, None
+        # The first run is kept as a `Retry`: the second run's figures replace it in the row,
+        # and the reader must still see what justified the retry.
+        spent = Retry(
+            first.get("duration_s", 0.0), first.get("load_before"), first.get("load_after")
+        )
         again = self.gate._execute(name, command)
         if presubmit.flake_verdict(first, again) == "flake":
-            return again, Outcome.PASSED
-        return again, Outcome.UNVERIFIED if again.get("not_ready", False) else Outcome.FAILED
+            return again, Outcome.PASSED, spent
+        failed = Outcome.UNVERIFIED if again.get("not_ready", False) else Outcome.FAILED
+        return again, failed, spent
 
     def _verified(
         self,
@@ -209,6 +224,7 @@ class RunCheck:
         witness_reason: str | None,
         outcome: Outcome | None,
         load: tuple[float | None, float | None],
+        retry: Retry | None,
     ) -> CheckRun:
         """What the system measured of a verification: its row, and never a stored pass. The
         call is recorded here, with the load the gate's classification read when the command
@@ -227,6 +243,7 @@ class RunCheck:
                 after,
                 cores,
                 tail(row["output"]),
+                retry,
             )
         )
         return self._measured(
@@ -240,13 +257,16 @@ class RunCheck:
             ),
             row,
             outcome,
+            retry,
         )
 
-    def _measured(self, run: CheckRun, row: CheckResult, outcome: Outcome | None) -> CheckRun:
+    def _measured(
+        self, run: CheckRun, row: CheckResult, outcome: Outcome | None, retry: Retry | None
+    ) -> CheckRun:
         """`run` with the outcome and the load a call measured; the load only for a command the
         product declared a `not_ready_exit` for, so every other reply is what it was."""
         ready = self.gate.readiness
-        run = replace(run, outcome=outcome)
+        run = replace(run, outcome=outcome, retry=retry)
         if ready is None or "load_before" not in row:
             return run
         return replace(

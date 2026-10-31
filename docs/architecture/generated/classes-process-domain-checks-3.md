@@ -26,6 +26,7 @@ classDiagram
     class presubmit__WitnessResult["WitnessResult"]
     class run_check__CheckRun["CheckRun"]
     class run_check__Outcome["Outcome"]
+    class run_check__Retry["Retry"]
     class run_check__Verification["Verification"]
     class run_check__VerificationCall["VerificationCall"]
     class run_check__WallOverCeiling["WallOverCeiling"]

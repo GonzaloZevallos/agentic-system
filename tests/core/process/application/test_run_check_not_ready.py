@@ -146,3 +146,27 @@ def test_a_verification_that_failed_with_75_on_a_quiet_machine_is_a_failed_line(
     handler.run("compare")
     (call,) = handler.calls
     assert call.outcome is Outcome.FAILED and len(commands.ran) == 1
+
+
+def test_a_retried_verification_keeps_the_first_run_on_the_line_and_in_the_reply() -> None:
+    # First run saturated before (9.0) and slow; the retry is quiet but still exits 75 on a
+    # quiet machine, so it is `failed`. The first run's figures must not vanish.
+    first = CommandResult(75, "app not ready")
+    commands = MemoryCommands(**{COMPARE.command: [first, first]})
+    handler, _, _ = rig(FakeLoadReader(HIGH, HIGH, LOW, LOW), commands)
+    reply = rules.render(handler.run("compare"))
+    (call,) = handler.calls
+    assert call.retry is not None and (call.retry.load_before, call.retry.load_after) == (
+        HIGH,
+        HIGH,
+    )
+    assert "retried once after a not_ready" in reply and "load 9.00 before, 9.00 after" in reply
+    assert "retried once after a not_ready" in (handler.evidence() or "")
+
+
+def test_a_verification_that_was_not_retried_says_nothing_of_a_retry() -> None:
+    commands = MemoryCommands(**{COMPARE.command: [CommandResult(0, "ok")]})
+    handler, _, _ = rig(FakeLoadReader(LOW), commands)
+    reply = rules.render(handler.run("compare"))
+    assert "retried" not in reply and "retried" not in (handler.evidence() or "")
+    assert handler.calls[0].retry is None
