@@ -811,7 +811,12 @@ def renumber_carries(changes: Sequence[LineChange]) -> bool:
 
 
 def already_dispatched(
-    landing: Sequence[Mapping[str, object]], head: str, step: str, upstream: str | None
+    landing: Sequence[Mapping[str, object]],
+    head: str,
+    step: str,
+    upstream: str | None,
+    *,
+    unstarted: bool = False,
 ) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
@@ -823,13 +828,20 @@ def already_dispatched(
     sha. A `land_slice` is never taken for good (GH-297): an open one is continued by its
     executor, a refused one is retried until `SLICE_REFUSALS_MAX`, and a landed one leaves
     other units to land on the same head. An `escalate_adr` is taken only once it is resolved
-    (GH-412): an entry recorded without its comment posted does not silence the next round."""
+    (GH-412): an entry recorded without its comment posted does not silence the next round.
+    With `unstarted` (`rules.landing_pass` says the pass is `unstarted`, GH-450) the last entry
+    is recorded and the executor never reopened anything, so it is not taken and `land` runs it
+    again on the same entry."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
+
+    unstarted_entry = landing[-1] if unstarted and landing else None
 
     def taken(entry: Mapping[str, object]) -> bool:
         if entry.get("head") != head or entry.get("step") != step or "lacks" in entry:
             return False
+        if entry is unstarted_entry:
+            return False  # GH-450: recorded, the executor never reopened anything
         if stamped is not None:
             # GH-442: a rerun recorded before the CI release is not the one the release owes.
             at = _aware(entry.get("at"))
@@ -851,6 +863,16 @@ def landing_open(state: TaskState) -> bool:
     """A landing pass is in flight: the last `landing` entry is not resolved and some
     subtask is reopened for it (`rules.landing_open`, where `resume_target` reads it)."""
     return rules.landing_open(state)
+
+
+def landing_pass(state: TaskState) -> rules.LandingPass | None:
+    """What the landing pass on the pull request is (`rules.landing_pass`, GH-450)."""
+    return rules.landing_pass(state)
+
+
+def landing_pass_live(state: TaskState) -> bool:
+    """A landing pass a run must continue (`rules.landing_pass_live`, GH-450)."""
+    return rules.landing_pass_live(state)
 
 
 def entry_of(raw: Mapping[str, object]) -> LandingEntry:
@@ -998,13 +1020,10 @@ def unescalated(raw: Mapping[str, object]) -> dict[str, Any]:
     """The one patch that clears a landing step's escalation: the task is back at the status
     it had before it (`rules.resumed_status`) and the epoch is closed with a `resumed` entry.
     Never writes `cost_usd`. No other module builds it."""
-    view = _landing_view(raw)
-    if isinstance(pull_request := raw.get("pull_request"), str):
-        view["pull_request"] = pull_request
     return {
         "escalated": None,
         "escalation_class": None,
-        "status": rules.resumed_status(view),
+        "status": rules.resumed_status(_landing_view(raw)),
         "pause_log": [{"kind": "resumed"}],
     }
 
@@ -1318,17 +1337,23 @@ def _landing_view(raw: Mapping[str, object]) -> TaskState:
         if isinstance(unit, Mapping) and (status := _status_of(unit.get("status"))):
             subtasks[str(name)] = {"status": status}
     state["subtasks"] = subtasks
+    if isinstance(pull_request := raw.get("pull_request"), str) and pull_request:
+        state["pull_request"] = pull_request
     return state
 
 
 def resume_owed(raw: Mapping[str, object], now: datetime) -> bool:
-    """A reopened landing whose resume child is owed: the pass is open, the task is not
-    escalated, fewer than `LANDING_RESUME_SPAWNS_MAX` children were spawned for the last entry,
-    the last one is older than `LANDING_RESUME_GRACE_S` and no run started since it. A timestamp
+    """A landing pass whose resume child is owed: the pass is `reopened` or `unfinished`
+    (`rules.landing_pass`, GH-450), the task is not escalated, fewer than
+    `LANDING_RESUME_SPAWNS_MAX` children were spawned for the last entry and the last one is
+    older than `LANDING_RESUME_GRACE_S`. A `reopened` pass also needs that no run started since
+    the spawn; an `unfinished` one does not (every unit is approved, so a role run after the
+    spawn says nothing about the pass; the task lock says whether a child is alive). A timestamp
     that is present but unparseable or naive gives False: it cannot be shown that the child
     is gone. Timestamps are compared as aware datetimes, never as strings."""
     state = _landing_view(raw)
-    if not rules.landing_open(state) or raw.get("escalated"):
+    kind = rules.landing_pass(state)
+    if kind not in ("reopened", "unfinished") or raw.get("escalated"):
         return False
     last = state["landing"][-1]
     if last.get("resume_spawns", 0) >= LANDING_RESUME_SPAWNS_MAX:
@@ -1339,6 +1364,8 @@ def resume_owed(raw: Mapping[str, object], now: datetime) -> bool:
     spawned = _aware(spawned_at)
     if spawned is None or now - spawned < timedelta(seconds=LANDING_RESUME_GRACE_S):
         return False
+    if kind == "unfinished":
+        return True
     runs = raw.get("runs")
     for run in runs if isinstance(runs, list) else []:
         if not isinstance(run, Mapping) or run.get("started_at") is None:

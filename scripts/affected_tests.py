@@ -164,6 +164,14 @@ TABLE: tuple[Row, ...] = (
         ("tests/core/process/adapters/github/test_board.py",),
         "the declared GraphQL types of the board's mutations are checked against it",
     ),
+    Row(
+        "tests/core/process/domain/fixtures/GH-484.yaml",
+        (
+            "tests/core/process/domain/test_landing_pass_rules.py",
+            "tests/core/process/application/test_resume.py",
+        ),
+        "apostrophe#484's frontmatter as a kill left it: the landing pass rules read it",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (

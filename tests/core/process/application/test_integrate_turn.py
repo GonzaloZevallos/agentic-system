@@ -5,13 +5,18 @@ one turn at a time. `integrate` is its async wrapper and behaves exactly as befo
 from __future__ import annotations
 
 import inspect
+import subprocess
+from dataclasses import replace
 
 import pytest
 
+from agentic.core.knowledge.adapters.git import GitStack
+from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application.integrate import integrate, integrate_turn
-from agentic.core.process.domain.task import INTEGRATION
+from agentic.core.process.domain import rules
+from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, memory_ports
+from tests.fakes import ScriptedRunner, memory_ports, real_commands
 
 pytestmark = pytest.mark.anyio
 
@@ -68,3 +73,70 @@ async def test_a_turn_with_the_task_escalated_touches_no_workspace(cfg):
     assert patch["status"] == "waiting_on_human"
     assert ports.workspace.merges == []
     assert await integrate(state, cfg, ports) == patch
+
+
+# --- a resumed turn over a task whose landing pass was cut (GH-450), through real git ------------
+
+
+def _git(*args, cwd):
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _landed(product, names):
+    """A product repo with one branch per unit, each adding its own file on top of master."""
+    (product / ".agentic").mkdir()
+    (product / ".agentic/stack.yaml").write_text("checks:\n  tests: pytest\n")
+    _git("init", "-q", "-b", "master", ".", cwd=product)
+    _git("add", "-A", cwd=product)
+    _git("commit", "-q", "-m", "v0", cwd=product)
+    base = _git("rev-parse", "HEAD", cwd=product)
+    units = {}
+    for name in names:
+        _git("checkout", "-q", "-b", f"agentic/GH-12.{name}", base, cwd=product)
+        (product / f"{name}.txt").write_text(name)
+        _git("add", "-A", cwd=product)
+        _git("commit", "-q", "-m", name, cwd=product)
+        units[name] = {**approved(name), "base": base, "reviewed_head": "a" * 40}
+    _git("checkout", "-q", "master", cwd=product)
+    return units
+
+
+@pytest.mark.parametrize("names", [("api",), ("api", "domain")])
+def test_a_resumed_turn_on_an_all_approved_task_with_an_open_fix_changes_nothing(tmp_path, names):
+    units = _landed(tmp_path, names)
+    cfg = Configuration(product_dir=tmp_path)
+    ports = replace(
+        memory_ports(ScriptedRunner()),
+        workspace=GitWorkspace(tmp_path, cfg.git_identity),
+        stack=GitStack(tmp_path),
+        commands=real_commands(),
+    )
+    state = {**TASK, "subtasks": units}
+    first = integrate_turn(state, cfg, ports)  # the wave that merged them, before the kill
+    head = _git("rev-parse", "agentic/GH-12", cwd=tmp_path)
+    assert all((tmp_path / ".agentic/worktrees/GH-12" / f"{n}.txt").exists() for n in names)
+
+    open_fix = {
+        "head": head,
+        "step": "fix",
+        "refusal": "ci_failed",
+        "at": "2026-10-30T10:19:54+00:00",
+        "cost_base": 18.8231,
+    }
+    merged = apply(state, first)
+    if INTEGRATION in merged["subtasks"]:  # reviewed and approved before the kill
+        merged = apply(merged, {"subtasks": {INTEGRATION: {"status": "approved"}}})
+    killed = apply(merged, {"pull_request": "https://example.test/pr/1", "landing": [open_fix]})
+    assert rules.landing_pass(killed) == "unfinished" and rules.resume_target(killed) == "integrate"
+
+    patch = integrate_turn(killed, cfg, ports)
+
+    assert _git("rev-parse", "agentic/GH-12", cwd=tmp_path) == head  # nothing new on the branch
+    assert "landing" not in patch  # the open entry is neither closed nor rewritten
+    assert apply(killed, patch)["landing"] == [open_fix]

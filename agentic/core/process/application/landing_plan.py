@@ -607,7 +607,11 @@ def pending(
     gate = diagnose_gate(raw, step.kind, now)
     if (gate == "skip" and not (released and step.kind == "diagnose")) or (
         landing.already_dispatched(
-            live_entries(raw), facts.pr_head, step.kind, facts.current_master
+            live_entries(raw),
+            facts.pr_head,
+            step.kind,
+            facts.current_master,
+            unstarted=landing.landing_pass(raw) == "unstarted",
         )
     ):
         return None

@@ -542,6 +542,14 @@ def prepare(
         if paused.get("escalation_class") == "estimate":
             _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))
         next_node = rules.resume_target(resumed)
+        if next_node is None and rules.landing_pass(resumed) == "unstarted":
+            # The pass was recorded and nothing reopened (GH-450): `resume` has no stage to
+            # continue, `land` runs the step on the same entry.
+            step = resumed["landing"][-1].get("step")
+            raise ValueError(
+                f"{task_id} has a landing pass ({step}) recorded and not started: "
+                f"run `agentic land --issue {task_id.removeprefix('GH-')}` to start it"
+            )
         if next_node is None:
             raise ValueError(
                 f"{task_id} has nothing left to run ({paused.get('status', 'open')}): "

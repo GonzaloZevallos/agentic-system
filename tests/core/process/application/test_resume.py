@@ -1,5 +1,7 @@
 """What a resume decides before it spends, against in-memory ports (ADR-0003, addendum)."""
 
+from pathlib import Path
+
 import pytest
 
 from agentic.core.process.application import resume
@@ -933,3 +935,56 @@ def test_announcing_an_account_limit_only_pause_unlabels_nothing_it_never_labell
     resume.announce(r, ports)
     assert ports.tracker.unlabeled == []
     assert len(ports.tracker.comments) == 1
+
+
+# --- a run killed in a landing pass with every unit approved (GH-450) ----------------------------
+
+KILLED = Path(__file__).parents[1] / "domain" / "fixtures" / "GH-484.yaml"
+
+
+def killed(**more):
+    """apostrophe#484 as its kill left it, through the production document loader."""
+    return {**document.parse(f"---\n{KILLED.read_text()}---\n\n# GH-484\n"), **more}
+
+
+def seeded(raw):
+    ports = memory_ports()
+    ports.documents.save(raw)
+    ports.workspace.existing_branches.update(
+        {
+            f"agentic/{raw['id']}": (raw["task_head"], "b0"),
+            **{
+                unit["branch"]: (unit["reviewed_head"], unit["base"])
+                for unit in raw["subtasks"].values()
+            },
+        }
+    )
+    return ports
+
+
+def test_a_run_killed_in_a_landing_pass_resumes_from_the_document_at_integrate(cfg):
+    ports = seeded(killed())
+    state = resume.from_document("GH-484", ports)
+    assert rules.landing_open(state) is False  # what read the task as ended before
+    r = resume.prepare("GH-484", state, "document", cfg, ports)
+    assert r.target == "integrate" and r.decision is None
+    assert r.resumed["status"] == "developing"
+
+
+def test_a_pass_recorded_and_never_started_is_left_to_land_with_its_name(cfg):
+    raw = killed()
+    raw["landing"][-1].pop("cost_base")
+    ports = seeded(raw)
+    state = resume.from_document("GH-484", ports)
+    with pytest.raises(ValueError) as refused:
+        resume.prepare("GH-484", state, "document", cfg, ports)
+    assert "agentic land --issue 484" in str(refused.value) and "(fix)" in str(refused.value)
+
+
+def test_a_resolved_pass_on_a_pull_request_task_still_has_nothing_left_to_run(cfg):
+    raw = killed()
+    raw["landing"][-1]["resolved_at"] = "2026-10-30T11:00:00+00:00"
+    raw["status"] = "ready_for_review"
+    ports = seeded(raw)
+    with pytest.raises(ValueError, match="nothing left to run"):
+        resume.prepare("GH-484", resume.from_document("GH-484", ports), "document", cfg, ports)
