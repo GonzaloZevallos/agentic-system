@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 5, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 6, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de application](classes-process-application.md)
 - Hermanas:
@@ -11,9 +11,13 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
   - [application: support (parte 3)](classes-process-application-support-3.md)
   - [application: support (parte 4)](classes-process-application-support-4.md)
   - [application: support (parte 5)](classes-process-application-support-5.md)
+  - [application: support (parte 6)](classes-process-application-support-6.md)
 
 ```mermaid
 classDiagram
+    class ports__Checkout["Checkout"]
+    class ports__CiLogs["CiLogs"]
+    class ports__CommandResult["CommandResult"]
     class ports__Commands["Commands"]
     class ports__FastForwardView["FastForwardView"]
     class ports__FlagVocabulary["FlagVocabulary"]
@@ -24,12 +28,6 @@ classDiagram
     class ports__IssueComment["IssueComment"]
     class ports__IssueRow["IssueRow"]
     class ports__IssueState["IssueState"]
-    class ports__LaunchAttempt["LaunchAttempt"]
-    class ports__Launcher["Launcher"]
-    class ports__ListedPullRequest["ListedPullRequest"]
-    class ports__LockHeld["LockHeld"]
-    class ports__LockRecord["LockRecord"]
-    ports__LockHeld o-- ports__LockRecord
 ```
 
 ## Relaciones con otras páginas

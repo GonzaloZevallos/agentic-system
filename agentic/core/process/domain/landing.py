@@ -1482,3 +1482,109 @@ def flake_marker(check: str) -> str:
     """The first line of a flake issue body, which the deduplication reads back: one open
     issue per check name, whichever task saw it flake."""
     return f"<!-- agentic:flake check={check} -->"
+
+
+# What a red job's log is reduced to for a diagnosis (GH-449): at most this many jobs, this
+# many bytes per job and in all. Declared, not measured; the excerpt is one prompt's input.
+CI_LOG_JOBS = 4
+CI_LOG_PER_JOB_BYTES = 16 * 1024
+CI_LOG_TOTAL_BYTES = 48 * 1024
+_CI_LOG_CONTEXT = 2
+# `<job>\t<step>\t<timestamp> <text>` is how `gh run view --log-failed` prints a line, with a
+# byte order mark before the first timestamp. The markers below are anchored after that prefix,
+# so a line that merely quotes one (an `echo`) is no hit. Evidence: runs 40749888261 and
+# 40684006672 of this repo, kept under `tests/fixtures/ci_logs/`.
+_CI_LOG_PREFIX = re.compile(
+    r"^(?:(?P<job>[^\t]*)\t(?P<step>[^\t]*)\t)?\ufeff?"
+    r"(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?)?"
+)
+# `##[error]` is the Actions annotation of a failed step, `FAILED tests/` and `E   ` are pytest's
+# summary and assertion lines, and the last three are what the `docs` check prints on stdout
+# (`DOCS_STALE` and its two other exits in `.agentic/stack.yaml`) plus the hint `check.py` adds.
+_CI_LOG_MARKER = re.compile(
+    r"^(?:##\[error\]|FAILED tests/|E   |docs stale:|docs generate exited|docs: git status failed"
+    r"|run `uv run python scripts/docs/generate\.py`)"
+)
+_CI_LOG_WRAPPER = re.compile(r"<(/?)(CiLog)", re.IGNORECASE)
+
+
+def _ci_log_attribute(job: str) -> str:
+    return re.sub(r'["<>\r\n]', "_", job)
+
+
+def _ci_log_text(text: str) -> str:
+    """`text` with anything that reads as the wrapper's own tag defused, so a log cannot
+    close `<CiLog>` and speak outside it."""
+    return _CI_LOG_WRAPPER.sub(lambda hit: f"<\\{hit.group(1)}{hit.group(2)}", text)
+
+
+def _ci_log_rows(text: str) -> list[tuple[str, str, int]]:
+    """`(step, text without its prefix, original size in bytes)` for every line of `text`."""
+    rows: list[tuple[str, str, int]] = []
+    for raw in text.splitlines():
+        found = _CI_LOG_PREFIX.match(raw)
+        assert found is not None  # every group of the pattern is optional
+        rows.append((found.group("step") or "", raw[found.end() :], len(raw.encode()) + 1))
+    return rows
+
+
+def _within(rows: Sequence[tuple[str, str, int]], order: Iterable[int], room: int) -> list[int]:
+    """The first of `order` that fit in `room` bytes, stopping at the first that does not."""
+    kept: list[int] = []
+    for index in order:
+        room -= len(rows[index][1].encode()) + 1
+        if room < 0:
+            break
+        kept.append(index)
+    return sorted(kept)
+
+
+def _ci_log_body(log: ci.JobLog, room: int) -> tuple[list[str], int]:
+    """The lines of one read log to show within `room` bytes and the bytes of the original that
+    stay out: first the marker lines with their context (the latest ones when they do not all
+    fit), then the tail of the failed step, the last step the log has."""
+    rows = _ci_log_rows(log.text)
+    hit = {i for i, row in enumerate(rows) if _CI_LOG_MARKER.match(row[1])}
+    context = {
+        j
+        for i in hit
+        for j in range(max(i - _CI_LOG_CONTEXT, 0), min(i + _CI_LOG_CONTEXT, len(rows) - 1) + 1)
+    }
+    marked = _within(rows, sorted(context, reverse=True), room)
+    room -= sum(len(rows[i][1].encode()) + 1 for i in marked)
+    failed_step = rows[-1][0] if rows else ""
+    tail_order = [
+        i for i in range(len(rows) - 1, -1, -1) if rows[i][0] == failed_step and i not in marked
+    ]
+    tail = _within(rows, tail_order, room) if room > 0 else []
+    shown = [*marked, *tail]
+    kept = set(shown)
+    left_out = sum(row[2] for i, row in enumerate(rows) if i not in kept)
+    return [_ci_log_text(rows[i][1]) for i in shown], left_out
+
+
+def ci_log_excerpt(logs: Sequence[ci.JobLog]) -> str:
+    """The failed jobs' logs as one text a diagnosis can cite (GH-449): at most `CI_LOG_JOBS`
+    jobs, each in `<CiLog job="...">` and capped at `CI_LOG_PER_JOB_BYTES`, all together at
+    `CI_LOG_TOTAL_BYTES`. A log that was read gives its marker lines, then the tail of its failed
+    step, then `bytes omitidos: N`; one that was not gives `log no leído: <cause>`. Empty input
+    gives the empty string. Pure; the text is for the prompt and is never stored."""
+    chosen = list(logs[:CI_LOG_JOBS])
+    if not chosen:
+        return ""
+    cap = min(CI_LOG_PER_JOB_BYTES, CI_LOG_TOTAL_BYTES // len(chosen))
+    blocks: list[str] = []
+    for log in chosen:
+        opening = f'<CiLog job="{_ci_log_attribute(log.job)}">\n'
+        closing = "</CiLog>\n"
+        if log.cause != "read" or not log.text:
+            cause = log.cause if log.cause != "read" else "empty"
+            blocks.append(f"{opening}log no leído: {cause}\n{closing}")
+            continue
+        footer_room = len("bytes omitidos: 18446744073709551616\n")
+        room = cap - len(opening.encode()) - len(closing) - footer_room
+        lines, left_out = _ci_log_body(log, max(room, 0))
+        omitted = left_out + log.truncated_bytes
+        body = "".join(f"{text}\n" for text in lines)
+        blocks.append(f"{opening}{body}bytes omitidos: {omitted}\n{closing}")
+    return "".join(blocks)

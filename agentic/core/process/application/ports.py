@@ -17,7 +17,7 @@ from typing import Any, Literal, Protocol
 
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
-from ..domain.ci import CiReport, CiUnreadable, Containment
+from ..domain.ci import CiReport, CiUnreadable, Containment, JobLog
 from ..domain.design import Design
 from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
@@ -1958,6 +1958,18 @@ class CheckScheduler(Protocol):
         ...
 
 
+class CiLogs(Protocol):
+    """The logs of the red jobs of a pull request head (GH-449), a port of its own so
+    `Tracker` and its fakes stay as they were."""
+
+    def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
+        """One `JobLog` per red job of `reference`'s pull request (at most four), read only
+        when the CI report belongs to `head` (`rules.same_commit`); each is bounded in bytes
+        and time. Never raises: a log that was not read says why in `cause`. The text is for one
+        prompt and is never stored."""
+        ...
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -1995,3 +2007,6 @@ class Ports:
     # how every checkout ran before.
     scratch: Scratch | None = None
     free_space: FreeSpace | None = None
+    # The logs of the red jobs of a pull request head, for the Landing Diagnoser (GH-449).
+    # `None` reads none and makes no call, which is how every landing ran before it existed.
+    ci_logs: CiLogs | None = None

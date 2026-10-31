@@ -1,0 +1,11 @@
+check	Run uv run python scripts/docs/check.py	﻿2026-10-28T12:20:50.2939563Z ##[group]Run uv run python scripts/docs/check.py
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:20:50.2939832Z ^[[36;1muv run python scripts/docs/check.py^[[0m
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:20:50.2992627Z shell: /usr/bin/bash -e {0}
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:20:50.2992774Z env:
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:20:50.2992932Z   UV_PYTHON_INSTALL_DIR: /home/runner/work/_temp/uv-python-dir
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:20:50.2993156Z   UV_CACHE_DIR: /home/runner/work/_temp/setup-uv-cache
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:20:50.2993335Z ##[endgroup]
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:21:36.3245293Z docs stale: commit these
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:21:36.3245642Z  M docs/architecture/generated/classes-process-application.mmd
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:21:36.3257970Z run `uv run python scripts/docs/generate.py` and commit
+check	Run uv run python scripts/docs/check.py	2026-10-28T12:21:36.3378250Z ##[error]Process completed with exit code 1.
