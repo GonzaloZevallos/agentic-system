@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 6
-summarised: 60
+summaries: 11
+summarised: 110
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -267,3 +267,249 @@ tasks:
       - GH-359
   GH-360@review:
     cost_usd: 0.1061
+  GH-353@review:
+    cost_usd: 0.0963
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-353
+  GH-354@review:
+    cost_usd: 0.1246
+  GH-365@review:
+    cost_usd: 0.0861
+  GH-355@review:
+    cost_usd: 0.052
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-355
+  GH-364@review:
+    cost_usd: 0.079
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-364
+  GH-373@review:
+    cost_usd: 0.0701
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-373
+  GH-371@review:
+    cost_usd: 0.0721
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-371
+  GH-381@review:
+    cost_usd: 0.0595
+  GH-391@review:
+    cost_usd: 0.1691
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-391
+  GH-361@review:
+    cost_usd: 0.1319
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-361
+    decisions: 1
+  GH-376@review:
+    cost_usd: 0.0897
+  GH-395@review:
+    cost_usd: 0.0705
+  GH-397@review:
+    cost_usd: 0.0677
+  GH-374@review:
+    cost_usd: 0.0482
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-374
+  GH-375@review:
+    cost_usd: 0.0715
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-375
+    decisions: 1
+  GH-392@review:
+    cost_usd: 0.0845
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-392
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-392
+    decisions: 2
+  GH-398@review:
+    cost_usd: 0.0636
+  GH-399@review:
+    cost_usd: 0.0819
+  GH-385@review:
+    cost_usd: 0.0643
+  GH-389@review:
+    cost_usd: 0.1155
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-389
+  GH-403@review:
+    cost_usd: 0.039
+  GH-400@review:
+    cost_usd: 0.1583
+    decisions: 1
+  GH-408@review:
+    cost_usd: 0.0636
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-408
+  GH-406@review:
+    cost_usd: 0.0993
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-406
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-406
+  GH-409@review:
+    cost_usd: 0.0901
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-409
+  GH-415@review:
+    cost_usd: 0.0416
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-415
+  GH-412@review:
+    cost_usd: 0.0687
+  GH-421@review:
+    cost_usd: 0.0353
+  GH-420@review:
+    cost_usd: 0.1079
+  GH-425@review:
+    cost_usd: 0.0353
+  GH-427@review:
+    cost_usd: 0.0628
+  GH-429@review:
+    cost_usd: 0.0814
+  GH-438@review:
+    cost_usd: 0.0708
+  GH-431@review:
+    cost_usd: 0.0978
+  GH-441@review:
+    cost_usd: 0.0759
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-441
+  GH-442@review:
+    cost_usd: 0.1072
+  GH-434@review:
+    cost_usd: 0.0903
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-434
+  GH-435@review:
+    cost_usd: 0.0917
+  GH-436@review:
+    cost_usd: 0.1037
+  GH-437@review:
+    cost_usd: 0.1054
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-437
+  GH-449@review:
+    cost_usd: 0.1102
+  GH-454@review:
+    cost_usd: 0.0642

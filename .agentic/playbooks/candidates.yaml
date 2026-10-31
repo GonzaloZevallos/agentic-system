@@ -683,3 +683,351 @@ candidates:
   - finding
   - return
   added_at: '2026-10-26T16:38:52.546+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: Before you deliver, run the full non-llm suite, not only your own tests. A new test that reads many repo files can trip a repo-wide guard such as the read-coverage check, so run that guard too.
+  confidence: medium
+  seen_in:
+  - GH-354
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T07:16:54.503+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: When a module you integrate fails the type check, fix the type at its source. Never wrap the value in cast to get the checker to pass, because the engineering standards forbid it.
+  confidence: medium
+  seen_in:
+  - GH-354
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T07:16:54.503+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a doc or reference states a behaviour (e.g. 'fails at load'), trace the code path that enforces it and confirm it is actually called there before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-365
+  sources:
+  - finding
+  added_at: '2026-10-27T09:39:03.186+00:00'
+- slug: developer
+  category: standard-other
+  lesson: After adding a rule to a prompt, re-read the surrounding text for lines it now contradicts and for 'as above' references that point at nothing, and fix them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-365
+  sources:
+  - finding
+  added_at: '2026-10-27T09:39:03.186+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: Before you deliver, check each test the wiring brief asks for against the tests that exist, and write the missing ones. A test of a neighbouring end-to-end path does not replace a requested unit test.
+  confidence: medium
+  seen_in:
+  - GH-355
+  sources:
+  - finding
+  added_at: '2026-10-27T10:21:47.869+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you change a mechanism, run the existing tests that touch it several times, each alone, and fix any order-dependent one before delivering. Never claim the suite passes unedited from one green run.
+  confidence: medium
+  seen_in:
+  - GH-364
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T10:59:58.030+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you narrow a guard, label or retry condition, list the other attempts, pre-existing states and call sites that share it, and test or note each one before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-381
+  sources:
+  - finding
+  added_at: '2026-10-27T15:52:57.174+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, re-read each plan invariant and check every test and wiring change against it, for example a test that reads real system state, or a task key that is never passed down to the composed adapter.
+  confidence: medium
+  seen_in:
+  - GH-391
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T21:08:39.243+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief lists states or cases (such as merged, closed, discarded, split), handle each one in the code and seed a test for each, including the fallback the brief names for unreadable data.
+  confidence: medium
+  seen_in:
+  - GH-391
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T21:08:39.243+00:00'
+- slug: developer_integrator
+  category: process-suite-red
+  lesson: After merging master, run the full declared test suite once on the merged head within its timeout, and fix or report any failure or hang before you hand the integration over.
+  confidence: medium
+  seen_in:
+  - GH-361
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T00:12:42.205+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, check each brief invariant that forbids a call or side effect in some case, gate the new code on that case, and add a test where the case holds that asserts the call never happens.
+  confidence: medium
+  seen_in:
+  - GH-376
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T01:45:59.134+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: For each new branch or text the plan promises, trace the caller's conditions to confirm it is reachable, and add a test through the declared seam that produces its output.
+  confidence: medium
+  seen_in:
+  - GH-395
+  sources:
+  - finding
+  added_at: '2026-10-28T02:58:56.511+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: Before you deliver, check that no decision rests on a listing or state read before the action it guards. Re-check at the moment of acting, or make the check and action atomic.
+  confidence: low
+  seen_in:
+  - GH-397
+  sources:
+  - finding
+  added_at: '2026-10-28T03:04:17.176+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: When you generate a request or query from a template, declare only what that request uses, and test it with a fake that enforces the real service's validation rules, not one that accepts anything.
+  confidence: low
+  seen_in:
+  - GH-375
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T04:16:31.268+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan states an invariant such as a required message prefix, grep every raise or exit site in the change and route each through the shared helper, then assert the invariant in a test per path.
+  confidence: medium
+  seen_in:
+  - GH-392
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T04:22:28.646+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: When the plan states an invariant, grep every code path and text that touches that subject, such as notices and prompts, and confirm each one honours it before you deliver the integration.
+  confidence: medium
+  seen_in:
+  - GH-398
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T05:07:34.677+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When an invariant names the exact exception types a handler may catch, match only those types. Do not add a branch that absorbs a wider case, and flag the gap to the plan instead.
+  confidence: medium
+  seen_in:
+  - GH-389
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T08:51:38.442+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Never narrow a test or deliverable so it passes when the brief requires more; build it, or flag a conflict between criteria and constraints in your first delivery instead of shipping a silent substitute.
+  confidence: medium
+  seen_in:
+  - GH-400
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T10:54:47.804+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you write docs about behaviour, trace each claim to the code branch that does it, including exhausted, error and conditional paths and who triggers what, and cite it, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-400
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T10:54:47.804+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: When you integrate subtasks, grep the merged code for cast and fix the types at their source; a new module also needs its entry in the type-checked file registry before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-406
+  sources:
+  - finding
+  added_at: '2026-10-28T12:44:40.575+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief states a lifetime or scope guarantee (once per run), trace how production constructs the object, per call or per node, and make the code, tests and docs state that same scope.
+  confidence: medium
+  seen_in:
+  - GH-409
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T14:45:46.483+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a guard reads a value another component produces, build at least one test input from that real producer, not only a hand-made fake, to prove each outcome the brief names is reachable.
+  confidence: medium
+  seen_in:
+  - GH-420
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-28T19:33:33.807+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, run each stated invariant against the brief's combined cases. If two cannot both hold, record it under Decisions and assumptions with the test output; never ship a test asserting the violation.
+  confidence: medium
+  seen_in:
+  - GH-429
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T01:43:38.163+00:00'
+- slug: developer_integrator
+  category: process-suite-red
+  lesson: Before you deliver, run the full non-LLM suite on the integrated tree, including repo-wide guard tests such as coverage tables, not only the tests of the subtasks you merged.
+  confidence: medium
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: 'After merging subtasks, re-verify each plan invariant on the integrated tree with its own check, and grep for duplicated declarations: each subtask can satisfy it alone while the merge breaks it.'
+  confidence: medium
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: Do not add a type ignore in integration code or test helpers. Express the narrowing in code, for example bind the match once and handle None, so the checker is satisfied rather than silenced.
+  confidence: low
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a module or a step to a flow, update the hand-written architecture and flow docs that list it in the same change, not only the generated diagrams.
+  confidence: medium
+  seen_in:
+  - GH-431
+  sources:
+  - finding
+  added_at: '2026-10-29T05:49:22.185+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When two entry points must agree on a decision, call one shared function with the same trigger condition, and test every plan invariant against each shape (ledger, depth-1, CI) before delivering.
+  confidence: medium
+  seen_in:
+  - GH-442
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T10:46:26.758+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Never silence ruff with noqa E402 to place imports mid-file; put every import in the file header.
+  confidence: medium
+  seen_in:
+  - GH-442
+  sources:
+  - finding
+  added_at: '2026-10-29T10:46:26.758+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: When the plan says a state change is recorded in the same write as another, persist both in a single save and add a test that no write leaves one without the other.
+  confidence: medium
+  seen_in:
+  - GH-442
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-29T10:46:26.758+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: For every guard that raises or rejects input (name checks, budget limits), write a test that feeds it an input it must reject and asserts the error. Passing happy-path tests do not exercise it.
+  confidence: medium
+  seen_in:
+  - GH-435
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-30T05:08:46.219+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan names a single source for a number, derive it from that source in tests too, never as a literal. Before you deliver, grep your added lines for the numbers and for expected strings that embed them.
+  confidence: medium
+  seen_in:
+  - GH-436
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-30T07:29:07.951+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before you deliver, grep the whole diff, ADRs and docs prose included, for each figure an invariant says no file may copy, and cite the named constant instead of the number.
+  confidence: medium
+  seen_in:
+  - GH-437
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-30T10:05:37.763+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: For every failure path the brief names, such as an exception or a timeout, record the closed outcome the brief requires and assert it in the test. Do not assert that nothing is recorded.
+  confidence: medium
+  seen_in:
+  - GH-449
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-31T08:57:14.432+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: After you add files such as fixtures or new paths, run the declared tests check in its affected-only form. Register the new paths in any input table the selector reads before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-449
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-31T08:57:14.432+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: When a record has a known closed shape, type it with a TypedDict or a literal type at its source. Do not widen it to a dict of object and then re-validate it by hand.
+  confidence: low
+  seen_in:
+  - GH-449
+  sources:
+  - finding
+  added_at: '2026-10-31T08:57:14.432+00:00'
