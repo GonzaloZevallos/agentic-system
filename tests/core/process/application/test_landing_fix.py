@@ -2074,6 +2074,22 @@ def test_an_entry_carries_no_ci_logs_but_the_closed_record():
     assert "ci_logs" not in landing_rules.entry_of({"ci_logs": free_text})
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "the log said boom",
+        {"job": "check", "bytes": 3, "cause": "read"},
+        ["check"],
+        [{"job": 7, "bytes": 3, "cause": "read"}],
+        [{"job": "check", "bytes": True, "cause": "read"}],
+        [{"job": "check", "bytes": "3", "cause": "read"}],
+        [{"job": "check", "cause": "read"}],
+    ],
+)
+def test_an_entry_drops_a_ci_logs_value_that_is_not_the_closed_record(value):
+    assert "ci_logs" not in landing_rules.entry_of({"ci_logs": value})
+
+
 def test_a_read_that_raises_leaves_the_diagnosis_going_with_a_closed_cause_and_no_excerpt(tmp_path):
     class Raising:
         def failed_job_logs(self, reference, head):

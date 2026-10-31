@@ -13,6 +13,7 @@ from . import rules
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import FallbackCause as FallbackCause
+from .task import JobLogCause as JobLogCause
 
 # How long a pending, missing or unreadable CI is waited for before the merge gate refuses.
 # A declared value, not a measured one: nobody has measured a product's CI duration yet.
@@ -59,9 +60,6 @@ class CiUnreadable:
     read (`gh_unreadable`)."""
 
     cause: Literal["gh_unavailable", "gh_unreadable"]
-
-
-JobLogCause = Literal["read", "unreadable", "empty", "other_head", "timed_out"]
 
 
 @dataclass(frozen=True)

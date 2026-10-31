@@ -952,7 +952,19 @@ class LandingEntry(TypedDict, total=False):
     integration_work: bool
     # GH-449, `diagnose` entries: what reading each red job's CI log gave, `{job, bytes, cause}`
     # with `cause` from the closed `ci.JobLogCause`. Never the text of the log.
-    ci_logs: list[dict[str, object]]
+    ci_logs: list[CiLogRecord]
+
+
+JobLogCause = Literal["read", "unreadable", "empty", "other_head", "timed_out"]
+
+
+class CiLogRecord(TypedDict):
+    """What reading one red job's CI log gave, as a `diagnose` entry keeps it (GH-449): the
+    job, the bytes read and the closed cause. Never the text of the log."""
+
+    job: str
+    bytes: int
+    cause: JobLogCause
 
 
 class EstimateRecord(TypedDict):

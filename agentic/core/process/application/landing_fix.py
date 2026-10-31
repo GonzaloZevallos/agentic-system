@@ -19,6 +19,7 @@ from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import (
     VERDICT_KEY,
     ChangeCategory,
+    CiLogRecord,
     EscalationClass,
     FindingRecord,
     PlanSettledRow,
@@ -546,7 +547,7 @@ CI_LOG_NOTICE = (
 they were for every run without a CI log (GH-449, invariant 6)."""
 
 
-def _ci_excerpt(context: LandingContext, reference: str) -> tuple[str, list[dict[str, object]]]:
+def _ci_excerpt(context: LandingContext, reference: str) -> tuple[str, list[CiLogRecord]]:
     """The failed jobs' log excerpt for the diagnosis and the closed record of the read
     (`{job, bytes, cause}` per job), or `("", [])` with no `CiLogs`. A read that raised gives no
     excerpt and one `unreadable` record, so the ledger still says why: reading the logs never
@@ -569,7 +570,7 @@ def _ci_excerpt(context: LandingContext, reference: str) -> tuple[str, list[dict
     ]
 
 
-def _stamp_ci_logs(context: LandingContext, read: list[dict[str, object]]) -> None:
+def _stamp_ci_logs(context: LandingContext, read: list[CiLogRecord]) -> None:
     """What the CI log read gave, on the diagnose entry, after the save that would overwrite it:
     the closed `{job, bytes, cause}` record, never the text (GH-449)."""
     if read:

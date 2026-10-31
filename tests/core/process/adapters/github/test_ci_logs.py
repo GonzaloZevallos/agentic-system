@@ -87,6 +87,19 @@ def test_a_timeout_is_a_closed_cause() -> None:
     assert (log.cause, log.text) == ("timed_out", "")
 
 
+def test_a_timeout_after_the_cap_was_filled_is_still_a_read_log() -> None:
+    full = b"x" * (1024 * 1024)
+    fake = Fake([check("check")], answer=StreamRead(full, 2048, -9, True))
+    (log,) = fake.logs()
+    assert (log.cause, log.bytes, log.truncated_bytes) == ("read", len(full), 2048)
+
+
+def test_a_failing_exit_below_the_cap_stays_unreadable_even_after_a_timeout_kill() -> None:
+    fake = Fake([check("check")], answer=StreamRead(b"x" * 10, 0, -9, False))
+    (log,) = fake.logs()
+    assert log.cause == "unreadable"
+
+
 def test_empty_output_is_empty() -> None:
     fake = Fake([check("check")], answer=StreamRead(b" \n", 0, 0, False))
     assert [log.cause for log in fake.logs()] == ["empty"]

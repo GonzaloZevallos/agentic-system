@@ -26,8 +26,10 @@ from .task import (
     VERDICT_KEY,
     VERDICT_SYNC,
     Carried,
+    CiLogRecord,
     DiagnosisVerdict,
     FailureReason,
+    JobLogCause,
     LandedSlice,
     LandedSliceRef,
     LandingEntry,
@@ -904,21 +906,23 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     return out
 
 
-def _ci_logs_of(value: object) -> list[dict[str, object]] | None:
+def _ci_logs_of(value: object) -> list[CiLogRecord] | None:
     """`value` as the `ci_logs` record of a diagnose entry (GH-449), `None` when it is not one:
     `{job, bytes, cause}` per job, the cause from the closed `ci.JobLogCause`. Anything else a
     document carries under the key is dropped, so no free text rides on the ledger."""
     if not isinstance(value, list):
         return None
-    causes = get_args(ci.JobLogCause)
-    kept: list[dict[str, object]] = []
+    kept: list[CiLogRecord] = []
     for item in value:
-        if not (isinstance(item, Mapping) and item.get("cause") in causes):
+        if not isinstance(item, Mapping):
             return None
         size, job = item.get("bytes"), item.get("job")
-        if not (isinstance(job, str) and isinstance(size, int) and not isinstance(size, bool)):
+        cause = next((one for one in get_args(JobLogCause) if item.get("cause") == one), None)
+        if cause is None or not isinstance(job, str):
             return None
-        kept.append({"job": job, "bytes": size, "cause": item["cause"]})
+        if not isinstance(size, int) or isinstance(size, bool):
+            return None
+        kept.append({"job": job, "bytes": size, "cause": cause})
     return kept
 
 

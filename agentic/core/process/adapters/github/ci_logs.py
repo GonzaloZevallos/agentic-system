@@ -78,9 +78,13 @@ class GhCiLogs:
             )
         except (OSError, ValueError, subprocess.SubprocessError):
             return _unread(check.name, check.link, "unreadable")
-        if read.timed_out:
+        # A stream that filled the cap kept the whole of what the excerpt can use: a wait that
+        # ran out while the rest was being counted and dropped (and the kill that followed) is
+        # not a log that was not read.
+        capped = len(read.data) >= self._max_bytes
+        if read.timed_out and not capped:
             return _unread(check.name, check.link, "timed_out")
-        if read.returncode != 0:
+        if read.returncode != 0 and not capped:
             return _unread(check.name, check.link, "unreadable")
         text = read.data.decode("utf-8", errors="replace")
         if not text.strip():
