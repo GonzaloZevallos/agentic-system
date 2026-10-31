@@ -23,6 +23,7 @@ from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.presubmit import CheckResult, RerunForm
+from ..domain.run_check import Verification
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -503,6 +504,23 @@ class ProductStack(Protocol):
         GH-365), as the commit `revision` declares them. Empty when the product declares none,
         which is every verdict of today. Raises `ValueError` when the key is malformed, or
         declared by a product with no `delivery_checks`."""
+        ...
+
+    def verifications(self, revision: str) -> dict[str, Verification]:
+        """Verification name -> its command and wall (`core.knowledge`, ADR-0065 addendum,
+        GH-451), as the commit `revision` declares them. Empty when the product declares none,
+        which is every run of today. Raises `ValueError` when the key is malformed."""
+        ...
+
+    def check_timeouts(self, revision: str) -> dict[str, float]:
+        """Check name -> the wall, in seconds, its product gives it (`core.knowledge`), as the
+        commit `revision` declares them. Empty when the product declares none."""
+        ...
+
+    def not_ready_exit(self, revision: str) -> dict[str, int]:
+        """Check or verification name -> the exit code that says the environment was not
+        ready (`core.knowledge`), as the commit `revision` declares them. Empty when the
+        product declares none."""
         ...
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:

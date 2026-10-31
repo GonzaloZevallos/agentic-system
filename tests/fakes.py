@@ -76,6 +76,7 @@ from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import CheckResult, RerunForm
+from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -404,6 +405,9 @@ class MemoryStack:
         merge_inert: tuple[str, ...] = (),
         check_budgets: dict[str, float] | None = None,
         docs: Docs | None = None,
+        verifications: dict[str, Verification] | None = None,
+        check_timeouts: dict[str, float] | None = None,
+        not_ready_exit: dict[str, int] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -449,6 +453,11 @@ class MemoryStack:
         self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
         # Empty is a product with no check budget (GH-365): every verdict of today.
         self.declared_check_budgets = {} if check_budgets is None else check_budgets
+        # Empty is a product that declares no verification, wall or not-ready exit code
+        # (ADR-0065 addendum, GH-451): every run of today.
+        self.declared_verifications = {} if verifications is None else verifications
+        self.declared_check_timeouts = {} if check_timeouts is None else check_timeouts
+        self.declared_not_ready_exit = {} if not_ready_exit is None else not_ready_exit
         # Empty is a product that declares no `merge_inert`: the merge gate of today.
         self.declared_merge_inert = merge_inert
         # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
@@ -499,6 +508,18 @@ class MemoryStack:
     def check_budgets(self, revision: str) -> dict[str, float]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_check_budgets
+
+    def verifications(self, revision: str) -> dict[str, Verification]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_verifications
+
+    def check_timeouts(self, revision: str) -> dict[str, float]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_check_timeouts
+
+    def not_ready_exit(self, revision: str) -> dict[str, int]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_not_ready_exit
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.

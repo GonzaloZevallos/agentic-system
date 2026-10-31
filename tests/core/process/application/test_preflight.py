@@ -30,6 +30,7 @@ from agentic.core.process.application.run_role import load_prompt
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.docs import Docs, plan_text, review_text
 from agentic.core.process.domain.presubmit import RerunForm
+from agentic.core.process.domain.run_check import Verification, WallOverCeiling
 from agentic.core.process.domain.roles import ROLES
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.shared.configuration import Configuration
@@ -864,3 +865,41 @@ def test_the_owner_cap_is_an_advisory_and_preflight_does_not_refuse_over_it():
     ports.workspace.files[("HEAD", "docs/decisiones-del-dueño.md")] = _rules(500)
     assert len(module.owner_over_cap(ports)) == 1
     assert module.over_cap(ports) == []  # the criteria cap, which can refuse a merge, is apart
+
+
+# --- the ceiling of a declared wall (ADR-0065 addendum, GH-451) -----------------------------
+
+
+def _walls_ports(stage0, **declared):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    return replace(ports, stack=MemoryStack(**declared))
+
+
+def test_a_verification_wall_over_the_ceiling_refuses_before_spending(stage0):
+    ports = _walls_ports(
+        stage0, verifications={"compare": Verification(command="./compare.sh", wall_s=3601.0)}
+    )
+    with pytest.raises(WallOverCeiling, match=r"'compare'.*3601.*3600"):
+        preflight(Configuration(product_dir=PRODUCT), ports)
+
+
+def test_a_check_timeout_over_the_ceiling_refuses_before_spending(stage0):
+    ports = _walls_ports(stage0, check_timeouts={"tests": 7200.0})
+    with pytest.raises(WallOverCeiling, match=r"'tests'"):
+        preflight(Configuration(product_dir=PRODUCT), ports)
+
+
+def test_the_owner_can_raise_the_ceiling_and_the_same_stack_passes(stage0):
+    ports = _walls_ports(stage0, check_timeouts={"tests": 7200.0})
+    cfg = Configuration(product_dir=PRODUCT, verification_wall_max_s=7200.0)
+    preflight(cfg, ports)
+
+
+def test_walls_at_or_under_the_ceiling_and_no_walls_pass_preflight(stage0):
+    preflight(Configuration(product_dir=PRODUCT), _walls_ports(stage0))
+    ports = _walls_ports(
+        stage0,
+        verifications={"compare": Verification(command="./compare.sh", wall_s=3600.0)},
+        check_timeouts={"tests": 30.0},
+    )
+    preflight(Configuration(product_dir=PRODUCT), ports)
