@@ -2009,14 +2009,11 @@ def test_a_failed_comment_leaves_the_entry_unresolved_and_the_question_is_asked_
 
 # --- GH-449: the diagnoser is handed the failed jobs' log, and a turn cut is retried ----------
 
-CI_FIXTURE = __import__("pathlib").Path(__file__).resolve().parents[3] / "fixtures" / "ci_logs"
 
+def _read_job():
+    from tests.core.process.domain.test_ci_log_excerpt import fixture
 
-def _read_job(name: str = "check.log"):
-    from agentic.core.process.domain.ci import JobLog
-
-    text = (CI_FIXTURE / "check_test_failure.log").read_text(encoding="utf-8")
-    return JobLog("check", "https://x/job/1", text, len(text.encode()), "read", 0)
+    return fixture("check_test_failure.log")
 
 
 def _with_logs(ports, fake):
