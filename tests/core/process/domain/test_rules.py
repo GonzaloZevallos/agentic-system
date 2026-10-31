@@ -4404,3 +4404,38 @@ def test_a_held_or_land_waiting_round_starts_and_defers_no_orphan():
     assert _orphan_plan(orphan_retakes=[7], held=["scratch"]).deferred == []
     waiting = _orphan_plan(orphan_retakes=[7], others_landing=True)
     assert waiting.actions == [] and waiting.deferred == []
+
+
+def _cut(reason: str) -> Any:
+    return {
+        "role": "r",
+        "attempt": 1,
+        "error": "e",
+        "cost_usd": 0.0,
+        "session_id": "",
+        "reason": reason,
+    }
+
+
+def test_retry_turns_is_the_roles_own_cap_with_no_failure():
+    assert rules.retry_turns(roles.LANDING_DIAGNOSER, []) == 24
+
+
+def test_retry_turns_ignores_a_failure_that_is_not_a_max_turns_cut():
+    assert rules.retry_turns(roles.LANDING_DIAGNOSER, [_cut("schema")]) == 24
+
+
+def test_retry_turns_raises_a_listed_role_after_a_max_turns_cut():
+    assert rules.retry_turns(roles.LANDING_DIAGNOSER, [_cut("max_turns")]) == 64
+    # only the last failure counts
+    assert rules.retry_turns(roles.LANDING_DIAGNOSER, [_cut("max_turns"), _cut("other")]) == 24
+
+
+def test_retry_turns_leaves_an_unlisted_role_at_its_own_cap_after_a_cut():
+    assert rules.retry_turns(roles.DEVELOPER, [_cut("max_turns")]) == roles.DEVELOPER.max_turns
+
+
+def test_retry_turns_table_is_closed_and_read_only():
+    assert dict(rules.RETRY_TURNS) == {"landing_diagnoser": 64}
+    with pytest.raises(TypeError):
+        rules.RETRY_TURNS["developer"] = 1  # type: ignore[index]

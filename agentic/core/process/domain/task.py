@@ -446,6 +446,11 @@ class Failure(TypedDict):
     # Why the attempt failed, from the closed set (`FailureReason`); absent on a
     # failure recorded before this field existed.
     reason: NotRequired[FailureReason]
+    # The turn cap this attempt ran with, from `rules.retry_turns` (GH-449): the one a
+    # reader compares `main_thread_turns` against, never the role's own `max_turns`, which
+    # the retry after a `max_turns` cut can exceed. Absent on a failure recorded before
+    # this field existed, which reads as `role.max_turns`.
+    max_turns: NotRequired[int]
     # The reset an `account_limit` error states, ISO-8601 with an offset, when its text
     # parses inside the session window (`account_reset.reset_at`; ADR-0039, addendum GH-381):
     # only a wait hint, never the reason. Absent on any other failure and on one recorded

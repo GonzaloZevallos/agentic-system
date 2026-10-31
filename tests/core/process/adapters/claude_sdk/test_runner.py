@@ -503,6 +503,27 @@ async def test_max_turns_motive_carries_what_the_sdk_reported(monkeypatch, tmp_p
     assert info.value.reason == "max_turns"
 
 
+async def test_the_received_cap_reaches_the_options_and_names_itself_in_the_motive(
+    monkeypatch, tmp_path
+):
+    # GH-449: the attempt's own cap, not `role.max_turns`, is what the CLI gets and what a
+    # cut says it exhausted.
+    seen = fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
+    with pytest.raises(AttemptFailed) as info:
+        await make_runner().run_once(
+            PJM,
+            "p",
+            system_prompt="s",
+            model="model-x",
+            json_schema={"type": "object"},
+            cwd=tmp_path,
+            owner_task="GH-1",
+            max_turns=64,
+        )
+    assert seen[0][1].max_turns == 64
+    assert str(info.value) == "max_turns (64) exhausted without a result"
+
+
 async def test_max_turns_motive_is_bare_when_the_sdk_reports_nothing_else(monkeypatch, tmp_path):
     # Tier 3 of the definition (`docs/product/role-failures.md`): nothing beyond the
     # subtype that put us in this branch is not new information, so the fixed sentence

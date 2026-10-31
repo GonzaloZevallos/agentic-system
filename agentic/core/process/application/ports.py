@@ -260,7 +260,8 @@ class RoleRunner(Protocol):
     `None` or empty is the explicit no-op -- the cage is installed and denies nothing,
     the same shape `presubmit`/`guard` absent already have. `check_tool`, when given,
     is the `run_check` tool the Developer and its integrator may call (ADR-0065); every
-    other role runs with no tool beyond its built-ins.
+    other role runs with no tool beyond its built-ins. `max_turns` is the cap of this one
+    attempt (`rules.retry_turns`, GH-449): `None` is `role.max_turns`.
 
     `owner_task` is the parent task's id, never a subtask's (GH-282, ADR-0052): the mark
     every process of this attempt carries, so its leftovers can be found and stopped when
@@ -282,6 +283,7 @@ class RoleRunner(Protocol):
         guard: SchemaGuard | None = None,
         forbidden: Sequence[Forbidden] | None = None,
         check_tool: CheckTool | None = None,
+        max_turns: int | None = None,
     ) -> RawResult: ...
 
 

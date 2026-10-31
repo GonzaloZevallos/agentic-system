@@ -668,6 +668,9 @@ TECH_LEAD_REVIEWER_LIGHT = replace(
 # The landing's diagnoser (GH-239, ADR-0048): the last step before the system gives a
 # pull request up, once per task. It reads the code and the findings the reviews left
 # and writes what a fresh run must do differently. Never writes.
+# `max_turns=24` is the base (GH-449): 12 ran out twice in apostrophe on 2026-10-30. The
+# attempt after a `max_turns` cut gets 64 from `rules.RETRY_TURNS`, the only other cap
+# this role has (ADR-0004, addendum GH-449).
 LANDING_DIAGNOSER = replace(
     TECH_LEAD_REVIEWER,
     name="Landing Diagnoser",
@@ -677,7 +680,7 @@ LANDING_DIAGNOSER = replace(
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
     reads=(ORIGINAL, "Tech Lead", FINDINGS),
-    max_turns=12,
+    max_turns=24,
 )
 
 DEVELOPER = Role(

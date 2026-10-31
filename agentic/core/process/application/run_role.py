@@ -256,6 +256,10 @@ class Output:
     # docstring); the run's total also folds in every `failures` entry's own list
     # (`_run_reaped`).
     reaped: list[ReapedProcess] = field(default_factory=list)
+    # The cap the delivering attempt ran with (`rules.retry_turns`, GH-449), set by
+    # `run_with_retry`; `None` for an output that never went through it, which
+    # `run_record` reads as `role.max_turns`.
+    max_turns: int | None = None
 
 
 def context_for(
@@ -543,6 +547,9 @@ async def run_with_retry(
             cold_fallback = True
         else:
             text, session = _retry_input(role, prompt, failures, resume)
+        # Once per attempt, from the rule alone: this is the cap the CLI gets and the one
+        # this attempt's record carries, never re-derived from a counter (GH-449).
+        turns = rules.retry_turns(role, failures)
         waited_from = time.monotonic()
         try:
             async with limits.slot():
@@ -564,6 +571,7 @@ async def run_with_retry(
                     guard=guard,
                     forbidden=forbidden,
                     check_tool=check_tool,
+                    max_turns=turns,
                 )
                 ended_at = _now_iso()
         except AttemptFailed as exc:
@@ -582,6 +590,7 @@ async def run_with_retry(
                     "cost_usd": exc.cost_usd,
                     "session_id": exc.session_id,
                     "reason": reason,
+                    "max_turns": turns,
                     "slug": role.slug,
                     "section": written_as,
                     "cold_fallback": fallback_now,
@@ -609,6 +618,7 @@ async def run_with_retry(
         output.queue_wait_s = queue_wait_s
         output.resumed_from = session or ""
         output.cold_fallback = fallback_now
+        output.max_turns = turns
         return output
     raise RoleFailure(role, failures)
 
@@ -712,6 +722,7 @@ async def _attempt(
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
     check_tool: CheckTool | None = None,
+    max_turns: int | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -727,6 +738,7 @@ async def _attempt(
         guard=guard,
         forbidden=forbidden,
         check_tool=check_tool,
+        max_turns=max_turns,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -884,7 +896,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "cost_usd": output.cost_usd,
         "cost_by_model": output.cost_by_model,
         "turns": output.turns,
-        "max_turns": role.max_turns,
+        "max_turns": output.max_turns if output.max_turns is not None else role.max_turns,
         "started_at": output.started_at,
         "ended_at": output.ended_at,
         "queue_wait_s": output.queue_wait_s,

@@ -31,6 +31,7 @@ from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import (
     DEVELOPER,
+    LANDING_DIAGNOSER,
     PJM,
     PM,
     PRODUCT_ANALYST,
@@ -148,6 +149,7 @@ async def test_retry_passes_the_error_and_sums_cost():
             "cost_usd": 0.05,
             "session_id": "",
             "reason": "other",
+            "max_turns": PJM.max_turns,
             "slug": "pjm",
             "section": "PjM",
             "cold_fallback": False,
@@ -412,6 +414,81 @@ async def test_a_max_turns_cut_with_no_session_appends_the_message_to_the_prompt
     assert retry["resume"] == "caller-session"
     assert retry["prompt"] == f"task\n\n{rules.turn_cut_retry_message(DEVELOPER)}"
     assert out.cost_usd == pytest.approx(1.0)
+
+
+def _diagnosis(session: str = "diag") -> RawResult:
+    return RawResult(
+        {"markdown": "### Why\n\nx.", "reason": "r", "verdict": "sync"}, 0.4, 3, session
+    )
+
+
+async def _run_diagnoser(runner: ScriptedRunner) -> Output:
+    return await run_with_retry(
+        LANDING_DIAGNOSER,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=1,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=runner,
+        owner_task="GH-1",
+    )
+
+
+async def test_a_diagnoser_cut_by_max_turns_retries_with_the_raised_cap_and_delivers():
+    # GH-449: the base cap and the retry cap are the rule's, and each attempt records the
+    # cap it ran with: the cut attempt on its Failure, the delivering one on the RoleRun.
+    cut = AttemptFailed("run failed (max_turns)", 0.4, session_id="sess-cut", reason="max_turns")
+    runner = ScriptedRunner(landing_diagnoser=[cut, _diagnosis()])
+    out = await _run_diagnoser(runner)
+    assert [c["max_turns"] for c in runner.calls] == [24, 64]
+    assert out.failures[0]["max_turns"] == 24
+    assert (
+        run_record({"id": "GH-1"}, LANDING_DIAGNOSER, "Landing Diagnoser", out)["max_turns"] == 64
+    )
+    assert runner.calls[1]["prompt"] == rules.turn_cut_retry_message(LANDING_DIAGNOSER)
+
+
+async def test_a_diagnoser_cut_twice_is_a_role_failure_with_max_turns_as_the_last_reason():
+    cut = AttemptFailed("run failed (max_turns)", 0.4, session_id="sess-cut", reason="max_turns")
+    runner = ScriptedRunner(landing_diagnoser=[cut, cut])
+    with pytest.raises(RoleFailure) as info:
+        await _run_diagnoser(runner)
+    assert info.value.failures[-1]["reason"] == "max_turns"
+    assert [f["max_turns"] for f in info.value.failures] == [24, 64]
+
+
+async def test_a_diagnoser_failing_for_another_reason_retries_with_the_base_cap():
+    bad = AttemptFailed("structured output missing", 0.1, session_id="s", reason="schema")
+    runner = ScriptedRunner(landing_diagnoser=[bad, _diagnosis()])
+    out = await _run_diagnoser(runner)
+    assert [c["max_turns"] for c in runner.calls] == [24, 24]
+    assert (
+        run_record({"id": "GH-1"}, LANDING_DIAGNOSER, "Landing Diagnoser", out)["max_turns"] == 24
+    )
+
+
+@pytest.mark.parametrize(
+    "role", [r for r in ROLES if r.slug != "landing_diagnoser"], ids=lambda r: r.slug
+)
+async def test_every_other_role_retries_a_max_turns_cut_with_its_own_unchanged_cap(role):
+    cut = AttemptFailed("run failed (max_turns)", 0.4, session_id="sess-cut", reason="max_turns")
+    runner = ScriptedRunner(**{role.slug: [cut, cut]})
+    with pytest.raises(RoleFailure):
+        await run_with_retry(
+            role,
+            "task",
+            system_prompt="s",
+            model="m",
+            retries=1,
+            vocabulary={},
+            cwd=Path("/p"),
+            runner=runner,
+            owner_task="GH-1",
+        )
+    assert [c["max_turns"] for c in runner.calls] == [role.max_turns, role.max_turns]
+    assert runner.calls[1]["prompt"] == rules.turn_cut_retry_message(role)
 
 
 @pytest.mark.parametrize(
