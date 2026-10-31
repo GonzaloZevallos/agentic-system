@@ -22,7 +22,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 classDiagram
     class check_schedule__CheckPriority["CheckPriority"]
     class check_schedule__Decision["Decision"]
-    class check_schedule__Entry["Entry"]
+    class check_schedule__Entry["check_schedule.Entry"]
     class check_schedule__Limits["Limits"]
     class check_schedule__Request["Request"]
     class ci__CiCheck["CiCheck"]
@@ -31,6 +31,7 @@ classDiagram
     class ci__CiVerdict["CiVerdict"]
     class ci__FullTierVerdict["FullTierVerdict"]
     class ci__JobLog["JobLog"]
+    class coverage__Entry["coverage.Entry"]
     check_schedule__Entry --> check_schedule__CheckPriority
     check_schedule__Request --> check_schedule__CheckPriority
 ```

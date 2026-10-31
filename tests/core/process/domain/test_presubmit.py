@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from agentic.core.process.domain import presubmit
 
 CHECKOUT = Path("/work/checkouts/GH-41.api")
@@ -725,3 +727,112 @@ def test_every_system_path_is_refused_sorted_and_at_most_five_are_named():
     assert reason.index(".agentic/logs/a") < reason.index(".agentic/runs/r1.json")
     assert ".agentic/runs/r4.json" in reason and ".agentic/runs/r5.json" not in reason
     assert "5 more" in reason
+
+
+# --- deferred_verdict and record_passed (GH-453) -------------------------------------------------
+
+COVER = presubmit.CiCover(job="e2e", failed=r"^\s+✘\s+\d+")
+GREEN_LINES = "\n".join(
+    f"  ✓  {n} [mobile] › a.spec.ts:1:1 › case {n} (1.4s)" for n in range(1, 218)
+)
+RED_LINE = "  ✘  42 [mobile] › a.spec.ts:9:1 › case 42 (3.1s)"
+
+
+def timed_out(output=GREEN_LINES, **more):
+    row = {"name": "web-e2e", "command": "npx playwright test", "passed": False, "output": output}
+    return {**row, "timed_out": True, **more}
+
+
+def verdict(row=None, gate="full_checks", cause="no_run", cover=COVER):
+    return presubmit.deferred_verdict(timed_out() if row is None else row, gate, cause, cover)
+
+
+def test_a_timed_out_covered_check_with_green_output_at_the_full_tier_is_deferred():
+    assert verdict() is True
+
+
+@pytest.mark.parametrize("cause", sorted(presubmit.DEFERRABLE))
+def test_every_deferrable_cause_defers(cause):
+    assert verdict(cause=cause) is True
+
+
+@pytest.mark.parametrize("cause", ["publish_failed", "untrusted", "bogus", None])
+def test_a_cause_outside_the_closed_set_keeps_the_timeout_red(cause):
+    assert verdict(cause=cause) is False
+
+
+@pytest.mark.parametrize("gate", ["delivery", "merge"])
+def test_only_the_full_tier_defers(gate):
+    assert verdict(gate=gate) is False
+
+
+def test_a_check_with_no_cover_is_not_deferred():
+    assert verdict(cover=None) is False
+
+
+def test_a_row_that_did_not_time_out_is_not_deferred_whatever_it_says():
+    row = {k: v for k, v in timed_out().items() if k != "timed_out"}
+    assert verdict(row) is False
+    assert verdict(timed_out(passed=True, timed_out=False)) is False
+
+
+def test_a_failed_line_anywhere_in_the_output_keeps_it_red():
+    assert verdict(timed_out(RED_LINE + "\n" + GREEN_LINES)) is False
+    assert verdict(timed_out(GREEN_LINES + "\n" + RED_LINE)) is False
+
+
+def test_a_failed_line_followed_by_more_than_the_failed_ids_window_is_still_found():
+    padding = "\n".join(["  ✓  1 [mobile] › a.spec.ts:1:1 › case (1.4s)"] * 2000)
+    assert len(padding) > presubmit.FAILED_IDS_TAIL_BYTES
+    assert verdict(timed_out(RED_LINE + "\n" + padding)) is False
+    assert verdict(timed_out(padding)) is True
+
+
+def test_a_truncated_empty_or_oversized_output_is_never_deferred():
+    assert verdict(timed_out(truncated=True)) is False
+    assert verdict(timed_out("")) is False
+    assert verdict(timed_out("  \n")) is False
+    over = "x" * (presubmit.DEFER_MAX_BYTES + 1)
+    assert verdict(timed_out(over)) is False
+    at_bound = "x" * presubmit.DEFER_MAX_BYTES
+    assert verdict(timed_out(at_bound)) is True
+    wide = "é" * (presubmit.DEFER_MAX_BYTES // 2 + 1)  # fewer characters than bytes
+    assert verdict(timed_out(wide)) is False
+
+
+def test_a_pattern_that_does_not_compile_is_not_a_deferral():
+    assert verdict(cover=presubmit.CiCover(job="e2e", failed="(")) is False
+
+
+def test_the_verdict_matches_only_a_line_and_the_timeout_line_is_not_one():
+    said = presubmit.said(GREEN_LINES, True, 1500)
+    assert verdict(timed_out(said)) is True
+
+
+def rows(*passed, **flags):
+    return [{"name": f"c{n}", "passed": p, **flags} for n, p in enumerate(passed)]
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        [],
+        rows(True),
+        rows(True, True, True),
+        rows(True, False),
+        rows(False),
+        rows(True, True, reused=True),
+        rows(True, flake=True),
+        [{"name": "a", "passed": True, "duration_s": 1.5}, {"name": "b", "passed": False}],
+    ],
+)
+def test_without_a_deferred_row_the_record_passes_exactly_as_it_always_did(fixture):
+    assert presubmit.record_passed(fixture) is all(row["passed"] for row in fixture)
+
+
+def test_a_deferred_row_is_not_a_failure_but_any_other_red_row_still_is():
+    deferred = {"name": "web-e2e", "passed": False, "deferred": True}
+    assert presubmit.record_passed([{"name": "tests", "passed": True}, deferred]) is True
+    assert presubmit.record_passed([{"name": "tests", "passed": False}, deferred]) is False
+    assert presubmit.record_passed([deferred]) is True
+    assert presubmit.record_passed([{"name": "x", "passed": False, "deferred": False}]) is False

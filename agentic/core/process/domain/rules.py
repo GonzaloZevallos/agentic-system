@@ -377,10 +377,13 @@ def qa_settles(record: FindingRecord, approved_version: int) -> bool:
 
 def full_checks_green_version(state: TaskState) -> int:
     """The version of the latest `full_checks` run when it passed, `0` otherwise (no run, or
-    the latest one red). The only reader of that fact for the fold: `full_checks_settles` is
-    the writer's one decision."""
+    the latest one red, or one that deferred a check to CI, GH-453: a deferral proves nothing
+    yet, so it settles no `full_checks:<check>` row). The only reader of that fact for the
+    fold: `full_checks_settles` is the writer's one decision."""
     recorded = state.get("full_checks")
-    return recorded["version"] if recorded and recorded["passed"] else 0
+    if not recorded or not recorded["passed"] or recorded.get("deferred"):
+        return 0
+    return recorded["version"]
 
 
 def full_checks_settles(record: FindingRecord, green_version: int) -> bool:
@@ -2508,7 +2511,11 @@ def after_qa_performance(state: TaskState) -> str | None:
 def _failed_names(record: FullChecksRecord) -> list[str]:
     """The checks a run failed, in the order recorded; the step it stopped at when it failed
     before any check ran (a worktree, a setup), and `checks` when it says nothing else."""
-    names = [entry["name"] for entry in record["results"] if not entry["passed"]]
+    names = [
+        entry["name"]
+        for entry in record["results"]
+        if not entry["passed"] and not entry.get("deferred", False)
+    ]
     return names or [record.get("failed_step") or "checks"]
 
 
@@ -2518,7 +2525,11 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
     "full_checks"`, one blocking `plan` row per failed check at `full_checks:<check>` with a
     fixed claim, and the return counts on `pair_for(target)`; at its limit the same patch
     escalates as a pair at its limit. The record travels with it, so the state and the
-    document hold the run the rows came from."""
+    document hold the run the rows came from. A deferred row (GH-453) is not a failure: a
+    record whose only non-passing rows are deferred is a passed one, and its patch holds the
+    record alone, with no return, no finding and no change of status."""
+    if record["passed"]:
+        return {"full_checks": record}
     subtasks = state.get("subtasks", {})
     target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks))
     names = _failed_names(record)
@@ -4781,6 +4792,10 @@ class MergeFacts:
     ci_red_on_base: tuple[str, ...] = ()
     github_conflicting: bool = False
     close_docs: CloseDocs | None = None
+    # GH-453: what the CI says about the jobs that cover the checks the latest `full_checks`
+    # record of this very head deferred (`deferral_state`), `None` when it deferred none.
+    deferral: ci.CoveringState | None = None
+    deferral_jobs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -4946,7 +4961,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "merge_failed")
     if facts.ci_required:
         gate = _ci_gate(facts)
-        if gate is not None:
+        if gate is not None and gate.kind != "merge":
+            return gate
+        if (held := _deferral_gate(facts)) is not None:
+            return held
+        # A deferral no job covers (skipped, missing) is no CI verdict: the checks run here.
+        if gate is not None and facts.deferral != "uncovered":
             return gate
     covers = (
         facts.checks_passed is not None
@@ -5065,6 +5085,31 @@ def adr_probe_wanted(facts: MergeFacts) -> bool:
     return auto_merge_decision(replace(facts, adr_collision=taken)) == MergeDecision(
         "refuse", "adr_number_taken"
     )
+
+
+def deferral_state(states: Sequence[ci.CoveringState]) -> ci.CoveringState:
+    """The one state of the jobs that cover a record's deferred checks (GH-453): `red` if any
+    is, else `pending`, else `uncovered`, else `covered`. An empty list is `uncovered`: a
+    deferral nobody can name a job for covers nothing."""
+    if "red" in states:
+        return "red"
+    if "pending" in states:
+        return "pending"
+    if "uncovered" in states or not states:
+        return "uncovered"
+    return "covered"
+
+
+def _deferral_gate(facts: MergeFacts) -> MergeDecision | None:
+    """What a deferral says to the merge (GH-453): a red covering job is a red CI check, a
+    pending one waits as the CI wait does (never a local run); covered and uncovered decide
+    nothing here."""
+    if facts.deferral == "red":
+        return MergeDecision("refuse", "ci_failed")
+    if facts.deferral == "pending":
+        spent = facts.ci_waited_s is not None and facts.ci_waited_s >= ci.CI_WAIT_MAX_S
+        return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
+    return None
 
 
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:

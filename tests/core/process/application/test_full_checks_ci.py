@@ -10,10 +10,19 @@ import pytest
 from agentic.core.process.application.checkouts import task_base
 from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.application.ports import CommandResult, GitError
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
+from agentic.core.process.domain.presubmit import CiCover
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryCommands, MemoryStack, MemoryTracker, MemoryWorkspace, memory_ports
+from tests.fakes import (
+    MemoryCheckResults,
+    MemoryCommands,
+    MemoryStack,
+    MemoryTracker,
+    MemoryWorkspace,
+    memory_ports,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -254,3 +263,78 @@ async def test_without_ci_no_ci_or_ref_port_is_called_and_no_new_key_is_written(
     assert ports.workspace.diff_reads == []
     assert [c for _, c in ports.commands.ran] == ["pytest", "ruff check ."]
     assert not patch["sections"]["Full checks"].startswith("CI not used")
+
+
+# GH-453: a timed-out check that a gating CI job covers is deferred, never red.
+COVER = CiCover("e2e", r"✘")
+WEB_OUT = "  ✓ 216 [mobile] works\n  ✓ 217 [mobile] last\n"
+CHECKS_WEB = {"unit": "pytest", "web-e2e": "playwright test"}
+
+
+def deferring_ports(
+    output: str, cause_read=None, *, covers=None, ci=("unit", "web"), commands_override=None, **more
+):
+    stack = MemoryStack(checks=CHECKS_WEB, delivery_checks=("unit",), ci=ci)
+    stack.declared_ci_covers = {"web-e2e": COVER} if covers is None else covers
+    timed_out = commands_override or CommandResult(-9, output, timed_out=True)
+    commands = MemoryCommands(**{"playwright test": [timed_out]})
+    read = cause_read if cause_read is not None else report(job("unit"), sha="f" * 40)
+    return memory_ports(stack=stack, commands=commands, tracker=Tracker(read), **more)
+
+
+async def test_a_timed_out_covered_check_with_no_failing_line_is_deferred_not_red():
+    ports = deferring_ports(WEB_OUT, check_results=MemoryCheckResults())
+    patch = await run(state_of(), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is True and record["deferred"] == ["web-e2e"]
+    assert record["ci_fallback"] == "no_run" and "failed_step" not in record
+    assert {"name": "web-e2e", "passed": False, "deferred": True} == {
+        k: v for k, v in record["results"][1].items() if k != "duration_s"
+    }
+    assert "subtasks" not in patch and "findings" not in patch
+    text = patch["sections"]["Full checks"]
+    assert "web-e2e: timed out after 100s, deferred to CI job `e2e`" in text
+    assert all(row["name"] != "web-e2e" for _, row, _ in ports.check_results.puts)
+
+
+async def test_a_timed_out_covered_check_with_a_failing_line_anywhere_stays_red():
+    ports = deferring_ports("  ✘ 3 [mobile] broke\n" + WEB_OUT)
+    patch = await run(state_of(), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is False and "deferred" not in record
+    assert record["failed_step"] == "checks"
+    assert patch["subtasks"][INTEGRATION]["returned_by"] == "full_checks"
+    assert [f["location"] for f in patch["findings"]] == ["full_checks:web-e2e"]
+
+
+async def test_an_untrusted_fallback_keeps_a_timeout_red():
+    ports = deferring_ports(WEB_OUT)
+    ports.workspace.diff_paths = ("src/a.py", ".github/workflows/ci.yml")
+    patch = await run(state_of(), ports)
+    assert patch["full_checks"]["ci_fallback"] == "untrusted"
+    assert patch["full_checks"]["passed"] is False and "deferred" not in patch["full_checks"]
+
+
+async def test_a_check_without_a_cover_and_a_product_without_ci_keep_a_timeout_red():
+    for ports in (deferring_ports(WEB_OUT, covers={"x": COVER}), deferring_ports(WEB_OUT, ci=())):
+        patch = await run(state_of(), ports)
+        assert patch["full_checks"]["passed"] is False
+        assert "deferred" not in patch["full_checks"]
+
+
+async def test_a_timed_out_check_whose_output_was_lost_is_never_deferred():
+    for lost in (
+        CommandResult(-9, "", timed_out=True),  # nothing captured
+        CommandResult(-9, WEB_OUT, timed_out=True, truncated=True),  # the drain gave up
+    ):
+        ports = deferring_ports(WEB_OUT, commands_override=lost)
+        patch = await run(state_of(), ports)
+        record = patch["full_checks"]
+        assert record["passed"] is False and "deferred" not in record
+        assert patch["subtasks"][INTEGRATION]["returned_by"] == "full_checks"
+
+
+async def test_a_deferral_settles_no_open_full_checks_finding():
+    ports = deferring_ports(WEB_OUT)
+    patch = await run(state_of(), ports)
+    assert rules.full_checks_green_version({"full_checks": patch["full_checks"]}) == 0

@@ -9,8 +9,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agentic.core.process.application import landing_plan, merge
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.ports import CommandResult, Upstream
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
+from agentic.core.process.domain.presubmit import CiCover
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _merges, _ports
 from tests.fakes import MemoryStack
@@ -353,3 +354,90 @@ def test_a_merge_whose_notice_fails_is_still_merged_and_records_the_failure(tmp_
     assert ports.tracker.merge_calls  # the merge happened, only its notice did not
     rows = ports.documents.closures["GH-5"]["tracker_failures"]
     assert [(r["target"], r["cls"]) for r in rows] == [("comment", "refused")]
+
+
+# GH-453: a `full_checks` record that deferred a check to a CI job.
+E2E = CiCover("e2e", "✘")
+
+
+def _deferring(*reports, record_head=HEAD, covers=None, **document):
+    record = {
+        "version": 1,
+        "head": record_head,
+        "passed": True,
+        "duration_s": 1.0,
+        "declared": {"web-e2e": "playwright test"},
+        "results": [{"name": "web-e2e", "passed": False, "deferred": True}],
+        "witness": None,
+        "deferred": ["web-e2e"],
+    }
+    ports = _world(*reports, full_checks=record, **document)
+    ports.stack.declared_ci_covers = {"web-e2e": E2E} if covers is None else covers
+    return ports
+
+
+def test_a_deferral_whose_job_is_green_on_the_head_merges_on_the_ci(tmp_path):
+    ports = _deferring(_report(_check(), _check("e2e", run=2)))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged" and ports.commands.ran == []
+
+
+def test_a_deferral_whose_job_is_red_is_a_red_ci_check_and_no_merge(tmp_path):
+    ports = _deferring(_report(_check(), _check("e2e", "FAILURE", run=2)))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert (result.kind, result.reason) == ("refused", "ci_failed")
+    [(_, comment)] = ports.tracker.comments
+    assert "e2e FAILURE " + RUN.format(2) in comment
+    assert ports.commands.ran == []
+
+
+def test_a_deferral_whose_job_is_pending_waits_and_runs_nothing_locally(tmp_path):
+    ports = _deferring(_report(_check(), _check("e2e", None, run=2)))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert (result.kind, result.reason) == ("stopped", "ci_wait")
+    assert ports.commands.ran == [] and ports.workspace.detached == []
+
+
+@pytest.mark.parametrize("jobs", [(_check("e2e", "SKIPPED", run=2),), ()])
+def test_a_deferral_no_job_covers_runs_the_checks_here_and_never_merges_on_the_ci(tmp_path, jobs):
+    ports = _deferring(_report(_check(), *jobs))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert ports.commands.ran, "the merge gate ran the checks locally"
+    assert _doc(ports).get("auto_merge_via") != "ci"
+
+
+def test_a_deferral_of_another_head_imposes_nothing(tmp_path):
+    ports = _deferring(_report(_check()), record_head="b" * 40)
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged" and ports.commands.ran == []
+
+
+def test_a_deferred_check_the_stack_no_longer_covers_is_uncovered(tmp_path):
+    ports = _deferring(_report(_check(), _check("e2e", run=2)), covers={"x": E2E})
+
+    _run(ports, tmp_path)
+
+    assert ports.commands.ran
+
+
+@pytest.mark.parametrize("jobs", [(_check("e2e", "SKIPPED", run=2),), ()])
+def test_an_uncovered_deferral_whose_local_rerun_times_out_never_merges(tmp_path, jobs):
+    ports = _deferring(_report(_check(), *jobs))
+    ports.commands.queues["run tests"] = [CommandResult(-9, "  ✓ 217 [mobile] last\n", True)]
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind != "merged"
+    assert ports.tracker.merge_calls == []
+    assert _doc(ports).get("auto_merge_via") != "ci"
+    assert _doc(ports)["merge_checks"]["passed"] is False

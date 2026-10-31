@@ -15,13 +15,17 @@ and nothing else, and the fan-in goes on.
 A product that declares `ci:` (GH-376) does not run the suite here: the integrated head is
 published to its own ref (`rules.ci_ref`) and the node waits for the declared jobs on exactly
 that head (`ci.full_tier_verdict`), recording their verdict. Any way the CI cannot be used
-runs the local tier above instead, and the record and the section say why."""
+runs the local tier above instead, and the record and the section say why.
+
+In that fallback a check that timed out and that the stack maps to a CI job (`ci_covers`, GH-453)
+is deferred when `presubmit.deferred_verdict` says so: its row is marked `deferred`, it is no
+failure and no pass, and the merge asks that job for the verdict."""
 
 from __future__ import annotations
 
 import math
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from typing import Any
 
 import anyio
@@ -32,6 +36,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import ci, presubmit, rules
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiCheck, CiReport, CiUnreadable, FullTierVerdict
+from ..domain.presubmit import CheckResult, CiCover
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
     WAITING_ON_HUMAN,
@@ -121,23 +126,30 @@ async def _local_full_checks(
         # Shielded: it must also run when the signal's cancellation is what unwinds us.
         with anyio.CancelScope(shield=True):
             await anyio.to_thread.run_sync(workspace.restore_clean, task.path)
+    covers = ports.stack.ci_covers(base) if fallback is not None else {}
+    rows, deferred = _deferrals(gate.results, fallback, covers)
     merged = presubmit.merge_checks_record(
         head=head,
         master=base,
         duration_s=round(time.monotonic() - started, 1),
         declared=declared,
-        results=gate.results,
+        results=rows,
         witness=gate.witness_result,
         gate=gate.gate,
     )
-    record = _record(state, merged, declared, gate)
-    text = presubmit.failed_checks_markdown(merged, head, neutralise=False)
+    record = _record(state, merged, declared, gate, deferred)
+    lines = [_deferred_line(name, covers[name], cfg.check_timeout_s) for name in deferred]
+    text = presubmit.failed_checks_markdown(
+        _without_deferred(merged, deferred), head, neutralise=False
+    )
     if record["passed"]:
         patch: TaskState = {"full_checks": record}
         reused = {entry["name"] for entry in record["results"] if entry.get("reused")}
         flaked = {entry["name"] for entry in record["results"] if entry.get("flake")}
-        shown = [_shown(name, reused, flaked) for name in declared]
+        shown = [_shown(name, reused, flaked) for name in declared if name not in deferred]
         text = f"Passed on `{head}`: {', '.join(shown)}."
+        if lines:
+            text += "\n\n" + "\n".join(lines)
         if breaches := presubmit.budget_breaches(gate.results, ports.stack.check_budgets(base)):
             # A record and a sentence, never a return: a slow suite is not a failed one.
             record["over_budget"] = [
@@ -147,6 +159,8 @@ async def _local_full_checks(
     else:
         patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
         text = text or f"Failed on `{head}`: no check output was recorded."
+        if lines:
+            text += "\n\n" + "\n".join(lines)
     if fallback is not None:
         record["ran_on"] = "local"
         record["ci_fallback"] = fallback
@@ -295,7 +309,11 @@ def _red_line(check: CiCheck) -> str:
 
 
 def _record(
-    state: TaskState, merged: dict[str, object], declared: dict[str, str], gate: CheckoutPresubmit
+    state: TaskState,
+    merged: dict[str, object],
+    declared: dict[str, str],
+    gate: CheckoutPresubmit,
+    deferred: list[str],
 ) -> FullChecksRecord:
     previous = state.get("full_checks")
     record: FullChecksRecord = {
@@ -304,14 +322,49 @@ def _record(
         "passed": merged["passed"] is True,
         "duration_s": float(str(merged["duration_s"])),
         "declared": dict(declared),
-        "results": _without_output(_ENTRIES.validate_python(merged["checks"])),
+        "results": _without_output(_ENTRIES.validate_python(merged["checks"]), deferred),
         "witness": dict(gate.witness_result) if gate.witness_result is not None else None,
     }
     if not record["passed"]:
         record["failed_step"] = str(merged["failed_step"])
     if (taken := gate.gate) is not None:
         record["gate"] = taken
+    if deferred:
+        record["deferred"] = deferred
     return record
+
+
+def _deferrals(
+    results: list[CheckResult] | None,
+    fallback: FallbackCause | None,
+    covers: Mapping[str, CiCover],
+) -> tuple[list[CheckResult] | None, list[str]]:
+    """The rows with `deferred: true` on each check whose last row `presubmit.deferred_verdict`
+    defers (GH-453), and those checks' names in the order they ran. The one place the
+    verdict is asked; the rows stay the gate's own, never stored."""
+    if results is None or fallback is None or not covers:
+        return results, []
+    chosen = {
+        id(row): row["name"]
+        for row in presubmit.final_results(results)
+        if presubmit.deferred_verdict(row, "full_checks", fallback, covers.get(row["name"]))
+    }
+    marked: list[CheckResult] = [
+        {**row, "deferred": True} if id(row) in chosen else row for row in results
+    ]
+    return marked, list(chosen.values())
+
+
+def _deferred_line(name: str, cover: CiCover, timeout_s: float) -> str:
+    return f"{name}: timed out after {timeout_s:g}s, deferred to CI job `{cover.job}`"
+
+
+def _without_deferred(merged: dict[str, object], deferred: list[str]) -> dict[str, object]:
+    """`merged` without the entries of the deferred checks: they are no failure, so the
+    failure text never names them."""
+    checks = merged["checks"]
+    assert isinstance(checks, list)  # `merge_checks_record` always writes the list
+    return {**merged, "checks": [c for c in checks if c["name"] not in deferred]}
 
 
 def _shown_up(seconds: float) -> float:
@@ -337,7 +390,9 @@ def _shown(name: str, reused: set[str], flaked: set[str]) -> str:
     return f"{name} ({', '.join(marks)})" if marks else name
 
 
-def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
+def _without_output(
+    entries: list[FullCheckEntry], deferred: Collection[str] = ()
+) -> list[FullCheckEntry]:
     """The name and verdict of each check: the record holds no command output (the `tail` the
     merge record keeps is free text); the `Full checks` section is where it is read. A reused
     row keeps its `reused: true` (ADR-0065) and a flaked one its `flake: true` (ADR-0066); a
@@ -349,6 +404,8 @@ def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
             row["reused"] = True
         if entry.get("flake"):
             row["flake"] = True
+        if entry["name"] in deferred:
+            row["deferred"] = True
         if "duration_s" in entry:
             row["duration_s"] = entry["duration_s"]
         kept.append(row)

@@ -53,6 +53,15 @@ so it is validated here: it compiles, has exactly one group, is at most 200 char
 quantified group that contains a quantifier and no alternation inside a quantified group (the
 shapes that backtrack catastrophically). Absent it reads as `{}`: the gate of today.
 
+**`ci_covers`**: optional (GH-453). A mapping of a check's name, which must also be under `checks`,
+to `{job, failed}`: the name of the CI job that runs the same suite as a merge gate and the regex
+of a failed line in the check's output. A full check that times out is deferred to that job only
+when no line of its output matches `failed` (`presubmit.deferred_verdict`). The job need not be
+under `ci`; the key is independent of `ci`, `rerun_checks` and `delivery_checks`. `failed` runs
+inside the system's process, so it is bounded like `test_id`: it compiles, is at most 200
+characters and has no quantified group containing a quantifier or an alternation; it needs no
+capturing group. Absent it reads as an empty mapping: nothing is deferred.
+
 **`check_budgets`**: optional (GH-365). A mapping of a check's name, which must also be under
 `checks`, to the seconds the check may take: a positive number (an int or a float, never a bool).
 The budget is compared only by the once-per-task `full_checks` run on the integrated head, never by
@@ -109,17 +118,18 @@ from __future__ import annotations
 import importlib
 import re
 import shlex
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Protocol, TypeGuard
 
 from agentic.core.process.domain import master_gain
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
+from agentic.core.process.domain.presubmit import CiCover, RerunForm
 from agentic.core.process.domain.presubmit import FlakeGate as FlakeGate
-from agentic.core.process.domain.presubmit import RerunForm
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.suppressions import Forbidden
 
@@ -145,6 +155,7 @@ KEYS = (
     "ci",
     "performance",
     "rerun_checks",
+    "ci_covers",
     "check_budgets",
     "merge_inert",
     "docs",
@@ -178,6 +189,8 @@ VOLUME_UNITS = ("rows", "days", "months", "years")
 # Every sub-key one `rerun_checks` entry declares, and the longest `test_id` it accepts (ADR-0066).
 RERUN_KEYS = ("command", "test_id")
 TEST_ID_MAX_LENGTH = 200
+# Every sub-key one `ci_covers` entry declares (GH-453).
+COVER_KEYS = ("job", "failed")
 SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -545,6 +558,48 @@ def rerun_checks(data: object, source: object) -> dict[str, RerunForm]:
     return forms
 
 
+def ci_covers(data: object, source: object) -> Mapping[str, CiCover]:
+    """Check name -> the CI job that runs the same suite and the pattern of a failed line in
+    its output, in the file's order (GH-453), read-only.
+
+    Empty when the product declares none. Present, a non-empty mapping whose every name is a
+    check declared under `checks` and every entry is `{job, failed}`: `job` a non-empty
+    string (it need not be one of `ci`: it is the job that runs the suite) and `failed` a
+    pattern that passes `_failed_refusal`. Independent of `ci`, `rerun_checks` and
+    `delivery_checks`. Every shape that is not that fails at load, naming the key."""
+    declared = _declared(data, source)
+    if "ci_covers" not in declared:
+        return MappingProxyType({})
+    found = _declared_nonempty(declared, source, "ci_covers")
+    if not isinstance(found, dict):
+        raise ValueError(f"{source}: expected `ci_covers`, a mapping of checks to jobs")
+    known = _known_checks(data, source)
+    covers: dict[str, CiCover] = {}
+    for name, body in found.items():
+        stack_checks.require_declared(name, "ci_covers", known, source)
+        covers[name] = _ci_cover(name, body, source)
+    return MappingProxyType(covers)
+
+
+def _ci_cover(name: str, body: object, source: object) -> CiCover:
+    where = f"{source}: {name!r} under `ci_covers`"
+    if not isinstance(body, dict):
+        raise ValueError(f"{where} is not a mapping of {COVER_KEYS}")
+    if unknown := [key for key in body if key not in COVER_KEYS]:
+        raise ValueError(
+            f"{source}: unknown key(s) {', '.join(sorted(map(str, unknown)))} under "
+            f"`ci_covers`; expected {COVER_KEYS}"
+        )
+    for key in COVER_KEYS:
+        value = body.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{where}: expected a non-empty `{key}`, which goes with the other")
+    pattern = body["failed"]
+    if reason := _failed_refusal(pattern):
+        raise ValueError(f"{where}: `failed` {reason}")
+    return CiCover(job=body["job"].strip(), failed=pattern)
+
+
 def check_budgets(data: object, source: object) -> dict[str, float]:
     """Check name -> the seconds it may take on the `full_checks` run, in the file's order
     (GH-365).
@@ -645,6 +700,27 @@ def _test_id_refusal(pattern: str) -> str | None:
     `TEST_ID_MAX_LENGTH`; a quantified group whose body contains another quantifier (`(a+)+`)
     or an alternation (`(a|ab)+`), the two shapes that backtrack catastrophically. Plain
     quantifiers (`\\S+`) and alternation outside a quantified group stay legal."""
+    parsed = _parse_pattern(pattern)
+    if isinstance(parsed, str):
+        return parsed
+    if parsed.state.groups != 2:
+        return (
+            f"has {parsed.state.groups - 1} capturing groups; expected exactly one capturing group"
+        )
+    return _catastrophic(parsed)
+
+
+def _failed_refusal(pattern: str) -> str | None:
+    """Why a product's `ci_covers` `failed` pattern may not run inside the system, or None
+    (GH-453): the same bounds as `_test_id_refusal` (length, compiles, no quantified group
+    containing a quantifier or an alternation, which also refuses every nested unbounded
+    repeat), without its capturing-group rule: the pattern only has to match a line."""
+    parsed = _parse_pattern(pattern)
+    return parsed if isinstance(parsed, str) else _catastrophic(parsed)
+
+
+def _parse_pattern(pattern: str) -> _Parsed | str:
+    """The parse tree of `pattern`, or why it is refused for length or for not compiling."""
     if len(pattern) > TEST_ID_MAX_LENGTH:
         return (
             f"is {len(pattern)} characters long; expected at most {TEST_ID_MAX_LENGTH} characters"
@@ -655,11 +731,7 @@ def _test_id_refusal(pattern: str) -> str | None:
         parsed: _Parsed = parser.parse(pattern)
     except (re.error, RecursionError, OverflowError) as exc:
         return f"does not compile: {exc}"
-    if parsed.state.groups != 2:
-        return (
-            f"has {parsed.state.groups - 1} capturing groups; expected exactly one capturing group"
-        )
-    return _catastrophic(parsed)
+    return parsed
 
 
 def _catastrophic(tree: _Tree) -> str | None:
@@ -1051,6 +1123,15 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         Computed(),
         "mapping of check name to a mapping of `command` and `test_id`: the failed-tests-only "
         "form of the check",
+    ),
+    KeyReference(
+        "ci_covers",
+        ci_covers,
+        COVER_KEYS,
+        Computed(),
+        "mapping of check name to a mapping of `job` and `failed`: the CI job that runs the "
+        "same suite and the pattern of a failed line, so a full check that times out is "
+        "deferred to it",
     ),
     KeyReference(
         "check_budgets",

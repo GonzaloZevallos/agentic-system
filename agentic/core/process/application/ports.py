@@ -22,7 +22,7 @@ from ..domain.design import Design, NotReady
 from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult, RerunForm
+from ..domain.presubmit import CheckResult, CiCover, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -501,6 +501,13 @@ class ProductStack(Protocol):
         product with no `delivery_checks`."""
         ...
 
+    def ci_covers(self, revision: str) -> Mapping[str, CiCover]:
+        """Check name -> the CI job that runs the same suite and the pattern of a failed line
+        (`core.knowledge`, GH-453), as the commit `revision` declares them, read-only. Empty
+        when the product declares none: nothing is ever deferred. Raises `ValueError` when
+        the key is malformed."""
+        ...
+
     def check_budgets(self, revision: str) -> dict[str, float]:
         """Check name -> the seconds it may take on the `full_checks` run (`core.knowledge`,
         GH-365), as the commit `revision` declares them. Empty when the product declares none,
@@ -586,6 +593,10 @@ class CommandResult:
     # stdout and stderr, interleaved as the command wrote them.
     output: str
     timed_out: bool = False
+    # True when `output` is known not to be all of what the command wrote: the adapter could
+    # not drain the pipe after killing a timed-out command (GH-453). A truncated output is
+    # never read as proof that no test failed.
+    truncated: bool = False
 
     @property
     def passed(self) -> bool:

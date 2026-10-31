@@ -127,6 +127,30 @@ def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     return CiVerdict(state, tuple(failing), tuple(missing))
 
 
+CoveringState = Literal["covered", "red", "pending", "uncovered"]
+
+
+def covering_state(read: CiReport | CiUnreadable | None, job: str, head: str) -> CoveringState:
+    """What the CI says about the `job` that covers a deferred check at `head` (GH-453):
+    `covered` when every run of `job` on `head` (by `same_commit`) is green; `red` when one is
+    decided and red, `SKIPPED` aside; `pending` when one is not decided yet and none is red;
+    `uncovered` when the job did not really run on this head: skipped, missing, a report of
+    another commit, or one that is unreadable or absent. Only `uncovered` and `covered` end
+    the wait. A separate reading from `ci_state`, which keeps `SKIPPED` red."""
+    if not isinstance(read, CiReport) or not rules.same_commit(read.head_sha, head):
+        return "uncovered"
+    runs = [check for check in read.checks if check.name == job]
+    if not runs:
+        return "uncovered"
+    if any(check.conclusion == "SKIPPED" for check in runs):
+        return "uncovered"
+    if any(not _pending(check) and not _green(check) for check in runs):
+        return "red"
+    if any(_pending(check) for check in runs):
+        return "pending"
+    return "covered"
+
+
 def red_checks(report: CiReport) -> tuple[CiCheck, ...]:
     """Every run of `report` that is red whatever its name, in report order: decided and not
     green, with the reading of red `ci_state` has. What a log is fetched for (GH-449)."""
