@@ -30,14 +30,12 @@ from agentic.core.process.domain.task import (
     RoleRun,
     TaskState,
 )
-from agentic.shared.configuration import Configuration
+from agentic.shared.configuration import ARM_SWITCHES, Configuration
 
-# The two `Configuration` switches `arm_label` joins, in the order every writer uses
-# (`experiment_snapshot`'s own order, minus `reviewer_model`: free text, not one of the
-# "three enums" the arm is the product of -- ADR-0030). A subsequence of
-# `EXPERIMENT_KEYS`, checked by `test_metrics.py`, so the two vocabularies cannot drift
-# apart on order.
-ARM_KEYS = ("review_mode", "skip_ephemeral")
+# The two `Configuration` switches `arm_label` joins, in the order every writer uses:
+# `shared.configuration.ARM_SWITCHES`, the single source (GH-470), a subsequence of
+# `EXPERIMENT_KEYS` by construction.
+ARM_KEYS = ARM_SWITCHES
 
 # Below this, a residual is floating-point noise (an interview's runs summed in a
 # different order), not money nothing accounted for: `has_residual_sample`'s own

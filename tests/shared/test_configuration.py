@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from agentic.shared.configuration import (
+    ARM_SWITCHES,
+    EXPERIMENT_KEYS,
     Configuration,
     MissingProductDir,
     experiment_snapshot,
@@ -311,6 +313,33 @@ def test_experiment_snapshot_is_non_empty_when_only_skip_ephemeral_moves():
         "skip_ephemeral": "True",
         "reviewer_model": "claude-opus-5",
     }
+
+
+def test_the_switches_have_one_source():
+    # `ARM_SWITCHES` is the single source: `EXPERIMENT_KEYS` is derived from it and adds
+    # only the free-text `reviewer_model` (GH-470).
+    assert ARM_SWITCHES == ("review_mode", "skip_ephemeral")
+    assert EXPERIMENT_KEYS == (*ARM_SWITCHES, "reviewer_model")
+
+
+@pytest.mark.parametrize("review_mode", ["full", "light"])
+@pytest.mark.parametrize("skip_ephemeral", [False, True])
+def test_experiment_snapshot_matches_the_literal_it_wrote_before_the_single_source(
+    review_mode, skip_ephemeral
+):
+    cfg = Configuration(
+        product_dir="/tmp/p", review_mode=review_mode, skip_ephemeral=skip_ephemeral
+    )
+    expected = (
+        {}
+        if (review_mode, skip_ephemeral) == ("full", False)
+        else {
+            "review_mode": review_mode,
+            "skip_ephemeral": str(skip_ephemeral),
+            "reviewer_model": "m",
+        }
+    )
+    assert experiment_snapshot(cfg, "m") == expected
 
 
 def test_decided_cap_is_on_by_default_and_is_not_an_arm():

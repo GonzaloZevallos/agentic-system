@@ -141,6 +141,47 @@ def test_render_writes_the_experiment_snapshot_when_non_empty():
     assert document.parse(rendered)["experiment"] == snapshot
 
 
+GOLDEN_WITHOUT_ASSIGNMENT = Path(__file__).parent / "golden" / "document_without_assignment.md"
+ASSIGNMENT = {
+    "experiment": "light-review",
+    "arm": "light",
+    "switches": {"review_mode": "light"},
+}
+
+
+def golden_state(**extra):
+    return {
+        "id": "GH-9",
+        "title": "Golden",
+        "description": "Body.",
+        "type": "feature",
+        "status": "open",
+        "experiment": {"review_mode": "light", "skip_ephemeral": "False", "reviewer_model": "m"},
+        "sections": {"Developer": "done"},
+        **extra,
+    }
+
+
+def test_a_document_without_assignment_renders_byte_identically_to_the_golden():
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT.read_text()
+    assert document.render(golden_state(assignment={})) == GOLDEN_WITHOUT_ASSIGNMENT.read_text()
+
+
+def test_assignment_round_trips_through_the_frontmatter():
+    rendered = document.render(golden_state(assignment=ASSIGNMENT))
+    assert "\nassignment:" in rendered
+    assert document.parse(rendered)["assignment"] == ASSIGNMENT
+    assert "assignment" not in document.parse(document.render(golden_state()))
+
+
+def test_assignment_is_the_only_difference_a_document_gains():
+    plain = document.render(golden_state()).splitlines()
+    assigned = document.render(golden_state(assignment=ASSIGNMENT)).splitlines()
+    added = [line for line in assigned if line not in plain]
+    assert added[0] == "assignment:"
+    assert [line for line in plain if line not in assigned] == []
+
+
 def test_interview_stats_never_reaches_the_document():
     """Measurement-only, like `subtask_id`: `interview()`'s own patch key
     (`InterviewStats`) never reaches the document, so a resumed task carries none of
