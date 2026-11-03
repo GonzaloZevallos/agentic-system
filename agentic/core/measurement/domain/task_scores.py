@@ -229,7 +229,7 @@ def dimensions(document: Mapping[str, Any]) -> Dimensions:
     return Dimensions(
         release=version if isinstance(version, str) and version else UNKNOWN,
         baseline=baseline if isinstance(baseline, str) and baseline else UNKNOWN,
-        arm=metrics.arm_label(document.get("experiment") or {}),
+        arm=metrics.arm_of(document),
     )
 
 

@@ -344,6 +344,19 @@ def arm_label(experiment: Mapping[str, str]) -> str:
     return ",".join(f"{key}={resolved[key]}" for key in ARM_KEYS)
 
 
+def arm_of(document: Mapping[str, Any]) -> str:
+    """The arm label a task document belongs to, the one reader of it (GH-470): the
+    `arm_label` of the switches its `assignment` carries when it has one, else of its
+    `experiment` snapshot, else `default`. The assignment wins because it is what the
+    poller decided; the snapshot is only what the process happened to run with. The
+    arm's *name* is never read: two arms setting the same switches are one arm here,
+    and the label's cardinality stays the closed product of `ARM_KEYS`."""
+    assignment = document.get("assignment")
+    if isinstance(assignment, Mapping):
+        return arm_label(assignment.get("switches") or {})
+    return arm_label(document.get("experiment") or {})
+
+
 def prompts_fingerprint(state: TaskState) -> str:
     """One short hash for the set of prompts the task ran, order-independent, so runs
     against the same prompts share a label. Empty when no prompt ran."""
