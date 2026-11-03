@@ -17,6 +17,8 @@ from typing import Literal, get_args, get_origin
 
 from agentic.shared.configuration import ARM_SWITCHES, Configuration
 
+from .task import ArmAssignment
+
 # The two flags `agentic run` takes and the poller's `_argv` writes: spelled here and
 # nowhere else, so the launcher and the parser cannot drift apart.
 ARM_FLAG = "--arm"
@@ -170,3 +172,43 @@ def conflicts(declaration: Experiment, cfg: Configuration) -> tuple[str, ...]:
     return tuple(
         key for key in ARM_SWITCHES if key in named and getattr(cfg, key) != defaults[key].default
     )
+
+
+def assignment_of(declaration: Experiment, arm: Arm) -> ArmAssignment:
+    """`TaskState.assignment` for `arm` of `declaration`: what `agentic run --arm` writes."""
+    return {"experiment": declaration.id, "arm": arm.name, "switches": dict(arm.switches)}
+
+
+def _typed(key: str, value: str) -> object:
+    """A switch as its `Configuration` field holds it: `skip_ephemeral` is `"True"`/`"False"`
+    in the document and a bool in the field, `review_mode` is the string itself."""
+    return value == "True" if Configuration.model_fields[key].annotation is bool else value
+
+
+def with_switches(cfg: Configuration, switches: Mapping[str, str]) -> Configuration:
+    """`cfg` with the arm's switches in force, whatever the environment holds: the one
+    place an assignment becomes configuration (the graph's nodes and `agentic run` call it)."""
+    if not switches:
+        return cfg
+    return cfg.model_copy(update={key: _typed(key, value) for key, value in switches.items()})
+
+
+def disagreements(cfg: Configuration, switches: Mapping[str, str]) -> tuple[str, ...]:
+    """The arm's switches `cfg` holds at another value, in `ARM_SWITCHES` order: what `resume`
+    says before it keeps the document's arm."""
+    return tuple(
+        key for key in ARM_SWITCHES if key in switches and str(getattr(cfg, key)) != switches[key]
+    )
+
+
+def carried(previous: Mapping[str, object] | None, declared_id: str | None) -> ArmAssignment | None:
+    """The assignment of a previous document that a `--fresh` run keeps: only when its
+    experiment is the one now declared. Any other id, or none, starts the task unassigned."""
+    if previous is None or declared_id is None:
+        return None
+    assigned = previous.get("assignment")
+    if not isinstance(assigned, Mapping) or assigned.get("experiment") != declared_id:
+        return None
+    raw = assigned.get("switches")
+    switches = {str(k): str(v) for k, v in raw.items()} if isinstance(raw, Mapping) else {}
+    return {"experiment": declared_id, "arm": str(assigned.get("arm")), "switches": switches}
