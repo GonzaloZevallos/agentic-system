@@ -866,6 +866,7 @@ SUB_KEYS = {
     "rerun_checks": stack.RERUN_KEYS,
     "verifications": stack_checks.VERIFICATION_KEYS,
     "ci_covers": stack.COVER_KEYS,
+    "ci_dispatch": stack.DISPATCH_KEYS,
 }
 # A valid declaration of each key a default may depend on.
 DECLARED = {"docs": {"generate": "echo hi", "paths": ["docs/generated/**"]}}

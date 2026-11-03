@@ -62,6 +62,14 @@ inside the system's process, so it is bounded like `test_id`: it compiles, is at
 characters and has no quantified group containing a quantifier or an alternation; it needs no
 capturing group. Absent it reads as an empty mapping: nothing is deferred.
 
+**`ci_dispatch`**: optional (GH-462). A mapping of exactly `workflow`, the bare file name (`.yml`
+or `.yaml`, no `/`) of a workflow under `.github/workflows/` on the task's base branch, and
+`sha_input`, the name of the `workflow_dispatch` input that carries the head sha. It requires `ci`.
+With it, a head that touches `.github/` -- which its own workflow cannot judge -- is judged by a
+dispatched run of the base's workflow at that sha; without it such a head runs the local suite. The
+accessor returns a `CiDispatch` or, absent, `None`. Both values are validated here, and the workflow
+name is later handed to `gh workflow run`, so it can never be a path.
+
 **`check_budgets`**: optional (GH-365). A mapping of a check's name, which must also be under
 `checks`, to the seconds the check may take: a positive number (an int or a float, never a bool).
 The budget is compared only by the once-per-task `full_checks` run on the integrated head, never by
@@ -128,7 +136,7 @@ from agentic.core.process.domain import master_gain
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
-from agentic.core.process.domain.presubmit import CiCover, RerunForm
+from agentic.core.process.domain.presubmit import CiCover, CiDispatch, RerunForm
 from agentic.core.process.domain.presubmit import FlakeGate as FlakeGate
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.suppressions import Forbidden
@@ -156,6 +164,7 @@ KEYS = (
     "performance",
     "rerun_checks",
     "ci_covers",
+    "ci_dispatch",
     "check_budgets",
     "merge_inert",
     "docs",
@@ -191,6 +200,10 @@ RERUN_KEYS = ("command", "test_id")
 TEST_ID_MAX_LENGTH = 200
 # Every sub-key one `ci_covers` entry declares (GH-453).
 COVER_KEYS = ("job", "failed")
+# Every sub-key `ci_dispatch` declares (GH-462), and the shape of its `workflow`: a bare file
+# name, so `gh workflow run` is never handed a path.
+DISPATCH_KEYS = ("workflow", "sha_input")
+WORKFLOW_FILE = re.compile(r"^[\w-][\w.-]*\.ya?ml$")
 SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -598,6 +611,40 @@ def _ci_cover(name: str, body: object, source: object) -> CiCover:
     if reason := _failed_refusal(pattern):
         raise ValueError(f"{where}: `failed` {reason}")
     return CiCover(job=body["job"].strip(), failed=pattern)
+
+
+def ci_dispatch(data: object, source: object) -> CiDispatch | None:
+    """The workflow the system dispatches on the base branch to judge a head that touches
+    `.github/`, and the input that carries the head sha (GH-462). Absent is `None`: such a head
+    keeps today's local run.
+
+    Present, a mapping of exactly `workflow` and `sha_input`, both non-empty strings, `workflow`
+    a bare `.yml`/`.yaml` file name (no `/`), and the product declares `ci`: a dispatch with no
+    CI to read would judge nothing. Every shape that is not that fails at load, naming the key."""
+    declared = _declared(data, source)
+    if "ci_dispatch" not in declared:
+        return None
+    found = _declared_nonempty(declared, source, "ci_dispatch")
+    if not isinstance(found, dict):
+        raise ValueError(f"{source}: expected `ci_dispatch`, a mapping of {DISPATCH_KEYS}")
+    if unknown := [key for key in found if key not in DISPATCH_KEYS]:
+        raise ValueError(
+            f"{source}: unknown key(s) {', '.join(sorted(map(str, unknown)))} under "
+            f"`ci_dispatch`; expected {DISPATCH_KEYS}"
+        )
+    for key in DISPATCH_KEYS:
+        value = found.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{source}: expected a non-empty `{key}` under `ci_dispatch`")
+    workflow = found["workflow"].strip()
+    if not WORKFLOW_FILE.match(workflow):
+        raise ValueError(
+            f"{source}: `workflow` under `ci_dispatch` must be a bare file name ending in "
+            f".yml or .yaml, with no `/`; got {workflow!r}"
+        )
+    if not ci(data, source):
+        raise ValueError(f"{source}: `ci_dispatch` requires `ci`: it judges what `ci` reads")
+    return CiDispatch(workflow=workflow, sha_input=found["sha_input"].strip())
 
 
 def check_budgets(data: object, source: object) -> dict[str, float]:
@@ -1132,6 +1179,16 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         "mapping of check name to a mapping of `job` and `failed`: the CI job that runs the "
         "same suite and the pattern of a failed line, so a full check that times out is "
         "deferred to it",
+    ),
+    KeyReference(
+        "ci_dispatch",
+        ci_dispatch,
+        DISPATCH_KEYS,
+        Disabled(),
+        "mapping of `workflow` (a bare file name under .github/workflows/) and `sha_input`; "
+        "requires `ci`. A head that touches .github/ is judged by a workflow_dispatch run of "
+        "the base branch's workflow at that sha, and without the key it runs the local suite "
+        "([ADR-0080](../adr/0080-un-producto-con-ci-corre-su-nivel-completo-solo-en-github.md))",
     ),
     KeyReference(
         "check_budgets",

@@ -1,0 +1,79 @@
+---
+status: accepted
+date: 2026-11-03
+---
+
+# Un producto con `ci:` corre su nivel completo solo en GitHub
+
+GH-462. Desde que ADR-0064 (adenda GH-376) hizo que `full_checks` empuje la cabeza integrada
+a `agentic-ci/<id>` y espere los jobs de `ci:`, el nivel completo volvía a correr en la máquina
+del dueño en tres casos: `no_run` (la CI nunca arrancó; la espera sondea cada 30 s hasta
+`check_timeout_s`, 1500 s), `untrusted` (la tarea toca `.github/`, así que una corrida de su propio
+workflow no puede juzgarla) y `publish_failed`. En apostrophe, desde el 2026-10-28, ninguno de
+los 30 `full_checks` corrió en CI (25 `no_run`, 5 `untrusted`): unas 32 h de espera a una CI que no
+arrancó, seguidas de corridas locales de 1100-2660 s que agotan el tiempo cuando varias
+comparten máquina. En agentic-system, 7 de 33 corrieron en local por `untrusted`.
+
+El dueño decidió el 2026-11-03: ningún chequeo se omite antes del merge, sólo cambia dónde corre; para
+un producto que declara `ci:`, la CI de GitHub es el único lugar donde corre la suite completa
+(D-2ed419a0). En local el Developer corre sólo el nivel rápido y los tests afectados, la puerta de
+entrega de siempre.
+
+## Decisión
+
+- **Sin retroceso local.** Un producto con `ci:` cuyo `full_checks` no obtiene veredicto de la CI
+  (`no_run`, `publish_failed`, `not_started`, `gh_unavailable`, `gh_unreadable`) escala con la clase
+  nueva `ci`. No es una devolución, no escribe registro y no construye `CheckoutPresubmit` ni corre
+  un comando de chequeo local. La reanudación no necesita decisión porque `full_checks_due`
+  compara cabezas, y `rules.auto_resumable` sigue siendo la única fuente de qué retoma el poller. La
+  causa es un valor cerrado (`CiCause`), elegido por el paso que falló o la clase de salida, nunca
+  leído de la salida de `gh` o de git (ADR-0029); el motivo para el humano puede citarla.
+- **Gracia y un reintento.** `Configuration.ci_start_grace_s` (por defecto 180 s, menor que
+  `check_timeout_s`): si pasada la gracia no hay ninguna corrida sobre la cabeza, el sistema borra y
+  recrea la ref una vez, espera otra gracia y escala. Una CI que no arranca se detecta en unos 6,5
+  min en vez de 25. Una corrida que sí arrancó se espera hasta `check_timeout_s`; una `gh` ilegible
+  conserva la cota de hoy.
+- **Cabeza no confiable por despacho.** La clave opcional `ci_dispatch: {workflow, sha_input}` del
+  stack (sólo junto a `ci:`; referencia en `docs/reference/stack-yaml.md`) dice qué workflow de la rama
+  base se despacha (`workflow_dispatch`) con la cabeza como entrada. Una cabeza que toca `.github/`
+  se juzga por esa corrida del workflow de la base, nunca por la copia de la tarea. La corrida se
+  identifica por su evento (`workflow_dispatch`), su archivo de workflow y el sha completo en su
+  título; la cota inferior `since` es sólo un margen con una constante con nombre en `domain/ci.py`,
+  de modo que ninguna comparación entre el reloj local y una marca de GitHub decide si una corrida
+  existe. Si `gh` rechaza el despacho, la causa es `dispatch_refused` y la tarea escala al instante,
+  sin espera ni reintento. Si una corrida completa omite o no tiene un job declarado, la causa es
+  `jobs_missing` y escala: nunca es rojo ni tiempo agotado. El registro `full_checks` suma `ran_on:
+  ci_dispatch` y `run_id`. Un producto sin la clave conserva la corrida local para cabezas no
+  confiables, y el registro dice por qué.
+- **Confianza en el merge.** `rules.ci_dispatched(record, pr_head)` es el único lugar que compara el sha
+  de un registro despachado con la cabeza del pull request (con `same_commit`, sha completo);
+  `rules.ci_trusted` es lo que leen la puerta de merge y el aterrizaje. Una cabeza que el aterrizaje
+  mueve vuelve por `integrate` y `full_checks`, y la cabeza sincronizada recibe su propio registro.
+- **Requisitos del workflow.** El workflow despachable declara `permissions: contents: read`, falla
+  salvo que la entrada sea de 40 caracteres hexadecimales (el valor pasa por `env`, nunca en línea en
+  `run:`), hace checkout del sha de la entrada y su `run-name` lo contiene en el despacho. El sistema
+  nunca corre un workflow definido por la cabeza; despachar exige `actions: write` en el token del
+  dueño.
+- **Compatibilidad.** `FallbackCause` conserva sus seis valores para que los documentos viejos
+  parseen; los registros nuevos sólo escriben `untrusted`. La deferencia de `ci_covers` (GH-453)
+  sigue como está, sobre el camino local que queda.
+
+## Rechazado
+
+- Mantener el retroceso local y sólo acortar la espera: sigue corriendo la suite completa en la
+  máquina del dueño, que es lo que el dueño decidió quitar.
+- Despachar el workflow de la cabeza: ejecutaría código que la tarea controla con el token del dueño.
+- Decidir si una corrida existe comparando `createdAt` con el reloj local: depende de dos relojes.
+
+## Residuos aceptados
+
+1. **CI vieja al mergear.** Si master se mueve entre `full_checks` y el merge, la CI del pull request
+   queda vieja y la puerta de merge corre la suite local salvo que los chequeos registrados cubran el
+   master actual (con la regla de ganancia inerte). Se registra como hallazgo `outside` en el issue de
+   seguimiento de esta tarea: llevar un merge con CI vieja a una sincronización más una corrida de
+   GitHub, con una cota sobre cuánto perseguir a master.
+2. **Sin `delivery_checks`.** Un producto con `ci:` y sin `delivery_checks` no tiene nodo `full_checks`,
+   así que sus cabezas no confiables siguen locales en el merge.
+3. **La cabeza de esta tarea.** Su base no tiene la clave, así que toma el camino local que queda para
+   cabezas no confiables. La primera corrida despachada real queda probada por el primer pull request
+   verde que la use.

@@ -22,7 +22,7 @@ from ..domain.design import Design, NotReady
 from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult, CiCover, RerunForm
+from ..domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -506,6 +506,14 @@ class ProductStack(Protocol):
         (`core.knowledge`, GH-453), as the commit `revision` declares them, read-only. Empty
         when the product declares none: nothing is ever deferred. Raises `ValueError` when
         the key is malformed."""
+        ...
+
+    def ci_dispatch(self, revision: str) -> CiDispatch | None:
+        """The workflow of the base branch to dispatch for a head that touches `.github/`, and
+        the input that carries the head sha (`core.knowledge`, GH-462), as the commit
+        `revision` declares them. `None` when the product declares none: such a head runs
+        the local suite. Raises `ValueError` when the key is malformed or declared without
+        `ci`."""
         ...
 
     def check_budgets(self, revision: str) -> dict[str, float]:
