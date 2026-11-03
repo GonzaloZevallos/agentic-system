@@ -141,7 +141,52 @@ def test_render_writes_the_experiment_snapshot_when_non_empty():
     assert document.parse(rendered)["experiment"] == snapshot
 
 
-GOLDEN_WITHOUT_ASSIGNMENT = Path(__file__).parent / "golden" / "document_without_assignment.md"
+GOLDEN_WITHOUT_ASSIGNMENT = """\
+---
+id: GH-9
+title: Golden
+type: feature
+status: open
+current_role: null
+flags: {}
+returns: {}
+return_history: []
+escalated: null
+escalation_class: null
+questions_for_human: []
+proposed_invariants: []
+discard_reason: null
+branch: null
+pull_request: null
+subtasks: {}
+invariants: []
+integration_brief: ''
+findings: []
+settled_findings: []
+cost_usd: 0.0
+prompts: {}
+experiment:
+  review_mode: light
+  skip_ephemeral: 'False'
+  reviewer_model: m
+plugins: {}
+system_commit: null
+runs: []
+failures: []
+pause_log: []
+design_items: []
+---
+
+# Golden
+
+## Original request
+
+Body.
+
+## Developer
+
+done
+"""
 ASSIGNMENT = {
     "experiment": "light-review",
     "arm": "light",
@@ -163,8 +208,8 @@ def golden_state(**extra):
 
 
 def test_a_document_without_assignment_renders_byte_identically_to_the_golden():
-    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT.read_text()
-    assert document.render(golden_state(assignment={})) == GOLDEN_WITHOUT_ASSIGNMENT.read_text()
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert document.render(golden_state(assignment={})) == GOLDEN_WITHOUT_ASSIGNMENT
 
 
 def test_assignment_round_trips_through_the_frontmatter():
