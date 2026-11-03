@@ -661,8 +661,9 @@ class GhTracker:
         self, workflow: str, ref: str, inputs: Mapping[str, str]
     ) -> CiUnreadable | None:
         """See `Tracker.dispatch_ci`. Transient failures go through the write retries first
-        (`_gh_retrying`); whatever is left is `dispatch_refused`, except a `gh` that cannot be
-        run at all."""
+        (`_gh_retrying`); whatever is left is `dispatch_refused`, a timeout or an unreachable
+        GitHub included (the caller escalates `ci` at once either way), except a `gh` that
+        cannot be run at all."""
         flags = ("--ref", ref) if ref else ()
         fields = tuple(part for key, value in inputs.items() for part in ("-f", f"{key}={value}"))
         try:
