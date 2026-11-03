@@ -933,13 +933,16 @@ def test_a_default_that_contradicts_its_reader_is_reported():
 def ci_dispatch_violations(dispatch: stack.CiDispatch, workflow: dict[str, Any]) -> list[str]:
     """What keeps `workflow` from being judged safely by a dispatch of itself on the base's
     copy (GH-462): the declared sha input exists, `permissions` is read-only, the checkout
-    takes the input, and a step validates the sha before anything runs it."""
+    takes the input, the run title carries it, and a step validates the sha before anything
+    runs it."""
     violations: list[str] = []
     triggers = workflow.get("on", workflow.get(True))
     dispatched = triggers.get("workflow_dispatch") if isinstance(triggers, dict) else None
     inputs = dispatched.get("inputs") if isinstance(dispatched, dict) else None
     if not isinstance(inputs, dict) or dispatch.sha_input not in inputs:
         violations.append(f"no `workflow_dispatch` input `{dispatch.sha_input}`")
+    if f"inputs.{dispatch.sha_input}" not in str(workflow.get("run-name", "")):
+        violations.append(f"the `run-name` does not carry `inputs.{dispatch.sha_input}`")
     permissions = workflow.get("permissions")
     if not isinstance(permissions, dict) or set(permissions.values()) != {"read"}:
         violations.append("`permissions` is not read-only at workflow level")
@@ -978,6 +981,10 @@ def test_ci_yml_accepts_the_dispatch_this_repos_stack_declares_and_the_guard_rej
     no_input = copy.deepcopy(workflow)
     no_input[True]["workflow_dispatch"] = None
     assert any("input" in v for v in ci_dispatch_violations(dispatch, no_input))
+
+    untitled = copy.deepcopy(workflow)
+    del untitled["run-name"]
+    assert any("run-name" in v for v in ci_dispatch_violations(dispatch, untitled))
 
     writable = copy.deepcopy(workflow)
     writable["permissions"] = {"contents": "write"}
