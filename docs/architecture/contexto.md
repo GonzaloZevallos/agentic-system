@@ -33,7 +33,9 @@ C4Context
 - **GitHub.** Es la cola de trabajo y el canal con el dueño. Los adaptadores están en
   `agentic/core/process/adapters/github/`: `GhInbox` lee la cola de issues
   (`agentic/core/process/adapters/github/inbox.py:GhInbox`), `GhTracker` abre pull requests,
-  comenta, etiqueta y mergea (`agentic/core/process/adapters/github/tracker.py:GhTracker`)
+  comenta, etiqueta y mergea, lee el CI y despacha el workflow de la rama base con el sha de
+  una cabeza que toca `.github/` (`agentic/core/process/adapters/github/tracker.py:GhTracker.dispatch_ci`
+  y `GhTracker.dispatched_ci`, GH-462)
   y `GhBoard` espeja el estado en el Project
   (`agentic/core/process/adapters/github/board.py:GhBoard`, ADR-0073). Todos usan el
   binario `gh`.
