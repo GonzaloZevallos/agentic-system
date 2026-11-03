@@ -400,3 +400,38 @@ def test_a_ceiling_equal_to_the_check_timeout_is_accepted():
 def test_raising_the_check_timeout_past_the_default_ceiling_is_rejected():
     with pytest.raises(ValueError, match="verification_wall_max_s"):
         Configuration.from_sources({"product_dir": "/tmp/p"}, {"AGENTIC_CHECK_TIMEOUT_S": "4000"})
+
+
+# --- ci_start_grace_s (GH-462) ---------------------------------------------------------
+
+
+def test_the_ci_start_grace_defaults_to_three_minutes():
+    cfg = Configuration.from_sources({"product_dir": "/tmp/p"}, {})
+    assert cfg.ci_start_grace_s == 180.0
+
+
+def test_the_ci_start_grace_is_set_from_the_environment():
+    env = {"AGENTIC_CI_START_GRACE_S": "90"}
+    assert Configuration.from_sources({"product_dir": "/tmp/p"}, env).ci_start_grace_s == 90
+
+
+@pytest.mark.parametrize("grace", ["900", "901"])
+def test_a_ci_start_grace_at_or_above_the_check_timeout_is_rejected(grace):
+    env = {"AGENTIC_CHECK_TIMEOUT_S": "900", "AGENTIC_CI_START_GRACE_S": grace}
+    with pytest.raises(ValueError, match="ci_start_grace_s"):
+        Configuration.from_sources({"product_dir": "/tmp/p"}, env)
+
+
+def test_a_ci_start_grace_just_below_the_check_timeout_is_accepted():
+    env = {"AGENTIC_CHECK_TIMEOUT_S": "900", "AGENTIC_CI_START_GRACE_S": "899"}
+    assert Configuration.from_sources({"product_dir": "/tmp/p"}, env).ci_start_grace_s == 899
+
+
+def test_a_ci_start_grace_of_zero_is_rejected():
+    with pytest.raises(ValueError, match="ci_start_grace_s"):
+        Configuration.from_sources({"product_dir": "/tmp/p"}, {"AGENTIC_CI_START_GRACE_S": "0"})
+
+
+def test_lowering_the_check_timeout_below_the_default_grace_is_rejected():
+    with pytest.raises(ValueError, match="ci_start_grace_s"):
+        Configuration.from_sources({"product_dir": "/tmp/p"}, {"AGENTIC_CHECK_TIMEOUT_S": "100"})

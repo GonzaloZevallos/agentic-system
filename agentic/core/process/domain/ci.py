@@ -270,19 +270,24 @@ def full_tier_verdict(
     names: tuple[str, ...],
     elapsed_s: float,
     timeout_s: float,
+    grace_s: float,
 ) -> FullTierVerdict:
     """The verdict of one read of the CI over the declared job `names`, `elapsed_s` into
     a wait bounded by `timeout_s`. A report of another commit than `head` counts as no run
-    on `head` (the only place that comparison lives for the full tier). Red wins over the
-    bound; a job that never started, alone, says the CI is unusable, not that the suite
-    failed; nothing is inferred from a skip (`SKIPPED` is red, as in `ci_state`)."""
+    on `head` (the only place that comparison lives for the full tier). With no run on `head`
+    at all (that, or a report with none of the declared jobs) the wait is bounded by the
+    shorter `grace_s` (GH-462): a CI that never starts is told in minutes; once any declared
+    job has a run on `head`, queued included, only `timeout_s` bounds it, and an unreadable
+    CI keeps `timeout_s` too. Red wins over the bound; a job that never started, alone, says
+    the CI is unusable, not that the suite failed; nothing is inferred from a skip (`SKIPPED`
+    is red, as in `ci_state`)."""
     at_bound = elapsed_s >= timeout_s
     if isinstance(read, CiUnreadable):
         if at_bound:
             return FullTierVerdict("unreachable", (), (), read.cause)
         return FullTierVerdict("waiting", (), tuple(dict.fromkeys(names)), None)
     if not rules.same_commit(read.head_sha, head):
-        if at_bound:
+        if elapsed_s >= grace_s or at_bound:
             return FullTierVerdict("unreachable", (), (), "no_run")
         return FullTierVerdict("waiting", (), tuple(dict.fromkeys(names)), None)
     verdict = ci_state(read, names)
@@ -294,10 +299,11 @@ def full_tier_verdict(
         return FullTierVerdict("red", verdict.failing, pending, None)
     if verdict.state == "green":
         return FullTierVerdict("green", (), (), None)
+    no_run = len(verdict.missing) == len(set(names))
+    if no_run and (elapsed_s >= grace_s or at_bound):
+        return FullTierVerdict("unreachable", (), pending, "no_run")
     if not at_bound:
         return FullTierVerdict("waiting", (), pending, None)
-    if len(verdict.missing) == len(set(names)):
-        return FullTierVerdict("unreachable", (), pending, "no_run")
     return FullTierVerdict("timed_out", (), pending, None)
 
 
