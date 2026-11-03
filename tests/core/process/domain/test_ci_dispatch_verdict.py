@@ -110,3 +110,9 @@ def test_a_declared_job_that_did_not_start_is_unreachable_not_started() -> None:
     for conclusion in ("STARTUP_FAILURE", "CANCELLED"):
         verdict = _verdict([_run(jobs=(_job("check", conclusion),))])
         assert (verdict.state, verdict.cause) == ("unreachable", "not_started")
+
+
+def test_a_run_still_in_progress_is_not_judged_even_with_a_red_job() -> None:
+    running = _run(status="in_progress", jobs=(_job("check", "FAILURE"),))
+    assert _verdict([running], elapsed_s=GRACE + 60).state == "waiting"
+    assert _verdict([running], elapsed_s=TIMEOUT).state == "timed_out"
