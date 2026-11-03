@@ -106,7 +106,9 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
   (`agentic/core/measurement/domain/metrics.py`,
   `agentic/core/measurement/domain/scorecard.py`).
 - `application/`: el caso de uso de los dashboards, con sus propios puertos `DashboardStore`
-  y `WidgetData` (`agentic/core/measurement/application/dashboards.py`).
+  y `WidgetData` (`agentic/core/measurement/application/dashboards.py`), y los comandos de
+  solo lectura `eval score` y `eval compare`
+  (`agentic/core/measurement/application/eval_commands.py`), que `cli.py` envuelve.
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
   proceso y la composición se lo pasa a `build_graph`.

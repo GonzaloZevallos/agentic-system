@@ -126,8 +126,10 @@ from .shared.environment import without_own_toolchain
 from .shared.errors import CannotStart as CannotStart
 
 # The eval commands moved to `eval_commands`; the old names stay here as the same objects.
-# `UNKNOWN_SYSTEM_VERSION`, `_eval_score`, `_read_eval_set` and `_refuse_open_pull_request`
-# are imported above; the rest are only re-exported. `_eval_compare` is the wrapper below.
+# `_eval_score`, `_read_eval_set` and `_refuse_open_pull_request` are imported above and used
+# here; the rest are only re-exported. `_eval_compare` is the wrapper below.
+UNKNOWN_SYSTEM_VERSION = eval_commands.UNKNOWN_SYSTEM_VERSION
+_fmt_figure = eval_commands._fmt_figure
 _bucket_documents = eval_commands._bucket_documents
 _print_scorecard = eval_commands._print_scorecard
 _print_role_usage = eval_commands._print_role_usage
