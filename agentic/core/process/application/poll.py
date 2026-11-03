@@ -1013,9 +1013,9 @@ def gather_retakes(
     (filled here like `crash`) unless its issue already carries the notice; this function writes
     nothing: the tracker, the lock and the documents are `execute`'s to change. A run that
     raised under the graph (its record carries `crashed_version`, GH-308) is retaken the same way,
-    but is returned apart: its issue is a key of `crash` (the mapping the caller hands in, filled here,
-    the same shape as `gather_merges`' `lands`) with the count `execute` needs, and is not in the
-    list. `system_version` is read only when some record carries the mark, at most once per
+    but is returned apart: its issue is a key of `crash` (the mapping the caller hands in, filled
+    here, the same shape as `gather_merges`' `lands`) with the count `execute` needs, and is not in
+    the list. `system_version` is read only when some record carries the mark, at most once per
     round, and names the version the crash retake resumes under; the count comes from the
     comments after the reset boundary. The tray (`Tracker.queue`) and the documents written
     inside `retakes.STALE_AFTER` are read at most once per round, when a record needs them. The

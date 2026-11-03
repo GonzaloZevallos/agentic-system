@@ -70,7 +70,8 @@ options:
 
 ```text
 usage: agentic resume [-h] --issue N [--task-budget USD] [--estimate USD] [--from-document]
-                      [--dry-run] [--yes] [--product-dir PRODUCT_DIR] [--verbose] [--detach]
+                      [--dry-run] [--yes] [--by-poller] [--product-dir PRODUCT_DIR] [--verbose]
+                      [--detach]
 
 options:
   -h, --help            show this help message and exit
@@ -82,6 +83,7 @@ options:
   --from-document       seed the state from the task document instead of the checkpoint
   --dry-run             show what would resume and stop, spending nothing
   --yes                 do not ask for confirmation
+  --by-poller           the poller spawned this resume (GH-466): it does not reset the retake budget
   --product-dir PRODUCT_DIR
                         root of the product repo (AGENTIC_PRODUCT_DIR)
   --verbose             stream each role's generation to stderr
