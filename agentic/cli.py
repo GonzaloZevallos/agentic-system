@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import re
 import signal
@@ -47,13 +46,16 @@ from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.application import dashboards as dashboards_app
+from .core.measurement.application import eval_commands
+from .core.measurement.application.eval_commands import (
+    _eval_score,
+    _read_eval_set,
+    _refuse_open_pull_request,
+)
 from .core.measurement.domain import (
     evaluation,
     findings_report,
-    parallel_factor,
     playbook_window,
-    role_usage,
-    scorecard,
     task_scores,
 )
 from .core.measurement.domain import metrics as delivery_metrics
@@ -121,6 +123,15 @@ from .core.process.domain.task import (
 )
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
+from .shared.errors import CannotStart as CannotStart
+
+# The eval commands moved to `eval_commands`; the old names stay here as the same objects.
+# `UNKNOWN_SYSTEM_VERSION`, `_eval_score`, `_read_eval_set` and `_refuse_open_pull_request`
+# are imported above; the rest are only re-exported. `_eval_compare` is the wrapper below.
+_bucket_documents = eval_commands._bucket_documents
+_print_scorecard = eval_commands._print_scorecard
+_print_role_usage = eval_commands._print_role_usage
+_print_parallel_factor = eval_commands._print_parallel_factor
 
 # The stack review's own corpus (ADR-0034): beside `.agentic/tasks/`, never inside it,
 # so `close --all`, `eval score` and `_bucket_documents` -- which reach the task corpus
@@ -152,13 +163,6 @@ LOCK_SCOPE = (
     "invocations from each other; a `langgraph dev` server holds every thread in one "
     "process and is not covered by it"
 )
-
-# The one string that spells an unknown `system_version` wherever `close` emits one:
-# absent, empty and null alike, all read back as this single literal (Tech Lead plan,
-# subtask `close-command`) -- `close` runs from a possibly different checkout than the
-# one that delivered, so it names the *delivering* run's version, never
-# `telemetry.system_version()`, which would name its own.
-UNKNOWN_SYSTEM_VERSION = "unknown"
 
 
 def no_brief(ports: Ports) -> str | None:
@@ -215,14 +219,6 @@ def _warn_no_tty(detach: bool) -> None:
             "closes (2026-09-15); pass --detach to survive it",
             file=sys.stderr,
         )
-
-
-class CannotStart(Exception):
-    """The command refuses before spending anything; the message says why and what to do."""
-
-    def __init__(self, message: str, code: int = 2):
-        super().__init__(message)
-        self.code = code
 
 
 # 2026-10-05 rename: a checkpoint written before it still names the old role
@@ -2522,53 +2518,6 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
-def _read_eval_set(cfg: Configuration, set_path: str | None) -> tuple[evaluation.EvalSet, str, str]:
-    """The declaration as a value, its own text (`evaluation.baseline_id`'s own input)
-    and where it came from: `--set` overrides the product's own `.agentic/eval-set.yaml`
-    (`evaluation.DECLARATION_PATH`) for a spike, and the caller reports which of the two
-    it read (Tech Lead plan, subtask `eval-cli`). No port: `cli.py` is the composition
-    root and already reads `.agentic/` directly, the same precedent `flags.py`'s adapter
-    has for `.agentic/flags.yaml` -- a second caller would earn this its own port, not a
-    first one with no other module to share it with."""
-    if set_path is not None:
-        path, source = Path(set_path), set_path
-    else:
-        path = cfg.product_dir / evaluation.DECLARATION_PATH
-        source = str(evaluation.DECLARATION_PATH)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise CannotStart(f"{source}: {exc}") from exc
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise CannotStart(f"{source}: {exc}") from exc
-    try:
-        declaration = evaluation.parse_eval_set(data, source)
-    except ValueError as exc:
-        raise CannotStart(str(exc)) from exc
-    return declaration, text, source
-
-
-def _refuse_open_pull_request(ports: Ports, task_id: str) -> None:
-    """A set task whose pull request is still open would have its branch archived out
-    from under that pull request by the `--fresh` each child runs with (ADR-0011, sixth
-    addendum). Read off the document alone, never `gh`: neither `eval` phase may call
-    it (Tech Lead plan invariant). `pull_request` present with no `closed_at` is the
-    document's own way of saying "not yet closed" -- `agentic close` is what would set
-    `closed_at`, and it is the one place allowed to ask `gh` whether a pull request is
-    still open. A task never before run, or one `agentic close` already recorded, never
-    refuses here."""
-    document = ports.documents.load(task_id)
-    reference = (document or {}).get("pull_request")
-    if reference and not (document or {}).get("closed_at"):
-        raise CannotStart(
-            f"{task_id}: has a pull request with no recorded closure (`pull_request` "
-            "set, no `closed_at`); --fresh would archive the branch it points at. Run "
-            f"`agentic close --issue N` first."
-        )
-
-
 def _run_eval_child(argv: list[str], env_overlay: dict[str, str]) -> None:
     """The default `EvalLauncher`: a waited `subprocess.run`, never `start_new_session`
     and never `_spawn_detached`, so `eval run`'s sequencing -- one child at a time,
@@ -2658,76 +2607,6 @@ async def _eval_run(
             print(
                 f"agentic: {task_id} (issue {issue}) done, ${cost:.2f} (${spent:.2f} spent so far)"
             )
-
-
-async def _eval_score(
-    cfg: Configuration, ports: Ports, set_path: str | None, out_path: str
-) -> None:
-    """`agentic eval score`: one JSONL line per evaluation-set task, each entirely
-    `evaluation.evaluation_record`'s own read of that task's document -- no `gh`, no
-    Langfuse, no metric emission, no write other than `out_path` (Tech Lead plan,
-    subtask `eval-cli`). Refuses outright when `out_path` already exists, before the
-    declaration is even read: a new file per invocation, merge and history left to
-    git, so no run can eat a baseline. Blockable by nothing except the documents it
-    reads.
-
-    Each line also carries `declaration_source` (which of the product's own
-    `.agentic/eval-set.yaml` or `--set` produced this run) and `baseline_id`
-    (`evaluation.baseline_id`: that task's own `system_version` plus a content hash of
-    the declaration's text, mixing in the document's own `experiment` snapshot when the
-    task ran an arm, issue #28) -- both identity, not a figure `evaluation_record`
-    itself would have to read a second source for, so they are added onto its own dict
-    rather than duplicated inside `core.measurement.domain.evaluation`, whose field
-    list the plan already enumerates in full."""
-    destination = Path(out_path)
-    if destination.exists():
-        raise CannotStart(f"{destination}: already exists; write a new file, merge with git")
-    declaration, declaration_text, source = _read_eval_set(cfg, set_path)
-    try:
-        product = ports.stack.product()
-    except (ValueError, OSError) as exc:
-        raise CannotStart(str(exc)) from exc
-    lines: list[str] = []
-    fingerprints: dict[str, list[str]] = {}
-    grouped: dict[str, list[evaluation.TaskDocument]] = {}
-    pending: list[int] = []
-    for issue in declaration.issues:
-        task_id = ports.inbox.task_id(issue)
-        document = ports.documents.load(task_id)
-        if document is None:
-            print(f"agentic: {task_id} (issue {issue}) has no document yet; skipped")
-            continue
-        record = evaluation.evaluation_record(product, issue, document)
-        version = document.get("system_version") or UNKNOWN_SYSTEM_VERSION
-        line: dict[str, object] = {
-            **record,
-            "declaration_source": source,
-            "baseline_id": evaluation.baseline_id(
-                version, declaration_text, document.get("experiment", {})
-            ),
-        }
-        lines.append(json.dumps(line, sort_keys=True))
-        fingerprints.setdefault(record["prompts_fingerprint"], []).append(task_id)
-        grouped.setdefault(record["prompts_fingerprint"], []).append(document)
-        if record["score"] is None:
-            pending.append(issue)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    print(f"agentic: {source}: wrote {len(lines)} line(s) to {destination}")
-    if len(fingerprints) > 1:
-        print(
-            "agentic: prompts fingerprint diverges across "
-            f"{len(fingerprints)} groups (a task that stopped early ran fewer prompts):"
-        )
-        for fingerprint, task_ids in fingerprints.items():
-            print(f"  {fingerprint}: {', '.join(sorted(task_ids))}")
-        playbook_roles, template_roles = evaluation.fingerprint_divergence(list(grouped.values()))
-        if playbook_roles:
-            print(f"  playbook differs for: {', '.join(playbook_roles)}")
-        if template_roles:
-            print(f"  template differs for: {', '.join(template_roles)}")
-    for issue in pending:
-        print(f"agentic close --issue {issue}")
 
 
 # Consecutive documents whose Langfuse write failed before the backfill stops: past it the
@@ -2903,108 +2782,17 @@ async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
         sys.exit(1)
 
 
-def _bucket_documents(
-    product_dir: Path, repo: Path
-) -> tuple[dict[str, list[tuple[str, scorecard.TaskFigures]]], int]:
-    """Every task document under `.agentic/tasks/`: this function owns only the glob
-    and the parse (Tech Lead review, subtask `scorecard`), handing what it read to
-    `scorecard.bucket_by_baseline` for the actual grouping -- a pure function, testable
-    at a declared seam (`tests/core/measurement/domain/test_scorecard.py`) without a
-    filesystem or git. No port: `cli.py` is the composition root and already reads
-    `.agentic/` directly, `_read_eval_set`'s own precedent for `.agentic/eval-set.yaml`.
-
-    `document.parse` rejects a document three ways -- malformed frontmatter YAML
-    (`yaml.YAMLError`, from its own unguarded `yaml.safe_load`), a missing frontmatter
-    block, or a file this process cannot read (`ValueError`/`OSError`) -- all three
-    caught here into the single `None` sentinel `bucket_by_baseline` counts and
-    excludes, never raised out of a read-only comparison."""
-    tasks_dir = product_dir / task_document.TASKS_SUBDIR
-    paths = sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []
-    parsed: list[scorecard.ParsedDocument] = []
-    for path in paths:
-        try:
-            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
-        except (ValueError, OSError, yaml.YAMLError):
-            parsed.append(None)
-            continue
-        parsed.append((raw.get("id", path.stem), cast(scorecard.ScorecardDocument, raw)))
-    return scorecard.bucket_by_baseline(parsed, lambda sha: telemetry.resolve_baseline(sha, repo))
-
-
-def _fmt_figure(figure: scorecard.Figure) -> str:
-    return "n/a" if figure.value is None else f"{figure.value:.4f}"
-
-
-def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> None:
-    """Every figure names the product it was computed over, the denominator it was
-    computed over, and the number of documents excluded from that denominator (Tech
-    Lead plan, standard 7): no printed figure sums documents from more than one product
-    directory, since `sc` is already this one invocation's own bucket of this one
-    product's own documents."""
-    print(f"-- {product} / {baseline} --")
-    print(
-        f"autonomy:          {_fmt_figure(sc.autonomy)} "
-        f"({sc.autonomy.denominator} judged, {sc.autonomy.excluded} excluded)"
-    )
-    print(
-        f"own failures/task: {_fmt_figure(sc.own_failures_per_task)} "
-        f"({sc.own_failures_per_task.denominator} terminated, "
-        f"{sc.own_failures_per_task.excluded} excluded)"
-    )
-    print(
-        "  caveat: `sdk` counts as ours on both sides; a run before ADR-0029 recorded "
-        "its 429s as `sdk` and is never reclassified -- a delta here is a quality delta "
-        "only if both sides show the post-ADR-0029 vocabulary"
-    )
-    print(f"  by reason: {sc.failures_by_reason}")
-    print(
-        f"cost/delivery:     {_fmt_figure(sc.cost_per_delivery)} "
-        f"({sc.cost_per_delivery.denominator} judged, {sc.cost_per_delivery.excluded} excluded)"
-    )
-    print(
-        f"rework/task:       {_fmt_figure(sc.rework_per_task)} "
-        f"({sc.rework_per_task.denominator} terminated, {sc.rework_per_task.excluded} excluded)"
-    )
-    print(f"  time to merge known for {sc.time_to_merge_known} of {sc.judged} judged deliveries")
-    for label, figure in (
-        ("actual/estimate cost:", sc.cost_over_estimate),
-        ("actual/estimate files:", sc.files_over_estimate),
-    ):
-        print(
-            f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}, "
-            f"{figure.excluded} excluded)"
-        )
-
-
-def _print_role_usage(
-    product: str, baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]
+async def _eval_compare(
+    cfg: Configuration, ports: Ports, frm: str, to: str, system_repo: str | None
 ) -> None:
-    """The per-role breakdown of one baseline's runs (GH-292), read off the same
-    bucket the scorecard above it was built from. Token columns are counts, `cost`
-    is the recorded `cost_usd`; a document recorded before a field existed reads 0."""
-    usage = role_usage.by_role(run for _, figures in tasks for run in figures.runs)
-    print(f"-- per-role usage -- {product} / {baseline} --")
-    print(
-        f"{'role':<24}{'runs':>6}{'turns':>7}{'input':>10}{'cache_read':>13}"
-        f"{'cache_write':>13}{'output':>10}{'cost_usd':>11}"
-    )
-    for slug, u in usage.items():
-        print(
-            f"{slug:<24}{u.runs:>6}{u.turns:>7}{u.input_tokens:>10}{u.cache_read_tokens:>13}"
-            f"{u.cache_write_tokens:>13}{u.output_tokens:>10}{u.cost_usd:>11.4f}"
-        )
-
-
-def _print_parallel_factor(
-    product: str, baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]
-) -> None:
-    """How many Developer sessions ran at once over one baseline's tasks (GH-364): the
-    recorded attempts' time over the wall time they occupied, summed over the tasks. One
-    line, `n/a` when no run of the baseline carries both timestamps. Not the transcript
-    figure the issue quotes (ADR-0068); nothing is recorded for it."""
-    factor = parallel_factor.aggregate({"runs": figures.runs} for _, figures in tasks)
-    print(
-        f"parallel factor -- {product} / {baseline}: {'n/a' if factor is None else f'{factor:.4f}'}"
+    """`agentic eval compare <from> <to>`: the comparison itself is
+    `eval_commands._eval_compare`; this wrapper owns the one thing that needs git, which
+    checkout resolves a document's `system_commit` into a baseline tag (`--system-repo`,
+    else the pinned stage0 checkout). Looked up through `telemetry` at call time, so a
+    test patching it still takes effect."""
+    repo = Path(system_repo) if system_repo else telemetry.REPO
+    await eval_commands._eval_compare(
+        cfg, ports, frm, to, lambda sha: telemetry.resolve_baseline(sha, repo)
     )
 
 
@@ -3033,65 +2821,6 @@ async def _eval_findings(cfg: Configuration, ports: Ports, since: date, until: d
             findings_report.build(documents, since, until), product, since, until
         )
     )
-
-
-async def _eval_compare(
-    cfg: Configuration, ports: Ports, frm: str, to: str, system_repo: str | None
-) -> None:
-    """`agentic eval compare <from> <to>`: ADR-0028's scorecard for two baselines, from
-    task documents and local git alone (Tech Lead plan, subtask `scorecard`) -- no
-    lock, no `gh`, no network. One product directory per invocation, the one `main()`
-    already resolved into `cfg`/`ports`: a second product is another invocation, never
-    a second `Configuration`/`Ports` built here."""
-    try:
-        product = ports.stack.product()
-    except (ValueError, OSError) as exc:
-        raise CannotStart(str(exc)) from exc
-    repo = Path(system_repo) if system_repo else telemetry.REPO
-    buckets, unreadable = _bucket_documents(cfg.product_dir, repo)
-    available = sorted(buckets)
-    for name in (frm, to):
-        if name not in buckets:
-            counts = ", ".join(f"{b} ({len(buckets[b])})" for b in available)
-            raise CannotStart(f"{name}: unknown baseline; available: {counts or 'none'}")
-    if unreadable:
-        print(f"agentic: {unreadable} document(s) could not be read; excluded from every bucket")
-    if unknown := buckets.get("unknown"):
-        print(
-            f"agentic: {len(unknown)} document(s) whose `system_commit` this repository "
-            "cannot resolve; re-pin stage0 or pass --system-repo"
-        )
-
-    frm_sc = scorecard.build([figures for _, figures in buckets[frm]])
-    to_sc = scorecard.build([figures for _, figures in buckets[to]])
-    _print_scorecard(product, frm, frm_sc)
-    _print_scorecard(product, to, to_sc)
-    v = scorecard.verdict(frm_sc, frm, to_sc, to)
-    print(f"verdict: {v.outcome} ({v.reason})")
-    _print_parallel_factor(product, frm, buckets[frm])
-    _print_parallel_factor(product, to, buckets[to])
-    _print_role_usage(product, frm, buckets[frm])
-    _print_role_usage(product, to, buckets[to])
-
-    # The eval-set declaration is read on a warning path (ADR-0025's `no_brief`/
-    # `brief_refusal` asymmetry): absent or malformed says so plainly and the
-    # comparison already printed above stands, never a `CannotStart` that would die
-    # before a figure is printed (this repo declares no `.agentic/eval-set.yaml`).
-    try:
-        declaration, _text, _source = _read_eval_set(cfg, None)
-    except CannotStart as exc:
-        print(f"agentic: eval set: {exc}")
-        return
-    for name, tasks in ((frm, buckets[frm]), (to, buckets[to])):
-        present = {task_id for task_id, _ in tasks}
-        missing = [
-            issue for issue in declaration.issues if ports.inbox.task_id(issue) not in present
-        ]
-        if missing:
-            print(
-                f"agentic: {name}: missing {len(missing)} of {len(declaration.issues)} "
-                f"eval-set issue(s): {', '.join(str(i) for i in missing)}"
-            )
 
 
 async def _invoke(
