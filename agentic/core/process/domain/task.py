@@ -1095,9 +1095,13 @@ class FullChecksRecord(TypedDict):
     # returns and blocks nothing.
     over_budget: NotRequired[list[BudgetBreach]]
     # Where the run happened (GH-376): `ci` when the product's GitHub jobs gave the verdict,
-    # `local` when this machine ran the tier. Absent on a record written before it and on a
+    # `local` when this machine ran the tier, `ci_dispatch` when a dispatched run of the base's
+    # workflow judged an untrusted head (GH-462). Absent on a record written before it and on a
     # product without `ci:`.
-    ran_on: NotRequired[Literal["ci", "local"]]
+    ran_on: NotRequired[Literal["ci", "local", "ci_dispatch"]]
+    # The id of the dispatched run that gave the verdict (GH-462); written only with
+    # `ran_on: "ci_dispatch"`.
+    run_id: NotRequired[int]
     # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
     ci_fallback: NotRequired[FallbackCause]
     # The checks deferred to CI (GH-453), a declared name each; written only when there is one,
