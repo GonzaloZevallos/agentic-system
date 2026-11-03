@@ -97,6 +97,12 @@ class _Locks:
         # Recorded, never acted on: a test asserts the poller left it empty.
         self.kept_crashed.append((task_id, system_version))
 
+    def keep_stopped(self, task_id, pid):
+        raise AssertionError("the poller must never rewrite a run's lock")
+
+    def mark_stopped_recordless(self, task_id):
+        raise AssertionError("the poller must never write a lock")
+
 
 def _no_sleep(seconds: float) -> None:
     """The default `sleep` every test but the ones about the wait itself inject: a

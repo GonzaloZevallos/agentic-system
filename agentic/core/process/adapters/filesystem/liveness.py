@@ -33,3 +33,17 @@ def is_alive(pid: int, recorded_boot: str | None, current_boot: str | None) -> b
     except PermissionError:
         return True  # owned by someone else, but the OS knows it is there
     return True
+
+
+def starttime_of(pid: int, proc: Path = Path("/proc")) -> str | None:
+    """When `pid` started, in the kernel's clock ticks since boot (`/proc/<pid>/stat`,
+    field 22): with the boot id it names one process for good, a reused pid included.
+    `None` where it cannot be read (the process is gone, or no `/proc`)."""
+    try:
+        text = (proc / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    # The command (field 2) is in parentheses and may hold anything: split after the last.
+    fields = text.rpartition(")")[2].split()
+    # `fields` starts at field 3 (state), so field 22 is the 20th.
+    return fields[19] if len(fields) > 19 else None

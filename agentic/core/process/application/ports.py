@@ -1534,6 +1534,12 @@ class LockRecord:
     # The system version a run recorded when it raised under the graph
     # (`RunLock.keep_crashed`); `None` for a record with no such mark.
     crashed_version: str | None = None
+    # The holder's start time as the kernel counts it (`/proc/<pid>/stat`, field 22), so a
+    # later process that reuses the pid is told apart; `None` for a record older than it.
+    starttime: str | None = None
+    # A human, a signal outside a shutdown or `agentic stop` ended this run on purpose: the
+    # poller never retakes it (`RunLock.keep_stopped`).
+    stopped_deliberately: bool = False
 
 
 class LockHeld(Exception):
@@ -1596,6 +1602,21 @@ class RunLock(Protocol):
         `crashed_version` set to `system_version`, keeping its boot id, so the poller can
         retake the run. A no-op when there is none, or when the record belongs to another
         pid. Exclusive with `release` and `keep_at_shutdown`: a run calls one of the three."""
+        ...
+
+    def keep_stopped(self, task_id: str, pid: int) -> None:
+        """Mark the record as a deliberate stop, only if it still names `pid`: rewrite it
+        with `stopped_deliberately` set and keep everything else it holds (pid, host, boot
+        id, starttime, start time, command). A run calls it on itself instead of `release`
+        when a signal that is not a shutdown stopped it; `agentic stop` calls it with the
+        pid of the run it is about to signal, before the signal. A no-op when there is no
+        record or it names another pid (a takeover is never undone)."""
+        ...
+
+    def mark_stopped_recordless(self, task_id: str) -> None:
+        """`agentic stop` found no record: write one with `stopped_deliberately` and the
+        identity (pid, host, boot id, starttime) of the calling process, which is gone as
+        soon as the command ends. Leaves an existing record alone."""
         ...
 
 

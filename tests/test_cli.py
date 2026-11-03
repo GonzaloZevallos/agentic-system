@@ -784,12 +784,19 @@ class FakeLock:
         self.released: list[str] = []
         self.kept: list[str] = []
         self.kept_crashed: list[tuple[str, str]] = []
+        self.kept_stopped: list[tuple[str, int]] = []
 
     def read(self, task_id):
         return self.held
 
     def keep_at_shutdown(self, task_id):
         self.kept.append(task_id)
+
+    def keep_stopped(self, task_id, pid):
+        self.kept_stopped.append((task_id, pid))
+
+    def mark_stopped_recordless(self, task_id):
+        raise AssertionError("only `agentic stop` marks a task with no record")
 
     def keep_crashed(self, task_id, system_version):
         self.kept_crashed.append((task_id, system_version))
@@ -1412,13 +1419,19 @@ async def test_a_signal_at_system_shutdown_keeps_the_lock_record_marked(monkeypa
 
 
 @pytest.mark.anyio
-async def test_a_signal_outside_a_shutdown_releases_the_lock(monkeypatch, tmp_path):
+async def test_a_signal_outside_a_shutdown_keeps_the_lock_record_as_a_deliberate_stop(
+    monkeypatch, tmp_path
+):
     from agentic.core.process.adapters.filesystem import FilesystemRunLock
 
     lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "boot-1")
     stop = await _signalled_run(monkeypatch, tmp_path, lock, lambda: False)
     assert stop.at_shutdown is False
-    assert lock.read("T-9") is None
+    record = lock.read("T-9")
+    assert record is not None
+    assert record.stopped_deliberately is True
+    assert record.stopped_at_shutdown is False
+    assert (record.pid, record.boot_id) == (os.getpid(), "boot-1")
 
 
 def test_each_invocation_has_its_own_stop_cause():
@@ -1462,13 +1475,14 @@ async def _signalled_then_raising_run(monkeypatch, tmp_path, lock, probe):
 
 
 @pytest.mark.anyio
-async def test_a_signal_followed_by_a_graph_exception_releases_the_lock_unmarked(
+async def test_a_signal_followed_by_a_graph_exception_keeps_the_stop_mark_not_the_crash_mark(
     monkeypatch, tmp_path
 ):
     lock = FakeLock()
     stop = await _signalled_then_raising_run(monkeypatch, tmp_path, lock, lambda: False)
     assert (stop.signalled, stop.crashed, stop.at_shutdown) == (True, True, False)
-    assert lock.released == ["T-9"]
+    assert lock.kept_stopped == [("T-9", os.getpid())]
+    assert lock.released == []
     assert lock.kept_crashed == []
     assert lock.kept == []
 
@@ -1480,6 +1494,7 @@ async def test_a_shutdown_and_a_crash_keep_the_lock_for_the_shutdown_only(monkey
     assert (stop.signalled, stop.crashed, stop.at_shutdown) == (True, True, True)
     assert lock.kept == ["T-9"]
     assert lock.kept_crashed == []
+    assert lock.kept_stopped == []
     assert lock.released == []
 
 
@@ -3158,6 +3173,12 @@ class FakeKeyedLock:
 
     def keep_crashed(self, task_id, system_version):
         self.kept_crashed.append((task_id, system_version))
+
+    def keep_stopped(self, task_id, pid):
+        pass
+
+    def mark_stopped_recordless(self, task_id):
+        pass
 
     def release(self, task_id):
         self.released.append(task_id)
@@ -5902,7 +5923,8 @@ async def test_the_deadline_reaps_roles_releases_the_lock_once_and_exits_once():
         ("run", "check", pid, None),
         ("run", "perf", pid, None),
     ]
-    assert lock.released == ["T-9"]  # the deadline released it; `_locked`'s finally did not
+    # The deadline kept it as a deliberate stop; `_locked`'s finally did not touch it again.
+    assert (lock.kept_stopped, lock.released) == ([("T-9", pid)], [])
     assert (exits, flushed) == ([1], [1])
 
 
@@ -5950,7 +5972,7 @@ async def test_a_run_stopped_that_reaches_the_guard_is_the_cancellation_not_a_tr
 
 
 @pytest.mark.anyio
-async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed():
+async def test_a_stopped_run_marks_its_lock_a_deliberate_stop_once_and_never_crashed():
     lock = FakeLock()
     stop = cli.StopCause()
 
@@ -5958,11 +5980,13 @@ async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed()
         with cli._locked(lock, "T-9", stop):
             from agentic.core.process.application.ports import RunStopped
 
+            stop.signalled = True  # what `on_signal` sets before it marks the flag
             raise RunStopped
 
     with pytest.raises(SystemExit):
         await cli._signal_guarded(work, stop)
-    assert (lock.released, lock.kept, lock.kept_crashed) == (["T-9"], [], [])
+    assert (lock.released, lock.kept, lock.kept_crashed) == ([], [], [])
+    assert lock.kept_stopped == [("T-9", os.getpid())]
 
 
 # `build_parser()` (GH-400, subtask `entry-points`): the command line as a tree the docs

@@ -967,8 +967,10 @@ class StopCause:
     settle: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def settle_lock(self, lock: RunLock, task_id: str) -> None:
-        """Keep the lock record at a shutdown or release it, once: whoever gets here
-        second finds it done. The crashed-record case belongs to `_locked` alone."""
+        """Keep the lock record or release it, once: whoever gets here second finds it done.
+        Kept marked for the shutdown, marked as crashed when the graph raised with no signal,
+        and marked as a deliberate stop for any other signal (SIGTERM, SIGHUP, SIGINT):
+        the poller never retakes that run. Released otherwise."""
         with self.settle:
             if self.lock_settled:
                 return
@@ -977,6 +979,8 @@ class StopCause:
                 lock.keep_at_shutdown(task_id)
             elif self.crashed and not self.signalled:
                 lock.keep_crashed(task_id, telemetry.system_version())
+            elif self.signalled:
+                lock.keep_stopped(task_id, os.getpid())
             else:
                 lock.release(task_id)
 
@@ -999,7 +1003,7 @@ def _system_is_stopping() -> bool:
 
 # Declared, not measured: seconds the hard deadline gives the telemetry flush before it exits.
 _STOP_FLUSH_CAP_S = 5.0
-_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
 async def _signal_guarded(
@@ -1011,8 +1015,8 @@ async def _signal_guarded(
     hard_exit: Callable[[int], object] = os._exit,
     flush: Callable[[], None] = telemetry.flush,
 ) -> None:
-    """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM or a
-    SIGHUP cancels (Tech Lead plan, subtask `signals`). This is the one place that
+    """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM, a SIGHUP
+    or a SIGINT cancels (Tech Lead plan, subtask `signals`). This is the one place that
     restructures the `anyio.run(work)` call; every other subtask takes its shape as it
     finds it.
 
@@ -1311,13 +1315,14 @@ def _locked(
     lock: RunLock, task_id: str, stop: StopCause | None = None
 ) -> Iterator[LockRecord | None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
-    releases whether the invocation delivers, escalates or raises -- except two cases where
+    releases whether the invocation delivers, escalates or raises -- except three cases where
     the record stays, marked, and exactly one action runs (`keep_at_shutdown`,
-    `keep_crashed`, `release`, in that priority): the system shutdown stopped it
-    (`stop.at_shutdown`), so the next boot can retake the run; or the graph itself raised
+    `keep_crashed`, `keep_stopped`, `release`, in that priority): the system shutdown stopped
+    it (`stop.at_shutdown`), so the next boot can retake the run; the graph itself raised
     (`stop.crashed`, set only by `_invoke`) with no signal, so the poller can retake it
     -- the dying process's own memoised system version is the right one, it is a fresh
-    process. A `CannotStart`, a signal, or an exception outside `app.ainvoke` releases.
+    process; or any other signal stopped it (`stop.signalled`), a deliberate stop the poller
+    never retakes. A `CannotStart` or an exception outside `app.ainvoke` releases.
     Yields the record of the dead run it took over, if any
     (`RunLock.acquire` only ever hands back a record of this host's own, never probing
     another host's)."""
