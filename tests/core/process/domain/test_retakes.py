@@ -41,6 +41,17 @@ def test_the_cap_is_three_and_the_prefixes_collide_with_nothing():
         assert one in SYSTEM
 
 
+def test_every_prefix_the_system_posts_is_in_the_real_registry():
+    from agentic.core.process.application import resume
+
+    for prefix in (*retakes.RETAKE_PREFIXES, retakes.RETAKES_SPENT):
+        assert prefix in resume.SYSTEM_COMMENTS
+    assert not any(
+        prefix.startswith(resume.RESUMED)
+        for prefix in (*retakes.RETAKE_PREFIXES, retakes.RETAKES_SPENT)
+    )
+
+
 def test_a_reboot_a_crash_and_an_orphan_retake_share_one_budget_and_spend_it():
     used = _budget(REBOOT, CRASH, ORPHAN)
     assert used == retakes.Budget(3, _at(0), _at(20))

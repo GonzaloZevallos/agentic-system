@@ -3783,7 +3783,7 @@ def orphaned_run(
         return "quiet"
     if retakes.spent(used):
         return "cap_spent"
-    if used.used > 0 and now < retakes.due(used, now, ORPHANED_QUIET):
+    if now < retakes.due(used, now, timedelta(0)):  # the quiet hour is `quiet`'s, above
         return "calendar"
     return "retake"
 
