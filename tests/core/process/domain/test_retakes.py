@@ -53,6 +53,12 @@ def test_legacy_retake_comments_count_toward_the_budget():
     assert _budget(legacy, legacy, legacy).used == 3
 
 
+def test_only_a_comment_that_starts_with_a_retake_prefix_counts():
+    quoted = f"The owner wrote: {retakes.RETAKEN}previous boot"
+    assert _budget(quoted).used == 0
+    assert _budget(f" {REBOOT}", REBOOT).used == 1
+
+
 def test_nothing_used_is_an_empty_budget():
     assert _budget() == retakes.Budget(0, None, None)
     assert _budget("a human decision") == retakes.Budget(0, None, None)
