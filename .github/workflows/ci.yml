@@ -1,16 +1,38 @@
 name: ci
 
+# On `workflow_dispatch` the title carries the full head sha: that is how `full_checks`
+# finds the run it dispatched (GH-462). Any other event keeps GitHub's usual title.
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('ci {0}', inputs.sha) || github.event.pull_request.title || github.event.head_commit.message || github.sha }}
+
 on:
   pull_request:
   push:
     # `agentic-ci/**`: the ref where `full_checks` runs the full tier on GitHub (ADR-0064).
     branches: [master, 'agentic-ci/**']
+  # The base's workflow judges a head that touches `.github/`, with the head sha as input (GH-462).
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character sha of the head to judge
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
+      # The input is read through `env`, never interpolated into the script (GH-462).
+      - if: github.event_name == 'workflow_dispatch'
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha input is not a full 40-hex sha"; exit 1; }
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: "0.12.13"
