@@ -1150,6 +1150,12 @@ class MemoryWorkspace:
             raise GitError(self.ci_ref_error)
         self.ci_refs[ref] = self.head(path)
 
+    def republish_ci_ref(self, path: Path, ref: str) -> None:
+        self.ci_ref_calls.append(("republish", ref))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        self.ci_refs[ref] = self.head(path)
+
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
         self.ci_ref_calls.append(("list", prefix))
         if self.ci_ref_error is not None:

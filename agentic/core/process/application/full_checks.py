@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import anyio
@@ -66,14 +67,23 @@ _REPRODUCE = (
 # What was tried for each closed cause, as prose for the human: the cause itself is the value
 # the node chose from the step that failed, never text read back from `gh` or git (ADR-0029).
 _CI_DETAIL: dict[CiCause, str] = {
-    "gh_unavailable": "`gh` could not be run for the whole {min:.0f} min wait on {ref}",
-    "gh_unreadable": "`gh` answered something unreadable for the whole {min:.0f} min wait on {ref}",
-    "no_run": "no CI run on {ref} for that head after {min:.0f} min",
+    "gh_unavailable": "`gh` could not be run for the whole {min:g} min wait on {ref}",
+    "gh_unreadable": "`gh` answered something unreadable for the whole {min:g} min wait on {ref}",
+    "no_run": "no CI run on {ref} for that head after {min:g} min, though the ref was pushed twice",
     "publish_failed": "the push of {ref} failed",
     "not_started": "the declared CI jobs on {ref} did not start (startup failure or cancelled)",
     "dispatch_refused": "`gh` refused to dispatch the workflow for that head",
     "jobs_missing": "the run completed without a declared job",
 }
+
+
+@dataclass(frozen=True)
+class _NoVerdict:
+    """GitHub gave no verdict: the closed `cause` and how long the node waited on it."""
+
+    cause: CiCause
+    waited_s: float
+
 
 Sleep = Callable[[float], Awaitable[None]]
 Clock = Callable[[], float]
@@ -102,12 +112,12 @@ async def full_checks(
     outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock)
     if outcome == "untrusted":
         return await _local_full_checks(state, cfg, ports, task, base, outcome)
-    if isinstance(outcome, str):
+    if isinstance(outcome, _NoVerdict):
         head = workspace.full_head(task.path)
-        detail = _CI_DETAIL[outcome].format(
-            ref=rules.ci_ref(state["id"]), min=cfg.check_timeout_s / 60
+        detail = _CI_DETAIL[outcome.cause].format(
+            ref=rules.ci_ref(state["id"]), min=round(outcome.waited_s / 60, 1)
         )
-        return finish(state, rules.ci_unavailable(outcome, head, detail), ports)
+        return finish(state, rules.ci_unavailable(outcome.cause, head, detail), ports)
     return finish(state, outcome, ports)
 
 
@@ -203,9 +213,10 @@ async def _ci_full_checks(
     names: tuple[str, ...],
     sleep: Sleep,
     clock: Clock,
-) -> dict[str, Any] | CiCause | Literal["untrusted"]:
+) -> dict[str, Any] | _NoVerdict | Literal["untrusted"]:
     """The patch of a run decided on GitHub, `untrusted` for running the local tier, or the
-    `CiCause` GitHub gave no verdict for. The
+    `_NoVerdict` GitHub gave no verdict for. When no run starts within the grace period the
+    ref is published once more (GH-462). The
     paths are read from the workspace only and the head is published to the task's own CI
     ref; the wait takes no check slot and runs no command (ADR-0070)."""
     workspace = ports.workspace
@@ -220,11 +231,20 @@ async def _ci_full_checks(
     try:
         await anyio.to_thread.run_sync(workspace.publish_ci_ref, task.path, ref)
     except GitError:
-        return "publish_failed"
+        return _NoVerdict("publish_failed", 0.0)
     gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
     verdict, read, waited = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+    if verdict.state == "unreachable" and verdict.cause == "no_run":
+        # Once per call: a CI that never started on the first push is told that it may have
+        # missed the event, and the second wait is bounded by the grace period again.
+        try:
+            await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
+        except GitError:
+            return _NoVerdict("publish_failed", waited)
+        verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+        waited += again
     if verdict.state == "unreachable":
-        return verdict.cause or "no_run"
+        return _NoVerdict(verdict.cause or "no_run", waited)
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
     if verdict.state == "green":
         return _ci_green(state, head, gate_names, read, waited)
@@ -240,13 +260,16 @@ async def _wait_ci(
     sleep: Sleep,
     clock: Clock,
 ) -> tuple[FullTierVerdict, CiReport | CiUnreadable, float]:
-    """Read the CI of `ref` every `CI_POLL_S` until a verdict that is not `waiting`; the one
-    bound is `cfg.check_timeout_s`, counted from the first read."""
+    """Read the CI of `ref` every `CI_POLL_S` until a verdict that is not `waiting`, counted
+    from the first read: bounded by `cfg.ci_start_grace_s` while no run exists on `head` and by
+    `cfg.check_timeout_s` once one does (`ci.full_tier_verdict`)."""
     started = clock()
     while True:
         read = await anyio.to_thread.run_sync(ports.tracker.branch_ci, ref)
         waited = clock() - started
-        verdict = ci.full_tier_verdict(read, head, names, waited, cfg.check_timeout_s)
+        verdict = ci.full_tier_verdict(
+            read, head, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
+        )
         if verdict.state != "waiting":
             return verdict, read, waited
         await sleep(ci.CI_POLL_S)

@@ -27,7 +27,7 @@ from tests.fakes import (
 
 pytestmark = pytest.mark.anyio
 
-CFG = Configuration(product_dir=MemoryWorkspace.ROOT, check_timeout_s=100.0)
+CFG = Configuration(product_dir=MemoryWorkspace.ROOT, check_timeout_s=100.0, ci_start_grace_s=30.0)
 CHECKS = {"tests": "pytest", "lint": "ruff check ."}
 REF = "agentic-ci/GH-1"
 HEAD = "base"
@@ -188,8 +188,12 @@ async def test_a_report_of_another_head_is_never_accepted_and_escalates_as_no_ru
     clock = Clock()
     patch = await run(state_of(), ports, clock)
     assert_escalated_ci(patch, ports, state_of())
-    assert sum(clock.slept) >= 100
+    # Two grace periods (30 s each), not the 100 s check timeout.
+    assert sum(clock.slept) == 60
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
     assert "no CI run" in patch["escalated"] and HEAD[:7] in patch["escalated"]
+    assert "pushed twice" in patch["escalated"] and "1 min" in patch["escalated"]
+    assert ports.commands.ran == [] and "full_checks" not in patch
 
 
 async def test_a_job_that_never_started_escalates_as_not_started():
@@ -315,3 +319,70 @@ async def test_a_product_without_ci_keeps_a_timeout_red():
     patch = await run(state_of(), deferring_ports(WEB_OUT, ci=()))
     assert patch["full_checks"]["passed"] is False
     assert "deferred" not in patch["full_checks"]
+
+
+# --- the grace period and the one republish (GH-462) ---------------------------------------
+
+
+async def test_no_run_ever_publishes_once_republishes_once_and_escalates_within_two_graces():
+    ports = ports_of(report(sha="f" * 40))
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert clock.now == 2 * CFG.ci_start_grace_s < CFG.check_timeout_s
+    assert ports.commands.ran == []
+
+
+async def test_a_run_that_appears_after_the_republish_is_awaited_and_recorded_green():
+    nothing = report(sha="f" * 40)
+    ports = ports_of(nothing, nothing, GREEN)
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    record = patch["full_checks"]
+    assert record["passed"] is True and record["ran_on"] == "ci"
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.commands.ran == []
+
+
+async def test_a_run_that_started_before_the_grace_is_never_republished():
+    started = report(job("unit", None, "IN_PROGRESS"), job("web", None, "QUEUED"))
+    ports = ports_of(*[started] * 3, GREEN)
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert patch["full_checks"]["passed"] is True
+    assert clock.now > CFG.ci_start_grace_s
+    assert ports.workspace.ci_ref_calls == [("publish", REF)]
+
+
+async def test_a_run_that_started_after_the_republish_is_bounded_by_the_check_timeout():
+    nothing = report(sha="f" * 40)
+    pending = report(job("unit"), job("web", None, "IN_PROGRESS"))
+    ports = ports_of(nothing, nothing, pending)
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert patch["full_checks"]["failed_step"] == "timeout"
+    assert clock.now > CFG.ci_start_grace_s * 2
+
+
+async def test_a_failed_republish_escalates_as_publish_failed_and_never_retries():
+    class Flaky(MemoryWorkspace):
+        def republish_ci_ref(self, path, ref):
+            super().republish_ci_ref(path, ref)
+            raise GitError("push refused")
+
+    ports = ports_of(report(sha="f" * 40), workspace=Flaky())
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert f"push of {REF} failed" in patch["escalated"]
+    assert ports.commands.ran == []
+
+
+async def test_an_unreadable_ci_past_the_grace_keeps_waiting_and_never_republishes():
+    ports = ports_of(CiUnreadable("gh_unavailable"))
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert clock.now >= CFG.check_timeout_s
+    assert ports.workspace.ci_ref_calls == [("publish", REF)]
