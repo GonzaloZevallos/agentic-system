@@ -25,6 +25,9 @@ from ..domain import evaluation, parallel_factor, role_usage, scorecard
 # empty and null alike, all read back as this single literal (Tech Lead plan, subtask
 # `close-command`) -- the *delivering* run's version, never the reader's own.
 UNKNOWN_SYSTEM_VERSION = "unknown"
+DEFAULT_ARM = "default"
+# The fewest tasks an arm needs before `--experiment` states a verdict between arms.
+MIN_ARM_TASKS = 10
 
 
 def _read_eval_set(cfg: Configuration, set_path: str | None) -> tuple[evaluation.EvalSet, str, str]:
@@ -215,6 +218,15 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
             f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}, "
             f"{figure.excluded} excluded)"
         )
+    # Informative only, never in the verdict (GH-470): a task missing a bound is left out.
+    for label, figure, closed, opened in (
+        ("cycle_h:", sc.cycle_h, sc.cycle_closed, sc.cycle_open),
+        ("active_h:", sc.active_h, sc.active_closed, sc.active_open),
+    ):
+        print(
+            f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}; "
+            f"closed {closed}, open {opened})"
+        )
 
 
 def _print_role_usage(
@@ -249,6 +261,46 @@ def _print_parallel_factor(
     )
 
 
+ArmGroup = tuple[str, str, list[tuple[str, scorecard.TaskFigures]]]
+"""One printed block: its heading name, its arm label and its tasks."""
+
+
+def _arm_groups(baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]) -> list[ArmGroup]:
+    """A baseline's tasks split by `arm` (`metrics.arm_of`, never an arm's name). A baseline
+    whose tasks are all `default` is one group named by the baseline alone, so its output is
+    what it always was; otherwise one group per arm, the default arm first."""
+    by_arm: dict[str, list[tuple[str, scorecard.TaskFigures]]] = {}
+    for entry in tasks:
+        by_arm.setdefault(entry[1].arm, []).append(entry)
+    if set(by_arm) <= {DEFAULT_ARM}:
+        return [(baseline, DEFAULT_ARM, tasks)]
+    ordered = sorted(by_arm, key=lambda arm: (arm != DEFAULT_ARM, arm))
+    return [(f"{baseline} / arm {arm}", arm, by_arm[arm]) for arm in ordered]
+
+
+def _print_verdicts(
+    frm: str,
+    frm_groups: list[ArmGroup],
+    to: str,
+    to_groups: list[ArmGroup],
+    cards: dict[str, scorecard.Scorecard],
+) -> None:
+    """The verdict between the two baselines. Unsplit on both sides it is the one line it
+    always was; otherwise one line per arm both baselines ran, since an arm is only
+    compared with itself."""
+    if len(frm_groups) == 1 == len(to_groups) and frm_groups[0][1] == to_groups[0][1]:
+        v = scorecard.verdict(cards[frm_groups[0][0]], frm, cards[to_groups[0][0]], to)
+        print(f"verdict: {v.outcome} ({v.reason})")
+        return
+    to_by_arm = {arm: name for name, arm, _ in to_groups}
+    common = [(name, arm) for name, arm, _ in frm_groups if arm in to_by_arm]
+    for name, arm in common:
+        v = scorecard.verdict(cards[name], frm, cards[to_by_arm[arm]], to)
+        print(f"verdict [{arm}]: {v.outcome} ({v.reason})")
+    if not common:
+        print("verdict: undecidable (no arm ran under both baselines)")
+
+
 async def _eval_compare(
     cfg: Configuration,
     ports: Ports,
@@ -279,16 +331,19 @@ async def _eval_compare(
             "cannot resolve; re-pin stage0 or pass --system-repo"
         )
 
-    frm_sc = scorecard.build([figures for _, figures in buckets[frm]])
-    to_sc = scorecard.build([figures for _, figures in buckets[to]])
-    _print_scorecard(product, frm, frm_sc)
-    _print_scorecard(product, to, to_sc)
-    v = scorecard.verdict(frm_sc, frm, to_sc, to)
-    print(f"verdict: {v.outcome} ({v.reason})")
-    _print_parallel_factor(product, frm, buckets[frm])
-    _print_parallel_factor(product, to, buckets[to])
-    _print_role_usage(product, frm, buckets[frm])
-    _print_role_usage(product, to, buckets[to])
+    frm_groups = _arm_groups(frm, buckets[frm])
+    to_groups = _arm_groups(to, buckets[to])
+    cards = {
+        name: scorecard.build([figures for _, figures in tasks])
+        for name, _, tasks in (*frm_groups, *to_groups)
+    }
+    for name, _, _ in (*frm_groups, *to_groups):
+        _print_scorecard(product, name, cards[name])
+    _print_verdicts(frm, frm_groups, to, to_groups, cards)
+    for name, _, tasks in (*frm_groups, *to_groups):
+        _print_parallel_factor(product, name, tasks)
+    for name, _, tasks in (*frm_groups, *to_groups):
+        _print_role_usage(product, name, tasks)
 
     # The eval-set declaration is read on a warning path (ADR-0025's `no_brief`/
     # `brief_refusal` asymmetry): absent or malformed says so plainly and the
@@ -309,3 +364,62 @@ async def _eval_compare(
                 f"agentic: {name}: missing {len(missing)} of {len(declaration.issues)} "
                 f"eval-set issue(s): {', '.join(str(i) for i in missing)}"
             )
+
+
+async def _eval_compare_experiment(
+    cfg: Configuration,
+    ports: Ports,
+    experiment: str,
+    resolve_baseline: Callable[[str | None], str],
+) -> None:
+    """`agentic eval compare --experiment <id>`: the arms of one experiment against each
+    other, over the tasks whose `assignment.experiment` is `id` (GH-470). Documents and
+    local git alone, like `_eval_compare`. An arm is its `arm_of` label, never its name.
+
+    The verdict needs a fair comparison: tasks spanning more than one baseline are
+    `insufficient (mixed baselines)` and listed per baseline, and an arm under
+    `MIN_ARM_TASKS` tasks is `insufficient (n/m)` with `n` the smallest arm. Otherwise the
+    first arm (the default one if present) is compared with each of the others."""
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    buckets, unreadable = _bucket_documents(cfg.product_dir, resolve_baseline)
+    chosen = [
+        (baseline, figures)
+        for baseline in sorted(buckets)
+        for _, figures in buckets[baseline]
+        if figures.experiment_id == experiment
+    ]
+    if not chosen:
+        raise CannotStart(f"{experiment}: no task document carries this experiment")
+    if unreadable:
+        print(f"agentic: {unreadable} document(s) could not be read; excluded from every bucket")
+    arms = sorted({f.arm for _, f in chosen}, key=lambda arm: (arm != DEFAULT_ARM, arm))
+    baselines = sorted({baseline for baseline, _ in chosen})
+    print(f"experiment {experiment}: {len(chosen)} task(s), {len(arms)} arm(s)")
+    if len(baselines) > 1:
+        for baseline in baselines:
+            counts = ", ".join(
+                f"{arm} n={sum(1 for b, f in chosen if b == baseline and f.arm == arm)}"
+                for arm in arms
+            )
+            print(f"  {baseline}: {counts}")
+        print("verdict: insufficient (mixed baselines)")
+        return
+    cards = {arm: scorecard.build([f for _, f in chosen if f.arm == arm]) for arm in arms}
+    sizes = {arm: sum(1 for _, f in chosen if f.arm == arm) for arm in arms}
+    for arm in arms:
+        _print_scorecard(
+            product, f"{baselines[0]} / experiment {experiment} / arm {arm}", cards[arm]
+        )
+    smallest = min(sizes.values())
+    if len(arms) < 2:
+        print("verdict: insufficient (only one arm)")
+    elif smallest < MIN_ARM_TASKS:
+        print(f"verdict: insufficient ({smallest}/{MIN_ARM_TASKS})")
+    else:
+        first = arms[0]
+        for other in arms[1:]:
+            v = scorecard.verdict(cards[first], first, cards[other], other)
+            print(f"verdict [{first} -> {other}]: {v.outcome} ({v.reason})")

@@ -419,8 +419,17 @@ def build_parser() -> CommandTree:
         "compare",
         help="ADR-0028's scorecard for two baselines, from task documents and local git alone",
     )
-    eval_compare.add_argument("frm", metavar="from", help="the baseline compared from")
-    eval_compare.add_argument("to", metavar="to", help="the baseline compared against `from`")
+    eval_compare.add_argument(
+        "frm", metavar="from", nargs="?", help="the baseline compared from"
+    )
+    eval_compare.add_argument(
+        "to", metavar="to", nargs="?", help="the baseline compared against `from`"
+    )
+    eval_compare.add_argument(
+        "--experiment",
+        metavar="ID",
+        help="compare the arms of one experiment against each other (instead of two baselines)",
+    )
     eval_compare.add_argument(
         "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"
     )
@@ -797,7 +806,19 @@ def main() -> None:
                     date.fromisoformat(args.until),
                 )
             else:
-                work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
+                if args.experiment is None and (args.frm is None or args.to is None):
+                    parser.error("eval compare: give <from> <to>, or --experiment ID")
+                if args.experiment is not None and (args.frm or args.to):
+                    parser.error("eval compare: --experiment takes no <from> <to>")
+                work = partial(
+                    _eval_compare,
+                    cfg,
+                    ports,
+                    args.frm,
+                    args.to,
+                    args.system_repo,
+                    experiment=args.experiment,
+                )
         elif args.command == "reflect":
             if args.since is not None:
                 date.fromisoformat(args.since)  # ValueError -> exit 2, before anything is spent
@@ -2785,7 +2806,12 @@ async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
 
 
 async def _eval_compare(
-    cfg: Configuration, ports: Ports, frm: str, to: str, system_repo: str | None
+    cfg: Configuration,
+    ports: Ports,
+    frm: str | None,
+    to: str | None,
+    system_repo: str | None,
+    experiment: str | None = None,
 ) -> None:
     """`agentic eval compare <from> <to>`: the comparison itself is
     `eval_commands._eval_compare`; this wrapper owns the one thing that needs git, which
@@ -2793,9 +2819,15 @@ async def _eval_compare(
     else the pinned stage0 checkout). Looked up through `telemetry` at call time, so a
     test patching it still takes effect."""
     repo = Path(system_repo) if system_repo else telemetry.REPO
-    await eval_commands._eval_compare(
-        cfg, ports, frm, to, lambda sha: telemetry.resolve_baseline(sha, repo)
-    )
+
+    def resolve(sha: str | None) -> str:
+        return telemetry.resolve_baseline(sha, repo)
+
+    if experiment is not None:
+        await eval_commands._eval_compare_experiment(cfg, ports, experiment, resolve)
+        return
+    assert frm is not None and to is not None  # main() refused anything else
+    await eval_commands._eval_compare(cfg, ports, frm, to, resolve)
 
 
 async def _eval_findings(cfg: Configuration, ports: Ports, since: date, until: date) -> None:

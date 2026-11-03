@@ -266,6 +266,8 @@ class Scorecard:
     active_h: Figure = Figure(None, 0, 0)
     cycle_closed: int = 0
     cycle_open: int = 0
+    active_closed: int = 0
+    active_open: int = 0
 
 
 def build(figures: Sequence[TaskFigures]) -> Scorecard:
@@ -331,6 +333,8 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
         active_h=active_h,
         cycle_closed=sum(1 for f in cycled if f.cycle_class == "closed"),
         cycle_open=sum(1 for f in cycled if f.cycle_class == "open"),
+        active_closed=sum(1 for f in actives if f.cycle_class == "closed"),
+        active_open=sum(1 for f in actives if f.cycle_class == "open"),
     )
 
 
