@@ -106,6 +106,7 @@ async def test_a_run_that_raised_during_planning_is_resumed_by_the_next_poll_rou
             "295",
             "--yes",
             "--detach",
+            "--by-poller",
             "--product-dir",
             str(tmp_path),
         ]
