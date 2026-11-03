@@ -58,9 +58,9 @@ class CiReport:
 class CiUnreadable:
     """The CI could not be read, which is not the same as a report that lacks a check:
     `gh` is missing or failed (`gh_unavailable`), or answered something this code cannot
-    read (`gh_unreadable`)."""
+    read (`gh_unreadable`). A workflow dispatch `gh` refused is `dispatch_refused` (GH-462)."""
 
-    cause: Literal["gh_unavailable", "gh_unreadable"]
+    cause: Literal["gh_unavailable", "gh_unreadable", "dispatch_refused"]
 
 
 @dataclass(frozen=True)
@@ -328,6 +328,19 @@ class DispatchedRun:
     jobs: tuple[CiCheck, ...]
 
 
+def chosen_run(
+    runs: list[DispatchedRun] | tuple[DispatchedRun, ...], head: str
+) -> DispatchedRun | None:
+    """The dispatched run that judges `head` (GH-462): the newest by `created_at` among those
+    whose event is `workflow_dispatch` and whose title holds the full 40-character `head`."""
+    matching = [
+        run
+        for run in runs
+        if run.event == "workflow_dispatch" and len(head) == 40 and head in run.display_title
+    ]
+    return max(matching, key=lambda candidate: candidate.created_at) if matching else None
+
+
 def dispatch_verdict(
     runs: list[DispatchedRun] | tuple[DispatchedRun, ...],
     head: str,
@@ -346,16 +359,11 @@ def dispatch_verdict(
     declared job that never started alone is `unreachable/not_started`. Then `ci_state` decides:
     undeclared jobs are ignored. No clock of this machine is compared with a GitHub one."""
     declared = tuple(dict.fromkeys(names))
-    matching = [
-        run
-        for run in runs
-        if run.event == "workflow_dispatch" and len(head) == 40 and head in run.display_title
-    ]
-    if not matching:
+    run = chosen_run(runs, head)
+    if run is None:
         if elapsed_s >= grace_s:
             return FullTierVerdict("unreachable", (), (), "no_run")
         return FullTierVerdict("waiting", (), declared, None)
-    run = max(matching, key=lambda candidate: candidate.created_at)
     report = CiReport(head, None, None, None, run.jobs)
     verdict = ci_state(report, declared)
     waiting_on = set(verdict.missing) | set(pending_names(report, declared))

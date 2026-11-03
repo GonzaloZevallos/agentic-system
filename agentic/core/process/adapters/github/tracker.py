@@ -11,7 +11,7 @@ import json
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -29,7 +29,7 @@ from ...application.ports import (
     TrackerTransient,
     TrackerUnreachable,
 )
-from ...domain.ci import CiCheck, CiReport, CiUnreadable
+from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from ...domain.task import (
     PullRequest,
     PullRequestCommit,
@@ -197,6 +197,20 @@ def _text(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise _Unreadable("a check field is not a non-empty string")
     return value
+
+
+def _dispatched_job(job: object) -> CiCheck:
+    """A job of `gh run view --json jobs` as a check: its enums upper-cased as GraphQL gives
+    them, an empty conclusion (a job still running) as `None`."""
+    if not isinstance(job, dict):
+        raise _Unreadable("a job is not an object")
+    conclusion = job.get("conclusion")
+    return CiCheck(
+        name=_text(job["name"]),
+        status=_text(job["status"]).upper(),
+        conclusion=conclusion.upper() if isinstance(conclusion, str) and conclusion else None,
+        link=job.get("url") or "",
+    )
 
 
 def _comment_author(comment: dict) -> str:
@@ -643,20 +657,101 @@ class GhTracker:
             head_sha=head_sha, base_ref=None, base_sha=None, opened_at=None, checks=checks
         )
 
-    def _graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
-        """One `gh api graphql` call, its JSON object or the class of its failure."""
+    def dispatch_ci(
+        self, workflow: str, ref: str, inputs: Mapping[str, str]
+    ) -> CiUnreadable | None:
+        """See `Tracker.dispatch_ci`. Transient failures go through the write retries first
+        (`_gh_retrying`); whatever is left is `dispatch_refused`, except a `gh` that cannot be
+        run at all."""
+        flags = ("--ref", ref) if ref else ()
+        fields = tuple(part for key, value in inputs.items() for part in ("-f", f"{key}={value}"))
         try:
-            raw = self._gh_read("api", "graphql", "-f", f"query={query}", *fields)
+            self._gh_retrying("workflow", "run", workflow, *flags, *fields)
+        except ValueError as exc:  # `_gh`'s own failure: a refusal, or no `gh` at all
+            missing = isinstance(exc.__cause__, FileNotFoundError)
+            return CiUnreadable("gh_unavailable" if missing else "dispatch_refused")
+        except OSError:  # a `gh` that cannot be run at all (not executable, no permission)
+            return CiUnreadable("gh_unavailable")
+        return None
+
+    def dispatched_ci(self, workflow: str, since: str) -> tuple[DispatchedRun, ...] | CiUnreadable:
+        """See `Tracker.dispatched_ci`: the listing, then one `gh run view` per run for its
+        jobs. `gh` writes statuses and conclusions in lower case; the run keeps `status` as
+        it came and its jobs carry the upper-case enums every other `CiCheck` does."""
+        listed = self._read_json(
+            "run",
+            "list",
+            "--workflow",
+            workflow,
+            "--event",
+            "workflow_dispatch",
+            "--created",
+            f">={since}",
+            "--json",
+            "databaseId,event,displayTitle,status,createdAt,url",
+            "--limit",
+            "50",
+        )
+        if isinstance(listed, CiUnreadable):
+            return listed
+        if not isinstance(listed, list):
+            return CiUnreadable("gh_unreadable")
+        runs: list[DispatchedRun] = []
+        for item in listed:
+            run = self._dispatched_run(item)
+            if isinstance(run, CiUnreadable):
+                return run
+            runs.append(run)
+        return tuple(runs)
+
+    def _dispatched_run(self, item: object) -> DispatchedRun | CiUnreadable:
+        if not isinstance(item, dict):
+            return CiUnreadable("gh_unreadable")
+        try:
+            run_id = item["databaseId"]
+            if not isinstance(run_id, int) or isinstance(run_id, bool):
+                return CiUnreadable("gh_unreadable")
+            fields = {
+                key: _text(item[key])
+                for key in ("event", "displayTitle", "status", "createdAt", "url")
+            }
+        except (KeyError, _Unreadable):
+            return CiUnreadable("gh_unreadable")
+        viewed = self._read_json("run", "view", str(run_id), "--json", "jobs")
+        if isinstance(viewed, CiUnreadable):
+            return viewed
+        try:
+            jobs = tuple(_dispatched_job(job) for job in viewed["jobs"])
+        except (_Unreadable, KeyError, TypeError):
+            return CiUnreadable("gh_unreadable")
+        return DispatchedRun(
+            run_id=run_id,
+            event=fields["event"],
+            display_title=fields["displayTitle"],
+            status=fields["status"],
+            created_at=fields["createdAt"],
+            link=fields["url"],
+            jobs=jobs,
+        )
+
+    def _read_json(self, *args: str) -> object | CiUnreadable:
+        """One `gh` read, its parsed JSON or the class of its failure."""
+        try:
+            raw = self._gh_read(*args)
         except ValueError as exc:  # `_gh`'s own failure
             missing = isinstance(exc.__cause__, FileNotFoundError)
             return CiUnreadable("gh_unavailable" if missing else "gh_unreadable")
         except OSError:  # a `gh` that cannot be run at all (not executable, no permission)
             return CiUnreadable("gh_unavailable")
         try:
-            answer = json.loads(raw)
+            return json.loads(raw)
         except json.JSONDecodeError:
             return CiUnreadable("gh_unreadable")
-        return answer if isinstance(answer, dict) else CiUnreadable("gh_unreadable")
+
+    def _graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
+        """One `gh api graphql` call, its JSON object or the class of its failure."""
+        answer = self._read_json("api", "graphql", "-f", f"query={query}", *fields)
+        return answer if isinstance(answer, dict | CiUnreadable) else CiUnreadable("gh_unreadable")
 
     def merge(self, reference: str, head_sha: str) -> str:
         """Raises `MergeCallFailed`, its class chosen at the step that failed: never by
