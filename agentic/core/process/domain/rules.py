@@ -59,6 +59,7 @@ from .task import (
     Carried,
     ChangeCategory,
     ChangesRequested,
+    CiCause,
     CloseDocs,
     DependencyState,
     DesignItemRecord,
@@ -2596,6 +2597,26 @@ def full_checks_heal(
         stopped = logged({**escalation("system_delivery", reason)})
         return {**stopped, "status": WAITING_ON_HUMAN}
     return {"task_head": head, "full_checks_healed": head}
+
+
+def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
+    """The patch of a `full_checks` of a `ci:` product that GitHub could not judge (GH-462):
+    the task stops for the human with class `ci`, and the suite is never run on this machine.
+    No `full_checks` record and no return: the head has no verdict, and `full_checks_due`
+    compares heads, so a resume enters the node again. `cause` is the closed value of the step
+    that failed; `detail` is what was tried, prose for the human only."""
+    reason = (
+        f"GitHub CI gave no verdict for {head[:7]} ({cause}): {detail}. The suite was not run "
+        "on this machine. Fix the CI or the connection and resume; the node runs again on the "
+        "same head."
+    )
+    return logged(
+        {
+            "current_role": DEVELOPER.name,
+            "status": WAITING_ON_HUMAN,
+            **escalation("ci", reason),
+        }
+    )
 
 
 def after_full_checks(state: TaskState) -> str | None:

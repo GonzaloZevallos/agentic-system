@@ -12,6 +12,7 @@ from typing import Any, Literal
 from . import rules
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
+from .task import CiCause as CiCause
 from .task import FallbackCause as FallbackCause
 from .task import JobLogCause as JobLogCause
 
@@ -260,7 +261,7 @@ class FullTierVerdict:
     state: Literal["green", "red", "waiting", "timed_out", "unreachable"]
     failing: tuple[CiCheck, ...]
     pending: tuple[str, ...]
-    cause: FallbackCause | None
+    cause: CiCause | None
 
 
 def full_tier_verdict(

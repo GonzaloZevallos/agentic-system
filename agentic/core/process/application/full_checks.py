@@ -15,9 +15,13 @@ and nothing else, and the fan-in goes on.
 A product that declares `ci:` (GH-376) does not run the suite here: the integrated head is
 published to its own ref (`rules.ci_ref`) and the node waits for the declared jobs on exactly
 that head (`ci.full_tier_verdict`), recording their verdict. Any way the CI cannot be used
-runs the local tier above instead, and the record and the section say why.
+escalates instead (GH-462): when GitHub gives no verdict (`CiCause`: the push failed, no run
+started, a job never started, `gh` unreadable) the task stops with class `ci` through
+`rules.ci_unavailable`, writes no record and never runs a local check. The one way left to the
+local tier above is a head the product's own workflow cannot judge (`untrusted`), and the record
+and the section say so.
 
-In that fallback a check that timed out and that the stack maps to a CI job (`ci_covers`, GH-453)
+In that run a check that timed out and that the stack maps to a CI job (`ci_covers`, GH-453)
 is deferred when `presubmit.deferred_verdict` says so: its row is marked `deferred`, it is no
 failure and no pass, and the merge asks that job for the verdict."""
 
@@ -26,7 +30,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 from pydantic import TypeAdapter
@@ -40,6 +44,7 @@ from ..domain.presubmit import CheckResult, CiCover
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
     WAITING_ON_HUMAN,
+    CiCause,
     FallbackCause,
     FullCheckEntry,
     FullChecksRecord,
@@ -57,6 +62,18 @@ _REPRODUCE = (
     "The integrated head failed CI; reproduce it with the product's declared checks in your "
     "checkout."
 )
+
+# What was tried for each closed cause, as prose for the human: the cause itself is the value
+# the node chose from the step that failed, never text read back from `gh` or git (ADR-0029).
+_CI_DETAIL: dict[CiCause, str] = {
+    "gh_unavailable": "`gh` could not be run for the whole {min:.0f} min wait on {ref}",
+    "gh_unreadable": "`gh` answered something unreadable for the whole {min:.0f} min wait on {ref}",
+    "no_run": "no CI run on {ref} for that head after {min:.0f} min",
+    "publish_failed": "the push of {ref} failed",
+    "not_started": "the declared CI jobs on {ref} did not start (startup failure or cancelled)",
+    "dispatch_refused": "`gh` refused to dispatch the workflow for that head",
+    "jobs_missing": "the run completed without a declared job",
+}
 
 Sleep = Callable[[float], Awaitable[None]]
 Clock = Callable[[], float]
@@ -83,8 +100,14 @@ async def full_checks(
     if not names:
         return await _local_full_checks(state, cfg, ports, task, base, None)
     outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock)
-    if isinstance(outcome, str):
+    if outcome == "untrusted":
         return await _local_full_checks(state, cfg, ports, task, base, outcome)
+    if isinstance(outcome, str):
+        head = workspace.full_head(task.path)
+        detail = _CI_DETAIL[outcome].format(
+            ref=rules.ci_ref(state["id"]), min=cfg.check_timeout_s / 60
+        )
+        return finish(state, rules.ci_unavailable(outcome, head, detail), ports)
     return finish(state, outcome, ports)
 
 
@@ -180,8 +203,9 @@ async def _ci_full_checks(
     names: tuple[str, ...],
     sleep: Sleep,
     clock: Clock,
-) -> dict[str, Any] | FallbackCause:
-    """The patch of a run decided on GitHub, or the cause for running the local tier. The
+) -> dict[str, Any] | CiCause | Literal["untrusted"]:
+    """The patch of a run decided on GitHub, `untrusted` for running the local tier, or the
+    `CiCause` GitHub gave no verdict for. The
     paths are read from the workspace only and the head is published to the task's own CI
     ref; the wait takes no check slot and runs no command (ADR-0070)."""
     workspace = ports.workspace
