@@ -93,6 +93,7 @@ async def test_a_run_that_raised_during_planning_is_resumed_by_the_next_poll_rou
     ports = memory_ports()
     # What the nodes had already written before the exception: open, nothing escalated.
     ports.documents.save({"id": "GH-295", "status": "open", "current_role": "PjM"})
+    ports.tracker._queue = [295]
     launcher = FakeLauncher()
 
     lines = _round(lock, ports, launcher, "abc1234")
@@ -114,20 +115,23 @@ async def test_a_run_that_raised_during_planning_is_resumed_by_the_next_poll_rou
     assert task_id == "GH-295"
     assert body.startswith("Retaken after crash: ")
     assert "resuming under abc1234 " in body
-    assert "(retake 1 of 2)" in body
+    assert "(retake 1 of 3)" in body
 
 
 @pytest.mark.anyio
-async def test_the_same_round_leaves_a_crash_with_no_known_version_to_the_human(
+async def test_a_crash_with_no_known_version_is_retaken_too_under_the_shared_budget(
     monkeypatch, tmp_path
 ):
-    """The input the retake must reject: a system version that says nothing."""
+    """GH-466: the version no longer gates a crash retake, the one budget of 3 bounds it."""
     lock = await _crash_a_run(monkeypatch, tmp_path, "unknown")
     ports = memory_ports()
     ports.documents.save({"id": "GH-295", "status": "open", "current_role": "PjM"})
+    ports.tracker._queue = [295]
     launcher = FakeLauncher()
 
     lines = _round(lock, ports, launcher, "unknown")
 
-    assert launcher.spawned == [] and ports.tracker.comments == []
-    assert "#295 crashed, system version unknown" in lines[0]
+    assert len(launcher.spawned) == 1
+    assert lines[0] == "agentic: poll: retake #295 -> pid 4242"
+    [(_, body)] = ports.tracker.comments
+    assert body.startswith("Retaken after crash: ") and "(retake 1 of 3)" in body
