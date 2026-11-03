@@ -941,25 +941,32 @@ class CrashRetake:
     key: str
 
 
-def _human_line(
-    number: int,
-    record: LockRecord,
-    other_boot: bool | None,
-    verdict_cap_spent: bool,
-    crash_why: str | None = None,
-    stale: bool = False,
-) -> str:
-    """The one line a run left to the human says: what happened to its lock, whose it
-    was, and the command that takes it up. It repeats every round (the poller keeps no
-    state), which is how a human watching the output learns of it. `crash_why` is what a
-    record with a crash mark adds; `stale` says the document went unwritten for too long."""
-    if crash_why is not None:
-        what = f"crashed, {crash_why}"
-    elif verdict_cap_spent:
-        what = "retake cap spent"
-    elif stale:
-        what = "died, document unwritten for over 24 h"
-    elif record.stopped_at_shutdown:
+@dataclass(frozen=True)
+class RetakesSpent:
+    """What `gather_retakes` or `gather_orphans` read once about a task whose retake budget is
+    spent (or whose dead lock went stale) and that nobody was told about yet, handed to `execute`
+    so it never rereads: the `shape` of what happened, the retakes `used`, the `createdAt` of the
+    first and the last of them, and the dead run's lock (`pid`, `started_at`, `boot_id`; `None`
+    for an orphan, which left none). `reap` says the run died in this boot, so its own scope is
+    reaped when the notice is written (ADR-0052)."""
+
+    issue: int
+    shape: retake_rules.RetakeShape
+    used: int
+    first_at: datetime | None
+    last_at: datetime | None
+    pid: int | None = None
+    started_at: str | None = None
+    boot_id: str | None = None
+    reap: bool = False
+
+
+def _human_line(number: int, record: LockRecord, other_boot: bool | None) -> str:
+    """The one line a run left to the human says when its document is one the poller cannot
+    read (no `status`): what happened to its lock, whose it was, and the command that takes it
+    up. A spent budget or a stale lock is not this: it is announced once, on the issue
+    (`RetakesSpent`)."""
+    if record.stopped_at_shutdown:
         what = "stopped at shutdown"
     elif other_boot is None:
         what = "died (boot unknown)"
@@ -971,6 +978,25 @@ def _human_line(
     )
 
 
+def _notice_pending(comments: Sequence[IssueComment]) -> bool:
+    """Whether the spent budget was not announced yet (`retakes.notice_posted` over the comments
+    already fetched)."""
+    from .resume import RESUMED, SYSTEM_COMMENTS
+
+    return not retake_rules.notice_posted([c.body for c in comments], SYSTEM_COMMENTS, RESUMED)
+
+
+def _lock_shape(
+    decision: Literal["spent", "stale"], record: LockRecord, other_boot: bool | None
+) -> retake_rules.RetakeShape:
+    """What killed the run, as the notice names it."""
+    if decision == "stale":
+        return "stale"
+    if record.crashed_version is not None:
+        return "crash"
+    return "reboot" if other_boot else "same_boot"
+
+
 def gather_retakes(
     ports: Ports,
     lock: RunLock,
@@ -979,9 +1005,13 @@ def gather_retakes(
     system_version: Callable[[], str | None] = lambda: None,
     crash: dict[int, CrashRetake] | None = None,
     now: datetime | None = None,
+    spent: dict[int, RetakesSpent] | None = None,
 ) -> tuple[list[int], list[str]]:
     """Every open task in the tray whose run is gone (`rules.interrupted_run`, one budget for
-    every shape, GH-466), and the lines for the ones left to the human. A run that raised under
+    every shape, GH-466), and the lines for the ones left to the human. A task whose budget is
+    spent, or whose dead lock went stale, is a `RetakesSpent` fact under its issue in `spent`
+    (filled here like `crash`) unless its issue already carries the notice; this function writes
+    nothing: the tracker, the lock and the documents are `execute`'s to change. A run that raised under
     the graph (its record carries `crashed_version`, GH-308) is retaken the same way, but is
     returned apart: its issue is a key of `crash` (the mapping the caller hands in, filled here,
     the same shape as `gather_merges`' `lands`) with the count `execute` needs, and is not in the
@@ -1001,6 +1031,7 @@ def gather_retakes(
     retakes: list[int] = []
     lines: list[str] = []
     crashes = crash if crash is not None else {}
+    notices = spent if spent is not None else {}
     read_version = functools.cache(system_version)
     moment = now if now is not None else datetime.now(UTC)
     tray = functools.cache(lambda: frozenset(ports.tracker.queue()))
@@ -1021,6 +1052,7 @@ def gather_retakes(
             other_boot,
             alive=lock.refusal(task_id) is not None,
             crashed_version=record.crashed_version,
+            stopped_deliberately=record.stopped_deliberately,
         )
         # The document's write time is only known as "inside the stale window or not".
         written_at = moment if task_id in fresh() else moment - retake_rules.STALE_AFTER
@@ -1035,7 +1067,8 @@ def gather_retakes(
         )
         if first in ("none", "running"):
             continue
-        used = _retake_budget(ports.tracker.timestamped_comments(task_id))
+        comments = ports.tracker.timestamped_comments(task_id)
+        used = _retake_budget(comments)
         decision = rules.interrupted_run(
             raw, facts, used, moment, in_tray=in_tray, document_written_at=written_at
         )
@@ -1048,27 +1081,21 @@ def gather_retakes(
                 crashes[number] = CrashRetake(used.used, record.crashed_version, key)
             case "calendar":
                 continue  # a retake is made, and the next one is only waiting for its time
-            case "human" | "spent" | "stale":
-                crash_why = "retake cap spent" if record.crashed_version is not None else None
-                line = _human_line(
-                    number,
-                    record,
-                    other_boot,
-                    decision == "spent",
-                    crash_why if decision == "spent" else None,
-                    stale=decision == "stale",
-                )
-                # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052):
-                # its own scope only, never the task's. An other-boot record has nothing
-                # alive, and an unknown boot proves nothing. Repeating it every round is
-                # fine: a re-scan of a reaped scope finds nothing.
-                if other_boot is False and (
-                    reaped := release.summary(
-                        release.release_processes(ports, task_id, run=record.pid)
+            case "human":
+                lines.append(_human_line(number, record, other_boot))
+            case "spent" | "stale":
+                if _notice_pending(comments):
+                    notices[number] = RetakesSpent(
+                        number,
+                        _lock_shape(decision, record, other_boot),
+                        used.used,
+                        used.first_at,
+                        used.last_at,
+                        record.pid,
+                        record.started_at,
+                        record.boot_id,
+                        reap=other_boot is False,
                     )
-                ):
-                    line += f"; {reaped}"
-                lines.append(line)
             case "none" | "running":
                 continue
             case _:
@@ -1243,6 +1270,7 @@ def gather_orphans(
     upstream: Callable[[], Upstream],
     reports: list[rules.BlockerReport],
     by_issue: dict[int, rules.BlockerReport],
+    spent: dict[int, RetakesSpent] | None = None,
 ) -> tuple[dict[int, int], list[str]]:
     """The orphan retakes of this round (GH-403, `rules.orphaned_run`) and the lines for the
     orphans it cannot retake now. `documents` is `queue_documents`' answer, so only an issue in
@@ -1256,8 +1284,10 @@ def gather_orphans(
     document was written inside `rules.ORPHANED_QUIET` (one `ids_touched_since` for the whole
     round) and, only for what is left, the issue's comments.
     Returns `{issue: counted}` in issue order, `counted` being the retakes of the shared budget
-    already made (`retakes.budget`)."""
+    already made (`retakes.budget`). A spent budget is a `RetakesSpent` fact of shape `orphan`
+    in `spent` unless the notice is already on the issue; it adds no line here."""
     orphans: dict[int, int] = {}
+    notices = spent if spent is not None else {}
     lines: list[str] = []
     touched: set[str] | None = None
     for number in sorted(documents):
@@ -1292,7 +1322,8 @@ def gather_orphans(
             minutes = int(rules.ORPHANED_QUIET.total_seconds() // 60)
             lines.append(rules.orphaned_line(number, "quiet", f"{minutes} min"))
             continue
-        used = _retake_budget(ports.tracker.timestamped_comments(task_id))
+        comments = ports.tracker.timestamped_comments(task_id)
+        used = _retake_budget(comments)
         verdict = rules.orphaned_run(
             raw,
             live=False,
@@ -1308,8 +1339,10 @@ def gather_orphans(
                 due = retake_rules.due(used, now, rules.ORPHANED_QUIET).astimezone(UTC)
                 lines.append(rules.orphaned_line(number, "calendar", due.strftime("%H:%M UTC")))
             case "cap_spent":
-                spent = f"{used.used} of {retake_rules.RETAKE_MAX}"
-                lines.append(rules.orphaned_line(number, "cap_spent", spent))
+                if _notice_pending(comments):
+                    notices[number] = RetakesSpent(
+                        number, "orphan", used.used, used.first_at, used.last_at
+                    )
             case "none" | "quiet":
                 continue
             case _:
@@ -1379,7 +1412,10 @@ def _spawn_resume(
         )
     cap = retake_rules.RETAKE_MAX
     document = ("--from-document",) if orphan_prior is not None else ()
-    argv = _argv(argv0, "resume", number, product_dir, "--yes", "--detach", *document)
+    # Every resume the poller spawns says so: the resume it starts must not reset the budget.
+    argv = _argv(
+        argv0, "resume", number, product_dir, "--yes", "--detach", "--by-poller", *document
+    )
     try:
         pid = launcher.spawn(argv)
     except OSError as exc:
@@ -1398,6 +1434,74 @@ def _spawn_resume(
     return lines
 
 
+_SHAPE_TEXT: Mapping[retake_rules.RetakeShape, str] = {
+    "same_boot": "crashed: the run died in this boot",
+    "reboot": "crashed: the run died after a reboot",
+    "crash": "crashed: the run raised under the graph",
+    "orphan": "crashed: the run left no lock",
+    "stale": "stale: untouched 24 h",
+}
+
+
+def _span(notice: RetakesSpent) -> str:
+    if notice.first_at is None or notice.last_at is None:
+        return "none made"
+    stamp = "%Y-%m-%d %H:%M UTC"
+    first = notice.first_at.astimezone(UTC).strftime(stamp)
+    last = notice.last_at.astimezone(UTC).strftime(stamp)
+    return f"over {first}..{last}"
+
+
+def spent_comment(notice: RetakesSpent) -> str:
+    """The one comment a spent budget leaves on the issue: what crashed, the dead run's lock, how
+    many retakes were made and over what span, and the command that takes the task up."""
+    lock = (
+        f" (lock pid {notice.pid} since {notice.started_at}, boot {notice.boot_id or 'unknown'})"
+        if notice.pid is not None
+        else ""
+    )
+    document = " --from-document" if notice.shape == "orphan" else ""
+    return (
+        f"{retake_rules.RETAKES_SPENT}{_SHAPE_TEXT[notice.shape]}{lock}; "
+        f"{notice.used} of {retake_rules.RETAKE_MAX} retakes, {_span(notice)}; "
+        f"resume it with `agentic resume --issue {notice.issue}{document}`."
+    )
+
+
+def _announce_spent(ports: Ports, cfg: Configuration, notice: RetakesSpent) -> list[str]:
+    """Tell the owner a task's retake budget is spent: the `needs-human` label first, then one
+    comment. Both are best effort, a failure is a line and never the end of the round; a comment
+    that did not land is retried next round, because the marker is still absent. The poll line
+    is printed only in the round the comment landed."""
+    number = notice.issue
+    task_id = ports.inbox.task_id(number)
+    lines: list[str] = []
+    if notice.reap and notice.pid is not None:
+        # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052): its own
+        # scope only, never the task's.
+        reaped = release.summary(release.release_processes(ports, task_id, run=notice.pid))
+        if reaped:
+            lines.append(f"agentic: poll: #{number} {reaped}")
+    try:
+        ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
+    except ValueError as exc:  # a TrackerCallFailed is one
+        lines.append(
+            f"agentic: poll: #{number} -> label {escalate_module.NEEDS_HUMAN} failed: {exc}"
+        )
+    if ports.tracker.note(task_id, spent_comment(notice)) is not None:
+        lines.append(
+            f"agentic: poll: #{number} -> retakes-spent comment failed, retried next round"
+        )
+        return lines
+    document = " --from-document" if notice.shape == "orphan" else ""
+    lines.append(
+        f"agentic: poll: #{number} retake budget spent ({_SHAPE_TEXT[notice.shape]}; "
+        f"{notice.used} of {retake_rules.RETAKE_MAX}), left to the human: "
+        f"agentic resume --issue {number}{document}"
+    )
+    return lines
+
+
 def execute(
     actions: Sequence[rules.PollAction],
     cfg: Configuration,
@@ -1412,6 +1516,7 @@ def execute(
     crash_retakes: Mapping[int, CrashRetake] | None = None,
     reruns: frozenset[int] = frozenset(),
     orphan_retakes: Mapping[int, int] | None = None,
+    spent_notices: Mapping[int, RetakesSpent] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -1438,7 +1543,8 @@ def execute(
     --fresh`: the same archive-and-start-over the landing's restart spawns, on the launch's
     own calendar. A `retake` whose `reason` is `orphaned` (GH-403) resumes `--from-document` and
     posts `RETAKEN_ORPHANED` with `orphaned_comment`, from the count `orphan_retakes[issue]`
-    that `gather_orphans` made."""
+    that `gather_orphans` made. A `retakes_spent` action announces the spent budget of
+    `spent_notices[issue]` (`_announce_spent`), spawning nothing."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -1453,6 +1559,8 @@ def execute(
                 lines.append(f"agentic: poll: close #{action.issue} -> not launched: {exc}")
                 continue
             lines.append(f"agentic: poll: close #{action.issue} -> pid {pid}")
+        elif action.kind == "retakes_spent":
+            lines += _announce_spent(ports, cfg, (spent_notices or {})[action.issue])
         elif action.kind == "resume":
             raw = ports.documents.load(task_id) or {}
             reason = rules.auto_resumable(raw) or "other"
@@ -1666,8 +1774,15 @@ def run_once(
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}
+    spent_notices: dict[int, RetakesSpent] = {}
     retakes, human_lines = gather_retakes(
-        ports, lock, current_boot, system_version=system_version, crash=crash_retakes, now=now
+        ports,
+        lock,
+        current_boot,
+        system_version=system_version,
+        crash=crash_retakes,
+        now=now,
+        spent=spent_notices,
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
@@ -1757,6 +1872,7 @@ def run_once(
                 upstream,
                 blocker_reports,
                 blockers_by_issue,
+                spent_notices,
             )
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
@@ -1789,6 +1905,7 @@ def run_once(
             earlier_land_wait=rules.land_queued_behind(previous, own_key, others),
             held=held,
             orphan_retakes=sorted(orphans),
+            spent_retakes=sorted(spent_notices),
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.
@@ -1814,6 +1931,7 @@ def run_once(
             crash_retakes,
             frozenset(reruns),
             orphans,
+            spent_notices,
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
         orphan_lines += [

@@ -3935,7 +3935,7 @@ class SpendPace:
     pace_usd_per_h: float
 
 
-PollActionKind = Literal["close", "retake", "resume", "launch", "merge", "land"]
+PollActionKind = Literal["close", "retake", "resume", "launch", "merge", "land", "retakes_spent"]
 
 
 @dataclass(frozen=True)
@@ -4282,6 +4282,7 @@ def poll_plan(
     earlier_land_wait: bool = False,
     held: Sequence[str] = (),
     orphan_retakes: Sequence[int] = (),
+    spent_retakes: Sequence[int] = (),
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -4362,11 +4363,16 @@ def poll_plan(
     `reason="orphaned"`. One that finds no slot is `Deferred("orphan", issue, "no_slot")`, the
     only source of its line; a round held by `others_landing` or `held` defers nothing.
 
+    `spent_retakes` (GH-466) are the issues whose retake budget is spent and not yet announced:
+    each is a `retakes_spent` action, which spawns nothing and so takes no slot, comes right
+    after the closes and is kept even in a `held` round (it writes the tracker alone).
+
     `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
-    not empty the plan is the closes alone: no launch, resume, retake, land or merge starts,
-    because a start would write scratch to a disk that is almost full. It defers nothing, so
-    it opens no Espera de aterrizaje."""
+    not empty the plan is the closes and the notices alone: no launch, resume, retake, land or
+    merge starts, because a start would write scratch to a disk that is almost full. It defers
+    nothing, so it opens no Espera de aterrizaje."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
+    actions += [PollAction("retakes_spent", issue) for issue in sorted(spent_retakes)]
     if held:
         return PollPlan(actions, [])
     received_slots = available_slots
