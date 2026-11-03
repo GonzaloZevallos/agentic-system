@@ -312,6 +312,11 @@ def build_parser() -> CommandTree:
         "--dry-run", action="store_true", help="show what would resume and stop, spending nothing"
     )
     resume.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    resume.add_argument(
+        "--by-poller",
+        action="store_true",
+        help="the poller spawned this resume (GH-466): it does not reset the retake budget",
+    )
     close = add(
         ("close",),
         sub,
@@ -766,6 +771,7 @@ def main() -> None:
                 detach=args.detach,
                 child_argv=_child_argv(),
                 stop=stop,
+                by_poller=args.by_poller,
             )
         elif args.command == "close":
             if args.all:
@@ -1672,6 +1678,7 @@ async def _resume(
     spawn: Spawner | None = None,
     stop: StopCause | None = None,
     estimate: float | None = None,
+    by_poller: bool = False,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -1783,7 +1790,7 @@ async def _resume(
                     crashed = r.interrupted
                     command: Command | None = None if crashed else Command(resume=r.answer())
                     await _record_tracker_failures(
-                        migrated_app, config, resuming.announce(r, ports), seed
+                        migrated_app, config, resuming.announce(r, ports, by_poller=by_poller), seed
                     )
                     final = await _invoke(
                         migrated_app,
@@ -1799,7 +1806,9 @@ async def _resume(
             else:
                 crashed = r.interrupted
                 command = None if crashed else Command(resume=r.answer())
-                await _record_tracker_failures(app, config, resuming.announce(r, ports), None)
+                await _record_tracker_failures(
+                    app, config, resuming.announce(r, ports, by_poller=by_poller), None
+                )
                 final = await _invoke(
                     app, command, config, r.paused, ports, cfg, "resume", r.decision, stop=stop
                 )
