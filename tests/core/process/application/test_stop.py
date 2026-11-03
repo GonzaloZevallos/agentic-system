@@ -115,6 +115,13 @@ def test_a_run_that_outlives_the_grace_is_killed_after_the_term():
     assert sum(naps) == 2.0
 
 
+def test_a_killed_run_has_its_own_scope_reaped_and_the_document_is_never_written():
+    outcome, _, reaper, documents, _ = _run(_record(), survives_term=True)
+    assert outcome == "killed"
+    assert reaper.calls[0] == ("run", TASK, 4242, None)
+    assert documents.writes == []
+
+
 def test_a_pid_whose_start_time_no_longer_matches_is_marked_and_never_signalled():
     """The rejected input: the record names pid 4242, but the process there now is another
     one (`holds` is False: the start time differs), so no signal may be sent."""
