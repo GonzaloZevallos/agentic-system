@@ -21,13 +21,13 @@ classDiagram
     class ports__RawResult["RawResult"]
     class ports__RoleRunner["RoleRunner"]
     class ports__RunLock["RunLock"]
+    class ports__RunProcess["RunProcess"]
     class ports__RunRegistration["RunRegistration"]
     class ports__RunRegistry["RunRegistry"]
     class ports__RunStopped["RunStopped"]
     class ports__SampleApp["SampleApp"]
     class ports__SampleAppHandle["SampleAppHandle"]
     class ports__SchemaGuard["SchemaGuard"]
-    class ports__Scratch["Scratch"]
 ```
 
 ## Relaciones con otras páginas

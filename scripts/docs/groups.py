@@ -120,6 +120,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.scratch_sweep": "lifecycle",
     "application.split": "build",
     "application.stack_review": "reflection",
+    "application.stop": "lifecycle",
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
     "domain.account_reset": "machine",

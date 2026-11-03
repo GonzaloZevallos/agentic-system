@@ -15,6 +15,7 @@ classDiagram
     class filesystem__check_results__FilesystemCheckResults["FilesystemCheckResults"]
     class filesystem__documents__FilesystemTaskDocuments["FilesystemTaskDocuments"]
     class filesystem__free_space__StatvfsFreeSpace["StatvfsFreeSpace"]
+    class filesystem__liveness__OsRunProcess["OsRunProcess"]
     class filesystem__lock__FilesystemRunLock["FilesystemRunLock"]
     class filesystem__perf_lock__FilesystemPerfLock["FilesystemPerfLock"]
     class filesystem__prompts__FilesystemPrompts["FilesystemPrompts"]

@@ -5998,6 +5998,7 @@ COMMAND_PATHS = [
     ("merge",),
     ("land",),
     ("restore",),
+    ("stop",),
     ("eval",),
     ("eval", "run"),
     ("eval", "score"),
@@ -6256,6 +6257,72 @@ async def test_a_runtime_error_inside_a_node_leaves_a_record_the_poller_retakes(
         {"status": "developing"}, facts, 0, version_key=rules.crash_version_key("def456")
     )
     assert verdict == "retake_crash"
+
+
+# --- agentic stop (GH-466) -----------------------------------------------------------------
+
+
+def test_stop_takes_the_issue_and_runs_the_stop(monkeypatch, tmp_path):
+    root = product(tmp_path, "stopping")
+    asked: list[object] = []
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: memory_ports())
+    monkeypatch.setattr(cli.anyio, "run", lambda func, *args: asked.append(args[0]))
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "stop", "--issue", "466", "--product-dir", str(root)]
+    )
+
+    cli.main()
+
+    (work,) = asked
+    assert work.func is cli._stop
+    assert work.args[:2] == ("GH-466", 466)
+
+
+def test_stop_without_an_issue_is_refused_before_anything_is_touched(monkeypatch, tmp_path):
+    root = product(tmp_path, "stopping")
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: memory_ports())
+    monkeypatch.setattr("sys.argv", ["agentic", "stop", "--product-dir", str(root)])
+
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("outcome", "line"),
+    [
+        ("signalled", "stopped #466 (signalled); to continue: agentic resume --issue 466"),
+        ("killed", "stopped #466 (killed); to continue: agentic resume --issue 466"),
+        ("marked_dead", "stopped #466 (marked_dead); to continue: agentic resume --issue 466"),
+        (
+            "marked_recordless",
+            "stopped #466 (marked_recordless); to continue: agentic resume --issue 466",
+        ),
+    ],
+)
+async def test_stop_prints_one_line_with_the_outcome_and_the_command_to_continue(
+    monkeypatch, tmp_path, capsys, outcome, line
+):
+    from agentic.shared.configuration import Configuration
+
+    monkeypatch.setattr(cli.stopmod, "stop", lambda *a, **k: outcome)
+    await cli._stop("GH-466", 466, Configuration(product_dir=tmp_path), memory_ports())
+    assert capsys.readouterr().out.strip() == line
+
+
+@pytest.mark.anyio
+async def test_stop_with_no_task_document_says_to_remove_the_agentic_label(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+
+    monkeypatch.setattr(cli.stopmod, "stop", lambda *a, **k: "no_document")
+    await cli._stop("GH-466", 466, Configuration(product_dir=tmp_path), memory_ports())
+    out = capsys.readouterr().out
+    assert "no task document" in out
+    assert "remove the `agentic` label" in out
 
 
 # --- agentic restore (GH-406) --------------------------------------------------------------

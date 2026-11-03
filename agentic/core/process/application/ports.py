@@ -1620,6 +1620,26 @@ class RunLock(Protocol):
         ...
 
 
+class RunProcess(Protocol):
+    """The process a lock record names, as `agentic stop` reaches it. Never a bare pid: every
+    call takes the whole `LockRecord`, and a process that is not the one the record names
+    (another host, another boot, a different start time) is neither found nor signalled."""
+
+    def holds(self, record: LockRecord) -> bool:
+        """Is the process the record names still running: same host, same boot, the pid
+        alive, and the start time the record holds (when it holds one) unchanged."""
+        ...
+
+    def terminate(self, record: LockRecord) -> None:
+        """SIGTERM to the process the record names, only after the same check `holds`
+        makes. Silent when it is gone or is not that process."""
+        ...
+
+    def kill(self, record: LockRecord) -> None:
+        """SIGKILL, with the same guard as `terminate`."""
+        ...
+
+
 @dataclass(frozen=True)
 class RunRegistration:
     """One live `agentic` child invocation, as `RunRegistry.live` hands it back

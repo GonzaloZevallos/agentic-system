@@ -70,6 +70,7 @@ from .core.process.application import archive, close_issues, reflect_run, releas
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
+from .core.process.application import stop as stopmod
 from .core.process.application.delivered import files_patch
 from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.landing import land
@@ -366,6 +367,15 @@ def build_parser() -> CommandTree:
         help="the prefix the archived run's branches live under",
     )
     restore.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    stop_parser = add(
+        ("stop",),
+        sub,
+        "stop",
+        help="stop the run of issue N on purpose and mark it so the poller never retakes it "
+        "(GH-466); `agentic resume --issue N` continues it",
+    )
+    stop_parser.add_argument("--issue", type=int, metavar="N", required=True)
+    stop_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     eval_parser = add(
         ("eval",), sub, "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -687,6 +697,7 @@ def main() -> None:
             "merge",
             "land",
             "restore",
+            "stop",
             "scores",
             "dashboards",
         ):
@@ -773,6 +784,9 @@ def main() -> None:
                 raise ValueError(f"--from {args.archive!r} is not an archive/run<N>-<sha> prefix")
             task_id = ports.inbox.task_id(args.issue)
             work = partial(_restore, task_id, args.archive, cfg, bind_task(ports, task_id))
+        elif args.command == "stop":
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_stop, task_id, args.issue, cfg, ports)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -2048,6 +2062,23 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
 
 
 _ARCHIVE_PREFIX = re.compile(r"archive/run\d+-[0-9A-Za-z]+")
+
+
+async def _stop(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> None:
+    """`agentic stop --issue N` (GH-466): marks the task's run as deliberately stopped and
+    stops it (`stopmod.stop`). Takes no lock (it must reach a run that holds it), runs no
+    role and opens no span. One line, exit 0 for every outcome; with no task document it says
+    to remove the `agentic` label, the hold README.md describes."""
+    outcome = await anyio.to_thread.run_sync(
+        partial(stopmod.stop, task_id, ports, _lock_for(cfg), liveness.OsRunProcess())
+    )
+    if outcome == "no_document":
+        print(
+            f"agentic: #{issue} has no task document: nothing to stop; "
+            "to hold it, remove the `agentic` label from the issue"
+        )
+        return
+    print(f"stopped #{issue} ({outcome}); to continue: agentic resume --issue {issue}")
 
 
 async def _restore(task_id: str, archive_prefix: str, cfg: Configuration, ports: Ports) -> None:
