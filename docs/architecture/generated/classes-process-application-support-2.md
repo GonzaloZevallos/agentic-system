@@ -19,6 +19,7 @@ classDiagram
     class ports__CiLogs["CiLogs"]
     class ports__CommandResult["CommandResult"]
     class ports__Commands["Commands"]
+    class ports__ExperimentFile["ExperimentFile"]
     class ports__FastForwardView["FastForwardView"]
     class ports__FlagVocabulary["FlagVocabulary"]
     class ports__FreeSpace["FreeSpace"]
@@ -27,7 +28,6 @@ classDiagram
     class ports__Inbox["Inbox"]
     class ports__IssueComment["IssueComment"]
     class ports__IssueRow["IssueRow"]
-    class ports__IssueState["IssueState"]
 ```
 
 ## Relaciones con otras páginas
