@@ -419,9 +419,7 @@ def build_parser() -> CommandTree:
         "compare",
         help="ADR-0028's scorecard for two baselines, from task documents and local git alone",
     )
-    eval_compare.add_argument(
-        "frm", metavar="from", nargs="?", help="the baseline compared from"
-    )
+    eval_compare.add_argument("frm", metavar="from", nargs="?", help="the baseline compared from")
     eval_compare.add_argument(
         "to", metavar="to", nargs="?", help="the baseline compared against `from`"
     )

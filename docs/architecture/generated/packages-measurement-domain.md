@@ -9,6 +9,7 @@ Esta página muestra los módulos de la capa `domain` de `agentic.core.measureme
 graph TD
     g_pkg__agentic__core__process["agentic.core.process (paquete)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
+    m_domain__cycle["domain.cycle"]
     m_domain__dashboards["domain.dashboards"]
     m_domain__evaluation["domain.evaluation"]
     m_domain__findings_report["domain.findings_report"]
@@ -18,6 +19,8 @@ graph TD
     m_domain__role_usage["domain.role_usage"]
     m_domain__scorecard["domain.scorecard"]
     m_domain__task_scores["domain.task_scores"]
+    m_domain__cycle --> g_pkg__agentic__core__process
+    m_domain__cycle --> m_domain__parallel_factor
     m_domain__dashboards --> m_domain__task_scores
     m_domain__evaluation --> g_pkg__agentic__core__process
     m_domain__evaluation --> m_domain__metrics
@@ -30,6 +33,7 @@ graph TD
     m_domain__playbook_window --> m_domain__metrics
     m_domain__role_usage --> g_pkg__agentic__core__process
     m_domain__scorecard --> g_pkg__agentic__core__process
+    m_domain__scorecard --> m_domain__cycle
     m_domain__scorecard --> m_domain__metrics
     m_domain__task_scores --> g_pkg__agentic__core__process
     m_domain__task_scores --> m_domain__metrics

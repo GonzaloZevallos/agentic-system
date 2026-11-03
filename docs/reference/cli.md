@@ -192,7 +192,8 @@ options:
 ## `agentic eval compare`
 
 ```text
-usage: agentic eval compare [-h] [--product-dir PRODUCT_DIR] [--system-repo PATH] from to
+usage: agentic eval compare [-h] [--experiment ID] [--product-dir PRODUCT_DIR] [--system-repo PATH]
+                            [from] [to]
 
 positional arguments:
   from                  the baseline compared from
@@ -200,6 +201,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --experiment ID       compare the arms of one experiment against each other (instead of two
+                        baselines)
   --product-dir PRODUCT_DIR
                         root of the product repo (AGENTIC_PRODUCT_DIR)
   --system-repo PATH    the system checkout to resolve a document's own system_commit against
