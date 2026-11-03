@@ -714,6 +714,7 @@ def slice_facts(
         in_eval_set=in_eval_set,
         touched_paths=touched_paths,
         ci_untrusted=rules.ci_untrusted(touched_paths),
+        ci_dispatched=rules.ci_dispatched(state.get("full_checks"), pr_head),
         attempts=attempts,
         checks_head=checks_head,
         checks_master=checks_master,

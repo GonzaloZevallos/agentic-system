@@ -288,6 +288,24 @@ def test_the_ci_untrusted_fact_is_computed_over_the_slice_paths():
     assert _slice_facts(touched_paths=None).ci_untrusted is None
 
 
+def test_the_dispatched_fact_reads_the_full_checks_record_against_the_slice_head():
+    record = {
+        "version": 1,
+        "head": SLICE_HEAD,
+        "passed": True,
+        "duration_s": 1.0,
+        "declared": {},
+        "results": [],
+        "witness": None,
+        "ran_on": "ci_dispatch",
+        "run_id": 5,
+    }
+    assert _slice_facts().ci_dispatched is False
+    assert _slice_facts({**_state(), "full_checks": record}).ci_dispatched is True
+    other = {**_state(), "full_checks": {**record, "head": "d" * 40}}
+    assert _slice_facts(other).ci_dispatched is False
+
+
 def test_a_green_ci_does_not_merge_a_slice_that_touches_the_ci_definition():
     facts = _slice_facts(
         touched_paths=(".github/workflows/ci.yml",),

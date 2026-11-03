@@ -329,7 +329,7 @@ def _merges_on_ci(facts: rules.MergeFacts) -> bool:
         and facts.ci_verdict is not None
         and facts.ci_verdict.state == "green"
         and facts.ci_fresh is True
-        and facts.ci_untrusted is False
+        and rules.ci_trusted(facts.ci_untrusted, facts.ci_dispatched)
         and facts.deferral != "uncovered"
     )
 
@@ -360,10 +360,13 @@ def _facts(
     master: str,
     touched: tuple[str, ...] | None,
 ) -> rules.MergeFacts:
+    pr_head = pull_request.head_oid if pull_request is not None else None
     return replace(
         _merge_facts(task_id, raw, pull_request, eval_set, number, master),
         touched_paths=touched,
         ci_untrusted=rules.ci_untrusted(touched),
+        # GH-462: whether the recorded dispatched run of the base's workflow stands for this head.
+        ci_dispatched=rules.ci_dispatched(raw.get("full_checks"), pr_head),
     )
 
 
