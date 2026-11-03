@@ -34,6 +34,7 @@ graph TD
     m_application__resume --> g_application__lifecycle__1
     m_application__resume --> g_application__support
     m_application__resume --> g_domain__landing
+    m_application__resume --> g_domain__machine
     m_application__resume --> g_domain__state
     m_application__resume --> g_pkg__agentic__shared
     m_application__schedule --> g_application__support

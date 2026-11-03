@@ -4216,6 +4216,7 @@ async def test_the_poller_retakes_a_run_a_reboot_cut_and_resume_takes_over_its_l
     cfg = Configuration(product_dir=tmp_path)
     ports = memory_ports()
     ports.documents.save({"id": "GH-30", "title": "t", "status": "developing"})
+    ports.tracker._queue = [30]  # in the tray: open, with the `agentic` label
     old_boot = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "old")
     old_boot.acquire("GH-30", "agentic run")  # this very pid: `os.kill` alone says alive
     lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "new")
@@ -6233,8 +6234,10 @@ class Raises:
 async def test_a_runtime_error_inside_a_node_leaves_a_record_the_poller_retakes(
     monkeypatch, tmp_path
 ):
+    from datetime import UTC, datetime
+
     from agentic.core.process.adapters.filesystem import FilesystemRunLock
-    from agentic.core.process.domain import rules
+    from agentic.core.process.domain import retakes, rules
     from agentic.shared.configuration import Configuration
     from tests.fakes import memory_ports
 
@@ -6254,7 +6257,12 @@ async def test_a_runtime_error_inside_a_node_leaves_a_record_the_poller_retakes(
     assert record is not None and record.crashed_version == "abc123"
     facts = rules.LockFacts(other_boot=False, alive=False, crashed_version=record.crashed_version)
     verdict = rules.interrupted_run(
-        {"status": "developing"}, facts, 0, version_key=rules.crash_version_key("def456")
+        {"status": "developing"},
+        facts,
+        retakes.Budget(0, None, None),
+        datetime.now(UTC),
+        in_tray=True,
+        document_written_at=None,
     )
     assert verdict == "retake_crash"
 
