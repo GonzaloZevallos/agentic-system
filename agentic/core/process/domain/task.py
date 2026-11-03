@@ -1089,6 +1089,14 @@ class FullChecksRecord(TypedDict):
     deferred: NotRequired[list[str]]
 
 
+class ArmAssignment(TypedDict):
+    """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
+
+    experiment: str
+    arm: str
+    switches: dict[str, str]
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -1260,6 +1268,11 @@ class TaskState(TaskInput, total=False):
     # graph refuse two writes in the same step. `last` is right here because every
     # branch of a wave writes the identical snapshot.
     experiment: Annotated[dict[str, str], last]
+    # The arm the product's experiment gave this task (GH-470, ADR-0030 amended): which
+    # experiment, the arm's name and the switches it set, as `arm_label` reads them.
+    # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
+    # `experiment`. Written once when the run starts, so no reducer.
+    assignment: ArmAssignment
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str
