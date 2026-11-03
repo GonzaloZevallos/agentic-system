@@ -24,6 +24,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules
 from ..domain import landing as landing_rules
+from ..domain.retakes import RETAKES_SPENT
 from ..domain.task import TaskState, TrackerFailure, TrackerFailureRecord, apply
 from . import landing_plan
 from .archive import STARTED_OVER
@@ -64,6 +65,7 @@ SYSTEM_COMMENTS = (
     RETAKEN,
     RETAKEN_AFTER_CRASH,
     RETAKEN_ORPHANED,
+    RETAKES_SPENT,
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
     LANDING,
