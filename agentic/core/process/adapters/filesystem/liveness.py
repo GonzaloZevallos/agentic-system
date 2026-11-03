@@ -71,7 +71,9 @@ class OsRunProcess:
             return False  # a pid on another host is never probed
         if not is_alive(record.pid, record.boot_id, self._boot_id()):
             return False
-        return record.starttime is None or starttime_of(record.pid) == record.starttime
+        # A record with no start time (written before it was recorded) cannot say which
+        # process it named, so it is never held and never signalled.
+        return record.starttime is not None and starttime_of(record.pid) == record.starttime
 
     def terminate(self, record: LockRecord) -> None:
         self._send(record, signal.SIGTERM)
@@ -88,7 +90,7 @@ class OsRunProcess:
             return
         try:
             # Re-checked with the pidfd held: from here the pid cannot name anyone else.
-            if record.starttime is not None and starttime_of(record.pid) != record.starttime:
+            if starttime_of(record.pid) != record.starttime:
                 return
             signal.pidfd_send_signal(fd, sig)
         except ProcessLookupError:

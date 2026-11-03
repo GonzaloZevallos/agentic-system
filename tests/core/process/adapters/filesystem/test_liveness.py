@@ -107,6 +107,22 @@ def test_run_process_never_signals_a_process_whose_start_time_differs():
         process.wait()
 
 
+def test_run_process_never_signals_a_record_that_holds_no_start_time():
+    """The rejected input: a record written before start times were recorded names a live
+    pid on this boot, but cannot tell which process it was, so nothing is signalled."""
+    process = _spawn_sleeper()
+    try:
+        control = liveness.OsRunProcess()
+        record = _record_of(process, starttime=None)
+        assert control.holds(record) is False
+        control.terminate(record)
+        control.kill(record)
+        assert process.poll() is None
+    finally:
+        process.kill()
+        process.wait()
+
+
 def test_run_process_never_signals_another_boots_or_another_hosts_record():
     process = _spawn_sleeper()
     try:

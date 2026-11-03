@@ -6308,7 +6308,10 @@ async def test_stop_prints_one_line_with_the_outcome_and_the_command_to_continue
     from agentic.shared.configuration import Configuration
 
     monkeypatch.setattr(cli.stopmod, "stop", lambda *a, **k: outcome)
-    await cli._stop("GH-466", 466, Configuration(product_dir=tmp_path), memory_ports())
+    # Returning normally (no raise, no SystemExit) is the exit 0 of every outcome.
+    assert (
+        await cli._stop("GH-466", 466, Configuration(product_dir=tmp_path), memory_ports()) is None
+    )
     assert capsys.readouterr().out.strip() == line
 
 
