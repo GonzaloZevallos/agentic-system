@@ -1011,9 +1011,9 @@ def gather_retakes(
     every shape, GH-466), and the lines for the ones left to the human. A task whose budget is
     spent, or whose dead lock went stale, is a `RetakesSpent` fact under its issue in `spent`
     (filled here like `crash`) unless its issue already carries the notice; this function writes
-    nothing: the tracker, the lock and the documents are `execute`'s to change. A run that raised under
-    the graph (its record carries `crashed_version`, GH-308) is retaken the same way, but is
-    returned apart: its issue is a key of `crash` (the mapping the caller hands in, filled here,
+    nothing: the tracker, the lock and the documents are `execute`'s to change. A run that
+    raised under the graph (its record carries `crashed_version`, GH-308) is retaken the same way,
+    but is returned apart: its issue is a key of `crash` (the mapping the caller hands in, filled here,
     the same shape as `gather_merges`' `lands`) with the count `execute` needs, and is not in the
     list. `system_version` is read only when some record carries the mark, at most once per
     round, and names the version the crash retake resumes under; the count comes from the

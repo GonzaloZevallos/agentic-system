@@ -4418,3 +4418,34 @@ def test_retry_turns_table_is_closed_and_read_only():
     assert dict(rules.RETRY_TURNS) == {"landing_diagnoser": 64}
     with pytest.raises(TypeError):
         rules.RETRY_TURNS["developer"] = 1  # type: ignore[index]
+
+
+def test_poll_plan_orders_a_spent_notice_after_the_closes_and_outside_the_cap():
+    plan = rules.poll_plan(
+        closes=[9],
+        resumes=[],
+        launches=[],
+        available_slots=0,
+        now=datetime(2026, 11, 3, tzinfo=UTC),
+        retakes=[4],
+        spent_retakes=[8, 5],
+    )
+    assert plan.actions == [
+        rules.PollAction("close", 9),
+        rules.PollAction("retakes_spent", 5),
+        rules.PollAction("retakes_spent", 8),
+    ]  # no slot: the retake of 4 starts nothing, the notices need none
+
+
+def test_poll_plan_keeps_a_spent_notice_in_a_held_round():
+    plan = rules.poll_plan(
+        closes=[],
+        resumes=[],
+        launches=[],
+        available_slots=2,
+        now=datetime(2026, 11, 3, tzinfo=UTC),
+        retakes=[4],
+        spent_retakes=[5],
+        held=["scratch"],
+    )
+    assert plan.actions == [rules.PollAction("retakes_spent", 5)]

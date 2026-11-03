@@ -210,6 +210,8 @@ class MemoryDocuments:
         # task_id -> the closure values recorded for it, folded over successive calls
         # the way the filesystem adapter's line-level replace-or-append does.
         self.closures: dict[str, dict[str, object]] = {}
+        # Task ids whose document `ids_touched_since` does not name: unwritten for a long time.
+        self.untouched: set[str] = set()
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
@@ -228,7 +230,7 @@ class MemoryDocuments:
         return sorted({state["id"] for state in self.saved})
 
     def ids_touched_since(self, since: datetime) -> list[str]:
-        return self.ids()
+        return [i for i in self.ids() if i not in self.untouched]
 
     def load(self, task_id: str) -> dict[str, object] | None:
         mine = [s for s in self.saved if s["id"] == task_id]
@@ -1461,6 +1463,7 @@ class MemoryTracker:
         self.comment_failures = 0
         # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).
         self.drop_label_failures = 0
+        self.label_failures = 0
         # `pull_requests_on`: the pull requests scripted per head branch, `lookup_error`
         # to make it raise `ValueError` (`gh`'s own failure shape), and each branch asked.
         self.on_branch: dict[str, list[BranchPullRequest]] = {}
@@ -1587,6 +1590,9 @@ class MemoryTracker:
         self.comments.append((task_id, text))
 
     def label(self, task_id: str, label: str) -> None:
+        if self.label_failures > 0:
+            self.label_failures -= 1
+            raise ValueError("gh issue edit failed: scripted")
         self.labels.append((task_id, label))
 
     def unlabel(self, task_id: str, label: str) -> None:
