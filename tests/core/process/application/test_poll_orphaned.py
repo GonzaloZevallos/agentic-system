@@ -210,7 +210,7 @@ def test_a_spent_cap_spawns_nothing_and_hands_the_task_to_the_human():
     assert "agentic resume --issue 7 --from-document" in lines[0]
 
 
-def test_a_retake_that_ran_something_does_not_count_against_the_cap():
+def test_a_retake_that_ran_something_still_counts_against_the_shared_budget():
     ports = _ports(
         runs=[
             {
@@ -224,8 +224,9 @@ def test_a_retake_that_ran_something_does_not_count_against_the_cap():
         _comment(f"Retaken with no lock: retake {n} of 3", NOW - timedelta(hours=5))
         for n in (1, 2, 3)
     ]
-    _, launcher = _go(ports)
-    assert len(launcher.spawned) == 1
+    lines, launcher = _go(ports)
+    assert launcher.spawned == []  # ADR 0080: the budget does not refill when the run progresses
+    assert lines == [rules.orphaned_line(7, "cap_spent", "3 of 3")]
 
 
 def test_the_second_retake_waits_on_the_retake_calendar():

@@ -3495,6 +3495,7 @@ def test_ending_a_task_without_a_delivery_stamps_finished_at_and_nothing_else_do
 
 # --- crash retake: a run that raised under the graph (GH-308) ---
 
+
 def test_crash_version_key_strips_dirty_and_refuses_unknown():
     assert rules.crash_version_key("abc123") == "abc123"
     assert rules.crash_version_key("abc123+dirty") == "abc123"
