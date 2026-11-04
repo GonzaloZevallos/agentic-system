@@ -9,17 +9,26 @@ caller hands in as `resolve_baseline`; this module imports no adapter and not `c
 from __future__ import annotations
 
 import json
+import shutil
+import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 import yaml
 
-from ....shared.configuration import Configuration
+from ....shared.configuration import ENV_PREFIX, Configuration
 from ....shared.errors import CannotStart
-from ...process.application.ports import Ports
+from ...process.application import poll, scratch_sweep
+from ...process.application.ports import Ports, RunRegistry
+from ...process.application.registration import REGISTER_WAIT_S, await_registration
 from ...process.domain import document as task_document
+from ...process.domain import experiment, rules
 from ..domain import evaluation, parallel_factor, role_usage, scorecard
+from .ports import EvalChild, EvalRoots, EvalSpawn
 
 # The one string that spells an unknown `system_version` wherever a task is scored: absent,
 # empty and null alike, all read back as this single literal (Tech Lead plan, subtask
@@ -58,23 +67,267 @@ def _read_eval_set(cfg: Configuration, set_path: str | None) -> tuple[evaluation
     return declaration, text, source
 
 
-def _refuse_open_pull_request(ports: Ports, task_id: str) -> None:
-    """A set task whose pull request is still open would have its branch archived out
-    from under that pull request by the `--fresh` each child runs with (ADR-0011, sixth
-    addendum). Read off the document alone, never `gh`: neither `eval` phase may call
-    it (Tech Lead plan invariant). `pull_request` present with no `closed_at` is the
-    document's own way of saying "not yet closed" -- `agentic close` is what would set
-    `closed_at`, and it is the one place allowed to ask `gh` whether a pull request is
-    still open. A task never before run, or one `agentic close` already recorded, never
-    refuses here."""
-    document = ports.documents.load(task_id)
-    reference = (document or {}).get("pull_request")
-    if reference and not (document or {}).get("closed_at"):
+# How long the driver sleeps between two looks at a hold (a full cap, another product's
+# land wait, an account pause, a volume under its floor).
+HOLD_POLL_S = 30.0
+# Where `eval run` writes what a child reads, inside the child's root.
+INPUT_SUBDIR = Path(".agentic/eval-input")
+
+
+@dataclass(frozen=True)
+class _Child:
+    """One run to make: `entry` re-run as `arm`."""
+
+    entry: evaluation.EvalEntry
+    arm: str
+
+
+def _arms(ports: Ports, experiment_id: str | None) -> tuple[list[str], object | None]:
+    """The arms every entry runs as, and the declaration's raw text-to-be: master's
+    `.agentic/experiment.yaml` (never a root's) when `--experiment` names it, else the one
+    `default` arm and no declaration."""
+    if experiment_id is None:
+        return [DEFAULT_ARM], None
+    try:
+        raw = ports.experiment.read() if ports.experiment is not None else None
+        if raw is None:
+            raise CannotStart(f"--experiment {experiment_id}: this product declares no experiment")
+        declaration = experiment.parse_experiment(raw, ".agentic/experiment.yaml")
+    except (ValueError, OSError) as exc:  # `InvalidExperiment` is a `ValueError`
+        raise CannotStart(str(exc)) from exc
+    if declaration.id != experiment_id:
+        raise CannotStart(f"--experiment {experiment_id}: the product declares {declaration.id!r}")
+    return [arm.name for arm in declaration.arms], raw
+
+
+def _refuse_bases(roots: EvalRoots, entries: tuple[evaluation.EvalEntry, ...]) -> None:
+    """Before any spend: every entry's `base` is a commit of the product that declares a
+    stack, so no child dies on arrival after the first ones were paid for."""
+    for entry in entries:
+        if not roots.resolves(entry.base):
+            raise CannotStart(f"issue {entry.issue}: base {entry.base} does not resolve")
+        if not roots.has_stack(entry.base):
+            raise CannotStart(
+                f"issue {entry.issue}: base {entry.base[:8]} has no .agentic/stack.yaml"
+            )
+
+
+def _next_ordinal(cfg: Configuration, roots: EvalRoots, child: _Child) -> int:
+    """1 + the highest ordinal seen for `(issue, base, arm)` among the documents already
+    copied to `eval/docs/` and the roots that exist."""
+    docs = cfg.product_dir / task_document.EVAL_DOCS_SUBDIR
+    seen = [p.stem for p in docs.glob("*.md")] if docs.is_dir() else []
+    wanted = (child.entry.issue, child.entry.base[:8], child.arm)
+    ordinals = [
+        parsed.k
+        for name in [*seen, *roots.ids()]
+        if (parsed := evaluation.parse_eval_task_id(name)) is not None
+        and (parsed.issue, parsed.sha8, parsed.arm) == wanted
+    ]
+    return max(ordinals, default=0) + 1
+
+
+def _collect(cfg: Configuration, roots: EvalRoots, eval_id: str) -> float | None:
+    """What a run leaves, whether it ended or died: its document copied to
+    `<product>/.agentic/eval/docs/<id>.md`, its root removed and its local branches deleted.
+    The recorded `cost_usd`, or `None` when it left no readable document."""
+    source = roots.path(eval_id) / task_document.TASKS_SUBDIR / f"{eval_id}.md"
+    cost: float | None = None
+    if source.is_file():
+        target = cfg.product_dir / task_document.EVAL_DOCS_SUBDIR / f"{eval_id}.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        try:
+            cost = float(
+                task_document.parse(target.read_text(encoding="utf-8"), target)["cost_usd"]
+            )
+        except (ValueError, OSError, KeyError, TypeError, yaml.YAMLError):
+            cost = None
+    roots.remove(eval_id)
+    roots.delete_branches(eval_id)
+    return cost
+
+
+def _sweep_orphans(cfg: Configuration, registry: RunRegistry, roots: EvalRoots) -> None:
+    """Roots a driver that died left behind: every one with no live run in the machine's
+    registry is collected as a finished one is."""
+    alive = {r.task_id for r in registry.live()}
+    for eval_id in roots.ids():
+        if eval_id not in alive:
+            _collect(cfg, roots, eval_id)
+            print(f"agentic: eval run: swept the orphan root {eval_id}")
+
+
+def _write_inputs(
+    root: Path, eval_id: str, product: str, child: _Child, declaration: object | None
+) -> list[str]:
+    """The frozen entry and the experiment inside the child's root; the flags that name them."""
+    directory = root / INPUT_SUBDIR
+    directory.mkdir(parents=True, exist_ok=True)
+    entry = directory / "entry.yaml"
+    frozen = {
+        "id": eval_id,
+        "product": product,
+        "issue": child.entry.issue,
+        "base": child.entry.base,
+        "title": child.entry.title,
+        "body": child.entry.body,
+    }
+    entry.write_text(yaml.safe_dump(frozen, sort_keys=False), encoding="utf-8")
+    flags = ["--issue-input", str(entry)]
+    if declaration is not None:
+        declared = directory / "experiment.yaml"
+        declared.write_text(yaml.safe_dump(declaration, sort_keys=False), encoding="utf-8")
+        flags += [experiment.ARM_FLAG, child.arm, experiment.EXPERIMENT_FILE_FLAG, str(declared)]
+    return flags
+
+
+def _held_by_slot(
+    cfg: Configuration, registry: RunRegistry, resumes: list[rules.ResumeCandidate], now: datetime
+) -> str | None:
+    """Why a child may not start now, read inside `registry.exclusive()` with the poller's
+    own `rules`: no free slot (`counts_against_cap` against the plain cap, never
+    `LAND_HEADROOM`), another product's land waiting, or an account pause of this product."""
+    live = sum(1 for r in registry.live() if rules.counts_against_cap(r.kind))
+    if live >= cfg.max_concurrent_runs:
+        return f"no free slot ({live} of {cfg.max_concurrent_runs} in use)"
+    own = rules.root_key(str((cfg.product_dir / task_document.TASKS_SUBDIR).resolve()))
+    waits, _notes = registry.land_waits(now)
+    if any(w.root_key != own for w in waits):
+        return "another product's land is waiting for a slot"
+    if rules.account_paused(resumes, now):
+        return "the account is paused until its limit resets"
+    return None
+
+
+@dataclass(frozen=True)
+class Launched:
+    """A child started: its id, its root and the process to wait for."""
+
+    eval_id: str
+    child: EvalChild
+
+
+def _launch(
+    cfg: Configuration,
+    ports: Ports,
+    registry: RunRegistry,
+    roots: EvalRoots,
+    spawn: EvalSpawn,
+    argv0: str,
+    child: _Child,
+    declaration: object | None,
+    product: str,
+    sleep: Callable[[float], None],
+    clock: Callable[[], datetime],
+) -> Launched:
+    """Wait until the child may start, then start it. The count, the holds, the root's
+    creation, the spawn and the wait for the child's registration happen inside one
+    `registry.exclusive()`: a second driver or the poller cannot count a slot this launch has
+    not registered into yet. A hold releases the lock, sleeps and looks again."""
+    last: str | None = None
+    while True:
+        now = clock()
+        held, lines = scratch_sweep.read_holds(cfg, ports)
+        reason = lines[0] if held else None
+        resumes = poll.gather_resumes(ports, now) if reason is None else []
+        if reason is None:
+            with registry.exclusive():
+                reason = _held_by_slot(cfg, registry, resumes, now)
+                if reason is None:
+                    eval_id = evaluation.eval_task_id(
+                        child.entry.issue,
+                        child.entry.base,
+                        child.arm,
+                        _next_ordinal(cfg, roots, child),
+                    )
+                    root = roots.create(eval_id, child.entry.base)
+                    flags = _write_inputs(root, eval_id, product, child, declaration)
+                    overlay = {ENV_PREFIX + "PRODUCT_DIR": str(root)}
+                    started = spawn([argv0, "run", *flags], overlay)
+                    if not await_registration(registry, eval_id, REGISTER_WAIT_S, sleep):
+                        print(f"agentic: eval run: {eval_id} did not register in time")
+                    return Launched(eval_id, started)
+        if reason != last:
+            print(f"agentic: eval run: waiting, {reason}")
+            last = reason
+        sleep(HOLD_POLL_S)
+
+
+async def _eval_run(
+    cfg: Configuration,
+    ports: Ports,
+    registry: RunRegistry,
+    roots: EvalRoots,
+    spawn: EvalSpawn,
+    argv0: str,
+    set_path: str | None,
+    experiment_id: str | None,
+    budget: float,
+    yes: bool,
+    dry_run: bool,
+    *,
+    locked: Callable[[], AbstractContextManager[object]] = nullcontext,
+    detach: Callable[[], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> None:
+    """`agentic eval run [--experiment ID]` (GH-470): every entry of the set once per arm
+    (`default` when no experiment), each in its own root pinned at the entry's `base`, one
+    child at a time. The refusals (declaration, product name, an entry's base) fire before the
+    first spend; `--dry-run` reports and returns; `--yes` is required to go on; the total
+    `budget` stops the loop; `locked` is the driver's own `"eval"` lock. Evaluation runs are
+    never resumed: what a child leaves is collected (`_collect`) and nothing more."""
+    declaration, _text, source = _read_eval_set(cfg, set_path)
+    arms, raw = _arms(ports, experiment_id)
+    children = [_Child(entry, arm) for entry in declaration.entries for arm in arms]
+    _refuse_bases(roots, declaration.entries)
+    estimate = len(children) * evaluation.PER_TASK_ESTIMATE_USD
+    print(
+        f"agentic: {source}: {len(children)} run(s), estimated ${estimate:.2f} at "
+        f"${evaluation.PER_TASK_ESTIMATE_USD:.2f}/run (smoke: issue {declaration.smoke})"
+    )
+    for arm in arms:
+        print(f"  arm {arm}: {len(declaration.entries)} run(s)")
+    if dry_run:
+        for child in children:
+            print(
+                f"  issue {child.entry.issue} at {child.entry.base[:8]} as {child.arm}: "
+                f"{evaluation.eval_task_id(child.entry.issue, child.entry.base, child.arm, _next_ordinal(cfg, roots, child))}"
+            )
+        return
+    if not yes:
         raise CannotStart(
-            f"{task_id}: has a pull request with no recorded closure (`pull_request` "
-            "set, no `closed_at`); --fresh would archive the branch it points at. Run "
-            f"`agentic close --issue N` first."
+            f"estimated spend ${estimate:.2f} for {len(children)} run(s): pass --yes to proceed"
         )
+    if detach is not None:
+        detach()
+        return
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    with locked():
+        _sweep_orphans(cfg, registry, roots)
+        spent = 0.0
+        for child in children:
+            if spent + evaluation.PER_TASK_ESTIMATE_USD > budget:
+                print(
+                    f"agentic: ${budget:.2f} budget would be exceeded; stopping with {spent:.2f} spent"
+                )
+                break
+            launched = _launch(
+                cfg, ports, registry, roots, spawn, argv0, child, raw, product, sleep, clock
+            )
+            try:
+                launched.child.wait()
+            finally:
+                recorded = _collect(cfg, roots, launched.eval_id)
+            # A run that left no document charges the full estimate: a child that dies on
+            # arrival cannot loop for free.
+            cost = evaluation.PER_TASK_ESTIMATE_USD if recorded is None else recorded
+            spent += cost
+            print(f"agentic: {launched.eval_id} done, ${cost:.2f} (${spent:.2f} spent so far)")
 
 
 async def _eval_score(

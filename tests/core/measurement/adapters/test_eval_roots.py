@@ -75,7 +75,7 @@ def test_a_task_branch_made_in_the_root_records_the_base_as_its_start(repo):
 def test_removing_a_root_and_its_branches_leaves_the_others_alone(repo):
     root, with_stack, without = repo
     roots = GitEvalRoots(root)
-    one, ten = ID.format(sha8=with_stack[:8]), "EVAL-7-{}-default-10".format(with_stack[:8])
+    one, ten = ID.format(sha8=with_stack[:8]), f"EVAL-7-{with_stack[:8]}-default-10"
     created = roots.create(one, with_stack)
     git(created, "checkout", "-q", "-b", f"agentic/{one}")
     git(root, "branch", f"agentic/{one}.unit-a", with_stack)

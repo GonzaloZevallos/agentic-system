@@ -42,6 +42,7 @@ from . import composition
 from .composition import GhWait, bind_task, default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
+from .core.measurement.adapters.git.eval_roots import GitEvalRoots
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
@@ -49,9 +50,8 @@ from .core.measurement.application import dashboards as dashboards_app
 from .core.measurement.application import eval_commands
 from .core.measurement.application.eval_commands import (
     _eval_score,
-    _read_eval_set,
-    _refuse_open_pull_request,
 )
+from .core.measurement.application.ports import EvalRoots, EvalSpawn
 from .core.measurement.domain import (
     evaluation,
     findings_report,
@@ -128,7 +128,7 @@ from .shared.environment import without_own_toolchain
 from .shared.errors import CannotStart as CannotStart
 
 # The eval commands moved to `eval_commands`; the old names stay here as the same objects.
-# `_eval_score`, `_read_eval_set` and `_refuse_open_pull_request` are imported above and used
+# `_eval_score` and `_read_eval_set` are imported above and used
 # here; the rest are only re-exported. `_eval_compare` is the wrapper below.
 UNKNOWN_SYSTEM_VERSION = eval_commands.UNKNOWN_SYSTEM_VERSION
 _fmt_figure = eval_commands._fmt_figure
@@ -149,16 +149,6 @@ Checkpointer = Callable[[Configuration, str], AbstractAsyncContextManager[BaseCh
 # `_run`/`_resume` so a test asserts argv and redirection without spawning anything
 # (Tech Lead plan, subtask `--detach`).
 Spawner = Callable[[list[str], str], int]
-# `eval run` launches one `agentic run --fresh --issue N` per set task, waited before
-# the next one starts: `RunLimits` is per Corrida keyed by `thread_id` (ADR-0004, fifth
-# addendum), so five in parallel would put twenty roles in flight and the 429s that
-# follow would read as prompt regressions (Tech Lead plan, subtask `eval-cli`).
-# `Spawner`'s own shape beside it -- one alias, one default implementation, `None` on
-# the call site meaning the default -- takes the child's argv and an environment
-# overlay and hands back nothing: the outcome is read from the task's own document
-# afterwards, never from this call, so an exit status here would be a second source of
-# truth the way `_report`'s `sys.exit(1)` already is not one.
-EvalLauncher = Callable[[list[str], dict[str, str]], None]
 
 # What the lock claims, said whenever it refuses (Tech Lead plan, subtask `run-lock`):
 # it protects one CLI invocation from another, nothing a `langgraph dev` server runs.
@@ -393,7 +383,14 @@ def build_parser() -> CommandTree:
         ("eval", "run"),
         eval_sub,
         "run",
-        help="run every task of the evaluation set from scratch, one at a time",
+        help="run every entry of the evaluation set from its pinned base, once per arm, "
+        "each in its own root and one at a time",
+    )
+    eval_run.add_argument(
+        "--experiment",
+        metavar="ID",
+        help="run each entry once per arm of this experiment (master's "
+        ".agentic/experiment.yaml); without it, once as `default`",
     )
     eval_run.add_argument(
         "--budget",
@@ -810,6 +807,7 @@ def main() -> None:
                     cfg,
                     ports,
                     args.set,
+                    args.experiment,
                     args.budget,
                     args.yes,
                     args.dry_run,
@@ -2667,23 +2665,23 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
-def _run_eval_child(argv: list[str], env_overlay: dict[str, str]) -> None:
-    """The default `EvalLauncher`: a waited `subprocess.run`, never `start_new_session`
-    and never `_spawn_detached`, so `eval run`'s sequencing -- one child at a time,
-    `RunLimits` being per Corrida (ADR-0004, fifth addendum) -- is a property of the
-    code and not of a comment. `AGENTIC_LOG_FILE` is dropped from every child's
-    environment: `_spawn_detached` sets it on a detached eval driver's own process, and
-    `Configuration` treats it as a per-field override, so without the drop every child
-    would log into the eval driver's own log file instead of minting its own."""
+def _spawn_eval_child(argv: list[str], env_overlay: dict[str, str]) -> subprocess.Popen[bytes]:
+    """The default `EvalSpawn`: an `agentic run` child the driver waits for itself, never
+    `start_new_session` and never `_spawn_detached` (the driver, not a session, owns it).
+    `AGENTIC_LOG_FILE` is dropped from the child's environment: `_spawn_detached` sets it on
+    a detached eval driver's own process, and `Configuration` treats it as a per-field
+    override, so without the drop every child would log into the driver's own log file
+    instead of minting its own."""
     env = {**os.environ, **env_overlay}
     env.pop(ENV_PREFIX + "LOG_FILE", None)
-    subprocess.run(argv, env=env, check=False)
+    return subprocess.Popen(argv, env=env)
 
 
 async def _eval_run(
     cfg: Configuration,
     ports: Ports,
     set_path: str | None,
+    experiment_id: str | None,
     budget: float,
     yes: bool,
     dry_run: bool,
@@ -2692,70 +2690,32 @@ async def _eval_run(
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
-    launch: EvalLauncher | None = None,
+    registry: RunRegistry | None = None,
+    roots: EvalRoots | None = None,
+    eval_spawn: EvalSpawn | None = None,
 ) -> None:
-    """`agentic eval run`: drives README.md 9's fixed set, one `agentic run --fresh
-    --issue N` per task, waited before the next starts (Tech Lead plan, subtask
-    `eval-cli`). Every refusal below fires before the first child is launched: the
-    declaration, the product's own name, a set task's still-open pull request, a set
-    task's own run lock, and the eval lock itself -- keyed on the fixed string `"eval"`,
-    one driver per product repo. `--dry-run` never acquires anything, the same shape
-    `resume --dry-run` already has: it reports and returns."""
+    """`agentic eval run [--experiment ID]`: the driver (`eval_commands._eval_run`, GH-470)
+    with its real collaborators -- the machine registry, the product's git roots and a
+    waited `agentic run` child -- and the `"eval"` lock, keyed on the fixed string, one
+    driver per product repo. `--dry-run` never acquires anything."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
-    declaration, _text, source = _read_eval_set(cfg, set_path)
-    estimate = len(declaration.issues) * evaluation.PER_TASK_ESTIMATE_USD
-    print(
-        f"agentic: {source}: {len(declaration.issues)} task(s), estimated "
-        f"${estimate:.2f} at ${evaluation.PER_TASK_ESTIMATE_USD:.2f}/task "
-        f"(smoke: issue {declaration.smoke})"
+    await eval_commands._eval_run(
+        cfg,
+        ports,
+        registry if registry is not None else _registry_for(cfg),
+        roots if roots is not None else GitEvalRoots(cfg.product_dir),
+        eval_spawn or _spawn_eval_child,
+        sys.argv[0],
+        set_path,
+        experiment_id,
+        budget,
+        yes,
+        dry_run,
+        locked=lambda: _locked(lock, "eval"),
+        detach=(lambda: _detach(lock, "eval", child_argv or [], log_file or "", spawn))
+        if detach
+        else None,
     )
-    if dry_run:
-        for issue in declaration.issues:
-            task_id = ports.inbox.task_id(issue)
-            document = ports.documents.load(task_id)
-            status = document.get("status", "open") if document else "no document yet"
-            print(f"  {task_id} (issue {issue}): {status}")
-            _print_lock(lock, task_id)
-        return
-    if not yes:
-        raise CannotStart(
-            f"estimated spend ${estimate:.2f} for {len(declaration.issues)} task(s): "
-            "pass --yes to proceed"
-        )
-    if detach:
-        _detach(lock, "eval", child_argv or [], log_file or "", spawn)
-        return
-    try:
-        ports.stack.product()
-    except (ValueError, OSError) as exc:
-        raise CannotStart(str(exc)) from exc
-    for issue in declaration.issues:
-        task_id = ports.inbox.task_id(issue)
-        _refuse_open_pull_request(ports, task_id)
-        _refuse_if_locked(lock, task_id)
-    with _locked(lock, "eval"):
-        spent = 0.0
-        for issue in declaration.issues:
-            task_id = ports.inbox.task_id(issue)
-            if spent + evaluation.PER_TASK_ESTIMATE_USD > budget:
-                print(
-                    f"agentic: ${budget:.2f} budget would be exceeded before {task_id} "
-                    f"(issue {issue}); stopping with {spent:.2f} spent"
-                )
-                break
-            before = ports.documents.load(task_id)
-            argv = [sys.argv[0], "run", "--fresh", "--issue", str(issue)]
-            overlay = {ENV_PREFIX + "PRODUCT_DIR": str(cfg.product_dir)}
-            (launch or _run_eval_child)(argv, overlay)
-            after = ports.documents.load(task_id)
-            # A task whose document did not move charges the full estimate: a child
-            # that dies before writing anything cannot loop for free (Tech Lead plan).
-            moved = after is not None and after != before
-            cost = float(after.get("cost_usd", 0.0)) if moved else evaluation.PER_TASK_ESTIMATE_USD
-            spent += cost
-            print(
-                f"agentic: {task_id} (issue {issue}) done, ${cost:.2f} (${spent:.2f} spent so far)"
-            )
 
 
 # Consecutive documents whose Langfuse write failed before the backfill stops: past it the

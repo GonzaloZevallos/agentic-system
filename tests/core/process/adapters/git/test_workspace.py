@@ -1783,6 +1783,8 @@ def test_an_evaluation_root_and_its_documents_stay_out_of_the_products_status(pr
     ws.exclude_system_files()
     (product / ".agentic/eval/EVAL-1-aaaaaaaa-default-1").mkdir(parents=True)
     (product / ".agentic/eval/EVAL-1-aaaaaaaa-default-1/file.txt").write_text("x")
+    (product / ".agentic/eval-input").mkdir(parents=True)
+    (product / ".agentic/eval-input/entry.yaml").write_text("x")
     (product / ".agentic/eval/docs").mkdir(parents=True)
     (product / ".agentic/eval/docs/EVAL-1-aaaaaaaa-default-1.md").write_text("x")
     assert git("status", "--porcelain", cwd=product) == ""

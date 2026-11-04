@@ -65,6 +65,7 @@ INDEX_DIR = ".agentic/index"
 TASKS_DIR = ".agentic/tasks"
 # The roots of the evaluation runs and the documents they leave (GH-470): the system's own.
 EVAL_DIR = ".agentic/eval"
+EVAL_INPUT_DIR = ".agentic/eval-input"
 # The only path `commit_archived_document` takes, and the namespace of the only refs it writes.
 _TASK_DOCUMENT = re.compile(r"\.agentic/tasks/[^/]+\.md")
 _ARCHIVE_NAMESPACE = "archive/"
@@ -83,6 +84,8 @@ EXCLUDES = (
     f"{TASKS_DIR}/*.md",
     # The evaluation runs' roots and documents (GH-470), never the product's.
     f"{EVAL_DIR}/",
+    # What `eval run` writes into a root: the frozen entry and the experiment (GH-470).
+    f"{EVAL_INPUT_DIR}/",
 )
 
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
