@@ -461,9 +461,10 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 # Re-pinned by GH-358: the `system_delivery` escalation class joins the escalations row.
 # Re-pinned by GH-391: the `disk_full` failure reason joins the failure-reason row.
 # Re-pinned by GH-409: the `render` failure reason joins the failure-reason row.
+# Re-pinned by GH-462: the `ci` escalation class joins the escalations row.
 UNCHANGED_ROWS = {
-    "agentic-system": "950f298199668efe43c7fff3f196dcbbc193d695e2f522814c41de288e8bc3ea",
-    "apostrophe": "63858dd8b84da5b69e4057949ede7d29e47528d093911f3912ad3134e66fed54",
+    "agentic-system": "b0ad35d637f3ca2ff70e0f82be144bea4caa6921f3aa1494d0b0ea6dc25664bc",
+    "apostrophe": "aa46f309fdec117dc2c4756a174536098779eb90bd4e1f101a87fbc15de42569",
 }
 
 

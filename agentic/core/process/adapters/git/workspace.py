@@ -473,6 +473,13 @@ class GitWorkspace:
         # No lease: the ref is the task's own and the run holds the task's lock.
         self._git("push", "--force", "origin", f"HEAD:refs/heads/{ref}", cwd=path)
 
+    def republish_ci_ref(self, path: Path, ref: str) -> None:
+        # Delete, then create: GitHub starts a run on a branch create, and a force push that
+        # moves nothing may start none (GH-462). A ref the remote no longer holds is just created.
+        if self._git("ls-remote", "--heads", "origin", f"refs/heads/{ref}", cwd=path).strip():
+            self._git("push", "origin", "--delete", ref, cwd=path)
+        self.publish_ci_ref(path, ref)
+
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
         listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{prefix}*")
         heads = "refs/heads/"

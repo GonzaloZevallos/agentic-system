@@ -60,7 +60,7 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 | `TaskDocuments` | leer y escribir el documento de la tarea | `agentic/core/process/adapters/filesystem/documents.py:FilesystemTaskDocuments` |
 | `Prompts` | el prompt de cada rol, con overlay del producto | `agentic/core/process/adapters/filesystem/prompts.py:FilesystemPrompts` |
 | `Workspace` | ramas, worktrees, commits y upstream | `agentic/core/process/adapters/git/workspace.py:GitWorkspace` |
-| `Tracker` | pull requests, comentarios y etiquetas | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
+| `Tracker` | pull requests, comentarios, etiquetas, lectura del CI y despacho del workflow de la rama base (`dispatch_ci`, `dispatched_ci`, GH-462) | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
 | `CiLogs` (opcional, `None` sin adaptador) | los logs de los jobs rojos de la cabeza de un pull request | `agentic/core/process/adapters/github/ci_logs.py:GhCiLogs` |
 | `Inbox` | la cola de issues | `agentic/core/process/adapters/github/inbox.py:GhInbox` |
 | `Board` | el espejo del Project | `agentic/core/process/adapters/github/board.py:GhBoard` |

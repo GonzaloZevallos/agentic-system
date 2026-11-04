@@ -143,6 +143,16 @@ class CiCover:
     failed: str
 
 
+@dataclass(frozen=True)
+class CiDispatch:
+    """The workflow of the task's base branch the system dispatches to judge a head that touches
+    `.github/`, and the `workflow_dispatch` input that carries the head sha (`ci_dispatch`,
+    GH-462). Validated when the stack is parsed."""
+
+    workflow: str
+    sha_input: str
+
+
 # Why a `full_checks` run that wanted CI ran locally, for the causes a timeout may be deferred
 # on (GH-453): CI produced no verdict for that head (`no_run`, `not_started`) or could not be
 # read (`gh_unavailable`, `gh_unreadable`). Every other cause (`publish_failed`, `untrusted`,

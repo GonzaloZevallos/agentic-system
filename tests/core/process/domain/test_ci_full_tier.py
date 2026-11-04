@@ -11,6 +11,7 @@ HEAD = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
 OTHER = "9f3e1a2b4c5d6e7f8091a2b3c4d5e6f708192a3b"
 NAMES = ("unit", "web")
 BOUND = 600.0
+GRACE = 120.0
 
 
 def run(name: str, conclusion: str | None, status: str = "COMPLETED") -> CiCheck:
@@ -22,7 +23,7 @@ def report(*checks: CiCheck, sha: str = HEAD) -> CiReport:
 
 
 def verdict(read: CiReport | CiUnreadable, elapsed_s: float = 0.0) -> FullTierVerdict:
-    return ci.full_tier_verdict(read, HEAD, NAMES, elapsed_s, BOUND)
+    return ci.full_tier_verdict(read, HEAD, NAMES, elapsed_s, BOUND, GRACE)
 
 
 def test_every_declared_job_green_is_green() -> None:
@@ -83,18 +84,18 @@ def test_a_red_job_wins_over_the_bound() -> None:
     assert got.state == "red"
 
 
-def test_no_declared_job_on_the_head_is_waiting_then_no_run() -> None:
+def test_no_declared_job_on_the_head_is_waiting_then_no_run_at_the_grace() -> None:
     other_jobs = report(run("lint", "SUCCESS"))
-    assert verdict(other_jobs, BOUND - 1).state == "waiting"
-    at_bound = verdict(other_jobs, BOUND)
-    assert (at_bound.state, at_bound.cause) == ("unreachable", "no_run")
+    assert verdict(other_jobs, GRACE - 1).state == "waiting"
+    at_grace = verdict(other_jobs, GRACE)
+    assert (at_grace.state, at_grace.cause) == ("unreachable", "no_run")
 
 
 def test_a_report_of_another_sha_is_ignored_even_when_green() -> None:
     green_elsewhere = report(run("unit", "SUCCESS"), run("web", "SUCCESS"), sha=OTHER)
-    assert verdict(green_elsewhere, BOUND - 1).state == "waiting"
-    at_bound = verdict(green_elsewhere, BOUND)
-    assert (at_bound.state, at_bound.cause) == ("unreachable", "no_run")
+    assert verdict(green_elsewhere, GRACE - 1).state == "waiting"
+    at_grace = verdict(green_elsewhere, GRACE)
+    assert (at_grace.state, at_grace.cause) == ("unreachable", "no_run")
 
 
 def test_a_short_sha_of_the_head_is_the_same_commit() -> None:
@@ -159,3 +160,55 @@ def test_covering_state_leaves_ci_state_reading_a_skip_as_red():
     skipped = report(run("e2e", "SKIPPED"))
     assert ci.ci_state(skipped, ("e2e",)).state == "red"
     assert covering(skipped) == "uncovered"
+
+
+# --- the grace period (GH-462): a CI that never starts is caught well before the bound ------
+
+
+def test_the_grace_is_below_the_bound_in_these_tests() -> None:
+    assert 0 < GRACE < BOUND
+
+
+@pytest.mark.parametrize("elapsed", [0.0, GRACE - 1])
+def test_no_run_on_the_head_before_the_grace_is_waiting(elapsed: float) -> None:
+    assert verdict(report(sha=OTHER), elapsed).state == "waiting"
+
+
+@pytest.mark.parametrize("elapsed", [GRACE, GRACE + 1, BOUND - 1])
+def test_no_run_on_the_head_at_and_past_the_grace_is_no_run(elapsed: float) -> None:
+    got = verdict(report(), elapsed)
+    assert (got.state, got.cause, got.failing) == ("unreachable", "no_run", ())
+
+
+def test_a_report_of_another_commit_past_the_grace_is_no_run() -> None:
+    got = verdict(report(run("unit", "SUCCESS"), run("web", "SUCCESS"), sha=OTHER), GRACE)
+    assert (got.state, got.cause) == ("unreachable", "no_run")
+
+
+@pytest.mark.parametrize("status", ["QUEUED", "IN_PROGRESS"])
+def test_a_started_run_past_the_grace_keeps_waiting_until_the_bound(status: str) -> None:
+    started = run("unit", None, status)
+    past = verdict(report(started), GRACE + 100)
+    assert past.state == "waiting"
+    assert past.cause is None
+    at_bound = verdict(report(started), BOUND)
+    assert (at_bound.state, at_bound.cause) == ("timed_out", None)
+
+
+def test_one_declared_job_reported_and_the_other_missing_is_not_no_run() -> None:
+    got = verdict(report(run("unit", "SUCCESS")), GRACE)
+    assert (got.state, got.pending) == ("waiting", ("web",))
+
+
+def test_a_green_head_past_the_grace_is_still_green() -> None:
+    both = report(run("unit", "SUCCESS"), run("web", "SUCCESS"))
+    assert verdict(both, GRACE + 1).state == "green"
+
+
+@pytest.mark.parametrize(
+    "unreadable", [CiUnreadable("gh_unavailable"), CiUnreadable("gh_unreadable")]
+)
+def test_an_unreadable_ci_past_the_grace_keeps_waiting_until_the_bound(
+    unreadable: CiUnreadable,
+) -> None:
+    assert verdict(unreadable, GRACE + 1) == FullTierVerdict("waiting", (), NAMES, None)

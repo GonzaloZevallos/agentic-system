@@ -1098,3 +1098,80 @@ def test_every_key_that_names_a_check_is_validated_by_the_one_function(monkeypat
         "check_timeouts",
         "not_ready_exit",
     }
+
+
+# --- ci_dispatch (GH-462) ------------------------------------------------------------------
+
+
+def dispatch_data(entry=None, **more):
+    return {
+        "checks": {"tests": "pytest"},
+        "ci": ["ci-ok"],
+        "ci_dispatch": {"workflow": "ci.yml", "sha_input": "sha"} if entry is None else entry,
+        **more,
+    }
+
+
+def refuse_dispatch(data, match):
+    with pytest.raises(ValueError, match=match):
+        stack.ci_dispatch(data, "stack.yaml")
+
+
+def test_a_stack_without_ci_dispatch_declares_none():
+    assert stack.ci_dispatch({"checks": {"tests": "pytest"}, "ci": ["ci-ok"]}, "x") is None
+    assert stack.ci_dispatch({"checks": {"tests": "pytest"}}, "x") is None
+
+
+def test_a_declared_ci_dispatch_is_a_frozen_pair_and_a_key_the_file_may_declare():
+    found = stack.ci_dispatch(dispatch_data(), "x")
+    assert found == stack.CiDispatch(workflow="ci.yml", sha_input="sha")
+    with pytest.raises(AttributeError):
+        found.workflow = "other.yml"  # type: ignore[misc]
+    assert "ci_dispatch" in stack.KEYS
+    stack.checks(dispatch_data(), "x")  # an unknown key would raise here
+
+
+def test_a_yaml_extension_and_surrounding_blanks_are_accepted_and_trimmed():
+    entry = {"workflow": " build.yaml ", "sha_input": " head "}
+    assert stack.ci_dispatch(dispatch_data(entry), "x") == stack.CiDispatch("build.yaml", "head")
+
+
+@pytest.mark.parametrize("sub_key", ["workflow", "sha_input"])
+def test_a_missing_sub_key_is_refused(sub_key):
+    entry = {"workflow": "ci.yml", "sha_input": "sha"}
+    del entry[sub_key]
+    refuse_dispatch(dispatch_data(entry), rf"expected a non-empty `{sub_key}`")
+
+
+@pytest.mark.parametrize("value", ["", "   ", None, 3, ["sha"]])
+@pytest.mark.parametrize("sub_key", ["workflow", "sha_input"])
+def test_an_empty_or_non_string_sub_key_is_refused(sub_key, value):
+    entry = {"workflow": "ci.yml", "sha_input": "sha", sub_key: value}
+    refuse_dispatch(dispatch_data(entry), rf"expected a non-empty `{sub_key}`")
+
+
+def test_an_unknown_sub_key_under_ci_dispatch_is_refused():
+    entry = {"workflow": "ci.yml", "sha_input": "sha", "extra": 1}
+    refuse_dispatch(dispatch_data(entry), r"unknown key\(s\) extra under `ci_dispatch`")
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [".github/workflows/ci.yml", "sub/ci.yml", "../ci.yml", "ci", "ci.json", "ci.yml.bak", ".yml"],
+)
+def test_a_workflow_that_is_not_a_bare_yaml_file_name_is_refused(workflow):
+    entry = {"workflow": workflow, "sha_input": "sha"}
+    refuse_dispatch(dispatch_data(entry), r"`workflow` under `ci_dispatch`")
+
+
+@pytest.mark.parametrize("bad", [None, {}, [], "ci.yml", ["workflow", "sha_input"]])
+def test_an_empty_or_misshapen_ci_dispatch_is_refused(bad):
+    data = dispatch_data()
+    data["ci_dispatch"] = bad
+    refuse_dispatch(data, r"`ci_dispatch`")
+
+
+def test_ci_dispatch_without_ci_is_refused():
+    data = dispatch_data()
+    del data["ci"]
+    refuse_dispatch(data, r"`ci_dispatch` requires `ci`")

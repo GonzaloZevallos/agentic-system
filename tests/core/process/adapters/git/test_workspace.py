@@ -1719,3 +1719,58 @@ def test_fast_forward_view_raises_git_error_when_the_diff_fails(product):
     """The tip exists as a name but not as an object `diff` can read: the error is git's."""
     with pytest.raises(GitError):
         GitWorkspace(product, IDENTITY).fast_forward_view("not-a-revision")
+
+
+# -- republish_ci_ref (GH-462): delete, then create, so GitHub sees a branch create ----------
+
+
+def _log_ref_presence_on_each_push(product: Path, ref: str) -> Path:
+    """A `pre-receive` hook on the bare origin that appends `present` or `absent` for `ref`
+    each time a push arrives, before that push has moved anything."""
+    log = product.parent / "presence.log"
+    hook = _remote(product) / "hooks" / "pre-receive"
+    hook.write_text(
+        "#!/bin/sh\n"
+        f'if git rev-parse --verify -q "refs/heads/{ref}" >/dev/null; then echo present; '
+        f"else echo absent; fi >> {log}\n"
+    )
+    hook.chmod(0o755)
+    return log
+
+
+def test_republish_ci_ref_deletes_the_ref_then_creates_it_at_head(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = _commit_on(ws, task.path, "one")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    log = _log_ref_presence_on_each_push(product, "agentic-ci/GH-12")
+    ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
+    # First push is the delete (the ref was there), the second the create (it was gone).
+    assert log.read_text().split() == ["present", "absent"]
+    assert git("rev-parse", "refs/heads/agentic-ci/GH-12", cwd=_remote(product)) == head
+
+
+def test_republish_ci_ref_creates_a_ref_the_remote_no_longer_holds(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = _commit_on(ws, task.path, "one")
+    ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
+    assert git("rev-parse", "refs/heads/agentic-ci/GH-12", cwd=_remote(product)) == head
+
+
+def test_republish_ci_ref_leaves_the_other_refs_alone(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-13")
+    ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
+    assert sorted(ws.remote_refs("agentic-ci/")) == ["agentic-ci/GH-12", "agentic-ci/GH-13"]
+    assert f"refs/heads/{task.branch}" in _remote_heads(product)
+
+
+def test_republish_ci_ref_against_a_missing_remote_raises(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="ls-remote|push"):
+        ws.republish_ci_ref(task.path, "agentic-ci/GH-12")

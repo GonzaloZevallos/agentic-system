@@ -59,6 +59,7 @@ from .task import (
     Carried,
     ChangeCategory,
     ChangesRequested,
+    CiCause,
     CloseDocs,
     DependencyState,
     DesignItemRecord,
@@ -2598,6 +2599,26 @@ def full_checks_heal(
     return {"task_head": head, "full_checks_healed": head}
 
 
+def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
+    """The patch of a `full_checks` of a `ci:` product that GitHub could not judge (GH-462):
+    the task stops for the human with class `ci`, and the suite is never run on this machine.
+    No `full_checks` record and no return: the head has no verdict, and `full_checks_due`
+    compares heads, so a resume enters the node again. `cause` is the closed value of the step
+    that failed; `detail` is what was tried, prose for the human only."""
+    reason = (
+        f"GitHub CI gave no verdict for {head[:7]} ({cause}): {detail}. The suite was not run "
+        "on this machine. Fix the CI or the connection and resume; the node runs again on the "
+        "same head."
+    )
+    return logged(
+        {
+            "current_role": DEVELOPER.name,
+            "status": WAITING_ON_HUMAN,
+            **escalation("ci", reason),
+        }
+    )
+
+
 def after_full_checks(state: TaskState) -> str | None:
     """Always back to the fan-in, like `after_qa_performance`: on a green run
     `full_checks_due` now reads `False` and `after_integrate` goes on; on a red one the
@@ -4697,6 +4718,10 @@ class MergeFacts:
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
+    `ci_dispatched` (GH-462) is `rules.ci_dispatched`'s reading of the document's `full_checks`
+    record against the pull request head: a passed run of the base's workflow, dispatched for
+    this head, lifts that refusal (`ci_trusted`). `None` is what a `MergeFacts` built without it
+    reads, the poller's, and means no dispatched verdict.
     `failed_step` is the step of the recorded `merge_checks` that failed, which only the
     landing reads. `adr_collision` (GH-229) is what `application.adr_collision` found: the
     `Renaming` that fixes an own ADR whose number master took, an `Ambiguous` one, or `None`
@@ -4734,6 +4759,7 @@ class MergeFacts:
     ci_fresh: bool | None = None
     ci_waited_s: float | None = None
     ci_untrusted: bool | None = None
+    ci_dispatched: bool | None = None
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
     adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
@@ -4847,6 +4873,28 @@ def ci_untrusted(touched_paths: Sequence[str] | None) -> bool | None:
     if touched_paths is None:
         return None
     return any(path.startswith(CI_DEFINITION_PREFIX) for path in touched_paths)
+
+
+def ci_dispatched(record: FullChecksRecord | None, pr_head: str | None) -> bool:
+    """Whether a recorded `full_checks` verdict of a dispatched run of the base's workflow
+    stands for `pr_head` (GH-462): the record exists, passed, was judged by `ci_dispatch`, and
+    names the same commit as the pull request head, both as whole ids. The only place the sha
+    of a dispatched record is compared; a short id, another head or any other `ran_on` never
+    stands."""
+    if record is None or record["passed"] is not True or record.get("ran_on") != "ci_dispatch":
+        return False
+    return (
+        full_commit_id(record["head"])
+        and full_commit_id(pr_head)
+        and same_commit(record["head"], pr_head)
+    )
+
+
+def ci_trusted(untrusted: bool | None, dispatched: bool | None) -> bool:
+    """Whether a green CI may decide a `merge` (GH-462): its definition is not the change's
+    own (`untrusted is False`), or a dispatched run of the base's workflow judged this head
+    (`dispatched is True`). Anything unknown is not trusted."""
+    return untrusted is False or dispatched is True
 
 
 def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
@@ -5089,7 +5137,7 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
             return MergeDecision("refuse", "ci_blocked_by_conflict")
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
     declared = set(facts.ci_required) - set(facts.ci_plan_only)
-    if declared and facts.ci_fresh is True and facts.ci_untrusted is False:
+    if declared and facts.ci_fresh is True and ci_trusted(facts.ci_untrusted, facts.ci_dispatched):
         return MergeDecision("merge", None)
     return None
 

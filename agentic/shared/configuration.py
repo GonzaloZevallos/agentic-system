@@ -84,6 +84,11 @@ class Configuration(BaseModel):
     # How long one product check may run inside the presubmit before it counts as
     # failed (issue #22). The presubmit's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)
+    # How long `full_checks` waits for a ci: product's GitHub CI to show any run on the pushed
+    # head before it publishes the ref once more, and again before it escalates (GH-462). A
+    # declared value, not a measured one: a few minutes covers GitHub's usual queueing. Always
+    # strictly below `check_timeout_s`, the bound of a run that did start.
+    ci_start_grace_s: float = Field(default=180.0, gt=0)
     # The ceiling of any wall a product declares for a check or a verification (`stack.yaml`,
     # ADR-0065 addendum, GH-451): the system's, set by the owner in `.env`. A declared figure
     # above it is refused at preflight and never clipped; never below `check_timeout_s`, the
@@ -240,6 +245,16 @@ class Configuration(BaseModel):
                 f"verification_wall_max_s ({self.verification_wall_max_s:g}) is below "
                 f"check_timeout_s ({self.check_timeout_s:g}): a check with no declared wall "
                 "would already be over the ceiling"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _ci_grace_below_the_check_timeout(self) -> Configuration:
+        if self.ci_start_grace_s >= self.check_timeout_s:
+            raise ValueError(
+                f"ci_start_grace_s ({self.ci_start_grace_s:g}) is not below "
+                f"check_timeout_s ({self.check_timeout_s:g}): a CI that never starts would be "
+                "waited for as long as one that did"
             )
         return self
 

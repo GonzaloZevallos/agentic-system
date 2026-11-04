@@ -12,6 +12,7 @@ from typing import Any, Literal
 from . import rules
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
+from .task import CiCause as CiCause
 from .task import FallbackCause as FallbackCause
 from .task import JobLogCause as JobLogCause
 
@@ -57,9 +58,9 @@ class CiReport:
 class CiUnreadable:
     """The CI could not be read, which is not the same as a report that lacks a check:
     `gh` is missing or failed (`gh_unavailable`), or answered something this code cannot
-    read (`gh_unreadable`)."""
+    read (`gh_unreadable`). A workflow dispatch `gh` refused is `dispatch_refused` (GH-462)."""
 
-    cause: Literal["gh_unavailable", "gh_unreadable"]
+    cause: Literal["gh_unavailable", "gh_unreadable", "dispatch_refused"]
 
 
 @dataclass(frozen=True)
@@ -260,7 +261,7 @@ class FullTierVerdict:
     state: Literal["green", "red", "waiting", "timed_out", "unreachable"]
     failing: tuple[CiCheck, ...]
     pending: tuple[str, ...]
-    cause: FallbackCause | None
+    cause: CiCause | None
 
 
 def full_tier_verdict(
@@ -269,19 +270,24 @@ def full_tier_verdict(
     names: tuple[str, ...],
     elapsed_s: float,
     timeout_s: float,
+    grace_s: float,
 ) -> FullTierVerdict:
     """The verdict of one read of the CI over the declared job `names`, `elapsed_s` into
     a wait bounded by `timeout_s`. A report of another commit than `head` counts as no run
-    on `head` (the only place that comparison lives for the full tier). Red wins over the
-    bound; a job that never started, alone, says the CI is unusable, not that the suite
-    failed; nothing is inferred from a skip (`SKIPPED` is red, as in `ci_state`)."""
+    on `head` (the only place that comparison lives for the full tier). With no run on `head`
+    at all (that, or a report with none of the declared jobs) the wait is bounded by the
+    shorter `grace_s` (GH-462): a CI that never starts is told in minutes; once any declared
+    job has a run on `head`, queued included, only `timeout_s` bounds it, and an unreadable
+    CI keeps `timeout_s` too. Red wins over the bound; a job that never started, alone, says
+    the CI is unusable, not that the suite failed; nothing is inferred from a skip (`SKIPPED`
+    is red, as in `ci_state`)."""
     at_bound = elapsed_s >= timeout_s
     if isinstance(read, CiUnreadable):
         if at_bound:
             return FullTierVerdict("unreachable", (), (), read.cause)
         return FullTierVerdict("waiting", (), tuple(dict.fromkeys(names)), None)
     if not rules.same_commit(read.head_sha, head):
-        if at_bound:
+        if elapsed_s >= grace_s or at_bound:
             return FullTierVerdict("unreachable", (), (), "no_run")
         return FullTierVerdict("waiting", (), tuple(dict.fromkeys(names)), None)
     verdict = ci_state(read, names)
@@ -293,11 +299,95 @@ def full_tier_verdict(
         return FullTierVerdict("red", verdict.failing, pending, None)
     if verdict.state == "green":
         return FullTierVerdict("green", (), (), None)
+    no_run = len(verdict.missing) == len(set(names))
+    if no_run and (elapsed_s >= grace_s or at_bound):
+        return FullTierVerdict("unreachable", (), pending, "no_run")
     if not at_bound:
         return FullTierVerdict("waiting", (), pending, None)
-    if len(verdict.missing) == len(set(names)):
-        return FullTierVerdict("unreachable", (), pending, "no_run")
     return FullTierVerdict("timed_out", (), pending, None)
+
+
+# The margin subtracted from the local instant a workflow was dispatched to form the loose
+# lower bound (`since`) of the run listing (GH-462). Hygiene only: it narrows what `gh` lists
+# and never decides whether a run exists, which the event, the workflow and the sha do.
+CI_DISPATCH_SKEW_S = 120
+
+# How many times a workflow is dispatched for one head when no run of it ever shows up: the
+# first dispatch and one more after a grace period without a run (GH-462).
+CI_DISPATCH_ATTEMPTS = 2
+
+
+@dataclass(frozen=True)
+class DispatchedRun:
+    """One workflow run as the port reports it (GH-462): `event` and `display_title` are what
+    identify a dispatched run of a head, `status` is the run's own (`completed` or not),
+    `created_at` the ISO UTC instant GitHub gave, and `jobs` its jobs as checks."""
+
+    run_id: int
+    event: str
+    display_title: str
+    status: str
+    created_at: str
+    link: str
+    jobs: tuple[CiCheck, ...]
+
+
+def chosen_run(
+    runs: list[DispatchedRun] | tuple[DispatchedRun, ...], head: str
+) -> DispatchedRun | None:
+    """The dispatched run that judges `head` (GH-462): the newest by `created_at` among those
+    whose event is `workflow_dispatch` and whose title holds the full 40-character `head`."""
+    matching = [
+        run
+        for run in runs
+        if run.event == "workflow_dispatch" and len(head) == 40 and head in run.display_title
+    ]
+    return max(matching, key=lambda candidate: candidate.created_at) if matching else None
+
+
+def dispatch_verdict(
+    runs: list[DispatchedRun] | tuple[DispatchedRun, ...],
+    head: str,
+    names: tuple[str, ...],
+    elapsed_s: float,
+    grace_s: float,
+    timeout_s: float,
+) -> FullTierVerdict:
+    """The verdict of the dispatched runs listed for the base's workflow, over the declared job
+    `names`, `elapsed_s` into the wait (GH-462). A run counts only when its event is
+    `workflow_dispatch` and its title holds the full 40-character `head`; of those the newest by
+    `created_at` (both GitHub's own, an ISO UTC string) is judged, whatever the list order. No
+    run is `waiting` until `grace_s` and `unreachable/no_run` from then on; a run that is not
+    completed is `waiting` until `timeout_s`, then `timed_out`. A completed run that lacks a
+    declared job or skipped it is `unreachable/jobs_missing`, before red or the bound; a
+    declared job that never started alone is `unreachable/not_started`. Then `ci_state` decides:
+    undeclared jobs are ignored. No clock of this machine is compared with a GitHub one."""
+    declared = tuple(dict.fromkeys(names))
+    run = chosen_run(runs, head)
+    if run is None:
+        if elapsed_s >= grace_s:
+            return FullTierVerdict("unreachable", (), (), "no_run")
+        return FullTierVerdict("waiting", (), declared, None)
+    report = CiReport(head, None, None, None, run.jobs)
+    verdict = ci_state(report, declared)
+    waiting_on = set(verdict.missing) | set(pending_names(report, declared))
+    pending = tuple(name for name in declared if name in waiting_on)
+    if run.status != "completed":
+        if elapsed_s >= timeout_s:
+            return FullTierVerdict("timed_out", (), pending, None)
+        return FullTierVerdict("waiting", (), pending, None)
+    skipped = {job.name for job in run.jobs if job.conclusion == "SKIPPED"}
+    if verdict.missing or skipped & set(declared):
+        return FullTierVerdict("unreachable", (), pending, "jobs_missing")
+    if verdict.failing:
+        if all(check.conclusion in _NOT_STARTED for check in verdict.failing):
+            return FullTierVerdict("unreachable", verdict.failing, pending, "not_started")
+        return FullTierVerdict("red", verdict.failing, pending, None)
+    if verdict.state == "green":
+        return FullTierVerdict("green", (), (), None)
+    if elapsed_s >= timeout_s:
+        return FullTierVerdict("timed_out", (), pending, None)
+    return FullTierVerdict("waiting", (), pending, None)
 
 
 def _first_red(report: CiReport, name: str) -> CiCheck | None:

@@ -17,12 +17,12 @@ from typing import Any, Literal, Protocol
 
 from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
-from ..domain.ci import CiReport, CiUnreadable, Containment, JobLog
+from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
 from ..domain.design import Design, NotReady
 from ..domain.docs import Docs
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult, CiCover, RerunForm
+from ..domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -506,6 +506,14 @@ class ProductStack(Protocol):
         (`core.knowledge`, GH-453), as the commit `revision` declares them, read-only. Empty
         when the product declares none: nothing is ever deferred. Raises `ValueError` when
         the key is malformed."""
+        ...
+
+    def ci_dispatch(self, revision: str) -> CiDispatch | None:
+        """The workflow of the base branch to dispatch for a head that touches `.github/`, and
+        the input that carries the head sha (`core.knowledge`, GH-462), as the commit
+        `revision` declares them. `None` when the product declares none: such a head runs
+        the local suite. Raises `ValueError` when the key is malformed or declared without
+        `ci`."""
         ...
 
     def check_budgets(self, revision: str) -> dict[str, float]:
@@ -1055,6 +1063,13 @@ class Workspace(Protocol):
         Raises `GitError` on any failure."""
         ...
 
+    def republish_ci_ref(self, path: Path, ref: str) -> None:
+        """Delete `refs/heads/<ref>` on `origin` (when it holds it) and then push `HEAD` of
+        the checkout at `path` to it again, so GitHub sees a branch create: what `full_checks`
+        does once when no CI run started on the first push (GH-462). Same ref rules as
+        `publish_ci_ref`. Raises `GitError` on any failure; the ref may then be absent."""
+        ...
+
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
         """The branch names `origin` holds under `refs/heads/<prefix>`, without
         `refs/heads/`. A failed read or an unreachable origin raises `GitError`: it is
@@ -1478,6 +1493,23 @@ class Tracker(Protocol):
         """The CI of the latest commit of `branch` (GH-216), the master side of a red
         check's comparison. `base_ref`, `base_sha` and `opened_at` are None. Never raises:
         what cannot be read is a `CiUnreadable`."""
+        ...
+
+    def dispatch_ci(
+        self, workflow: str, ref: str, inputs: Mapping[str, str]
+    ) -> CiUnreadable | None:
+        """Start the workflow file `workflow` as it is on `ref` with `inputs` (GH-462): `None`
+        means GitHub accepted it. An empty `ref` is the repository's default branch, the one
+        a delivery's pull request targets. A refusal is `CiUnreadable("dispatch_refused")` and
+        a missing `gh` is `gh_unavailable`, chosen from the step that failed, never from what
+        `gh` printed (ADR-0029). Never raises, and the caller never repeats a refused call."""
+        ...
+
+    def dispatched_ci(self, workflow: str, since: str) -> tuple[DispatchedRun, ...] | CiUnreadable:
+        """The runs of `workflow` whose event is `workflow_dispatch`, created at or after the
+        ISO instant `since` (a loose lower bound that only narrows the listing, GH-462), each
+        with its jobs. Which run judges a head is `ci.chosen_run`'s, not this port's. Never
+        raises: what cannot be read is a `CiUnreadable`."""
         ...
 
     def queue(self) -> list[int]:
