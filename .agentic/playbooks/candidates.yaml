@@ -1157,3 +1157,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T14:32:10.595+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Run every grep or command the brief gives as an acceptance check before you deliver, and fix any hit it flags instead of assuming a partial change satisfies it.
+  confidence: medium
+  seen_in:
+  - GH-469
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T17:53:56.135+00:00'
