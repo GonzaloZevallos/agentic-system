@@ -26,6 +26,9 @@ from .legacy_names import rename_legacy_roles
 from .task import RoleRun
 
 TASKS_SUBDIR = Path(".agentic/tasks")
+# Where an evaluation run's document is kept once its root is gone (GH-470): outside
+# `TASKS_SUBDIR`, so no scanner of the tasks sees it.
+EVAL_DOCS_SUBDIR = Path(".agentic/eval/docs")
 ORIGINAL = "Original request"
 # What the human decided on each escalation, written by the system on a resume (ADR-0003).
 HUMAN = "Human"

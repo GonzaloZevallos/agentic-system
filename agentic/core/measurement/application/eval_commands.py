@@ -147,6 +147,23 @@ async def _eval_score(
         print(f"agentic close --issue {issue}")
 
 
+def _parse_documents(paths: list[Path]) -> list[scorecard.ParsedDocument]:
+    """`paths` read and parsed: `(task_id, document)` each, `None` for one `document.parse`
+    itself rejected -- malformed frontmatter YAML (`yaml.YAMLError`, from its own
+    unguarded `yaml.safe_load`), a missing frontmatter block, or a file this process cannot
+    read (`ValueError`/`OSError`) -- all three caught into the single `None` sentinel
+    `bucket_by_baseline` counts and excludes, never raised out of a read-only comparison."""
+    parsed: list[scorecard.ParsedDocument] = []
+    for path in paths:
+        try:
+            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
+        except (ValueError, OSError, yaml.YAMLError):
+            parsed.append(None)
+            continue
+        parsed.append((raw.get("id", path.stem), cast(scorecard.ScorecardDocument, raw)))
+    return parsed
+
+
 def _bucket_documents(
     product_dir: Path, resolve_baseline: Callable[[str | None], str]
 ) -> tuple[dict[str, list[tuple[str, scorecard.TaskFigures]]], int]:
@@ -156,22 +173,22 @@ def _bucket_documents(
     at a declared seam (`tests/core/measurement/domain/test_scorecard.py`) without a
     filesystem or git. No port: `cli.py` is the composition root and already reads
     `.agentic/` directly, `_read_eval_set`'s own precedent for `.agentic/eval-set.yaml`.
-
-    `document.parse` rejects a document three ways -- malformed frontmatter YAML
-    (`yaml.YAMLError`, from its own unguarded `yaml.safe_load`), a missing frontmatter
-    block, or a file this process cannot read (`ValueError`/`OSError`) -- all three
-    caught here into the single `None` sentinel `bucket_by_baseline` counts and
-    excludes, never raised out of a read-only comparison."""
+    Evaluation runs live elsewhere (`_eval_documents`) and never reach this glob."""
     tasks_dir = product_dir / task_document.TASKS_SUBDIR
     paths = sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []
-    parsed: list[scorecard.ParsedDocument] = []
-    for path in paths:
-        try:
-            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
-        except (ValueError, OSError, yaml.YAMLError):
-            parsed.append(None)
-            continue
-        parsed.append((raw.get("id", path.stem), cast(scorecard.ScorecardDocument, raw)))
+    return scorecard.bucket_by_baseline(_parse_documents(paths), resolve_baseline)
+
+
+def _eval_documents(
+    product_dir: Path, resolve_baseline: Callable[[str | None], str]
+) -> tuple[dict[str, list[tuple[str, scorecard.TaskFigures]]], int]:
+    """The evaluation runs' documents, `.agentic/eval/docs/*.md` (GH-470), bucketed like
+    `_bucket_documents`'s. This function owns only that glob, and keeps only the documents
+    `evaluation.evaluation_documents` accepts: one without the `evaluation` key is not an
+    evaluation run's and is no reader's business here."""
+    docs_dir = product_dir / task_document.EVAL_DOCS_SUBDIR
+    paths = sorted(docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+    parsed = evaluation.evaluation_documents(_parse_documents(paths))
     return scorecard.bucket_by_baseline(parsed, resolve_baseline)
 
 
@@ -385,6 +402,11 @@ async def _eval_compare_experiment(
     except (ValueError, OSError) as exc:
         raise CannotStart(str(exc)) from exc
     buckets, unreadable = _bucket_documents(cfg.product_dir, resolve_baseline)
+    # The evaluation runs of the experiment count beside the real tasks that carry it.
+    evaluated, evaluation_unreadable = _eval_documents(cfg.product_dir, resolve_baseline)
+    unreadable += evaluation_unreadable
+    for baseline, tasks in evaluated.items():
+        buckets.setdefault(baseline, []).extend(tasks)
     chosen = [
         (baseline, figures)
         for baseline in sorted(buckets)

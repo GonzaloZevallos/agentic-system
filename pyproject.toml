@@ -70,6 +70,7 @@ files = [
     "agentic/core/process/adapters/filesystem/check_ledger.py",
     "agentic/core/process/adapters/filesystem/check_results.py",
     "agentic/core/process/adapters/filesystem/board_sent.py",
+    "agentic/core/process/adapters/filesystem/file_inbox.py",
     "agentic/core/process/adapters/github/board.py",
     "agentic/core/process/adapters/filesystem/scratch.py",
     "agentic/core/process/adapters/filesystem/free_space.py",
