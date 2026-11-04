@@ -115,3 +115,11 @@ def test_it_closes_nothing_for_an_entry_the_landing_wrote_under_a_pull_request()
         "landing": [{"step": "fix_important", "head": "h", "refusal": "open_findings"}],
     }
     assert pre_pr_fix.close_pass(state, NOW) is None
+
+
+def test_files_owed_by_the_verifier_set_are_dropped_with_the_head_that_is_about_to_move():
+    state = _state(_row("api"))
+    plain, _ = _run(state)
+    assert "pending_close_docs" not in plain
+    owing = {**state, "pending_close_docs": {"parent": "a" * 40, "definitions": []}}
+    assert _run(owing)[0]["pending_close_docs"] is None
