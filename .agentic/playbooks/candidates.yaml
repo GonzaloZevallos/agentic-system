@@ -1196,3 +1196,23 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T20:49:28.362+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: 'Before delivering, grep your new tests for the plan''s invariants: compare text from git or other external output against its scrubbed form, and use the policy constants instead of literal attempt counts or seconds.'
+  confidence: medium
+  seen_in:
+  - GH-487
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T23:01:22.459+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: When integrating branches, re-check each line the merge brings in against the plan invariants (scrub on external text, no raw comparisons, no literal policy numbers), as the existing code already applies them.
+  confidence: medium
+  seen_in:
+  - GH-487
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T23:01:22.459+00:00'
