@@ -161,27 +161,9 @@ async def full_checks(
 
 
 def _unknown_text(outcome: _NoVerdict, head: str, plan_only: tuple[str, ...]) -> str:
-    """The escalation for names no check run carries (GH-485): which, on which head, what did
-    report, and where each name is fixed. The remedy depends on who owns the name: a plan-only
-    name lives in the task document, a stack `ci:` name in `.agentic/stack.yaml` on master."""
-    lines = [
-        f"no check run named `{name}` on this head `{head}` (workflow runs completed); "
-        f"reported: {', '.join(f'`{r}`' for r in outcome.reported) or 'none'}; either the name "
-        "is wrong or its workflow does not run for this event."
-        for name in outcome.unknown
-    ]
-    fixes: list[str] = []
-    if owned := [name for name in outcome.unknown if name in plan_only]:
-        fixes.append(
-            f"Edit `ci_required` in the task document's frontmatter ({', '.join(owned)}), "
-            "then `agentic resume`."
-        )
-    if stack := [name for name in outcome.unknown if name not in plan_only]:
-        fixes.append(
-            f"Change `ci:` in `.agentic/stack.yaml` on master ({', '.join(stack)}), then "
-            "`agentic resume`."
-        )
-    return " ".join(lines) + " " + " ".join(fixes) + " Resume re-enters on the same head."
+    """The escalation for names no check run carries (GH-485): `ci.unreported_text`, the one
+    wording the full tier, the merge gate and the landing share."""
+    return ci.unreported_text(outcome.unknown, outcome.reported, head, plan_only)
 
 
 async def _local_full_checks(

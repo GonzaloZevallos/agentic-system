@@ -238,6 +238,7 @@ def _land(
         step.kind,
         master,
         unstarted=landing_rules.landing_pass(current) == "unstarted",
+        names=step.names,
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -271,6 +272,8 @@ def _land(
         entry["checks"] = list(
             dict.fromkeys(check.name for check in (verdict.failing if verdict else ()))
         )
+        if step.names:
+            entry["names"] = list(step.names)
         if upstream.sha is not None:
             entry[UPSTREAM_KEY] = upstream.sha
     if step.kind == "land_slice":
