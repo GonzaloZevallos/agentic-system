@@ -1,12 +1,21 @@
 """The evaluation set and record: `agentic.core.measurement.domain.evaluation`."""
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
 from agentic.core.measurement.domain import evaluation
 
-VALID = {"issues": [10, 11, 12], "smoke": 11}
+SHA_A = "a" * 40
+SHA_B = "0123456789abcdef" * 2 + "01234567"
+
+
+def entry(issue, base=SHA_A, title="a title", body="a body"):
+    return {"issue": issue, "base": base, "title": title, "body": body}
+
+
+VALID = {"entries": [entry(10), entry(11), entry(12, SHA_B)], "smoke": 11}
 
 
 def doc(**overrides):
@@ -57,28 +66,61 @@ def test_eval_set_refusal_rejects_an_unknown_key():
     assert "threshold" in reason
 
 
-def test_eval_set_refusal_rejects_an_empty_issue_list():
-    reason = evaluation.eval_set_refusal({"issues": [], "smoke": 1}, "eval-set.yaml")
+def test_eval_set_refusal_rejects_the_old_issues_form():
+    reason = evaluation.eval_set_refusal({"issues": [10, 11], "smoke": 10}, "eval-set.yaml")
     assert reason is not None
     assert "issues" in reason
 
 
-def test_eval_set_refusal_rejects_a_non_integer_issue_number():
-    bad = {"issues": [10, "11"], "smoke": 10}
-    reason = evaluation.eval_set_refusal(bad, "eval-set.yaml")
+def test_eval_set_refusal_rejects_an_empty_entry_list():
+    reason = evaluation.eval_set_refusal({"entries": [], "smoke": 1}, "eval-set.yaml")
     assert reason is not None
-    assert "'11'" in reason
+    assert "entries" in reason
 
 
-def test_eval_set_refusal_rejects_a_duplicated_issue_number():
-    bad = {"issues": [10, 11, 10], "smoke": 10}
+@pytest.mark.parametrize(
+    ("bad", "named"),
+    [
+        (entry("11"), "'11'"),
+        (entry(True), "True"),
+        (entry(0), "0"),
+        (entry(-3), "-3"),
+        (entry(11, "A" * 40), "base"),
+        (entry(11, "a" * 39), "base"),
+        (entry(11, "main"), "'main'"),
+        (entry(11, 5), "base"),
+        (entry(11, title=""), "title"),
+        (entry(11, title="  "), "title"),
+        (entry(11, body=""), "body"),
+        (entry(11, body=None), "body"),
+        ({"issue": 11, "base": SHA_A, "title": "t"}, "body"),
+        ({**entry(11), "extra": 1}, "extra"),
+        ("11", "entry mapping"),
+    ],
+)
+def test_eval_set_refusal_rejects_each_invalid_entry(bad, named):
+    reason = evaluation.eval_set_refusal(
+        {"entries": [entry(10), bad], "smoke": 10}, "eval-set.yaml"
+    )
+    assert reason is not None
+    assert named in reason
+    assert "eval-set.yaml" in reason
+
+
+def test_eval_set_refusal_rejects_a_duplicated_issue_and_base():
+    bad = {"entries": [entry(10), entry(11), entry(10)], "smoke": 10}
     reason = evaluation.eval_set_refusal(bad, "eval-set.yaml")
     assert reason is not None
     assert "10" in reason
 
 
-def test_eval_set_refusal_rejects_a_smoke_task_absent_from_issues():
-    bad = {"issues": [10, 11, 12], "smoke": 99}
+def test_eval_set_refusal_accepts_one_issue_at_two_bases():
+    both = {"entries": [entry(10, SHA_A), entry(10, SHA_B)], "smoke": 10}
+    assert evaluation.eval_set_refusal(both, "eval-set.yaml") is None
+
+
+def test_eval_set_refusal_rejects_a_smoke_task_absent_from_the_entries():
+    bad = {"entries": [entry(10), entry(11)], "smoke": 99}
     reason = evaluation.eval_set_refusal(bad, "eval-set.yaml")
     assert reason is not None
     assert "99" in reason
@@ -87,15 +129,117 @@ def test_eval_set_refusal_rejects_a_smoke_task_absent_from_issues():
 # --- parse_eval_set: the value, and the raise that mirrors the refusal ---
 
 
-def test_parse_eval_set_returns_the_declared_issues_and_smoke_task():
+def test_parse_eval_set_returns_the_entries_and_smoke_task():
     parsed = evaluation.parse_eval_set(VALID, "eval-set.yaml")
-    assert parsed == evaluation.EvalSet(issues=(10, 11, 12), smoke=11)
+    assert parsed.smoke == 11
+    assert parsed.entries[2] == evaluation.EvalEntry(
+        issue=12, base=SHA_B, title="a title", body="a body"
+    )
+
+
+def test_issues_are_the_distinct_issue_numbers_sorted():
+    declared = {"entries": [entry(12), entry(10, SHA_A), entry(10, SHA_B)], "smoke": 12}
+    assert evaluation.parse_eval_set(declared, "eval-set.yaml").issues == (10, 12)
 
 
 def test_parse_eval_set_raises_with_the_refusal_message():
-    bad = {"issues": [10, 11], "smoke": 99}
+    bad = {"entries": [entry(10), entry(11)], "smoke": 99}
     with pytest.raises(ValueError, match="99"):
         evaluation.parse_eval_set(bad, "eval-set.yaml")
+
+
+# --- is_evaluation, is_evaluation_root, wiring_refusal: what an evaluation run is ---
+
+
+def test_a_document_with_an_evaluation_key_is_an_evaluation():
+    assert evaluation.is_evaluation(doc(evaluation={"issue": 1, "base": SHA_A, "ci": "local"}))
+    assert not evaluation.is_evaluation(doc())
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/p/.agentic/eval/EVAL-1-aaaaaaaa-default-1", True),
+        ("/p/.agentic/eval/EVAL-1-aaaaaaaa-default-1/", True),
+        ("/p/.agentic/eval/docs", False),
+        ("/p/.agentic/eval", False),
+        ("/p/.agentic/eval/EVAL-1-aaaaaaaa-default-1/sub", False),
+        ("/p/.agentic/tasks/EVAL-1-aaaaaaaa-default-1", False),
+        ("/p/eval/EVAL-1-aaaaaaaa-default-1", False),
+        ("/p", False),
+    ],
+)
+def test_is_evaluation_root_is_the_shape_of_the_path(path, expected):
+    assert evaluation.is_evaluation_root(Path(path)) is expected
+
+
+def test_is_evaluation_root_resolves_a_symlink_before_it_looks(tmp_path):
+    root = tmp_path / "product" / ".agentic" / "eval" / "EVAL-1-aaaaaaaa-default-1"
+    root.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(root)
+    assert evaluation.is_evaluation_root(link)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    disguised = tmp_path / "EVAL-1-aaaaaaaa-default-1"
+    disguised.symlink_to(plain)
+    assert not evaluation.is_evaluation_root(disguised)
+
+
+EVAL_ID = "EVAL-7-aaaaaaaa-default-1"
+ROOT = Path("/p/.agentic/eval/EVAL-7-aaaaaaaa-default-1")
+
+
+def test_wiring_refusal_lets_agreeing_root_and_id_through():
+    assert evaluation.wiring_refusal(ROOT, EVAL_ID) is None
+    assert evaluation.wiring_refusal(Path("/p"), "GH-7") is None
+
+
+def test_wiring_refusal_refuses_an_eval_id_outside_an_evaluation_root():
+    reason = evaluation.wiring_refusal(Path("/p"), EVAL_ID)
+    assert reason is not None
+    assert EVAL_ID in reason
+
+
+def test_wiring_refusal_refuses_a_real_id_inside_an_evaluation_root():
+    reason = evaluation.wiring_refusal(ROOT, "GH-7")
+    assert reason is not None
+    assert "GH-7" in reason
+
+
+# --- eval_task_id and its parser ---
+
+
+def test_eval_task_id_is_issue_short_sha_arm_and_ordinal():
+    assert evaluation.eval_task_id(7, SHA_B, "default", 2) == "EVAL-7-01234567-default-2"
+
+
+@pytest.mark.parametrize("arm", ["default", "no-ephemeral", "a-1", "x" * 24])
+def test_eval_task_id_round_trips_through_its_parser(arm):
+    task_id = evaluation.eval_task_id(7, SHA_B, arm, 12)
+    assert evaluation.parse_eval_task_id(task_id) == evaluation.EvalTaskId(7, "01234567", arm, 12)
+
+
+@pytest.mark.parametrize(
+    "task_id",
+    ["GH-7", "EVAL-7", "EVAL-x-01234567-default-1", "EVAL-7-0123456-default-1",
+     "EVAL-7-01234567-default-0", "EVAL-7-01234567-default", "EVAL-7-01234567--1",
+     "EVAL-7-0123456G-default-1"],
+)  # fmt: skip
+def test_parse_eval_task_id_refuses_what_eval_task_id_never_makes(task_id):
+    assert evaluation.parse_eval_task_id(task_id) is None
+
+
+# --- evaluation_documents: the one filter every reader of eval/docs goes through ---
+
+
+def test_evaluation_documents_keeps_evaluations_and_unreadable_ones_only():
+    marked = (
+        "EVAL-7-aaaaaaaa-default-1",
+        doc(id="EVAL-7-aaaaaaaa-default-1", evaluation={"issue": 7}),
+    )
+    real = ("GH-7", doc(id="GH-7"))
+    assert evaluation.evaluation_documents([marked, real, None]) == [marked, None]
 
 
 # --- baseline_id ---

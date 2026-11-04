@@ -264,9 +264,8 @@ def test_the_runs_own_full_checks_pass_is_reused_by_the_merge_gate_when_the_tree
     `full_checks` result is not itself read as a `merge_checks` record."""
     import anyio
 
-    from agentic.core.process.application.full_checks import full_checks
     from agentic.core.process.domain.task import INTEGRATION
-    from tests.fakes import MemoryCheckResults
+    from tests.fakes import MemoryCheckResults, full_checks_in_task_checkout
 
     checks = {"tests": "pytest", "lint": "ruff check ."}
     store, commands = MemoryCheckResults(), MemoryCommands()
@@ -291,7 +290,7 @@ def test_the_runs_own_full_checks_pass_is_reused_by_the_merge_gate_when_the_tree
     state |= {"sections": {"PM": "### Consolidated definition\n\nx"}, "task_head": "base"}
     state["subtasks"] = {INTEGRATION: subtask}
     ports.workspace.trees[ports.workspace.ROOT / "GH-7"] = "tree:integrated"
-    patch = anyio.run(full_checks, state, cfg, ports)
+    patch = anyio.run(full_checks_in_task_checkout, state, cfg, ports)
     assert patch["full_checks"]["passed"] is True
     assert len(commands.ran) == 2
     ports.documents.save({"id": "GH-7", "status": "ready_for_review", **patch})

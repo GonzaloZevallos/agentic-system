@@ -29,7 +29,7 @@ from ..domain.roles import TECH_WRITER, TECH_WRITER_REVIEW
 from ..domain.schemas import CopyReview
 from ..domain.task import INTEGRATION, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
-from .ports import GitError, Ports
+from .ports import Checkout, GitError, Ports
 from .run_role import finish, run_role, with_context
 
 
@@ -49,14 +49,14 @@ async def write_copy(state: TaskState, cfg: Configuration, ports: Ports) -> Task
     return finish(state, patch, ports)
 
 
-async def copy_review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+async def copy_review(
+    state: TaskState, cfg: Configuration, ports: Ports, *, checkout: Checkout
+) -> TaskState:
     """Tech Writer's review of the integrated piece, in the checkout `deliver` uses. It reads
     the diff against the task's base, its own open rows by identifier and the corrected texts
-    in force; what it finds and settles becomes rows and closures of the table."""
-    try:
-        task = await task_checkout_in_thread(state, cfg, ports)
-    except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(TECH_WRITER_REVIEW), ports)
+    in force; what it finds and settles becomes rows and closures of the table. The `checkout`
+    is the verifier set's (GH-469): resolved once by `verifiers.verify`, never here."""
+    task = checkout
     base = task_base(state, ports)
     branch = rules.task_branch(state["id"])
     standards_missing = not ports.knowledge.writing(task.path)

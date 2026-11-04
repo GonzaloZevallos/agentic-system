@@ -8,7 +8,6 @@ from __future__ import annotations
 import pytest
 
 from agentic.core.process.application.checkouts import task_base
-from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
@@ -22,6 +21,7 @@ from tests.fakes import (
     MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
+    full_checks_in_task_checkout,
     memory_ports,
 )
 
@@ -104,7 +104,7 @@ def ports_of(*reads, commands=None, ci=("unit", "web"), **more):
 
 async def run(state, ports, clock: Clock | None = None):
     clock = clock or Clock()
-    return await full_checks(state, CFG, ports, sleep=clock.sleep, clock=clock)
+    return await full_checks_in_task_checkout(state, CFG, ports, sleep=clock.sleep, clock=clock)
 
 
 async def test_green_ci_passes_with_no_local_check_and_publishes_the_head_once():
@@ -551,3 +551,80 @@ async def test_without_the_key_the_untrusted_head_still_runs_local():
     patch = await run(state_of(), ports)
     assert patch["full_checks"]["ran_on"] == "local"
     assert ports.tracker.dispatch_calls == [] and ports.tracker.dispatched_reads == []
+
+
+# -- GH-485: a required name no check run carries escalates as a planning defect ---------------
+
+
+def complete_report(*checks: CiCheck) -> CiReport:
+    return CiReport(HEAD, None, None, None, tuple(checks), True)
+
+
+MATRIX = tuple(job(f"e2e ({n})") for n in range(1, 5))
+
+
+def counters(patch: dict) -> list[str]:
+    return [key for key in ("full_checks", "subtasks", "findings") if key in patch]
+
+
+async def test_gh543_a_matrix_job_id_required_escalates_unknown_names_without_a_return():
+    ports = ports_of(complete_report(job("unit"), *MATRIX), ci=("unit",))
+    clock = Clock()
+    state = state_of(ci_required=["e2e"])
+    patch = await run(state, ports, clock)
+    assert_escalated_ci(patch, ports, state)
+    assert counters(patch) == []
+    # Two reads agreed (one poll apart); the check timeout (100 s) was not waited out.
+    assert clock.slept == [30]
+    text = patch["escalated"]
+    assert "Planning defect" in text and "no check run named `e2e`" in text
+    assert HEAD in text and "`e2e (1)`" in text and "`e2e (4)`" in text
+    assert "`ci_required`" in text and "task document" in text and "agentic resume" in text
+    after = apply(state, patch)
+    assert after["subtasks"][INTEGRATION]["status"] == "approved"
+    assert "full_checks" not in after
+
+
+async def test_an_unknown_stack_ci_name_points_at_the_stack_on_master_not_the_document():
+    ports = ports_of(complete_report(job("unit")), ci=("unit", "e2e"))
+    patch = await run(state_of(), ports)
+    assert patch["escalation_class"] == "ci" and counters(patch) == []
+    assert "`.agentic/stack.yaml` on master" in patch["escalated"]
+    assert "task document" not in patch["escalated"]
+
+
+async def test_a_run_status_that_is_not_known_keeps_waiting_to_the_timeout():
+    ports = ports_of(CiReport(HEAD, None, None, None, (job("unit"), *MATRIX), None), ci=("unit",))
+    patch = await run(state_of(ci_required=["e2e"]), ports)
+    assert patch["full_checks"]["failed_step"] == "timeout"
+
+
+async def test_a_name_that_appears_on_the_second_read_is_waited_for_then_green():
+    first = complete_report(job("unit"))
+    second = complete_report(job("unit"), job("e2e"))
+    ports = ports_of(first, second, ci=("unit",))
+    patch = await run(state_of(ci_required=["e2e"]), ports)
+    assert patch["full_checks"]["passed"] is True and "escalated" not in patch
+
+
+async def test_a_red_job_with_an_unknown_name_is_still_a_return():
+    ports = ports_of(complete_report(job("unit", "FAILURE")), ci=("unit",))
+    patch = await run(state_of(ci_required=["e2e"]), ports)
+    assert patch["full_checks"]["failed_step"] == "unit"
+    assert "escalated" not in patch
+
+
+async def test_correcting_the_name_in_the_document_and_resuming_goes_green_with_counters_kept():
+    reads = (complete_report(job("unit"), *MATRIX),)
+    state = state_of(ci_required=["e2e"])
+    stopped = apply(state, await run(state, ports_of(*reads, ci=("unit",))))
+    before = stopped["subtasks"][INTEGRATION]
+    assert stopped["escalation_class"] == "ci"
+    resumed = {**stopped, "ci_required": ["e2e (1)"]}
+    resumed.pop("escalated")
+    patch = await run(resumed, ports_of(*reads, ci=("unit",)))
+    assert patch["full_checks"]["passed"] is True
+    assert patch["full_checks"]["version"] == 1
+    after = apply(resumed, patch)
+    assert after["subtasks"][INTEGRATION]["status"] == before["status"]
+    assert after["subtasks"][INTEGRATION].get("returns", 0) == before.get("returns", 0)

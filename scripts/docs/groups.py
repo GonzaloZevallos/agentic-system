@@ -38,6 +38,7 @@ PHASES: Mapping[str, tuple[str, ...]] = {
     "deliver": (
         "__end__",
         "deliver",
+        "evaluated",
     ),
     "plan": (
         "plan",
@@ -45,12 +46,9 @@ PHASES: Mapping[str, tuple[str, ...]] = {
         "tracker_only",
     ),
     "review": (
-        "copy_review",
-        "final_validation",
         "fix_important",
-        "full_checks",
         "owner_rules",
-        "qa_performance",
+        "verify",
     ),
 }
 
@@ -86,6 +84,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.diagnose": "definition",
     "application.discard": "definition",
     "application.escalate": "build",
+    "application.evaluated": "build",
     "application.final_validation": "definition",
     "application.full_checks": "checks",
     "application.integrate": "build",
@@ -124,6 +123,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.stop": "lifecycle",
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
+    "application.verifiers": "checks",
     "domain.account_reset": "machine",
     "domain.adr_numbers": "landing",
     "domain.board": "landing",
@@ -131,6 +131,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.check_results": "checks",
     "domain.check_schedule": "checks",
     "domain.ci": "checks",
+    "domain.ci_workflow": "checks",
     "domain.copy": "roles",
     "domain.cost_history": "landing",
     "domain.coverage": "checks",
@@ -143,6 +144,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.legacy_names": "state",
     "domain.master_gain": "checks",
     "domain.merge_ci": "checks",
+    "domain.merge_conflict": "checks",
     "domain.performance": "checks",
     "domain.plan_settlement": "landing",
     "domain.plan_view": "landing",

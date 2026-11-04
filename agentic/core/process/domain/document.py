@@ -26,6 +26,9 @@ from .legacy_names import rename_legacy_roles
 from .task import RoleRun
 
 TASKS_SUBDIR = Path(".agentic/tasks")
+# Where an evaluation run's document is kept once its root is gone (GH-470): outside
+# `TASKS_SUBDIR`, so no scanner of the tasks sees it.
+EVAL_DOCS_SUBDIR = Path(".agentic/eval/docs")
 ORIGINAL = "Original request"
 # What the human decided on each escalation, written by the system on a resume (ADR-0003).
 HUMAN = "Human"
@@ -84,6 +87,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "tracker_checklist_posted",
         "full_checks",
         "merge_ci",
+        "merge_conflict",
         "flake_comments",
         "flakes",
         "tracker_failures",
@@ -97,6 +101,7 @@ _FLOW_KEYS = (
     "landed_slices",
     "full_checks",
     "merge_ci",
+    "merge_conflict",
     "flakes",
     "tracker_failures",
 )
@@ -177,6 +182,9 @@ def render(
         # set so a document without them is byte-identical to one written before. The merge
         # gate reads it from here.
         **({"close_docs": docs} if (docs := state.get("close_docs")) else {}),
+        # The capability files owed to the task branch until the verifier set commits them
+        # (GH-469), written only when set so a document without them is byte-identical.
+        **({"pending_close_docs": p} if (p := state.get("pending_close_docs")) else {}),
         # The owner-rules step's observation (GH-431): the head it last saw and the rules it
         # could not write here, each written only when set so a document without them is
         # byte-identical to one written before.
@@ -211,6 +219,8 @@ def render(
         # The merge gate's fresh GitHub runs (GH-463): one flow line, replaced whole by the
         # merge child, which has no state owner.
         **({"merge_ci": _LANDING_PLACEHOLDER} if state.get("merge_ci") else {}),
+        # The conflict git found building a fresh pair (GH-492): one flow line, replaced whole.
+        **({"merge_conflict": _LANDING_PLACEHOLDER} if state.get("merge_conflict") else {}),
         # The flakes the gates observed (ADR-0066) and the flake issues already commented on:
         # each written only when non-empty, `flakes` as one flow line like the records above.
         **({"flakes": _LANDING_PLACEHOLDER} if state.get("flakes") else {}),
@@ -280,6 +290,9 @@ def render(
         # when assigned, so a document of an unassigned task is byte-identical to one
         # written before it. Parsed back under the same name by `parse`.
         **({"assignment": assigned} if (assigned := state.get("assignment")) else {}),
+        # Marks an evaluation run (GH-470), written only when set, so a real task's document
+        # is byte-identical to one written before it. Parsed back under the same name.
+        **({"evaluation": evaluated} if (evaluated := state.get("evaluation")) else {}),
         # Whether the request entered with a `## Decided` heading and so runs one-round
         # interviews (`rules.entering`): written only when true, so a document without it
         # is byte-identical to one written before the cap existed, and reads as not decided.

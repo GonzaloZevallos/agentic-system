@@ -52,6 +52,10 @@ Status = Literal[
     # A task whose plan is only work on the issue tracker (GH-336): the checklist is posted
     # for the human and the run ends with no pull request. An end like `split`.
     "tracker_only",
+    # An evaluation run that reached the end of its road (GH-470, part 2): the graph sends a
+    # task carrying `evaluation` here instead of `deliver`. An end like `tracker_only`, with
+    # no pull request and no tracker write.
+    "evaluated",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -391,6 +395,17 @@ class ArmAssignment(TypedDict):
     switches: dict[str, str]
 
 
+class EvaluationRef(TypedDict):
+    """`TaskState.evaluation`: what marks a task as an evaluation run (GH-470) -- the issue
+    it re-runs, the commit it runs from, and that its full check always runs locally. The
+    key's presence is the marker (`measurement.domain.evaluation.is_evaluation`); whether a
+    process is wired as one is decided by its root, never by this."""
+
+    issue: int
+    base: str
+    ci: Literal["local"]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -420,6 +435,9 @@ class TaskInput(TypedDict):
     # it the graph's `input_schema` drops the key and the arm never reaches the state.
     # Absent reads as unassigned.
     assignment: NotRequired[ArmAssignment]
+    # What marks an evaluation run (GH-470): `FileInbox` sets it from the frozen entry.
+    # Declared for the same reason as `decided`. Absent reads as a real task.
+    evaluation: NotRequired[EvaluationRef]
 
 
 @dataclass(frozen=True)
@@ -748,8 +766,17 @@ class ReleasePatch(TypedDict, total=False):
 class FinishedPatch(TypedDict):
     """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
 
-    status: Literal["discarded", "split", "tracker_only"]
+    status: Literal["discarded", "split", "tracker_only", "evaluated"]
     finished_at: str
+
+
+class EvaluatedPatch(FinishedPatch, total=False):
+    """What the `evaluated` node writes when an evaluation run ends (GH-470): the keys of
+    `rules.finished` plus the role that closes it and the processes the release reaped. A
+    partial patch, so `apply` takes it as a mapping, not as a whole `TaskState`."""
+
+    current_role: str
+    reaped_at_cleanup: list[ReapedProcess]
 
 
 class FindingRecord(TypedDict):
@@ -833,6 +860,11 @@ class Subtask(TypedDict, total=False):
     # and on every ordinary review return. `returned_developer_delta`'s own
     # `rules.return_section` reads it to find which section carries the delta.
     returned_by: ReturnedBy
+    # The other verifiers that returned the same subtask in the same verifier set
+    # (GH-469), in the fixed verifier order; `returned_by` is the first. Absent on every
+    # document written before the set existed and on every return by one party alone:
+    # `rules.returned_by_all` is the one reader of both fields.
+    returned_with: list[ReturnedBy]
     # Branches the fan-in could not bring into the task branch on its own. Only the
     # integration subtask carries it: what the integrator has left to resolve.
     conflicts: list[str]
@@ -1046,6 +1078,7 @@ CiCause = Literal[
     "not_started",
     "dispatch_refused",
     "jobs_missing",
+    "unknown_names",
 ]
 
 
@@ -1082,6 +1115,17 @@ class CloseDocs(TypedDict):
     parent: str
     head: str
     paths: list[str]
+
+
+class PendingCloseDocs(TypedDict):
+    """The capability files `final_validation` approved with and the verifier set has not
+    committed yet (GH-469): `parent` the reviewed unit's `reviewed_head` PM's approval sits
+    on, `definitions` the files as PM returned them (`CapabilityFile` dumped). Committed only
+    on that `parent` (`rules.close_docs_committable`); cleared by any return and by
+    `fix_important`."""
+
+    parent: str
+    definitions: list[dict[str, Any]]
 
 
 class CiSpeculation(TypedDict):
@@ -1175,6 +1219,16 @@ class MergeCiRecord(TypedDict):
     failing: NotRequired[list[str]]
     cause: NotRequired[CiCause]
     rerun_at: NotRequired[str]
+
+
+class MergeConflictRecord(TypedDict):
+    """The conflict git found merging `head` with `master` (GH-492): full ids, `at` the ISO
+    instant it was read. One row for the task, replaced whole on each write, and it holds only
+    for that exact pair (`merge_conflict.applies`). No free text."""
+
+    head: str
+    master: str
+    at: str
 
 
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
@@ -1289,6 +1343,10 @@ class TaskState(TaskInput, total=False):
     # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
     # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
+    # The conflict git found building a fresh pair (GH-492), one row replaced whole on each write
+    # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
+    # reads as no record.
+    merge_conflict: Annotated[MergeConflictRecord, last]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str
@@ -1307,6 +1365,11 @@ class TaskState(TaskInput, total=False):
     # `None` is how a `pm_final` run clears the previous one. Written to the document only
     # when set, read with `.get`.
     close_docs: NotRequired[CloseDocs | None]
+    # The capability files an approving `final_validation` returned, owed to the task branch
+    # until the verifier set commits them (GH-469, `PendingCloseDocs`): `None` clears it. No
+    # reducer, so the last write wins, like `close_docs`; written to the document only when
+    # set, read with `.get`.
+    pending_close_docs: NotRequired[PendingCloseDocs | None]
     # The head the `owner_rules` step last observed (`rules.owner_rules_due` compares it with
     # the current head; never a record of which rules were written). Written to the document
     # only when set, read with `.get`.
@@ -1371,6 +1434,10 @@ class TaskState(TaskInput, total=False):
     # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
     # `experiment`. Written once when the run starts, so no reducer.
     assignment: ArmAssignment
+    # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
+    # Written once when the run starts, from the frozen entry, so no reducer; omitted from
+    # the document when absent.
+    evaluation: EvaluationRef
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str
@@ -1429,9 +1496,10 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState | ReleasePatch) -> TaskState:
+def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) -> TaskState:
     """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
-    patch is a `TaskState` or the partial `ReleasePatch`, so every key stays checked."""
+    patch is a `TaskState` or the partial `ReleasePatch` / `EvaluatedPatch`, so every key stays
+    checked."""
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)

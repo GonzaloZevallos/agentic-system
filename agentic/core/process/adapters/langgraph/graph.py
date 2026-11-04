@@ -39,6 +39,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Protocol
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
@@ -55,13 +56,14 @@ from ...application.develop import develop
 from ...application.diagnose import diagnose
 from ...application.discard import discard
 from ...application.escalate import escalate
+from ...application.evaluated import evaluated
 from ...application.final_validation import final_validation
 from ...application.full_checks import full_checks
 from ...application.integrate import integrate, integrate_turn
 from ...application.limits import RunLimits
 from ...application.owner_rules import owner_rules
 from ...application.plan import plan
-from ...application.ports import Ports, ProductKnowledge, Prompts
+from ...application.ports import Checkout, Ports, ProductKnowledge, Prompts
 from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
@@ -70,6 +72,7 @@ from ...application.schedule import run_subtasks
 from ...application.split import split
 from ...application.tracker_only import tracker_only
 from ...application.validate_prd import validate_prd
+from ...application.verifiers import Run, verify
 from ...domain import rules
 from ...domain.experiment import with_switches
 from ...domain.roles import (
@@ -111,6 +114,7 @@ ESCALATE = "escalate"
 PAUSE = "pause"
 PIPELINE = "pipeline"
 INTEGRATE = "integrate"
+VERIFY = rules.VERIFY
 
 
 def configuration_from(
@@ -197,6 +201,57 @@ def _system_node(use_case: UseCase, ports_of: PortsOf):
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
         cfg = configuration_from(config, state)
         return await use_case(state, cfg, ports_of(cfg, config))
+
+    return node
+
+
+class _InCheckout(Protocol):
+    """A verifier's use case: it judges the checkout it is handed and resolves none."""
+
+    def __call__(
+        self, state: TaskState, cfg: Configuration, ports: Ports, *, checkout: Checkout
+    ) -> Awaitable[TaskState]: ...
+
+
+def _verify_node(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
+    """The verifiers of the integrated head as one system node (GH-469). `verify` decides
+    which are due, resolves the checkout once and starts them together; each is wrapped here
+    the way `_node` wraps a role, so it keeps its own role span and cost label even though the
+    spans now overlap in time. `full_checks` is no role and has no span, like `_system_node`."""
+
+    async def node(state: TaskState, config: RunnableConfig) -> TaskState:
+        cfg = configuration_from(config, state)
+        ports = ports_of(cfg, config)
+
+        def role_run(use_case: _InCheckout, role: Role) -> Run:
+            async def run(snapshot: TaskState, checkout: Checkout) -> TaskState:
+                with telemetry.role_span(
+                    role.name, role.slug, product_name(ports), arm=arm_for(cfg)
+                ) as span:
+                    try:
+                        patch = await use_case(snapshot, cfg, ports, checkout=checkout)
+                    except Exception:
+                        span.finish({})
+                        raise
+                    span.finish(patch)
+                    return patch
+
+            return run
+
+        async def checks(snapshot: TaskState, checkout: Checkout) -> TaskState:
+            return await full_checks(snapshot, cfg, ports, checkout=checkout)
+
+        return await verify(
+            state,
+            cfg,
+            ports,
+            {
+                "full_checks": checks,
+                "copy_review": role_run(copy_review, TECH_WRITER_REVIEW),
+                "final_validation": role_run(final_validation, PM_FINAL),
+                "qa_performance": role_run(qa_performance, QA_PERFORMANCE),
+            },
+        )
 
     return node
 
@@ -342,33 +397,13 @@ def build_graph(
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry, arm_for))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))
-    # PM's early, UI-only final validation (ADR-0040): only reached through
-    # `rules.final_validation_due`, from `after_integrate`. One node, one span, labelled
-    # by its own final decision-maker (`PM_FINAL`) -- the same shape `define`/`plan`
-    # already use for a node that runs more than one role in its own session
-    # (an interview's interviewer and interviewee, here UX Lead's and UI Lead's own
-    # final counterparts): the role spans in this graph are one per node, not one per
-    # `run_role` call, and `PM_FINAL` is the one that decides this node's own verdict.
-    graph.add_node(
-        "final_validation", _node(final_validation, PM_FINAL, shared, telemetry, arm_for)
-    )
-    # Tech Writer's review of the texts in the integrated piece: reached from
-    # `after_integrate` through `rules.copy_review_due`, back to the fan-in like the final
-    # validation, with no return of its own.
-    graph.add_node(
-        "copy_review", _node(copy_review, TECH_WRITER_REVIEW, shared, telemetry, arm_for)
-    )
-    # QA Performance (GH-318, ADR-0060): reached through `rules.qa_performance_due`, from
-    # `after_integrate`, back to the fan-in like the final validation. Never visited by a
-    # plan that convened no performance.
-    graph.add_node(
-        "qa_performance", _node(qa_performance, QA_PERFORMANCE, shared, telemetry, arm_for)
-    )
-    # The whole suite, once, on the integrated head (GH-358): no role and no model cost, a
-    # system node like `deliver`. Reached through `rules.full_checks_due` from
-    # `after_integrate`, only for a product that declares `delivery_checks`, and always back to
-    # the fan-in.
-    graph.add_node("full_checks", _system_node(full_checks, shared))
+    # The verifiers of the integrated head (GH-469): `copy_review`, PM's UI-only
+    # `final_validation` (ADR-0040), `qa_performance` (ADR-0060, GH-318) and the whole suite
+    # `full_checks` (GH-358), those `rules.verifiers_due` names, run together on the same
+    # head in one node and come back as one patch (`rules.combined_return`). Each keeps its
+    # own role span; no graph fan-out, because the reducers of `status` and `subtasks` would
+    # let one return overwrite another.
+    graph.add_node(VERIFY, _verify_node(shared, telemetry, arm_for))
     # The task's one important pass, before the pull request (GH-354): reached through
     # `rules.pre_pr_important_due` from `after_integrate`, no role and no model cost, always
     # back to the fan-in, which sends the reopened units to their Developers.
@@ -380,6 +415,9 @@ def build_graph(
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node("split", _system_node(split, shared))
     graph.add_node("tracker_only", _system_node(tracker_only, shared))
+    # The end of an evaluation run (GH-470): `rules.after_integrate` sends a task carrying
+    # `evaluation` here instead of `deliver`. No role, no model, no tracker write.
+    graph.add_node("evaluated", _system_node(evaluated, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
     graph.add_node(PAUSE, pause)
 
@@ -432,17 +470,12 @@ def build_graph(
             PIPELINE,
             "fix_important",
             "owner_rules",
-            "full_checks",
-            "copy_review",
-            "final_validation",
-            "qa_performance",
+            VERIFY,
             "deliver",
+            "evaluated",
             ESCALATE,
             END,
         ],
-    )
-    graph.add_conditional_edges(
-        "full_checks", _route(rules.after_full_checks), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges(
         "fix_important", _route(rules.after_fix_important), [INTEGRATE, ESCALATE]
@@ -450,17 +483,10 @@ def build_graph(
     graph.add_conditional_edges(
         "owner_rules", _route(rules.after_owner_rules), [INTEGRATE, ESCALATE]
     )
-    graph.add_conditional_edges(
-        "copy_review", _route(rules.after_copy_review), [INTEGRATE, ESCALATE]
-    )
-    graph.add_conditional_edges(
-        "final_validation", _route(rules.after_final_validation), [INTEGRATE, ESCALATE]
-    )
-    graph.add_conditional_edges(
-        "qa_performance", _route(rules.after_qa_performance), [INTEGRATE, ESCALATE]
-    )
+    graph.add_conditional_edges(VERIFY, _route(rules.after_verify), [INTEGRATE, ESCALATE])
     graph.add_conditional_edges("deliver", _route(rules.after_deliver), [INTEGRATE, END, ESCALATE])
     graph.add_conditional_edges("discard", _route(rules.after_discard), [END, ESCALATE])
+    graph.add_edge("evaluated", END)
     graph.add_edge(ESCALATE, PAUSE)
     graph.add_conditional_edges(
         PAUSE,

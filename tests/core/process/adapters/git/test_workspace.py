@@ -12,6 +12,7 @@ from agentic.core.knowledge.adapters.git.stack import GitStack
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.git import workspace as workspace_module
 from agentic.core.process.adapters.git.workspace import GitError, UnstageablePath
+from agentic.core.process.application.ports import MergeConflict
 from agentic.core.process.domain import rules
 from agentic.shared.configuration import Configuration
 
@@ -224,7 +225,7 @@ def test_a_merge_that_applies_returns_nothing_and_one_that_conflicts_says_why(pr
     (domain.path / "api.py").write_text("post\n")
     ws.commit_all(domain.path, "domain")
     reason = ws.merge(task.path, domain.branch)
-    assert reason is not None and "api.py" in reason
+    assert isinstance(reason, MergeConflict) and "api.py" in reason.reason
     # Undone, so the checkout is one a role can work in and nothing half-merged ships.
     assert ws.is_clean(task.path)
     assert (task.path / "api.py").read_text() == "get\n"
@@ -1774,6 +1775,21 @@ def test_republish_ci_ref_against_a_missing_remote_raises(product, tmp_path):
     git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
     with pytest.raises(GitError, match="ls-remote|push"):
         ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
+
+
+def test_an_evaluation_root_and_its_documents_stay_out_of_the_products_status(product):
+    """GH-470: a pinned-base root (`.agentic/eval/EVAL-…/`) and the copied documents beside
+    it (`.agentic/eval/docs/`) are the system's own files, never the product's."""
+    ws = GitWorkspace(product, IDENTITY)
+    ws.exclude_system_files()
+    (product / ".agentic/eval/EVAL-1-aaaaaaaa-default-1").mkdir(parents=True)
+    (product / ".agentic/eval/EVAL-1-aaaaaaaa-default-1/file.txt").write_text("x")
+    (product / ".agentic/eval-input").mkdir(parents=True)
+    (product / ".agentic/eval-input/entry.yaml").write_text("x")
+    (product / ".agentic/eval/docs").mkdir(parents=True)
+    (product / ".agentic/eval/docs/EVAL-1-aaaaaaaa-default-1.md").write_text("x")
+    assert git("status", "--porcelain", cwd=product) == ""
+    assert (product / ".git/info/exclude").read_text().splitlines().count(".agentic/eval/") == 1
 
 
 # -- publish_dispatch_ref, remote_dispatch_refs, delete_dispatch_ref and merge(message) (GH-463) --

@@ -87,7 +87,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         section=section,
         extra_sections=(
             rules.developer_section(subtask_id),
-            rules.return_section(state, subtask_id),
+            *rules.return_sections(state, subtask_id),
             *extra_ci,
             *_perf_table(state, subtask_id),
         ),
@@ -154,16 +154,17 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         return finish(state, patch, ports)
 
     returned = {
-        **subtask,
+        # A verifier set's `returned_with` goes with the returners this review replaces.
+        **{key: value for key, value in subtask.items() if key != "returned_with"},
         "status": "returned",
         "reason": reason,
         "change_category": category,
     }
-    if rules.return_section(state, subtask_id) != rules.review_section(subtask_id):
+    if rules.return_sections(state, subtask_id) != (rules.review_section(subtask_id),):
         # PM's early final validation (ADR-0040) or QA Performance (ADR-0060) was the open
         # return; this review is now, so the next resumed Developer's delta, and the pass
         # after this one's own spec, must both come from this section
-        # (`rules.return_section`), not from theirs. Written only to flip that case: an
+        # (`rules.return_sections`), not from theirs. Written only to flip that case: an
         # ordinary return keeps the subtask with no `returned_by` key at all, which
         # `return_section` already reads as `'review'`.
         returned["returned_by"] = "review"

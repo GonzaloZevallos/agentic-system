@@ -61,9 +61,11 @@ sequenceDiagram
    (`agentic/core/process/adapters/git/workspace.py:WORKTREES`) y su par es Tech Lead. El
    orden en que arrancan las subtareas lo decide
    `agentic/core/process/application/schedule.py:run_subtasks`.
-6. **Integración y entrega.** `integrate` une las ramas de las subtareas; los pasos finales
-   (`final_validation`, `copy_review`, `qa_performance`, `owner_rules`, `full_checks`)
-   corren según el plan; `owner_rules` anexa en la rama de la tarea las reglas que el dueño
+6. **Integración y entrega.** `integrate` une las ramas de las subtareas; `owner_rules` y el pase
+   de `fix_important` corren en serie y mueven la cabeza; después `verify` corre juntos, sobre
+   esa cabeza, los verificadores que el plan convoca (`final_validation`, `copy_review`,
+   `qa_performance`, `full_checks`; `agentic/core/process/application/verifiers.py:verify`) y
+   `deliver` espera a todos; `owner_rules` anexa en la rama de la tarea las reglas que el dueño
    marcó con `Owner's rule:` en el issue (`agentic/core/process/application/owner_rules.py`); `deliver` empuja la rama y abre el pull request con `Tracker.open_pull_request`
    (`agentic/core/process/application/deliver.py:deliver`).
 7. **Merge.** En rondas siguientes el poller reúne los pull requests entregados

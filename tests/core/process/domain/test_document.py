@@ -227,6 +227,21 @@ def test_assignment_is_the_only_difference_a_document_gains():
     assert [line for line in plain if line not in assigned] == []
 
 
+EVALUATION = {"issue": 7, "base": "a" * 40, "ci": "local"}
+
+
+def test_a_document_without_evaluation_renders_byte_identically_to_the_golden():
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert document.render(golden_state(evaluation={})) == GOLDEN_WITHOUT_ASSIGNMENT
+
+
+def test_evaluation_round_trips_through_the_frontmatter():
+    rendered = document.render(golden_state(evaluation=EVALUATION))
+    assert "\nevaluation:" in rendered
+    assert document.parse(rendered)["evaluation"] == EVALUATION
+    assert "evaluation" not in document.parse(document.render(golden_state()))
+
+
 def test_interview_stats_never_reaches_the_document():
     """Measurement-only, like `subtask_id`: `interview()`'s own patch key
     (`InterviewStats`) never reaches the document, so a resumed task carries none of
@@ -1560,3 +1575,15 @@ def test_ci_speculation_is_not_the_deliverys_anchor():
     parsed = document.parse(document.render(_speculative_state(ci_speculation=_SPECULATION)))
     assert "pushed_head" not in parsed
     assert "pushed_at" not in parsed
+
+
+def test_record_closure_round_trips_a_merge_conflict_record_and_render_keeps_it():
+    """GH-492: the one-row conflict record is a flow line `record_closure` replaces whole."""
+    first = {"head": "a" * 40, "master": "b" * 40, "at": "2026-11-04T12:20:00Z"}
+    second = {"head": "c" * 40, "master": "b" * 40, "at": "2026-11-04T12:21:30.123456Z"}
+    _assert_roundtrip_and_replace("merge_conflict", first, second)
+    assert (
+        document.parse(document.render({**_bare(), "merge_conflict": first}))["merge_conflict"]
+        == first
+    )
+    assert "merge_conflict" not in document.parse(document.render(_bare()))

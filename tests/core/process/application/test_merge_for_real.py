@@ -24,7 +24,7 @@ from agentic.core.process.application.ports import MergeCallFailed, TrackerUnrea
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryTracker, memory_ports, real_commands
+from tests.fakes import MemoryTracker, eval_set_yaml, memory_ports, real_commands
 
 GREEN = "test -f feature.txt && test -f upstream.txt"
 # stderr carries one CSI escape and one tab. No single quote, so `World`'s `{checks!r}`
@@ -314,7 +314,7 @@ def test_a_merge_that_fails_but_landed_keeps_the_intent_and_closes_as_auto_merge
 
 
 def test_an_issue_in_the_eval_set_on_upstream_alone_is_never_merged(world):
-    (world.product / ".agentic/eval-set.yaml").write_text("issues: [209, 10]\nsmoke: 209\n")
+    (world.product / ".agentic/eval-set.yaml").write_text(eval_set_yaml(209, 10))
     git("add", ".agentic/eval-set.yaml", cwd=world.product)
     git("commit", "-q", "-m", "eval set", cwd=world.product)
     git("push", "-q", "origin", "HEAD:master", cwd=world.product)
@@ -331,6 +331,21 @@ def test_an_issue_in_the_eval_set_on_upstream_alone_is_never_merged(world):
 def test_the_eval_set_helper_reads_upstream_and_refuses_what_it_cannot_read(world):
     upstream = world.ports.workspace.upstream()
     assert cli._upstream_eval_set(world.ports, upstream) == frozenset()
+
+    (world.product / ".agentic/eval-set.yaml").write_text(eval_set_yaml(209, 10, 11))
+    git("add", ".agentic/eval-set.yaml", cwd=world.product)
+    git("commit", "-q", "-m", "declared", cwd=world.product)
+    git("push", "-q", "origin", "HEAD:master", cwd=world.product)
+    assert cli._upstream_eval_set(world.ports, world.ports.workspace.upstream()) == frozenset(
+        {209, 10, 11}
+    )
+
+    # The old `issues:` form is no declaration any more: unreadable, never an empty set.
+    (world.product / ".agentic/eval-set.yaml").write_text("issues: [209]\nsmoke: 209\n")
+    git("add", ".agentic/eval-set.yaml", cwd=world.product)
+    git("commit", "-q", "-m", "old form", cwd=world.product)
+    git("push", "-q", "origin", "HEAD:master", cwd=world.product)
+    assert cli._upstream_eval_set(world.ports, world.ports.workspace.upstream()) is None
 
     (world.product / ".agentic/eval-set.yaml").write_text("issues: [: broken\n")
     git("add", ".agentic/eval-set.yaml", cwd=world.product)

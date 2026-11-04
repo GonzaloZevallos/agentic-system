@@ -8,12 +8,18 @@ import threading
 
 import pytest
 
-from agentic.core.process.application.full_checks import _shown_up, _without_output, full_checks
+from agentic.core.process.application.full_checks import _shown_up, _without_output
 from agentic.core.process.application.ports import CommandResult, RunStopped
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryCommands, MemoryStack, MemoryWorkspace, memory_ports
+from tests.fakes import (
+    MemoryCommands,
+    MemoryStack,
+    MemoryWorkspace,
+    full_checks_in_task_checkout,
+    memory_ports,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -66,14 +72,14 @@ class Messy(MemoryCommands):
 
 async def test_every_declared_check_runs_in_full_with_no_affected_command():
     ports = ports_of(affected_checks={"tests": "pytest {changed}"}, affected_fallback=("lint",))
-    await full_checks(state_of(), CFG, ports)
+    await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert [command for _, command in ports.commands.ran] == ["pytest", "ruff check ."]
     assert all(cwd == TASK_PATH for cwd, _ in ports.commands.ran)
 
 
 async def test_a_green_run_writes_a_passed_record_and_no_rows():
     ports = ports_of()
-    patch = await full_checks(state_of(), CFG, ports)
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports)
     record = patch["full_checks"]
     assert record["passed"] is True
     assert record["version"] == 1
@@ -92,7 +98,7 @@ async def test_a_green_run_writes_a_passed_record_and_no_rows():
 
 async def test_a_passed_record_names_no_master_on_any_result():
     """Invariant 6: the run's rows are not `merge_checks` rows, so none carries a master."""
-    patch = await full_checks(state_of(), CFG, ports_of())
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports_of())
     assert patch["full_checks"]["results"]
     assert all("master" not in row for row in patch["full_checks"]["results"])
     assert "master" not in patch["full_checks"]
@@ -109,14 +115,14 @@ async def test_a_green_run_of_a_later_version_follows_the_previous_record():
         "witness": None,
         "failed_step": "checks",
     }
-    patch = await full_checks(state_of(full_checks=previous), CFG, ports_of())
+    patch = await full_checks_in_task_checkout(state_of(full_checks=previous), CFG, ports_of())
     assert patch["full_checks"]["version"] == 3
     assert rules.full_checks_green_version(apply(state_of(), patch)) == 3
 
 
 async def test_a_red_run_keeps_no_command_output_in_the_record_only_in_the_section():
     commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
-    patch = await full_checks(state_of(), CFG, ports_of(commands))
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports_of(commands))
     assert [(r["name"], r["passed"]) for r in patch["full_checks"]["results"]] == [
         ("tests", True),
         ("lint", False),
@@ -128,7 +134,7 @@ async def test_a_red_run_keeps_no_command_output_in_the_record_only_in_the_secti
 async def test_a_red_run_reopens_the_integration_with_a_row_per_failed_check_and_the_section():
     commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
     ports = ports_of(commands)
-    patch = await full_checks(state_of(), CFG, ports)
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports)
     reopened = patch["subtasks"][INTEGRATION]
     assert reopened["status"] == "returned"
     assert reopened["returned_by"] == "full_checks"
@@ -149,7 +155,7 @@ async def test_a_red_run_reopens_the_integration_with_a_row_per_failed_check_and
 async def test_a_red_run_at_the_pair_limit_escalates_instead_of_reopening_forever():
     commands = MemoryCommands(**{"pytest": [CommandResult(1, "1 failed")] * 2})
     limited = Configuration(product_dir=MemoryWorkspace.ROOT, max_changes_requested_per_pair=0)
-    patch = await full_checks(state_of(), limited, ports_of(commands))
+    patch = await full_checks_in_task_checkout(state_of(), limited, ports_of(commands))
     assert patch["escalated"]
     assert patch["escalation_class"] == "returns"
     assert patch["full_checks"]["passed"] is False
@@ -163,31 +169,9 @@ async def test_a_check_that_dirties_the_tree_leaves_it_clean_green_or_red():
             workspace=workspace,
             commands=Messy(workspace, **queue),
         )
-        await full_checks(state_of(), CFG, ports)
+        await full_checks_in_task_checkout(state_of(), CFG, ports)
         assert workspace.restored == [TASK_PATH]
         assert workspace.is_clean(TASK_PATH)
-
-
-async def test_a_dirty_tree_escalates_with_the_setup_class_and_runs_nothing():
-    workspace = MemoryWorkspace()
-    workspace.dirty.add(TASK_PATH)
-    ports = memory_ports(
-        stack=MemoryStack(checks=CHECKS, delivery_checks=("tests",)), workspace=workspace
-    )
-    patch = await full_checks(state_of(), CFG, ports)
-    assert patch["escalation_class"] == "setup"
-    assert "uncommitted" in patch["escalated"]
-    assert ports.commands.ran == []
-    assert "full_checks" not in patch
-    assert workspace.restored == []
-
-
-async def test_a_setup_that_fails_on_a_new_checkout_escalates_like_deliver():
-    commands = MemoryCommands(**{"make env": [CommandResult(1, "no env")]})
-    ports = ports_of(commands, setup={"env": "make env"})
-    patch = await full_checks(state_of(), CFG, ports)
-    assert patch["escalation_class"] == "setup"
-    assert [command for _, command in commands.ran] == ["make env"]
 
 
 async def test_a_second_run_on_the_same_tree_reuses_the_pass_and_runs_no_command():
@@ -199,9 +183,9 @@ async def test_a_second_run_on_the_same_tree_reuses_the_pass_and_runs_no_command
         commands=commands,
         check_results=store,
     )
-    first = await full_checks(state_of(), CFG, ports)
+    first = await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert [command for _, command in commands.ran] == ["pytest", "ruff check ."]
-    second = await full_checks(state_of(), CFG, ports)
+    second = await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert [command for _, command in commands.ran] == ["pytest", "ruff check ."]
     assert all("reused" not in row for row in first["full_checks"]["results"])
     assert second["full_checks"]["passed"] is True
@@ -237,7 +221,7 @@ async def test_a_stop_during_the_checks_propagates_restores_the_tree_and_returns
         commands=commands,
     )
     with pytest.raises(RunStopped):
-        await full_checks(state_of(), CFG, ports)
+        await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert workspace.restored == [TASK_PATH]  # `finally`, after the command was gone
     assert ports.documents.load("GH-1") is None  # nothing written for the stop
 
@@ -245,23 +229,8 @@ async def test_a_stop_during_the_checks_propagates_restores_the_tree_and_returns
 async def test_the_checks_run_off_the_event_loop_thread():
     commands = Stopped()
     ports = ports_of(commands)
-    await full_checks(state_of(), CFG, ports)
+    await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert commands.threads
-    assert threading.main_thread().name not in commands.threads
-
-
-async def test_a_stop_during_setup_discards_the_checkout_and_is_not_a_setup_failure():
-    commands = Stopped(stops="make env")
-    workspace = MemoryWorkspace()
-    ports = memory_ports(
-        stack=MemoryStack(checks=CHECKS, setup={"env": "make env"}),
-        workspace=workspace,
-        commands=commands,
-    )
-    with pytest.raises(RunStopped):
-        await full_checks(state_of(), CFG, ports)
-    assert workspace.discarded == [TASK_PATH]
-    assert TASK_PATH not in workspace.on_disk  # the next ask makes it again, setup included
     assert threading.main_thread().name not in commands.threads
 
 
@@ -294,7 +263,7 @@ def test_without_output_keeps_a_zero_duration_a_check_that_ran_instantly():
 
 
 async def test_the_record_holds_each_checks_duration_as_a_number():
-    patch = await full_checks(state_of(), CFG, ports_of())
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports_of())
     rows = patch["full_checks"]["results"]
     assert [row["name"] for row in rows] == ["tests", "lint"]
     assert all(isinstance(row["duration_s"], float) and row["duration_s"] >= 0 for row in rows)
@@ -308,7 +277,7 @@ ROOMY = 10_000.0
 
 async def test_a_green_run_over_a_budget_records_the_breach_and_still_passes():
     ports = ports_of(check_budgets={"tests": OVER, "lint": ROOMY})
-    patch = await full_checks(state_of(), CFG, ports)
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports)
     record = patch["full_checks"]
     assert record["passed"] is True
     [breach] = record["over_budget"]
@@ -330,8 +299,10 @@ def test_a_narrow_breach_is_written_above_its_budget_not_rounded_down_to_it():
 
 
 async def test_a_run_within_budget_or_with_no_budgets_writes_no_over_budget_and_the_same_text():
-    plain = await full_checks(state_of(), CFG, ports_of())
-    roomy = await full_checks(state_of(), CFG, ports_of(check_budgets={"tests": ROOMY}))
+    plain = await full_checks_in_task_checkout(state_of(), CFG, ports_of())
+    roomy = await full_checks_in_task_checkout(
+        state_of(), CFG, ports_of(check_budgets={"tests": ROOMY})
+    )
     for patch in (plain, roomy):
         assert "over_budget" not in patch["full_checks"]
         assert patch["sections"]["Full checks"] == "Passed on `base`: tests, lint."
@@ -340,7 +311,7 @@ async def test_a_run_within_budget_or_with_no_budgets_writes_no_over_budget_and_
 async def test_a_red_run_is_not_compared_with_the_budgets():
     commands = MemoryCommands(pytest=[CommandResult(1, "boom")] * 2)
     ports = ports_of(commands, check_budgets={"lint": OVER})
-    patch = await full_checks(state_of(), CFG, ports)
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert patch["full_checks"]["passed"] is False
     assert "over_budget" not in patch["full_checks"]
     assert "Over budget" not in patch["sections"]["Full checks"]

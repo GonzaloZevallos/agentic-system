@@ -92,6 +92,7 @@ from .task import (
     TaskInput,
     TaskState,
     TrackerPosted,
+    apply,
 )
 
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
@@ -586,12 +587,14 @@ def invariants_markdown(state: TaskState) -> str:
     return "\n".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) or "- none"
 
 
-def finished(status: Literal["discarded", "split", "tracker_only"], at: str) -> FinishedPatch:
+def finished(
+    status: Literal["discarded", "split", "tracker_only", "evaluated"], at: str
+) -> FinishedPatch:
     """The patch that ends a task with no delivery: its `status` and `finished_at`, the
     clock the Reflector's decision gate reads (ADR-0056). The only place the key is set."""
-    if status not in ("discarded", "split", "tracker_only"):
+    if status not in ("discarded", "split", "tracker_only", "evaluated"):
         raise ValueError(
-            f"finished_at is for discarded, split and tracker_only tasks, not {status}"
+            f"finished_at is for discarded, split, tracker_only and evaluated tasks, not {status}"
         )
     return {"status": status, "finished_at": at}
 
@@ -1436,16 +1439,16 @@ def review_section(subtask_id: str) -> str:
     return f"{REVIEW_PREFIX}{subtask_id}"
 
 
-def return_section(state: TaskState, subtask_id: str) -> str:
-    """Whose section a returned subtask's delta and the incremental reviewer's own spec
-    come from (ADR-0040): `review_section(subtask_id)`, as today, unless PM's early,
-    UI-only final validation is the open return (`subtasks[id]["returned_by"] ==
-    'final_validation'`), absent reading as `'review'` for every subtask this never
-    touched. The plan's own invariant: a returned item's delta and the incremental
-    reviewer's spec both come from this one function, never from `review_section`
-    directly."""
-    subtask = state.get("subtasks", {}).get(subtask_id, {})
-    returned_by: ReturnedBy = subtask.get("returned_by", "review")
+def returned_by_all(subtask: Subtask) -> tuple[ReturnedBy, ...]:
+    """Everyone who returned `subtask` (GH-469): `returned_by` -- the first, absent reading as
+    `'review'` for every document written before ADR-0040 -- followed by `returned_with`, the
+    other verifiers of the same set, absent on every document written before it. The one
+    reader of the two fields: no code outside `task.py` and `combined_return` reads or
+    compares either directly."""
+    return (subtask.get("returned_by", "review"), *subtask.get("returned_with", []))
+
+
+def _section_of(subtask_id: str, returned_by: ReturnedBy) -> str:
     match returned_by:
         case "review":
             return review_section(subtask_id)
@@ -1457,6 +1460,23 @@ def return_section(state: TaskState, subtask_id: str) -> str:
             return FULL_CHECKS
         case _:
             assert_never(returned_by)
+
+
+def return_sections(state: TaskState, subtask_id: str) -> tuple[str, ...]:
+    """Whose sections a returned subtask's delta and the incremental reviewer's own spec
+    come from (ADR-0040, GH-469): one per entry of `returned_by_all`, in order --
+    `review_section(subtask_id)`, as today, unless a verifier returned it (PM's early,
+    UI-only final validation, QA Performance, the whole suite). The plan's own invariant: a
+    returned item's delta and the incremental reviewer's spec both come from this one
+    function, never from `review_section` directly."""
+    subtask = state.get("subtasks", {}).get(subtask_id, {})
+    return tuple(_section_of(subtask_id, returned_by) for returned_by in returned_by_all(subtask))
+
+
+def return_section(state: TaskState, subtask_id: str) -> str:
+    """The first of `return_sections`: the section of whoever returned `subtask_id` first,
+    for a caller that still wants one."""
+    return return_sections(state, subtask_id)[0]
 
 
 def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
@@ -1481,10 +1501,13 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
         parts.append(f"## {HUMAN}\n\n{human}")
     if findings := sections.get(FINDINGS):
         parts.append(f"## {FINDINGS}\n\n{findings}")
-    review = return_section(state, subtask_id)
     reason = state.get("subtasks", {}).get(subtask_id, {}).get("reason", "").strip()
     lead = f"**Returned:** {reason}\n\n" if reason else ""
-    parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
+    for review in return_sections(state, subtask_id):
+        # The one-line reason already carries every returner's (`combined_return`), so it
+        # leads the first section only.
+        parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
+        lead = ""
     if state.get("invariants"):
         parts.append(
             "The coverage map belongs to the whole delivery, not to what you change now: "
@@ -2197,7 +2220,7 @@ def phase_of(section: str) -> str:
     return "definition"
 
 
-CLOSENESS: tuple[str, ...] = ("launch", *PHASES, "delivered", "land")
+CLOSENESS: tuple[str, ...] = ("launch", *PHASES, "delivered", "evaluated", "land")
 """How close to merge a counted start is, nearest last (ADR-0045 addendum, GH-362; glossary:
 Cercanía): a fresh launch, then each phase in `PHASES` order, then a task with a pull request,
 then a land. The phases are never listed again, so one appended to `PHASES` is ranked by it."""
@@ -2207,6 +2230,8 @@ def closeness(state: TaskState) -> int:
     """The task's rank in `CLOSENESS`. A pull request makes it `delivered`; otherwise it is the
     furthest phase any run reached (not the last: a return to plan after development stays
     development); a task with no runs is in the first phase."""
+    if state.get("status") == "evaluated":
+        return CLOSENESS.index("evaluated")  # an evaluation's end: it has no pull request
     if state.get("pull_request"):
         return CLOSENESS.index("delivered")
     reached = (
@@ -2491,13 +2516,13 @@ def after_integrate(state: TaskState) -> str | None:
         return FIX_IMPORTANT
     if owner_rules_due(state):
         return "owner_rules"
-    if full_checks_due(state):
-        return "full_checks"
-    if copy_review_due(state):
-        return "copy_review"
-    if final_validation_due(state):
-        return "final_validation"
-    return "qa_performance" if qa_performance_due(state) else "deliver"
+    # The verifiers of the integrated head run together in one node (GH-469); files owed to
+    # the docs still wait there to be committed or dropped, so no route leaves them set and
+    # goes to `deliver` (invariant 4).
+    if verifiers_due(state) or state.get("pending_close_docs"):
+        return VERIFY
+    # An evaluation run ends here, not at `deliver`: nothing is pushed or opened for it.
+    return "evaluated" if state.get("evaluation") else "deliver"
 
 
 def after_owner_rules(state: TaskState) -> str | None:
@@ -2506,27 +2531,18 @@ def after_owner_rules(state: TaskState) -> str | None:
     return None if state.get("escalated") else "integrate"
 
 
+def after_verify(state: TaskState) -> str | None:
+    """Always back to the fan-in (GH-469): the verifier set wrote one combined patch. On an
+    approval `verifiers_due` now reads empty and `after_integrate` goes on to `deliver`; on a
+    return, the reopened subtask is what `dispatched_subtasks` picks up, and the fan-in sends
+    it back to its Developer like any other wave."""
+    return None if state.get("escalated") else "integrate"
+
+
 def after_fix_important(state: TaskState) -> str | None:
     """Always back to the fan-in: the pass reopened the owning units, which
     `dispatched_subtasks` picks up; once they and the integration are approved again
     `important_pass_spent` reads `True` and `after_integrate` goes on to the checks."""
-    return None if state.get("escalated") else "integrate"
-
-
-def after_final_validation(state: TaskState) -> str | None:
-    """Always back to the fan-in (ADR-0040): on `approved`, `final_validation_due` now
-    reads `False` and `after_integrate` falls through to `deliver`; on `returned`, the
-    reopened subtask is exactly what `dispatched_subtasks` picks up, and the fan-in
-    sends it back to its Developer like any other wave. No new predicate decides
-    between the two -- `after_integrate` already does, from the same state."""
-    return None if state.get("escalated") else "integrate"
-
-
-def after_qa_performance(state: TaskState) -> str | None:
-    """Always back to the fan-in, like `after_final_validation`: on `approved` or
-    `unverified`, `qa_performance_due` now reads `False` and `after_integrate` falls
-    through to `deliver`; on `returned`, the reopened subtask is what `dispatched_subtasks`
-    picks up."""
     return None if state.get("escalated") else "integrate"
 
 
@@ -2591,6 +2607,126 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
     return patch
 
 
+# The verifiers that read the integrated head (GH-469), in the one order their deltas and
+# their combined return are composed in -- never the order they finish in, so the positions of
+# `runs` that `_latest_index` reads do not depend on timing.
+Verifier = Literal["full_checks", "copy_review", "final_validation", "qa_performance"]
+VERIFIER_ORDER: tuple[Verifier, ...] = (
+    "full_checks",
+    "copy_review",
+    "final_validation",
+    "qa_performance",
+)
+_VERIFIER_DUE: Mapping[Verifier, Callable[[TaskState], bool]] = MappingProxyType(
+    {
+        "full_checks": full_checks_due,
+        "copy_review": copy_review_due,
+        "final_validation": final_validation_due,
+        "qa_performance": qa_performance_due,
+    }
+)
+
+
+def verifiers_due(state: TaskState) -> tuple[Verifier, ...]:
+    """The verifiers whose own predicate says they still have to run on the integrated head,
+    in `VERIFIER_ORDER`; empty when none is. Reads the state alone, never a port: whether
+    `full_checks` runs first and alone is the application's to decide, not this."""
+    return tuple(name for name in VERIFIER_ORDER if _VERIFIER_DUE[name](state))
+
+
+def _returned_entry(state: TaskState, patch: TaskState) -> tuple[str, Subtask] | None:
+    """The target subtask (`INTEGRATION`, the single subtask when there is none) as `patch`
+    leaves it when the patch returns it, with its name."""
+    subtasks = state.get("subtasks", {})
+    if not subtasks:
+        return None
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks))
+    entry = patch.get("subtasks", {}).get(target)
+    return (target, entry) if entry is not None and entry.get("status") == "returned" else None
+
+
+def combined_return(state: TaskState, patches: Mapping[Verifier, TaskState]) -> TaskState:
+    """The one patch a verifier set returns (GH-469, invariants 1 and 2): what each verifier
+    produced on the same snapshot `state`, folded in `VERIFIER_ORDER` whatever the order of
+    `patches`, reducer by reducer (`apply`): lists concatenate, `cost_usd` adds,
+    `changes_requested` unites. A lone patch comes out as it went in. The only code that
+    merges verifier patches, and the only writer of the target's `returned_with`.
+
+    With several returners the target is returned by the first (`returned_by`) with the others
+    in `returned_with`, its `reason` each returner's own prefixed by the verifier's name. Any
+    escalating patch escalates the whole, with the class of the first one and a text that
+    carries every returner's reason; the others' deltas are kept, a pair that returned without
+    reaching its limit keeps its increment. `pending_close_docs` is whatever `final_validation`
+    left, and any return clears it."""
+    ordered = [(name, patches[name]) for name in VERIFIER_ORDER if name in patches]
+    if not ordered:
+        raise ValueError("a verifier set returns at least one patch")
+    merged = apply(ordered[0][1], {})
+    for _, patch in ordered[1:]:
+        merged = apply(merged, patch)
+    returns = [
+        (name, found[0], found[1], patch)
+        for name, patch in ordered
+        if (found := _returned_entry(state, patch)) is not None
+    ]
+    if len(returns) > 1:
+        target = returns[0][1]
+        reasons = [(name, entry.get("reason", "")) for name, _, entry, _ in returns]
+        combined: Subtask = {
+            **merged["subtasks"][target],
+            "status": "returned",
+            "reason": "\n\n".join(f"{name}: {reason}" for name, reason in reasons),
+            "returned_by": returns[0][2].get("returned_by", "review"),
+            "returned_with": [entry.get("returned_by", "review") for _, _, entry, _ in returns[1:]],
+        }
+        merged["subtasks"] = {**merged["subtasks"], target: combined}
+    elif returns and "returned_with" in returns[0][2]:
+        # A lone returner spread the target as the state held it: the others an earlier set
+        # returned it with are not this return's.
+        target = returns[0][1]
+        alone = merged["subtasks"][target].copy()
+        del alone["returned_with"]
+        merged["subtasks"] = {**merged["subtasks"], target: alone}
+    for name, patch in ordered:
+        if not (text := patch.get("escalated")):
+            continue
+        for other, _, entry, _ in returns:
+            reason = entry.get("reason", "")
+            if other != name and reason not in text:
+                text = f"{text}\n\n{other}: {reason}"
+        merged |= escalation(patch.get("escalation_class") or "failure", text)
+        merged["status"] = WAITING_ON_HUMAN
+        break
+    final = patches.get("final_validation")
+    wrote = final is not None and "pending_close_docs" in final
+    merged.pop("pending_close_docs", None)
+    if returns:
+        if wrote or state.get("pending_close_docs"):
+            merged["pending_close_docs"] = None
+    elif final is not None and wrote:
+        merged["pending_close_docs"] = final["pending_close_docs"]
+    return merged
+
+
+def close_docs_committable(state: TaskState) -> bool:
+    """Whether the capability files `final_validation` approved with may be committed now
+    (GH-469, invariant 4): they are owed (`pending_close_docs`) and the `parent` they were
+    approved on is the reviewed head of the reviewed unit -- the integration, or the single
+    subtask -- as `same_commit` reads it."""
+    pending = state.get("pending_close_docs")
+    if not pending:
+        return False
+    name = reviewed_unit_name(state)
+    reviewed = state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
+    return same_commit(pending["parent"], reviewed)
+
+
+def close_docs_stale(state: TaskState) -> bool:
+    """Whether the files owed no longer sit on the head that was reviewed: owed, and not
+    committable. The set drops them without committing, and the head is verified again."""
+    return bool(state.get("pending_close_docs")) and not close_docs_committable(state)
+
+
 def full_checks_cover(
     record: FullChecksRecord | None, differs: bool
 ) -> Literal["ok", "missing", "stale"]:
@@ -2640,18 +2776,20 @@ def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
     )
 
 
-def after_full_checks(state: TaskState) -> str | None:
-    """Always back to the fan-in, like `after_qa_performance`: on a green run
-    `full_checks_due` now reads `False` and `after_integrate` goes on; on a red one the
-    reopened subtask is what `dispatched_subtasks` picks up."""
-    return None if state.get("escalated") else "integrate"
-
-
-def after_copy_review(state: TaskState) -> str | None:
-    """Always back to the fan-in, like `after_final_validation`: the review returns nothing,
-    so `after_integrate` reads the same state and goes on to the next step or reopens the
-    owner of an important finding."""
-    return None if state.get("escalated") else "integrate"
+def ci_planning_defect(head: str, text: str) -> dict[str, Any]:
+    """The patch of a `full_checks` whose required CI names no check run of `head` carries
+    (GH-485): a planning defect, never a failed check. The task stops for the human under class
+    `ci`; no `full_checks` record, no return and no counter, so the Developer is not charged and
+    a resume enters the node again on the same head. `text` names the names, the reported ones
+    and where to fix them."""
+    reason = f"Planning defect, not a CI failure ({head[:7]}): {text}"
+    return logged(
+        {
+            "current_role": DEVELOPER.name,
+            "status": WAITING_ON_HUMAN,
+            **escalation("ci", reason),
+        }
+    )
 
 
 def after_deliver(state: TaskState) -> str | None:
@@ -2690,7 +2828,7 @@ def run_ended(status: Status) -> bool:
     twice would otherwise leave two samples of its accumulated total. `"crashed"` is
     not a `Status`: the CLI fabricates it only for its own telemetry when a process
     dies mid-run, so it cannot appear in this predicate's own type."""
-    return status in ("ready_for_review", "discarded", "split", "tracker_only")
+    return status in ("ready_for_review", "discarded", "split", "tracker_only", "evaluated")
 
 
 # Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
@@ -2905,6 +3043,7 @@ LANDING_IMPORTANT_PASSES_MAX = 1
 declared, not measured. `domain.landing` re-exports it."""
 
 FIX_IMPORTANT = "fix_important"
+VERIFY = "verify"
 
 
 def important_pass_spent(state: Mapping[str, object], *, resolved_only: bool = False) -> bool:
@@ -3706,6 +3845,7 @@ _NOT_INTERRUPTED_STATUSES = (
     "discarded",
     "split",
     "tracker_only",
+    "evaluated",
     "waiting_on_human",
 )
 
@@ -4655,6 +4795,7 @@ MergeRefusal = Literal[
     "ci_missing",
     "ci_unreadable",
     "ci_blocked_by_conflict",
+    "ci_unknown_names",
     "ci_no_verdict",
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
@@ -4709,6 +4850,11 @@ MergeRefusal = Literal[
 - `ci_blocked_by_conflict` (GH-395): GitHub reads the head as conflicting with its base and
   no required check has a result on it; GitHub runs no CI on such a head, so none will come.
   Decided in the same round with no wait; the landing syncs master instead.
+- `ci_unknown_names` (GH-485): a required name no check run of this head carries while every
+  workflow run of it is completed (`MergeFacts.ci_unreported`, from `ci.unreported`), seen at
+  least `2 * ci.CI_POLL_S` into the wait. A planning defect, not a slow CI: red still wins
+  (`ci_failed`), and a conflicting head with no suites is `ci_blocked_by_conflict`. The
+  landing escalates it once per head and names, spending no budget.
 - `ci_no_verdict` (GH-463): a product that declares `ci:` asked GitHub for a fresh run of the
   head on the current master and got no verdict, after the one republish (or second dispatch)
   of the pair: `ci.CI_NO_VERDICT_PAIRS_MAX` pairs since the last release. The landing escalates
@@ -4753,6 +4899,9 @@ class MergeFacts:
     `ci_red_on_base` (GH-371) is the failing required names that are also red on the base
     branch's latest CI report (`ci.red_on_base`): `()` when none, when that report was not read,
     or in a `MergeFacts` built without it; only the landing reads it.
+    `ci_unreported` (GH-485) is the required names `ci.unreported` finds no check run for (the
+    report's workflow runs all completed), `ci_reported` the names the report did carry: `()`
+    in a `MergeFacts` built without them, and then the gate waits as it always did.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -4805,6 +4954,8 @@ class MergeFacts:
     ci_unreadable: ci.CiUnreadable | None = None
     ci_fresh: bool | None = None
     ci_waited_s: float | None = None
+    ci_unreported: tuple[str, ...] = ()
+    ci_reported: tuple[str, ...] = ()
     ci_untrusted: bool | None = None
     ci_dispatched: bool | None = None
     followups_filed: bool = False
@@ -5094,19 +5245,26 @@ def merge_conflicts_from(
     pr_head: str | None,
     current_master: str | None,
     probe: bool | None,
+    *,
+    recorded: bool,
 ) -> bool | None:
-    """The only place GitHub's mergeability becomes a fact (GH-326): `MergeFacts.conflicts`
-    from the two readings of it. GitHub's `CONFLICTING` counts, `True` whatever the probe
-    says, only when it was read on the head (`head_oid`) and on the base tip (`base_oid`)
-    this decision is made on (`pr_head`, `current_master`). Anything else -- `MERGEABLE`,
+    """The only place a conflict becomes `MergeFacts.conflicts` (GH-326, GH-492), from three
+    readings, in this order. GitHub's `CONFLICTING` counts, `True` whatever the probe says,
+    only when it was read on the head (`head_oid`) and on the base tip (`base_oid`) this
+    decision is made on (`pr_head`, `current_master`). Then `recorded`: git itself found a
+    conflict on this exact head and master (`merge_conflict.applies`, decided by the caller),
+    which is `True` over `MERGEABLE` and over `UNKNOWN`. Anything else -- `MERGEABLE`,
     `UNKNOWN` (still computing: read again on the next poll), no reading, a stale head, a
-    different or absent base tip -- is the `probe`'s value, unchanged."""
+    different or absent base tip -- is the `probe`'s value, unchanged: `UNKNOWN` is unread,
+    never clean. `recorded` has no default, so every caller states what it passes."""
     if (
         pull_request is not None
         and pull_request.mergeable == "CONFLICTING"
         and same_commit(pull_request.head_oid, pr_head)
         and same_commit(pull_request.base_oid, current_master)
     ):
+        return True
+    if recorded:
         return True
     return probe
 
@@ -5210,6 +5368,12 @@ def _deferral_gate(facts: MergeFacts) -> MergeDecision | None:
     return None
 
 
+def _ci_confirmed(facts: MergeFacts) -> bool:
+    """Whether the wait has run long enough for `ci.unreported` to be believed (GH-485): two
+    polls into it, so the same complete answer was given twice. No anchor is not confirmed."""
+    return facts.ci_waited_s is not None and facts.ci_waited_s >= 2 * ci.CI_POLL_S
+
+
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     """The CI's part of `auto_merge_decision`: `None` means a green CI that is not fresh,
     which goes on to the local checks, as does any green CI whose definition is untrusted and
@@ -5233,6 +5397,8 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     if verdict.state == "pending":
         if ci_never_coming(facts):
             return MergeDecision("refuse", "ci_blocked_by_conflict")
+        if facts.ci_unreported and _ci_confirmed(facts):
+            return MergeDecision("refuse", "ci_unknown_names")
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
     declared = set(facts.ci_required) - set(facts.ci_plan_only)
     if facts.ci_subject == "tested":

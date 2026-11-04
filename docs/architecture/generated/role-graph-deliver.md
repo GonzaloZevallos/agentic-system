@@ -14,13 +14,16 @@ Esta página muestra los nodos de la fase `deliver` del grafo de roles y las ari
 graph TD
     __end__["__end__"]
     deliver["deliver"]
+    evaluated["evaluated"]
     phase_build["build (fase)"]
     phase_define["define (fase)"]
     phase_plan["plan (fase)"]
     deliver -.-> __end__
     deliver -.-> phase_build
+    evaluated --> __end__
     phase_build -.-> __end__
     phase_build -.-> deliver
+    phase_build -.-> evaluated
     phase_define -.-> __end__
     phase_plan -.-> __end__
 ```

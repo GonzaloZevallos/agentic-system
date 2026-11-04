@@ -20,8 +20,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__CiLogRecord["CiLogRecord"]
-    class task__CiSpeculation["CiSpeculation"]
     class task__CloseDocs["CloseDocs"]
     class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]
@@ -29,9 +27,18 @@ classDiagram
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
     class task__EstimateRevision["EstimateRevision"]
+    class task__EvaluatedPatch["EvaluatedPatch"]
+    class task__EvaluationRef["EvaluationRef"]
     class task__Failure["Failure"]
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
+    class task__FullCheckEntry["FullCheckEntry"]
+    task__EvaluatedPatch --|> task__FinishedPatch
 ```
+
+## Relaciones con otras páginas
+
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - `task.TaskState` se asocia con `task.EvaluationRef`

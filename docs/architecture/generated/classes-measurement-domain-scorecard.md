@@ -7,7 +7,9 @@ Esta página muestra las clases públicas de los módulos del grupo `scorecard` 
 
 ```mermaid
 classDiagram
+    class evaluation__EvalEntry["EvalEntry"]
     class evaluation__EvalSet["EvalSet"]
+    class evaluation__EvalTaskId["EvalTaskId"]
     class evaluation__EvaluationRecord["EvaluationRecord"]
     class evaluation__Score["Score"]
     class evaluation__TaskDocument["TaskDocument"]

@@ -29,7 +29,7 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, experiment, merge_ci, presubmit, rules
+from ..domain import ci, document, experiment, merge_ci, merge_conflict, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
@@ -425,7 +425,11 @@ def _landing_step(
         # GH-463: the release of a `ci_no_verdict` escalation is persisted by a `land` child.
         return step
     if not landing_plan.takes_action(step.kind, live) or landing_rules.already_dispatched(
-        landing_plan.live_entries(view), facts.pr_head, step.kind, facts.current_master
+        landing_plan.live_entries(view),
+        facts.pr_head,
+        step.kind,
+        facts.current_master,
+        names=step.names,
     ):
         return None
     return step
@@ -470,6 +474,8 @@ def with_ci(
         ci_required=names,
         ci_head=report.head_sha,
         ci_verdict=ci.ci_state(report, names),
+        ci_unreported=ci.unreported(report, names, True),
+        ci_reported=ci.reported_names(report),
         ci_fresh=fresh,
         ci_waited_s=_seconds_since(anchor, now),
     )
@@ -483,6 +489,13 @@ def ci_wait_line(
     waited = "?" if facts.ci_waited_s is None else str(int(facts.ci_waited_s))
     if facts.ci_unreadable is not None:
         what = f"unreadable {facts.ci_unreadable.cause}"
+    elif facts.ci_unreported:
+        # GH-485: `ci.unreported` first -- a name no check run carries is not pending; the gate
+        # refuses it once the wait is confirmed, so a line that waits is that confirmation.
+        what = (
+            f"unreported {', '.join(facts.ci_unreported)}: not a check-run name on this head, "
+            "confirming"
+        )
     elif facts.ci_verdict is not None and facts.ci_verdict.missing:
         what = f"missing {', '.join(facts.ci_verdict.missing)}"
         if facts.ci_plan_only and isinstance(report, ci.CiReport):
@@ -499,20 +512,23 @@ def ci_wait_line(
     return f"agentic: poll: auto-merge #{number} -> waiting: ci {what} ({bound})"
 
 
-ConflictSource = Literal["github", "probe"]
+ConflictSource = Literal["github", "probe", "recorded"]
 
 
 def read_conflicts(
-    ports: Ports, pull_request: PullRequest | None, head: str, master: str
+    ports: Ports, pull_request: PullRequest | None, head: str, master: str, *, recorded: bool
 ) -> tuple[bool | None, ConflictSource]:
-    """`MergeFacts.conflicts` for `head` on `master` (GH-326), shared by the poller and the
-    merge verb so both read it the same way: GitHub's reading when
-    `rules.merge_conflicts_from` takes it as a conflict -- git is then not asked -- and the
-    merge-tree probe otherwise. The source is log text, nothing else."""
-    if rules.merge_conflicts_from(pull_request, head, master, None) is True:
+    """`MergeFacts.conflicts` for `head` on `master` (GH-326, GH-492), shared by the poller and
+    the merge verb so both read it the same way: GitHub's reading, or the conflict git recorded
+    for this exact pair (`recorded`), when `rules.merge_conflicts_from` takes it as a conflict
+    -- git is then not asked -- and the merge-tree probe otherwise. The source is log text,
+    nothing else."""
+    if rules.merge_conflicts_from(pull_request, head, master, None, recorded=False) is True:
         return True, "github"
+    if recorded:
+        return True, "recorded"
     probe = ports.workspace.merge_conflicts(head, master)
-    return rules.merge_conflicts_from(pull_request, head, master, probe), "probe"
+    return rules.merge_conflicts_from(pull_request, head, master, probe, recorded=False), "probe"
 
 
 def read_criteria(ports: Ports, head: str, master: str) -> tuple[str, ...] | None:
@@ -578,6 +594,14 @@ def assess_merge(
     if pull_request is not None and rules.pr_abandoned(pull_request.state):
         return Abandoned(pull_request)
     facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
+    # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this
+    # exact pair, so a recorded conflict refuses `merge_conflict` here, unlandable pair or not.
+    recorded = merge_conflict.applies(raw.get("merge_conflict"), facts.pr_head, current_master)
+    base_conflicts = rules.merge_conflicts_from(
+        pull_request, facts.pr_head, current_master, None, recorded=recorded
+    )
+    if base_conflicts is True:
+        facts = replace(facts, conflicts=True)
     try:
         declared = ports.stack.ci(task_base(raw, ports))
     except ValueError as exc:
@@ -616,7 +640,9 @@ def assess_merge(
     ):
         # GH-255: a head that does not merge with master is a conflict before it is a CI
         # fact. Git is asked only now, with every git-free refusal ahead of it ruled out.
-        conflicts, source = read_conflicts(ports, pull_request, facts.pr_head, current_master)
+        conflicts, source = read_conflicts(
+            ports, pull_request, facts.pr_head, current_master, recorded=recorded
+        )
         unread = conflicts is None
         facts = replace(facts, conflicts=conflicts)
         decision = rules.auto_merge_decision(gated(facts))

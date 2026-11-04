@@ -29,7 +29,7 @@ def gh320_conflicting_facts() -> tuple[rules.MergeFacts, TaskState]:
     its base (read through `rules.merge_conflicts_from`), a CI that never reported past
     `CI_WAIT_MAX_S`, three approved units, conflicting syncs for the current sha already at
     `LANDING_CONFLICT_SYNCS_MAX`, and restart depth 0."""
-    conflicts = rules.merge_conflicts_from(gh320_pull_request(), HEAD, MASTER, None)
+    conflicts = rules.merge_conflicts_from(gh320_pull_request(), HEAD, MASTER, None, recorded=False)
     facts = rules.MergeFacts(
         task_id="GH-320",
         status="ready_for_review",

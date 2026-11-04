@@ -5,8 +5,9 @@ is where the rest of `checks` runs, with no affected form substituted, before th
 opens (`rules.after_integrate` sends the task here once every unit is approved). No role runs
 and nothing is paid: it is the system running the product's own commands.
 
-In order: the task checkout (a setup that fails escalates as `deliver`'s does), a clean tree
-required, every declared check run once through the same `CheckoutPresubmit` the merge gate
+In order: the task checkout and the clean tree it requires, both made once by
+`verifiers.verify` (GH-469) and handed in (a setup that fails escalates as `deliver`'s does),
+every declared check run once through the same `CheckoutPresubmit` the merge gate
 uses, the tree put back as its head holds it whatever the checks did (`restore_clean`, never
 `-x`), the record and the `Full checks` section written. A red run reopens the integration
 with one row per failed check (`rules.full_checks_return`); a green one writes a passed record
@@ -57,7 +58,7 @@ from ..domain.task import (
     TaskState,
 )
 from . import ci_flakes
-from .checkouts import Checkout, SetupFailed, task_base, task_checkout_in_thread
+from .checkouts import Checkout, task_base
 from .ports import GitError, Ports
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .run_role import finish
@@ -80,6 +81,7 @@ _CI_DETAIL: dict[CiCause, str] = {
     "not_started": "the declared CI jobs on {ref} did not start (startup failure or cancelled)",
     "dispatch_refused": "`gh` refused to dispatch the workflow for that head",
     "jobs_missing": "the run completed without a declared job",
+    "unknown_names": "no check run carries a declared job name",
 }
 # The same causes when the verdict was asked of a dispatched run: `{ref}` is the workflow file.
 _DISPATCH_DETAIL: dict[CiCause, str] = {
@@ -92,6 +94,7 @@ _DISPATCH_DETAIL: dict[CiCause, str] = {
     "(startup failure or cancelled)",
     "dispatch_refused": "`gh` refused to dispatch {ref} for that head",
     "jobs_missing": "the dispatched {ref} completed without a declared job",
+    "unknown_names": "no check run carries a declared job name",
 }
 
 
@@ -103,6 +106,9 @@ class _NoVerdict:
     waited_s: float
     # The workflow file of a dispatched run that gave none; None for the task's own CI ref.
     workflow: str | None = None
+    # `unknown_names` only (GH-485): the names no check run carries, and the names that did report.
+    unknown: tuple[str, ...] = ()
+    reported: tuple[str, ...] = ()
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -114,6 +120,43 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _head_trust(ports: Ports, checkout: Checkout, base: str) -> tuple[str, bool]:
+    """The integrated head and whether the product's own CI may judge it: `False` when the
+    change touches the CI definition or the diff cannot be read (fail closed,
+    `rules.ci_untrusted`). The one place the two are read, for the node and for
+    `full_checks_mode`."""
+    head = ports.workspace.full_head(checkout.path)
+    try:
+        paths: tuple[str, ...] | None = ports.workspace.changed_paths(base, head)
+    except GitError:
+        paths = None
+    return head, rules.ci_untrusted(paths) is False
+
+
+def _pushed_for(state: TaskState, head: str) -> bool:
+    """Whether a review already pushed this very commit and its run can be waited for
+    (GH-465): the one place `speculation.consumable` is asked."""
+    return bool(state.get("ci_speculation")) and speculation.consumable(state, head)
+
+
+def full_checks_mode(
+    state: TaskState, cfg: Configuration, ports: Ports, checkout: Checkout
+) -> Literal["local", "consumable", "wait"]:
+    """How the integrated head's `full_checks` will be decided (GH-469), from the same reads
+    the node makes and with no side effect: `local` when the suite runs on this machine (no
+    `ci:`, or a head the product's workflow cannot judge and no `ci_dispatch`), `consumable`
+    when the run a review pushed for this very commit only has to be read, `wait` when a CI
+    verdict has to be waited for (a push, or a dispatched run). Only `wait` is slow enough to
+    be worth running beside the roles."""
+    base = task_base(state, ports)
+    if not ports.stack.ci(base):
+        return "local"
+    head, trusted = _head_trust(ports, checkout, base)
+    if not trusted:
+        return "wait" if ports.stack.ci_dispatch(base) is not None else "local"
+    return "consumable" if _pushed_for(state, head) else "wait"
+
+
 async def full_checks(
     state: TaskState,
     cfg: Configuration,
@@ -122,16 +165,14 @@ async def full_checks(
     sleep: Sleep = anyio.sleep,
     clock: Clock = time.monotonic,
     now: Now = _utc_now,
+    checkout: Checkout,
 ) -> TaskState:
     """`sleep` and `clock` are the CI wait's, injectable so a test does not wait; `now` is the
-    wall clock `speculation.event_lost` measures the speculative push against."""
-    try:
-        task = await task_checkout_in_thread(state, cfg, ports)
-    except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
+    wall clock `speculation.event_lost` measures the speculative push against. A `checkout`
+    handed in (the verifier set resolves the task's once, GH-469): no resolution and no clean
+    check here, `verifiers.verify` made both."""
     workspace = ports.workspace
-    if not workspace.is_clean(task.path):
-        return finish(state, _dirty(task.branch), ports)
+    task = checkout
     base = task_base(state, ports)
     names = ports.stack.ci(base)
     if not names:
@@ -139,6 +180,12 @@ async def full_checks(
     outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock, now)
     if outcome == "untrusted":
         return await _local_full_checks(state, cfg, ports, task, base, outcome)
+    if isinstance(outcome, _NoVerdict) and outcome.cause == "unknown_names":
+        head = workspace.full_head(task.path)
+        plan_only = rules.ci_gate_names(names, state.get("ci_required") or []).plan_only
+        return finish(
+            state, rules.ci_planning_defect(head, _unknown_text(outcome, head, plan_only)), ports
+        )
     if isinstance(outcome, _NoVerdict):
         head = workspace.full_head(task.path)
         table = _CI_DETAIL if outcome.workflow is None else _DISPATCH_DETAIL
@@ -148,6 +195,12 @@ async def full_checks(
         )
         return finish(state, rules.ci_unavailable(outcome.cause, head, detail), ports)
     return finish(state, outcome, ports)
+
+
+def _unknown_text(outcome: _NoVerdict, head: str, plan_only: tuple[str, ...]) -> str:
+    """The escalation for names no check run carries (GH-485): `ci.unreported_text`, the one
+    wording the full tier, the merge gate and the landing share."""
+    return ci.unreported_text(outcome.unknown, outcome.reported, head, plan_only)
 
 
 async def _local_full_checks(
@@ -251,13 +304,9 @@ async def _ci_full_checks(
     paths are read from the workspace only and the head is published to the task's own CI
     ref; the wait takes no check slot and runs no command (ADR-0070)."""
     workspace = ports.workspace
-    head = workspace.full_head(task.path)
-    try:
-        paths: tuple[str, ...] | None = workspace.changed_paths(base, head)
-    except GitError:
-        paths = None
+    head, trusted = _head_trust(ports, task, base)
     gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
-    if rules.ci_untrusted(paths) is not False:
+    if not trusted:
         if (dispatch := ports.stack.ci_dispatch(base)) is None:
             return "untrusted"
         return await _dispatched_full_checks(
@@ -266,7 +315,7 @@ async def _ci_full_checks(
     ref = rules.ci_ref(state["id"])
     speculative = False
     pushed = state.get("ci_speculation")
-    if pushed and speculation.consumable(state, head):
+    if pushed and _pushed_for(state, head):
         # A review already pushed this very commit (GH-465): its run is waited for, not
         # pushed again. A run that never came, or was cancelled, is today's path from the
         # republish on, and only the wait that follows it may escalate.
@@ -299,7 +348,10 @@ async def _ci_full_checks(
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
     if verdict.state == "unreachable":
-        return _NoVerdict(verdict.cause or "no_run", waited)
+        reported = ci.reported_names(read) if isinstance(read, CiReport) else ()
+        return _NoVerdict(
+            verdict.cause or "no_run", waited, unknown=verdict.unknown, reported=reported
+        )
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
     if verdict.state == "green":
         patch = _ci_green(state, head, gate_names, read, waited)
@@ -362,6 +414,7 @@ async def _wait_ci(
     `cfg.check_timeout_s` once one does (`ci.full_tier_verdict`). `first` is a read already
     taken, used for the first round instead of asking again."""
     started = clock()
+    previous: CiReport | CiUnreadable | None = None
     while True:
         read = (
             first
@@ -371,11 +424,35 @@ async def _wait_ci(
         first = None
         waited = clock() - started
         verdict = ci.full_tier_verdict(
-            read, head, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
+            read,
+            head,
+            names,
+            waited,
+            cfg.check_timeout_s,
+            cfg.ci_start_grace_s,
+            _same_complete_read(previous, read, head),
         )
         if verdict.state != "waiting":
             return verdict, read, waited
+        previous = read
         await sleep(ci.CI_POLL_S)
+
+
+def _same_complete_read(
+    previous: CiReport | CiUnreadable | None, read: CiReport | CiUnreadable, head: str
+) -> bool:
+    """Whether two consecutive reads agree that `head`'s workflow runs are completed and carry
+    the same check names (GH-485): the one confirmation `ci.unreported` asks for, so a name that
+    appears late is waited for. Held in memory by the wait, never stored."""
+    return (
+        isinstance(previous, CiReport)
+        and isinstance(read, CiReport)
+        and rules.same_commit(previous.head_sha, head)
+        and rules.same_commit(read.head_sha, head)
+        and previous.runs_completed is True
+        and read.runs_completed is True
+        and set(ci.reported_names(previous)) == set(ci.reported_names(read))
+    )
 
 
 async def _dispatched_full_checks(
@@ -417,7 +494,7 @@ async def _dispatched_full_checks(
         return _NoVerdict(verdict.cause or "no_run", waited, dispatch.workflow)
     run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
     assert run is not None  # a verdict other than `unreachable` came from a chosen run
-    read = CiReport(head, None, None, None, run.jobs)
+    read = CiReport(head, None, None, None, run.jobs, run.status == "completed")
     if verdict.state == "green":
         patch = _ci_green(state, head, names, read, waited)
     else:
@@ -656,7 +733,7 @@ def _section(state: TaskState, version: int, text: str) -> dict[str, str]:
     return sections
 
 
-def _dirty(branch: str) -> dict[str, Any]:
+def dirty_patch(branch: str) -> dict[str, Any]:
     """The task checkout holds uncommitted work the suite would be run over: no command
     runs, and nothing is cleaned, which could throw away what a human left there."""
     return rules.logged(

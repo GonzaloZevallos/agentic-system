@@ -132,7 +132,7 @@ def test_the_fan_in_routes_to_fix_important_before_full_checks_and_deliver():
 
 def test_a_task_with_no_such_row_goes_the_route_it_went_before():
     clean = {**_state(), "task_head": "h", "owner_rules_seen": "h"}
-    assert rules.after_integrate(clean) == "full_checks"
+    assert rules.after_integrate(clean) == "verify"
     assert rules.after_integrate(_state()) == "deliver"
     assert rules.after_integrate(_state(_row("outside", "api"))) == "deliver"
     lowered = _state(_row("subtask", "api", reported_severity="blocking"))

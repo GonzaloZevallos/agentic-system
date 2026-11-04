@@ -23,6 +23,7 @@ from tests.fakes import (
     MemoryStack,
     ScriptedRunner,
     delivered,
+    full_checks_in_task_checkout,
     memory_ports,
 )
 
@@ -150,9 +151,8 @@ async def test_a_flake_in_full_checks_passes_and_is_recorded(cfg):
 
     commands = MemoryCommands(pytest=[RED], **{"pytest --lf": [GREEN]})
     ports = ports_of(commands, rerun_checks={"tests": FORM})
-    from agentic.core.process.application.full_checks import full_checks
 
-    patch = await full_checks(state_of(), CFG, ports)
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert patch["full_checks"]["passed"] is True
     # Invariant 2: the record and the section say flake, never plain passed.
     [entry] = [e for e in patch["full_checks"]["results"] if e["name"] == "tests"]
@@ -167,17 +167,15 @@ async def test_a_flake_in_full_checks_passes_and_is_recorded(cfg):
 
 
 async def test_a_green_full_checks_carries_no_flakes(cfg):
-    from agentic.core.process.application.full_checks import full_checks
     from tests.core.process.application.test_full_checks import CFG, ports_of, state_of
 
-    patch = await full_checks(state_of(), CFG, ports_of())
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports_of())
     assert "flakes" not in patch
 
 
 async def test_a_first_run_that_stopped_early_reruns_the_form_in_full_checks_as_at_delivery(cfg):
     """GH-464: the form applies at `full_checks` as at delivery. A suite behind an early stop
     that is red only shows past the threshold, which bounds the risk (ADR)."""
-    from agentic.core.process.application.full_checks import full_checks
     from tests.core.process.application.test_full_checks import CFG, ports_of, state_of
 
     one_id = CommandResult(1, "FAILED tests/a.py::one\n")
@@ -189,7 +187,9 @@ async def test_a_first_run_that_stopped_early_reruns_the_form_in_full_checks_as_
     )
     assert [f["tests"] for f in patch["flakes"]] == [["tests/a.py::one"]]
     commands = MemoryCommands(pytest=[one_id], **{"pytest --lf": [GREEN]})
-    full = await full_checks(state_of(), CFG, ports_of(commands, rerun_checks={"tests": FORM}))
+    full = await full_checks_in_task_checkout(
+        state_of(), CFG, ports_of(commands, rerun_checks={"tests": FORM})
+    )
     assert full["full_checks"]["passed"] is True
     assert "pytest --lf" in [c for _, c in commands.ran]
 
