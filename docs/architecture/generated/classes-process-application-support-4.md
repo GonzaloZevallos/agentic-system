@@ -15,6 +15,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__ProcessReaper["ProcessReaper"]
     class ports__ProductKnowledge["ProductKnowledge"]
     class ports__ProductStack["ProductStack"]
     class ports__Prompts["Prompts"]
@@ -33,6 +34,7 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [application: support (parte 3)](classes-process-application-support-3.md)
+  - `ports.Ports` se asocia con `ports.ProcessReaper`
   - `ports.Ports` se asocia con `ports.ProductKnowledge`
   - `ports.Ports` se asocia con `ports.ProductStack`
   - `ports.Ports` se asocia con `ports.Prompts`

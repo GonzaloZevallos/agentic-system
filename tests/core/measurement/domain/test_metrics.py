@@ -563,3 +563,20 @@ def test_every_arm_key_names_a_bool_or_literal_configuration_field():
 
 def test_arm_keys_never_names_reviewer_model():
     assert "reviewer_model" not in metrics.ARM_KEYS
+
+
+def test_arm_of_reads_the_assignment_over_the_experiment_and_never_the_arms_name():
+    light = {"review_mode": "light", "skip_ephemeral": "False"}
+    assigned = {"assignment": {"experiment": "e", "arm": "fast", "switches": light}}
+    assert metrics.arm_of(assigned) == "review_mode=light,skip_ephemeral=False"
+    assert "fast" not in metrics.arm_of(assigned)
+    # The assignment wins over a snapshot that says otherwise.
+    both = {**assigned, "experiment": {"review_mode": "full", "skip_ephemeral": "True"}}
+    assert metrics.arm_of(both) == metrics.arm_of(assigned)
+    # Without one it is the snapshot, as before; with neither it is the default arm.
+    assert metrics.arm_of({"experiment": light}) == metrics.arm_label(light)
+    assert metrics.arm_of({}) == "default"
+    # An arm that sets nothing different from the defaults is the default arm.
+    assert metrics.arm_of({"assignment": {"experiment": "e", "arm": "a", "switches": {}}}) == (
+        "default"
+    )

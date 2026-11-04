@@ -543,3 +543,22 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-451
+  GH-462@review:
+    cost_usd: 0.1102
+  GH-474@review:
+    cost_usd: 0.1417
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-other
+      lesson: ''
+      item_id: developer-1
+      tasks:
+      - GH-474
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-474

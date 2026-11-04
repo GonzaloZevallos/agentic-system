@@ -29,7 +29,7 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, presubmit, rules
+from ..domain import ci, document, experiment, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
@@ -54,6 +54,7 @@ from .checkouts import task_base
 from .ports import (
     GitError,
     IssueComment,
+    LaunchAttempt,
     Launcher,
     LockRecord,
     Ports,
@@ -1220,6 +1221,7 @@ def gather_launches(
     reports: list[rules.BlockerReport] | None = None,
     by_issue: dict[int, rules.BlockerReport] | None = None,
     documents: Mapping[int, TaskState | None] | None = None,
+    notes: list[str] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -1230,11 +1232,18 @@ def gather_launches(
     `reports` when given (GH-344), for the queue-blocked line, and set in `by_issue` under
     its issue number when given (GH-375), for the board mirror. `documents` (GH-403) is
     `queue_documents`' answer, shared with the orphan pass so each queue document is loaded
-    once per round; without it this function reads it itself."""
+    once per round; without it this function reads it itself. When the product declares an
+    experiment (GH-470, `ports.experiment`), each launch candidate that can launch carries the
+    arm `experiment.assign` picked for it, or the one its launch record already has; an invalid
+    declaration, or an `.env` switch an arm names, adds one line to `notes` and leaves every
+    candidate unassigned -- it never stops the queue. With no declaration this reads and counts
+    nothing more than it did before."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     queued = documents if documents is not None else queue_documents(ports)
+    declaration = _declared_experiment(cfg, ports, notes)
+    counts = _arm_counts(declaration, ports, registry, product, queued) if declaration else {}
     for number, loaded in queued.items():
         if loaded is not None:
             registry.clear_launch(product, number)
@@ -1247,10 +1256,89 @@ def gather_launches(
         attempt = registry.launch_attempts(product, number)
         since = attempt.since if attempt is not None else None
         prior = attempt.prior if attempt is not None else 0
+        arm = None
+        if declaration is not None and not report:
+            arm = _arm_for(declaration, number, attempt, counts)
         launches.append(
-            rules.LaunchCandidate(number, bool(report), since, prior, len(rules.LAUNCH_SCHEDULE))
+            rules.LaunchCandidate(
+                number, bool(report), since, prior, len(rules.LAUNCH_SCHEDULE), arm
+            )
         )
     return launches
+
+
+EXPERIMENT_FILE = ".agentic/experiment.yaml"
+
+
+def _declared_experiment(
+    cfg: Configuration, ports: Ports, notes: list[str] | None
+) -> experiment.Experiment | None:
+    """The product's valid experiment for this round, or `None` -- no declaration, an invalid one,
+    or one the environment contradicts -- the last two adding their one line to `notes`."""
+    if ports.experiment is None:
+        return None
+    try:
+        data = ports.experiment.read()
+        if data is None:
+            return None
+        declaration = experiment.parse_experiment(data, EXPERIMENT_FILE)
+    except (ValueError, experiment.InvalidExperiment) as exc:
+        _note(notes, f"agentic: poll: experiment ignored, launching unassigned: {exc}")
+        return None
+    if clash := experiment.conflicts(declaration, cfg):
+        _note(
+            notes,
+            f"agentic: poll: experiment {declaration.id} ignored, launching unassigned: "
+            f".env sets {', '.join(clash)}, which an arm also sets",
+        )
+        return None
+    return declaration
+
+
+def _note(notes: list[str] | None, line: str) -> None:
+    if notes is not None:
+        notes.append(line)
+
+
+def _arm_counts(
+    declaration: experiment.Experiment,
+    ports: Ports,
+    registry: RunRegistry,
+    product: str,
+    queued: Mapping[int, TaskState | None],
+) -> dict[str, int]:
+    """Tasks per arm name, each counted once: the documents under this experiment's id (the
+    queue's own were loaded already) and the launch records with an arm whose issue has no
+    document yet."""
+    counts: dict[str, int] = {}
+    loaded = {ports.inbox.task_id(n): doc for n, doc in queued.items() if doc is not None}
+    for task_id in ports.documents.ids():
+        doc = loaded[task_id] if task_id in loaded else ports.documents.load(task_id)
+        given = (doc or {}).get("assignment")
+        if given is not None and given.get("experiment") == declaration.id:
+            counts[given["arm"]] = counts.get(given["arm"], 0) + 1
+    for number, doc in queued.items():
+        attempt = registry.launch_attempts(product, number) if doc is None else None
+        if attempt is not None and attempt.arm is not None:
+            counts[attempt.arm] = counts.get(attempt.arm, 0) + 1
+    return counts
+
+
+def _arm_for(
+    declaration: experiment.Experiment,
+    number: int,
+    attempt: LaunchAttempt | None,
+    counts: dict[str, int],
+) -> str:
+    """The arm of a launch candidate: the one its record already has (counted already, and kept
+    while the declaration still names it), else the next `experiment.assign` picks, which
+    counts for the candidates after it in this round."""
+    if attempt is not None and attempt.arm in {a.name for a in declaration.arms}:
+        assert attempt.arm is not None
+        return attempt.arm
+    chosen = experiment.assign(declaration, number, counts).name
+    counts[chosen] = counts.get(chosen, 0) + 1
+    return chosen
 
 
 def orphaned_comment(counted: int) -> str:
@@ -1641,9 +1729,10 @@ def execute(
             await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: land #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
-            registry.record_launch(product, action.issue, now)
+            registry.record_launch(product, action.issue, now, action.arm)
             fresh = ("--fresh",) if action.issue in reruns else ()
-            argv = _argv(argv0, "run", action.issue, product_dir, *fresh, "--detach")
+            arm = (experiment.ARM_FLAG, action.arm) if action.arm is not None else ()
+            argv = _argv(argv0, "run", action.issue, product_dir, *fresh, *arm, "--detach")
             try:
                 pid = launcher.spawn(argv)
             except OSError as exc:
@@ -1813,8 +1902,16 @@ def run_once(
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
         queued = queue_documents(ports)
+        experiment_notes: list[str] = []
         launches = gather_launches(
-            cfg, ports, registry, upstream, blocker_reports, blockers_by_issue, queued
+            cfg,
+            ports,
+            registry,
+            upstream,
+            blocker_reports,
+            blockers_by_issue,
+            queued,
+            experiment_notes,
         )
         merges: list[int] = []
         merge_lines: list[str] = []
@@ -1883,6 +1980,7 @@ def run_once(
         others_landing = bool(others)
         previous = next((w.since for w in waits if w.root_key == own_key), None)
         notes = [
+            *experiment_notes,
             *spend_notes,
             *wait_notes,
             *_upstream_notes(upstream.cache_info().currsize > 0, upstream),

@@ -537,3 +537,26 @@ def test_a_pass_written_before_the_pull_request_is_no_landing_run_for_the_follow
     assert "followups" not in by_name(ts.task_scores(before))
     both = document(landing=[{"step": "fix_important", "before_pr": True}, {"step": "merge"}])
     assert by_name(ts.task_scores(both))["followups"].value == 0.0
+
+
+def test_assignment_alone_gives_one_arm_to_arm_of_eligibility_and_the_score_label():
+    """A document with an `assignment` and no `experiment` snapshot is the same arm for the
+    three readers (GH-470): `arm_of`, the playbook window's refusal and the `arm` label of
+    the per-task scores. A document with neither is `default` for all three."""
+    from agentic.core.measurement.domain import metrics, playbook_window
+
+    light = {"review_mode": "light", "skip_ephemeral": "False"}
+    assigned = document(
+        closed_at="2026-10-02T00:00:00+00:00",
+        assignment={"experiment": "e", "arm": "fast", "switches": light},
+    )
+    assert "experiment" not in assigned
+    label = "review_mode=light,skip_ephemeral=False"
+    assert metrics.arm_of(assigned) == label
+    assert ts.dimensions(assigned).arm == label
+    assert playbook_window._eligible(assigned, "developer") is False
+
+    plain = document(closed_at="2026-10-02T00:00:00+00:00")
+    assert metrics.arm_of(plain) == "default"
+    assert ts.dimensions(plain).arm == "default"
+    assert playbook_window._eligible(plain, "developer") is True
