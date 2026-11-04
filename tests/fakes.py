@@ -1181,6 +1181,12 @@ class MemoryWorkspace:
             raise GitError(f"git push origin --delete {ref} failed: no such ref")
         del self.dispatch_refs[ref]
 
+    def remote_dispatch_refs(self) -> tuple[str, ...]:
+        self.ci_ref_calls.append(("list_dispatch", ""))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        return tuple(self.dispatch_refs)
+
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
         self.ci_ref_calls.append(("list", prefix))
         if self.ci_ref_error is not None:
