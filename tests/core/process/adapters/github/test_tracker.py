@@ -1769,3 +1769,31 @@ def test_dispatched_ci_with_a_missing_gh_is_unavailable_and_a_failing_one_unread
     assert GhTracker(Path("/p"), Recorder(fail=True)).dispatched_ci("ci.yml", "s") == CiUnreadable(
         "gh_unreadable"
     )
+
+
+# -- rerun_ci_run (GH-463) ------------------------------------------------------------------
+
+
+def test_rerun_ci_run_reruns_the_failed_jobs_of_that_run_and_nothing_else():
+    run = Recorder(stdout="")
+    assert GhTracker(Path("/p"), run).rerun_ci_run("123456789") is None
+    assert run.calls == [["gh", "run", "rerun", "123456789", "--failed"]]
+
+
+def test_a_refused_rerun_is_dispatch_refused_whatever_gh_printed():
+    answer = GhTracker(Path("/p"), Recorder(fail=True)).rerun_ci_run("123456789")
+    assert answer == CiUnreadable("dispatch_refused")
+
+
+def test_a_missing_gh_on_rerun_is_unavailable_never_raised():
+    assert GhTracker(Path("/p"), Missing()).rerun_ci_run("1") == CiUnreadable("gh_unavailable")
+    assert GhTracker(Path("/p"), NotExecutable()).rerun_ci_run("1") == CiUnreadable(
+        "gh_unavailable"
+    )
+
+
+@pytest.mark.parametrize("run_id", ["", "abc", "12/34", "-1", "12 --web"])
+def test_a_run_id_that_is_not_digits_is_refused_before_any_gh_call(run_id):
+    run = Recorder(stdout="")
+    assert GhTracker(Path("/p"), run).rerun_ci_run(run_id) == CiUnreadable("dispatch_refused")
+    assert run.calls == []

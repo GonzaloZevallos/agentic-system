@@ -203,3 +203,35 @@ def test_pending_names_lists_only_declared_names_with_a_run_still_waiting():
     )
     assert ci.pending_names(report, ("web", "e2e", "gone")) == ("web",)
     assert ci.pending_names(report, ("e2e",)) == ()
+
+
+# -- run_id_of_link (GH-463) ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("link", "run_id"),
+    [
+        ("https://github.com/o/r/actions/runs/123456789/job/987", "123456789"),
+        ("https://github.com/o/r/actions/runs/42", "42"),
+        ("https://github.com/o/r/actions/runs/42/", "42"),
+        ("https://github.com/o/r/actions/runs/42?pr=7", "42"),
+    ],
+)
+def test_a_details_url_with_a_run_segment_gives_its_run_id(link: str, run_id: str) -> None:
+    assert ci.run_id_of_link(link) == run_id
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "",
+        "https://github.com/o/r/pull/7",
+        "https://ci.example.com/build/17",  # a commit status of another system
+        "https://github.com/o/r/actions/runs/",
+        "https://github.com/o/r/actions/runs/abc/job/1",
+        "https://github.com/o/r/actions/runs/12abc",
+        "not a url at all /actions/runs/",
+    ],
+)
+def test_a_link_with_no_parsable_run_segment_gives_none(link: str) -> None:
+    assert ci.run_id_of_link(link) is None

@@ -1498,6 +1498,27 @@ def test_record_closure_round_trips_a_full_checks_record_judged_by_a_dispatched_
     _assert_roundtrip_and_replace("full_checks", local, dispatched)
 
 
+def test_a_merge_ci_record_is_one_flow_line_written_by_record_closure_and_by_render():
+    """GH-463: the merge gate's fresh-run pairs are replaced whole by a merge child with no
+    state owner, and a later `render` of the state keeps them as the same one flow line."""
+    pair = {
+        "head": "a" * 40,
+        "master": "b" * 40,
+        "tested": "c" * 40,
+        "mode": "push",
+        "published_at": "2026-11-03T10:00:00+00:00",
+        "republished": False,
+        "superseded": [],
+    }
+    decided = {**pair, "outcome": "green", "run_id": "42", "superseded": ["d" * 40]}
+    _assert_roundtrip_and_replace("merge_ci", [pair], [decided, {**pair, "master": "e" * 40}])
+    state = {"id": "T-1", "title": "t", "description": "d", "merge_ci": [pair]}
+    rendered = document.render(state)
+    _one_flow_line(rendered, "merge_ci")
+    assert document.parse(rendered)["merge_ci"] == [pair]
+    assert "merge_ci" not in document.render({**state, "merge_ci": []})
+
+
 _SPECULATION = {"head": "a" * 40, "pushed_at": "2026-11-03T12:00:00+00:00"}
 
 
