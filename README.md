@@ -895,7 +895,7 @@ v0: tareas reales, escritas por alguien con el problema en la mano. Se re-corren
 contra cada versión de los prompts. Cinco tareas distintas cada vez no miden nada, porque no
 se puede separar si mejoró el prompt o si las tareas eran más fáciles.
 
-**El producto de evaluación es apostrophe** (ADR-0082). Cada entrada de su
+**El producto de evaluación es apostrophe** (ADR-0083). Cada entrada de su
 `.agentic/eval-set.yaml` nombra un issue, el sha completo de la base sobre la que se corre y el
 texto del issue congelado una vez (`entries: [{issue, base, title, body}]`). `agentic eval run`
 la re-corre una vez por brazo del experimento (o una como `default`) en una raíz aparte,
@@ -1473,7 +1473,7 @@ El set de tareas vive en `.agentic/eval-set.yaml` del producto (como `stack.yaml
 `flags.yaml` y `BRIEF.md`): `entries` (issue, sha de la base, título y cuerpo congelados) y
 cuál de ellos es la tarea de humo. `agentic eval run --budget <USD> --yes` corre cada entrada
 (o, con `--dry-run`, solo la muestra sin gastar nada) una vez por brazo -- un
-`agentic run --issue-input <archivo>` por corrida, en su propia raíz de evaluación (ADR-0082),
+`agentic run --issue-input <archivo>` por corrida, en su propia raíz de evaluación (ADR-0083),
 esperado antes de lanzar el siguiente -- y se niega antes de lanzar el primero si la
 declaración no es válida, si el nombre del producto no se puede leer, si la base de alguna
 entrada no resuelve o no declara `.agentic/stack.yaml`, o si el propio lock de `eval` está
