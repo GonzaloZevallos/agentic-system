@@ -1576,7 +1576,7 @@ async def _run(
                 # runs, so `--fresh`, the poller and `eval run` all reach it.
                 entered = rules.entering(task, cap=cfg.decided_cap, carried=carried)
                 if assignment is not None:
-                    entered = cast(TaskInput, {**entered, "assignment": assignment})
+                    entered = {**entered, "assignment": assignment}
                 if archive_failures:
                     # The archive notice that did not land (GH-389) enters through the state's
                     # reducer with the seed itself: no line edit, no second update on a new thread.

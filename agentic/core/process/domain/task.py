@@ -373,6 +373,14 @@ def add_restorations(existing: list[Restoration], new: list[Restoration]) -> lis
     return list(joined.values())
 
 
+class ArmAssignment(TypedDict):
+    """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
+
+    experiment: str
+    arm: str
+    switches: dict[str, str]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -397,6 +405,11 @@ class TaskInput(TypedDict):
     # archive notice of `cli._run`, entering through the reducer `add_tracker_failures`.
     # Declared for the same reason as `decided`. Absent reads as none.
     tracker_failures: NotRequired[list[TrackerFailureRecord]]
+    # The arm the product's experiment gave the task (GH-470): `cli._run` sets it from
+    # `--arm`, or carries it on `--fresh`. Declared for the same reason as `decided`: without
+    # it the graph's `input_schema` drops the key and the arm never reaches the state.
+    # Absent reads as unassigned.
+    assignment: NotRequired[ArmAssignment]
 
 
 @dataclass(frozen=True)
@@ -1087,14 +1100,6 @@ class FullChecksRecord(TypedDict):
     # The checks deferred to CI (GH-453), a declared name each; written only when there is one,
     # so a record without a deferral is as it always was.
     deferred: NotRequired[list[str]]
-
-
-class ArmAssignment(TypedDict):
-    """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
-
-    experiment: str
-    arm: str
-    switches: dict[str, str]
 
 
 class TaskState(TaskInput, total=False):

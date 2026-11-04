@@ -258,3 +258,87 @@ def test_the_resumed_state_binds_the_documents_switches_whatever_the_file_says(t
     root = declared(tmp_path, DECLARATION.replace("review_mode: light", "review_mode: full"))
     cfg = configuration_from({"configurable": {"product_dir": str(root)}}, {"assignment": LIGHT})
     assert cfg.review_mode == "light"
+
+
+# --- through the real graph: the input_schema keeps only the keys TaskInput declares ----------
+
+
+async def run_through_the_real_graph(monkeypatch, tmp_path, previous=None, **options):
+    """A task run to its cap pause on `build_graph`, recording the `Configuration` every node
+    was handed. Returns the ports, the configurations and the checkpoint state."""
+    import os
+
+    from agentic import composition
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from tests.fakes import (
+        MemoryWorkspace,
+        ScriptedRunner,
+        answers,
+        classified,
+        defined,
+        delivered,
+        planned,
+        questions,
+        reviewed,
+        verdict,
+    )
+    from tests.test_cli import Saver
+
+    script = ScriptedRunner(
+        pjm=[classified()],
+        product_analyst_interviewer=[questions(1), questions(done=True)],
+        pm_interviewee=[answers(1)],
+        product_analyst=[defined()],
+        pm=[verdict("approved")],
+        tech_lead_ephemeral=[questions(done=True)],
+        tech_lead=[planned()],
+        developer=[delivered()],
+        tech_lead_review=[reviewed("approved")],
+    )
+    ports = memory_ports(script)
+    if previous is not None:
+        ports.documents.save(previous)
+    ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
+    seen = []
+
+    def ports_for(cfg):
+        seen.append(cfg)
+        return ports
+
+    monkeypatch.setattr(cli, "graph", build_graph(ports_for, arm_for=composition._arm_for))
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
+    cfg = Configuration.from_sources({}, os.environ)
+    saver = Saver()
+    task = {"id": "GH-1", "title": "Export", "description": "CSV."}
+    with pytest.raises(SystemExit):  # paused at the cap: exit 1
+        await cli._run(task, cfg, ports, checkpointer=saver, **options)
+    snapshot = await cli.graph.compile(checkpointer=saver.saver).aget_state(
+        {"configurable": {"thread_id": "GH-1"}}
+    )
+    return ports, seen, snapshot.values
+
+
+@pytest.mark.anyio
+async def test_an_assigned_task_keeps_its_arm_through_the_real_graph(monkeypatch, tmp_path):
+    ports, seen, state = await run_through_the_real_graph(monkeypatch, tmp_path, assignment=LIGHT)
+    assert state["assignment"] == LIGHT
+    assert ports.documents.load("GH-1")["assignment"] == LIGHT
+    assert seen and all(cfg.review_mode == "light" and cfg.skip_ephemeral for cfg in seen)
+
+
+@pytest.mark.anyio
+async def test_an_unassigned_task_through_the_real_graph_has_no_assignment(monkeypatch, tmp_path):
+    ports, seen, state = await run_through_the_real_graph(monkeypatch, tmp_path)
+    assert "assignment" not in state and "assignment" not in ports.documents.load("GH-1")
+    assert seen and all(cfg.review_mode == "full" for cfg in seen)
+
+
+@pytest.mark.anyio
+async def test_a_fresh_run_carries_the_arm_through_the_real_graph(monkeypatch, tmp_path):
+    previous = {**TASK, "id": "GH-1", "assignment": LIGHT}
+    _, seen, state = await run_through_the_real_graph(
+        monkeypatch, tmp_path, previous, fresh=True, experiment_id="light-vs-full"
+    )
+    assert state["assignment"] == LIGHT
+    assert seen and all(cfg.review_mode == "light" for cfg in seen)
