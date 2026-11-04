@@ -15,8 +15,6 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class ci_push__PushFailed["PushFailed"]
-    class ci_push__Pushed["Pushed"]
     class ci_review__CiEvidence["CiEvidence"]
     class coverage_guard__InvariantCoverageGuard["InvariantCoverageGuard"]
     class perf__PerfExit["PerfExit"]
@@ -33,8 +31,6 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- [application: support (parte 2)](classes-process-application-support-2.md)
-  - `ci_push.PushFailed` hereda de `ports.GitError`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`
   - `presubmit.Readiness` se asocia con `ports.LoadReader`
