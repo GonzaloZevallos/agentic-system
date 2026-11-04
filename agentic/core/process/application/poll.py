@@ -29,7 +29,16 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, experiment, merge_ci, merge_conflict, presubmit, rules
+from ..domain import (
+    ci,
+    document,
+    exempt_queue,
+    experiment,
+    merge_ci,
+    merge_conflict,
+    presubmit,
+    rules,
+)
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
@@ -1775,6 +1784,7 @@ def execute(
                 sleep,
             )
         elif action.kind == "merge":
+            registry.record_exempt_attempt(product, action.issue, "merge", now)
             argv = _argv(argv0, "merge", action.issue, product_dir)
             try:
                 pid = launcher.spawn(argv)
@@ -1785,6 +1795,8 @@ def execute(
             lines.append(f"agentic: poll: merge #{action.issue} -> pid {pid}")
         elif action.kind == "land":
             kind = (land_kinds or {}).get(action.issue, "land_model")
+            if not rules.counts_against_cap(kind):
+                registry.record_exempt_attempt(product, action.issue, "land", now)
             argv = _argv(argv0, "land", action.issue, product_dir, "--run-kind", kind)
             try:
                 pid = launcher.spawn(argv)
@@ -1872,6 +1884,52 @@ def _live_issues(
         if r.product == product and (issue := ports.inbox.issue_of(r.task_id)) is not None
     }
     return frozenset(running | {a.issue for a in actions if a.kind in _LIVE_ACTIONS})
+
+
+def _exempt_candidates(
+    product: str,
+    key: str,
+    merges: Sequence[int],
+    lands: Sequence[rules.LandCandidate],
+    attempts: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt],
+) -> list[exempt_queue.ExemptCandidate]:
+    """This product's merges and exempt (`land_checks`) lands as `exempt_queue` candidates,
+    with the instants its attempt records hold (GH-500)."""
+    wanted: list[tuple[int, exempt_queue.ExemptKind]] = [(n, "merge") for n in merges] + [
+        (c.issue, "land") for c in lands if not rules.counts_against_cap(c.kind)
+    ]
+    found = []
+    for issue, kind in wanted:
+        known = attempts.get((issue, kind)) or exempt_queue.ExemptAttempt()
+        found.append(
+            exempt_queue.ExemptCandidate(
+                kind, product, key, issue, known.first_seen, known.last_attempt
+            )
+        )
+    return found
+
+
+def _sweep_exempt_attempts(
+    ports: Ports,
+    registry: RunRegistry,
+    product: str,
+    attempts: dict[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt],
+) -> None:
+    """Delete the attempt records a fact has made stale (`exempt_queue.stale_keys`): the facts
+    are the task document's `closed_at` and `pull_request`, read once per record's issue, with
+    no call to the tracker. A task absent from this round's candidates keeps its record."""
+    facts: dict[tuple[str, int], exempt_queue.ExemptFacts] = {}
+    for issue in {issue for issue, _ in attempts}:
+        raw = ports.documents.load(ports.inbox.task_id(issue))
+        if raw is not None:
+            reference = raw.get("pull_request")
+            facts[(product, issue)] = exempt_queue.ExemptFacts(
+                bool(raw.get("closed_at")), str(reference) if reference else None, None
+            )
+    records = [(product, issue, kind) for issue, kind in attempts]
+    for _, issue, kind in exempt_queue.stale_keys(records, facts):
+        registry.clear_exempt_attempt(product, issue, kind)
+        attempts.pop((issue, kind), None)
 
 
 def run_once(
@@ -2040,6 +2098,26 @@ def run_once(
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
         own_key = rules.root_key(str(tasks_root))
+        # GH-500: the exempt queue. The records of tasks a fact closed go first; every candidate
+        # is noted the first time it is seen; this product yields to an older wait of another root.
+        exempt_records = registry.exempt_attempts(product)
+        _sweep_exempt_attempts(ports, registry, product, exempt_records)
+        for candidate in _exempt_candidates(product, own_key, merges, lands, exempt_records):
+            if candidate.first_seen is None:
+                registry.record_exempt_seen(product, candidate.issue, candidate.kind, now)
+                exempt_records[(candidate.issue, candidate.kind)] = exempt_queue.ExemptAttempt(
+                    now, candidate.last_attempt
+                )
+        exempt_head = next(
+            iter(
+                exempt_queue.ordered(
+                    _exempt_candidates(product, own_key, merges, lands, exempt_records)
+                )
+            ),
+            None,
+        )
+        exempt_waits, exempt_wait_notes = registry.exempt_waits(now)
+        exempt_others = [w for w in exempt_waits if w.root_key != own_key]
         waits, wait_notes = registry.land_waits(now)
         # A product never holds itself: only another root's fresh record holds this round.
         others = [w for w in waits if w.root_key != own_key]
@@ -2049,6 +2127,7 @@ def run_once(
             *experiment_notes,
             *spend_notes,
             *wait_notes,
+            *exempt_wait_notes,
             *_upstream_notes(upstream.cache_info().currsize > 0, upstream),
         ]
         plan = rules.poll_plan(
@@ -2070,6 +2149,32 @@ def run_once(
             held=held,
             orphan_retakes=sorted(orphans),
             spent_retakes=sorted(spent_notices),
+            exempt_attempts=exempt_records,
+            exempt_yield=exempt_queue.behind(
+                exempt_queue.rank(exempt_head) if exempt_head else None, exempt_others
+            ),
+        )
+        # GH-500: the head of this product's queue is published only while it could start. A
+        # round that starts it, or that has no such head, removes the record: the child that
+        # runs is the claim, and a record of the old `since` would hold the others for nothing.
+        started = {(a.issue, a.kind) for a in plan.actions}
+        own_exempt_live = any(
+            r.product == product and not rules.counts_against_cap(r.kind) for r in running
+        )
+        could_start = exempt_head is not None and exempt_queue.startable(
+            exempt_head,
+            backed_off=False,
+            busy=exempt_live > 0,
+            held=bool(held),
+            own_live_exempt=own_exempt_live,
+        )
+        registry.publish_exempt_wait(
+            tasks_root,
+            product,
+            exempt_head
+            if could_start and exempt_head and (exempt_head.issue, exempt_head.kind) not in started
+            else None,
+            now,
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.

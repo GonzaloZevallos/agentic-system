@@ -73,11 +73,13 @@ class ExemptCandidate:
 
 @dataclass(frozen=True)
 class ExemptAttempt:
-    """The two instants one poller keeps for a candidate, `(product, issue, kind)` keyed:
-    what `rules.poll_plan` reads to order the candidates of a product."""
+    """What one poller keeps for a candidate, `(product, issue, kind)` keyed: the two instants
+    `rules.poll_plan` reads to order the candidates of a product, and whether the starvation
+    line was already said for it (`starved_reported`, reset when a child starts for it)."""
 
     first_seen: datetime | None = None
     last_attempt: datetime | None = None
+    starved_reported: bool = False
 
 
 @dataclass(frozen=True)

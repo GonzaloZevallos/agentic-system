@@ -71,7 +71,7 @@ from agentic.core.process.application.ports import (
     Workspace,
 )
 from agentic.core.process.domain import check_results as check_results_domain
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import exempt_queue, rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import (
@@ -83,6 +83,7 @@ from agentic.core.process.domain.ci import (
 )
 from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Docs
+from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
@@ -1797,6 +1798,12 @@ class MemoryRunRegistry:
         self.land_wait_records: dict[Path, tuple[str, datetime, datetime, tuple[int, ...]]] = {}
         self.land_wait_notes: list[str] = []
         self.land_wait_publishes: list[tuple[Path, str, tuple[int, ...], datetime | None]] = []
+        # GH-500: the attempt records by `(product, issue, kind)`, the published exempt waits
+        # by resolved root, and every publish made (`None` is a removal).
+        self.exempt_records: dict[tuple[str, int, exempt_queue.ExemptKind], ExemptAttempt] = {}
+        self.exempt_wait_records: dict[Path, tuple[datetime, ExemptCandidate]] = {}
+        self.exempt_wait_notes: list[str] = []
+        self.exempt_wait_publishes: list[tuple[Path, str, ExemptCandidate | None]] = []
 
     def register(self, product: str, task_id: str, kind: rules.RunKind = "role") -> None:
         self.registered.append((product, task_id))
@@ -1863,6 +1870,65 @@ class MemoryRunRegistry:
             if now - written_at <= rules.LAND_WAIT_TTL
         ]
         return waits, list(self.land_wait_notes)
+
+    def exempt_attempts(
+        self, product: str
+    ) -> dict[tuple[int, exempt_queue.ExemptKind], ExemptAttempt]:
+        return {
+            (issue, kind): attempt
+            for (owner, issue, kind), attempt in self.exempt_records.items()
+            if owner == product
+        }
+
+    def record_exempt_seen(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind, now: datetime
+    ) -> None:
+        existing = self.exempt_records.get((product, issue, kind)) or ExemptAttempt()
+        if existing.first_seen is None:
+            self.exempt_records[(product, issue, kind)] = dataclasses.replace(
+                existing, first_seen=now
+            )
+
+    def record_exempt_attempt(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind, now: datetime
+    ) -> None:
+        existing = self.exempt_records.get((product, issue, kind)) or ExemptAttempt()
+        self.exempt_records[(product, issue, kind)] = ExemptAttempt(
+            existing.first_seen or now, now, False
+        )
+
+    def mark_exempt_starved(self, product: str, issue: int, kind: exempt_queue.ExemptKind) -> None:
+        existing = self.exempt_records.get((product, issue, kind))
+        if existing is not None:
+            self.exempt_records[(product, issue, kind)] = dataclasses.replace(
+                existing, starved_reported=True
+            )
+
+    def clear_exempt_attempt(self, product: str, issue: int, kind: exempt_queue.ExemptKind) -> None:
+        self.exempt_records.pop((product, issue, kind), None)
+
+    def exempt_waits(self, now: datetime) -> tuple[list[ExemptWait], list[str]]:
+        waits = [
+            ExemptWait(
+                candidate.product,
+                rules.root_key(str(root)),
+                written_at,
+                exempt_queue.rank(candidate).since,
+            )
+            for root, (written_at, candidate) in self.exempt_wait_records.items()
+            if now - written_at <= exempt_queue.EXEMPT_WAIT_TTL
+        ]
+        return waits, list(self.exempt_wait_notes)
+
+    def publish_exempt_wait(
+        self, root: Path, product: str, candidate: ExemptCandidate | None, now: datetime
+    ) -> None:
+        root = root.resolve()
+        self.exempt_wait_publishes.append((root, product, candidate))
+        if candidate is None:
+            self.exempt_wait_records.pop(root, None)
+        else:
+            self.exempt_wait_records[root] = (now, candidate)
 
 
 class FakeLoadReader:

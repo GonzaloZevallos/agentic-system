@@ -18,20 +18,25 @@ import hashlib
 import json
 import math
 import os
+import re
 import socket
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from ...application.ports import LaunchAttempt, RunRegistration
-from ...domain import rules
+from ...domain import exempt_queue, rules
 from .liveness import current_boot_id, is_alive
 
 _LOCK_NAME = ".lock"
 _LAUNCHES_DIR = "launches"
 _SPEND_DIR = "spend"
 _WAITING_DIR = "waiting"
+_EXEMPT_DIR = "exempt"
+_EXEMPT_ATTEMPTS = "attempts"
+_EXEMPT_WAITING = "waiting"
 
 
 class FilesystemRunRegistry:
@@ -234,6 +239,124 @@ class FilesystemRunRegistry:
     def _land_wait_path(self, root: Path) -> Path:
         return self.dir / _WAITING_DIR / f"{rules.root_key(str(root))}.json"
 
+    # -- exempt attempts and waits (GH-500) -------------------------------------------------
+
+    def exempt_attempts(self, product: str) -> dict[tuple[int, exempt_queue.ExemptKind], _Attempt]:
+        directory = self.dir / _EXEMPT_DIR / _EXEMPT_ATTEMPTS
+        if not directory.is_dir():
+            return {}
+        pattern = re.compile(rf"{re.escape(product)}-(\d+)-(merge|land)\.json")
+        found: dict[tuple[int, exempt_queue.ExemptKind], _Attempt] = {}
+        for path in sorted(directory.glob("*.json")):
+            named = pattern.fullmatch(path.name)
+            attempt = _read_attempt(path, product)
+            if named is None or attempt is None:
+                continue
+            kind: exempt_queue.ExemptKind = "land" if named.group(2) == "land" else "merge"
+            found[(int(named.group(1)), kind)] = attempt
+        return found
+
+    def record_exempt_seen(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind, now: datetime
+    ) -> None:
+        existing = self._exempt_attempt(product, issue, kind)
+        if existing is not None and existing.first_seen is not None:
+            return
+        kept = existing or exempt_queue.ExemptAttempt()
+        self._write_attempt(product, issue, kind, replace(kept, first_seen=now))
+
+    def record_exempt_attempt(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind, now: datetime
+    ) -> None:
+        existing = self._exempt_attempt(product, issue, kind) or exempt_queue.ExemptAttempt()
+        seen = existing.first_seen or now
+        self._write_attempt(
+            product, issue, kind, exempt_queue.ExemptAttempt(seen, now, starved_reported=False)
+        )
+
+    def mark_exempt_starved(self, product: str, issue: int, kind: exempt_queue.ExemptKind) -> None:
+        existing = self._exempt_attempt(product, issue, kind)
+        if existing is not None:
+            self._write_attempt(product, issue, kind, replace(existing, starved_reported=True))
+
+    def clear_exempt_attempt(self, product: str, issue: int, kind: exempt_queue.ExemptKind) -> None:
+        self._exempt_attempt_path(product, issue, kind).unlink(missing_ok=True)
+
+    def exempt_waits(self, now: datetime) -> tuple[list[exempt_queue.ExemptWait], list[str]]:
+        directory = self.dir / _EXEMPT_DIR / _EXEMPT_WAITING
+        if not directory.is_dir():
+            return [], []
+        current = self._boot_id()
+        waits: list[exempt_queue.ExemptWait] = []
+        notes: list[str] = []
+        for path in sorted(directory.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                written_at = datetime.fromisoformat(data["written_at"])
+                since = datetime.fromisoformat(data["since"])
+                product, root = str(data["product"]), str(data["root"])
+                boot = data.get("boot_id")
+                if written_at.tzinfo is None or since.tzinfo is None:
+                    raise ValueError("naive instant")
+            except (OSError, ValueError, KeyError, TypeError):
+                notes.append(f"agentic: poll: exempt wait file {path.name} unreadable, skipped")
+                continue
+            if boot is not None and current is not None and boot != current:
+                continue
+            if now - written_at > exempt_queue.EXEMPT_WAIT_TTL:
+                continue
+            waits.append(exempt_queue.ExemptWait(product, rules.root_key(root), written_at, since))
+        return waits, notes
+
+    def publish_exempt_wait(
+        self,
+        root: Path,
+        product: str,
+        candidate: exempt_queue.ExemptCandidate | None,
+        now: datetime,
+    ) -> None:
+        resolved = root.resolve()
+        path = self.dir / _EXEMPT_DIR / _EXEMPT_WAITING / f"{rules.root_key(str(resolved))}.json"
+        if candidate is None:
+            path.unlink(missing_ok=True)
+            return
+        ranked = exempt_queue.rank(candidate)
+        record = {
+            "product": product,
+            "root": str(resolved),
+            "written_at": now.isoformat(),
+            "boot_id": self._boot_id(),
+            "rank": ranked.kind,
+            "since": ranked.since.isoformat(),
+            "issue": candidate.issue,
+            "kind": candidate.kind,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _replace_json(path, record)
+
+    def _exempt_attempt(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind
+    ) -> _Attempt | None:
+        return _read_attempt(self._exempt_attempt_path(product, issue, kind), product)
+
+    def _write_attempt(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind, attempt: _Attempt
+    ) -> None:
+        path = self._exempt_attempt_path(product, issue, kind)
+        record: dict[str, object] = {
+            "product": product,
+            "issue": issue,
+            "kind": kind,
+            "first_seen": attempt.first_seen.isoformat() if attempt.first_seen else None,
+            "last_attempt": attempt.last_attempt.isoformat() if attempt.last_attempt else None,
+            "starved_reported": attempt.starved_reported,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _replace_json(path, record)
+
+    def _exempt_attempt_path(self, product: str, issue: int, kind: exempt_queue.ExemptKind) -> Path:
+        return self.dir / _EXEMPT_DIR / _EXEMPT_ATTEMPTS / f"{product}-{issue}-{kind}.json"
+
     @staticmethod
     def _read_spend_file(path: Path, since: datetime) -> tuple[list[rules.SpendRun], list[str]]:
         """The entries of one spend file that ended at or after `since`; an unparseable
@@ -261,6 +384,29 @@ class FilesystemRunRegistry:
             else []
         )
         return runs, notes
+
+
+_Attempt = exempt_queue.ExemptAttempt
+
+
+def _read_attempt(path: Path, product: str) -> _Attempt | None:
+    """The record of one attempt file; `None` when it is absent or damaged (not JSON, another
+    product's, a naive or malformed instant): such a file is skipped, never raised on."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data["product"] != product:
+            return None
+        first, last = data.get("first_seen"), data.get("last_attempt")
+        seen = datetime.fromisoformat(first) if first is not None else None
+        tried = datetime.fromisoformat(last) if last is not None else None
+        starved = data.get("starved_reported", False)
+        if not isinstance(starved, bool):
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if (seen is not None and seen.tzinfo is None) or (tried is not None and tried.tzinfo is None):
+        return None
+    return _Attempt(seen, tried, starved)
 
 
 def _replace_json(path: Path, record: dict[str, object]) -> None:

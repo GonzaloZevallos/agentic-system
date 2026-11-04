@@ -7,7 +7,7 @@ and launcher doubles."""
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from agentic.core.process.application import landing, poll
 from agentic.core.process.application.ports import (
@@ -16,7 +16,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
     Upstream,
 )
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import document, exempt_queue, rules
 from tests.core.process.application.test_land_run_kind import _failed_local_check_after_a_rerun
 from tests.core.process.application.test_poll import (
     ESCALATED_AT,
@@ -33,7 +33,8 @@ from tests.core.process.application.test_poll_merge import (
     _ports,
     _unapproved,
 )
-from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryStack
+from tests.core.process.application.test_poll_scratch import _free
+from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryScratch, MemoryStack
 
 NO_WORK = "agentic: poll: nothing to do this round"
 LIVE = frozenset({"rerun", "fix", "re_review"})
@@ -399,3 +400,112 @@ def test_the_gap_before_the_resume_registers_counts_the_land_and_defers_another(
 
     assert again.spawned == []
     assert second == ["agentic: poll: land #6 waits: no_slot"]
+
+
+# -- GH-500: the exempt queue over the registry ------------------------------------------------
+
+T0 = ESCALATED_AT
+
+
+def _at(minutes: int) -> datetime:
+    return T0 + timedelta(minutes=minutes)
+
+
+def _tasks_root(cfg):
+    return (cfg.product_dir / document.TASKS_SUBDIR).resolve()
+
+
+def _merged_issues(launcher) -> list[str]:
+    return [argv[3] for argv in launcher.spawned if argv[1] == "merge"]
+
+
+def test_the_merge_that_just_started_goes_behind_the_others_next_round(tmp_path):
+    cfg, ports, registry = _cfg(tmp_path), _ports(478, 487, 492), MemoryRunRegistry()
+    for issue in (478, 487, 492):
+        registry.record_exempt_seen("product", issue, "merge", T0)
+
+    first, second = FakeLauncher(), FakeLauncher()
+    _round(cfg, ports, registry, first, _at(5))
+    _round(cfg, ports, registry, second, _at(6))
+
+    assert _merged_issues(first) == ["478"]
+    assert _merged_issues(second) == ["487"]
+    assert registry.exempt_attempts("product")[(478, "merge")].last_attempt == _at(5)
+
+
+def test_a_candidate_is_noted_the_first_time_it_is_seen_and_keeps_that_instant(tmp_path):
+    cfg, ports, registry = _cfg(tmp_path), _ports(5), MemoryRunRegistry()
+
+    _round(cfg, ports, registry, FakeLauncher(), _at(1))
+    _round(cfg, ports, registry, FakeLauncher(), _at(2))
+
+    seen = registry.exempt_attempts("product")[(5, "merge")]
+    assert (seen.first_seen, seen.last_attempt) == (_at(1), _at(2))
+
+
+def _two_products(tmp_path):
+    a = dataclasses.replace(_ports(5), stack=MemoryStack(product="a"))
+    b = dataclasses.replace(_ports(5), stack=MemoryStack(product="b"))
+    return a, b, _cfg(tmp_path / "a"), _cfg(tmp_path / "b")
+
+
+def test_the_product_whose_candidate_waited_longer_makes_the_other_yield(tmp_path):
+    a_ports, b_ports, a_cfg, b_cfg = _two_products(tmp_path)
+    registry = MemoryRunRegistry()
+    registry.record_exempt_seen("b", 5, "merge", _at(4))
+    registry.record_exempt_seen("a", 5, "merge", T0)
+    a_key = rules.root_key(str(_tasks_root(a_cfg)))
+    older = exempt_queue.ExemptCandidate("merge", "a", a_key, 5, first_seen=T0)
+    registry.publish_exempt_wait(_tasks_root(a_cfg), "a", older, _at(5))
+    launcher = FakeLauncher()
+
+    lines = _round(b_cfg, b_ports, registry, launcher, _at(6))
+
+    assert launcher.spawned == []
+    assert "agentic: poll: merge #5 waits: exempt_busy" in lines
+    # B's own candidate could start, so it is published behind A's, and A never yields to it.
+    assert {w.product for w in registry.exempt_waits(_at(6))[0]} == {"a", "b"}
+    a_launcher = FakeLauncher()
+    _round(a_cfg, a_ports, registry, a_launcher, _at(7))
+    assert _merged_issues(a_launcher) == ["5"]
+    assert [w.product for w in registry.exempt_waits(_at(7))[0]] == ["b"]
+
+
+def test_a_held_round_removes_its_wait_so_the_other_product_starts(tmp_path):
+    a_ports, b_ports, a_cfg, b_cfg = _two_products(tmp_path)
+    registry = MemoryRunRegistry()
+    registry.record_exempt_seen("b", 5, "merge", _at(4))
+    a_key = rules.root_key(str(_tasks_root(a_cfg)))
+    registry.publish_exempt_wait(
+        _tasks_root(a_cfg),
+        "a",
+        exempt_queue.ExemptCandidate("merge", "a", a_key, 5, first_seen=T0),
+        _at(5),
+    )
+    held = dataclasses.replace(
+        a_ports, scratch=MemoryScratch(), free_space=_free(a_cfg.product_dir, tmp_mb=10)
+    )
+    held_cfg = _cfg(a_cfg.product_dir, scratch_dir=a_cfg.product_dir / "scratch-root")
+
+    _round(held_cfg, held, registry, FakeLauncher(), _at(6))
+    launcher = FakeLauncher()
+    _round(b_cfg, b_ports, registry, launcher, _at(6))
+
+    assert registry.exempt_wait_publishes[1] == (_tasks_root(a_cfg), "a", None)
+    assert _merged_issues(launcher) == ["5"]
+
+
+def test_a_filtered_or_busy_candidate_keeps_its_record_and_a_closed_task_loses_it(tmp_path):
+    cfg, ports, registry = _cfg(tmp_path), _ports(5, 6), MemoryRunRegistry()
+    registry.record_exempt_seen("product", 5, "merge", T0)
+    registry.record_exempt_seen("product", 6, "merge", T0)
+    registry.entries.append(_child("role", "GH-5"))  # a live child of #5: never a candidate
+
+    for minute in (1, 2):
+        _round(cfg, ports, registry, FakeLauncher(), _at(minute))
+        assert (5, "merge") in registry.exempt_attempts("product")
+
+    ports.documents.record_closure("GH-6", {"closed_at": "2026-11-04T09:00:00.000+00:00"})
+    _round(cfg, ports, registry, FakeLauncher(), _at(3))
+
+    assert set(registry.exempt_attempts("product")) == {(5, "merge")}
