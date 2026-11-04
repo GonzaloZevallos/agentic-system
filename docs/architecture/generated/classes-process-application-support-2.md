@@ -15,7 +15,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__Checkout["Checkout"]
     class ports__CiLogs["CiLogs"]
     class ports__CommandResult["CommandResult"]
     class ports__Commands["Commands"]
@@ -28,6 +27,8 @@ classDiagram
     class ports__Inbox["Inbox"]
     class ports__IssueComment["IssueComment"]
     class ports__IssueRow["IssueRow"]
+    class ports__IssueState["IssueState"]
+    class ports__LaunchAttempt["LaunchAttempt"]
 ```
 
 ## Relaciones con otras páginas

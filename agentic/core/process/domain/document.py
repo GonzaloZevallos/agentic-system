@@ -180,6 +180,10 @@ def render(
         # them, so a document without them is byte-identical to one written before.
         **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),
         **({"pushed_at": pushed_at} if (pushed_at := state.get("pushed_at")) else {}),
+        # The head a review published to the CI ref ahead of `full_checks` (GH-465) and when:
+        # the push fact, never a verdict. Written only when set, cleared with `None`, so a
+        # document without one is byte-identical to one written before.
+        **({"ci_speculation": s} if (s := state.get("ci_speculation")) else {}),
         # What the release reaped when the task closed (GH-282, ADR-0052), written only when
         # something was, so a document without one is byte-identical to one written before.
         **({"reaped_at_cleanup": r} if (r := state.get("reaped_at_cleanup")) else {}),

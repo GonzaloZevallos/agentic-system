@@ -39,6 +39,7 @@ graph TD
     m_adapters__filesystem__documents --> g_pkg__domain
     m_adapters__filesystem__file_inbox --> g_pkg__domain
     m_adapters__filesystem__free_space --> g_pkg__domain
+    m_adapters__filesystem__liveness --> g_pkg__application
     m_adapters__filesystem__liveness --> g_pkg__domain
     m_adapters__filesystem__lock --> g_pkg__application
     m_adapters__filesystem__lock --> m_adapters__filesystem__liveness

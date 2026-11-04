@@ -15,10 +15,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__Upstream["Upstream"]
-    class ports__UpstreamMerge["UpstreamMerge"]
-    class ports__Workspace["Workspace"]
-    class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
     class preflight__ScratchInARepository["ScratchInARepository"]
     class run_role__Escalating["Escalating"]
     class run_role__EstimateCapReached["EstimateCapReached"]
@@ -36,9 +32,5 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- [application: landing](classes-process-application-landing.md)
-  - `landing_plan.LandingContext` se asocia con `ports.Upstream`
-- [application: support (parte 3)](classes-process-application-support-3.md)
-  - `ports.Ports` se asocia con `ports.Workspace`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`

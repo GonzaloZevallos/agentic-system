@@ -17,6 +17,7 @@ classDiagram
     class filesystem__experiment_file__FilesystemExperimentFile["FilesystemExperimentFile"]
     class filesystem__file_inbox__FileInbox["FileInbox"]
     class filesystem__free_space__StatvfsFreeSpace["StatvfsFreeSpace"]
+    class filesystem__liveness__OsRunProcess["OsRunProcess"]
     class filesystem__lock__FilesystemRunLock["FilesystemRunLock"]
     class filesystem__perf_lock__FilesystemPerfLock["FilesystemPerfLock"]
     class filesystem__prompts__FilesystemPrompts["FilesystemPrompts"]

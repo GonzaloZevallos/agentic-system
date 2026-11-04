@@ -30,6 +30,7 @@ graph TD
     m_application__board_sync["application.board_sync"]
     m_application__poll["application.poll"]
     m_application__registration["application.registration"]
+    m_application__restore["application.restore"]
     m_application__archive --> g_application__support
     m_application__archive --> g_domain__machine
     m_application__archive --> g_domain__state
@@ -51,4 +52,10 @@ graph TD
     m_application__poll --> m_application__registration
     m_application__registration --> g_application__support
     m_application__registration --> g_domain__state
+    m_application__restore --> g_application__landing
+    m_application__restore --> g_application__lifecycle__2
+    m_application__restore --> g_application__support
+    m_application__restore --> g_domain__landing
+    m_application__restore --> g_domain__state
+    m_application__restore --> m_application__archive
 ```

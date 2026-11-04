@@ -73,6 +73,7 @@ from .core.process.application import archive, close_issues, reflect_run, releas
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
+from .core.process.application import stop as stopmod
 from .core.process.application.delivered import files_patch
 from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.landing import land
@@ -320,6 +321,11 @@ def build_parser() -> CommandTree:
         "--dry-run", action="store_true", help="show what would resume and stop, spending nothing"
     )
     resume.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    resume.add_argument(
+        "--by-poller",
+        action="store_true",
+        help="the poller spawned this resume (GH-466): it does not reset the retake budget",
+    )
     close = add(
         ("close",),
         sub,
@@ -375,6 +381,15 @@ def build_parser() -> CommandTree:
         help="the prefix the archived run's branches live under",
     )
     restore.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    stop_parser = add(
+        ("stop",),
+        sub,
+        "stop",
+        help="stop the run of issue N on purpose and mark it so the poller never retakes it "
+        "(GH-466); `agentic resume --issue N` continues it",
+    )
+    stop_parser.add_argument("--issue", type=int, metavar="N", required=True)
+    stop_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     eval_parser = add(
         ("eval",), sub, "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -713,6 +728,7 @@ def main() -> None:
             "merge",
             "land",
             "restore",
+            "stop",
             "scores",
             "dashboards",
         ):
@@ -785,6 +801,7 @@ def main() -> None:
                 detach=args.detach,
                 child_argv=_child_argv(),
                 stop=stop,
+                by_poller=args.by_poller,
             )
         elif args.command == "close":
             if args.all:
@@ -803,6 +820,9 @@ def main() -> None:
                 raise ValueError(f"--from {args.archive!r} is not an archive/run<N>-<sha> prefix")
             task_id = ports.inbox.task_id(args.issue)
             work = partial(_restore, task_id, args.archive, cfg, bind_task(ports, task_id))
+        elif args.command == "stop":
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_stop, task_id, args.issue, cfg, ports)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -1089,8 +1109,10 @@ class StopCause:
     settle: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def settle_lock(self, lock: RunLock, task_id: str) -> None:
-        """Keep the lock record at a shutdown or release it, once: whoever gets here
-        second finds it done. The crashed-record case belongs to `_locked` alone."""
+        """Keep the lock record or release it, once: whoever gets here second finds it done.
+        Kept marked for the shutdown, marked as crashed when the graph raised with no signal,
+        and marked as a deliberate stop for any other signal (SIGTERM, SIGHUP, SIGINT):
+        the poller never retakes that run. Released otherwise."""
         with self.settle:
             if self.lock_settled:
                 return
@@ -1099,6 +1121,8 @@ class StopCause:
                 lock.keep_at_shutdown(task_id)
             elif self.crashed and not self.signalled:
                 lock.keep_crashed(task_id, telemetry.system_version())
+            elif self.signalled:
+                lock.keep_stopped(task_id, os.getpid())
             else:
                 lock.release(task_id)
 
@@ -1121,7 +1145,7 @@ def _system_is_stopping() -> bool:
 
 # Declared, not measured: seconds the hard deadline gives the telemetry flush before it exits.
 _STOP_FLUSH_CAP_S = 5.0
-_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
 async def _signal_guarded(
@@ -1133,8 +1157,8 @@ async def _signal_guarded(
     hard_exit: Callable[[int], object] = os._exit,
     flush: Callable[[], None] = telemetry.flush,
 ) -> None:
-    """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM or a
-    SIGHUP cancels (Tech Lead plan, subtask `signals`). This is the one place that
+    """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM, a SIGHUP
+    or a SIGINT cancels (Tech Lead plan, subtask `signals`). This is the one place that
     restructures the `anyio.run(work)` call; every other subtask takes its shape as it
     finds it.
 
@@ -1433,13 +1457,14 @@ def _locked(
     lock: RunLock, task_id: str, stop: StopCause | None = None
 ) -> Iterator[LockRecord | None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
-    releases whether the invocation delivers, escalates or raises -- except two cases where
+    releases whether the invocation delivers, escalates or raises -- except three cases where
     the record stays, marked, and exactly one action runs (`keep_at_shutdown`,
-    `keep_crashed`, `release`, in that priority): the system shutdown stopped it
-    (`stop.at_shutdown`), so the next boot can retake the run; or the graph itself raised
+    `keep_crashed`, `keep_stopped`, `release`, in that priority): the system shutdown stopped
+    it (`stop.at_shutdown`), so the next boot can retake the run; the graph itself raised
     (`stop.crashed`, set only by `_invoke`) with no signal, so the poller can retake it
     -- the dying process's own memoised system version is the right one, it is a fresh
-    process. A `CannotStart`, a signal, or an exception outside `app.ainvoke` releases.
+    process; or any other signal stopped it (`stop.signalled`), a deliberate stop the poller
+    never retakes. A `CannotStart` or an exception outside `app.ainvoke` releases.
     Yields the record of the dead run it took over, if any
     (`RunLock.acquire` only ever hands back a record of this host's own, never probing
     another host's)."""
@@ -1794,6 +1819,7 @@ async def _resume(
     spawn: Spawner | None = None,
     stop: StopCause | None = None,
     estimate: float | None = None,
+    by_poller: bool = False,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -1913,7 +1939,7 @@ async def _resume(
                     crashed = r.interrupted
                     command: Command | None = None if crashed else Command(resume=r.answer())
                     await _record_tracker_failures(
-                        migrated_app, config, resuming.announce(r, ports), seed
+                        migrated_app, config, resuming.announce(r, ports, by_poller=by_poller), seed
                     )
                     final = await _invoke(
                         migrated_app,
@@ -1929,7 +1955,9 @@ async def _resume(
             else:
                 crashed = r.interrupted
                 command = None if crashed else Command(resume=r.answer())
-                await _record_tracker_failures(app, config, resuming.announce(r, ports), None)
+                await _record_tracker_failures(
+                    app, config, resuming.announce(r, ports, by_poller=by_poller), None
+                )
                 final = await _invoke(
                     app, command, config, r.paused, ports, cfg, "resume", r.decision, stop=stop
                 )
@@ -2192,6 +2220,23 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
 
 
 _ARCHIVE_PREFIX = re.compile(r"archive/run\d+-[0-9A-Za-z]+")
+
+
+async def _stop(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> None:
+    """`agentic stop --issue N` (GH-466): marks the task's run as deliberately stopped and
+    stops it (`stopmod.stop`). Takes no lock (it must reach a run that holds it), runs no
+    role and opens no span. One line, exit 0 for every outcome; with no task document it says
+    to remove the `agentic` label, the hold README.md describes."""
+    outcome = await anyio.to_thread.run_sync(
+        partial(stopmod.stop, task_id, ports, _lock_for(cfg), liveness.OsRunProcess())
+    )
+    if outcome == "no_document":
+        print(
+            f"agentic: #{issue} has no task document: nothing to stop; "
+            "to hold it, remove the `agentic` label from the issue"
+        )
+        return
+    print(f"stopped #{issue} ({outcome}); to continue: agentic resume --issue {issue}")
 
 
 async def _restore(task_id: str, archive_prefix: str, cfg: Configuration, ports: Ports) -> None:
