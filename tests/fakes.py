@@ -759,6 +759,8 @@ class MemoryWorkspace:
         self.conflicts: set[str] = set()
         # GH-492: branches `merge` refuses without any unmerged path (`MergeFailed`).
         self.failed_merges: set[str] = set()
+        # The text git gave for a branch in `failed_merges`; `refused: <branch>` by default.
+        self.failed_merge_reasons: dict[str, str] = {}
         # `merge_keeping_conflicts` calls, and the paths a scripted conflict leaves
         # (`x.py` when a branch is in `conflicts` but not given here). A branch in
         # `refused_branches` conflicts with nothing to resolve: a refusal with no
@@ -1018,7 +1020,7 @@ class MemoryWorkspace:
         self.merges.append((path, branch))
         self.merge_messages.append(message)
         if branch in self.failed_merges:
-            return MergeFailed(f"refused: {branch}")
+            return MergeFailed(self.failed_merge_reasons.get(branch, f"refused: {branch}"))
         if branch in self.conflicts:
             return MergeConflict(
                 self.conflict_paths.get(branch, ("x.py",)), f"CONFLICT in {branch}"

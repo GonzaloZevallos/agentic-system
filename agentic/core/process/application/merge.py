@@ -486,7 +486,9 @@ def _build_pair(
             return _Fresh(stopped=MergeResult("refused", "merge_conflict"))
         if isinstance(merged, MergeFailed):
             # A refusal with no unmerged path says nothing about the code: nothing is recorded.
-            log(f"agentic: merge: {task_id}: could not publish the fresh CI run: {merged.reason}")
+            # Git's own text reaches the log only through `scrub` (GH-487), never a `str.format`.
+            said = scrub(merged.reason)
+            log(f"agentic: merge: {task_id}: could not publish the fresh CI run: " + said)
             return _Fresh(stopped=MergeResult("stopped", "ci_publish_failed"))
         tested = ports.workspace.full_head(path)
         if again is None:
