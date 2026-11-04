@@ -301,6 +301,7 @@ def _merge_facts(
         in_eval_set=None if eval_set is None else number in eval_set,
         touched_paths=None,
         ci_untrusted=None,
+        merge_ci=tuple(raw.get("merge_ci") or ()),
         attempts=count if isinstance(count, int) and attempts.get("head") == pr_head else 0,
         checks_head=_text(checks.get("head")),
         checks_master=_text(checks.get("master")),
@@ -562,11 +563,20 @@ def assess_merge(
     except ValueError as exc:
         raise StackUnreadable(str(exc)) from exc
     gate = ci_gate(raw, declared)
+    try:
+        dispatch_declared = ports.stack.ci_dispatch(task_base(raw, ports)) is not None
+    except ValueError:
+        dispatch_declared = False
 
     def gated(candidate: rules.MergeFacts) -> rules.MergeFacts:
         # What the decision reads before the CI is: the names, so a refusal ahead of the CI
         # is the same one, and no verdict, so the CI itself is a `wait`.
-        return replace(candidate, ci_required=gate.names, ci_plan_only=gate.plan_only)
+        return replace(
+            candidate,
+            ci_required=gate.names,
+            ci_plan_only=gate.plan_only,
+            ci_dispatch_declared=dispatch_declared,
+        )
 
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(gated(facts))
