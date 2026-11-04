@@ -28,6 +28,7 @@ classDiagram
     class ports__CheckResults["CheckResults"]
     class ports__CheckScheduler["CheckScheduler"]
     class ports__CheckTool["CheckTool"]
+    class ports__Checkout["Checkout"]
 ```
 
 ## Relaciones con otras páginas
