@@ -110,4 +110,4 @@ apostrophe (todo salvo e2e, y formas afectadas) es un seguimiento fuera de esta 
 
 **Addendum 2026-11-03 (GH-462).** Para un producto que declara `ci:`, el retroceso a la suite local descrito arriba se quita: sin veredicto de la CI, `full_checks` escala con la clase `ci` y una causa cerrada, y una cabeza que toca `.github/` se juzga por un despacho del workflow de la base si el producto declara `ci_dispatch`. Ver [ADR-0080](0080-un-producto-con-ci-corre-su-nivel-completo-solo-en-github.md).
 
-**Adenda 2026-11-04 (GH-469).** `full_checks` ya no es un nodo propio: corre dentro de `verify`, solo y primero salvo que haya que esperar el veredicto del CI. Ver [ADR-0083](0083-verificadores-de-la-cabeza-integrada-en-conjunto.md).
+**Adenda 2026-11-04 (GH-469).** `full_checks` ya no es un nodo propio: corre dentro de `verify`, solo y primero salvo que haya que esperar el veredicto del CI. Ver [ADR-0084](0084-verificadores-de-la-cabeza-integrada-en-conjunto.md).

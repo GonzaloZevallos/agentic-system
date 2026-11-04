@@ -64,4 +64,4 @@ convocada no cuesta nada más; el texto del prompt del Tech Lead sí cambia para
 - Un `measure` que imprime la unidad equivocada se cree.
 - La atribución `Origin` del playbook y `reflect.py` caen en `review` para estos hallazgos.
 
-**Adenda 2026-11-04 (GH-469).** `qa_performance` ya no es un nodo propio: corre junto con los demás verificadores de la cabeza integrada en `verify`. Ver [ADR-0083](0083-verificadores-de-la-cabeza-integrada-en-conjunto.md).
+**Adenda 2026-11-04 (GH-469).** `qa_performance` ya no es un nodo propio: corre junto con los demás verificadores de la cabeza integrada en `verify`. Ver [ADR-0084](0084-verificadores-de-la-cabeza-integrada-en-conjunto.md).
