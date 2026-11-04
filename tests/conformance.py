@@ -24,6 +24,7 @@ from agentic.core.process.application.ports import (
     CheckScheduler,
     CiLogs,
     Commands,
+    ExperimentFile,
     FlagVocabulary,
     FreeSpace,
     Inbox,
@@ -52,6 +53,7 @@ from tests.fakes import (
     FakeBoardSent,
     FakeCheckScheduler,
     FakeCiLogs,
+    FakeExperimentFile,
     FakeFreeSpace,
     FakeLauncher,
     FakeLoadReader,
@@ -97,6 +99,7 @@ _check_scheduler: CheckScheduler = FakeCheckScheduler()
 _scratch: Scratch = MemoryScratch()
 _free_space: FreeSpace = FakeFreeSpace()
 _ci_logs: CiLogs = FakeCiLogs()
+_experiment_file: ExperimentFile = FakeExperimentFile()
 _stop_flag: StopFlag = FakeStopFlag()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
@@ -148,6 +151,7 @@ COVERED: dict[str, type] = {
     "Scratch": MemoryScratch,
     "FreeSpace": FakeFreeSpace,
     "CiLogs": FakeCiLogs,
+    "ExperimentFile": FakeExperimentFile,
     "StopFlag": FakeStopFlag,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,

@@ -20,6 +20,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__CiLogRecord["CiLogRecord"]
+    class task__CiSpeculation["CiSpeculation"]
     class task__CloseDocs["CloseDocs"]
     class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]
@@ -32,5 +34,4 @@ classDiagram
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
-    class task__FullCheckEntry["FullCheckEntry"]
 ```

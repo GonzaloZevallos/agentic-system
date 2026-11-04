@@ -112,14 +112,21 @@ class FilesystemRunRegistry:
         if not path.is_file():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        return LaunchAttempt(datetime.fromisoformat(data["since"]), int(data["prior"]))
+        return LaunchAttempt(
+            datetime.fromisoformat(data["since"]), int(data["prior"]), data.get("arm")
+        )
 
-    def record_launch(self, product: str, issue: int, when: datetime) -> None:
+    def record_launch(
+        self, product: str, issue: int, when: datetime, arm: str | None = None
+    ) -> None:
         path = self._launch_path(product, issue)
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = self.launch_attempts(product, issue)
         prior = existing.prior if existing is not None else 0
-        record = {"since": when.isoformat(), "prior": prior + 1}
+        kept = arm if arm is not None else (existing.arm if existing is not None else None)
+        record: dict[str, str | int] = {"since": when.isoformat(), "prior": prior + 1}
+        if kept is not None:
+            record["arm"] = kept
         path.write_text(json.dumps(record), encoding="utf-8")
 
     def clear_launch(self, product: str, issue: int) -> None:

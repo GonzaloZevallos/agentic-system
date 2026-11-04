@@ -376,6 +376,14 @@ def add_restorations(existing: list[Restoration], new: list[Restoration]) -> lis
     return list(joined.values())
 
 
+class ArmAssignment(TypedDict):
+    """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
+
+    experiment: str
+    arm: str
+    switches: dict[str, str]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -400,6 +408,11 @@ class TaskInput(TypedDict):
     # archive notice of `cli._run`, entering through the reducer `add_tracker_failures`.
     # Declared for the same reason as `decided`. Absent reads as none.
     tracker_failures: NotRequired[list[TrackerFailureRecord]]
+    # The arm the product's experiment gave the task (GH-470): `cli._run` sets it from
+    # `--arm`, or carries it on `--fresh`. Declared for the same reason as `decided`: without
+    # it the graph's `input_schema` drops the key and the arm never reaches the state.
+    # Absent reads as unassigned.
+    assignment: NotRequired[ArmAssignment]
 
 
 @dataclass(frozen=True)
@@ -1296,6 +1309,11 @@ class TaskState(TaskInput, total=False):
     # graph refuse two writes in the same step. `last` is right here because every
     # branch of a wave writes the identical snapshot.
     experiment: Annotated[dict[str, str], last]
+    # The arm the product's experiment gave this task (GH-470, ADR-0030 amended): which
+    # experiment, the arm's name and the switches it set, as `arm_label` reads them.
+    # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
+    # `experiment`. Written once when the run starts, so no reducer.
+    assignment: ArmAssignment
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str

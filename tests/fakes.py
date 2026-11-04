@@ -31,6 +31,7 @@ from agentic.core.process.application.ports import (
     CiLogs,
     CommandResult,
     Commands,
+    ExperimentFile,
     FastForwardView,
     FlagVocabulary,
     FreeSpace,
@@ -1757,10 +1758,13 @@ class MemoryRunRegistry:
     def launch_attempts(self, product: str, issue: int) -> LaunchAttempt | None:
         return self.attempts.get((product, issue))
 
-    def record_launch(self, product: str, issue: int, when: datetime) -> None:
+    def record_launch(
+        self, product: str, issue: int, when: datetime, arm: str | None = None
+    ) -> None:
         existing = self.attempts.get((product, issue))
         prior = existing.prior if existing is not None else 0
-        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1)
+        kept = arm if arm is not None else (existing.arm if existing is not None else None)
+        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept)
 
     def clear_launch(self, product: str, issue: int) -> None:
         self.attempts.pop((product, issue), None)
@@ -1974,6 +1978,23 @@ class FakeCiLogs:
         return list(self.logs)
 
 
+class FakeExperimentFile:
+    """GH-470: no test reads a real `.agentic/experiment.yaml`. `read` answers `data` (`None`
+    declares no experiment) or raises `error` as the adapter does for an unreadable file, and
+    counts the reads."""
+
+    def __init__(self, data: object | None = None, error: str | None = None) -> None:
+        self.data = data
+        self.error = error
+        self.reads = 0
+
+    def read(self) -> object | None:
+        self.reads += 1
+        if self.error is not None:
+            raise ValueError(self.error)
+        return self.data
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of
@@ -2170,6 +2191,7 @@ def memory_ports(
     free_space: FreeSpace | None = None,
     ci_logs: CiLogs | None = None,
     load_reader: LoadReader | None = None,
+    experiment: ExperimentFile | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2195,6 +2217,7 @@ def memory_ports(
         free_space=free_space,
         ci_logs=ci_logs,
         load_reader=load_reader,
+        experiment=experiment,
     )
 
 

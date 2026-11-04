@@ -43,7 +43,11 @@ vocabulario está en `agentic/core/process/CONTEXT.md`.
 
 - `domain/`: funciones puras sobre `TaskState`, sin clase agregado (ADR-0009). Las reglas de
   ruteo, de tope y de reanudación viven en `agentic/core/process/domain/rules.py`, y la tabla
-  del aterrizaje en `agentic/core/process/domain/landing.py:landing_step`.
+  del aterrizaje en `agentic/core/process/domain/landing.py:landing_step`. La declaración de
+  experimento del producto y la asignación de brazo a cada tarea son puras y viven en
+  `agentic/core/process/domain/experiment.py`; el brazo asignado llega a la `Configuration` de
+  cada nodo por `configuration_from` (`agentic/core/process/adapters/langgraph/graph.py`), que
+  lee la asignación del estado (ADR-0081).
 - `application/`: un caso de uso por nodo (`classify`, `define`, `plan`, `develop`, `review`,
   `integrate`, `deliver`, `escalate`...), más `poll`, `landing`, `merge` y `resume`. Reciben
   `Configuration` y `Ports`.
@@ -62,6 +66,7 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 | `Workspace` | ramas, worktrees, commits y upstream | `agentic/core/process/adapters/git/workspace.py:GitWorkspace` |
 | `Tracker` | pull requests, comentarios, etiquetas, lectura del CI y despacho del workflow de la rama base (`dispatch_ci`, `dispatched_ci`, GH-462) | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
 | `CiLogs` (opcional, `None` sin adaptador) | los logs de los jobs rojos de la cabeza de un pull request | `agentic/core/process/adapters/github/ci_logs.py:GhCiLogs` |
+| `ExperimentFile` (opcional, `None` sin adaptador) | la declaración de experimento del producto, el archivo experiment.yaml de .agentic | `agentic/core/process/adapters/filesystem/experiment_file.py:FilesystemExperimentFile` |
 | `Inbox` | la cola de issues | `agentic/core/process/adapters/github/inbox.py:GhInbox` |
 | `Board` | el espejo del Project | `agentic/core/process/adapters/github/board.py:GhBoard` |
 | `Commands` | correr los chequeos del producto | `agentic/core/process/adapters/shell/commands.py:ShellCommands` |
@@ -104,9 +109,13 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
 
 - `domain/`: retrabajo, devoluciones, puntajes y el scorecard
   (`agentic/core/measurement/domain/metrics.py`,
-  `agentic/core/measurement/domain/scorecard.py`).
+  `agentic/core/measurement/domain/scorecard.py`), y las cifras de tiempo de una tarea, el
+  ciclo y el tiempo activo (`agentic/core/measurement/domain/cycle.py`). El brazo de una tarea
+  se lee solo por `metrics.arm_of`: su asignación si la tiene, si no su `experiment` (ADR-0081).
 - `application/`: el caso de uso de los dashboards, con sus propios puertos `DashboardStore`
-  y `WidgetData` (`agentic/core/measurement/application/dashboards.py`).
+  y `WidgetData` (`agentic/core/measurement/application/dashboards.py`), y los comandos de
+  solo lectura `eval score` y `eval compare`
+  (`agentic/core/measurement/application/eval_commands.py`), que `cli.py` envuelve.
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
   proceso y la composición se lo pasa a `build_graph`.

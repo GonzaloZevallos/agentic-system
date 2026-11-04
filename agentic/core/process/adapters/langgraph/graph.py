@@ -71,6 +71,7 @@ from ...application.split import split
 from ...application.tracker_only import tracker_only
 from ...application.validate_prd import validate_prd
 from ...domain import rules
+from ...domain.experiment import with_switches
 from ...domain.roles import (
     DEVELOPER,
     PJM,
@@ -112,9 +113,18 @@ PIPELINE = "pipeline"
 INTEGRATE = "integrate"
 
 
-def configuration_from(config: RunnableConfig | None) -> Configuration:
+def configuration_from(
+    config: RunnableConfig | None, state: TaskState | None = None
+) -> Configuration:
+    """The node's `Configuration`: the run's `configurable` and the environment, then the
+    switches of the arm the task was assigned (`state["assignment"]`, GH-470), which win --
+    the only place an assignment becomes configuration, so every role, span label and use
+    case of an assigned task reads the arm's switches. A task with no assignment is
+    returned exactly as `from_sources` built it."""
     configurable = (config or {}).get("configurable") or {}
-    return Configuration.from_sources(configurable, os.environ)
+    cfg = Configuration.from_sources(configurable, os.environ)
+    assigned = (state or {}).get("assignment")
+    return with_switches(cfg, assigned["switches"]) if assigned else cfg
 
 
 class _PortsPerRun:
@@ -156,7 +166,7 @@ PortsOf = Callable[[Configuration, RunnableConfig | None], Ports]
 
 def _node(use_case: UseCase, role: Role, ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
-        cfg = configuration_from(config)
+        cfg = configuration_from(config, state)
         ports = ports_of(cfg, config)
         # The patch is what the use case decided; the span and the metrics read it
         # here, so the use case never sees telemetry (ADR-0007). Which product the run is
@@ -185,7 +195,7 @@ def _system_node(use_case: UseCase, ports_of: PortsOf):
     span, because no role ran."""
 
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
-        cfg = configuration_from(config)
+        cfg = configuration_from(config, state)
         return await use_case(state, cfg, ports_of(cfg, config))
 
     return node
@@ -279,7 +289,7 @@ def _branch_node(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     pipeline = _pipeline(_branch_ports(ports_of), telemetry, arm_for)
 
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
-        cfg = configuration_from(config)
+        cfg = configuration_from(config, state)
 
         async def run_branch(branch_state: TaskState, branch_ports: Ports) -> TaskState:
             configurable = {

@@ -20,6 +20,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class rules__MergeDecision["MergeDecision"]
+    class rules__MergeFacts["MergeFacts"]
     class rules__PollAction["PollAction"]
     class rules__PollPlan["PollPlan"]
     class rules__PushPlan["PushPlan"]
@@ -29,8 +31,12 @@ classDiagram
     class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
+    class task__ArmAssignment["ArmAssignment"]
     class task__Carried["Carried"]
     class task__ChangesRequested["ChangesRequested"]
-    class task__CiLogRecord["CiLogRecord"]
-    class task__CiSpeculation["CiSpeculation"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - `task.TaskState` se asocia con `task.ArmAssignment`

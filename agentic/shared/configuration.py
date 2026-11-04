@@ -338,15 +338,21 @@ class Configuration(BaseModel):
         }
 
 
+# The two `Configuration` switches an experiment arm may set, in the order every writer
+# uses: the single source (GH-470). `EXPERIMENT_KEYS`, `experiment_snapshot`, the
+# experiment validator (`process.domain.experiment`) and `metrics.ARM_KEYS`/`arm_label`
+# all derive from it. `reviewer_model` is not one: free text, not an enum (ADR-0030).
+ARM_SWITCHES = ("review_mode", "skip_ephemeral")
+
 # The three keys `experiment_snapshot` writes, in the order every writer uses
-# (`document.render`'s frontmatter, `evaluation.baseline_id`'s digest): the two
-# switches above, plus the model resolved for whichever reviewer actually ran.
-EXPERIMENT_KEYS = ("review_mode", "skip_ephemeral", "reviewer_model")
+# (`document.render`'s frontmatter, `evaluation.baseline_id`'s digest): the switches
+# above, plus the model resolved for whichever reviewer actually ran.
+EXPERIMENT_KEYS = (*ARM_SWITCHES, "reviewer_model")
 
 
 def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, str]:
     """The `experiment` state/frontmatter value (`TaskState.experiment`,
-    `document.render`): `{}` when both switches above are at their default, so a
+    `document.render`): `{}` when every `ARM_SWITCHES` switch is at its default, so a
     document produced on the default path stays byte-identical to one written before
     this task (the plan's omit-at-default pattern). Otherwise all three
     `EXPERIMENT_KEYS`, verbatim and in that order -- `reviewer_model` travels even
@@ -355,10 +361,7 @@ def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, st
     caught reading this key after the run, never prevented (out of this subtask's
     scope; said in the pull request body)."""
     defaults = Configuration.model_fields
-    if (
-        cfg.review_mode == defaults["review_mode"].default
-        and cfg.skip_ephemeral == defaults["skip_ephemeral"].default
-    ):
+    if all(getattr(cfg, key) == defaults[key].default for key in ARM_SWITCHES):
         return {}
     return {
         "review_mode": cfg.review_mode,

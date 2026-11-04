@@ -7,8 +7,9 @@ items:
   - GH-239
   - GH-255
   - GH-282
+  - GH-474
   added_at: '2026-10-26T05:51:14.504+00:00'
-  last_applied: '2026-10-26T05:59:20.946+00:00'
+  last_applied: '2026-11-04T04:16:32.166+00:00'
   in_prompt_since: '2026-10-27T03:49:56.000+00:00'
 - id: developer-2
   lesson: Before you deliver, list each acceptance criterion and full-path scenario in the brief and name the test that asserts it at the declared seam, through to its final outcome, not only the first steps.
@@ -59,6 +60,7 @@ items:
   - GH-392
   - GH-406
   - GH-451
+  - GH-474
   added_at: '2026-10-26T06:06:02.292+00:00'
-  last_applied: '2026-10-31T21:01:58.425+00:00'
+  last_applied: '2026-11-04T04:16:32.166+00:00'
   in_prompt_since: '2026-10-27T03:49:56.000+00:00'
