@@ -69,6 +69,7 @@ COMMENTED: tuple[str, ...] = (
     "merge_failed",
     "ci_failed",
     "ci_missing",
+    "ci_unknown_names",
     "ci_unreadable",
     "perf_unverified",
     "criteria_over_cap",
@@ -1085,6 +1086,11 @@ def _ci_evidence(
     if facts.deferral in ("red", "pending") and isinstance(report, ci.CiReport):
         return _deferral_evidence(facts, report)
     verdict = facts.ci_verdict
+    if reason == "ci_unknown_names":
+        text = ci.unreported_text(
+            facts.ci_unreported, facts.ci_reported, facts.ci_head or "", facts.ci_plan_only
+        )
+        return f"Planning defect, not a CI failure: {text}"
     if reason == "ci_failed" and verdict is not None:
         return "\n".join(
             f"- {check.name} {check.conclusion or check.status} {check.link}"
@@ -1202,7 +1208,12 @@ def _refuse(
             text = "\n\n".join(part for part in (first, evidence, closing) if part)
         if facts is not None and reason == "adr_number_taken":
             text = "\n\n".join(part for part in (first, _adr_evidence(facts), closing) if part)
-        if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
+        if facts is not None and reason in (
+            "ci_failed",
+            "ci_missing",
+            "ci_unknown_names",
+            "ci_unreadable",
+        ):
             text = "\n\n".join(
                 part for part in (first, _ci_evidence(reason, facts, report), closing) if part
             )
@@ -1244,6 +1255,7 @@ def _refuse(
                 head,
                 step.kind,
                 facts.current_master if facts is not None else None,
+                names=step.names,
             )
             if not taken and not any(
                 body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)

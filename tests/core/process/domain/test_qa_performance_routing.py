@@ -49,7 +49,7 @@ def test_the_role_reads_the_code_and_has_no_bash_at_all():
 
 def test_it_is_due_once_a_convened_plan_is_all_approved():
     assert rules.qa_performance_due(convened())
-    assert rules.after_integrate(convened()) == "qa_performance"
+    assert rules.after_integrate(convened()) == "verify"
 
 
 @pytest.mark.parametrize("performance", [(), None])
@@ -97,7 +97,7 @@ def test_it_reads_the_integration_review_when_there_is_an_integration():
     assert rules.qa_performance_due(state)
 
 
-def test_the_order_is_copy_then_final_validation_then_qa_performance_then_deliver():
+def test_the_set_is_copy_then_final_validation_then_qa_performance_then_deliver():
     state = {
         "type": "feature",
         "flags": {"touches_ui": True, "touches_copy": True},
@@ -105,12 +105,15 @@ def test_the_order_is_copy_then_final_validation_then_qa_performance_then_delive
         "subtasks": {"api": {"status": "approved"}},
         "runs": [run("Tech Lead", REVIEW)],
     }
-    assert rules.after_integrate(state) == "copy_review"
+    assert rules.after_integrate(state) == "verify"
+    assert rules.verifiers_due(state) == ("copy_review", "final_validation", "qa_performance")
     state["runs"].append(run(roles.TECH_WRITER_REVIEW.name))
-    assert rules.after_integrate(state) == "final_validation"
+    assert rules.verifiers_due(state) == ("final_validation", "qa_performance")
     state["runs"].append(run(roles.PM_FINAL.name))
-    assert rules.after_integrate(state) == "qa_performance"
+    assert rules.verifiers_due(state) == ("qa_performance",)
+    assert rules.after_integrate(state) == "verify"
     state["runs"].append(qa("approved"))
+    assert rules.verifiers_due(state) == ()
     assert rules.after_integrate(state) == "deliver"
 
 
@@ -118,11 +121,6 @@ def test_a_pending_wave_goes_to_the_pipeline_before_the_node():
     state = convened()
     state["subtasks"] = {"api": {"status": "returned"}}
     assert rules.after_integrate(state) == "pipeline"
-
-
-def test_after_qa_performance_goes_back_to_the_fan_in_unless_escalated():
-    assert rules.after_qa_performance(convened()) == "integrate"
-    assert rules.after_qa_performance({**convened(), "escalated": True}) is None
 
 
 def test_return_section_names_whose_delta_a_returned_subtask_reads():

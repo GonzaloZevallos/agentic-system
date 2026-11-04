@@ -308,7 +308,12 @@ async def test_final_validation_widened_renders_prompt(tmp_path):
     )
     ports, prompts = wired(runner, tmp_path)
 
-    await final_validation(design_state(), Configuration(product_dir=tmp_path), ports)
+    await final_validation(
+        design_state(),
+        Configuration(product_dir=tmp_path),
+        ports,
+        checkout=ports.workspace.task_checkout(design_state()["id"]),
+    )
 
     assert_rendered(runner, prompts, ["ux_lead_final", "ui_lead_final", "pm_final"])
     assert runner.slugs == ["ux_lead_final", "ui_lead_final", "pm_final"]

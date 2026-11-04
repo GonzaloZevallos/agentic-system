@@ -537,7 +537,16 @@ def _base_links(
 def escalate_red_on_base(context: LandingContext) -> None:
     """The `escalate` step: every failing required check is also red on the base branch, so
     the task escalates to the human (class `questions`) without a rerun, a Developer pass, a
-    diagnosis, a restart or a slice."""
+    diagnosis, a restart or a slice. For `ci_unknown_names` (GH-485) it is the planning defect
+    instead: a required name no check run carries, class `ci`, said plainly and charged to no
+    attempt."""
+    if context.step.refusal == "ci_unknown_names":
+        facts = context.facts
+        head = context.head
+        plan_only = tuple(facts.ci_plan_only)
+        text = ci.unreported_text(context.step.names, facts.ci_reported, head, plan_only)
+        _escalate(context, f"Planning defect, not a CI failure ({head[:7]}): {text}", "ci")
+        return
     verdict = context.facts.ci_verdict
     failing = verdict.failing if verdict is not None else ()
     names = tuple(dict.fromkeys(check.name for check in failing))

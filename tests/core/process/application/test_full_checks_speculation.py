@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.application.ports import GitError
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
@@ -19,6 +18,7 @@ from tests.fakes import (
     MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
+    full_checks_in_task_checkout,
     memory_ports,
 )
 
@@ -113,7 +113,7 @@ def ports_of(*reads, ci=("check",), workspace=None):
 async def run(state, ports, *, after_s: float = 5.0):
     clock = Clock()
     now = PUSHED + timedelta(seconds=after_s)
-    return await full_checks(
+    return await full_checks_in_task_checkout(
         state,
         CFG,
         ports,
@@ -193,7 +193,7 @@ async def test_a_stale_push_with_no_run_republishes_without_sleeping():
     clock = Clock()
     ports = ports_of(NOT_YET, GREEN)
     now = PUSHED + timedelta(seconds=31)
-    patch = await full_checks(
+    patch = await full_checks_in_task_checkout(
         state_of(), CFG, ports, sleep=clock.sleep, clock=clock, now=lambda: now
     )
     assert ports.workspace.ci_ref_calls == [("delete_ci", REF), ("publish", REF)]

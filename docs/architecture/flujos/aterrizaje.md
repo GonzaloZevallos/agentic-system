@@ -31,6 +31,8 @@ sequenceDiagram
         Land->>GitHub: open follow-up issues, merge
     else adr_number_taken
         Land->>GitHub: renumber when the rule can decide, else escalate_adr asks the human once, then none
+    else ci_unknown_names
+        Land->>GitHub: escalate once per (head, names) as a planning defect, no budget spent, then none
     else budget spent, ledger only
         Land->>GitHub: escalate_ledger asks the human once, then none
     else budget spent, a clean slice exists
@@ -88,6 +90,14 @@ sequenceDiagram
    El rechazo `adr_number_taken` no pasa por `exhausted()`: es `renumber` cuando la regla decide
    la colisión y quedan renumeraciones (`LANDING_RENUMBERS_MAX`); si no, una sola `escalate_adr`
    por (cabeza, rechazo), y después `none`. Nunca `diagnose` ni `restart` (ADR-0049, adenda GH-412).
+   El rechazo `ci_unknown_names` (GH-485) tampoco pasa por `exhausted()`: un nombre exigido que
+   ninguna corrida de chequeo de la cabeza lleva, con todas las corridas de workflow completadas,
+   es un defecto de planificación y no un CI lento. `landing_step` lo manda a un solo `escalate`
+   por (cabeza, nombres), con los nombres ordenados en la entrada `landing`
+   (`agentic/core/process/domain/landing.py:landing_step`), y después a `none`; otros nombres
+   sobre la misma cabeza se publican de nuevo (`MergeFacts.ci_unreported` y `ci_reported`,
+   `LandingStep.names`, `already_dispatched(names=)`). No gasta presupuesto, ni `diagnose`, ni
+   reinicio (ADR-0045, adenda GH-485).
 7. **Un escalado se libera por una sola decisión (GH-442).** Un documento escalado cuyo paso
    de la tabla es `diagnose` no se despacha: `agentic/core/process/application/landing.py:_land`
    (y el poller, en `gather_merges`) preguntan a

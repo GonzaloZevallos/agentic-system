@@ -41,9 +41,9 @@ from ..domain.performance import Limit, Result, Run, Scenario
 from ..domain.roles import PAIR_QA_PERFORMANCE_TECH_LEAD, QA_PERFORMANCE
 from ..domain.schemas import PerfScenario
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import SetupFailed, task_base, task_checkout_in_thread
+from .checkouts import task_base
 from .perf import PerfRefused, measure_at
-from .ports import Ports
+from .ports import Checkout, Ports
 from .run_role import finish, run_role, with_context
 
 Verdict = Literal["approved", "returned", "unverified"]
@@ -71,14 +71,14 @@ class Row:
     category: Literal["spec-scope", "standard-other"]
 
 
-async def qa_performance(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+async def qa_performance(
+    state: TaskState, cfg: Configuration, ports: Ports, *, checkout: Checkout
+) -> TaskState:
+    """The `checkout` is the verifier set's (GH-469): resolved once by `verifiers.verify`."""
     runner, lock = ports.perf_runner, ports.perf_lock
     if runner is None or lock is None:
         raise RuntimeError("QA Performance needs a PerfRunner and a PerfLock in the ports")
-    try:
-        task = await task_checkout_in_thread(state, cfg, ports)
-    except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(QA_PERFORMANCE), ports)
+    task = checkout
     head = ports.workspace.full_head(task.path)
     plan = [PerfScenario.model_validate(raw) for raw in state.get("performance", [])]
     scenarios, facts = _scenarios(

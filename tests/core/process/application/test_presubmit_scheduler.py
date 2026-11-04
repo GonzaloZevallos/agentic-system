@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application.develop import develop
-from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.application.ports import CheckRequest, CommandResult
 from agentic.core.process.application.presubmit import CheckoutPresubmit
 from agentic.core.process.domain.check_schedule import CheckPriority
@@ -23,6 +22,7 @@ from tests.fakes import (
     MemoryWorkspace,
     ScriptedRunner,
     delivered,
+    full_checks_in_task_checkout,
     memory_ports,
 )
 
@@ -183,7 +183,7 @@ async def test_full_checks_gates_as_integration(cfg):
     from tests.core.process.application.test_full_checks import state_of
 
     ports = memory_ports(stack=MemoryStack(checks={"tests": "pytest"}))
-    await full_checks(state_of(), cfg, ports)
+    await full_checks_in_task_checkout(state_of(), cfg, ports)
     assert [r.priority for r in ports.check_scheduler.requests] == [CheckPriority.INTEGRATION]
 
 

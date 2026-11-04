@@ -200,7 +200,12 @@ async def _scenario(
                 {"metric": PERF_METRIC, "limit": 100, "unit": "ms", "source": "issue", "basis": "b"}
             ],
         }
-        await qa_performance(_state(performance=[plan]), cfg, ports)
+        await qa_performance(
+            _state(performance=[plan]),
+            cfg,
+            ports,
+            checkout=ports.workspace.task_checkout((_state(performance=[plan]))["id"]),
+        )
     else:
         raise SystemExit(f"unknown scenario {scenario}")
 
@@ -213,7 +218,7 @@ async def _run_graph(cfg: Configuration, ports: Ports, product: Path, box: dict[
         seeded = _state(
             type="feature", branch=f"agentic/{TASK}", task_head=head, owner_rules_seen=head
         )
-        # The fan-in has run: the next node the graph reaches is `full_checks`.
+        # The fan-in has run: the next node is `verify`, where `full_checks` runs alone first.
         await app.aupdate_state(_config(product), seeded, as_node="integrate")
         await app.ainvoke(None, config=_config(product))
 
@@ -247,7 +252,7 @@ async def _resume(scenario: str, product: Path, workdir: Path) -> dict[str, Any]
         report["setup_ran"] = (workdir / "setup.ran").exists()
         return report
     async with composition.checkpointer(cfg, TASK) as saver:
-        app = _graph(ports).compile(checkpointer=saver, interrupt_after=["full_checks"])
+        app = _graph(ports).compile(checkpointer=saver, interrupt_after=["verify"])
         before = await app.aget_state(_config(product))
         saved = await saver.aget_tuple(_config(product))
         report["next"] = list(before.next)

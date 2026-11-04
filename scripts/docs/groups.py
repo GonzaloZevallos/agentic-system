@@ -46,12 +46,9 @@ PHASES: Mapping[str, tuple[str, ...]] = {
         "tracker_only",
     ),
     "review": (
-        "copy_review",
-        "final_validation",
         "fix_important",
-        "full_checks",
         "owner_rules",
-        "qa_performance",
+        "verify",
     ),
 }
 
@@ -126,6 +123,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.stop": "lifecycle",
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
+    "application.verifiers": "checks",
     "domain.account_reset": "machine",
     "domain.adr_numbers": "landing",
     "domain.board": "landing",
@@ -134,6 +132,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.check_schedule": "checks",
     "domain.ci": "checks",
     "domain.ci_push": "checks",
+    "domain.ci_workflow": "checks",
     "domain.copy": "roles",
     "domain.cost_history": "landing",
     "domain.coverage": "checks",

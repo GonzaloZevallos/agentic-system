@@ -114,9 +114,14 @@ async def drive(
             perf_runner=perf,
             perf_lock=FakePerfLock(),
         )
-        if step == "qa_performance":
-            state = apply(state, await qa_performance(state, CFG, ports))
-            assert rules.after_qa_performance(state) == "integrate"
+        if step == "verify":
+            state = apply(
+                state,
+                await qa_performance(
+                    state, CFG, ports, checkout=ports.workspace.task_checkout((state)["id"])
+                ),
+            )
+            assert rules.after_verify(state) == "integrate"
         elif step == "owner_rules":
             state = apply(state, await owner_rules(state, CFG, ports))
         elif step == "pipeline":
@@ -162,7 +167,7 @@ async def test_a_convened_task_goes_over_budget_is_fixed_and_approved_then_deliv
 
     route, final = await drive(integrated([PLAN]), role, perf)
 
-    assert route == ["qa_performance", "pipeline", "owner_rules", "qa_performance", "deliver"]
+    assert route == ["verify", "pipeline", "owner_rules", "verify", "deliver"]
     assert role.slugs == [
         "qa_performance",
         "developer_integrator",
@@ -181,7 +186,7 @@ async def test_a_convened_task_goes_over_budget_is_fixed_and_approved_then_deliv
 async def test_the_gate_refuses_a_head_other_than_the_one_qa_performance_measured():
     role = ScriptedRunner(qa_performance=[reviewed("approved")])
     route, final = await drive(integrated([PLAN]), role, FakePerfRunner(measured(40)))
-    assert route == ["qa_performance", "deliver"]
+    assert route == ["verify", "deliver"]
     moved = rules.auto_merge_decision(merge_facts(final, "c" * 40))  # reviewed, but not measured
     assert (moved.kind, moved.reason) == ("refuse", "perf_unverified")
 
@@ -196,7 +201,12 @@ async def test_an_unfixed_return_leaves_the_pull_request_to_the_human():
         perf_runner=FakePerfRunner(measured(150)),
         perf_lock=FakePerfLock(),
     )
-    returned = apply(state, await qa_performance(state, CFG, ports))
+    returned = apply(
+        state,
+        await qa_performance(
+            state, CFG, ports, checkout=ports.workspace.task_checkout((state)["id"])
+        ),
+    )
     decision = rules.auto_merge_decision(merge_facts(returned, HEAD))
     assert (decision.kind, decision.reason) == ("refuse", "perf_unverified")
 
@@ -233,9 +243,9 @@ async def test_a_convened_plan_reaches_the_state_survives_the_document_and_drive
     unit = state["subtasks"]["api"]
     state["subtasks"]["api"] = {**unit, "status": "approved", "branch": "agentic/GH-1"}
     state["runs"] = [{"role": "Tech Lead", "section": rules.review_section("api"), "version": 1}]
-    assert rules.after_integrate(state) == "qa_performance"
+    assert rules.after_integrate(state) == "verify"
     route, final = await drive(
         state, ScriptedRunner(qa_performance=[reviewed("approved")]), FakePerfRunner(measured(40))
     )
-    assert route == ["qa_performance", "deliver"]
+    assert route == ["verify", "deliver"]
     assert rules.perf_merge_facts(final)[:2] == (True, "approved")

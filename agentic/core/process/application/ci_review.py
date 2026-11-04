@@ -27,6 +27,10 @@ class CiEvidence:
 
 
 def _line(report: ci.CiReport, name: str) -> str:
+    # GH-485: `ci.unreported` before `pending`. A review reads one complete answer, advice and
+    # not a decision, so it is taken as confirmed.
+    if ci.unreported(report, (name,), True):
+        return "not a check-run name on this head (workflow runs completed)"
     verdict = ci.ci_state(report, (name,))
     runs = [check for check in report.checks if check.name == name]
     link = (verdict.failing or tuple(runs))[0].link if runs else None

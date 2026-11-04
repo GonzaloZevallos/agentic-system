@@ -89,4 +89,4 @@ async def test_an_approval_after_a_qa_return_makes_qa_performance_due_again():
     # The new reviewed head is observed by the owner-rules step first, then QA Performance.
     assert rules.after_integrate(after) == "owner_rules"
     seen = after["subtasks"][INTEGRATION]["reviewed_head"]
-    assert rules.after_integrate({**after, "owner_rules_seen": seen}) == "qa_performance"
+    assert rules.after_integrate({**after, "owner_rules_seen": seen}) == "verify"

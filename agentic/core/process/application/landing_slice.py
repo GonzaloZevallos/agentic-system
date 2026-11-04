@@ -259,6 +259,8 @@ def _decide(
     ci_verdict: ci.CiVerdict | None = None
     ci_unreadable: ci.CiUnreadable | None = None
     ci_waited_s: float | None = None
+    ci_unreported: tuple[str, ...] = ()
+    ci_reported: tuple[str, ...] = ()
     gate = ci_gate(raw, declared)
     if gate.names:
         report = ports.tracker.ci_report(reference)
@@ -269,6 +271,8 @@ def _decide(
             ci_unreadable = report
         else:
             ci_head, ci_verdict = report.head_sha, ci.ci_state(report, gate.names)
+            ci_unreported = ci.unreported(report, gate.names, True)
+            ci_reported = ci.reported_names(report)
     facts = landing_rules.slice_facts(
         landing_rules.Slice(units),
         raw,
@@ -295,6 +299,8 @@ def _decide(
         # asks a fresh GitHub run otherwise, which a slice never gets (GH-463).
         ci_fresh=True,
         ci_waited_s=ci_waited_s,
+        ci_unreported=ci_unreported,
+        ci_reported=ci_reported,
     )
     if rules.criteria_probe_wanted(facts):
         # GH-334: a slice is a merge like any other; it must not push a criteria document
