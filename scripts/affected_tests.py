@@ -165,6 +165,11 @@ TABLE: tuple[Row, ...] = (
         "the declared GraphQL types of the board's mutations are checked against it",
     ),
     Row(
+        "tests/fixtures/presubmit/*",
+        ("tests/core/process/application/test_presubmit_rerun.py",),
+        "a real pytest output past the failed-ids window: the form rerun must not trust it",
+    ),
+    Row(
         "tests/core/process/domain/fixtures/GH-484.yaml",
         (
             "tests/core/process/domain/test_landing_pass_rules.py",
