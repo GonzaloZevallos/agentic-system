@@ -1167,3 +1167,32 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T17:53:56.135+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you deliver, check that each comment giving a reason that depends on other code (for example, who imports this) is true in the tree you deliver; otherwise reword it or leave it out.
+  confidence: low
+  seen_in:
+  - GH-492
+  sources:
+  - finding
+  added_at: '2026-11-04T19:45:38.625+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you pass a new kind of reference to a port, check that the production adapter resolves it, not only the fake. Add a test through the real adapter path that reaches the intended source.
+  confidence: medium
+  seen_in:
+  - GH-478
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T20:49:28.362+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a port or a contract between modules, update the hand-written page under docs/architecture that describes it in the same change.
+  confidence: medium
+  seen_in:
+  - GH-478
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T20:49:28.362+00:00'
