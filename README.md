@@ -315,9 +315,10 @@ Una corrida cuyo proceso murió sin dejar una parada deliberada la retoma el pol
 la causa: un reinicio, una excepción del grafo, un SIGKILL o el OOM killer en el mismo arranque,
 o una corrida sin lock. Todas gastan **un solo presupuesto de 3 retomas por tarea**, con el
 calendario `RETAKE_SCHEDULE` (la primera de inmediato, la segunda a los 30 min de la primera, la
-tercera a los 60). El presupuesto se reinicia cuando una persona comenta el issue o corre
+tercera a los 60; la corrida sin lock espera antes de la primera una hora de quietud). El presupuesto se reinicia cuando una persona comenta el issue o corre
 `agentic resume`; lo que lanza el poller (`--by-poller`, comentario `Resumed by the poller: `)
-no lo reinicia. Gastado el presupuesto, o con un lock muerto sin tocar 24 h, el poller no retoma:
+no lo reinicia. Gastado el presupuesto, o con un lock muerto del mismo arranque (o de arranque
+desconocido, sin marca de caída) cuyo documento lleva 24 h sin tocar, el poller no retoma:
 pone la etiqueta `needs-human` y deja **un solo comentario** `Retakes spent: ` con lo que murió,
 cuántas retomas se hicieron y el comando para seguir. No lo repite en cada vuelta.
 

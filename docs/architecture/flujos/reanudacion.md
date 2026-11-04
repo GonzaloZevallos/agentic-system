@@ -65,7 +65,8 @@ sequenceDiagram
      reanudación comenta `Resumed by the poller: `
      (`agentic/core/process/domain/retakes.py:RESUMED_BY_POLLER`), que a diferencia del
      `Resumed: ` de una persona no reinicia el presupuesto de retomas. Cuando ese presupuesto
-     se gasta (o el lock muerto quedó sin tocar 24 h), el poller pone la etiqueta `needs-human` y
+     se gasta (o un lock muerto del mismo arranque, o de arranque desconocido, sin marca de caída,
+     cuyo documento quedó sin tocar 24 h), el poller pone la etiqueta `needs-human` y
      deja un único comentario `Retakes spent: `
      (`agentic/core/process/application/poll.py:_announce_spent`). Si una persona habló después
      del sistema, la pausa ya es del humano y el poller no la toca.
