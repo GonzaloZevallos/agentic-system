@@ -33,6 +33,8 @@ classDiagram
 
 ## Relaciones con otras páginas
 
+- [application: checks](classes-process-application-checks.md)
+  - `ci_push.PushFailed` hereda de `ports.GitError`
 - [application: reflection](classes-process-application-reflection.md)
   - `reflect_run.SystemRepo` se asocia con `ports.Inbox`
 - [application: support (parte 3)](classes-process-application-support-3.md)

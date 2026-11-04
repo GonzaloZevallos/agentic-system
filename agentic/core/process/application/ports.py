@@ -794,7 +794,14 @@ class GitError(RuntimeError):
     all -- the architecture test) must catch it: "ante la duda, no lanza" covers a git
     failure the same as an unknown object or a `gh` error. The adapter module still
     exposes the same name, imported from here, so existing call sites and tests that
-    import it from `adapters.git.workspace` keep working unchanged."""
+    import it from `adapters.git.workspace` keep working unchanged.
+
+    `stderr` is what git itself printed (GH-487), `""` when the error did not come from a
+    git process: the CI path's retry reads it to tell a network blip from a refusal."""
+
+    def __init__(self, *args: object, stderr: str = ""):
+        super().__init__(*args)
+        self.stderr = stderr
 
 
 class UnstageablePath(GitError):
@@ -1065,11 +1072,12 @@ class Workspace(Protocol):
         Raises `GitError` on any failure."""
         ...
 
-    def republish_ci_ref(self, path: Path, ref: str) -> None:
-        """Delete `refs/heads/<ref>` on `origin` (when it holds it) and then push `HEAD` of
-        the checkout at `path` to it again, so GitHub sees a branch create: what `full_checks`
-        does once when no CI run started on the first push (GH-462). Same ref rules as
-        `publish_ci_ref`. Raises `GitError` on any failure; the ref may then be absent."""
+    def delete_ci_ref(self, path: Path, ref: str) -> None:
+        """Delete `refs/heads/<ref>` from `origin` when it holds it (GH-487), so a later
+        `publish_ci_ref` is a branch create, which GitHub starts a run on (GH-462). A ref
+        the remote does not hold is already deleted, and so is one a racing delete removed
+        (`remote ref does not exist`): neither raises. One git step: the caller retries
+        it (`application/ci_push`), this never does. Raises `GitError` on any other failure."""
         ...
 
     def publish_dispatch_ref(self, path: Path, ref: str) -> None:

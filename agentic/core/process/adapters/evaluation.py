@@ -193,8 +193,8 @@ class EvaluationWorkspace:
     def publish_ci_ref(self, path: Path, ref: str) -> None:
         raise EvaluationWrite(f"workspace.publish_ci_ref({ref}): an evaluation run pushes no ref")
 
-    def republish_ci_ref(self, path: Path, ref: str) -> None:
-        raise EvaluationWrite(f"workspace.republish_ci_ref({ref}): an evaluation run pushes no ref")
+    def delete_ci_ref(self, path: Path, ref: str) -> None:
+        raise EvaluationWrite(f"workspace.delete_ci_ref({ref}): an evaluation run pushes no ref")
 
     def publish_dispatch_ref(self, path: Path, ref: str) -> None:
         raise EvaluationWrite(

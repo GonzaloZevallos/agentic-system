@@ -56,6 +56,7 @@ from ..domain.task import (
     FullChecksRecord,
     TaskState,
 )
+from . import ci_push
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout_in_thread
 from .ports import GitError, Ports
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
@@ -274,7 +275,7 @@ async def _ci_full_checks(
         speculative = decided is not None
         if decided is None:
             try:
-                await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
+                await anyio.to_thread.run_sync(ci_push.republish, workspace, task.path, ref)
             except GitError:
                 return _NoVerdict("publish_failed", waited)
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
@@ -291,7 +292,7 @@ async def _ci_full_checks(
             # Once per call: a CI that never started on the first push is told that it may have
             # missed the event, and the second wait is bounded by the grace period again.
             try:
-                await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
+                await anyio.to_thread.run_sync(ci_push.republish, workspace, task.path, ref)
             except GitError:
                 return _NoVerdict("publish_failed", waited)
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)

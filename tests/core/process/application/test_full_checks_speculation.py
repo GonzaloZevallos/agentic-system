@@ -171,7 +171,7 @@ async def test_a_run_of_an_older_head_republishes_and_never_escalates_by_itself(
     # Head A was pushed, then B overwrote the ref, A was approved: the ref shows B's run.
     ports = ports_of(report(job("check"), sha=OTHER), GREEN)
     patch = await run(state_of(), ports, after_s=40.0)
-    assert ports.workspace.ci_ref_calls == [("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("delete_ci", REF), ("publish", REF)]
     assert patch["full_checks"]["passed"] is True
     assert "speculative" not in patch["full_checks"]
     assert patch.get("status") != WAITING_ON_HUMAN
@@ -184,7 +184,7 @@ async def test_a_stale_push_with_no_run_republishes_without_sleeping():
     patch = await full_checks(
         state_of(), CFG, ports, sleep=clock.sleep, clock=clock, now=lambda: now
     )
-    assert ports.workspace.ci_ref_calls == [("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("delete_ci", REF), ("publish", REF)]
     assert clock.slept == []
     assert patch["full_checks"]["passed"] is True
     assert "speculative" not in patch["full_checks"]
@@ -201,7 +201,7 @@ async def test_a_cancelled_speculated_run_falls_back_to_the_republish_and_its_wa
     # The run of the ref was cancelled by a newer push; the republish finds a fresh green one.
     ports = ports_of(CANCELLED, GREEN)
     patch = await run(state_of(), ports)
-    assert ports.workspace.ci_ref_calls == [("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("delete_ci", REF), ("publish", REF)]
     assert patch["full_checks"]["passed"] is True
     assert "speculative" not in patch["full_checks"]
     assert patch.get("status") != WAITING_ON_HUMAN
@@ -210,7 +210,7 @@ async def test_a_cancelled_speculated_run_falls_back_to_the_republish_and_its_wa
 async def test_only_the_wait_after_the_fallback_may_escalate():
     ports = ports_of(CANCELLED)
     patch = await run(state_of(), ports)
-    assert ports.workspace.ci_ref_calls == [("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("delete_ci", REF), ("publish", REF)]
     assert patch["status"] == WAITING_ON_HUMAN
     assert "full_checks" not in patch
 

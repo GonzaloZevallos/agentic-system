@@ -301,7 +301,7 @@ def test_a_run_that_never_starts_is_republished_once_then_refused_with_its_comme
 
     clock.advance(2)
     assert _call(ports, tmp_path, clock).reason == "ci_wait"
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     [pair] = _pairs(ports)
     assert (pair["tested"], pair["superseded"], pair["republished"]) == (
         TESTED[1],
@@ -320,7 +320,7 @@ def test_a_run_that_never_starts_is_republished_once_then_refused_with_its_comme
     assert "ci_no_verdict" in comment and "no_run" in comment
     again = _call(ports, tmp_path, clock)
     assert (again.kind, again.reason) == ("refused", "ci_no_verdict")
-    assert len(ports.workspace.ci_ref_calls) == 2 and len(_refusals(ports)) == 1
+    assert len(ports.workspace.ci_ref_calls) == 3 and len(_refusals(ports)) == 1
 
 
 def test_a_run_still_undecided_at_the_check_timeout_is_no_verdict(tmp_path):

@@ -190,7 +190,7 @@ async def test_a_report_of_another_head_is_never_accepted_and_escalates_as_no_ru
     assert_escalated_ci(patch, ports, state_of())
     # Two grace periods (30 s each), not the 100 s check timeout.
     assert sum(clock.slept) == 60
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     assert "no CI run" in patch["escalated"] and HEAD[:7] in patch["escalated"]
     assert "pushed twice" in patch["escalated"] and "1 min" in patch["escalated"]
     assert ports.commands.ran == [] and "full_checks" not in patch
@@ -329,7 +329,7 @@ async def test_no_run_ever_publishes_once_republishes_once_and_escalates_within_
     clock = Clock()
     patch = await run(state_of(), ports, clock)
     assert_escalated_ci(patch, ports, state_of())
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     assert clock.now == 2 * CFG.ci_start_grace_s < CFG.check_timeout_s
     assert ports.commands.ran == []
 
@@ -341,7 +341,7 @@ async def test_a_run_that_appears_after_the_republish_is_awaited_and_recorded_gr
     patch = await run(state_of(), ports, clock)
     record = patch["full_checks"]
     assert record["passed"] is True and record["ran_on"] == "ci"
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     assert ports.commands.ran == []
 
 
@@ -365,16 +365,16 @@ async def test_a_run_that_started_after_the_republish_is_bounded_by_the_check_ti
     assert clock.now > CFG.ci_start_grace_s * 2
 
 
-async def test_a_failed_republish_escalates_as_publish_failed_and_never_retries():
-    class Flaky(MemoryWorkspace):
-        def republish_ci_ref(self, path, ref):
-            super().republish_ci_ref(path, ref)
-            raise GitError("push refused")
+async def test_a_refused_republish_escalates_as_publish_failed_and_is_not_retried():
+    class Refused(MemoryWorkspace):
+        def delete_ci_ref(self, path, ref):
+            super().delete_ci_ref(path, ref)
+            raise GitError("push refused", stderr="remote: Permission to o/r denied to workflow")
 
-    ports = ports_of(report(sha="f" * 40), workspace=Flaky())
+    ports = ports_of(report(sha="f" * 40), workspace=Refused())
     patch = await run(state_of(), ports)
     assert_escalated_ci(patch, ports, state_of())
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF)]
     assert f"push of {REF} failed" in patch["escalated"]
     assert ports.commands.ran == []
 

@@ -21,6 +21,7 @@ graph TD
     g_domain__roles["roles (grupo de domain)"]
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
+    m_application__ci_push["application.ci_push"]
     m_application__ci_ref_sweep["application.ci_ref_sweep"]
     m_application__ci_review["application.ci_review"]
     m_application__coverage_guard["application.coverage_guard"]
@@ -29,6 +30,8 @@ graph TD
     m_application__presubmit["application.presubmit"]
     m_application__run_check["application.run_check"]
     m_application__schema_guard["application.schema_guard"]
+    m_application__ci_push --> g_application__support
+    m_application__ci_push --> g_domain__checks
     m_application__ci_ref_sweep --> g_application__lifecycle
     m_application__ci_ref_sweep --> g_application__support
     m_application__ci_ref_sweep --> g_domain__state
@@ -42,6 +45,7 @@ graph TD
     m_application__full_checks --> g_domain__roles
     m_application__full_checks --> g_domain__state
     m_application__full_checks --> g_pkg__agentic__shared
+    m_application__full_checks --> m_application__ci_push
     m_application__full_checks --> m_application__presubmit
     m_application__perf --> g_application__support
     m_application__perf --> g_domain__checks

@@ -33,7 +33,7 @@ from ..domain.task import (
     add_merge_ci,
     add_tracker_failures,
 )
-from . import adr_collision, landing_flakes, landing_plan
+from . import adr_collision, ci_push, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
 from .poll import (
@@ -494,7 +494,7 @@ def _build_pair(
             if again is None:
                 ports.workspace.publish_ci_ref(path, ref)
             else:
-                ports.workspace.republish_ci_ref(path, ref)
+                ci_push.republish(ports.workspace, path, ref)
         else:
             if dispatch is None:
                 return _Fresh(stopped=MergeResult("stopped", "ci_dispatch_undeclared"))

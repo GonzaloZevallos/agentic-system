@@ -1164,11 +1164,11 @@ class MemoryWorkspace:
             raise GitError(self.ci_ref_error)
         self.ci_refs[ref] = self.head(path)
 
-    def republish_ci_ref(self, path: Path, ref: str) -> None:
-        self.ci_ref_calls.append(("republish", ref))
+    def delete_ci_ref(self, path: Path, ref: str) -> None:
+        self.ci_ref_calls.append(("delete_ci", ref))
         if self.ci_ref_error is not None:
             raise GitError(self.ci_ref_error)
-        self.ci_refs[ref] = self.head(path)
+        self.ci_refs.pop(ref, None)
 
     def publish_dispatch_ref(self, path: Path, ref: str) -> None:
         self.ci_ref_calls.append(("publish_dispatch", ref))
