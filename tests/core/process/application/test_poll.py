@@ -2341,7 +2341,7 @@ def _spent_task(boot_id="boot-old", **lock_more):
 def test_a_spent_budget_labels_then_comments_once_and_later_rounds_say_nothing():
     ports, locks = _spent_task()
     first = _spent_round(ports, locks)
-    assert ports.tracker.events == ["comment"] and ports.tracker.labels == [
+    assert ports.tracker.events == ["label", "comment"] and ports.tracker.labels == [
         ("GH-30", "needs-human")
     ]
     assert len([line for line in first if "retake budget spent" in line]) == 1
@@ -2401,12 +2401,10 @@ def test_a_dead_lock_whose_document_went_unwritten_for_a_day_gets_the_stale_noti
     assert any("retake budget spent" in line for line in lines)
 
 
-@pytest.mark.parametrize(
-    "mark", [{"stopped_deliberately": True}, {"stopped_deliberately": True, "boot_id": "boot-now"}]
-)
-def test_a_deliberate_stop_is_neither_retaken_nor_announced(mark):
+@pytest.mark.parametrize("boot_id", ["boot-old", "boot-now"])
+def test_a_deliberate_stop_is_neither_retaken_nor_announced(boot_id):
     ports, _ = _spent_task()
-    locks = _Locks(_dead_lock("GH-30", **{k: v for k, v in mark.items() if k != "boot_id"}))
+    locks = _Locks(_dead_lock("GH-30", boot_id=boot_id, stopped_deliberately=True))
     spent: dict[int, poll.RetakesSpent] = {}
     assert poll.gather_retakes(ports, locks, "boot-now", spent=spent) == ([], [])
     assert spent == {}

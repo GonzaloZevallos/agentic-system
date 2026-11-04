@@ -1593,6 +1593,7 @@ class MemoryTracker:
         if self.label_failures > 0:
             self.label_failures -= 1
             raise ValueError("gh issue edit failed: scripted")
+        self.events.append("label")
         self.labels.append((task_id, label))
 
     def unlabel(self, task_id: str, label: str) -> None:

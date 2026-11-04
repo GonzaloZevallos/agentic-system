@@ -23,8 +23,9 @@ sequenceDiagram
         Owner->>GitHub: answers in a comment
         Owner->>Resume: agentic resume --issue N
     else external cut (role failure, account limit, full disk)
-        Poller->>Resume: spawn resume --issue N --yes --detach
+        Poller->>Resume: spawn resume --issue N --yes --detach --by-poller
         Poller->>GitHub: Auto-resumed comment, once the spawn returned a pid
+        Resume->>GitHub: Resumed by the poller comment, which does not reset the retake budget
     end
     Resume->>GitHub: comments since the last system one
     Resume->>Resume: prepare, summary, confirmation
@@ -59,7 +60,14 @@ sequenceDiagram
      recién cuando el spawn devolvió un pid, deja el comentario `Auto-resumed: `
      (`agentic/core/process/application/poll.py:AUTO_RESUMED`). Las corridas que murieron por un
      reinicio o una caída las retoma también el poller
-     (`agentic/core/process/application/poll.py:gather_retakes`). Si una persona habló después
+     (`agentic/core/process/application/poll.py:gather_retakes`). Todo hijo que el poller lanza
+     lleva `--by-poller` (`agentic/core/process/application/poll.py:_spawn_resume`) y su
+     reanudación comenta `Resumed by the poller: `
+     (`agentic/core/process/domain/retakes.py:RESUMED_BY_POLLER`), que a diferencia del
+     `Resumed: ` de una persona no reinicia el presupuesto de retomas. Cuando ese presupuesto
+     se gasta (o el lock muerto quedó sin tocar 24 h), el poller pone la etiqueta `needs-human` y
+     deja un único comentario `Retakes spent: `
+     (`agentic/core/process/application/poll.py:_announce_spent`). Si una persona habló después
      del sistema, la pausa ya es del humano y el poller no la toca.
 4. **Antes de gastar.** `agentic/core/process/application/resume.py:prepare` decide la
    reanudación: toma como decisión todos los comentarios posteriores al último del sistema
