@@ -39,7 +39,7 @@ from ..domain.design import (
 )
 from ..domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL, UI_LEAD_FINAL, UX_LEAD_FINAL
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import SetupFailed, task_base, task_checkout_in_thread
+from .checkouts import task_base
 from .ports import Checkout, Ports, SampleAppHandle
 from .run_role import Output, finish, run_role, with_context
 
@@ -51,19 +51,13 @@ async def final_validation(
     cfg: Configuration,
     ports: Ports,
     *,
-    checkout: Checkout | None = None,
-    defer_close_docs: bool = False,
+    checkout: Checkout,
 ) -> TaskState:
-    """A `checkout` handed in (the verifier set's, GH-469) is used as is. With
-    `defer_close_docs` an approval with capability files does not write or commit them: it
-    leaves them owed in `pending_close_docs` on the reviewed head, and `commit_close_docs`
-    commits them once the whole set has judged the same head."""
+    """The `checkout` is the verifier set's (GH-469): resolved once by `verifiers.verify`.
+    An approval with capability files does not write or commit them: it leaves them owed in
+    `pending_close_docs` on the reviewed head, and `commit_close_docs` commits them once the
+    whole set has judged the same head."""
     task = checkout
-    if task is None:
-        try:
-            task = await task_checkout_in_thread(state, cfg, ports)
-        except SetupFailed as unprepared:
-            return finish(state, unprepared.patch(PM_FINAL), ports)
     design_block = ports.stack.design(task_base(state, ports))
     started = _start(design_block, ports, task.path)
     try:
@@ -99,10 +93,7 @@ async def final_validation(
         if output is None:
             return finish(state, patch, ports)
         patch = apply(patch, _verdict_patch(state, cfg, output.data))
-        if defer_close_docs:
-            patch = apply(patch, _pending_close_docs_patch(output.data, reviewed))
-        else:
-            patch = apply(patch, _close_docs_patch(state, ports, task.path, output.data, reviewed))
+        patch = apply(patch, _pending_close_docs_patch(output.data, reviewed))
         return finish(state, patch, ports)
     finally:
         if isinstance(started, SampleAppHandle):
@@ -265,18 +256,6 @@ def commit_close_docs(state: TaskState, ports: Ports, root: Path) -> TaskState:
         state, ports, root, list(pending["definitions"]), pending["parent"]
     )
     return {**committed, "pending_close_docs": None}
-
-
-def _close_docs_patch(
-    state: TaskState, ports: Ports, root: Path, data: dict[str, Any], reviewed: str | None
-) -> TaskState:
-    """The close-time pass: on `approved`, the capability files PM returned are written into
-    the task checkout and committed there, and `close_docs` records that commit. Nothing is
-    written when PM returned none or no head was reviewed, and nothing is recorded when the
-    files were already what the checkout held (no commit). `paths` is what was committed."""
-    if not _owes_close_docs(data, reviewed) or reviewed is None:
-        return {}
-    return _commit_definitions(state, ports, root, data["definitions"], reviewed)
 
 
 def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -> TaskState:

@@ -2491,13 +2491,12 @@ def after_integrate(state: TaskState) -> str | None:
         return FIX_IMPORTANT
     if owner_rules_due(state):
         return "owner_rules"
-    if full_checks_due(state):
-        return "full_checks"
-    if copy_review_due(state):
-        return "copy_review"
-    if final_validation_due(state):
-        return "final_validation"
-    return "qa_performance" if qa_performance_due(state) else "deliver"
+    # The verifiers of the integrated head run together in one node (GH-469); files owed to
+    # the docs still wait there to be committed or dropped, so no route leaves them set and
+    # goes to `deliver` (invariant 4).
+    if verifiers_due(state) or state.get("pending_close_docs"):
+        return VERIFY
+    return "deliver"
 
 
 def after_owner_rules(state: TaskState) -> str | None:
@@ -2506,27 +2505,18 @@ def after_owner_rules(state: TaskState) -> str | None:
     return None if state.get("escalated") else "integrate"
 
 
+def after_verify(state: TaskState) -> str | None:
+    """Always back to the fan-in (GH-469): the verifier set wrote one combined patch. On an
+    approval `verifiers_due` now reads empty and `after_integrate` goes on to `deliver`; on a
+    return, the reopened subtask is what `dispatched_subtasks` picks up, and the fan-in sends
+    it back to its Developer like any other wave."""
+    return None if state.get("escalated") else "integrate"
+
+
 def after_fix_important(state: TaskState) -> str | None:
     """Always back to the fan-in: the pass reopened the owning units, which
     `dispatched_subtasks` picks up; once they and the integration are approved again
     `important_pass_spent` reads `True` and `after_integrate` goes on to the checks."""
-    return None if state.get("escalated") else "integrate"
-
-
-def after_final_validation(state: TaskState) -> str | None:
-    """Always back to the fan-in (ADR-0040): on `approved`, `final_validation_due` now
-    reads `False` and `after_integrate` falls through to `deliver`; on `returned`, the
-    reopened subtask is exactly what `dispatched_subtasks` picks up, and the fan-in
-    sends it back to its Developer like any other wave. No new predicate decides
-    between the two -- `after_integrate` already does, from the same state."""
-    return None if state.get("escalated") else "integrate"
-
-
-def after_qa_performance(state: TaskState) -> str | None:
-    """Always back to the fan-in, like `after_final_validation`: on `approved` or
-    `unverified`, `qa_performance_due` now reads `False` and `after_integrate` falls
-    through to `deliver`; on `returned`, the reopened subtask is what `dispatched_subtasks`
-    picks up."""
     return None if state.get("escalated") else "integrate"
 
 
@@ -2758,20 +2748,6 @@ def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
             **escalation("ci", reason),
         }
     )
-
-
-def after_full_checks(state: TaskState) -> str | None:
-    """Always back to the fan-in, like `after_qa_performance`: on a green run
-    `full_checks_due` now reads `False` and `after_integrate` goes on; on a red one the
-    reopened subtask is what `dispatched_subtasks` picks up."""
-    return None if state.get("escalated") else "integrate"
-
-
-def after_copy_review(state: TaskState) -> str | None:
-    """Always back to the fan-in, like `after_final_validation`: the review returns nothing,
-    so `after_integrate` reads the same state and goes on to the next step or reopens the
-    owner of an important finding."""
-    return None if state.get("escalated") else "integrate"
 
 
 def after_deliver(state: TaskState) -> str | None:
@@ -3025,6 +3001,7 @@ LANDING_IMPORTANT_PASSES_MAX = 1
 declared, not measured. `domain.landing` re-exports it."""
 
 FIX_IMPORTANT = "fix_important"
+VERIFY = "verify"
 
 
 def important_pass_spent(state: Mapping[str, object], *, resolved_only: bool = False) -> bool:

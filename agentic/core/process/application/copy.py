@@ -50,18 +50,13 @@ async def write_copy(state: TaskState, cfg: Configuration, ports: Ports) -> Task
 
 
 async def copy_review(
-    state: TaskState, cfg: Configuration, ports: Ports, *, checkout: Checkout | None = None
+    state: TaskState, cfg: Configuration, ports: Ports, *, checkout: Checkout
 ) -> TaskState:
     """Tech Writer's review of the integrated piece, in the checkout `deliver` uses. It reads
     the diff against the task's base, its own open rows by identifier and the corrected texts
-    in force; what it finds and settles becomes rows and closures of the table. A `checkout`
-    handed in (the verifier set's, GH-469) is used as is."""
+    in force; what it finds and settles becomes rows and closures of the table. The `checkout`
+    is the verifier set's (GH-469): resolved once by `verifiers.verify`, never here."""
     task = checkout
-    if task is None:
-        try:
-            task = await task_checkout_in_thread(state, cfg, ports)
-        except SetupFailed as unprepared:
-            return finish(state, unprepared.patch(TECH_WRITER_REVIEW), ports)
     base = task_base(state, ports)
     branch = rules.task_branch(state["id"])
     standards_missing = not ports.knowledge.writing(task.path)
