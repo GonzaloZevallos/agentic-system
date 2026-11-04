@@ -91,6 +91,7 @@ from .task import (
     TaskInput,
     TaskState,
     TrackerPosted,
+    apply,
 )
 
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
@@ -1435,16 +1436,16 @@ def review_section(subtask_id: str) -> str:
     return f"{REVIEW_PREFIX}{subtask_id}"
 
 
-def return_section(state: TaskState, subtask_id: str) -> str:
-    """Whose section a returned subtask's delta and the incremental reviewer's own spec
-    come from (ADR-0040): `review_section(subtask_id)`, as today, unless PM's early,
-    UI-only final validation is the open return (`subtasks[id]["returned_by"] ==
-    'final_validation'`), absent reading as `'review'` for every subtask this never
-    touched. The plan's own invariant: a returned item's delta and the incremental
-    reviewer's spec both come from this one function, never from `review_section`
-    directly."""
-    subtask = state.get("subtasks", {}).get(subtask_id, {})
-    returned_by: ReturnedBy = subtask.get("returned_by", "review")
+def returned_by_all(subtask: Subtask) -> tuple[ReturnedBy, ...]:
+    """Everyone who returned `subtask` (GH-469): `returned_by` -- the first, absent reading as
+    `'review'` for every document written before ADR-0040 -- followed by `returned_with`, the
+    other verifiers of the same set, absent on every document written before it. The one
+    reader of the two fields: no code outside `task.py` and `combined_return` reads or
+    compares either directly."""
+    return (subtask.get("returned_by", "review"), *subtask.get("returned_with", []))
+
+
+def _section_of(subtask_id: str, returned_by: ReturnedBy) -> str:
     match returned_by:
         case "review":
             return review_section(subtask_id)
@@ -1456,6 +1457,23 @@ def return_section(state: TaskState, subtask_id: str) -> str:
             return FULL_CHECKS
         case _:
             assert_never(returned_by)
+
+
+def return_sections(state: TaskState, subtask_id: str) -> tuple[str, ...]:
+    """Whose sections a returned subtask's delta and the incremental reviewer's own spec
+    come from (ADR-0040, GH-469): one per entry of `returned_by_all`, in order --
+    `review_section(subtask_id)`, as today, unless a verifier returned it (PM's early,
+    UI-only final validation, QA Performance, the whole suite). The plan's own invariant: a
+    returned item's delta and the incremental reviewer's spec both come from this one
+    function, never from `review_section` directly."""
+    subtask = state.get("subtasks", {}).get(subtask_id, {})
+    return tuple(_section_of(subtask_id, returned_by) for returned_by in returned_by_all(subtask))
+
+
+def return_section(state: TaskState, subtask_id: str) -> str:
+    """The first of `return_sections`: the section of whoever returned `subtask_id` first,
+    for a caller that still wants one."""
+    return return_sections(state, subtask_id)[0]
 
 
 def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
@@ -1480,10 +1498,13 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
         parts.append(f"## {HUMAN}\n\n{human}")
     if findings := sections.get(FINDINGS):
         parts.append(f"## {FINDINGS}\n\n{findings}")
-    review = return_section(state, subtask_id)
     reason = state.get("subtasks", {}).get(subtask_id, {}).get("reason", "").strip()
     lead = f"**Returned:** {reason}\n\n" if reason else ""
-    parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
+    for review in return_sections(state, subtask_id):
+        # The one-line reason already carries every returner's (`combined_return`), so it
+        # leads the first section only.
+        parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
+        lead = ""
     if state.get("invariants"):
         parts.append(
             "The coverage map belongs to the whole delivery, not to what you change now: "
@@ -2568,6 +2589,119 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
         stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))})
         patch = {**patch, **stopped, "status": WAITING_ON_HUMAN}
     return patch
+
+
+# The verifiers that read the integrated head (GH-469), in the one order their deltas and
+# their combined return are composed in -- never the order they finish in, so the positions of
+# `runs` that `_latest_index` reads do not depend on timing.
+Verifier = Literal["full_checks", "copy_review", "final_validation", "qa_performance"]
+VERIFIER_ORDER: tuple[Verifier, ...] = (
+    "full_checks",
+    "copy_review",
+    "final_validation",
+    "qa_performance",
+)
+_VERIFIER_DUE: Mapping[Verifier, Callable[[TaskState], bool]] = MappingProxyType(
+    {
+        "full_checks": full_checks_due,
+        "copy_review": copy_review_due,
+        "final_validation": final_validation_due,
+        "qa_performance": qa_performance_due,
+    }
+)
+
+
+def verifiers_due(state: TaskState) -> tuple[Verifier, ...]:
+    """The verifiers whose own predicate says they still have to run on the integrated head,
+    in `VERIFIER_ORDER`; empty when none is. Reads the state alone, never a port: whether
+    `full_checks` runs first and alone is the application's to decide, not this."""
+    return tuple(name for name in VERIFIER_ORDER if _VERIFIER_DUE[name](state))
+
+
+def _returned_entry(state: TaskState, patch: TaskState) -> tuple[str, Subtask] | None:
+    """The target subtask (`INTEGRATION`, the single subtask when there is none) as `patch`
+    leaves it when the patch returns it, with its name."""
+    subtasks = state.get("subtasks", {})
+    if not subtasks:
+        return None
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks))
+    entry = patch.get("subtasks", {}).get(target)
+    return (target, entry) if entry is not None and entry.get("status") == "returned" else None
+
+
+def combined_return(state: TaskState, patches: Mapping[Verifier, TaskState]) -> TaskState:
+    """The one patch a verifier set returns (GH-469, invariants 1 and 2): what each verifier
+    produced on the same snapshot `state`, folded in `VERIFIER_ORDER` whatever the order of
+    `patches`, reducer by reducer (`apply`): lists concatenate, `cost_usd` adds,
+    `changes_requested` unites. A lone patch comes out as it went in. The only code that
+    merges verifier patches, and the only writer of the target's `returned_with`.
+
+    With several returners the target is returned by the first (`returned_by`) with the others
+    in `returned_with`, its `reason` each returner's own prefixed by the verifier's name. Any
+    escalating patch escalates the whole, with the class of the first one and a text that
+    carries every returner's reason; the others' deltas are kept, a pair that returned without
+    reaching its limit keeps its increment. `pending_close_docs` is whatever `final_validation`
+    left, and any return clears it."""
+    ordered = [(name, patches[name]) for name in VERIFIER_ORDER if name in patches]
+    if not ordered:
+        raise ValueError("a verifier set returns at least one patch")
+    merged = apply(ordered[0][1], {})
+    for _, patch in ordered[1:]:
+        merged = apply(merged, patch)
+    returns = [
+        (name, found[0], found[1], patch)
+        for name, patch in ordered
+        if (found := _returned_entry(state, patch)) is not None
+    ]
+    if len(returns) > 1:
+        target = returns[0][1]
+        reasons = [(name, entry.get("reason", "")) for name, _, entry, _ in returns]
+        combined: Subtask = {
+            **merged["subtasks"][target],
+            "status": "returned",
+            "reason": "\n\n".join(f"{name}: {reason}" for name, reason in reasons),
+            "returned_by": returns[0][2].get("returned_by", "review"),
+            "returned_with": [entry.get("returned_by", "review") for _, _, entry, _ in returns[1:]],
+        }
+        merged["subtasks"] = {**merged["subtasks"], target: combined}
+    for name, patch in ordered:
+        if not (text := patch.get("escalated")):
+            continue
+        for other, _, entry, _ in returns:
+            reason = entry.get("reason", "")
+            if other != name and reason not in text:
+                text = f"{text}\n\n{other}: {reason}"
+        merged |= escalation(patch.get("escalation_class") or "failure", text)
+        merged["status"] = WAITING_ON_HUMAN
+        break
+    final = patches.get("final_validation")
+    wrote = final is not None and "pending_close_docs" in final
+    merged.pop("pending_close_docs", None)
+    if returns:
+        if wrote or state.get("pending_close_docs"):
+            merged["pending_close_docs"] = None
+    elif final is not None and wrote:
+        merged["pending_close_docs"] = final["pending_close_docs"]
+    return merged
+
+
+def close_docs_committable(state: TaskState) -> bool:
+    """Whether the capability files `final_validation` approved with may be committed now
+    (GH-469, invariant 4): they are owed (`pending_close_docs`) and the `parent` they were
+    approved on is the reviewed head of the reviewed unit -- the integration, or the single
+    subtask -- as `same_commit` reads it."""
+    pending = state.get("pending_close_docs")
+    if not pending:
+        return False
+    name = reviewed_unit_name(state)
+    reviewed = state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
+    return same_commit(pending["parent"], reviewed)
+
+
+def close_docs_stale(state: TaskState) -> bool:
+    """Whether the files owed no longer sit on the head that was reviewed: owed, and not
+    committable. The set drops them without committing, and the head is verified again."""
+    return bool(state.get("pending_close_docs")) and not close_docs_committable(state)
 
 
 def full_checks_cover(

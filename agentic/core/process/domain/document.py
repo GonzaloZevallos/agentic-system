@@ -168,6 +168,9 @@ def render(
         # set so a document without them is byte-identical to one written before. The merge
         # gate reads it from here.
         **({"close_docs": docs} if (docs := state.get("close_docs")) else {}),
+        # The capability files owed to the task branch until the verifier set commits them
+        # (GH-469), written only when set so a document without them is byte-identical.
+        **({"pending_close_docs": p} if (p := state.get("pending_close_docs")) else {}),
         # The owner-rules step's observation (GH-431): the head it last saw and the rules it
         # could not write here, each written only when set so a document without them is
         # byte-identical to one written before.

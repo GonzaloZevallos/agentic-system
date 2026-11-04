@@ -824,6 +824,11 @@ class Subtask(TypedDict, total=False):
     # and on every ordinary review return. `returned_developer_delta`'s own
     # `rules.return_section` reads it to find which section carries the delta.
     returned_by: ReturnedBy
+    # The other verifiers that returned the same subtask in the same verifier set
+    # (GH-469), in the fixed verifier order; `returned_by` is the first. Absent on every
+    # document written before the set existed and on every return by one party alone:
+    # `rules.returned_by_all` is the one reader of both fields.
+    returned_with: list[ReturnedBy]
     # Branches the fan-in could not bring into the task branch on its own. Only the
     # integration subtask carries it: what the integrator has left to resolve.
     conflicts: list[str]
@@ -1072,6 +1077,17 @@ class CloseDocs(TypedDict):
     paths: list[str]
 
 
+class PendingCloseDocs(TypedDict):
+    """The capability files `final_validation` approved with and the verifier set has not
+    committed yet (GH-469): `parent` the reviewed unit's `reviewed_head` PM's approval sits
+    on, `definitions` the files as PM returned them (`CapabilityFile` dumped). Committed only
+    on that `parent` (`rules.close_docs_committable`); cleared by any return and by
+    `fix_important`."""
+
+    parent: str
+    definitions: list[dict[str, Any]]
+
+
 class CiSpeculation(TypedDict):
     """The push `review()` made of the final unit's head to `agentic-ci/<id>` ahead of
     `full_checks` (GH-465): `head` the whole sha pushed, `pushed_at` the ISO instant. Replaced
@@ -1250,6 +1266,11 @@ class TaskState(TaskInput, total=False):
     # `None` is how a `pm_final` run clears the previous one. Written to the document only
     # when set, read with `.get`.
     close_docs: NotRequired[CloseDocs | None]
+    # The capability files an approving `final_validation` returned, owed to the task branch
+    # until the verifier set commits them (GH-469, `PendingCloseDocs`): `None` clears it. No
+    # reducer, so the last write wins, like `close_docs`; written to the document only when
+    # set, read with `.get`.
+    pending_close_docs: NotRequired[PendingCloseDocs | None]
     # The head the `owner_rules` step last observed (`rules.owner_rules_due` compares it with
     # the current head; never a record of which rules were written). Written to the document
     # only when set, read with `.get`.

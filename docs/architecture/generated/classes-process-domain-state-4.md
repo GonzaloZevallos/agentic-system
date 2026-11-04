@@ -31,9 +31,9 @@ classDiagram
     class task__MergeOutcome["MergeOutcome"]
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
+    class task__PendingCloseDocs["PendingCloseDocs"]
     class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
-    class task__PullRequestCommit["PullRequestCommit"]
 ```
 
 ## Relaciones con otras páginas
