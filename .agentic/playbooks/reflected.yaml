@@ -613,3 +613,13 @@ tasks:
     decisions: 3
   GH-485@review:
     cost_usd: 0.0763
+  GH-469@review:
+    cost_usd: 0.0951
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-469
