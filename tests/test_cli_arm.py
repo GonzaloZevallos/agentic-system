@@ -266,7 +266,9 @@ def test_the_resumed_state_binds_the_documents_switches_whatever_the_file_says(t
 # --- through the real graph: the input_schema keeps only the keys TaskInput declares ----------
 
 
-async def run_through_the_real_graph(monkeypatch, tmp_path, previous=None, **options):
+async def run_through_the_real_graph(
+    monkeypatch, tmp_path, previous=None, task_extra=None, **options
+):
     """A task run to its cap pause on `build_graph`, recording the `Configuration` every node
     was handed. Returns the ports, the configurations and the checkpoint state."""
     import os
@@ -315,7 +317,7 @@ async def run_through_the_real_graph(monkeypatch, tmp_path, previous=None, **opt
         monkeypatch.delenv(switch, raising=False)
     cfg = Configuration.from_sources({}, os.environ)
     saver = Saver()
-    task = {"id": "GH-1", "title": "Export", "description": "CSV."}
+    task = {"id": "GH-1", "title": "Export", "description": "CSV.", **(task_extra or {})}
     with pytest.raises(SystemExit):  # paused at the cap: exit 1
         await cli._run(task, cfg, ports, checkpointer=saver, **options)
     snapshot = await cli.graph.compile(checkpointer=saver.saver).aget_state(
@@ -349,6 +351,26 @@ async def test_a_fresh_run_carries_the_arm_through_the_real_graph(monkeypatch, t
     assert seen and all(cfg.review_mode == "light" for cfg in seen)
 
 
+@pytest.mark.anyio
+async def test_the_evaluation_marker_goes_through_the_real_graph_into_state_and_document(
+    monkeypatch, tmp_path
+):
+    marker = {"issue": 7, "base": "a" * 40, "ci": "local"}
+    ports, _, state = await run_through_the_real_graph(
+        monkeypatch, tmp_path, task_extra={"evaluation": marker}
+    )
+    assert state["evaluation"] == marker
+    assert ports.documents.load("GH-1")["evaluation"] == marker
+
+
+@pytest.mark.anyio
+async def test_a_task_without_the_marker_has_no_evaluation_through_the_real_graph(
+    monkeypatch, tmp_path
+):
+    ports, _, state = await run_through_the_real_graph(monkeypatch, tmp_path)
+    assert "evaluation" not in state and "evaluation" not in ports.documents.load("GH-1")
+
+
 # --- `run --issue-input`: the task of an evaluation run comes from its frozen entry ---
 
 FROZEN = {
@@ -366,6 +388,11 @@ def frozen_file(tmp_path, **overrides):
     return path
 
 
+def eval_root(tmp_path, name="p"):
+    """A product root shaped as an evaluation run's: `<x>/.agentic/eval/EVAL-...`."""
+    return product(tmp_path, f"{name}/.agentic/eval/EVAL-7-aaaaaaaa-control-1")
+
+
 def run_input(monkeypatch, root, *extra):
     monkeypatch.setattr("sys.argv", ["agentic", "run", "--product-dir", str(root), *extra])
     cli.main()
@@ -379,7 +406,8 @@ def test_run_issue_input_builds_the_task_from_the_file_and_never_asks_the_tracke
 
     monkeypatch.setattr(GhInbox, "task", forbidden)
     monkeypatch.setattr(GhInbox, "open_issues", forbidden)
-    root = declared(tmp_path)
+    root = eval_root(tmp_path)
+    (root / ".agentic/experiment.yaml").write_text(DECLARATION)
     seen = capture(monkeypatch)
     run_input(monkeypatch, root, "--issue-input", str(frozen_file(tmp_path)), ARM_FLAG, "light")
     task, _cfg, ports = seen["args"][:3]
@@ -422,7 +450,7 @@ def test_run_issue_input_with_a_malformed_entry_is_refused_before_anything_spend
     capture(monkeypatch)
     path = frozen_file(tmp_path, **overrides)
     with pytest.raises(SystemExit) as info:
-        run_input(monkeypatch, product(tmp_path, "p"), "--issue-input", str(path))
+        run_input(monkeypatch, eval_root(tmp_path), "--issue-input", str(path))
     assert info.value.code == 2
     assert reason in capsys.readouterr().err.splitlines()[-1]
 
@@ -430,6 +458,28 @@ def test_run_issue_input_with_a_malformed_entry_is_refused_before_anything_spend
 def test_run_issue_input_with_a_missing_file_is_refused(monkeypatch, tmp_path, capsys):
     capture(monkeypatch)
     with pytest.raises(SystemExit) as info:
-        run_input(monkeypatch, product(tmp_path, "p"), "--issue-input", str(tmp_path / "no.yaml"))
+        run_input(monkeypatch, eval_root(tmp_path), "--issue-input", str(tmp_path / "no.yaml"))
     assert info.value.code == 2
     assert "no.yaml" in capsys.readouterr().err
+
+
+def test_run_issue_input_in_a_root_that_is_not_an_evaluation_root_is_refused_before_it_spends(
+    monkeypatch, tmp_path, capsys
+):
+    seen = capture(monkeypatch)
+    root = product(tmp_path, "p")
+    with pytest.raises(SystemExit) as info:
+        run_input(monkeypatch, root, "--issue-input", str(frozen_file(tmp_path)))
+    assert info.value.code == 2
+    error = capsys.readouterr().err.splitlines()[-1]
+    assert "EVAL-7-aaaaaaaa-control-1" in error and "outside an evaluation root" in error
+    assert seen == {}  # never reached `_run`
+    assert not (root / ".agentic/tasks").exists()
+
+
+def test_run_issue_input_through_a_symlink_to_an_evaluation_root_is_accepted(monkeypatch, tmp_path):
+    seen = capture(monkeypatch)
+    link = tmp_path / "link"
+    link.symlink_to(eval_root(tmp_path))
+    run_input(monkeypatch, link, "--issue-input", str(frozen_file(tmp_path)))
+    assert seen["args"][0]["id"] == "EVAL-7-aaaaaaaa-control-1"

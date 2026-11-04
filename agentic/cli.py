@@ -872,7 +872,7 @@ def main() -> None:
             if args.issue_input is not None:
                 # An evaluation run's task is its frozen entry and nothing else: the inbox
                 # of the run is that file for the whole process, so no read reaches `gh`.
-                frozen = _frozen_inbox(Path(args.issue_input))
+                frozen = _frozen_inbox(Path(args.issue_input), cfg.product_dir)
                 ports = replace(ports, inbox=frozen)
                 task = frozen.task(frozen.issue)
             elif args.issue is not None:
@@ -920,10 +920,12 @@ def main() -> None:
         parser.exit(exc.code, f"agentic: {exc}\n")
 
 
-def _frozen_inbox(path: Path) -> FileInbox:
+def _frozen_inbox(path: Path, product_dir: Path) -> FileInbox:
     """The inbox over the frozen entry at `path`, refused (`CannotStart`, before anything
     spends) when the file is unreadable, its entry breaks the set's own rule
-    (`evaluation.entry_refusal`) or its id is not an evaluation id of its own issue."""
+    (`evaluation.entry_refusal`), its id is not an evaluation id of its own issue, or
+    `product_dir` is not an evaluation root (`evaluation.wiring_refusal`): the root, never
+    the flag alone, decides that a run is wired as an evaluation."""
     try:
         inbox = FileInbox(path)
     except ValueError as exc:
@@ -933,6 +935,8 @@ def _frozen_inbox(path: Path) -> FileInbox:
     parsed = evaluation.parse_eval_task_id(inbox.id)
     if parsed is None or parsed.issue != inbox.issue:
         raise CannotStart(f"{path}: id {inbox.id!r} is not an evaluation id of issue {inbox.issue}")
+    if (reason := evaluation.wiring_refusal(product_dir, inbox.id)) is not None:
+        raise CannotStart(reason)
     return inbox
 
 
