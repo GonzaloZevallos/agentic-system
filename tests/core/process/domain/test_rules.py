@@ -3567,7 +3567,7 @@ def test_after_integrate_for_a_plan_that_convenes_no_performance_is_what_it_alwa
         "subtasks": {"api": {"status": "approved"}},
         "runs": [run("Tech Lead", review)],
     }
-    assert rules.after_integrate(design) == "final_validation"
+    assert rules.after_integrate(design) == "verify"
     assert rules.after_integrate(
         {**design, "runs": [*design["runs"], run(roles.PM_FINAL.name)]}
     ) == ("deliver")

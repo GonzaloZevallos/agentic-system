@@ -295,7 +295,7 @@ def test_copy_review_is_due_after_the_last_approval_and_before_final_validation(
     review = run("Tech Lead", "Tech Lead: review api")
     state = approved_state("touches_copy", review_runs=[review])
     assert rules.copy_review_due(state)
-    assert rules.after_integrate(state) == "copy_review"
+    assert rules.after_integrate(state) == "verify"
     state["runs"] = [*state["runs"], run("Tech Writer: review")]
     assert not rules.copy_review_due(state)
     assert rules.after_integrate(state) == "deliver"
@@ -307,9 +307,9 @@ def test_copy_review_is_due_after_the_last_approval_and_before_final_validation(
 def test_copy_review_goes_before_the_final_validation_of_a_task_with_both_flags():
     review = run("Tech Lead", "Tech Lead: review api")
     state = approved_state("touches_copy", "touches_ui", review_runs=[review])
-    assert rules.after_integrate(state) == "copy_review"
+    assert rules.after_integrate(state) == "verify"
     state["runs"] = [*state["runs"], run("Tech Writer: review")]
-    assert rules.after_integrate(state) == "final_validation"
+    assert rules.after_integrate(state) == "verify"
 
 
 def test_copy_review_is_not_due_without_the_flag_or_before_every_subtask_is_approved():
@@ -319,11 +319,6 @@ def test_copy_review_is_not_due_without_the_flag_or_before_every_subtask_is_appr
     pending = approved_state("touches_copy", review_runs=[review])
     pending["subtasks"]["ui"] = {"status": "pending"}
     assert not rules.copy_review_due(pending)
-
-
-def test_after_copy_review_returns_to_the_fan_in_unless_escalated():
-    assert rules.after_copy_review({}) == "integrate"
-    assert rules.after_copy_review({"escalated": "x"}) is None
 
 
 # --- attribution and roles -----------------------------------------------------------------

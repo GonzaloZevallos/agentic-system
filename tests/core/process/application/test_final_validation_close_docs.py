@@ -73,7 +73,13 @@ async def run(
     start: TaskState, runner: ScriptedRunner, tmp_path: Path, workspace: MemoryWorkspace
 ) -> tuple[TaskState, Any]:
     ports = memory_ports(runner, workspace=workspace)
-    patch = await node.final_validation(start, Configuration(product_dir=tmp_path), ports)
+    checkout = workspace.task_checkout(start["id"])
+    patch = await node.final_validation(
+        start, Configuration(product_dir=tmp_path), ports, checkout=checkout
+    )
+    if patch.get("pending_close_docs"):
+        # What the verifier set does once nothing returned: commit what the approval owes.
+        patch = apply(patch, node.commit_close_docs(apply(start, patch), ports, checkout.path))
     return patch, ports
 
 
@@ -268,7 +274,10 @@ async def test_a_deferred_approval_owes_the_files_and_calls_neither_consolidate_
     ports = memory_ports(runner, workspace=workspace)
 
     patch = await node.final_validation(
-        state(), Configuration(product_dir=tmp_path), ports, defer_close_docs=True
+        state(),
+        Configuration(product_dir=tmp_path),
+        ports,
+        checkout=workspace.task_checkout("GH-12"),
     )
 
     assert workspace.path_commits == [] and ports.knowledge.definitions == {}
@@ -280,7 +289,10 @@ async def test_a_deferred_return_owes_nothing(tmp_path):
     runner = runner_with(final_verdict("returned", reason="wide", blocking=["x"]))
     ports = memory_ports(runner)
     patch = await node.final_validation(
-        state(), Configuration(product_dir=tmp_path), ports, defer_close_docs=True
+        state(),
+        Configuration(product_dir=tmp_path),
+        ports,
+        checkout=ports.workspace.task_checkout("GH-12"),
     )
     assert "pending_close_docs" not in patch
 

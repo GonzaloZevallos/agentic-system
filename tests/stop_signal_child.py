@@ -200,7 +200,12 @@ async def _scenario(
                 {"metric": PERF_METRIC, "limit": 100, "unit": "ms", "source": "issue", "basis": "b"}
             ],
         }
-        await qa_performance(_state(performance=[plan]), cfg, ports)
+        await qa_performance(
+            _state(performance=[plan]),
+            cfg,
+            ports,
+            checkout=ports.workspace.task_checkout((_state(performance=[plan]))["id"]),
+        )
     else:
         raise SystemExit(f"unknown scenario {scenario}")
 

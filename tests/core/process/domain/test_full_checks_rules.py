@@ -57,10 +57,10 @@ def test_a_state_without_task_head_never_visits_the_node():
 def test_with_task_head_and_no_record_the_node_comes_before_everything_after_the_fan_in():
     due = state(task_head=HEAD, owner_rules_seen=HEAD)
     assert rules.full_checks_due(due)
-    assert rules.after_integrate(due) == "full_checks"
+    assert rules.after_integrate(due) == "verify"
     # Before the copy review, the final validation and QA Performance, whatever is convened.
     convened = state(task_head=HEAD, owner_rules_seen=HEAD, performance=[{"name": "x"}])
-    assert rules.after_integrate(convened) == "full_checks"
+    assert rules.after_integrate(convened) == "verify"
 
 
 # --- ci_unavailable (GH-462) ------------------------------------------------------------------
@@ -115,12 +115,25 @@ def test_a_head_moved_by_a_landing_pass_is_due_again():
     moved = state(
         task_head=MOVED, owner_rules_seen=MOVED, full_checks=record(HEAD), landing=landing
     )
-    assert rules.after_integrate(moved) == "full_checks"
+    assert rules.after_integrate(moved) == "verify"
 
 
-def test_after_full_checks_always_returns_to_the_fan_in_unless_escalated():
-    assert rules.after_full_checks(state()) == "integrate"
-    assert rules.after_full_checks(state(escalated="stuck")) is None
+def test_after_verify_always_returns_to_the_fan_in_unless_escalated():
+    assert rules.after_verify(state()) == "integrate"
+    assert rules.after_verify(state(escalated="stuck")) is None
+
+
+def test_files_owed_to_the_docs_keep_the_route_in_verify_and_a_resume_goes_through_the_fan_in():
+    owing = state(
+        task_head=HEAD,
+        full_checks={"head": HEAD, "passed": True},
+        owner_rules_seen=HEAD,
+        pending_close_docs={"parent": HEAD, "definitions": []},
+    )
+    assert rules.verifiers_due(owing) == ()
+    assert rules.after_integrate(owing) == "verify"
+    assert rules.resume_target(owing) == "integrate"
+    assert rules.after_integrate({**owing, "pending_close_docs": None}) == "deliver"
 
 
 # --- the red run returns the integration ------------------------------------------------------
