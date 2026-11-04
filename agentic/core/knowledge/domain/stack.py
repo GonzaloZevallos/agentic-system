@@ -45,10 +45,21 @@ a name that is not under `checks` all fail at load.
 
 **`rerun_checks`**: optional (ADR-0066). A mapping of a check's name, which must also be under
 `checks`, to `{command, test_id}`: the "failed tests only" form of the check and the regex whose
-single group names a failed test in its output. Only the delivery gate runs the form, and only
-after a failure whose output `test_id` found at least one id in; every other rerun is the check's
-own command. A form requires `delivery_checks`, so the full run on the integrated head that
-tier guarantees always covers what the form skipped. The regex runs inside the system's process,
+single group names a failed test in its output. The delivery, merge and full-checks gates run the
+form (GH-464, ADR-0082), and only after a failure whose output `test_id` found ids in, all of them
+(`presubmit.ids_complete`); every other rerun is the check's own command, and a form rerun that
+stays red without naming one of the ids it reran falls back once to the whole command. A form
+requires `delivery_checks`, so the full run on the integrated head that tier guarantees always
+covers what the form skipped.
+
+*The CI flake block* (GH-464, ADR-0082): a job named under `ci` may print, for the tests its own
+rerun found flaky, one line `agentic-flakes: {"v":1,"check":"<name>","tests":["<id>",...]}` per
+check, where `<name>` is a name under `checks`. The `full_checks` CI path and the merge gate read it
+(`GhCiLogs.flake_block`, from `gh run view --job --log`) only when the CI report is the judged
+head's, and record it as flakes: the last block per job and check wins, a check not under `checks`
+at the task's base commit is dropped, ids are capped at 50 and 200 characters each and an id with a
+newline, backtick, `<!--`, `-->` or `{{` is dropped, and a malformed line is dropped whole. It is
+evidence from the head under test: it can add flake records, never change a verdict or a merge. The regex runs inside the system's process,
 so it is validated here: it compiles, has exactly one group, is at most 200 characters, has no
 quantified group that contains a quantifier and no alternation inside a quantified group (the
 shapes that backtrack catastrophically). Absent it reads as `{}`: the gate of today.
