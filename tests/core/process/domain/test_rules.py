@@ -1881,6 +1881,21 @@ def test_the_persisted_escalation_is_a_failure_class_pause_auto_resumable_does_n
     assert rules.auto_resumable(task.apply(state, patch)) is None
 
 
+@pytest.mark.parametrize(
+    "cls", [c for c in get_args(task.EscalationClass) if c != "failure"], ids=str
+)
+def test_auto_resumable_never_retakes_a_document_escalated_with_a_class_but_failure(cls):
+    # GH-462: a new class (`ci`) must never be retaken by the poller on its own.
+    state = {
+        "pause_log": [_failure_entry("account_limit"), _escalation_entry(cls)],
+        "escalation_class": cls,
+    }
+    assert rules.auto_resumable(cast(Any, state)) is None
+    # Control: the same epoch escalated as `failure` is retaken.
+    control = {"pause_log": [_failure_entry("account_limit"), _escalation_entry("failure")]}
+    assert rules.auto_resumable(cast(Any, control)) == "account_limit"
+
+
 def _paused_by(*entries: dict, escalated: str = "Developer failed") -> dict:
     return {"pause_log": list(entries), "escalated": escalated}
 

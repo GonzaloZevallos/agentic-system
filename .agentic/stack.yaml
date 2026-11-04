@@ -100,3 +100,6 @@ forbidden:
 # If Actions stops reporting, the merge waits up to `ci.CI_WAIT_MAX_S` and then landing
 # diagnoses (ADR-0048). Commenting this key out again is a human decision.
 ci: [check]
+# `ci_dispatch` (GH-462): a head that touches `.github/` is judged by a dispatch of this
+# workflow as it is on the task's base, with the head sha in the input `sha`.
+ci_dispatch: {workflow: ci.yml, sha_input: sha}

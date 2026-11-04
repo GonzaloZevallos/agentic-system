@@ -160,7 +160,9 @@ ReviewKind = Literal["first", "incremental", "integration"]
 # `failure`: it still pauses the task like any other role failure (ADR-0029); only the
 # reason series tells the two apart. `system_delivery` (GH-358) is `deliver` refusing twice, on
 # the same head, to push a tiered product's branch without a passed `full_checks` record: the
-# system's own plumbing failing to deliver, not a role and not a return.
+# system's own plumbing failing to deliver, not a role and not a return. `ci` (GH-462) is a
+# `full_checks` of a product that declares `ci:` for which GitHub gave no verdict (`CiCause`
+# says why): the task stops for the human instead of running the suite on this machine.
 EscalationClass = Literal[
     "classification",
     "returns",
@@ -171,6 +173,7 @@ EscalationClass = Literal[
     "setup",
     "estimate",
     "system_delivery",
+    "ci",
 ]
 
 
@@ -1007,6 +1010,19 @@ FallbackCause = Literal[
     "gh_unavailable", "gh_unreadable", "no_run", "publish_failed", "not_started", "untrusted"
 ]
 
+# Why GitHub CI gave a `full_checks` of a `ci:` product no verdict (GH-462): the same closed
+# values, chosen from the step that failed, plus those of the dispatched run. `untrusted` is
+# not one: it is no failure of the CI but a head the product's own workflow cannot judge.
+CiCause = Literal[
+    "gh_unavailable",
+    "gh_unreadable",
+    "no_run",
+    "publish_failed",
+    "not_started",
+    "dispatch_refused",
+    "jobs_missing",
+]
+
 
 class FullCheckEntry(TypedDict):
     """One check of a `full_checks` run: its name and whether it passed. Unlike
@@ -1079,9 +1095,13 @@ class FullChecksRecord(TypedDict):
     # returns and blocks nothing.
     over_budget: NotRequired[list[BudgetBreach]]
     # Where the run happened (GH-376): `ci` when the product's GitHub jobs gave the verdict,
-    # `local` when this machine ran the tier. Absent on a record written before it and on a
+    # `local` when this machine ran the tier, `ci_dispatch` when a dispatched run of the base's
+    # workflow judged an untrusted head (GH-462). Absent on a record written before it and on a
     # product without `ci:`.
-    ran_on: NotRequired[Literal["ci", "local"]]
+    ran_on: NotRequired[Literal["ci", "local", "ci_dispatch"]]
+    # The id of the dispatched run that gave the verdict (GH-462); written only with
+    # `ran_on: "ci_dispatch"`.
+    run_id: NotRequired[int]
     # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
     ci_fallback: NotRequired[FallbackCause]
     # The checks deferred to CI (GH-453), a declared name each; written only when there is one,

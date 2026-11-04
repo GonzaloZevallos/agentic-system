@@ -63,6 +63,32 @@ def test_with_task_head_and_no_record_the_node_comes_before_everything_after_the
     assert rules.after_integrate(convened) == "full_checks"
 
 
+# --- ci_unavailable (GH-462) ------------------------------------------------------------------
+
+
+def test_ci_unavailable_escalates_with_class_ci_and_writes_no_record_and_no_return():
+    patch = rules.ci_unavailable("no_run", HEAD, "no CI run on agentic-ci/GH-1 after 25 min")
+    assert patch["escalation_class"] == "ci"
+    assert patch["status"] == "waiting_on_human"
+    assert patch["current_role"] == roles.DEVELOPER.name
+    assert patch["pause_log"] == [{"kind": "escalation", "value": "ci"}]
+    assert "(no_run)" in patch["escalated"] and HEAD[:7] in patch["escalated"]
+    assert HEAD not in patch["escalated"]
+    assert "no CI run on agentic-ci/GH-1 after 25 min" in patch["escalated"]
+    assert "full_checks" not in patch and "subtasks" not in patch and "findings" not in patch
+
+
+def test_a_state_escalated_ci_with_no_passed_record_is_due_again_so_a_resume_re_enters():
+    stopped = apply(
+        state(task_head=HEAD, owner_rules_seen=HEAD),
+        rules.ci_unavailable("publish_failed", HEAD, "push failed"),
+    )
+    assert stopped["escalation_class"] == "ci"
+    assert rules.full_checks_due(stopped)
+    # Rejected input: a passed record of the same head is the one thing that ends the node.
+    assert not rules.full_checks_due({**stopped, "full_checks": record()})
+
+
 def test_the_fan_in_still_dispatches_and_stops_before_it_considers_the_node():
     open_unit = state(task_head=HEAD, subtasks={"api": {"status": "returned"}})
     assert rules.after_integrate(open_unit) == "pipeline"

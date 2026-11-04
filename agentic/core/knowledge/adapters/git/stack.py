@@ -11,7 +11,7 @@ import yaml
 from ....process.domain.design import Design
 from ....process.domain.docs import Docs
 from ....process.domain.performance import Scenario
-from ....process.domain.presubmit import CiCover, RerunForm
+from ....process.domain.presubmit import CiCover, CiDispatch, RerunForm
 from ....process.domain.run_check import Verification
 from ....process.domain.suppressions import Forbidden
 from ...domain import stack
@@ -60,6 +60,10 @@ class GitStack:
     def ci_covers(self, revision: str) -> Mapping[str, CiCover]:
         data, source = self._declaration(revision)
         return stack.ci_covers(data, source)
+
+    def ci_dispatch(self, revision: str) -> CiDispatch | None:
+        data, source = self._declaration(revision)
+        return stack.ci_dispatch(data, source)
 
     def check_budgets(self, revision: str) -> dict[str, float]:
         data, source = self._declaration(revision)

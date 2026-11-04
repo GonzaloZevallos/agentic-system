@@ -1382,3 +1382,31 @@ def test_a_state_without_plan_settled_renders_no_key_for_it():
     assert "plan_settled" not in plain
     assert document.render({**state, "plan_settled": []}) == plain
     assert "plan_settled" not in document.parse(plain)
+
+
+def test_record_closure_round_trips_a_full_checks_record_judged_by_a_dispatched_run():
+    """GH-462: `ran_on: ci_dispatch` and the dispatched `run_id` survive the flow line."""
+    dispatched = {
+        "version": 3,
+        "head": "c" * 40,
+        "passed": True,
+        "duration_s": 240.0,
+        "declared": {"check": "ci"},
+        "results": [{"name": "check", "passed": True}],
+        "witness": None,
+        "ran_on": "ci_dispatch",
+        "run_id": 123456789,
+    }
+    local = {
+        "version": 4,
+        "head": "d" * 40,
+        "passed": True,
+        "duration_s": 3.0,
+        "declared": {"tests": "pytest"},
+        "results": [{"name": "tests", "passed": True}],
+        "witness": None,
+        "ran_on": "local",
+        "ci_fallback": "untrusted",
+    }
+    _assert_roundtrip_and_replace("full_checks", dispatched, local)
+    _assert_roundtrip_and_replace("full_checks", local, dispatched)

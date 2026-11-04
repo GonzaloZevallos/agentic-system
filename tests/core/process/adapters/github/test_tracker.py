@@ -14,7 +14,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.domain import rules
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
+from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
 
@@ -1623,3 +1623,149 @@ def test_a_refusal_with_no_policy_is_a_plain_value_error_and_raises_from_a_note(
     with pytest.raises(ValueError) as raised:
         _NOTES[target](GhTracker(Path("/p"), run, lambda line: None))
     assert type(raised.value) is ValueError
+
+
+# -- dispatch_ci and dispatched_ci (GH-462) ------------------------------------------------
+
+SHA = "a" * 40
+
+
+def test_dispatch_ci_runs_the_workflow_on_the_ref_with_each_input_as_a_field():
+    run = Recorder(stdout="")
+    answer = GhTracker(Path("/p"), run).dispatch_ci("ci.yml", "master", {"sha": SHA})
+    assert answer is None
+    assert run.calls == [["gh", "workflow", "run", "ci.yml", "--ref", "master", "-f", f"sha={SHA}"]]
+
+
+def test_dispatch_ci_with_no_ref_leaves_the_default_branch_to_gh():
+    run = Recorder(stdout="")
+    GhTracker(Path("/p"), run).dispatch_ci("ci.yml", "", {"sha": SHA})
+    assert "--ref" not in run.calls[0]
+
+
+def test_a_refused_dispatch_is_dispatch_refused_whatever_gh_printed():
+    run = Recorder(fail=True)
+    answer = GhTracker(Path("/p"), run).dispatch_ci("ci.yml", "master", {"sha": SHA})
+    assert answer == CiUnreadable("dispatch_refused")
+    assert len(run.calls) == 1  # not retried: no retry policy, and a refusal is final
+
+
+def test_a_missing_gh_on_dispatch_is_unavailable_never_raised():
+    answer = GhTracker(Path("/p"), Missing()).dispatch_ci("ci.yml", "master", {"sha": SHA})
+    assert answer == CiUnreadable("gh_unavailable")
+
+
+def test_a_gh_that_cannot_be_run_on_dispatch_is_unavailable_never_raised():
+    answer = GhTracker(Path("/p"), NotExecutable()).dispatch_ci("ci.yml", "master", {"sha": SHA})
+    assert answer == CiUnreadable("gh_unavailable")
+
+
+def _listing(*runs):
+    return json.dumps(
+        [
+            {
+                "databaseId": run_id,
+                "event": event,
+                "displayTitle": title,
+                "status": status,
+                "createdAt": created,
+                "url": f"https://github.com/o/r/actions/runs/{run_id}",
+            }
+            for run_id, event, title, status, created in runs
+        ]
+    )
+
+
+def _jobs(*jobs):
+    return json.dumps(
+        {
+            "jobs": [
+                {"name": name, "status": status, "conclusion": conclusion, "url": f"u/{name}"}
+                for name, status, conclusion in jobs
+            ]
+        }
+    )
+
+
+class Viewing(Recorder):
+    """`gh run list` answers `listing`; `gh run view <id>` the jobs scripted per id."""
+
+    def __init__(self, listing, jobs):
+        super().__init__()
+        self.listing = listing
+        self.jobs = jobs
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        if args[2] == "list":
+            return subprocess.CompletedProcess(args, 0, self.listing, "")
+        return subprocess.CompletedProcess(args, 0, self.jobs[args[3]], "")
+
+
+def test_dispatched_ci_lists_the_dispatch_runs_of_the_workflow_since_a_bound_with_their_jobs():
+    run = Viewing(
+        _listing((7, "workflow_dispatch", f"CI {SHA}", "completed", "2026-11-03T10:00:00Z")),
+        {"7": _jobs(("unit", "completed", "success"), ("web", "in_progress", ""))},
+    )
+    answer = GhTracker(Path("/p"), run).dispatched_ci("ci.yml", "2026-11-03T09:58:00Z")
+    assert answer == (
+        DispatchedRun(
+            run_id=7,
+            event="workflow_dispatch",
+            display_title=f"CI {SHA}",
+            status="completed",
+            created_at="2026-11-03T10:00:00Z",
+            link="https://github.com/o/r/actions/runs/7",
+            jobs=(
+                CiCheck("unit", "COMPLETED", "SUCCESS", "u/unit"),
+                CiCheck("web", "IN_PROGRESS", None, "u/web"),
+            ),
+        ),
+    )
+    listing, view = run.calls
+    assert listing[:3] == ["gh", "run", "list"]
+    assert listing[listing.index("--workflow") + 1] == "ci.yml"
+    assert listing[listing.index("--event") + 1] == "workflow_dispatch"
+    assert listing[listing.index("--created") + 1] == ">=2026-11-03T09:58:00Z"
+    assert view == ["gh", "run", "view", "7", "--json", "jobs"]
+
+
+def test_a_push_run_that_names_the_sha_is_returned_as_what_it_is_and_the_verdict_drops_it():
+    """The listing is not trusted to have filtered: the event stays on the run, and
+    `ci.chosen_run` is what ignores a `push` whose title holds the sha."""
+    from agentic.core.process.domain import ci
+
+    run = Viewing(
+        _listing((8, "push", f"fix {SHA}", "completed", "2026-11-03T10:00:00Z")),
+        {"8": _jobs(("unit", "completed", "success"))},
+    )
+    answer = GhTracker(Path("/p"), run).dispatched_ci("ci.yml", "2026-11-03T09:58:00Z")
+    assert isinstance(answer, tuple) and [r.event for r in answer] == ["push"]
+    assert ci.chosen_run(answer, SHA) is None
+
+
+@pytest.mark.parametrize(
+    "listing",
+    ["not json", json.dumps({"a": 1}), json.dumps([1]), json.dumps([{"databaseId": "7"}])],
+    ids=["not-json", "not-a-list", "not-an-object", "bad-id"],
+)
+def test_dispatched_ci_never_reads_what_it_cannot_whole_as_runs(listing):
+    run = Viewing(listing, {})
+    answer = GhTracker(Path("/p"), run).dispatched_ci("ci.yml", "2026-11-03T09:58:00Z")
+    assert answer == CiUnreadable("gh_unreadable")
+
+
+def test_dispatched_ci_with_jobs_it_cannot_read_is_unreadable():
+    run = Viewing(
+        _listing((7, "workflow_dispatch", SHA, "completed", "t")), {"7": json.dumps({"jobs": [1]})}
+    )
+    assert GhTracker(Path("/p"), run).dispatched_ci("ci.yml", "s") == CiUnreadable("gh_unreadable")
+
+
+def test_dispatched_ci_with_a_missing_gh_is_unavailable_and_a_failing_one_unreadable():
+    assert GhTracker(Path("/p"), Missing()).dispatched_ci("ci.yml", "s") == CiUnreadable(
+        "gh_unavailable"
+    )
+    assert GhTracker(Path("/p"), Recorder(fail=True)).dispatched_ci("ci.yml", "s") == CiUnreadable(
+        "gh_unreadable"
+    )

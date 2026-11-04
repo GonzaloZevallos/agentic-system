@@ -866,6 +866,7 @@ SUB_KEYS = {
     "rerun_checks": stack.RERUN_KEYS,
     "verifications": stack_checks.VERIFICATION_KEYS,
     "ci_covers": stack.COVER_KEYS,
+    "ci_dispatch": stack.DISPATCH_KEYS,
 }
 # A valid declaration of each key a default may depend on.
 DECLARED = {"docs": {"generate": "echo hi", "paths": ["docs/generated/**"]}}
@@ -927,3 +928,85 @@ def test_a_default_that_contradicts_its_reader_is_reported():
         stack.KeyReference("witness", stack.witness, (), stack.Computed(), "x")
     )
     assert _default_mismatch(stack.KeyReference("product", stack.product, (), None, "x"))
+
+
+def ci_dispatch_violations(dispatch: stack.CiDispatch, workflow: dict[str, Any]) -> list[str]:
+    """What keeps `workflow` from being judged safely by a dispatch of itself on the base's
+    copy (GH-462): the declared sha input exists, `permissions` is read-only, the checkout
+    takes the input, the run title carries it, and a step validates the sha before anything
+    runs it."""
+    violations: list[str] = []
+    triggers = workflow.get("on", workflow.get(True))
+    dispatched = triggers.get("workflow_dispatch") if isinstance(triggers, dict) else None
+    inputs = dispatched.get("inputs") if isinstance(dispatched, dict) else None
+    if not isinstance(inputs, dict) or dispatch.sha_input not in inputs:
+        violations.append(f"no `workflow_dispatch` input `{dispatch.sha_input}`")
+    if f"inputs.{dispatch.sha_input}" not in str(workflow.get("run-name", "")):
+        violations.append(f"the `run-name` does not carry `inputs.{dispatch.sha_input}`")
+    permissions = workflow.get("permissions")
+    if not isinstance(permissions, dict) or set(permissions.values()) != {"read"}:
+        violations.append("`permissions` is not read-only at workflow level")
+    expression = f"inputs.{dispatch.sha_input}"
+    steps = workflow.get("jobs", {}).get("check", {}).get("steps", [])
+    checkouts = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout")]
+    if not checkouts or any(
+        expression not in str(c.get("with", {}).get("ref", "")) for c in checkouts
+    ):
+        violations.append(f"the checkout ref does not use `{expression}`")
+    validating = [
+        s
+        for s in steps
+        if "run" in s
+        and "[0-9a-f]{40}" in s["run"]
+        and expression in str(s.get("env", {}))
+        and "inputs." not in s["run"]
+    ]
+    if not validating:
+        violations.append("no step validates the sha input through `env` before checkout")
+    elif checkouts and steps.index(validating[0]) > steps.index(checkouts[0]):
+        violations.append("the sha validation runs after the checkout")
+    return violations
+
+
+def test_ci_yml_accepts_the_dispatch_this_repos_stack_declares_and_the_guard_rejects_unsafe_ones():
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    dispatch = stack.ci_dispatch(data, STACK_YAML)
+    assert dispatch is not None, f"{STACK_YAML} declares no `ci_dispatch`"
+    assert dispatch.workflow == CI_YML.name
+    workflow = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
+    assert ci_dispatch_violations(dispatch, workflow) == []
+    assert "workflow_dispatch" in _workflow_triggers(workflow)
+    assert "pull_request" in _workflow_triggers(workflow)
+
+    no_input = copy.deepcopy(workflow)
+    no_input[True]["workflow_dispatch"] = None
+    assert any("input" in v for v in ci_dispatch_violations(dispatch, no_input))
+
+    untitled = copy.deepcopy(workflow)
+    del untitled["run-name"]
+    assert any("run-name" in v for v in ci_dispatch_violations(dispatch, untitled))
+
+    writable = copy.deepcopy(workflow)
+    writable["permissions"] = {"contents": "write"}
+    assert any("read-only" in v for v in ci_dispatch_violations(dispatch, writable))
+    unset = copy.deepcopy(workflow)
+    del unset["permissions"]
+    assert any("read-only" in v for v in ci_dispatch_violations(dispatch, unset))
+
+    head_checkout = copy.deepcopy(workflow)
+    for step in head_checkout["jobs"]["check"]["steps"]:
+        if str(step.get("uses", "")).startswith("actions/checkout"):
+            del step["with"]
+    assert any("checkout ref" in v for v in ci_dispatch_violations(dispatch, head_checkout))
+
+    unvalidated = copy.deepcopy(workflow)
+    unvalidated["jobs"]["check"]["steps"] = [
+        s for s in unvalidated["jobs"]["check"]["steps"] if "[0-9a-f]{40}" not in str(s.get("run"))
+    ]
+    assert any("validates" in v for v in ci_dispatch_violations(dispatch, unvalidated))
+
+    inline = copy.deepcopy(workflow)
+    for step in inline["jobs"]["check"]["steps"]:
+        if "[0-9a-f]{40}" in str(step.get("run")):
+            step["run"] += " # ${{ inputs.sha }}"
+    assert any("validates" in v for v in ci_dispatch_violations(dispatch, inline))

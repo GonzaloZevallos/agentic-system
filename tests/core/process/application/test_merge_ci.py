@@ -10,7 +10,7 @@ import pytest
 
 from agentic.core.process.application import landing_plan, merge
 from agentic.core.process.application.ports import CommandResult, Upstream
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
+from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, CiVerdict
 from agentic.core.process.domain.presubmit import CiCover
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _merges, _ports
@@ -441,3 +441,103 @@ def test_an_uncovered_deferral_whose_local_rerun_times_out_never_merges(tmp_path
     assert ports.tracker.merge_calls == []
     assert _doc(ports).get("auto_merge_via") != "ci"
     assert _doc(ports)["merge_checks"]["passed"] is False
+
+
+def _dispatched(head: str = HEAD, **over) -> dict:
+    """The `full_checks` record of a dispatched run of the base's workflow (GH-462)."""
+    return {
+        "version": 1,
+        "head": head,
+        "passed": True,
+        "duration_s": 30.0,
+        "declared": {},
+        "results": [],
+        "witness": None,
+        "ran_on": "ci_dispatch",
+        "run_id": 41,
+        **over,
+    }
+
+
+def _untrusted_world(*reports, **document):
+    """The change touches the CI's own definition: a green CI alone proves nothing."""
+    ports = _world(*reports, **document)
+    ports.workspace.diff_paths = (".github/workflows/ci.yml",)
+    return ports
+
+
+def test_an_untrusted_head_with_a_dispatched_verdict_of_this_head_merges_on_the_ci(tmp_path):
+    ports = _untrusted_world(_report(_check()), full_checks=_dispatched())
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged"
+    assert ports.workspace.detached == [] and ports.commands.ran == []
+    document = _doc(ports)
+    assert document["auto_merge_via"] == "ci"
+    assert document["auto_merge_ci"] == [{"name": "web", "link": RUN.format(1)}]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _dispatched("c" * 40),
+        _dispatched(HEAD[:12]),
+        _dispatched(ran_on="ci"),
+        _dispatched(passed=False),
+    ],
+    ids=["old_head", "short_sha", "ran_on_ci", "failed"],
+)
+def test_an_untrusted_head_without_a_dispatched_verdict_of_this_head_runs_the_local_checks(
+    tmp_path, record
+):
+    """The record a landing sync left behind names the head before the sync: the head it moved
+    to has none yet, so the merge decides on the local checks as it always did."""
+    ports = _untrusted_world(_report(_check()), full_checks=record)
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged"
+    assert len(ports.workspace.detached) == 1
+    assert [command for _, command in ports.commands.ran] == ["run tests"]
+    assert _doc(ports)["auto_merge_via"] == "local"
+    assert "auto_merge_ci" not in _doc(ports)
+
+
+def test_a_head_the_landing_moved_is_trusted_only_once_its_own_dispatched_record_is_written(
+    tmp_path,
+):
+    old = "c" * 40
+    ports = _untrusted_world(_report(_check()), full_checks=_dispatched(old))
+    document = _doc(ports)
+
+    facts = merge._facts(
+        "GH-5",
+        document,
+        ports.tracker.prs[document["pull_request"]],
+        None,
+        5,
+        MASTER,
+        (".github/x.yml",),
+    )
+    assert facts.ci_dispatched is False
+
+    document["full_checks"] = _dispatched(HEAD)
+    facts = merge._facts(
+        "GH-5",
+        document,
+        ports.tracker.prs[document["pull_request"]],
+        None,
+        5,
+        MASTER,
+        (".github/x.yml",),
+    )
+    assert facts.ci_dispatched is True
+    assert merge._merges_on_ci(
+        dataclasses.replace(
+            facts,
+            ci_required=("web",),
+            ci_verdict=CiVerdict("green", (), ()),
+            ci_fresh=True,
+        )
+    )
