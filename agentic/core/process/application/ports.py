@@ -2050,6 +2050,18 @@ class CiLogs(Protocol):
         prompt and is never stored."""
         ...
 
+    def flake_block(
+        self, reference: str, head: str, jobs: Sequence[str]
+    ) -> list[tuple[str, list[str]]] | CiUnreadable:
+        """GH-464: per job of `jobs` (the names the stack's `ci:` declares) that the pull
+        request's CI report holds, the lines of its whole log that start with `agentic-flakes: `
+        once gh's columns and timestamp are stripped, in log order. Reads only when the report
+        belongs to `head` (`rules.same_commit`); the log is read as its last
+        `CI_FLAKE_LOG_BYTES`, and a cap hit is no failure. `CiUnreadable` when the report is
+        not `head`'s, a read times out or fails, or a log cannot be read. Never raises. The
+        lines are evidence from the head under test: `parse_flake_blocks` reads them."""
+        ...
+
 
 class ExperimentFile(Protocol):
     """A product's experiment declaration as its owner wrote it (GH-470,
