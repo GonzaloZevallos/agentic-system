@@ -111,7 +111,7 @@ sequenceDiagram
    comentario del dueño, y nunca porque la base esté en verde. La liberación la escribe
    `landing.released_no_verdict`: desescala el documento, marca `released_at` en la entrada
    `escalate` y en el par `merge_ci` de la cabeza, que le concede un par más al contador
-   `no_verdict` (`domain/merge_ci.py:pair_counts`). El paso liberado es `wait`
+   `no_verdict` (`agentic/core/process/domain/merge_ci.py:pair_counts`). El paso liberado es `wait`
    (`landing_plan.released_step`), que `_land` guarda directamente, sin ejecutor, y el poller
    (`poll._landing_step`) lo devuelve para que un hijo lo persista.
    `agentic resume` consulta la misma decisión
