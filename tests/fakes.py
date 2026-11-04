@@ -2694,3 +2694,18 @@ class BadGatewayComments(MemoryTracker):
 
     def note(self, task_id: str, text: str) -> TrackerFailure | None:
         return self._gh.note(task_id, text)
+
+
+def eval_set_yaml(*issues: int, smoke: int | None = None, extra: str = "") -> str:
+    """The text of an `.agentic/eval-set.yaml` freezing `issues` at one base (GH-470),
+    `smoke` defaulting to the first. `extra` is appended verbatim, for a malformed one."""
+    lines = ["entries:"]
+    for number in issues:
+        lines += [
+            f"  - issue: {number}",
+            f"    base: {'a' * 40}",
+            f"    title: Issue {number}",
+            f"    body: Body of issue {number}",
+        ]
+    lines.append(f"smoke: {issues[0] if smoke is None else smoke}")
+    return "\n".join(lines) + "\n" + extra

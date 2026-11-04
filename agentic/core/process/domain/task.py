@@ -384,6 +384,17 @@ class ArmAssignment(TypedDict):
     switches: dict[str, str]
 
 
+class EvaluationRef(TypedDict):
+    """`TaskState.evaluation`: what marks a task as an evaluation run (GH-470) -- the issue
+    it re-runs, the commit it runs from, and that its full check always runs locally. The
+    key's presence is the marker (`measurement.domain.evaluation.is_evaluation`); whether a
+    process is wired as one is decided by its root, never by this."""
+
+    issue: int
+    base: str
+    ci: Literal["local"]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -413,6 +424,9 @@ class TaskInput(TypedDict):
     # it the graph's `input_schema` drops the key and the arm never reaches the state.
     # Absent reads as unassigned.
     assignment: NotRequired[ArmAssignment]
+    # What marks an evaluation run (GH-470): `FileInbox` sets it from the frozen entry.
+    # Declared for the same reason as `decided`. Absent reads as a real task.
+    evaluation: NotRequired[EvaluationRef]
 
 
 @dataclass(frozen=True)
@@ -1298,6 +1312,10 @@ class TaskState(TaskInput, total=False):
     # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
     # `experiment`. Written once when the run starts, so no reducer.
     assignment: ArmAssignment
+    # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
+    # Written once when the run starts, from the frozen entry, so no reducer; omitted from
+    # the document when absent.
+    evaluation: EvaluationRef
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str

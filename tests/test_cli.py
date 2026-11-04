@@ -24,7 +24,13 @@ from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain import legacy_names
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import ENV_PREFIX, Configuration
-from tests.fakes import MemoryKnowledge, MemoryStack, MemoryTracker, memory_ports
+from tests.fakes import (
+    MemoryKnowledge,
+    MemoryStack,
+    MemoryTracker,
+    eval_set_yaml,
+    memory_ports,
+)
 
 # `_run`/`_resume` now open their checkpointer twice per invocation (ADR-0003, addendum
 # 2026-10-04: a second open after `adelete_thread` is how a task migrates). This double
@@ -3114,7 +3120,7 @@ def test_close_all_reports_a_task_after_the_stopped_one_as_not_attempted_not_sti
 # or patches `subprocess` (Tech Lead plan: "the cheap test to write is one that spends
 # $200").
 
-EVAL_SET_YAML = "issues:\n  - 1\n  - 2\nsmoke: 1\n"
+EVAL_SET_YAML = eval_set_yaml(1, 2)
 
 
 def eval_root(tmp_path: Path, eval_set: str | None = EVAL_SET_YAML) -> Path:
@@ -3259,9 +3265,9 @@ async def test_eval_run_dry_run_prefers_the_set_override_over_the_products_own(t
     the printed line says which of the two it read (Tech Lead plan)."""
     from agentic.shared.configuration import Configuration
 
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")  # never read
+    root = eval_root(tmp_path, eval_set=eval_set_yaml(1))  # never read
     override = tmp_path / "spike.yaml"
-    override.write_text("issues:\n  - 9\nsmoke: 9\n")
+    override.write_text(eval_set_yaml(9))
     await cli._eval_run(
         Configuration(product_dir=root), memory_ports(), str(override), 200.0, False, True
     )
@@ -3275,9 +3281,9 @@ async def test_eval_run_dry_run_prefers_the_set_override_over_the_products_own(t
 async def test_eval_score_uses_the_set_override_and_reports_it_as_the_source(tmp_path):
     from agentic.shared.configuration import Configuration
 
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")  # never read
+    root = eval_root(tmp_path, eval_set=eval_set_yaml(1))  # never read
     override = tmp_path / "spike.yaml"
-    override.write_text("issues:\n  - 9\nsmoke: 9\n")
+    override.write_text(eval_set_yaml(9))
     ports = memory_ports()
     ports.documents.save({"id": "GH-9", "status": "open", "prompts": {"developer": "abc"}})
     out = tmp_path / "out.jsonl"
@@ -3295,7 +3301,7 @@ async def test_eval_run_refuses_when_the_declaration_names_an_unknown_key(tmp_pa
     exercised through the CLI seam: the offending key names itself in the message."""
     from agentic.shared.configuration import Configuration
 
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\nextra: nope\n")
+    root = eval_root(tmp_path, eval_set=eval_set_yaml(1, extra="extra: nope\n"))
     with pytest.raises(cli.CannotStart, match="extra"):
         await cli._eval_run(
             Configuration(product_dir=root), memory_ports(), None, 200.0, True, False
@@ -3481,7 +3487,7 @@ async def test_eval_run_hands_each_child_the_products_dir_and_never_a_log_file_k
     that key, or the default would have nothing to drop it from."""
     from agentic.shared.configuration import Configuration
 
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")
+    root = eval_root(tmp_path, eval_set=eval_set_yaml(1))
     ports = memory_ports()
     launch = FakeLaunch()
     await cli._eval_run(
@@ -3501,7 +3507,7 @@ async def test_eval_run_charges_the_full_estimate_when_a_childs_document_never_m
     check that follows sees the full per-task estimate, not zero."""
     from agentic.shared.configuration import Configuration
 
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\n  - 2\nsmoke: 1\n")
+    root = eval_root(tmp_path, eval_set=eval_set_yaml(1, 2))
     ports = memory_ports()
     launch = FakeLaunch()  # never writes a document
     await cli._eval_run(

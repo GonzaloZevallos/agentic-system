@@ -264,6 +264,9 @@ def render(
         # when assigned, so a document of an unassigned task is byte-identical to one
         # written before it. Parsed back under the same name by `parse`.
         **({"assignment": assigned} if (assigned := state.get("assignment")) else {}),
+        # Marks an evaluation run (GH-470), written only when set, so a real task's document
+        # is byte-identical to one written before it. Parsed back under the same name.
+        **({"evaluation": evaluated} if (evaluated := state.get("evaluation")) else {}),
         # Whether the request entered with a `## Decided` heading and so runs one-round
         # interviews (`rules.entering`): written only when true, so a document without it
         # is byte-identical to one written before the cap existed, and reads as not decided.

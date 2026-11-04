@@ -227,6 +227,21 @@ def test_assignment_is_the_only_difference_a_document_gains():
     assert [line for line in plain if line not in assigned] == []
 
 
+EVALUATION = {"issue": 7, "base": "a" * 40, "ci": "local"}
+
+
+def test_a_document_without_evaluation_renders_byte_identically_to_the_golden():
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert document.render(golden_state(evaluation={})) == GOLDEN_WITHOUT_ASSIGNMENT
+
+
+def test_evaluation_round_trips_through_the_frontmatter():
+    rendered = document.render(golden_state(evaluation=EVALUATION))
+    assert "\nevaluation:" in rendered
+    assert document.parse(rendered)["evaluation"] == EVALUATION
+    assert "evaluation" not in document.parse(document.render(golden_state()))
+
+
 def test_interview_stats_never_reaches_the_document():
     """Measurement-only, like `subtask_id`: `interview()`'s own patch key
     (`InterviewStats`) never reaches the document, so a resumed task carries none of
