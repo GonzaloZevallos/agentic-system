@@ -170,7 +170,7 @@ def merge_task(
         base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
         # GitHub's reading of a conflict on this head and master (GH-326), git-free; the
         # probe is the last look's, immediately before the merge call.
-        github = rules.merge_conflicts_from(pull_request, head, master, None)
+        github = rules.merge_conflicts_from(pull_request, head, master, None, recorded=False)
         facts = with_ci(
             replace(
                 base_facts,

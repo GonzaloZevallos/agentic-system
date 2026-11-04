@@ -522,10 +522,10 @@ def read_conflicts(
     merge verb so both read it the same way: GitHub's reading when
     `rules.merge_conflicts_from` takes it as a conflict -- git is then not asked -- and the
     merge-tree probe otherwise. The source is log text, nothing else."""
-    if rules.merge_conflicts_from(pull_request, head, master, None) is True:
+    if rules.merge_conflicts_from(pull_request, head, master, None, recorded=False) is True:
         return True, "github"
     probe = ports.workspace.merge_conflicts(head, master)
-    return rules.merge_conflicts_from(pull_request, head, master, probe), "probe"
+    return rules.merge_conflicts_from(pull_request, head, master, probe, recorded=False), "probe"
 
 
 def read_criteria(ports: Ports, head: str, master: str) -> tuple[str, ...] | None:

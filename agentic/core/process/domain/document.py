@@ -87,6 +87,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "tracker_checklist_posted",
         "full_checks",
         "merge_ci",
+        "merge_conflict",
         "flake_comments",
         "flakes",
         "tracker_failures",
@@ -100,6 +101,7 @@ _FLOW_KEYS = (
     "landed_slices",
     "full_checks",
     "merge_ci",
+    "merge_conflict",
     "flakes",
     "tracker_failures",
 )
@@ -214,6 +216,8 @@ def render(
         # The merge gate's fresh GitHub runs (GH-463): one flow line, replaced whole by the
         # merge child, which has no state owner.
         **({"merge_ci": _LANDING_PLACEHOLDER} if state.get("merge_ci") else {}),
+        # The conflict git found building a fresh pair (GH-492): one flow line, replaced whole.
+        **({"merge_conflict": _LANDING_PLACEHOLDER} if state.get("merge_conflict") else {}),
         # The flakes the gates observed (ADR-0066) and the flake issues already commented on:
         # each written only when non-empty, `flakes` as one flow line like the records above.
         **({"flakes": _LANDING_PLACEHOLDER} if state.get("flakes") else {}),
