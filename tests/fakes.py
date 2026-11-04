@@ -100,6 +100,7 @@ from agentic.core.process.domain.task import (
     TaskState,
     TrackerFailure,
 )
+from agentic.shared.configuration import Configuration
 
 # What `MemoryWorkspace.merge_base` answers for a pair a test did not script (GH-334).
 MERGE_BASE = "e" * 40
@@ -2703,7 +2704,9 @@ class BadGatewayComments(MemoryTracker):
         return self._gh.note(task_id, text)
 
 
-async def full_checks_in_task_checkout(state, cfg, ports, **more):
+async def full_checks_in_task_checkout(
+    state: TaskState, cfg: Configuration, ports: Ports, **more: Any
+) -> TaskState:
     """`full_checks` on the task checkout the way `verifiers.verify` hands it in (GH-469): the
     checkout is resolved here, with the product's setup, and the use case only judges it."""
     from agentic.core.process.application.checkouts import task_checkout
