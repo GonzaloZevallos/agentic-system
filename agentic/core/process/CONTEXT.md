@@ -330,7 +330,7 @@ _Campo_: flaky test — Software Engineering at Google, cap. 11; retries de Play
 
 **Bloque de flakes del CI**:
 La línea `agentic-flakes: {"v":1,"check":"<nombre>","tests":["<id>",...]}` que un job de CI imprime con los tests que su propio reintento encontró flaky (ADR-0085). Es evidencia de la cabeza bajo prueba, no un veredicto: el chequeo completo (en su camino de CI) y la puerta de merge lo leen de los jobs de `ci:` solo si el reporte de CI es de la cabeza que juzgan, y de él salen únicamente `FlakeRecord`. Gana el último bloque por (job, chequeo); un chequeo que el stack del commit base no declara, un id largo o con salto de línea, comilla invertida, `<!--`, `-->` o `{{`, y una línea malformada se descartan; un bloque ausente o ilegible no registra nada y no cambia ningún veredicto.
-En el código se llama `FLAKE_BLOCK_PREFIX`, `CiFlakeBlock` y `parse_flake_blocks` (dominio, `domain/ci.py`), `CiLogs.flake_block` con `GhCiLogs` (`adapters/github/ci_logs.py`) y `ci_flakes.block_records` (`application/ci_flakes.py`).
+En el código se llama `FLAKE_BLOCK_PREFIX`, `CiFlakeBlock`, `clean_flake_ids` y `parse_flake_blocks` (dominio, `domain/ci.py`; `scripts/ci_flakes.py` escribe el bloque con la misma limpieza), `CiLogs.flake_block` con `GhCiLogs` (`adapters/github/ci_logs.py`) y `ci_flakes.block_records` (`application/ci_flakes.py`).
 _Avoid_: reporte de flakes
 _Campo_: sin término de arte; lo más cerca es el reporte de tests flaky que algunas CI publican (JUnit con reintentos), que acá es una línea de log sin autoridad
 
