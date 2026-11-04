@@ -9,28 +9,41 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime, timedelta
-from typing import cast
+from typing import get_args
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
 from ..domain.landing import IssueRef
+from ..domain.presubmit import FlakeGate
 from ..domain.task import FlakeRecord
 from .ports import Ports
 
 FLAKE_LABEL = "agentic"
 
 
+_GATES: dict[object, FlakeGate] = {gate: gate for gate in get_args(FlakeGate)}
+
+
 def _clean(value: object) -> list[FlakeRecord]:
-    """The readable records of a `flakes` value: a dict with a string `check`, its `tests`
-    reduced to the strings in it; whatever else a hand-edited or older document holds (an
-    absent value, a non-list) yields none."""
+    """The well-formed records of a `flakes` value: a dict naming its check, head and a known
+    gate, its `tests` reduced to the strings in it, `at` kept only when it is a string.
+    Anything else a hand-edited or older document holds (an absent value, a non-list) yields
+    none."""
     records: list[FlakeRecord] = []
     for entry in value if isinstance(value, list) else []:
-        if isinstance(entry, dict) and isinstance(entry.get("check"), str):
-            tests = entry.get("tests")
-            clean = [t for t in tests if isinstance(t, str)] if isinstance(tests, list) else []
-            records.append(cast("FlakeRecord", {**entry, "tests": clean}))
+        if not isinstance(entry, dict):
+            continue
+        check, head, gate = entry.get("check"), entry.get("head"), entry.get("gate")
+        if not (isinstance(check, str) and isinstance(head, str) and gate in _GATES):
+            continue
+        tests = entry.get("tests")
+        clean = [t for t in tests if isinstance(t, str)] if isinstance(tests, list) else []
+        record = FlakeRecord(check=check, head=head, gate=_GATES[gate], tests=clean)
+        at = entry.get("at")
+        if isinstance(at, str):
+            record["at"] = at
+        records.append(record)
     return records
 
 
