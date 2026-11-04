@@ -100,7 +100,8 @@ class Spawner:
             if self.writes:
                 (root / ".agentic/tasks").mkdir(parents=True)
                 (root / ".agentic/tasks" / f"{eval_id}.md").write_text(
-                    f"---\nid: {eval_id}\nevaluation:\n  issue: 1\ncost_usd: {self.cost}\n---\nbody\n"
+                    f"---\nid: {eval_id}\nevaluation:\n  issue: 1\n"
+                    f"cost_usd: {self.cost}\n---\nbody\n"
                 )
 
         return FakeChild(finish)
@@ -344,3 +345,56 @@ async def test_the_product_without_a_name_is_refused_and_the_eval_lock_is_taken(
 
     await drive(product, locked=Lock)
     assert entered == [1]
+
+
+@pytest.mark.anyio
+async def test_two_drivers_never_exceed_the_cap_and_a_pollers_count_includes_their_children(
+    tmp_path,
+):
+    """Two drivers of two products share one registry and a cap of one: while one child is
+    live the other driver waits, and no round of either sees more than one counted child."""
+    registry = MemoryRunRegistry()
+    products = []
+    for name in ("a", "b"):
+        root = tmp_path / name
+        (root / ".agentic").mkdir(parents=True)
+        (root / ".agentic/eval-set.yaml").write_text(eval_set_yaml(1))
+        products.append(root)
+    peak = 0
+    first_waits: list[int] = []
+
+    def counted() -> int:
+        return sum(1 for r in registry.live() if rules.counts_against_cap(r.kind))
+
+    class Watch(Spawner):
+        def __call__(self, argv, overlay):
+            nonlocal peak
+            child = super().__call__(argv, overlay)
+            peak = max(peak, counted())
+            return child
+
+    await drive(products[0], registry=registry, spawner=Watch(registry), cap=1)
+    # The second driver starts while a child of the first is registered: it must wait.
+    registry.entries.append(RunRegistration(1, "h", "product", "EVAL-1-x-default-1", "role"))
+
+    def sleep(seconds):
+        first_waits.append(1)
+        registry.entries.clear()
+
+    await drive(products[1], registry=registry, spawner=Watch(registry), cap=1, sleep=sleep)
+    assert peak == 1 and first_waits == [1]
+
+
+def test_a_poller_round_keeps_an_evaluation_childs_scratch_and_names_it_to_no_tracker(tmp_path):
+    from tests.core.process.application.test_poll import _cfg, _no_sleep, _round
+    from tests.fakes import FakeLauncher
+
+    eval_id = f"EVAL-1-{SHA8}-default-1"
+    ports = memory_ports(free_space=FakeFreeSpace())
+    registry = MemoryRunRegistry([RunRegistration(4, "h", "product", eval_id, "role")])
+    lines = _round(_cfg(tmp_path), ports, registry, FakeLauncher(), NOW, sleep=_no_sleep)
+    assert not any(eval_id in line for line in lines)
+    tracker = ports.tracker
+    named = [*tracker.comments, *tracker.labels]
+    assert all(eval_id not in str(call) for call in named)
+    assert registry.live()[0].task_id == eval_id  # the round never ended or retook it

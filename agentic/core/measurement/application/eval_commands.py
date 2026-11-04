@@ -291,10 +291,10 @@ async def _eval_run(
         print(f"  arm {arm}: {len(declaration.entries)} run(s)")
     if dry_run:
         for child in children:
-            print(
-                f"  issue {child.entry.issue} at {child.entry.base[:8]} as {child.arm}: "
-                f"{evaluation.eval_task_id(child.entry.issue, child.entry.base, child.arm, _next_ordinal(cfg, roots, child))}"
-            )
+            k = _next_ordinal(cfg, roots, child)
+            planned = evaluation.eval_task_id(child.entry.issue, child.entry.base, child.arm, k)
+            where = f"issue {child.entry.issue} at {child.entry.base[:8]} as {child.arm}"
+            print(f"  {where}: {planned}")
         return
     if not yes:
         raise CannotStart(
@@ -313,7 +313,8 @@ async def _eval_run(
         for child in children:
             if spent + evaluation.PER_TASK_ESTIMATE_USD > budget:
                 print(
-                    f"agentic: ${budget:.2f} budget would be exceeded; stopping with {spent:.2f} spent"
+                    f"agentic: ${budget:.2f} budget would be exceeded; "
+                    f"stopping with {spent:.2f} spent"
                 )
                 break
             launched = _launch(
