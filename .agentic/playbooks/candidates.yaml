@@ -1059,3 +1059,23 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-31T21:01:58.425+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a port or contract between layers, update the architecture docs that describe it in the same change, and check the docs diff is not empty before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-462
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T00:50:28.601+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before you deliver, check each plan invariant against the diff with a grep. Name every retry or attempt bound as a constant from the configuration or domain module, never as a literal in application code.
+  confidence: medium
+  seen_in:
+  - GH-462
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T00:50:28.601+00:00'
