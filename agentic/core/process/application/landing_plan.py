@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
@@ -222,8 +222,7 @@ def spent(
 def _merge_ci_records(raw: Mapping[str, object]) -> list[MergeCiRecord]:
     """The document's fresh-run pairs (GH-463); `[]` for one written before them."""
     records = raw.get("merge_ci")
-    kept = [r for r in records if isinstance(r, dict)] if isinstance(records, list) else []
-    return cast("list[MergeCiRecord]", kept)
+    return records if isinstance(records, list) else []
 
 
 def _after_restoration(written: object, restored_at: str | None) -> bool:
