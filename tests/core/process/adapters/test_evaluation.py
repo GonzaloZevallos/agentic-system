@@ -23,6 +23,7 @@ REFUSED_TRACKER_CALLS = {
     "open_issue": ("title", "body"),
     "comment_on_issue": ("7", "text"),
     "rerun_failed_ci": ("https://github.com/o/r/pull/7", "abc"),
+    "rerun_ci_run": ("123456",),
     "close_pull_request": ("https://github.com/o/r/pull/7",),
     "reopen_pull_request": (7,),
     "ensure_label": ("agentic",),
@@ -137,6 +138,8 @@ REFUSED_WORKSPACE_CALLS = {
     "push": ("agentic/GH-1",),
     "publish_ci_ref": (None, "agentic-ci/GH-1"),
     "republish_ci_ref": (None, "agentic-ci/GH-1"),
+    "publish_dispatch_ref": (None, "GH-1"),
+    "delete_dispatch_ref": ("GH-1",),
     "delete_remote_ref": ("agentic-ci/GH-1",),
 }
 

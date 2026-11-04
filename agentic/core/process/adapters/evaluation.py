@@ -73,6 +73,7 @@ class EvaluationTracker:
             "open_issue",
             "open_pull_request",
             "reopen_pull_request",
+            "rerun_ci_run",
             "rerun_failed_ci",
             "update_pull_request_body",
         }
@@ -114,7 +115,7 @@ class EvaluationTracker:
 
 class EvaluationWorkspace:
     """`Workspace` for an evaluation root. Every local operation passes through (`ALLOWED`:
-    the run builds and merges on its own checkouts); the four members that write to a
+    the run builds and merges on its own checkouts); the members that write to a
     remote are overridden and raise, for any ref -- `agentic-ci/<id>` included."""
 
     ALLOWED = frozenset(
@@ -163,6 +164,7 @@ class EvaluationWorkspace:
             "overlay",
             "prune",
             "record_setup_tree",
+            "remote_dispatch_refs",
             "remote_refs",
             "remote_tip",
             "remove_checkout",
@@ -193,6 +195,16 @@ class EvaluationWorkspace:
 
     def republish_ci_ref(self, path: Path, ref: str) -> None:
         raise EvaluationWrite(f"workspace.republish_ci_ref({ref}): an evaluation run pushes no ref")
+
+    def publish_dispatch_ref(self, path: Path, ref: str) -> None:
+        raise EvaluationWrite(
+            f"workspace.publish_dispatch_ref({ref}): an evaluation run pushes no ref"
+        )
+
+    def delete_dispatch_ref(self, ref: str) -> None:
+        raise EvaluationWrite(
+            f"workspace.delete_dispatch_ref({ref}): an evaluation run deletes no remote ref"
+        )
 
     def delete_remote_ref(self, ref: str) -> None:
         raise EvaluationWrite(
