@@ -12,6 +12,7 @@ from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.domain import ci_push, rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_UNKNOWN_ATTEMPTS
 from agentic.core.process.domain.presubmit import CiCover, CiDispatch
 from agentic.core.process.domain.roles import DEVELOPER_INTEGRATOR
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, apply
@@ -600,7 +601,7 @@ async def test_a_red_run_after_a_retried_push_records_the_retry_too():
     patch = await run(state_of(), ports)
     record = patch["full_checks"]
     assert record["passed"] is False
-    assert record["push_attempts"] == 3 and record["push_kind"] == "transient"
+    assert record["push_attempts"] == PUSH_ATTEMPTS and record["push_kind"] == "transient"
 
 
 async def test_a_permanent_push_refusal_escalates_after_one_attempt_with_what_git_said():
@@ -626,8 +627,11 @@ async def test_an_unknown_push_failure_is_tried_twice_and_escalates_with_its_kin
     stderr = "fatal: something nobody has seen"
     workspace = FlakyPush(stderr)
     patch = await run(state_of(), ports_of(GREEN, workspace=workspace))
-    assert len(workspace.ci_ref_calls) == 2
-    assert f"after 2 attempt(s) (unknown); git said: {ci_push.scrub(stderr)}" in patch["escalated"]
+    assert len(workspace.ci_ref_calls) == PUSH_UNKNOWN_ATTEMPTS
+    assert (
+        f"after {PUSH_UNKNOWN_ATTEMPTS} attempt(s) (unknown); git said: {ci_push.scrub(stderr)}"
+        in patch["escalated"]
+    )
 
 
 async def test_a_push_failure_without_git_text_keeps_the_escalation_it_always_had():
@@ -636,7 +640,7 @@ async def test_a_push_failure_without_git_text_keeps_the_escalation_it_always_ha
     patch = await run(state_of(), ports)
     said = ci_push.scrub("push refused")
     assert (
-        f"push of {REF} failed after 2 attempt(s) (unknown); git said: {said}"
+        f"push of {REF} failed after {PUSH_UNKNOWN_ATTEMPTS} attempt(s) (unknown); git said: {said}"
         in (patch["escalated"])
     )
 
