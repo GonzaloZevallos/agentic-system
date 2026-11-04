@@ -1774,3 +1774,16 @@ def test_republish_ci_ref_against_a_missing_remote_raises(product, tmp_path):
     git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
     with pytest.raises(GitError, match="ls-remote|push"):
         ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
+
+
+def test_an_evaluation_root_and_its_documents_stay_out_of_the_products_status(product):
+    """GH-470: a pinned-base root (`.agentic/eval/EVAL-…/`) and the copied documents beside
+    it (`.agentic/eval/docs/`) are the system's own files, never the product's."""
+    ws = GitWorkspace(product, IDENTITY)
+    ws.exclude_system_files()
+    (product / ".agentic/eval/EVAL-1-aaaaaaaa-default-1").mkdir(parents=True)
+    (product / ".agentic/eval/EVAL-1-aaaaaaaa-default-1/file.txt").write_text("x")
+    (product / ".agentic/eval/docs").mkdir(parents=True)
+    (product / ".agentic/eval/docs/EVAL-1-aaaaaaaa-default-1.md").write_text("x")
+    assert git("status", "--porcelain", cwd=product) == ""
+    assert (product / ".git/info/exclude").read_text().splitlines().count(".agentic/eval/") == 1

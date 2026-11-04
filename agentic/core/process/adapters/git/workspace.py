@@ -63,6 +63,8 @@ WORKTREES = Path(".agentic/worktrees")
 # (ADR-0001 of the knowledge module); `core.knowledge`'s builder names the same directory.
 INDEX_DIR = ".agentic/index"
 TASKS_DIR = ".agentic/tasks"
+# The roots of the evaluation runs and the documents they leave (GH-470): the system's own.
+EVAL_DIR = ".agentic/eval"
 # The only path `commit_archived_document` takes, and the namespace of the only refs it writes.
 _TASK_DOCUMENT = re.compile(r"\.agentic/tasks/[^/]+\.md")
 _ARCHIVE_NAMESPACE = "archive/"
@@ -79,6 +81,8 @@ EXCLUDES = (
     # The task documents (GH-420): the system keeps them on the machine and never stages
     # them, so a product that does not track them never sees them as untracked either.
     f"{TASKS_DIR}/*.md",
+    # The evaluation runs' roots and documents (GH-470), never the product's.
+    f"{EVAL_DIR}/",
 )
 
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
