@@ -623,3 +623,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-469
+  GH-492@review:
+    cost_usd: 0.0837

@@ -1167,3 +1167,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T17:53:56.135+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you deliver, check that each comment giving a reason that depends on other code (for example, who imports this) is true in the tree you deliver; otherwise reword it or leave it out.
+  confidence: low
+  seen_in:
+  - GH-492
+  sources:
+  - finding
+  added_at: '2026-11-04T19:45:38.625+00:00'
