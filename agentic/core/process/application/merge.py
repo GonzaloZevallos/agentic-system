@@ -25,6 +25,7 @@ from ..domain import landing as landing_rules
 from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import CiDispatch
 from ..domain.task import (
+    CiCause,
     MergeCiRecord,
     PullRequest,
     TaskState,
@@ -216,7 +217,7 @@ def merge_task(
         raw = ports.documents.load(task_id) or raw
         facts = decide(raw)
         decision = rules.auto_merge_decision(facts)
-    cause: str | None = None
+    cause: CiCause | None = None
     if decision.kind == "ci_run":
         # GH-463: a `ci:` product never runs its suite here; one fresh GitHub run decides.
         assert head is not None  # a decision never asks for a run without a head
@@ -374,7 +375,7 @@ class _Fresh:
 
     stopped: MergeResult | None = None
     report: ci.CiReport | None = None
-    cause: str | None = None
+    cause: CiCause | None = None
 
 
 def _instant(text: str) -> datetime:
@@ -501,9 +502,13 @@ def _build_pair(
             refused = ports.tracker.dispatch_ci(dispatch.workflow, "", {dispatch.sha_input: tested})
             if refused is not None:
                 # A refusal ends the pair at once: no second dispatch (as `full_checks`).
-                _write_pairs(
-                    ports, task_id, pairs, {**record, "republished": True, "outcome": "no_verdict"}
-                )
+                ended: MergeCiRecord = {
+                    **record,
+                    "republished": True,
+                    "outcome": "no_verdict",
+                    "cause": refused.cause,
+                }
+                _write_pairs(ports, task_id, pairs, ended)
                 return _Fresh(cause=refused.cause)
     except GitError as exc:
         log(f"agentic: merge: {task_id}: could not publish the fresh CI run: {exc}")
@@ -570,6 +575,8 @@ def _read_pair(
         row: MergeCiRecord = {**pair, "outcome": "green" if verdict.state == "green" else "red"}
         if run_id is not None:
             row["run_id"] = run_id
+        if verdict.state == "red":
+            row["failing"] = [check.name for check in verdict.failing]
         _write_pairs(ports, task_id, pairs, row)
         return _Fresh(report=report)
     if verdict.cause == "no_run" and not pair["republished"]:
@@ -586,7 +593,10 @@ def _read_pair(
             clock,
             log,
         )
-    _write_pairs(ports, task_id, pairs, {**pair, "republished": True, "outcome": "no_verdict"})
+    undecided: MergeCiRecord = {**pair, "republished": True, "outcome": "no_verdict"}
+    if verdict.cause is not None:
+        undecided["cause"] = verdict.cause
+    _write_pairs(ports, task_id, pairs, undecided)
     return _Fresh(cause=verdict.cause)
 
 
@@ -1086,7 +1096,7 @@ def _deferral_evidence(facts: rules.MergeFacts, report: ci.CiReport) -> str:
     return "\n".join([f"The CI job covering a deferred check ({facts.deferral}):", *lines])
 
 
-def _fresh_run_evidence(reason: str, facts: rules.MergeFacts | None, cause: str | None) -> str:
+def _fresh_run_evidence(reason: str, facts: rules.MergeFacts | None, cause: CiCause | None) -> str:
     """What a refusal of the gate's fresh run says (GH-463), from closed facts only: the
     `CiCause` of the missing verdict, the stale pairs spent, or a fixed sentence."""
     if reason == "ci_untrusted_no_dispatch":
@@ -1147,7 +1157,7 @@ def _refuse(
     failure: rules.MergeFailure | None = None,
     facts: rules.MergeFacts | None = None,
     report: ci.CiReport | ci.CiUnreadable | None = None,
-    cause: str | None = None,
+    cause: CiCause | None = None,
 ) -> MergeResult:
     """Comments a refusal the human can act on, once per (head, reason): the last
     `Auto-merge refused:` comment naming the same head and reason is enough. A

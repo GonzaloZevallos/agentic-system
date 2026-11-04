@@ -2114,3 +2114,67 @@ def test_with_no_ci_logs_port_the_prompt_has_no_log_block(tmp_path):
 
     assert "CiLog" not in runner.calls[0]["prompt"]
     assert "ci_logs" not in _diagnoses(ports)[0]
+
+
+def _red_pair(**over):
+    pair = {
+        "head": HEAD,
+        "master": MASTER,
+        "tested": "d" * 40,
+        "mode": "push",
+        "published_at": "2026-10-13T23:00:00+00:00",
+        "republished": False,
+        "superseded": [],
+        "outcome": "red",
+        "failing": ["web"],
+        **over,
+    }
+    return pair
+
+
+def test_a_red_fresh_run_of_the_gate_is_rerun_by_its_id_once_then_the_second_red_is_a_fix(tmp_path):
+    """GH-463: `land` reads the gate's red fresh run off the document's `merge_ci` pair, as the
+    merge child does, so the rerun reaches the run by id and the pull request's own runs are
+    never rerun."""
+    ports = _ci_world(_report(_check()))  # the pull request's own CI is green and stale
+    ports.documents.record_closure("GH-5", {"merge_ci": [_red_pair(run_id="777")]})
+
+    first, _ = _land(ports, tmp_path)
+
+    assert first.step == "rerun"
+    assert ports.tracker.run_reruns == ["777"]
+    assert ports.tracker.rerun_calls == []
+    [entry] = [e for e in _doc(ports)["landing"] if e["step"] == "rerun"]
+    assert entry["checks"] == ["web"]
+
+    launcher = FakeLauncher()
+    second, _ = _land(ports, tmp_path, launcher)
+
+    assert second.step == "fix"
+    assert ports.tracker.run_reruns == ["777"]  # once per head
+    assert ports.tracker.rerun_calls == []
+
+
+def test_a_red_fresh_run_that_master_overtook_is_not_rerun_by_the_landing(tmp_path):
+    """The rejecting input: the pair belongs to an older master, so the gate builds a new pair
+    and the landing has nothing to rerun."""
+    ports = _ci_world(_report(_check()))
+    ports.documents.record_closure("GH-5", {"merge_ci": [_red_pair(master="c" * 40, run_id="7")]})
+
+    result, _ = _land(ports, tmp_path)
+
+    assert result.kind == "skipped"
+    assert ports.tracker.run_reruns == [] and ports.tracker.rerun_calls == []
+
+
+def test_the_ci_no_verdict_escalation_carries_the_cause_the_pair_recorded(tmp_path):
+    ports = _ci_world(_report(_check()))
+    pair = _red_pair(outcome="no_verdict", republished=True, cause="no_run")
+    del pair["failing"]
+    ports.documents.record_closure("GH-5", {"merge_ci": [pair]})
+
+    result, _ = _land(ports, tmp_path)
+
+    assert result.step == "escalate"
+    [entry] = [e for e in _doc(ports)["landing"] if e["step"] == "escalate"]
+    assert entry["refusal"] == "ci_no_verdict" and entry["cause"] == "no_run"

@@ -18,6 +18,7 @@ from typing import Any, Literal, assert_never
 from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
+from ..domain import merge_ci
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
@@ -281,8 +282,12 @@ def _land(
         )
         if upstream.sha is not None:
             entry[UPSTREAM_KEY] = upstream.sha
-        if step.refusal == "ci_no_verdict" and facts.ci_unreadable is not None:
-            entry["cause"] = facts.ci_unreadable.cause
+        if step.refusal == "ci_no_verdict":
+            # The cause the gate's fresh run recorded on its pair, not the pull request's own
+            # report's: `merge_ci` holds the closed `CiCause`.
+            pair = merge_ci.latest(raw.get("merge_ci", []), head)
+            if pair is not None and "cause" in pair:
+                entry["cause"] = pair["cause"]
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:

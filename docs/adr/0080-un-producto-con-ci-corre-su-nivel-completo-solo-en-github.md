@@ -85,9 +85,9 @@ Donde antes devolvía `run_checks`, decide `ci_run`: una corrida fresca de GitHu
 fusionada con el master actual, cuyo veredicto decide. Antes, #353 sigue mandando: si nada de lo que
 la tarea toca cambió en master, no se vuelve a chequear.
 
-**Mecanismo.** La puerta arma `cabeza + master` sólo con git, escribe el par en el registro
-`merge_ci` del documento antes de disparar nada y lo publica. Una cabeza confiable va a
-`agentic-ci/<id>` y se lee con `branch_ci`; una no confiable va a `refs/agentic-ci-dispatch/<id>`
+**Mecanismo.** La puerta (`merge_task` en `agentic/core/process/application/merge.py`) arma `cabeza + master` sólo con git, escribe el par en el registro
+`merge_ci` del documento (`MergeCiRecord` en `agentic/core/process/domain/task.py`) antes de disparar nada y lo publica. Una cabeza confiable va a
+`agentic-ci/<id>` y se lee con `Tracker.branch_ci` (`agentic/core/process/application/ports.py`); una no confiable va a `refs/agentic-ci-dispatch/<id>`
 (fuera de `refs/heads/`, no dispara `push`) y se despacha el workflow de la base con el sha probado.
 Se rechazaron: actualizar la rama (mueve `pr_head` y rompe `head_reviewed`), repetir la corrida del
 pull request (conserva un `GITHUB_SHA` viejo) y cerrar y reabrir el pull request (efectos laterales).
@@ -106,10 +106,12 @@ veredicto tras el único republicado o segundo despacho).
 
 **Liberación de `ci_no_verdict`.** Una sola vez por par (cabeza, upstream): cuando el upstream es
 otro que el de la escalación, o cuando el dueño comenta. Un base verde por sí solo nunca la libera. La
-liberación estampa `released_at` en el par de `merge_ci`, lo que concede un par más sin veredicto, y el
+liberación estampa `released_at` en el par de `merge_ci` (`landing_plan.release` en `agentic/core/process/application/landing_plan.py`; la regla pura es `landing.ci_no_verdict_entry` en `agentic/core/process/domain/landing.py`), lo que concede un par más sin veredicto, y el
 paso que da es `wait`: la puerta decide de nuevo en la ronda siguiente. Una corrida fresca roja se
-reintenta con `rerun_ci_run(run_id)` una vez por par, nunca con los runs del pull request; sin
-`run_id` no se reintenta y la puerta republica dentro del par.
+reintenta con `Tracker.rerun_ci_run(run_id)` (`agentic/core/process/adapters/github/tracker.py`, llamado por `_rerun_fresh` en `agentic/core/process/application/landing_fix.py`) una vez por par, nunca con los runs del pull request; sin
+`run_id` no se reintenta y la puerta republica dentro del par. El aterrizaje ve esa corrida roja por el par
+registrado (`poll.with_recorded_red` y `merge_ci.decided_red`, en `agentic/core/process/application/poll.py` y `agentic/core/process/domain/merge_ci.py`), sin leer GitHub; si
+master ya la superó, el par ya no es el vigente y no hay nada que reintentar.
 
 **Cabezas no confiables.**
 

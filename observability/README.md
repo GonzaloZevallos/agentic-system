@@ -202,7 +202,7 @@ lote de scores) por documento.
 
 ## Rechazos del aterrizaje (GH-463)
 
-El atributo de cadena `agentic.landing.refusal` lleva el `MergeRefusal` cerrado que el aterrizaje
+El atributo de cadena `agentic.landing.refusal` (`agentic/core/measurement/adapters/otel/telemetry.py`) lleva el `MergeRefusal` cerrado (`agentic/core/process/domain/rules.py`) que el aterrizaje
 atiende. Tres valores nuevos, de la corrida fresca de GitHub que reemplaza los chequeos locales de un
 producto con `ci:`: `ci_stale_exhausted` (master adelantó `CI_STALE_PAIRS_MAX` corridas; el
 aterrizaje sincroniza), `ci_no_verdict` (GitHub no dio veredicto; escala y se libera una vez por par

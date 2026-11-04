@@ -86,6 +86,20 @@ def run_stands(
     return rules.same_commit(record["master"], current_master) or inert is True
 
 
+def decided_red(
+    records: Sequence[MergeCiRecord], pr_head: str | None, current_master: str | None
+) -> MergeCiRecord | None:
+    """The head's newest pair when a fresh run on the current master ended `red` and still
+    stands for the head (`run_stands`, no inert gain assumed), else None. What the landing
+    reads of the gate's fresh run: it never reads GitHub for it, the pair holds the outcome,
+    the run id and the failing names (a pair the gate left behind for a newer master is no
+    longer the newest, so it is never reported here)."""
+    pair = latest(records, pr_head)
+    if pair is None or pair.get("outcome") != "red":
+        return None
+    return pair if run_stands(pair, pr_head, current_master, None) else None
+
+
 def masters_covered_ci(
     full_checks: FullChecksRecord | None,
     fresh: MergeCiRecord | None,

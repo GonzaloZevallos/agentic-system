@@ -1123,7 +1123,9 @@ class MergeCiRecord(TypedDict):
     the one republish (or second dispatch) of the pair was spent and `superseded` holds the
     earlier `tested` shas of the pair, whose verdicts never apply. `run_id` is the run that
     decided the pair, when it could be read; `outcome` how the pair ended; `released_at` the
-    instant the landing released a `no_verdict` pair. No free text in any field."""
+    instant the landing released a `no_verdict` pair. `failing` names the declared checks a `red`
+    pair failed and `cause` the closed `CiCause` of a `no_verdict` one, so the landing reads
+    both off the document and never from `gh`'s text. No free text in any field."""
 
     head: str
     master: str
@@ -1135,6 +1137,8 @@ class MergeCiRecord(TypedDict):
     run_id: NotRequired[str]
     outcome: NotRequired[Literal["stale", "no_verdict", "green", "red"]]
     released_at: NotRequired[str]
+    failing: NotRequired[list[str]]
+    cause: NotRequired[CiCause]
 
 
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:

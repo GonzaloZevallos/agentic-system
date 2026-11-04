@@ -5,10 +5,17 @@ bounds. No I/O: every case is a record and the answer."""
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from agentic.core.process.domain import ci, merge_ci
-from agentic.core.process.domain.task import FullChecksRecord, MergeCiRecord, add_merge_ci
+from agentic.core.process.domain.task import (
+    FullCheckEntry,
+    FullChecksRecord,
+    MergeCiRecord,
+    add_merge_ci,
+)
 
 HEAD = "a" * 40
 MASTER = "b" * 40
@@ -18,31 +25,53 @@ SETUP = ["uv sync"]
 TASK_DOC = ".agentic/tasks/GH-9.md"
 
 
-def _pair(**over) -> MergeCiRecord:
-    base: MergeCiRecord = {
-        "head": HEAD,
-        "master": MASTER,
-        "tested": TESTED,
-        "mode": "push",
-        "published_at": "2026-11-03T10:00:00.000Z",
-        "republished": False,
-        "superseded": [],
-    }
-    return {**base, **over}  # type: ignore[typeddict-item]
+def _pair(
+    *,
+    head: str = HEAD,
+    master: str = MASTER,
+    tested: str = TESTED,
+    mode: Literal["push", "dispatch"] = "push",
+    republished: bool = False,
+    superseded: list[str] | None = None,
+    outcome: Literal["stale", "no_verdict", "green", "red"] | None = None,
+    run_id: str | None = None,
+    released_at: str | None = None,
+) -> MergeCiRecord:
+    record = MergeCiRecord(
+        head=head,
+        master=master,
+        tested=tested,
+        mode=mode,
+        published_at="2026-11-03T10:00:00.000Z",
+        republished=republished,
+        superseded=superseded or [],
+    )
+    if outcome is not None:
+        record["outcome"] = outcome
+    if run_id is not None:
+        record["run_id"] = run_id
+    if released_at is not None:
+        record["released_at"] = released_at
+    return record
 
 
-def _full(**over) -> FullChecksRecord:
-    base: FullChecksRecord = {
-        "version": 1,
-        "head": HEAD,
-        "passed": True,
-        "duration_s": 1.0,
-        "declared": {"check": "x"},
-        "results": [{"name": "check", "passed": True}],
-        "witness": None,
-        "ran_on": "ci",
-    }
-    return {**base, **over}  # type: ignore[typeddict-item]
+def _full(
+    *,
+    head: str = HEAD,
+    passed: bool = True,
+    results: list[FullCheckEntry] | None = None,
+    ran_on: Literal["ci", "local", "ci_dispatch"] = "ci",
+) -> FullChecksRecord:
+    return FullChecksRecord(
+        version=1,
+        head=head,
+        passed=passed,
+        duration_s=1.0,
+        declared={"check": "x"},
+        results=[{"name": "check", "passed": True}] if results is None else results,
+        witness=None,
+        ran_on=ran_on,
+    )
 
 
 # --- run_stands -------------------------------------------------------------------------
@@ -230,3 +259,12 @@ def test_the_reducer_replaces_a_known_pair_in_place_and_appends_a_new_one():
     other = _pair(master=NEWER)
     assert add_merge_ci([first], [updated, other]) == [updated, other]
     assert add_merge_ci([], [first]) == [first]
+
+
+def test_decided_red_is_the_newest_red_pair_on_the_current_master_only():
+    red = _pair(outcome="red", run_id="7")
+    assert merge_ci.decided_red([red], HEAD, MASTER) == red
+    assert merge_ci.decided_red([red], HEAD, NEWER) is None  # master overtook it
+    assert merge_ci.decided_red([_pair(outcome="green")], HEAD, MASTER) is None
+    assert merge_ci.decided_red([red, _pair(master=NEWER)], HEAD, MASTER) is None  # not newest
+    assert merge_ci.decided_red([red], HEAD[:7], MASTER) is None  # a short head names nothing

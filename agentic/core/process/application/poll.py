@@ -29,7 +29,7 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, presubmit, rules
+from ..domain import ci, document, merge_ci, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
@@ -349,6 +349,27 @@ def ci_gate(raw: TaskState, declared: tuple[str, ...]) -> rules.CiGate:
     return rules.ci_gate_names(declared, plan if isinstance(plan, list) else [])
 
 
+def with_recorded_red(facts: rules.MergeFacts) -> rules.MergeFacts:
+    """`facts` read the way `merge.with_ci_run` reads a decided red fresh run (GH-463), from the
+    head's `merge_ci` pair instead of GitHub: `ci_subject` `tested`, the pair's `tested` sha as
+    `ci_head` and a red verdict over the names the pair recorded as failing. Anything else (no
+    red pair on the current master) leaves `facts` as they were."""
+    pair = merge_ci.decided_red(facts.merge_ci, facts.pr_head, facts.current_master)
+    if pair is None:
+        return facts
+    failing = tuple(
+        ci.CiCheck(name, "COMPLETED", "FAILURE", "") for name in pair.get("failing", [])
+    )
+    return replace(
+        facts,
+        ci_subject="tested",
+        ci_head=pair["tested"],
+        ci_verdict=ci.CiVerdict("red", failing, ()),
+        ci_unreadable=None,
+        ci_fresh=True,
+    )
+
+
 def with_red_on_base(
     ports: Ports, facts: rules.MergeFacts, report: ci.CiReport | ci.CiUnreadable | None
 ) -> rules.MergeFacts:
@@ -609,6 +630,11 @@ def assess_merge(
         report = ports.tracker.ci_report(str(reference))
         facts = with_red_on_base(ports, with_ci(facts, raw, declared, report), report)
         decision = rules.auto_merge_decision(facts)
+        if rules.declares_ci(facts) and decision.kind != "refuse":
+            # GH-463: the gate's fresh run, once it ended red, is the CI fact of this head;
+            # the merge child refuses `ci_failed` on it, so the landing must see the same.
+            facts = with_recorded_red(facts)
+            decision = rules.auto_merge_decision(facts)
     return MergeAssessment(
         facts, decision, report, pull_request, unread, source if facts.conflicts else None
     )

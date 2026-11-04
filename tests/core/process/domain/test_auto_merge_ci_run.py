@@ -2,6 +2,7 @@
 in place of the local checks. Pure: each case is a `MergeFacts` and the decision it must give."""
 
 from dataclasses import replace
+from typing import Literal
 
 import pytest
 
@@ -19,17 +20,34 @@ CI_RUN = MergeDecision("ci_run", None)
 MERGE = MergeDecision("merge", None)
 
 
-def _pair(**over) -> MergeCiRecord:
-    base: MergeCiRecord = {
-        "head": HEAD,
-        "master": MASTER,
-        "tested": TESTED,
-        "mode": "push",
-        "published_at": "2026-11-03T10:00:00.000Z",
-        "republished": False,
-        "superseded": [],
-    }
-    return {**base, **over}  # type: ignore[typeddict-item]
+def _pair(
+    *,
+    head: str = HEAD,
+    master: str = MASTER,
+    tested: str = TESTED,
+    mode: Literal["push", "dispatch"] = "push",
+    republished: bool = False,
+    superseded: list[str] | None = None,
+    outcome: Literal["stale", "no_verdict", "green", "red"] | None = None,
+    run_id: str | None = None,
+    released_at: str | None = None,
+) -> MergeCiRecord:
+    record = MergeCiRecord(
+        head=head,
+        master=master,
+        tested=tested,
+        mode=mode,
+        published_at="2026-11-03T10:00:00.000Z",
+        republished=republished,
+        superseded=superseded or [],
+    )
+    if outcome is not None:
+        record["outcome"] = outcome
+    if run_id is not None:
+        record["run_id"] = run_id
+    if released_at is not None:
+        record["released_at"] = released_at
+    return record
 
 
 def _verdict(state, failing=()) -> CiVerdict:
@@ -218,7 +236,7 @@ def test_a_dispatched_pair_vouches_for_a_covered_head_only_once_green():
     green = _pair(mode="dispatch", outcome="green")
     assert rules.auto_merge_decision(replace(facts, merge_ci=(green,))) == MERGE
     for outcome in ("stale", "no_verdict", None):
-        pair = _pair(mode="dispatch", **({"outcome": outcome} if outcome else {}))
+        pair = _pair(mode="dispatch", outcome=outcome)
         assert rules.auto_merge_decision(replace(facts, merge_ci=(pair,))) == CI_RUN
 
 
