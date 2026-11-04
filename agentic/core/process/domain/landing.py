@@ -1579,6 +1579,11 @@ def keys_over_threshold(
     return {key: ids for key, ids in seen.items() if len(ids) >= tasks}
 
 
+# How long a flake filing waits for the per-product lock (GH-464), in seconds: a bound on the
+# merge it runs inside, not a measure. A lock not taken in time skips the filing.
+FLAKE_LOCK_WAIT_S = 10
+
+
 @dataclass(frozen=True)
 class IssueRef:
     """An open tracker issue as the flake path reads it: its URL, title and body."""
