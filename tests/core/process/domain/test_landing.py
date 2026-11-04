@@ -63,6 +63,9 @@ EXPECTED = {
     "ci_missing": "wait",
     "ci_unreadable": "wait",
     "ci_blocked_by_conflict": "sync_master",
+    "ci_untrusted_no_dispatch": "none",
+    "ci_stale_exhausted": "sync_master",
+    "ci_no_verdict": "escalate",
     "not_approved": "re_review",
     "head_not_reviewed": "re_review",
     "open_findings_blocking": "fix",
@@ -99,7 +102,14 @@ def test_every_refusal_still_has_a_step_when_every_budget_is_spent(refusal):
     )
     step = _step(refusal, spent, owners=("api",))
     assert isinstance(step, LandingStep) and step.refusal == refusal
-    assert step.kind in {"none", "wait", "diagnose", "file_followups_and_land", "escalate_adr"}
+    assert step.kind in {
+        "none",
+        "wait",
+        "diagnose",
+        "file_followups_and_land",
+        "escalate_adr",
+        "escalate",
+    }
 
 
 @pytest.mark.parametrize("refusal", get_args(rules.MergeRefusal))

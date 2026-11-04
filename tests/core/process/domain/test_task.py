@@ -46,6 +46,7 @@ def test_reducers_are_read_from_the_annotations():
         "settled_findings",
         "approval_settled",
         "plan_settled",
+        "merge_ci",
         "status",
         "current_role",
         "escalated",
