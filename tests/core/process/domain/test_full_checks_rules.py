@@ -395,3 +395,28 @@ def test_an_open_row_stays_open_under_a_record_with_a_deferred_row():
     # The same state under a plain green record does close it: the guard is the deferral.
     plain = apply(red, {"full_checks": record(MOVED, version=3)})
     assert statuses(plain) == [(2, "fixed")]
+
+
+def test_next_section_version_is_one_without_a_kept_run():
+    assert rules.next_section_version({}, "Full checks") == 1
+    assert rules.next_section_version({"sections": {"Full checks": "x"}}, "Full checks") == 1
+
+
+def test_next_section_version_goes_past_the_highest_key_and_ignores_gaps():
+    sections = {"Full checks": "x", "Full checks (v1)": "a", "Full checks (v3)": "b"}
+    assert rules.next_section_version({"sections": sections}, "Full checks") == 4
+
+
+def test_next_section_version_ignores_other_sections_and_look_alike_keys():
+    sections = {
+        "QA (v7)": "a",
+        "Full checks (v2) extra": "b",
+        "Full checks (vX)": "c",
+        "Full checks (v1)": "d",
+    }
+    assert rules.next_section_version({"sections": sections}, "Full checks") == 2
+
+
+def test_next_section_version_reads_keys_never_contents():
+    sections = {"Full checks": "## Full checks (v99)\n\nFull checks (v99)", "Full checks (v1)": "x"}
+    assert rules.next_section_version({"sections": sections}, "Full checks") == 2

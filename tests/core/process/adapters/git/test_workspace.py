@@ -14,6 +14,7 @@ from agentic.core.process.adapters.git import workspace as workspace_module
 from agentic.core.process.adapters.git.workspace import GitError, UnstageablePath
 from agentic.core.process.application.ports import MergeConflict
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.ci_push import classify
 from agentic.shared.configuration import Configuration
 
 # The identity as the composition root hands it in.
@@ -1722,7 +1723,7 @@ def test_fast_forward_view_raises_git_error_when_the_diff_fails(product):
         GitWorkspace(product, IDENTITY).fast_forward_view("not-a-revision")
 
 
-# -- republish_ci_ref (GH-462): delete, then create, so GitHub sees a branch create ----------
+# -- delete_ci_ref (GH-462, GH-487): the delete half of a republish, one git step --------------
 
 
 def _log_ref_presence_on_each_push(product: Path, ref: str) -> Path:
@@ -1739,42 +1740,115 @@ def _log_ref_presence_on_each_push(product: Path, ref: str) -> Path:
     return log
 
 
-def test_republish_ci_ref_deletes_the_ref_then_creates_it_at_head(product):
+def _reject_every_push(product: Path, message: str) -> None:
+    hook = _remote(product) / "hooks" / "pre-receive"
+    hook.write_text(f"#!/bin/sh\necho '{message}' >&2\nexit 1\n")
+    hook.chmod(0o755)
+
+
+def test_delete_then_publish_is_a_delete_and_a_create_at_head(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     head = _commit_on(ws, task.path, "one")
     ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
     log = _log_ref_presence_on_each_push(product, "agentic-ci/GH-12")
-    ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.delete_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
     # First push is the delete (the ref was there), the second the create (it was gone).
     assert log.read_text().split() == ["present", "absent"]
     assert git("rev-parse", "refs/heads/agentic-ci/GH-12", cwd=_remote(product)) == head
 
 
-def test_republish_ci_ref_creates_a_ref_the_remote_no_longer_holds(product):
+def test_delete_ci_ref_of_a_ref_the_remote_lacks_passes_and_pushes_nothing(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
-    head = _commit_on(ws, task.path, "one")
-    ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
-    assert git("rev-parse", "refs/heads/agentic-ci/GH-12", cwd=_remote(product)) == head
+    log = _log_ref_presence_on_each_push(product, "agentic-ci/GH-12")
+    ws.delete_ci_ref(task.path, "agentic-ci/GH-12")
+    assert not log.exists()
+    assert ws.remote_refs("agentic-ci/") == ()
 
 
-def test_republish_ci_ref_leaves_the_other_refs_alone(product):
+def test_delete_ci_ref_leaves_the_other_refs_alone(product):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     ws.push(task.branch)
     ws.publish_ci_ref(task.path, "agentic-ci/GH-13")
-    ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
-    assert sorted(ws.remote_refs("agentic-ci/")) == ["agentic-ci/GH-12", "agentic-ci/GH-13"]
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.delete_ci_ref(task.path, "agentic-ci/GH-12")
+    assert ws.remote_refs("agentic-ci/") == ("agentic-ci/GH-13",)
     assert f"refs/heads/{task.branch}" in _remote_heads(product)
 
 
-def test_republish_ci_ref_against_a_missing_remote_raises(product, tmp_path):
+def test_delete_ci_ref_counts_a_ref_a_racing_delete_removed_as_done(product):
+    class Racing(GitWorkspace):
+        def _run_with_env(self, env, *args, cwd=None):
+            if "--delete" in args:
+                return subprocess.CompletedProcess(
+                    args, 1, "", "error: unable to delete 'x': remote ref does not exist\n"
+                )
+            return super()._run_with_env(env, *args, cwd=cwd)
+
+    ws = Racing(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    GitWorkspace(product, IDENTITY).publish_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.delete_ci_ref(task.path, "agentic-ci/GH-12")
+
+
+def test_delete_ci_ref_raises_another_failure_of_the_delete_with_git_s_words(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    _reject_every_push(product, "pre-receive says no")
+    with pytest.raises(GitError) as raised:
+        ws.delete_ci_ref(task.path, "agentic-ci/GH-12")
+    assert "pre-receive says no" in raised.value.stderr
+
+
+def test_publish_ci_ref_twice_at_the_same_sha_passes(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = _commit_on(ws, task.path, "one")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    assert git("rev-parse", "refs/heads/agentic-ci/GH-12", cwd=_remote(product)) == head
+
+
+def test_a_refused_publish_carries_git_s_stderr_and_reads_as_permanent(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    _reject_every_push(product, "pre-receive hook declined: no workflow scope")
+    with pytest.raises(GitError) as raised:
+        ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    assert "pre-receive hook declined" in raised.value.stderr
+    assert classify(raised.value.stderr) == "permanent"
+
+
+def test_delete_ci_ref_against_a_missing_remote_raises_with_git_s_stderr(product, tmp_path):
     ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
-    with pytest.raises(GitError, match="ls-remote|push"):
-        ws.republish_ci_ref(task.path, "agentic-ci/GH-12")
+    with pytest.raises(GitError, match="ls-remote") as raised:
+        ws.delete_ci_ref(task.path, "agentic-ci/GH-12")
+    assert raised.value.stderr.strip()
+
+
+def test_the_ci_path_pushes_run_in_the_c_locale(product, monkeypatch):
+    seen: list[tuple[str, str | None]] = []
+    real = subprocess.run
+
+    def spy(command, *args, **kwargs):
+        seen.append((command[1], kwargs["env"].get("LC_ALL")))
+        return real(command, *args, **kwargs)
+
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    monkeypatch.setattr("agentic.core.process.adapters.git.workspace.subprocess.run", spy)
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-12")
+    ws.delete_ci_ref(task.path, "agentic-ci/GH-12")
+    assert {verb: locale for verb, locale in seen if verb in ("push", "ls-remote")} == {
+        "push": "C",
+        "ls-remote": "C",
+    }
 
 
 def test_an_evaluation_root_and_its_documents_stay_out_of_the_products_status(product):

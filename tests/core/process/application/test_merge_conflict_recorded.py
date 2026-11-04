@@ -12,6 +12,7 @@ from pathlib import Path
 from agentic.core.process.application import landing_plan, merge, poll
 from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.ci_push import scrub
 from tests.core.process.application.test_conflict_probe import _land
 from tests.core.process.application.test_merge_ci_run import _world
 from tests.core.process.application.test_poll import _cfg
@@ -191,7 +192,23 @@ def test_a_merge_that_fails_without_a_conflict_writes_nothing_and_stops(tmp_path
 
     assert result == merge.MergeResult("stopped", "ci_publish_failed")
     assert _document(ports) == before
-    assert lines == [f"agentic: merge: GH-5: could not publish the fresh CI run: refused: {MASTER}"]
+    assert lines == [
+        "agentic: merge: GH-5: could not publish the fresh CI run: " + scrub(f"refused: {MASTER}")
+    ]
+
+
+def test_the_text_git_gave_for_a_failed_merge_reaches_the_log_only_through_scrub(tmp_path):
+    ports = _gh475()
+    ports.workspace.conflicts.discard(MASTER)
+    ports.workspace.failed_merges.add(MASTER)
+    said = "fatal: unable to access 'https://x-access-token:ghs_abc@github.com/o/r': `x`\nmore {y}"
+    ports.workspace.failed_merge_reasons[MASTER] = said
+
+    result, lines = _merge_round(ports, tmp_path)
+
+    assert result == merge.MergeResult("stopped", "ci_publish_failed")
+    assert lines == ["agentic: merge: GH-5: could not publish the fresh CI run: " + scrub(said)]
+    assert "ghs_abc" not in lines[0] and "`" not in lines[0] and "\n" not in lines[0]
 
 
 def test_the_base_reading_takes_a_recorded_conflict_over_every_other_reading():

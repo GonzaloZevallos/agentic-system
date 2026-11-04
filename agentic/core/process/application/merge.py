@@ -23,6 +23,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import adr_numbers, ci, master_gain, merge_ci, merge_conflict, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.check_schedule import CheckPriority
+from ..domain.ci_push import scrub
 from ..domain.presubmit import CiDispatch
 from ..domain.task import (
     CiCause,
@@ -33,7 +34,7 @@ from ..domain.task import (
     add_merge_ci,
     add_tracker_failures,
 )
-from . import adr_collision, ci_flakes, landing_flakes, landing_plan
+from . import adr_collision, ci_flakes, ci_push, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
 from .poll import (
@@ -120,6 +121,7 @@ def merge_task(
     eval_set: frozenset[int] | None,
     log: Callable[[str], None],
     clock: Callable[[], str] = _now,
+    sleep: Callable[[float], None] = time.sleep,
     registry: RunRegistry | None = None,
 ) -> MergeResult:
     raw = ports.documents.load(task_id)
@@ -235,7 +237,7 @@ def merge_task(
         # GH-463: a `ci:` product never runs its suite here; one fresh GitHub run decides.
         assert head is not None  # a decision never asks for a run without a head
         step = _fresh_run(
-            task_id, raw, head, master, base, facts, dispatch, names, cfg, ports, clock, log
+            task_id, raw, head, master, base, facts, dispatch, names, cfg, ports, clock, log, sleep
         )
         if step.stopped is not None:
             return step.stopped
@@ -456,6 +458,7 @@ def _fresh_run(
     ports: Ports,
     clock: Callable[[], str],
     log: Callable[[str], None],
+    sleep: Callable[[float], None],
 ) -> _Fresh:
     """The gate's one fresh GitHub run of `head` merged with `master` (GH-463). A pair that
     already stands for the head is read, never rebuilt or triggered again; otherwise the pair
@@ -466,7 +469,7 @@ def _fresh_run(
         pair, head, master, facts.ci_run_inert, ran=pair["tested"]
     ):
         return _read_pair(
-            task_id, pairs, pair, head, master, names, dispatch, cfg, ports, clock, log
+            task_id, pairs, pair, head, master, names, dispatch, cfg, ports, clock, log, sleep
         )
     return _build_pair(
         task_id,
@@ -480,6 +483,7 @@ def _fresh_run(
         ports,
         clock,
         log,
+        sleep,
     )
 
 
@@ -495,6 +499,7 @@ def _build_pair(
     ports: Ports,
     clock: Callable[[], str],
     log: Callable[[str], None],
+    sleep: Callable[[float], None],
 ) -> _Fresh:
     """Builds `head` merged with `master` with git only, records the pair, publishes it. `again`
     is the pair being republished (the second dispatch): its new `tested` is written to the
@@ -520,7 +525,9 @@ def _build_pair(
             return _Fresh(stopped=MergeResult("refused", "merge_conflict"))
         if isinstance(merged, MergeFailed):
             # A refusal with no unmerged path says nothing about the code: nothing is recorded.
-            log(f"agentic: merge: {task_id}: could not publish the fresh CI run: {merged.reason}")
+            # Git's own text reaches the log only through `scrub` (GH-487), never a `str.format`.
+            said = scrub(merged.reason)
+            log(f"agentic: merge: {task_id}: could not publish the fresh CI run: " + said)
             return _Fresh(stopped=MergeResult("stopped", "ci_publish_failed"))
         tested = ports.workspace.full_head(path)
         if again is None:
@@ -556,13 +563,17 @@ def _build_pair(
         if mode == "push":
             ref = rules.ci_ref(task_id)
             if again is None:
-                ports.workspace.publish_ci_ref(path, ref)
+                ci_push.publish_with_retry(
+                    lambda: ports.workspace.publish_ci_ref(path, ref), sleep=sleep
+                )
             else:
-                ports.workspace.republish_ci_ref(path, ref)
+                ci_push.republish(ports.workspace, path, ref, sleep=sleep)
         else:
             if dispatch is None:
                 return _Fresh(stopped=MergeResult("stopped", "ci_dispatch_undeclared"))
-            ports.workspace.publish_dispatch_ref(path, task_id)
+            ci_push.publish_with_retry(
+                lambda: ports.workspace.publish_dispatch_ref(path, task_id), sleep=sleep
+            )
             refused = ports.tracker.dispatch_ci(dispatch.workflow, "", {dispatch.sha_input: tested})
             if refused is not None:
                 # A refusal ends the pair at once: no second dispatch (as `full_checks`).
@@ -575,7 +586,13 @@ def _build_pair(
                 _write_pairs(ports, task_id, pairs, ended)
                 return _Fresh(cause=refused.cause)
     except GitError as exc:
-        log(f"agentic: merge: {task_id}: could not publish the fresh CI run: {exc}")
+        # Git's words reach the log only through `scrub`; a `PushFailed` has done it already.
+        said = (
+            f"after {exc.attempts} attempt(s) ({exc.kind}): {exc.said}"
+            if isinstance(exc, ci_push.PushFailed)
+            else scrub(str(exc))
+        )
+        log(f"agentic: merge: {task_id}: could not publish the fresh CI run: {said}")
         return _Fresh(stopped=MergeResult("stopped", "ci_publish_failed"))
     finally:
         release_checkout(ports, ports.workspace.checkout_path(name))
@@ -595,6 +612,7 @@ def _read_pair(
     ports: Ports,
     clock: Callable[[], str],
     log: Callable[[str], None],
+    sleep: Callable[[float], None],
 ) -> _Fresh:
     """Reads the verdict of the pair's run once (`ci.full_tier_verdict`, `ci.dispatch_verdict`).
     Waiting is not blocking: an undecided run is `stopped ci_wait`, bounded by the grace period
@@ -658,6 +676,7 @@ def _read_pair(
             ports,
             clock,
             log,
+            sleep,
         )
     undecided: MergeCiRecord = {**pair, "republished": True, "outcome": "no_verdict"}
     if verdict.cause is not None:

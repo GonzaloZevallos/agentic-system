@@ -16,6 +16,8 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 ```mermaid
 classDiagram
     class checkouts__SetupFailed["SetupFailed"]
+    class ci_push__PushFailed["PushFailed"]
+    class ci_push__Pushed["Pushed"]
     class limits__RunLimits["RunLimits"]
     class ports__AddedAdr["AddedAdr"]
     class ports__AddedLine["AddedLine"]
@@ -27,12 +29,12 @@ classDiagram
     class ports__CheckRequest["CheckRequest"]
     class ports__CheckResults["CheckResults"]
     class ports__CheckScheduler["CheckScheduler"]
-    class ports__CheckTool["CheckTool"]
-    class ports__Checkout["Checkout"]
 ```
 
 ## Relaciones con otras páginas
 
+- [application: support (parte 2)](classes-process-application-support-2.md)
+  - `ci_push.PushFailed` hereda de `ports.GitError`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `limits.RunLimits`
   - `ports.Ports` se asocia con `ports.CheckScheduler`

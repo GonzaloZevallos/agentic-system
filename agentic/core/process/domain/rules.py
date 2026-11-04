@@ -1255,6 +1255,16 @@ def superseded(section: str, version: int) -> str:
     return f"{section} (v{version})"
 
 
+def next_section_version(state: TaskState, section: str) -> int:
+    """The `N` a previous run of `section` is kept under as `section (vN)`: one more than the
+    highest such key of `state["sections"]`, or 1 when there is none. Read from the keys only,
+    never from a section's text, which may say anything (it holds a third party's words). A key
+    that is not exactly `<section> (v<digits>)` is not a version."""
+    pattern = re.compile(rf"{re.escape(section)} \(v(\d+)\)")
+    found = (int(m[1]) for key in state.get("sections", {}) if (m := pattern.fullmatch(key)))
+    return max(found, default=0) + 1
+
+
 def last_session(state: TaskState, role_name: str, section: str) -> str | None:
     """The session id of the latest run of `role_name` that wrote `section`, to resume
     it; None when that role never wrote there."""
