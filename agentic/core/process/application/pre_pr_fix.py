@@ -55,6 +55,9 @@ async def fix_important(state: TaskState, cfg: Configuration, ports: Ports) -> T
         "change_history": reopened["change_history"][len(kept) :],
         "landing": [*(landing_rules.entry_of(e) for e in landing_plan.all_entries(state)), entry],
     }
+    if state.get("pending_close_docs"):
+        # The head is about to move: the files owed on the old one are not committed (GH-469).
+        patch["pending_close_docs"] = None
     return finish(state, patch, ports)
 
 

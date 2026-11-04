@@ -73,7 +73,13 @@ async def run(
     start: TaskState, runner: ScriptedRunner, tmp_path: Path, workspace: MemoryWorkspace
 ) -> tuple[TaskState, Any]:
     ports = memory_ports(runner, workspace=workspace)
-    patch = await node.final_validation(start, Configuration(product_dir=tmp_path), ports)
+    checkout = workspace.task_checkout(start["id"])
+    patch = await node.final_validation(
+        start, Configuration(product_dir=tmp_path), ports, checkout=checkout
+    )
+    if patch.get("pending_close_docs"):
+        # What the verifier set does once nothing returned: commit what the approval owes.
+        patch = apply(patch, node.commit_close_docs(apply(start, patch), ports, checkout.path))
     return patch, ports
 
 
@@ -255,3 +261,81 @@ def test_pm_final_reads_knowledge_and_the_whole_checkout_and_writes_nothing():
     assert not roles.PM_FINAL.executes and not any(
         rule.startswith(("Edit", "Write")) for rule in roles.PM_FINAL.allowed
     )
+
+
+# --- deferred close docs (GH-469): the verifier set commits them, once, after the whole set ---
+
+
+async def test_a_deferred_approval_owes_the_files_and_calls_neither_consolidate_nor_commit(
+    tmp_path,
+):
+    workspace = MemoryWorkspace()
+    runner = runner_with(final_verdict("approved", definitions=[capability()]))
+    ports = memory_ports(runner, workspace=workspace)
+
+    patch = await node.final_validation(
+        state(),
+        Configuration(product_dir=tmp_path),
+        ports,
+        checkout=workspace.task_checkout("GH-12"),
+    )
+
+    assert workspace.path_commits == [] and ports.knowledge.definitions == {}
+    assert patch["pending_close_docs"] == {"parent": REVIEWED, "definitions": [capability()]}
+    assert patch["close_docs"] is None
+
+
+async def test_a_deferred_return_owes_nothing(tmp_path):
+    runner = runner_with(final_verdict("returned", reason="wide", blocking=["x"]))
+    ports = memory_ports(runner)
+    patch = await node.final_validation(
+        state(),
+        Configuration(product_dir=tmp_path),
+        ports,
+        checkout=ports.workspace.task_checkout("GH-12"),
+    )
+    assert "pending_close_docs" not in patch
+
+
+async def test_a_checkout_handed_in_is_not_resolved_again(tmp_path):
+    workspace = MemoryWorkspace()
+    ports = memory_ports(runner_with(final_verdict("approved")), workspace=workspace)
+    checkout = workspace.task_checkout("GH-12")
+    workspace.checkouts_made.clear()
+    await node.final_validation(
+        state(), Configuration(product_dir=tmp_path), ports, checkout=checkout
+    )
+    assert workspace.checkouts_made == []
+
+
+def owing(**more: Any) -> TaskState:
+    return {
+        **state(),
+        "pending_close_docs": {"parent": REVIEWED, "definitions": [capability()]},
+        **more,
+    }
+
+
+def test_commit_close_docs_writes_commits_records_and_clears_the_field():
+    workspace = MemoryWorkspace()
+    ports = memory_ports(workspace=workspace)
+    patch = node.commit_close_docs(owing(), ports, workspace.ROOT / "GH-12")
+    assert patch["close_docs"] == {
+        "parent": REVIEWED,
+        "head": "c2",
+        "paths": ["docs/product/dashboard.md"],
+    }
+    assert patch["pending_close_docs"] is None
+    assert workspace.path_commits[0][2] == "GH-12: capability files at close"
+
+
+def test_commit_close_docs_over_files_the_checkout_already_held_only_clears_the_field():
+    workspace = NoChangeWorkspace()
+    patch = node.commit_close_docs(owing(), memory_ports(workspace=workspace), workspace.ROOT)
+    assert patch == {"pending_close_docs": None}
+
+
+def test_commit_close_docs_with_nothing_owed_is_an_empty_patch():
+    workspace = MemoryWorkspace()
+    assert node.commit_close_docs(state(), memory_ports(workspace=workspace), workspace.ROOT) == {}
+    assert workspace.path_commits == []

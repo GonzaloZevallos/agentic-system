@@ -87,3 +87,5 @@ recorrido real ni comparaciones y su documento lo dice.
   resultado por rol, junto con el veredicto del humano sobre las comparaciones.
 - Una tarea con UI cuesta más en la definición y suma una validación al final. El tope de
   tarea tiene que absorberlo.
+
+**Adenda 2026-11-04 (GH-469).** `final_validation` ya no es un nodo propio: corre junto con los demás verificadores de la cabeza integrada en `verify`. Ver [ADR-0084](0084-verificadores-de-la-cabeza-integrada-en-conjunto.md).

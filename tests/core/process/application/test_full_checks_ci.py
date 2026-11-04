@@ -8,7 +8,6 @@ from __future__ import annotations
 import pytest
 
 from agentic.core.process.application.checkouts import task_base
-from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
@@ -22,6 +21,7 @@ from tests.fakes import (
     MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
+    full_checks_in_task_checkout,
     memory_ports,
 )
 
@@ -104,7 +104,7 @@ def ports_of(*reads, commands=None, ci=("unit", "web"), **more):
 
 async def run(state, ports, clock: Clock | None = None):
     clock = clock or Clock()
-    return await full_checks(state, CFG, ports, sleep=clock.sleep, clock=clock)
+    return await full_checks_in_task_checkout(state, CFG, ports, sleep=clock.sleep, clock=clock)
 
 
 async def test_green_ci_passes_with_no_local_check_and_publishes_the_head_once():

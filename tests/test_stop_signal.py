@@ -224,7 +224,7 @@ def test_a_signal_during_the_full_checks_node_leaves_the_checkpoint_to_repeat_it
     assert resumed["errors"] == []
     assert resumed["pending_writes"] == 0
     # ...so the graph is still waiting at it, and a resume runs it, to its end this time.
-    assert resumed["next"] == ["full_checks"]
+    assert resumed["next"] == ["verify"]
     after = resumed["after"]
     assert isinstance(after, dict) and after["passed"] is True
 

@@ -15,6 +15,7 @@ Esta página muestra los módulos del grupo `checks` de `application` y los impo
 
 ```mermaid
 graph TD
+    g_application__definition["definition (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
     g_application__support["support (grupo)"]
     g_domain__checks["checks (grupo de domain)"]
@@ -29,6 +30,7 @@ graph TD
     m_application__presubmit["application.presubmit"]
     m_application__run_check["application.run_check"]
     m_application__schema_guard["application.schema_guard"]
+    m_application__verifiers["application.verifiers"]
     m_application__ci_ref_sweep --> g_application__lifecycle
     m_application__ci_ref_sweep --> g_application__support
     m_application__ci_ref_sweep --> g_domain__state
@@ -53,4 +55,10 @@ graph TD
     m_application__run_check --> g_domain__checks
     m_application__run_check --> m_application__presubmit
     m_application__schema_guard --> g_domain__roles
+    m_application__verifiers --> g_application__definition
+    m_application__verifiers --> g_application__support
+    m_application__verifiers --> g_domain__roles
+    m_application__verifiers --> g_domain__state
+    m_application__verifiers --> g_pkg__agentic__shared
+    m_application__verifiers --> m_application__full_checks
 ```

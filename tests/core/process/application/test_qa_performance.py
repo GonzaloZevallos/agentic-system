@@ -90,7 +90,9 @@ async def go(state, runner_script, role=None, stack=None, lock=None, workspace=N
         perf_runner=perf,
         perf_lock=lock,
     )
-    patch = await qa_performance(state, CFG, ports)
+    patch = await qa_performance(
+        state, CFG, ports, checkout=ports.workspace.task_checkout((state)["id"])
+    )
     return apply(state, patch), perf, lock, role, ports
 
 
@@ -118,7 +120,9 @@ async def test_every_measurement_call_comes_before_the_role_runner_is_called():
     ports = memory_ports(
         role, stack=MemoryStack(performance=declared()), perf_runner=perf, perf_lock=FakePerfLock()
     )
-    await qa_performance(state_of(), CFG, ports)
+    await qa_performance(
+        state_of(), CFG, ports, checkout=ports.workspace.task_checkout((state_of())["id"])
+    )
     assert role.seen == [6]
 
 
@@ -225,7 +229,9 @@ async def test_an_interrupt_leaves_no_table_no_run_no_lock_and_the_node_still_du
     )
     assert rules.qa_performance_due(state)
     with pytest.raises(PerfInterrupted):
-        await qa_performance(state, CFG, ports)
+        await qa_performance(
+            state, CFG, ports, checkout=ports.workspace.task_checkout((state)["id"])
+        )
     assert role.calls == [] and ports.documents.saved == []
     assert lock.released == 1
     (made,) = ports.workspace.detached
@@ -247,7 +253,9 @@ async def test_a_stop_during_the_measurement_writes_nothing_and_leaves_the_node_
         perf_lock=lock,
     )
     with pytest.raises(RunStopped):
-        await qa_performance(state, CFG, ports)
+        await qa_performance(
+            state, CFG, ports, checkout=ports.workspace.task_checkout((state)["id"])
+        )
     assert role.calls == [] and ports.documents.saved == []
     assert lock.released == 1
     (made,) = ports.workspace.detached
@@ -278,7 +286,9 @@ async def test_the_measurement_does_not_block_the_event_loop():
             ticks += 1
 
     async def node():
-        await qa_performance(state_of(), CFG, ports)
+        await qa_performance(
+            state_of(), CFG, ports, checkout=ports.workspace.task_checkout((state_of())["id"])
+        )
         done.set()
 
     async with anyio.create_task_group() as tg:
