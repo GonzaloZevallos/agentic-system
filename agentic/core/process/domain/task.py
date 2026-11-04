@@ -761,6 +761,15 @@ class FinishedPatch(TypedDict):
     finished_at: str
 
 
+class EvaluatedPatch(FinishedPatch, total=False):
+    """What the `evaluated` node writes when an evaluation run ends (GH-470): the keys of
+    `rules.finished` plus the role that closes it and the processes the release reaped. A
+    partial patch, so `apply` takes it as a mapping, not as a whole `TaskState`."""
+
+    current_role: str
+    reaped_at_cleanup: list[ReapedProcess]
+
+
 class FindingRecord(TypedDict):
     """One finding as the table keeps it (issue #42): what the reviewer wrote, plus
     which subtask's review raised it and in which pass. Append-only and never rewritten:
@@ -1378,9 +1387,10 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState | ReleasePatch) -> TaskState:
+def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) -> TaskState:
     """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
-    patch is a `TaskState` or the partial `ReleasePatch`, so every key stays checked."""
+    patch is a `TaskState` or the partial `ReleasePatch` / `EvaluatedPatch`, so every key stays
+    checked."""
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)

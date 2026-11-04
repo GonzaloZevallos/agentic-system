@@ -28,12 +28,13 @@ classDiagram
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
     class task__EstimateRevision["EstimateRevision"]
+    class task__EvaluatedPatch["EvaluatedPatch"]
     class task__EvaluationRef["EvaluationRef"]
     class task__Failure["Failure"]
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
-    class task__FlakeRecord["FlakeRecord"]
+    task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
