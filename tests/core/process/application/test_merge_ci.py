@@ -121,17 +121,26 @@ def test_the_merge_comment_has_no_accepted_section_without_open_important_rows(t
     assert "Accepted without a fix" not in comment
 
 
-def test_a_green_ci_on_an_older_master_runs_the_local_checks_once_when_contains_says_no(tmp_path):
+def _asks_a_fresh_run_and_runs_nothing_here(ports, result) -> None:
+    """GH-463: a `ci:` product never runs its suite at the merge gate: one merge commit is built
+    with git only, recorded and published, and the verb stops until GitHub's run decides."""
+    assert (result.kind, result.reason) == ("stopped", "ci_wait")
+    assert ports.commands.ran == []
+    assert len(ports.workspace.detached) == 1
+    assert [call[0] for call in ports.workspace.ci_ref_calls] == ["publish"]
+    assert len(_doc(ports)["merge_ci"]) == 1
+    assert ports.tracker.merge_calls == []
+    assert _doc(ports).get("auto_merge_via") is None
+    assert "merge_checks" not in _doc(ports)
+
+
+def test_a_green_ci_on_an_older_master_asks_one_fresh_run_when_contains_says_no(tmp_path):
     ports = _world(_report(_check(), base="c" * 40))
     ports.workspace.contains_answer = "no"
 
     result, _ = _run(ports, tmp_path)
 
-    assert result.kind == "merged"
-    assert len(ports.workspace.detached) == 1
-    assert [command for _, command in ports.commands.ran] == ["run tests"]
-    assert _doc(ports)["auto_merge_via"] == "local"
-    assert "auto_merge_ci" not in _doc(ports)
+    _asks_a_fresh_run_and_runs_nothing_here(ports, result)
     assert ports.workspace.contains_calls == [(HEAD, MASTER)]
 
 
@@ -405,13 +414,12 @@ def test_a_deferral_whose_job_is_pending_waits_and_runs_nothing_locally(tmp_path
 
 
 @pytest.mark.parametrize("jobs", [(_check("e2e", "SKIPPED", run=2),), ()])
-def test_a_deferral_no_job_covers_runs_the_checks_here_and_never_merges_on_the_ci(tmp_path, jobs):
+def test_a_deferral_no_job_covers_asks_a_fresh_run_and_never_merges_on_the_ci(tmp_path, jobs):
     ports = _deferring(_report(_check(), *jobs))
 
     result, _ = _run(ports, tmp_path)
 
-    assert ports.commands.ran, "the merge gate ran the checks locally"
-    assert _doc(ports).get("auto_merge_via") != "ci"
+    _asks_a_fresh_run_and_runs_nothing_here(ports, result)
 
 
 def test_a_deferral_of_another_head_imposes_nothing(tmp_path):
@@ -425,22 +433,22 @@ def test_a_deferral_of_another_head_imposes_nothing(tmp_path):
 def test_a_deferred_check_the_stack_no_longer_covers_is_uncovered(tmp_path):
     ports = _deferring(_report(_check(), _check("e2e", run=2)), covers={"x": E2E})
 
-    _run(ports, tmp_path)
+    result, _ = _run(ports, tmp_path)
 
-    assert ports.commands.ran
+    _asks_a_fresh_run_and_runs_nothing_here(ports, result)
 
 
 @pytest.mark.parametrize("jobs", [(_check("e2e", "SKIPPED", run=2),), ()])
-def test_an_uncovered_deferral_whose_local_rerun_times_out_never_merges(tmp_path, jobs):
+def test_an_uncovered_deferral_never_merges_and_no_local_rerun_can_time_out(tmp_path, jobs):
     ports = _deferring(_report(_check(), *jobs))
     ports.commands.queues["run tests"] = [CommandResult(-9, "  ✓ 217 [mobile] last\n", True)]
 
     result, _ = _run(ports, tmp_path)
 
     assert result.kind != "merged"
-    assert ports.tracker.merge_calls == []
+    assert ports.tracker.merge_calls == [] and ports.commands.ran == []
     assert _doc(ports).get("auto_merge_via") != "ci"
-    assert _doc(ports)["merge_checks"]["passed"] is False
+    assert "merge_checks" not in _doc(ports)
 
 
 def _dispatched(head: str = HEAD, **over) -> dict:
@@ -488,20 +496,20 @@ def test_an_untrusted_head_with_a_dispatched_verdict_of_this_head_merges_on_the_
     ],
     ids=["old_head", "short_sha", "ran_on_ci", "failed"],
 )
-def test_an_untrusted_head_without_a_dispatched_verdict_of_this_head_runs_the_local_checks(
+def test_an_untrusted_head_without_a_dispatched_verdict_of_this_head_is_refused_without_a_run(
     tmp_path, record
 ):
     """The record a landing sync left behind names the head before the sync: the head it moved
-    to has none yet, so the merge decides on the local checks as it always did."""
+    to has none yet. The stack declares no `ci_dispatch`, so no workflow of the base can judge
+    it and the suite is not run here either (GH-463): refused, with nothing built or published."""
     ports = _untrusted_world(_report(_check()), full_checks=record)
 
     result, _ = _run(ports, tmp_path)
 
-    assert result.kind == "merged"
-    assert len(ports.workspace.detached) == 1
-    assert [command for _, command in ports.commands.ran] == ["run tests"]
-    assert _doc(ports)["auto_merge_via"] == "local"
-    assert "auto_merge_ci" not in _doc(ports)
+    assert (result.kind, result.reason) == ("refused", "ci_untrusted_no_dispatch")
+    assert ports.workspace.detached == [] and ports.commands.ran == []
+    assert ports.workspace.ci_ref_calls == [] and ports.tracker.dispatch_calls == []
+    assert "auto_merge_ci" not in _doc(ports) and "merge_ci" not in _doc(ports)
 
 
 def test_a_head_the_landing_moved_is_trusted_only_once_its_own_dispatched_record_is_written(

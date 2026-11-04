@@ -38,6 +38,7 @@ graph TD
     m_application__landing --> g_application__landing__2
     m_application__landing --> g_application__lifecycle
     m_application__landing --> g_application__support
+    m_application__landing --> g_domain__checks
     m_application__landing --> g_domain__landing
     m_application__landing --> g_domain__state
     m_application__landing --> g_pkg__agentic__shared

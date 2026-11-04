@@ -1789,3 +1789,107 @@ def test_an_evaluation_root_and_its_documents_stay_out_of_the_products_status(pr
     (product / ".agentic/eval/docs/EVAL-1-aaaaaaaa-default-1.md").write_text("x")
     assert git("status", "--porcelain", cwd=product) == ""
     assert (product / ".git/info/exclude").read_text().splitlines().count(".agentic/eval/") == 1
+
+
+# -- publish_dispatch_ref, remote_dispatch_refs, delete_dispatch_ref and merge(message) (GH-463) --
+
+
+def _remote_refs(product: Path) -> list[str]:
+    return git("for-each-ref", "--format=%(refname)", cwd=_remote(product)).splitlines()
+
+
+def test_publish_dispatch_ref_creates_a_ref_outside_refs_heads_at_head_of_the_checkout(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    head = _commit_on(ws, task.path, "one")
+    ws.publish_dispatch_ref(task.path, "GH-12")
+    remote = _remote(product)
+    assert git("rev-parse", "refs/agentic-ci-dispatch/GH-12", cwd=remote) == head
+    # Nothing under refs/heads/ was created for it: no branch, so no push event for it.
+    assert not [ref for ref in _remote_heads(product) if "GH-12" in ref]
+    assert [ref for ref in _remote_refs(product) if "GH-12" in ref] == [
+        "refs/agentic-ci-dispatch/GH-12"
+    ]
+
+
+def test_publish_dispatch_ref_moves_the_ref_by_force_and_takes_the_full_name_too(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    _commit_on(ws, task.path, "one")
+    ws.publish_dispatch_ref(task.path, "GH-12")
+    git("reset", "-q", "--hard", "HEAD~1", cwd=task.path)
+    other = _commit_on(ws, task.path, "other")
+    ws.publish_dispatch_ref(task.path, "refs/agentic-ci-dispatch/GH-12")
+    assert git("rev-parse", "refs/agentic-ci-dispatch/GH-12", cwd=_remote(product)) == other
+    assert not [ref for ref in _remote_refs(product) if "agentic-ci-dispatch/refs" in ref]
+
+
+def test_publish_dispatch_ref_against_a_missing_remote_raises(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="push"):
+        ws.publish_dispatch_ref(task.path, "GH-12")
+
+
+def test_remote_dispatch_refs_lists_the_ids_and_not_the_branches(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    ws.publish_ci_ref(task.path, "agentic-ci/GH-14")
+    assert ws.remote_dispatch_refs() == ()
+    ws.publish_dispatch_ref(task.path, "GH-12")
+    ws.publish_dispatch_ref(task.path, "GH-13")
+    assert sorted(ws.remote_dispatch_refs()) == ["GH-12", "GH-13"]
+    # The branch namespace is not read through here, nor the other way round.
+    assert ws.remote_refs("agentic-ci/") == ("agentic-ci/GH-14",)
+
+
+def test_remote_dispatch_refs_against_a_missing_remote_raises_and_never_reads_empty(
+    product, tmp_path
+):
+    ws = GitWorkspace(product, IDENTITY)
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="ls-remote"):
+        ws.remote_dispatch_refs()
+
+
+def test_delete_dispatch_ref_removes_that_ref_and_leaves_the_others(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    ws.publish_dispatch_ref(task.path, "GH-12")
+    ws.publish_dispatch_ref(task.path, "GH-13")
+    ws.delete_dispatch_ref("GH-12")
+    assert ws.remote_dispatch_refs() == ("GH-13",)
+    assert f"refs/heads/{task.branch}" in _remote_heads(product)
+
+
+def test_delete_dispatch_ref_of_a_missing_ref_or_remote_raises(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    with pytest.raises(GitError, match="push"):
+        ws.delete_dispatch_ref("GH-99")
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="ls-remote"):
+        ws.delete_dispatch_ref("GH-12")
+
+
+def test_merge_with_a_message_makes_a_commit_with_that_message(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    _commit_on(ws, task.path, "one")
+    other = ws.task_checkout("GH-13")
+    _commit_on(ws, other.path, "two")
+    assert ws.merge(task.path, other.branch, "Fresh run [skip ci]") is None
+    assert git("log", "-1", "--format=%s", cwd=task.path) == "Fresh run [skip ci]"
+    assert len(git("log", "-1", "--format=%P", cwd=task.path).split()) == 2
+
+
+def test_merge_without_a_message_keeps_gits_own(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    _commit_on(ws, task.path, "one")
+    other = ws.task_checkout("GH-13")
+    _commit_on(ws, other.path, "two")
+    assert ws.merge(task.path, other.branch) is None
+    assert git("log", "-1", "--format=%s", cwd=task.path).startswith("Merge")

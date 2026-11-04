@@ -251,10 +251,11 @@ class GitWorkspace:
         # The same flags `system_version` uses, so the two never disagree about a tree.
         return not self._git("status", "--porcelain", "--untracked-files=no", cwd=path)
 
-    def merge(self, path: Path, branch: str) -> str | None:
+    def merge(self, path: Path, branch: str, message: str | None = None) -> str | None:
         """A conflict is not an error of the system: the merge is undone so the
         checkout stays clean, and the reason goes back for a role to resolve by hand."""
-        result = self._run_locked("merge", "--no-edit", "-q", branch, cwd=path)
+        notes = ("-m", message) if message is not None else ("--no-edit",)
+        result = self._run_locked("merge", *notes, "-q", branch, cwd=path)
         if result.returncode == 0:
             return None
         self._run("merge", "--abort", cwd=path)
@@ -486,6 +487,28 @@ class GitWorkspace:
         if self._git("ls-remote", "--heads", "origin", f"refs/heads/{ref}", cwd=path).strip():
             self._git("push", "origin", "--delete", ref, cwd=path)
         self.publish_ci_ref(path, ref)
+
+    def publish_dispatch_ref(self, path: Path, ref: str) -> None:
+        # No lease, as `publish_ci_ref`; and a full ref outside `refs/heads/`, so no push event.
+        self._git("push", "--force", "origin", f"HEAD:{self._dispatch_ref(ref)}", cwd=path)
+
+    def delete_dispatch_ref(self, ref: str) -> None:
+        full = self._dispatch_ref(ref)
+        # git deletes a fully qualified ref the remote lacks without a word: the port says a
+        # missing ref raises, as it does for a branch.
+        if not self._git("ls-remote", "origin", full).strip():
+            raise GitError(f"git push origin --delete {full} failed: origin holds no such ref")
+        self._git("push", "origin", "--delete", full)
+
+    def remote_dispatch_refs(self) -> tuple[str, ...]:
+        listed = self._git("ls-remote", "origin", f"{rules.CI_DISPATCH_REF_PREFIX}*")
+        prefix = rules.CI_DISPATCH_REF_PREFIX
+        return tuple(line.split()[1][len(prefix) :] for line in listed.splitlines() if line.strip())
+
+    @staticmethod
+    def _dispatch_ref(ref: str) -> str:
+        """The full ref of the task id `ref`; a full name is never prefixed twice."""
+        return rules.ci_dispatch_ref(ref.removeprefix(rules.CI_DISPATCH_REF_PREFIX))
 
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
         listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{prefix}*")

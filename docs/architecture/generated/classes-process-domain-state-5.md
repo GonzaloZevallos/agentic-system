@@ -20,9 +20,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__PullRequest["PullRequest"]
-    class task__PullRequestCommit["PullRequestCommit"]
-    class task__ReleasePatch["ReleasePatch"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
     class task__RoleRun["RoleRun"]

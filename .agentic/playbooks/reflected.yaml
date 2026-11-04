@@ -582,3 +582,14 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-465
+  GH-463@review:
+    cost_usd: 0.1655
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-463
+    decisions: 1

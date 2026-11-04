@@ -134,18 +134,18 @@ def test_a_ci_reason_never_hides_an_earlier_one():
 
 
 @pytest.mark.parametrize("fresh", [None, False])
-def test_a_green_stale_or_unknown_ci_falls_to_the_local_checks(fresh):
+def test_a_green_stale_or_unknown_ci_asks_for_a_fresh_run_never_the_local_checks(fresh):
     asked = rules.auto_merge_decision(_facts(ci_fresh=fresh))
-    assert asked == MergeDecision("run_checks", None)
-    covered = _facts(
+    assert asked == MergeDecision("ci_run", None)
+    # GH-463: a local record or the attempts spent mean nothing to a product that declares `ci:`.
+    local = _facts(
         ci_fresh=fresh,
         checks_head=HEAD,
         checks_master=MASTER,
         checks_passed=False,
+        attempts=rules.MERGE_ATTEMPTS_MAX,
     )
-    assert rules.auto_merge_decision(covered) == MergeDecision("refuse", "checks_failed")
-    spent = _facts(ci_fresh=fresh, attempts=rules.MERGE_ATTEMPTS_MAX)
-    assert rules.auto_merge_decision(spent) == MergeDecision("refuse", "attempts_exhausted")
+    assert rules.auto_merge_decision(local) == MergeDecision("ci_run", None)
 
 
 def test_default_facts_decide_as_before_whatever_the_ci_fields_say_nothing_of():
@@ -178,11 +178,17 @@ def test_default_facts_decide_as_before_whatever_the_ci_fields_say_nothing_of():
 @pytest.mark.parametrize("untrusted", [None, True], ids=["unknown_paths", "ci_definition_touched"])
 def test_a_green_fresh_ci_never_decides_merge_when_its_definition_is_untrusted(untrusted):
     facts = _facts(ci_untrusted=untrusted)
-    assert rules.auto_merge_decision(facts) == MergeDecision("run_checks", None)
+    want = (
+        MergeDecision("ci_run", None)
+        if untrusted is None
+        else MergeDecision("refuse", "ci_untrusted_no_dispatch")
+    )
+    assert rules.auto_merge_decision(facts) == want
     covered = replace(facts, checks_head=HEAD, checks_master=MASTER, checks_passed=True)
-    assert rules.auto_merge_decision(covered) == MergeDecision("merge", None)
-    assert rules.auto_merge_decision(replace(covered, checks_passed=False)) == MergeDecision(
-        "refuse", "checks_failed"
+    assert rules.auto_merge_decision(covered) == want
+    assert rules.auto_merge_decision(replace(covered, checks_passed=False)) == want
+    assert rules.auto_merge_decision(replace(facts, ci_dispatch_declared=True)) == MergeDecision(
+        "ci_run", None
     )
 
 

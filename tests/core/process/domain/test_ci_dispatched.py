@@ -131,13 +131,13 @@ def test_a_green_fresh_ci_on_an_untrusted_head_merges_when_the_dispatch_passed()
 
 @pytest.mark.parametrize("dispatched", [False, None])
 def test_the_same_head_does_not_merge_on_the_ci_without_a_dispatched_verdict(dispatched):
-    assert rules.auto_merge_decision(_facts(ci_dispatched=dispatched)) == MergeDecision(
-        "run_checks", None
-    )
+    assert rules.auto_merge_decision(
+        _facts(ci_dispatched=dispatched, ci_dispatch_declared=True)
+    ) == MergeDecision("ci_run", None)
 
 
 def test_a_dispatched_verdict_never_lifts_a_stale_or_red_ci():
-    stale = _facts(ci_dispatched=True, ci_fresh=False)
-    assert rules.auto_merge_decision(stale) == MergeDecision("run_checks", None)
+    stale = _facts(ci_dispatched=True, ci_fresh=False, ci_dispatch_declared=True)
+    assert rules.auto_merge_decision(stale) == MergeDecision("ci_run", None)
     red = _facts(ci_dispatched=True, ci_verdict=CiVerdict("red", (), ()))
     assert rules.auto_merge_decision(red) == MergeDecision("refuse", "ci_failed")
