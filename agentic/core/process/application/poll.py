@@ -799,6 +799,7 @@ def gather_merges(
     cfg: Configuration | None = None,
     reruns: list[int] | None = None,
     backed_off: list[int] | None = None,
+    backoff_ends: dict[int, datetime] | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -825,7 +826,9 @@ def gather_merges(
     is closed in its document when git says every unit landed, or its issue goes into
     `reruns` (when given) when work is left; each says so in one line (GH-334). A candidate
     whose `merge_refusal` still holds on its head and master (`exempt_queue.backed_off`, GH-500)
-    goes into `backed_off` (when given) instead of the result: `rules.poll_plan` defers it."""
+    goes into `backed_off` (when given) instead of the result: `rules.poll_plan` defers it. Its
+    backoff's end, for any candidate of that pair, goes into `backoff_ends` (when given): the
+    starvation clock starts there (`exempt_queue.backoff_ends`)."""
     out = lines if lines is not None else []
     now = now or datetime.now(UTC)
     if current_master is None:
@@ -914,8 +917,12 @@ def gather_merges(
                     lands.append(rules.LandCandidate(number, landing_rules.run_kind_of(None, None)))
         else:
             head = pull_request.head_oid if pull_request is not None else None
+            refusal = raw.get("merge_refusal")
+            ends = exempt_queue.backoff_ends(refusal, head, current_master)
+            if backoff_ends is not None and ends is not None:
+                backoff_ends[number] = ends
             if backed_off is not None and exempt_queue.backed_off(
-                raw.get("merge_refusal"), head, current_master, now
+                refusal, head, current_master, now
             ):
                 backed_off.append(number)
             else:
@@ -1966,18 +1973,23 @@ def _starvation_lines(
     records: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt],
     now: datetime,
     holder: Callable[[], str],
+    backoff_ends: Mapping[int, datetime] | None = None,
 ) -> list[str]:
     """One line per candidate that waited `exempt_busy` (a live child, a yield, or the child
     started this round) for longer than `exempt_queue.EXEMPT_STARVED_AFTER` since its last
     attempt or first sighting and was not reported yet; the record is then marked, so it is said
-    once. Backoff rounds are `backoff`, never `exempt_busy`, so they do not count. Closed fields
-    only, never a metric (GH-500)."""
+    once. Backoff rounds are `backoff`, never `exempt_busy`, so they do not count: a merge whose
+    refusal backoff ran out waits from that instant (`backoff_ends`), not from its last attempt.
+    Closed fields only, never a metric (GH-500)."""
     found: list[str] = []
     for deferred in plan.deferred:
         if deferred.kind == "orphan" or deferred.reason != "exempt_busy":
             continue
         record = records.get((deferred.issue, deferred.kind))
         since = (record.last_attempt or record.first_seen) if record else None
+        ended = (backoff_ends or {}).get(deferred.issue) if deferred.kind == "merge" else None
+        if since is not None and ended is not None:
+            since = max(since, ended)
         if record is None or since is None or record.starved_reported:
             continue
         if now - since < exempt_queue.EXEMPT_STARVED_AFTER:
@@ -2098,6 +2110,7 @@ def run_once(
         )
         merges: list[int] = []
         backed_off_merges: list[int] = []
+        backoff_ends: dict[int, datetime] = {}
         merge_lines: list[str] = []
         lands: list[rules.LandCandidate] = []
         reruns: list[int] = []
@@ -2115,6 +2128,7 @@ def run_once(
                 cfg,
                 reruns,
                 backed_off_merges,
+                backoff_ends,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())
@@ -2254,6 +2268,7 @@ def run_once(
                 if starting
                 else None,
             ),
+            backoff_ends,
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.

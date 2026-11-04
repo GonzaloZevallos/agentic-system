@@ -27,6 +27,7 @@ from tests.core.process.application.test_poll import (
     _seed_body,
 )
 from tests.core.process.application.test_poll_merge import (
+    HEAD,
     MASTER,
     _HeldLocks,
     _merge_argv,
@@ -550,4 +551,35 @@ def test_a_merge_yielding_to_another_product_is_reported_naming_that_product(tmp
     assert _starved(lines) == [
         f"agentic: poll: merge #5 starved: {int(late.total_seconds() // 60)} min behind "
         "yielding to product a"
+    ]
+
+
+def test_the_time_a_merge_spent_in_backoff_does_not_count_toward_starvation(tmp_path):
+    """GH-500 finding: a `ci_untrusted_no_dispatch` backoff outlasts `EXEMPT_STARVED_AFTER`, so
+    the first `exempt_busy` round after it ended reported the merge as starved at once."""
+    cfg, ports, registry = _cfg(tmp_path), _ports(5), MemoryRunRegistry()
+    registry.entries.append(_child("merge", "GH-9", product="other", pid=7))
+    registry.record_exempt_attempt("product", 5, "merge", T0)
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "merge_refusal": {
+                "reason": "ci_untrusted_no_dispatch",
+                "head": HEAD,
+                "master": MASTER,
+                "at": T0.isoformat(),
+            }
+        },
+    )
+    ends = int(exempt_queue.EXEMPT_REFUSAL_BACKOFF.total_seconds() // 60)
+    after = int(exempt_queue.EXEMPT_STARVED_AFTER.total_seconds() // 60)
+
+    inside = _round(cfg, ports, registry, FakeLauncher(), _at(ends - 1))
+    just_out = _round(cfg, ports, registry, FakeLauncher(), _at(ends + 1))
+    waited = _round(cfg, ports, registry, FakeLauncher(), _at(ends + after + 1))
+
+    assert _starved(inside) == [] and _starved(just_out) == []
+    assert _starved(waited) == [
+        f"agentic: poll: merge #5 starved: {after + 1} min behind "
+        "product other task GH-9 kind merge"
     ]

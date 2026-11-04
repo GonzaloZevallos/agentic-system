@@ -169,3 +169,14 @@ def test_a_record_with_no_facts_is_never_stale_whatever_this_round_lists():
 def test_both_kinds_of_one_issue_go_together_when_the_task_is_closed():
     facts = {("p", 1): eq.ExemptFacts(closed=True, pull_request="u", pr_state="OPEN")}
     assert eq.stale_keys([_key(1), _key(1, "land")], facts) == [_key(1, "land"), _key(1)]
+
+
+def test_the_backoff_ends_at_the_refusal_plus_the_backoff_for_the_same_pair_only():
+    written = NOW - timedelta(minutes=5)
+    assert eq.backoff_ends(_refusal(), HEAD, MASTER) == written + eq.EXEMPT_REFUSAL_BACKOFF
+    # a refusal for another pair, or a malformed one, has no end to wait for
+    assert eq.backoff_ends(_refusal(), OTHER, MASTER) is None
+    assert eq.backoff_ends(_refusal(), HEAD, OTHER) is None
+    assert eq.backoff_ends(_refusal(reason="master_moved"), HEAD, MASTER) is None
+    assert eq.backoff_ends(_refusal(at="yesterday"), HEAD, MASTER) is None
+    assert eq.backoff_ends(None, HEAD, MASTER) is None

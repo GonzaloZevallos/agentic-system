@@ -145,6 +145,33 @@ def behind(own: ExemptRank | None, others: Sequence[ExemptWait]) -> bool:
     return any((w.since, w.root_key) < (own.since, own.root_key) for w in others)
 
 
+def _written_at(
+    refusal: Mapping[str, object] | None, head: str | None, master: str | None
+) -> datetime | None:
+    """When a well formed `{reason, head, master, at}` refusal of a reason in `BACKOFF_REASONS`
+    was written, if both its shas name the commits asked about under `rules.same_commit`;
+    otherwise None: a refusal is never read for another pair."""
+    if not isinstance(refusal, Mapping):
+        return None
+    reason, recorded_head = refusal.get("reason"), refusal.get("head")
+    recorded_master, at = refusal.get("master"), refusal.get("at")
+    if reason not in BACKOFF_REASONS:
+        return None
+    if not (isinstance(recorded_head, str) and isinstance(recorded_master, str)):
+        return None
+    if not isinstance(at, str):
+        return None
+    try:
+        written = datetime.fromisoformat(at)
+    except ValueError:
+        return None
+    if written.tzinfo is None:
+        return None
+    if not (rules.same_commit(recorded_head, head) and rules.same_commit(recorded_master, master)):
+        return None
+    return written
+
+
 def backed_off(
     refusal: Mapping[str, object] | None,
     head: str | None,
@@ -156,25 +183,20 @@ def backed_off(
     asked about under `rules.same_commit`, and less than `EXEMPT_REFUSAL_BACKOFF` has passed
     since `at`. A missing or malformed record, a moved head or master, an expired backoff or
     an `at` in the future releases it: a refusal is never read for another pair."""
-    if not isinstance(refusal, Mapping):
-        return False
-    reason, recorded_head = refusal.get("reason"), refusal.get("head")
-    recorded_master, at = refusal.get("master"), refusal.get("at")
-    if reason not in BACKOFF_REASONS:
-        return False
-    if not (isinstance(recorded_head, str) and isinstance(recorded_master, str)):
-        return False
-    if not isinstance(at, str):
-        return False
-    try:
-        written = datetime.fromisoformat(at)
-    except ValueError:
-        return False
-    if written.tzinfo is None:
-        return False
-    if not (rules.same_commit(recorded_head, head) and rules.same_commit(recorded_master, master)):
+    written = _written_at(refusal, head, master)
+    if written is None:
         return False
     return timedelta(0) <= now - written < EXEMPT_REFUSAL_BACKOFF
+
+
+def backoff_ends(
+    refusal: Mapping[str, object] | None, head: str | None, master: str | None
+) -> datetime | None:
+    """The instant the backoff of `refusal` runs out on this head and master, or None when it
+    holds nothing for this pair. The starvation clock starts there: the rounds a merge spent in
+    backoff are `backoff`, not `exempt_busy`, and must not count as waiting for the slot."""
+    written = _written_at(refusal, head, master)
+    return None if written is None else written + EXEMPT_REFUSAL_BACKOFF
 
 
 def stale_keys(
