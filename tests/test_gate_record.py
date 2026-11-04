@@ -12,7 +12,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application.develop import develop
-from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.domain import document, presubmit
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_delivery_tier import TASK, building
@@ -24,6 +23,7 @@ from tests.fakes import (
     MemoryStack,
     ScriptedRunner,
     delivered,
+    full_checks_in_task_checkout,
     memory_ports,
 )
 
@@ -213,7 +213,7 @@ async def test_the_full_checks_record_carries_its_gate(cfg):
         stack=MemoryStack(checks={"tests": "pytest"}),
         check_scheduler=FakeCheckScheduler(share=9, overdue=True, wait_s=3.0),
     )
-    patch = await full_checks(state_of(), cfg, ports)
+    patch = await full_checks_in_task_checkout(state_of(), cfg, ports)
     gate = patch["full_checks"]["gate"]
     assert (gate["share"], gate["wait_s"], gate["priority"], gate["overdue"]) == (
         9,

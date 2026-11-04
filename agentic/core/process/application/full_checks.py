@@ -5,8 +5,9 @@ is where the rest of `checks` runs, with no affected form substituted, before th
 opens (`rules.after_integrate` sends the task here once every unit is approved). No role runs
 and nothing is paid: it is the system running the product's own commands.
 
-In order: the task checkout (a setup that fails escalates as `deliver`'s does), a clean tree
-required, every declared check run once through the same `CheckoutPresubmit` the merge gate
+In order: the task checkout and the clean tree it requires, both made once by
+`verifiers.verify` (GH-469) and handed in (a setup that fails escalates as `deliver`'s does),
+every declared check run once through the same `CheckoutPresubmit` the merge gate
 uses, the tree put back as its head holds it whatever the checks did (`restore_clean`, never
 `-x`), the record and the `Full checks` section written. A red run reopens the integration
 with one row per failed check (`rules.full_checks_return`); a green one writes a passed record
@@ -56,7 +57,7 @@ from ..domain.task import (
     FullChecksRecord,
     TaskState,
 )
-from .checkouts import Checkout, SetupFailed, task_base, task_checkout_in_thread
+from .checkouts import Checkout, task_base
 from .ports import GitError, Ports
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .run_role import finish
@@ -158,22 +159,14 @@ async def full_checks(
     sleep: Sleep = anyio.sleep,
     clock: Clock = time.monotonic,
     now: Now = _utc_now,
-    checkout: Checkout | None = None,
+    checkout: Checkout,
 ) -> TaskState:
     """`sleep` and `clock` are the CI wait's, injectable so a test does not wait; `now` is the
     wall clock `speculation.event_lost` measures the speculative push against. A `checkout`
-    handed in (the verifier set resolves the task's once, GH-469) is used as is: no resolution
-    and no clean check here, the caller made both."""
+    handed in (the verifier set resolves the task's once, GH-469): no resolution and no clean
+    check here, `verifiers.verify` made both."""
     workspace = ports.workspace
-    if checkout is None:
-        try:
-            task = await task_checkout_in_thread(state, cfg, ports)
-        except SetupFailed as unprepared:
-            return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
-        if not workspace.is_clean(task.path):
-            return finish(state, dirty_patch(task.branch), ports)
-    else:
-        task = checkout
+    task = checkout
     base = task_base(state, ports)
     names = ports.stack.ci(base)
     if not names:

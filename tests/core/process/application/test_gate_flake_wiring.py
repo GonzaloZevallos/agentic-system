@@ -17,6 +17,7 @@ from tests.fakes import (
     MemoryStack,
     ScriptedRunner,
     delivered,
+    full_checks_in_task_checkout,
     memory_ports,
 )
 
@@ -139,9 +140,8 @@ async def test_a_flake_in_full_checks_passes_and_is_recorded(cfg):
     from tests.core.process.application.test_full_checks import CFG, ports_of, state_of
 
     ports = ports_of(MemoryCommands(pytest=[RED, GREEN]), rerun_checks={"tests": FORM})
-    from agentic.core.process.application.full_checks import full_checks
 
-    patch = await full_checks(state_of(), CFG, ports)
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports)
     assert patch["full_checks"]["passed"] is True
     # Invariant 2: the record and the section say flake, never plain passed.
     [entry] = [e for e in patch["full_checks"]["results"] if e["name"] == "tests"]
@@ -155,10 +155,9 @@ async def test_a_flake_in_full_checks_passes_and_is_recorded(cfg):
 
 
 async def test_a_green_full_checks_carries_no_flakes(cfg):
-    from agentic.core.process.application.full_checks import full_checks
     from tests.core.process.application.test_full_checks import CFG, ports_of, state_of
 
-    patch = await full_checks(state_of(), CFG, ports_of())
+    patch = await full_checks_in_task_checkout(state_of(), CFG, ports_of())
     assert "flakes" not in patch
 
 
@@ -167,7 +166,6 @@ async def test_a_first_run_that_stopped_early_passes_in_the_form_at_delivery_but
 ):
     """The form reruns one failed id and passes; the suite behind the early stop is red, and
     only `full_checks` runs it all: it reruns the full command and refuses."""
-    from agentic.core.process.application.full_checks import full_checks
     from tests.core.process.application.test_full_checks import CFG, ports_of, state_of
 
     one_id = CommandResult(1, "FAILED tests/a.py::one\n")
@@ -179,7 +177,9 @@ async def test_a_first_run_that_stopped_early_passes_in_the_form_at_delivery_but
     )
     assert [f["tests"] for f in patch["flakes"]] == [["tests/a.py::one"]]
     red_suite = MemoryCommands(pytest=[CommandResult(1, "FAILED tests/z.py::late\n")] * 2)
-    full = await full_checks(state_of(), CFG, ports_of(red_suite, rerun_checks={"tests": FORM}))
+    full = await full_checks_in_task_checkout(
+        state_of(), CFG, ports_of(red_suite, rerun_checks={"tests": FORM})
+    )
     assert full["full_checks"]["passed"] is False
     assert "pytest --lf" not in [c for _, c in red_suite.ran]
 

@@ -2701,3 +2701,12 @@ class BadGatewayComments(MemoryTracker):
 
     def note(self, task_id: str, text: str) -> TrackerFailure | None:
         return self._gh.note(task_id, text)
+
+
+async def full_checks_in_task_checkout(state, cfg, ports, **more):
+    """`full_checks` on the task checkout the way `verifiers.verify` hands it in (GH-469): the
+    checkout is resolved here, with the product's setup, and the use case only judges it."""
+    from agentic.core.process.application.checkouts import task_checkout
+    from agentic.core.process.application.full_checks import full_checks
+
+    return await full_checks(state, cfg, ports, checkout=task_checkout(state, cfg, ports), **more)

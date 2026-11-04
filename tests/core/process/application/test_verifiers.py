@@ -9,7 +9,7 @@ from typing import Any
 import anyio
 import pytest
 
-from agentic.core.process.application.ports import Checkout
+from agentic.core.process.application.ports import Checkout, CommandResult, RunStopped
 from agentic.core.process.application.verifiers import verify
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, apply
@@ -248,6 +248,35 @@ async def test_a_dirty_tree_returns_the_suite_dirty_patch_and_starts_nothing():
     fakes = Fakes(approving())
     patch = await verify(state_of(), CFG, ports_of(workspace=workspace), fakes.run)
     assert fakes.calls == [] and patch["escalation_class"] == "setup"
+
+
+async def test_a_setup_that_fails_on_a_new_checkout_escalates_and_starts_nothing():
+    commands = MemoryCommands(**{"make env": [CommandResult(1, "no env")]})
+    stack = MemoryStack(
+        checks={"tests": "pytest"}, delivery_checks=("tests",), setup={"env": "make env"}
+    )
+    ports = memory_ports(stack=stack, commands=commands, workspace=Workspace())
+    fakes = Fakes(approving())
+    patch = await verify(state_of(), CFG, ports, fakes.run)
+    assert fakes.calls == [] and patch["escalation_class"] == "setup"
+    assert [command for _, command in commands.ran] == ["make env"]
+
+
+async def test_a_stop_during_setup_discards_the_checkout_and_is_not_a_setup_failure():
+    class Stopped(MemoryCommands):
+        def run(self, cwd, command, timeout_s, *, env=None):
+            raise RunStopped
+
+    workspace = Workspace()
+    stack = MemoryStack(
+        checks={"tests": "pytest"}, delivery_checks=("tests",), setup={"env": "make env"}
+    )
+    ports = memory_ports(stack=stack, commands=Stopped(), workspace=workspace)
+    fakes = Fakes(approving())
+    with pytest.raises(RunStopped):
+        await verify(state_of(), CFG, ports, fakes.run)
+    assert fakes.calls == []
+    assert workspace.discarded == [MemoryWorkspace.ROOT / "GH-1"]
 
 
 # --- full_checks first or with the others -----------------------------------------------------

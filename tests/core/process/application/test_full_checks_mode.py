@@ -135,11 +135,3 @@ async def test_a_checkout_handed_in_is_not_resolved_again_nor_checked_clean():
     assert patch["full_checks"]["passed"] is True
     assert ports.workspace.checkouts_made == []
     assert "escalated" not in patch
-
-
-async def test_without_a_checkout_the_node_resolves_one_and_refuses_a_dirty_tree_as_today():
-    ports = ports_of(tracker=Tracker())
-    ports.workspace.uncommitted.add(CHECKOUT.path)
-    patch = await full_checks(state_of(None), CFG, ports)
-    assert ports.workspace.checkouts_made == ["agentic/GH-1"]
-    assert patch["escalation_class"] == "setup"
