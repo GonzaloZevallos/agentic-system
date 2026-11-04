@@ -1098,3 +1098,23 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-04T04:16:32.166+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, take each plan invariant and grep your diff for every way it could break, including legacy data missing a new field and decisions made outside the module that owns the rule.
+  confidence: medium
+  seen_in:
+  - GH-466
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T07:23:17.187+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a contract between components (argv, comment prefixes, tracker writes), grep the hand-written docs for the old shape and update them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-466
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T07:23:17.187+00:00'
