@@ -41,7 +41,15 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
-      # Only pure tests. The `llm` ones need the subscription, which CI does not have.
-      - run: uv run pytest -m "not llm"
+      # Only pure tests. The `llm` ones need the subscription, which CI does not have. A red run
+      # reruns just the failed tests once; the step's exit is that rerun's, and `ci_flakes.py`
+      # only prints the `agentic-flakes:` block (GH-464): its failure drops the block, nothing else.
+      - run: |
+          uv run pytest -m "not llm" -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/first.xml" || {
+            rc=0
+            uv run pytest -m "not llm" --last-failed --last-failed-no-failures none -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/second.xml" || rc=$?
+            uv run python scripts/ci_flakes.py --check tests "$RUNNER_TEMP/first.xml" "$RUNNER_TEMP/second.xml" || echo "ci_flakes: no block"
+            exit $rc
+          }
       # The generated docs are current: the same command the delivery gate runs (ADR-0074).
       - run: uv run python scripts/docs/check.py
