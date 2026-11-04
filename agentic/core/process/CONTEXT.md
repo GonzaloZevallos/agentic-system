@@ -290,7 +290,7 @@ _Avoid_: corrida local especulativa (no existe: sólo corre GitHub), caché de C
 
 **Chequeo exigido por el plan**:
 Un nombre de chequeo del CI que los criterios de hecho del issue necesitan en verde sobre la cabeza del pull request. Lo declara el plan (`ci_required`) y es distinto del `ci` del stack. Es condición necesaria de un merge, nunca suficiente: un CI verde que cubre sólo chequeos exigidos por el plan no decide el merge, lo deciden los chequeos locales (ADR-0045, adenda GH-371).
-En el código se llama `ci_required`, `ci_plan_only` y `ci_gate_names`. El nombre es el de una corrida de chequeo del CI, nunca el id de un job de matriz: `pytest (areas-1, tests/…)` no se pide como `pytest` (GH-485).
+En el código se llama `ci_required`, `ci_plan_only` y `ci_gate_names`. El nombre es el de una corrida de chequeo del CI, nunca el id de un job de matriz: `pytest (areas-1, tests/…)` no se pide como `pytest` (GH-485). Ya al escribir el plan, `plan_check_for` rechaza un nombre que los workflows de la base de la tarea prueban que no es de una corrida (el id de un job con `strategy.matrix`, o de un job con otro `name:` literal), salvo que la tarea toque ese workflow; lo lee el módulo puro `domain/ci_workflow.py` (`check_run_names`) y la razón nombra el job y los candidatos (los jobs que lo `needs:` y el `ci` del stack). Todo lo indecidible (`uses:`, un `name:` con `${{`, YAML ilegible) pasa y queda al chequeo en tiempo de ejecución.
 _Avoid_: chequeo declarado (eso es el `ci` del stack), criterio de CI
 
 **Nombre de chequeo sin corrida**:

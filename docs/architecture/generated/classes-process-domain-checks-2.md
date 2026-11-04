@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
+    class ci_workflow__WrongId["WrongId"]
     class coverage__Entry["Entry"]
     class coverage__Parsed["Parsed"]
     class coverage__Refusal["Refusal"]
