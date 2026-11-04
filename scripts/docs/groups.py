@@ -38,6 +38,7 @@ PHASES: Mapping[str, tuple[str, ...]] = {
     "deliver": (
         "__end__",
         "deliver",
+        "evaluated",
     ),
     "plan": (
         "plan",
@@ -85,6 +86,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.diagnose": "definition",
     "application.discard": "definition",
     "application.escalate": "build",
+    "application.evaluated": "build",
     "application.final_validation": "definition",
     "application.full_checks": "checks",
     "application.integrate": "build",

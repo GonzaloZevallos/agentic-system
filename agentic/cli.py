@@ -756,6 +756,10 @@ def main() -> None:
         stop: StopCause | None = None
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
+            if evaluation.is_evaluation_root(cfg.product_dir):
+                raise CannotStart(f"{task_id}: an evaluation run is never resumed")
+            if (reason := evaluation.wiring_refusal(cfg.product_dir, task_id)) is not None:
+                raise CannotStart(reason)
             ports = bind_task(ports, task_id)
             base = declared_stack_of(task_id, ports)
             if (warning := no_forbidden(ports, base)) is not None:
@@ -881,6 +885,8 @@ def main() -> None:
                     "title": args.title,
                     "description": args.description,
                 }
+            if (reason := evaluation.wiring_refusal(cfg.product_dir, task["id"])) is not None:
+                raise CannotStart(reason)
             # A task that already has a branch is measured against its own base, which
             # may predate the day this product declared a stack: HEAD alone would let it
             # through and it would die inside a node, where nothing escalates. A task

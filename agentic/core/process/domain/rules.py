@@ -585,12 +585,14 @@ def invariants_markdown(state: TaskState) -> str:
     return "\n".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) or "- none"
 
 
-def finished(status: Literal["discarded", "split", "tracker_only"], at: str) -> FinishedPatch:
+def finished(
+    status: Literal["discarded", "split", "tracker_only", "evaluated"], at: str
+) -> FinishedPatch:
     """The patch that ends a task with no delivery: its `status` and `finished_at`, the
     clock the Reflector's decision gate reads (ADR-0056). The only place the key is set."""
-    if status not in ("discarded", "split", "tracker_only"):
+    if status not in ("discarded", "split", "tracker_only", "evaluated"):
         raise ValueError(
-            f"finished_at is for discarded, split and tracker_only tasks, not {status}"
+            f"finished_at is for discarded, split, tracker_only and evaluated tasks, not {status}"
         )
     return {"status": status, "finished_at": at}
 
@@ -2176,7 +2178,7 @@ def phase_of(section: str) -> str:
     return "definition"
 
 
-CLOSENESS: tuple[str, ...] = ("launch", *PHASES, "delivered", "land")
+CLOSENESS: tuple[str, ...] = ("launch", *PHASES, "delivered", "evaluated", "land")
 """How close to merge a counted start is, nearest last (ADR-0045 addendum, GH-362; glossary:
 Cercanía): a fresh launch, then each phase in `PHASES` order, then a task with a pull request,
 then a land. The phases are never listed again, so one appended to `PHASES` is ranked by it."""
@@ -2186,6 +2188,8 @@ def closeness(state: TaskState) -> int:
     """The task's rank in `CLOSENESS`. A pull request makes it `delivered`; otherwise it is the
     furthest phase any run reached (not the last: a return to plan after development stays
     development); a task with no runs is in the first phase."""
+    if state.get("status") == "evaluated":
+        return CLOSENESS.index("evaluated")  # an evaluation's end: it has no pull request
     if state.get("pull_request"):
         return CLOSENESS.index("delivered")
     reached = (
@@ -2476,7 +2480,10 @@ def after_integrate(state: TaskState) -> str | None:
         return "copy_review"
     if final_validation_due(state):
         return "final_validation"
-    return "qa_performance" if qa_performance_due(state) else "deliver"
+    if qa_performance_due(state):
+        return "qa_performance"
+    # An evaluation run ends here, not at `deliver`: nothing is pushed or opened for it.
+    return "evaluated" if state.get("evaluation") else "deliver"
 
 
 def after_owner_rules(state: TaskState) -> str | None:
@@ -2669,7 +2676,7 @@ def run_ended(status: Status) -> bool:
     twice would otherwise leave two samples of its accumulated total. `"crashed"` is
     not a `Status`: the CLI fabricates it only for its own telemetry when a process
     dies mid-run, so it cannot appear in this predicate's own type."""
-    return status in ("ready_for_review", "discarded", "split", "tracker_only")
+    return status in ("ready_for_review", "discarded", "split", "tracker_only", "evaluated")
 
 
 # Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
@@ -3692,6 +3699,7 @@ _NOT_INTERRUPTED_STATUSES = (
     "discarded",
     "split",
     "tracker_only",
+    "evaluated",
     "waiting_on_human",
 )
 
