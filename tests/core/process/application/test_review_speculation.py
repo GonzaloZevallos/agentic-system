@@ -10,7 +10,7 @@ import pytest
 
 from agentic.core.process.application.ports import GitError
 from agentic.core.process.application.review import review
-from agentic.core.process.domain.ci_push import PUSH_BACKOFF_S, scrub
+from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_BACKOFF_S, scrub
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryStack, MemoryWorkspace, ScriptedRunner, memory_ports, reviewed
 
@@ -237,7 +237,7 @@ async def test_a_permanent_refusal_is_tried_once_leaves_no_record_and_logs_what_
 async def test_a_transient_failure_that_never_heals_is_logged_after_every_attempt(capsys):
     ports = ports_of(reviewed("approved"), workspace=Scripted(always=TRANSIENT))
     patch = await run(state_of(), ports)
-    assert len(ports.workspace.ci_ref_calls) == 3
+    assert len(ports.workspace.ci_ref_calls) == PUSH_ATTEMPTS
     assert "ci_speculation" not in patch
     err = capsys.readouterr().err
-    assert f"after 3 attempt(s) (transient): {scrub(TRANSIENT)}" in err
+    assert f"after {PUSH_ATTEMPTS} attempt(s) (transient): {scrub(TRANSIENT)}" in err
