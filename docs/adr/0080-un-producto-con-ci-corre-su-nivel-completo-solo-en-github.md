@@ -130,3 +130,40 @@ hasta `CI_STALE_PAIRS_MAX` pares y luego sincroniza.
 **Hecho abierto.** Si `actions/checkout` puede traer un sha alcanzable sólo desde una ref que no es
 rama es algo que sólo GitHub produce. Si no puede, el resultado es `ci_no_verdict`, nunca un push de
 la cabeza no confiable a `refs/heads/`.
+
+## Adenda GH-465: el empuje especulativo
+
+Ninguna regla de arriba cambia: ningún chequeo se saltea y el veredicto sigue siendo el de
+`ci.full_tier_verdict` sobre el sha. Cambia cuándo arranca el CI.
+
+- **Quién empuja.** La revisión de la unidad final (`integration`, o la subtarea única) publica su
+  cabeza en `agentic-ci/<id>` antes de lanzar al Tech Lead, cuando `speculation.push_due` lo dice:
+  el producto declara `ci:` y `delivery_checks`, la cabeza es confiable (`ci_untrusted` es `False`),
+  no hay pull request ni escalado, y no hay un `full_checks` pasado sobre esa cabeza. Un producto con
+  `ci_dispatch` especula igual cuando su cabeza es confiable. Un `GitError` al empujar no falla ni
+  reintenta la revisión: no se escribe registro.
+- **Qué guarda el estado.** `ci_speculation: {head, pushed_at}`, el hecho del push y nunca un
+  veredicto. Sólo lo escribe esa revisión: la aprobación con un sha de 40 hex, la devolución con
+  `None`, que descarta la corrida. `full_checks`, `deliver` y el aterrizaje no lo tocan.
+- **Reutilizar sólo por el mismo sha, no por árbol.** El CI juzga un commit; una corrida de GitHub no
+  tiene la firma ni la huella de entorno de ADR-0065. Reutilizar por árbol obligaría a cambiar
+  `full_checks_due` y `approved_head` y a que el registro lleve dos shas. Un árbol igual con otro sha
+  corre como hoy. Un commit propio posterior a la revisión (`owner_rules`, `fix_important`,
+  `close_docs`) mueve el sha y la tarea cae al camino de siempre.
+- **Consumo.** Con `speculation.consumable`, `full_checks` no publica: lee la ref una vez y espera.
+  Si `speculation.event_lost` dice que GitHub nunca arrancó una corrida (ninguna visible pasado el
+  período de gracia desde `pushed_at`), republica de inmediato. Si la espera sobre la corrida
+  especulada termina en `no_run` o `not_started` (cancelada o ausente, por ejemplo porque un push
+  más nuevo la pisó), no es un veredicto ni un escalado: republica y espera como hoy, y sólo esa
+  segunda espera puede escalar con clase `ci`. El registro gana `speculative: true`; `ran_on` sigue
+  siendo `ci`.
+- **Costo.** A lo sumo un push por pase de la unidad final antes del pull request: 1 + el máximo de
+  devoluciones por par (`max_changes_requested_per_pair`) por cada decisión humana que reinicia el
+  par, más uno por el `pre_pr_fix`. Este repo no cancela corridas viejas (`cancel-in-progress`), así
+  que cada pase devuelto paga una corrida completa de CI. Agregarlo al `ci.yml` queda como
+  seguimiento `outside`: tocar `.github/` en esta tarea volvería no confiable su propia cabeza.
+- **Fuera de alcance.** El rojo especulativo no llega al Tech Lead como evidencia: lo recoge
+  `full_checks` con sus filas por chequeo.
+- **Medir los aciertos** (sobre los documentos de tarea, sin span ni etiqueta nuevos): acierto es
+  `ci_speculation.head == full_checks.head` y `full_checks.speculative`; empuje perdido es
+  `ci_speculation` presente con otro `full_checks.head`.

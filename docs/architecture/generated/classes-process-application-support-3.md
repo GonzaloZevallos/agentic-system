@@ -15,7 +15,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
     class ports__ListedPullRequest["ListedPullRequest"]
     class ports__LoadReader["LoadReader"]
@@ -28,8 +27,12 @@ classDiagram
     class ports__Ports["Ports"]
     class ports__Presubmit["Presubmit"]
     class ports__ProcessReaper["ProcessReaper"]
+    class ports__ProductKnowledge["ProductKnowledge"]
+    class ports__ProductStack["ProductStack"]
     ports__LockHeld o-- ports__LockRecord
     ports__Ports --> ports__ProcessReaper
+    ports__Ports --> ports__ProductKnowledge
+    ports__Ports --> ports__ProductStack
 ```
 
 ## Relaciones con otras páginas
@@ -47,13 +50,10 @@ classDiagram
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 4)](classes-process-application-support-4.md)
-  - `ports.Ports` se asocia con `ports.ProductKnowledge`
-  - `ports.Ports` se asocia con `ports.ProductStack`
   - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
-- [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.Ports` se asocia con `ports.Workspace`

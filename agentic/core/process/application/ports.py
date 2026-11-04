@@ -1595,6 +1595,12 @@ class LockRecord:
     # The system version a run recorded when it raised under the graph
     # (`RunLock.keep_crashed`); `None` for a record with no such mark.
     crashed_version: str | None = None
+    # The holder's start time as the kernel counts it (`/proc/<pid>/stat`, field 22), so a
+    # later process that reuses the pid is told apart; `None` for a record older than it.
+    starttime: str | None = None
+    # A human, a signal outside a shutdown or `agentic stop` ended this run on purpose: the
+    # poller never retakes it (`RunLock.keep_stopped`).
+    stopped_deliberately: bool = False
 
 
 class LockHeld(Exception):
@@ -1659,6 +1665,41 @@ class RunLock(Protocol):
         pid. Exclusive with `release` and `keep_at_shutdown`: a run calls one of the three."""
         ...
 
+    def keep_stopped(self, task_id: str, pid: int) -> None:
+        """Mark the record as a deliberate stop, only if it still names `pid`: rewrite it
+        with `stopped_deliberately` set and keep everything else it holds (pid, host, boot
+        id, starttime, start time, command). A run calls it on itself instead of `release`
+        when a signal that is not a shutdown stopped it; `agentic stop` calls it with the
+        pid of the run it is about to signal, before the signal. A no-op when there is no
+        record or it names another pid (a takeover is never undone)."""
+        ...
+
+    def mark_stopped_recordless(self, task_id: str) -> None:
+        """`agentic stop` found no record: write one with `stopped_deliberately` and the
+        identity (pid, host, boot id, starttime) of the calling process, which is gone as
+        soon as the command ends. Leaves an existing record alone."""
+        ...
+
+
+class RunProcess(Protocol):
+    """The process a lock record names, as `agentic stop` reaches it. Never a bare pid: every
+    call takes the whole `LockRecord`, and a process that is not the one the record names
+    (another host, another boot, a different start time) is neither found nor signalled."""
+
+    def holds(self, record: LockRecord) -> bool:
+        """Is the process the record names still running: same host, same boot, the pid
+        alive, and the start time the record holds (when it holds one) unchanged."""
+        ...
+
+    def terminate(self, record: LockRecord) -> None:
+        """SIGTERM to the process the record names, only after the same check `holds`
+        makes. Silent when it is gone or is not that process."""
+        ...
+
+    def kill(self, record: LockRecord) -> None:
+        """SIGKILL, with the same guard as `terminate`."""
+        ...
+
 
 @dataclass(frozen=True)
 class RunRegistration:
@@ -1684,6 +1725,10 @@ class LaunchAttempt:
 
     since: datetime
     prior: int
+    # The arm the poller assigned this launch (GH-470): kept across every rewrite of the
+    # record, so a relaunch of the same issue keeps it and it counts until a document
+    # exists. `None` for a launch with no experiment, which is every launch of today.
+    arm: str | None = None
 
 
 class CheckResults(Protocol):
@@ -1739,9 +1784,13 @@ class RunRegistry(Protocol):
         issue has never been attempted, or its attempt already cleared."""
         ...
 
-    def record_launch(self, product: str, issue: int, when: datetime) -> None:
+    def record_launch(
+        self, product: str, issue: int, when: datetime, arm: str | None = None
+    ) -> None:
         """Note one more launch attempt of `issue`, timestamped `when` (the poller's own
-        clock, never read here): `prior` grows by one, `since` becomes `when`."""
+        clock, never read here): `prior` grows by one, `since` becomes `when`. `arm` (GH-470)
+        is the arm assigned to this launch; `None` keeps the one the record already has, and a
+        record that never had one stays `{since, prior}` exactly."""
         ...
 
     def clear_launch(self, product: str, issue: int) -> None:
@@ -2072,6 +2121,17 @@ class CiLogs(Protocol):
         ...
 
 
+class ExperimentFile(Protocol):
+    """A product's experiment declaration as its owner wrote it (GH-470,
+    `.agentic/experiment.yaml`): the raw parsed YAML, validated by `domain.experiment`."""
+
+    def read(self) -> object | None:
+        """The parsed YAML, or `None` when the product declares no experiment (no file),
+        which is every product of today. Raises `ValueError`, in one line, when the file
+        cannot be read or is not YAML."""
+        ...
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -2115,3 +2175,6 @@ class Ports:
     # The machine's load average, which classifies a `not_ready` (GH-451). `None` reads no load,
     # so no exit is ever excused by one: a red stays red.
     load_reader: LoadReader | None = None
+    # The product's experiment declaration (GH-470). `None` declares none and reads nothing,
+    # which is how every round ran before it existed.
+    experiment: ExperimentFile | None = None

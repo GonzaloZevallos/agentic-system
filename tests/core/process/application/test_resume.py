@@ -6,7 +6,7 @@ import pytest
 
 from agentic.core.process.application import resume
 from agentic.core.process.application.plan import PART_BUILT_WHOLE
-from agentic.core.process.domain import document, legacy_names, roles, rules, schemas
+from agentic.core.process.domain import document, legacy_names, retakes, roles, rules, schemas
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -988,3 +988,46 @@ def test_a_resolved_pass_on_a_pull_request_task_still_has_nothing_left_to_run(cf
     ports = seeded(raw)
     with pytest.raises(ValueError, match="nothing left to run"):
         resume.prepare("GH-484", resume.from_document("GH-484", ports), "document", cfg, ports)
+
+
+def test_announcing_a_resume_the_poller_spawned_uses_its_own_prefix(cfg):
+    # GH-466: a human's `Resumed: ` resets the retake budget, so the poller's resume says it is
+    # the poller's; without the flag the bytes are as they always were.
+    ports = memory_ports()
+    r = resume.prepare("GH-12", paused(), "checkpoint", cfg, ports)
+    resume.announce(r, ports, by_poller=True)
+    [(_, text)] = ports.tracker.comments
+    assert text == f"Resumed by the poller: integrate, under a task cap of {r.cap_usd:.2f} USD."
+    assert text.startswith(retakes.RESUMED_BY_POLLER)
+
+
+def test_the_new_comment_prefixes_are_the_systems_and_none_hides_another():
+    prefixes = (retakes.RESUMED_BY_POLLER, retakes.RETAKES_SPENT, *retakes.RETAKE_PREFIXES)
+    assert all(p in resume.SYSTEM_COMMENTS for p in prefixes)
+    for one in (*prefixes, resume.RESUMED):
+        for other in (*prefixes, resume.RESUMED):
+            assert one == other or not one.startswith(other)
+
+
+def test_a_spent_budget_comment_is_not_read_as_the_humans_decision():
+    comments = ["Escalated: x", retakes.RETAKES_SPENT + "crashed, 3 of 3 retakes", "Go on."]
+    assert resume.human_decision(comments) == "Go on."
+    assert resume.human_decision([retakes.RETAKES_SPENT + "crashed"]) is None
+
+
+def test_resuming_an_interrupted_run_drops_needs_human_even_when_the_document_does_not_ask(cfg):
+    # GH-466: the spent-budget notice labels the issue of a run that is merely interrupted.
+    state = {**paused(cost_usd=1.0), "escalated": None, "status": "developing"}
+    ports = memory_ports()
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, ports, ("integrate",))
+    resume.announce(r, ports, by_poller=True)
+    assert ports.tracker.unlabeled == [("GH-12", "needs-human")]
+
+
+def test_resuming_an_orphan_from_its_document_drops_needs_human(cfg):
+    state = {**paused(cost_usd=1.0), "escalated": None, "status": "developing"}
+    ports = memory_ports()
+    r = resume.prepare("GH-12", state, "document", cfg, ports)
+    assert not r.interrupted
+    resume.announce(r, ports)
+    assert ports.tracker.unlabeled == [("GH-12", "needs-human")]

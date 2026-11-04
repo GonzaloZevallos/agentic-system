@@ -16,7 +16,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, merge_ci, presubmit
+from . import adr_numbers, ci, merge_ci, presubmit, retakes
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -3317,7 +3317,7 @@ EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "net
 # auto_resume_limit`'s own 1 or 6. Two calendars with the same values today, split so
 # a launch that never registered a run (not a 429) never follows a retake's calendar.
 LAUNCH_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
-RETAKE_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
+RETAKE_SCHEDULE: tuple[int, ...] = retakes.RETAKE_SCHEDULE
 
 # After a 429 the only thing that matters is how soon after the account's own reset the
 # next attempt lands, and an attempt the limit cuts again costs ~$0 (the 429 arrives on
@@ -3688,23 +3688,16 @@ class LockFacts:
     other_boot: bool | None
     alive: bool
     # The version the run recorded when it raised under the graph (`RunLock.keep_crashed`);
-    # `None` for a record with no crash mark, which reads exactly as before.
+    # `None` for a record with no crash mark.
     crashed_version: str | None = None
+    # The record says the run was stopped on purpose (a signal outside a shutdown, `agentic
+    # stop`): never retaken, whatever else the record says.
+    stopped_deliberately: bool = False
 
 
-RetakeVerdict = Literal["retake", "retake_crash", "human", "running", "none"]
-
-# How many times the poller retakes one task after a reboot before the run is the
-# human's. A judgement, not a measurement: a reboot is rare, so a run that keeps being
-# found dead after three retakes is dying of something else.
-RETAKE_AFTER_REBOOT_MAX = 3
-
-# How many times the poller retakes one task after its run raised, under one stage0
-# version, and how many in all, both counted from the last human comment. A judgement,
-# not a measurement: a fix that landed gets two fresh tries under its new version, and a
-# task that raises under every version is not going to be cured by a seventh retake.
-CRASH_RETAKE_PER_VERSION_MAX = 2
-CRASH_RETAKE_TOTAL_MAX = 6
+RetakeVerdict = Literal[
+    "none", "running", "retake", "retake_crash", "calendar", "spent", "stale", "human"
+]
 
 # The statuses where a run has nothing left to retake: the work is delivered, ruled
 # out, or waiting on a human's answer.
@@ -3720,7 +3713,7 @@ _NOT_INTERRUPTED_STATUSES = (
 def crash_version_key(version: str | None) -> str | None:
     """The key a crash retake is counted under: the version without a trailing `+dirty`
     (an edited working tree is still the same sha), and `None` for a version that says
-    nothing -- `None` or `unknown` -- which never produces a retake."""
+    nothing -- `None` or `unknown`."""
     if version is None:
         return None
     key = version.removesuffix("+dirty")
@@ -3729,77 +3722,59 @@ def crash_version_key(version: str | None) -> str | None:
     return key
 
 
-def _resuming_fragment(key: str) -> str:
-    """The one place the `resuming under <key> ` fragment is spelled: the comment
-    writes it and the counter reads it, so they cannot drift. The trailing space keeps
-    a key from matching another it is a prefix of."""
-    return f"resuming under {key} "
-
-
 def crash_retake_comment(crashed_version: str, key: str, n: int, cap: int) -> str:
     """The text after the `RETAKEN_AFTER_CRASH` prefix of the comment a crash retake
     posts: the version the run raised under, the key it resumes under, and which retake
     of `cap` this is."""
-    return f"run raised under {crashed_version}; {_resuming_fragment(key)}(retake {n} of {cap})"
-
-
-def crash_retake_counts(bodies: Sequence[str], key: str, prefix: str) -> tuple[int, int]:
-    """`(at_version, total)` over comment bodies: those starting with `prefix`, and among
-    them those that resumed under `key`. The caller hands over only the bodies after the
-    last non-system comment, so a human comment resets both."""
-    ours = [b[len(prefix) :] for b in bodies if b.startswith(prefix)]
-    fragment = _resuming_fragment(key)
-    return sum(1 for b in ours if fragment in b), len(ours)
+    return f"run raised under {crashed_version}; resuming under {key} (retake {n} of {cap})"
 
 
 def interrupted_run(
     raw: TaskState,
     lock: LockFacts | None,
-    prior_retakes: int,
-    crash_prior_at_version: int = 0,
-    crash_prior_total: int = 0,
-    version_key: str | None = None,
+    used: retakes.Budget,
+    now: datetime,
+    *,
+    in_tray: bool,
+    document_written_at: datetime | None,
 ) -> RetakeVerdict:
-    """Whether the poller retakes an open task whose run is gone (GH-176, GH-308):
+    """Whether the poller retakes an open task whose run is gone (GH-176, GH-308, GH-466):
 
-    - `none`: there is no lock record (`lock is None`), or the document has a truthy
-      `closed_at`, `escalated` or `pull_request`, or its `status` is `ready_for_review`,
-      `discarded` or `waiting_on_human` -- this is not an interrupted run at all;
+    - `none`: there is no lock record (`lock is None`), the record carries the deliberate
+      mark, the document has a truthy `closed_at`, `escalated` or `pull_request`, or its
+      `status` is `ready_for_review`, `discarded`, `split`, `tracker_only` or
+      `waiting_on_human`, or the task is not in the tray (`in_tray` is False: the issue is
+      closed or lost its `agentic` label, which is how a human holds it);
     - `human`: the document has no `status` key at all (not one this rule can read);
-    - `retake_crash`: the record carries a crash mark (`lock.crashed_version`), checked
-      before `alive` because the mark proves the process ended, `version_key` is not
-      `None`, and both `crash_prior_at_version` (retakes under this key) and
-      `crash_prior_total` are under `CRASH_RETAKE_PER_VERSION_MAX` and
-      `CRASH_RETAKE_TOTAL_MAX`. With a mark and a spent cap or no key, a record of
-      another boot falls to the reboot rule below, anything else is the `human`'s;
-    - `running`: `lock.alive`, the process still runs;
-    - `retake`: `lock.other_boot is True` and `prior_retakes` is under
-      `RETAKE_AFTER_REBOOT_MAX` -- a reboot killed it;
-    - `human` in every other case: the same boot (a human killed it), an unknown boot
-      (never retaken), or the cap spent."""
-    if lock is None:
+    - `running`: `lock.alive` and no crash mark, the process still runs. A crash mark is
+      checked first: it proves the process ended even when its pid reads alive again;
+    - `stale`: a dead record of this boot or an unknown boot whose document went
+      `retakes.STALE_AFTER` unwritten: whatever killed it is not going to be cured by a retake;
+    - `spent`: the shared budget (`retakes.spent`) is used up;
+    - `calendar`: a retake is not due yet (`retakes.due`; the first of a dead lock is due at
+      once);
+    - `retake_crash`: the record carries a crash mark; `retake`: any other dead record --
+      another boot's, or this boot's killed by SIGKILL, the OOM killer or a killed scope."""
+    if lock is None or lock.stopped_deliberately:
         return "none"
     if raw.get("closed_at") or raw.get("escalated") or raw.get("pull_request"):
+        return "none"
+    if not in_tray:
         return "none"
     if "status" not in raw:
         return "human"
     if raw["status"] in _NOT_INTERRUPTED_STATUSES:
         return "none"
-    if lock.crashed_version is not None:
-        if (
-            version_key is not None
-            and crash_prior_at_version < CRASH_RETAKE_PER_VERSION_MAX
-            and crash_prior_total < CRASH_RETAKE_TOTAL_MAX
-        ):
-            return "retake_crash"
-        if lock.other_boot is True and prior_retakes < RETAKE_AFTER_REBOOT_MAX:
-            return "retake"
-        return "human"
-    if lock.alive:
+    crashed = lock.crashed_version is not None
+    if lock.alive and not crashed:
         return "running"
-    if lock.other_boot is True and prior_retakes < RETAKE_AFTER_REBOOT_MAX:
-        return "retake"
-    return "human"
+    if not crashed and lock.other_boot is not True and retakes.stale(document_written_at, now):
+        return "stale"
+    if retakes.spent(used):
+        return "spent"
+    if now < retakes.due(used, document_written_at or now, timedelta(0)):
+        return "calendar"
+    return "retake_crash" if crashed else "retake"
 
 
 # --- GH-403: Corrida huérfana --------------------------------------------------------
@@ -3813,10 +3788,6 @@ def interrupted_run(
 # to write its first line.
 ORPHANED_QUIET = timedelta(hours=1)
 
-# How many consecutive retakes that ran nothing the poller makes of one orphan, counted from
-# the last human comment. A judgement, not a measurement: the `RETAKE_AFTER_REBOOT_MAX` shape.
-ORPHANED_RETAKE_MAX = 3
-
 # The statuses of a task that has not been delivered, escalated or ended: the only ones a run
 # can still be missing from.
 ORPHANED_STATUSES = ("open", "defined", "returned", "definition_ready", "planned", "developing")
@@ -3825,32 +3796,13 @@ OrphanVerdict = Literal["retake", "none", "quiet", "calendar", "cap_spent"]
 OrphanWhy = Literal["quiet", "calendar", "no_slot", "cap_spent", "lock_unreadable"]
 
 
-def orphaned_retake_count(
-    comment_times: Sequence[datetime], run_starts: Sequence[str | None | object]
-) -> int:
-    """How many own orphan-retake comments (`comment_times`, already cut after the last
-    comment that is not the system's) count against `ORPHANED_RETAKE_MAX`: those no
-    `runs[]` entry follows, that is, none whose `started_at` reads as a later instant. A
-    retake that started a run did something; one the next run never followed ran nothing.
-    An entry with a missing or unreadable `started_at` proves nothing, so the retake counts."""
-    started = [t for t in (_instant(value) for value in run_starts) if t is not None]
-    return sum(1 for posted in comment_times if not any(start > posted for start in started))
-
-
-def orphaned_due(last_own_at: datetime, prior: int) -> datetime:
-    """When the retake after `prior` counted ones is due: `RETAKE_SCHEDULE[prior]` minutes
-    after the last own comment. The one place the calendar is read for an orphan."""
-    return last_own_at + timedelta(minutes=RETAKE_SCHEDULE[prior])
-
-
 def orphaned_run(
     raw: TaskState,
     *,
     live: bool,
     has_lock: bool,
     quiet: bool,
-    prior: int,
-    last_own_at: datetime | None,
+    used: retakes.Budget,
     now: datetime,
 ) -> OrphanVerdict:
     """Whether the poller retakes a task in the tray whose run is gone and left no lock
@@ -3858,11 +3810,10 @@ def orphaned_run(
 
     - `none`: a truthy `closed_at`, `escalated` or `pull_request`; a `status` that is
       missing or not in `ORPHANED_STATUSES`; a live run or a lock record (the lock is
-      `interrupted_run`'s, whose verdicts do not change);
+      `interrupted_run`'s);
     - `quiet`: the document was written inside `ORPHANED_QUIET` (`quiet` is False);
-    - `cap_spent`: `prior` retakes that ran nothing already reached `ORPHANED_RETAKE_MAX`;
-    - `calendar`: a retake was made (`prior > 0`) and `RETAKE_SCHEDULE[prior]` minutes have
-      not passed since `last_own_at`;
+    - `cap_spent`: the shared budget (`retakes.spent`) is used up;
+    - `calendar`: a retake was made and the next one is not due yet (`retakes.due`);
     - `retake` otherwise. The first one waits only for the quiet hour."""
     if raw.get("closed_at") or raw.get("escalated") or raw.get("pull_request"):
         return "none"
@@ -3872,9 +3823,9 @@ def orphaned_run(
         return "none"
     if not quiet:
         return "quiet"
-    if prior >= ORPHANED_RETAKE_MAX:
+    if retakes.spent(used):
         return "cap_spent"
-    if prior > 0 and last_own_at is not None and now < orphaned_due(last_own_at, prior):
+    if now < retakes.due(used, now, timedelta(0)):  # the quiet hour is `quiet`'s, above
         return "calendar"
     return "retake"
 
@@ -4026,7 +3977,7 @@ class SpendPace:
     pace_usd_per_h: float
 
 
-PollActionKind = Literal["close", "retake", "resume", "launch", "merge", "land"]
+PollActionKind = Literal["close", "retake", "resume", "launch", "merge", "land", "retakes_spent"]
 
 
 @dataclass(frozen=True)
@@ -4041,6 +3992,9 @@ class PollAction:
     # one that left no lock at all (the caller writes a different comment for each). Other
     # kinds leave the default.
     reason: Literal["reboot", "crash", "orphaned"] = "reboot"
+    # The experiment arm a `launch` was assigned (GH-470); `None` for every other kind and for a
+    # launch with no experiment.
+    arm: str | None = None
 
 
 @dataclass(frozen=True)
@@ -4195,6 +4149,8 @@ class LaunchCandidate:
     since: datetime | None
     prior: int
     limit: int
+    # The arm assigned to this launch (GH-470), `None` when the product declares no experiment.
+    arm: str | None = None
 
 
 RunKind = Literal["role", "merge", "land_checks", "land_model"]
@@ -4373,6 +4329,7 @@ def poll_plan(
     earlier_land_wait: bool = False,
     held: Sequence[str] = (),
     orphan_retakes: Sequence[int] = (),
+    spent_retakes: Sequence[int] = (),
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -4453,11 +4410,16 @@ def poll_plan(
     `reason="orphaned"`. One that finds no slot is `Deferred("orphan", issue, "no_slot")`, the
     only source of its line; a round held by `others_landing` or `held` defers nothing.
 
+    `spent_retakes` (GH-466) are the issues whose retake budget is spent and not yet announced:
+    each is a `retakes_spent` action, which spawns nothing and so takes no slot, comes right
+    after the closes and is kept even in a `held` round (it writes the tracker alone).
+
     `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
-    not empty the plan is the closes alone: no launch, resume, retake, land or merge starts,
-    because a start would write scratch to a disk that is almost full. It defers nothing, so
-    it opens no Espera de aterrizaje."""
+    not empty the plan is the closes and the notices alone: no launch, resume, retake, land or
+    merge starts, because a start would write scratch to a disk that is almost full. It defers
+    nothing, so it opens no Espera de aterrizaje."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
+    actions += [PollAction("retakes_spent", issue) for issue in sorted(spent_retakes)]
     if held:
         return PollPlan(actions, [])
     received_slots = available_slots
@@ -4550,7 +4512,7 @@ def poll_plan(
                 pace_usd_per_h=pace.pace_usd_per_h,
             )
         ):
-            actions.append(PollAction("launch", ready[0].issue))
+            actions.append(PollAction("launch", ready[0].issue, arm=ready[0].arm))
             slots_left -= 1
 
     exempt_merges = sorted(merges)

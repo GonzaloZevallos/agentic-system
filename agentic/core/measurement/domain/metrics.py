@@ -30,14 +30,12 @@ from agentic.core.process.domain.task import (
     RoleRun,
     TaskState,
 )
-from agentic.shared.configuration import Configuration
+from agentic.shared.configuration import ARM_SWITCHES, Configuration
 
-# The two `Configuration` switches `arm_label` joins, in the order every writer uses
-# (`experiment_snapshot`'s own order, minus `reviewer_model`: free text, not one of the
-# "three enums" the arm is the product of -- ADR-0030). A subsequence of
-# `EXPERIMENT_KEYS`, checked by `test_metrics.py`, so the two vocabularies cannot drift
-# apart on order.
-ARM_KEYS = ("review_mode", "skip_ephemeral")
+# The two `Configuration` switches `arm_label` joins, in the order every writer uses:
+# `shared.configuration.ARM_SWITCHES`, the single source (GH-470), a subsequence of
+# `EXPERIMENT_KEYS` by construction.
+ARM_KEYS = ARM_SWITCHES
 
 # Below this, a residual is floating-point noise (an interview's runs summed in a
 # different order), not money nothing accounted for: `has_residual_sample`'s own
@@ -344,6 +342,19 @@ def arm_label(experiment: Mapping[str, str]) -> str:
     if all(resolved[key] == str(defaults[key].default) for key in ARM_KEYS):
         return "default"
     return ",".join(f"{key}={resolved[key]}" for key in ARM_KEYS)
+
+
+def arm_of(document: Mapping[str, Any]) -> str:
+    """The arm label a task document belongs to, the one reader of it (GH-470): the
+    `arm_label` of the switches its `assignment` carries when it has one, else of its
+    `experiment` snapshot, else `default`. The assignment wins because it is what the
+    poller decided; the snapshot is only what the process happened to run with. The
+    arm's *name* is never read: two arms setting the same switches are one arm here,
+    and the label's cardinality stays the closed product of `ARM_KEYS`."""
+    assignment = document.get("assignment")
+    if isinstance(assignment, Mapping):
+        return arm_label(assignment.get("switches") or {})
+    return arm_label(document.get("experiment") or {})
 
 
 def prompts_fingerprint(state: TaskState) -> str:

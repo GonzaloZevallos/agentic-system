@@ -31,6 +31,7 @@ from agentic.core.process.application.ports import (
     CiLogs,
     CommandResult,
     Commands,
+    ExperimentFile,
     FastForwardView,
     FlagVocabulary,
     FreeSpace,
@@ -216,6 +217,8 @@ class MemoryDocuments:
         # task_id -> the closure values recorded for it, folded over successive calls
         # the way the filesystem adapter's line-level replace-or-append does.
         self.closures: dict[str, dict[str, object]] = {}
+        # Task ids whose document `ids_touched_since` does not name: unwritten for a long time.
+        self.untouched: set[str] = set()
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
@@ -234,7 +237,7 @@ class MemoryDocuments:
         return sorted({state["id"] for state in self.saved})
 
     def ids_touched_since(self, since: datetime) -> list[str]:
-        return self.ids()
+        return [i for i in self.ids() if i not in self.untouched]
 
     def load(self, task_id: str) -> dict[str, object] | None:
         mine = [s for s in self.saved if s["id"] == task_id]
@@ -1508,6 +1511,7 @@ class MemoryTracker:
         self.comment_failures = 0
         # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).
         self.drop_label_failures = 0
+        self.label_failures = 0
         # `pull_requests_on`: the pull requests scripted per head branch, `lookup_error`
         # to make it raise `ValueError` (`gh`'s own failure shape), and each branch asked.
         self.on_branch: dict[str, list[BranchPullRequest]] = {}
@@ -1660,6 +1664,10 @@ class MemoryTracker:
         self.comments.append((task_id, text))
 
     def label(self, task_id: str, label: str) -> None:
+        if self.label_failures > 0:
+            self.label_failures -= 1
+            raise ValueError("gh issue edit failed: scripted")
+        self.events.append("label")
         self.labels.append((task_id, label))
 
     def unlabel(self, task_id: str, label: str) -> None:
@@ -1792,10 +1800,13 @@ class MemoryRunRegistry:
     def launch_attempts(self, product: str, issue: int) -> LaunchAttempt | None:
         return self.attempts.get((product, issue))
 
-    def record_launch(self, product: str, issue: int, when: datetime) -> None:
+    def record_launch(
+        self, product: str, issue: int, when: datetime, arm: str | None = None
+    ) -> None:
         existing = self.attempts.get((product, issue))
         prior = existing.prior if existing is not None else 0
-        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1)
+        kept = arm if arm is not None else (existing.arm if existing is not None else None)
+        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1, kept)
 
     def clear_launch(self, product: str, issue: int) -> None:
         self.attempts.pop((product, issue), None)
@@ -2009,6 +2020,23 @@ class FakeCiLogs:
         return list(self.logs)
 
 
+class FakeExperimentFile:
+    """GH-470: no test reads a real `.agentic/experiment.yaml`. `read` answers `data` (`None`
+    declares no experiment) or raises `error` as the adapter does for an unreadable file, and
+    counts the reads."""
+
+    def __init__(self, data: object | None = None, error: str | None = None) -> None:
+        self.data = data
+        self.error = error
+        self.reads = 0
+
+    def read(self) -> object | None:
+        self.reads += 1
+        if self.error is not None:
+            raise ValueError(self.error)
+        return self.data
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of
@@ -2205,6 +2233,7 @@ def memory_ports(
     free_space: FreeSpace | None = None,
     ci_logs: CiLogs | None = None,
     load_reader: LoadReader | None = None,
+    experiment: ExperimentFile | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2230,6 +2259,7 @@ def memory_ports(
         free_space=free_space,
         ci_logs=ci_logs,
         load_reader=load_reader,
+        experiment=experiment,
     )
 
 

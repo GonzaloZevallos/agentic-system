@@ -26,7 +26,7 @@ from typing import Literal
 
 from agentic.core.process.domain.task import RoleRun, TaskState
 
-from . import metrics
+from . import cycle, metrics
 
 # The three failure reasons a scorecard's "own failures" excludes (ADR-0029, extended
 # by issue #137's own `network`), read here and nowhere else in this diff: every other
@@ -109,6 +109,14 @@ class TaskFigures:
     estimate_cost_usd: float | None = None
     estimate_files: int | None = None
     actual_files: int | None = None
+    # The arm the task ran under (`metrics.arm_of`, never the arm's name), the experiment its
+    # assignment names, and its time: `cycle_class` decides whether the task enters
+    # `cycle_h`/`active_h` at all, the seconds are `None` when a bound is missing.
+    arm: str = "default"
+    experiment_id: str | None = None
+    cycle_class: cycle.CycleClass = "excluded"
+    cycle_s: float | None = None
+    active_s: float | None = None
 
 
 def task_figures(document: ScorecardDocument) -> TaskFigures:
@@ -120,6 +128,7 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
     time_to_merge = document.get("time_to_merge_seconds")
     plan = document.get("estimate")
     actual_files = document.get("actual_files")
+    assignment = document.get("assignment")
     return TaskFigures(
         cost_usd=document.get("cost_usd", 0.0),
         rework_usd=metrics.rework_cost_usd(document),
@@ -138,6 +147,11 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         estimate_cost_usd=float(plan["cost_usd"]) if plan else None,
         estimate_files=int(plan["files"]) if plan else None,
         actual_files=int(actual_files) if actual_files is not None else None,
+        arm=metrics.arm_of(document),
+        experiment_id=assignment.get("experiment") if assignment else None,
+        cycle_class=cycle.cycle_class(document),
+        cycle_s=cycle.cycle_seconds(document),
+        active_s=cycle.active_seconds(document),
     )
 
 
@@ -245,6 +259,15 @@ class Scorecard:
     # each; `n/a` when none does.
     cost_over_estimate: Figure = Figure(None, 0, 0)
     files_over_estimate: Figure = Figure(None, 0, 0)
+    # Informative only (GH-470), enter no verdict: the medians, in hours, of the cycle and of
+    # the active time over the tasks `cycle.cycle_class` lets in and whose bound is known;
+    # `cycle_closed`/`cycle_open` split the cycle's `n` by how its end was found.
+    cycle_h: Figure = Figure(None, 0, 0)
+    active_h: Figure = Figure(None, 0, 0)
+    cycle_closed: int = 0
+    cycle_open: int = 0
+    active_closed: int = 0
+    active_open: int = 0
 
 
 def build(figures: Sequence[TaskFigures]) -> Scorecard:
@@ -288,6 +311,10 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
     ]
     cost_over_estimate = _median(cost_ratios, excluded=total - len(cost_ratios))
     files_over_estimate = _median(files_ratios, excluded=total - len(files_ratios))
+    cycled = [f for f in figures if f.cycle_class != "excluded" and f.cycle_s is not None]
+    actives = [f for f in figures if f.cycle_class != "excluded" and f.active_s is not None]
+    cycle_h = _median([(f.cycle_s or 0.0) / 3600 for f in cycled], excluded=total - len(cycled))
+    active_h = _median([(f.active_s or 0.0) / 3600 for f in actives], excluded=total - len(actives))
     by_reason: dict[str, int] = {}
     for f in terminated:
         for reason, count in f.failures_by_reason.items():
@@ -302,6 +329,12 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
         judged=len(judged),
         cost_over_estimate=cost_over_estimate,
         files_over_estimate=files_over_estimate,
+        cycle_h=cycle_h,
+        active_h=active_h,
+        cycle_closed=sum(1 for f in cycled if f.cycle_class == "closed"),
+        cycle_open=sum(1 for f in cycled if f.cycle_class == "open"),
+        active_closed=sum(1 for f in actives if f.cycle_class == "closed"),
+        active_open=sum(1 for f in actives if f.cycle_class == "open"),
     )
 
 

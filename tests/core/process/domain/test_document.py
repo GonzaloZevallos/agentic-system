@@ -141,6 +141,92 @@ def test_render_writes_the_experiment_snapshot_when_non_empty():
     assert document.parse(rendered)["experiment"] == snapshot
 
 
+GOLDEN_WITHOUT_ASSIGNMENT = """\
+---
+id: GH-9
+title: Golden
+type: feature
+status: open
+current_role: null
+flags: {}
+returns: {}
+return_history: []
+escalated: null
+escalation_class: null
+questions_for_human: []
+proposed_invariants: []
+discard_reason: null
+branch: null
+pull_request: null
+subtasks: {}
+invariants: []
+integration_brief: ''
+findings: []
+settled_findings: []
+cost_usd: 0.0
+prompts: {}
+experiment:
+  review_mode: light
+  skip_ephemeral: 'False'
+  reviewer_model: m
+plugins: {}
+system_commit: null
+runs: []
+failures: []
+pause_log: []
+design_items: []
+---
+
+# Golden
+
+## Original request
+
+Body.
+
+## Developer
+
+done
+"""
+ASSIGNMENT = {
+    "experiment": "light-review",
+    "arm": "light",
+    "switches": {"review_mode": "light"},
+}
+
+
+def golden_state(**extra):
+    return {
+        "id": "GH-9",
+        "title": "Golden",
+        "description": "Body.",
+        "type": "feature",
+        "status": "open",
+        "experiment": {"review_mode": "light", "skip_ephemeral": "False", "reviewer_model": "m"},
+        "sections": {"Developer": "done"},
+        **extra,
+    }
+
+
+def test_a_document_without_assignment_renders_byte_identically_to_the_golden():
+    assert document.render(golden_state()) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert document.render(golden_state(assignment={})) == GOLDEN_WITHOUT_ASSIGNMENT
+
+
+def test_assignment_round_trips_through_the_frontmatter():
+    rendered = document.render(golden_state(assignment=ASSIGNMENT))
+    assert "\nassignment:" in rendered
+    assert document.parse(rendered)["assignment"] == ASSIGNMENT
+    assert "assignment" not in document.parse(document.render(golden_state()))
+
+
+def test_assignment_is_the_only_difference_a_document_gains():
+    plain = document.render(golden_state()).splitlines()
+    assigned = document.render(golden_state(assignment=ASSIGNMENT)).splitlines()
+    added = [line for line in assigned if line not in plain]
+    assert added[0] == "assignment:"
+    assert [line for line in plain if line not in assigned] == []
+
+
 def test_interview_stats_never_reaches_the_document():
     """Measurement-only, like `subtask_id`: `interview()`'s own patch key
     (`InterviewStats`) never reaches the document, so a resumed task carries none of
@@ -1431,3 +1517,46 @@ def test_a_merge_ci_record_is_one_flow_line_written_by_record_closure_and_by_ren
     _one_flow_line(rendered, "merge_ci")
     assert document.parse(rendered)["merge_ci"] == [pair]
     assert "merge_ci" not in document.render({**state, "merge_ci": []})
+
+
+_SPECULATION = {"head": "a" * 40, "pushed_at": "2026-11-03T12:00:00+00:00"}
+
+
+def _speculative_state(**extra):
+    return {"id": "T-9", "title": "Speculate", "description": "d", "sections": {}, **extra}
+
+
+def test_ci_speculation_roundtrips_through_the_frontmatter():
+    text = document.render(_speculative_state(ci_speculation=_SPECULATION))
+    assert document.parse(text)["ci_speculation"] == _SPECULATION
+
+
+def test_full_checks_speculative_roundtrips_inside_the_record():
+    record = {
+        "version": 1,
+        "head": "a" * 40,
+        "passed": True,
+        "duration_s": 3.0,
+        "declared": {"tests": "pytest"},
+        "results": [],
+        "witness": None,
+        "ran_on": "ci",
+        "speculative": True,
+    }
+    parsed = document.parse(document.render(_speculative_state(full_checks=record)))
+    assert parsed["full_checks"] == record
+
+
+@pytest.mark.parametrize("value", [None, {}])
+def test_a_document_without_ci_speculation_is_as_before(value):
+    plain = document.render(_speculative_state())
+    absent = document.render(_speculative_state(ci_speculation=value))
+    assert absent == plain
+    assert "ci_speculation" not in plain
+    assert "ci_speculation" not in document.parse(plain)
+
+
+def test_ci_speculation_is_not_the_deliverys_anchor():
+    parsed = document.parse(document.render(_speculative_state(ci_speculation=_SPECULATION)))
+    assert "pushed_head" not in parsed
+    assert "pushed_at" not in parsed

@@ -24,6 +24,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules
 from ..domain import landing as landing_rules
+from ..domain.retakes import RESUMED_BY_POLLER, RETAKES_SPENT
 from ..domain.task import TaskState, TrackerFailure, TrackerFailureRecord, apply
 from . import landing_plan
 from .archive import STARTED_OVER
@@ -57,6 +58,7 @@ RESUMED = "Resumed: "
 SYSTEM_COMMENTS = (
     ESCALATED,
     RESUMED,
+    RESUMED_BY_POLLER,
     READY,
     DISCARDED,
     STARTED_OVER,
@@ -64,6 +66,7 @@ SYSTEM_COMMENTS = (
     RETAKEN,
     RETAKEN_AFTER_CRASH,
     RETAKEN_ORPHANED,
+    RETAKES_SPENT,
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
     LANDING,
@@ -694,7 +697,7 @@ def _commit_leftovers(r: Resumption, ports: Ports) -> None:
         ) from failed
 
 
-def announce(r: Resumption, ports: Ports) -> list[TrackerFailureRecord]:
+def announce(r: Resumption, ports: Ports, *, by_poller: bool = False) -> list[TrackerFailureRecord]:
     """Take the task out of the queue and say on the issue that it resumed. A task seeded
     from its document first forgets the worktrees the human removed by hand, so asking
     for those checkouts again recreates them; a dry run never gets here.
@@ -705,6 +708,9 @@ def announce(r: Resumption, ports: Ports) -> list[TrackerFailureRecord]:
     this ever wrote, `SYSTEM_COMMENTS` stays as it is, and a resume that was not
     interrupted emits the exact same bytes as before (subtask `signals`).
 
+    `by_poller` (GH-466): the poller spawned this resume, so it posts `RESUMED_BY_POLLER`, which
+    never resets the retake budget the way a human's `RESUMED` does.
+
     Both writes are informative (GH-389): a GitHub error that outlasts the retries does not
     end the resume. The failures come back as rows for `tracker_failures`, empty when both
     landed; the caller records them through the state's reducer."""
@@ -714,8 +720,11 @@ def announce(r: Resumption, ports: Ports) -> list[TrackerFailureRecord]:
         ports.workspace.prune()
     # `gh issue edit --remove-label` fails for a label the repository never had, and an
     # account-limit-only pause (GH-381) is never labelled, so it is not unlabelled either.
-    if rules.needs_a_human(r.paused):
+    # GH-466: the spent-budget notice labels a run that was merely interrupted or orphaned, so
+    # resuming one drops the label too.
+    if rules.needs_a_human(r.paused) or r.interrupted or r.source == "document":
         failures.append(ports.tracker.drop_label(r.task_id, NEEDS_HUMAN))
+    prefix = RESUMED_BY_POLLER if by_poller else RESUMED
     answered = " with your decision" if r.decision else ""
     role = r.paused.get("current_role") or "before any role"
     interrupted = f", interrupted at {role}" if r.interrupted else ""
@@ -724,7 +733,7 @@ def announce(r: Resumption, ports: Ports) -> list[TrackerFailureRecord]:
     failures.append(
         ports.tracker.note(
             r.task_id,
-            f"{RESUMED}{r.target}{answered}{interrupted}{increment}, "
+            f"{prefix}{r.target}{answered}{interrupted}{increment}, "
             f"under a task cap of {r.cap_usd:.2f} USD.",
         )
     )

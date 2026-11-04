@@ -265,11 +265,21 @@ decisión: resetear el contador sin nada nuevo repite la misma devolución.
 Esto exige estado durable del lado del sistema: el grafo se frena, el estado sobrevive al
 proceso en un checkpointer, y la respuesta del humano lo reanuda donde estaba (ADR-0003).
 
-### Pausar una corrida (GH-355)
+### Pausar una corrida (GH-355, GH-466)
 
 Para frenar una corrida `agentic run` o `agentic resume` (por ejemplo para bajar la carga
-de la máquina) se le manda SIGTERM, o SIGHUP, **una sola vez**. No se usa `kill -9`, que
-deja los chequeos y los roles huérfanos.
+de la máquina) lo normal es `agentic stop --issue N`. Marca la corrida como detenida a propósito
+y recién después la detiene: SIGTERM al pid que nombra su lock y, si a los 45 s
+(`stop.GRACE_S`, declarado, no medido) sigue viva, SIGKILL. Solo alcanza a ese pid, y solo si el
+id de arranque y el starttime del lock coinciden con los del proceso. Una sola línea de salida:
+
+```
+agentic stop --issue 123
+stopped #123 (signalled); to continue: agentic resume --issue 123
+```
+
+A mano sirve también mandarle SIGTERM, SIGHUP o Ctrl-C (SIGINT) **una sola vez**. No se usa
+`kill -9`, que deja los chequeos y los roles huérfanos y, además, no deja la marca de parada.
 
 ```
 cat <producto>/.agentic/runs/<tarea>.lock     # el "pid" de la corrida (JSON); o: pgrep -af 'agentic (run|resume)'
@@ -281,19 +291,36 @@ lanzó (`pytest`, `npm run e2e`, navegadores, servidores); el turno del rol en c
 cancela y el runner cierra los procesos de ese intento al desenrollarse. En el log se ve
 `[<Rol>] interrupted after N turns` y las líneas `reaper: stopped <pid> …`; el proceso sale
 con código 1. Si algo ignora la cancelación, a los 40 s (`reaping.STOP_DEADLINE_S`,
-declarado, no medido) el plazo duro mata los procesos de los roles, libera el lock y sale.
-En la práctica la corrida muere en menos de un minuto. Una segunda señal no hace nada
-distinto: no hace falta repetirla.
+declarado, no medido) el plazo duro mata los procesos de los roles y sale. En la práctica la
+corrida muere en menos de un minuto. Una segunda señal no hace nada distinto: no hace falta
+repetirla. El lock **no se libera**: se conserva con la marca `stopped_deliberately`, con el pid,
+el id de arranque y el starttime de la corrida original. Es una *parada deliberada*, y el poller
+nunca la retoma, ni como caída ni como huérfana ni como una retoma que gasta el presupuesto.
+(Excepción: un apagado ordenado del sistema conserva el lock con la marca de apagado, y el
+arranque siguiente sí la retoma.)
 
 Qué no pasa: no se commitea ni se pushea, no se escribe nada en el documento de tarea ni
-en el issue, el turno interrumpido no se registra como terminado y no se gasta un retake por
-caída (el lock se libera sin marca). El poller no la relanza: una tarea con documento y sin
-lock ni fallo externo no es candidata a retoma.
+en el issue, y el turno interrumpido no se registra como terminado. El poller no la relanza.
 
-Para retomarla: `agentic resume <issue>`. El nodo interrumpido no dejó escrituras, así que
+Para retomarla: `agentic resume --issue N`. El nodo interrumpido no dejó escrituras, así que
 se repite entero (un setup cortado se rehace). Si la corrida todavía no tenía documento (PjM
-clasificando o definiendo), el issue sigue siendo candidato a lanzamiento: sacale la etiqueta
-`agentic` antes de pararla para que el poller no la vuelva a lanzar.
+clasificando o definiendo), `agentic stop` no tiene qué marcar y lo dice: el issue sigue siendo
+candidato a lanzamiento, así que sacale la etiqueta `agentic` antes de pararla para que el poller
+no la vuelva a lanzar. Sacar la etiqueta `agentic` (o cerrar el issue) es, en general, la manera de
+retener una tarea: el poller no retoma nada que no esté en la bandeja.
+
+### Lo que el poller retoma solo (GH-466)
+
+Una corrida cuyo proceso murió sin dejar una parada deliberada la retoma el poller, sea cual sea
+la causa: un reinicio, una excepción del grafo, un SIGKILL o el OOM killer en el mismo arranque,
+o una corrida sin lock. Todas gastan **un solo presupuesto de 3 retomas por tarea**, con el
+calendario `RETAKE_SCHEDULE` (la primera de inmediato, la segunda a los 30 min de la primera, la
+tercera a los 60; la corrida sin lock espera antes de la primera una hora de quietud). El presupuesto se reinicia cuando una persona comenta el issue o corre
+`agentic resume`; lo que lanza el poller (`--by-poller`, comentario `Resumed by the poller: `)
+no lo reinicia. Gastado el presupuesto, o con un lock muerto del mismo arranque (o de arranque
+desconocido, sin marca de caída) cuyo documento lleva 24 h sin tocar, el poller no retoma:
+pone la etiqueta `needs-human` y deja **un solo comentario** `Retakes spent: ` con lo que murió,
+cuántas retomas se hicieron y el comando para seguir. No lo repite en cada vuelta.
 
 ### Fallo de rol
 
@@ -1243,13 +1270,15 @@ grafo, `run`, `resume` y `--fresh` toman `.agentic/runs/<tarea>.lock` (pid, host
 comando): un pid vivo en este host se niega, uno de otro host se niega por nombre sin
 probarlo, y uno muerto se toma, avisándolo; `--dry-run` no lo toma, solo lo muestra. Protege
 invocaciones de la CLI entre sí, no un `langgraph dev`, que mantiene todos los hilos en un
-solo proceso. Un SIGTERM o un SIGHUP cancelan la invocación en curso: se vacía la
-telemetría, se libera el lock y el proceso sale con código distinto de cero, sin escribir
+solo proceso. Un SIGTERM, un SIGHUP o un SIGINT cancelan la invocación en curso: se vacía la
+telemetría, el lock se conserva con la marca de parada deliberada (ver «Pausar una corrida») y
+el proceso sale con código distinto de cero, sin escribir
 en el documento (el único `TaskState` que la CLI tiene en ese momento es el de entrada, y
 pisarlo borraría lo que los nodos de esta invocación ya escribieron) ni un comentario nuevo
 en el issue (`Resumed: ` gana una cláusula que nombra el rol interrumpido, en la próxima
 reanudación de una corrida que se cruzó con uno de estos, en vez de un prefijo nuevo). Un
-SIGKILL no se puede atrapar: el lock queda huérfano y `resume` lo toma avisándolo.
+SIGKILL no se puede atrapar: el lock queda sin marca, `resume` lo toma avisándolo, y el poller lo
+retoma como una caída contra su presupuesto de retomas.
 `--detach` (en `run` y en `resume`, este último exigiendo `--yes` y rechazando
 `--dry-run` al parsear) reejecuta la misma invocación sin `--detach`, en `setsid`
 —nunca un fork, porque un hijo forkeado después de `setsid` sigue sin terminal para su

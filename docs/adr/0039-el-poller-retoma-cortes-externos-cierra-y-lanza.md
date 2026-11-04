@@ -11,6 +11,8 @@ andando la cola de un producto sin un humano mirando: `agentic poll --product-di
 [--detach] [--interval S]`, un proceso de larga vida por producto que cada `S` segundos
 (60 por defecto) da una vuelta. Los relojes de los roles proactivos quedan afuera.
 
+**Adenda (2026-11-03):** el tope de retomas tras un reinicio, los topes de caída de GH-308 y el de huérfanas de GH-403 los reemplaza [ADR-0082](0082-un-solo-presupuesto-de-retomas-y-la-parada-deliberada.md): un solo presupuesto de 3 retomas por tarea.
+
 ## Decisión
 
 ### Un motivo propio para la red caída

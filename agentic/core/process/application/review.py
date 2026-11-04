@@ -27,11 +27,15 @@ verdict, and what it lowered, at the head of the review's section."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+
+import anyio
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import ci, docs, presubmit, rules
+from ..domain import ci, docs, presubmit, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
@@ -63,6 +67,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
+    pushed_at = await _push_speculatively(state, subtask_id, base, head, checkout.path, ports)
     # A product that declares `ci`, or a plan that requires a check (GH-371), has the
     # system's own CI section in front of the reviewer and its red checks recorded as
     # findings; one that has neither is reviewed exactly as before, with no read of the
@@ -144,6 +149,8 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             {"approval_settled": rules.settled_on_approval(state, subtask_id, version, findings)},
         )
         patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
+        if pushed_at is not None and rules.full_commit_id(head):
+            patch = apply(patch, {"ci_speculation": {"head": head, "pushed_at": pushed_at}})
         return finish(state, patch, ports)
 
     returned = {
@@ -161,6 +168,10 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         # `return_section` already reads as `'review'`.
         returned["returned_by"] = "review"
     patch = apply(patch, {"subtasks": {subtask_id: returned}})
+    if state.get("ci_speculation") and subtask_id == rules.reviewed_unit_name(state):
+        # A return discards the pushed run (GH-465): the head will move, and the record that
+        # named the old one must not stand for the next.
+        patch = apply(patch, {"ci_speculation": None})
     if remaining > 0:
         patch = apply(
             patch,
@@ -178,6 +189,40 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         patch = rules.logged(patch)
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
+
+
+async def _push_speculatively(
+    state: TaskState, subtask_id: str, base: str, head: str, path: Path, ports: Ports
+) -> str | None:
+    """Publish `head` to the task's CI ref when `speculation.push_due` says so (GH-465), so
+    the full tier runs while the Tech Lead reads it; the ISO instant of the push, or `None`
+    when nothing was pushed. A product without `ci:` or `delivery_checks` makes no call at
+    all. A push that fails never fails the review: nothing is recorded and `full_checks`
+    publishes as it always did."""
+    ci_names = ports.stack.ci(base)
+    tiered = bool(ports.stack.delivery_checks(base))
+    if not ci_names or not tiered or subtask_id != rules.reviewed_unit_name(state):
+        return None
+    try:
+        paths: tuple[str, ...] | None = ports.workspace.changed_paths(base, head)
+    except GitError:
+        paths = None
+    if not speculation.push_due(
+        state,
+        subtask_id,
+        ci_names=ci_names,
+        tiered=tiered,
+        untrusted=rules.ci_untrusted(paths),
+        head=head,
+    ):
+        return None
+    try:
+        await anyio.to_thread.run_sync(
+            ports.workspace.publish_ci_ref, path, rules.ci_ref(state["id"])
+        )
+    except GitError:
+        return None
+    return datetime.now(UTC).isoformat()
 
 
 def _required_paths_findings(

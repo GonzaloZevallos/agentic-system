@@ -376,6 +376,14 @@ def add_restorations(existing: list[Restoration], new: list[Restoration]) -> lis
     return list(joined.values())
 
 
+class ArmAssignment(TypedDict):
+    """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
+
+    experiment: str
+    arm: str
+    switches: dict[str, str]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -400,6 +408,11 @@ class TaskInput(TypedDict):
     # archive notice of `cli._run`, entering through the reducer `add_tracker_failures`.
     # Declared for the same reason as `decided`. Absent reads as none.
     tracker_failures: NotRequired[list[TrackerFailureRecord]]
+    # The arm the product's experiment gave the task (GH-470): `cli._run` sets it from
+    # `--arm`, or carries it on `--fresh`. Declared for the same reason as `decided`: without
+    # it the graph's `input_schema` drops the key and the arm never reaches the state.
+    # Absent reads as unassigned.
+    assignment: NotRequired[ArmAssignment]
 
 
 @dataclass(frozen=True)
@@ -1064,6 +1077,15 @@ class CloseDocs(TypedDict):
     paths: list[str]
 
 
+class CiSpeculation(TypedDict):
+    """The push `review()` made of the final unit's head to `agentic-ci/<id>` ahead of
+    `full_checks` (GH-465): `head` the whole sha pushed, `pushed_at` the ISO instant. Replaced
+    whole by every review of the final unit; carries no verdict."""
+
+    head: str
+    pushed_at: str
+
+
 OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
 """Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
 `owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
@@ -1112,6 +1134,9 @@ class FullChecksRecord(TypedDict):
     # The checks deferred to CI (GH-453), a declared name each; written only when there is one,
     # so a record without a deferral is as it always was.
     deferred: NotRequired[list[str]]
+    # Whether the CI run that gave the verdict was the one a review pushed ahead of this run
+    # (GH-465, `speculation.consumable`); written only when it was, `ran_on` stays `ci`.
+    speculative: NotRequired[bool]
 
 
 class MergeCiRecord(TypedDict):
@@ -1287,6 +1312,10 @@ class TaskState(TaskInput, total=False):
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str
     pushed_at: str
+    # The head the final unit's review published to the CI ref and when (GH-465): the push
+    # fact, never a verdict. Written only by that review (its approval with a whole sha, `None`
+    # on its return), written to the document only when set, read with `.get`.
+    ci_speculation: NotRequired[CiSpeculation | None]
     # The processes a role left running that the release stopped when the task closed
     # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
     # and it is read with `.get`.
@@ -1330,6 +1359,11 @@ class TaskState(TaskInput, total=False):
     # graph refuse two writes in the same step. `last` is right here because every
     # branch of a wave writes the identical snapshot.
     experiment: Annotated[dict[str, str], last]
+    # The arm the product's experiment gave this task (GH-470, ADR-0030 amended): which
+    # experiment, the arm's name and the switches it set, as `arm_label` reads them.
+    # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
+    # `experiment`. Written once when the run starts, so no reducer.
+    assignment: ArmAssignment
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str
