@@ -1623,6 +1623,10 @@ class LaunchAttempt:
 
     since: datetime
     prior: int
+    # The arm the poller assigned this launch (GH-470): kept across every rewrite of the
+    # record, so a relaunch of the same issue keeps it and it counts until a document
+    # exists. `None` for a launch with no experiment, which is every launch of today.
+    arm: str | None = None
 
 
 class CheckResults(Protocol):
@@ -1678,9 +1682,13 @@ class RunRegistry(Protocol):
         issue has never been attempted, or its attempt already cleared."""
         ...
 
-    def record_launch(self, product: str, issue: int, when: datetime) -> None:
+    def record_launch(
+        self, product: str, issue: int, when: datetime, arm: str | None = None
+    ) -> None:
         """Note one more launch attempt of `issue`, timestamped `when` (the poller's own
-        clock, never read here): `prior` grows by one, `since` becomes `when`."""
+        clock, never read here): `prior` grows by one, `since` becomes `when`. `arm` (GH-470)
+        is the arm assigned to this launch; `None` keeps the one the record already has, and a
+        record that never had one stays `{since, prior}` exactly."""
         ...
 
     def clear_launch(self, product: str, issue: int) -> None:
@@ -2011,6 +2019,17 @@ class CiLogs(Protocol):
         ...
 
 
+class ExperimentFile(Protocol):
+    """A product's experiment declaration as its owner wrote it (GH-470,
+    `.agentic/experiment.yaml`): the raw parsed YAML, validated by `domain.experiment`."""
+
+    def read(self) -> object | None:
+        """The parsed YAML, or `None` when the product declares no experiment (no file),
+        which is every product of today. Raises `ValueError`, in one line, when the file
+        cannot be read or is not YAML."""
+        ...
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -2054,3 +2073,6 @@ class Ports:
     # The machine's load average, which classifies a `not_ready` (GH-451). `None` reads no load,
     # so no exit is ever excused by one: a red stays red.
     load_reader: LoadReader | None = None
+    # The product's experiment declaration (GH-470). `None` declares none and reads nothing,
+    # which is how every round ran before it existed.
+    experiment: ExperimentFile | None = None

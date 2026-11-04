@@ -3999,6 +3999,9 @@ class PollAction:
     # one that left no lock at all (the caller writes a different comment for each). Other
     # kinds leave the default.
     reason: Literal["reboot", "crash", "orphaned"] = "reboot"
+    # The experiment arm a `launch` was assigned (GH-470); `None` for every other kind and for a
+    # launch with no experiment.
+    arm: str | None = None
 
 
 @dataclass(frozen=True)
@@ -4153,6 +4156,8 @@ class LaunchCandidate:
     since: datetime | None
     prior: int
     limit: int
+    # The arm assigned to this launch (GH-470), `None` when the product declares no experiment.
+    arm: str | None = None
 
 
 RunKind = Literal["role", "merge", "land_checks", "land_model"]
@@ -4508,7 +4513,7 @@ def poll_plan(
                 pace_usd_per_h=pace.pace_usd_per_h,
             )
         ):
-            actions.append(PollAction("launch", ready[0].issue))
+            actions.append(PollAction("launch", ready[0].issue, arm=ready[0].arm))
             slots_left -= 1
 
     exempt_merges = sorted(merges)

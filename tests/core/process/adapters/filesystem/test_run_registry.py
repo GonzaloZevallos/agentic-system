@@ -458,3 +458,26 @@ def test_two_roots_publish_two_records_and_each_rewrite_replaces_its_own(tmp_pat
         ("a", (3,)),
         ("b", (2,)),
     ]
+
+
+# --- GH-470: the arm rides on the launch record ---------------------------------------
+
+
+def test_an_unassigned_launch_record_stays_since_and_prior_exactly(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path)
+    registry.record_launch("apostrophe", 20, T0)
+    registry.record_launch("apostrophe", 20, T0)
+    record = json.loads((tmp_path / "launches" / "apostrophe-20.json").read_text())
+    assert record == {"since": T0.isoformat(), "prior": 2}
+    assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 2)
+
+
+def test_the_arm_survives_every_rewrite_of_the_launch_record_and_clears_with_it(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path)
+    registry.record_launch("apostrophe", 20, T0, arm="light")
+    registry.record_launch("apostrophe", 20, T0)  # a relaunch that names no arm
+    assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 2, "light")
+    registry.record_launch("apostrophe", 20, T0, arm="control")  # an explicit one replaces it
+    assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 3, "control")
+    registry.clear_launch("apostrophe", 20)
+    assert registry.launch_attempts("apostrophe", 20) is None
