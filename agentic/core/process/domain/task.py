@@ -1109,6 +1109,40 @@ class FullChecksRecord(TypedDict):
     deferred: NotRequired[list[str]]
 
 
+class MergeCiRecord(TypedDict):
+    """One pair of the merge gate's fresh GitHub run (GH-463): the pull request `head`
+    merged with `master`, built as the commit `tested`, which `mode` published (`push`:
+    `agentic-ci/<id>`; `dispatch`: `refs/agentic-ci-dispatch/<id>`, judged by a dispatched run
+    of the base's workflow). All shas are full ids. Written before anything is published or
+    dispatched, so a poll round never fires a second run for the same pair. `republished` says
+    the one republish (or second dispatch) of the pair was spent and `superseded` holds the
+    earlier `tested` shas of the pair, whose verdicts never apply. `run_id` is the run that
+    decided the pair, when it could be read; `outcome` how the pair ended; `released_at` the
+    instant the landing released a `no_verdict` pair. No free text in any field."""
+
+    head: str
+    master: str
+    tested: str
+    mode: Literal["push", "dispatch"]
+    published_at: str
+    republished: bool
+    superseded: list[str]
+    run_id: NotRequired[str]
+    outcome: NotRequired[Literal["stale", "no_verdict", "green", "red"]]
+    released_at: NotRequired[str]
+
+
+def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
+    """The pairs of `existing` and `new` as one list in the order first seen, one row per
+    `(head, master)`: a row for a known pair replaces it whole, so a record is written before
+    the trigger and updated in place as the pair is republished, decided or released. The
+    only way `merge_ci` is ever written; a document without the key reads as no record."""
+    joined: dict[tuple[str, str], MergeCiRecord] = {}
+    for row in (*existing, *new):
+        joined[(row["head"], row["master"])] = row
+    return list(joined.values())
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -1207,6 +1241,9 @@ class TaskState(TaskInput, total=False):
     task_head: str
     # The latest `full_checks` run (GH-358), persisted as one flow line; absent until one ran.
     full_checks: FullChecksRecord
+    # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
+    # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
+    merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str
@@ -1403,6 +1440,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
                 patch[key] = fresh
+        elif reducer is add_merge_ci:
+            prior = {(r["head"], r["master"]): r for r in old}
+            if grown := [r for r in value if prior.get((r["head"], r["master"])) != r]:
+                patch[key] = grown
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:

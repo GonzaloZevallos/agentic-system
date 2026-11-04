@@ -16,7 +16,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, presubmit
+from . import adr_numbers, ci, merge_ci, presubmit
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -75,6 +75,7 @@ from .task import (
     FinishedPatch,
     FullChecksRecord,
     LapsePauseEntry,
+    MergeCiRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PartRecord,
@@ -4672,6 +4673,9 @@ MergeRefusal = Literal[
     "ci_missing",
     "ci_unreadable",
     "ci_blocked_by_conflict",
+    "ci_no_verdict",
+    "ci_stale_exhausted",
+    "ci_untrusted_no_dispatch",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -4723,6 +4727,15 @@ MergeRefusal = Literal[
 - `ci_blocked_by_conflict` (GH-395): GitHub reads the head as conflicting with its base and
   no required check has a result on it; GitHub runs no CI on such a head, so none will come.
   Decided in the same round with no wait; the landing syncs master instead.
+- `ci_no_verdict` (GH-463): a product that declares `ci:` asked GitHub for a fresh run of the
+  head on the current master and got no verdict, after the one republish (or second dispatch)
+  of the pair: `ci.CI_NO_VERDICT_PAIRS_MAX` pairs since the last release. The landing escalates
+  it with the cause, and releases it once per (head, upstream) pair.
+- `ci_stale_exhausted` (GH-463): master overtook `ci.CI_STALE_PAIRS_MAX` fresh runs of the
+  head, each with a gain that is not inert; the landing syncs master, a new head.
+- `ci_untrusted_no_dispatch` (GH-463): the head touches the CI's own definition and the stack
+  declares no `ci_dispatch`: no workflow of the base can judge it and the local suite no
+  longer runs for a `ci:` product, so it is left to the human at once.
 """
 
 
@@ -4776,7 +4789,16 @@ class MergeFacts:
     to be compared with `current_master`, exactly as before. `github_conflicting` (GH-395) is
     `rules.github_conflicting`'s reading: GitHub reads `CONFLICTING` on the head, whatever the
     base. Only `ci_never_coming` reads it. `close_docs` is the document's record of the
-    close-time capability commit (`head_reviewed` reads it), `None` when there is none."""
+    close-time capability commit (`head_reviewed` reads it), `None` when there is none.
+    The `ci_*` facts below are read only when the stack declares `ci:` (GH-463). `merge_ci` is
+    the document's fresh-run pairs (`task.MergeCiRecord`), `()` for a document that has none;
+    `ci_covered` is `merge_ci.masters_covered_ci`'s verdict on the recorded GitHub pass or the
+    green fresh run (None: not read, which is not covered); `ci_dispatch_declared` whether the
+    stack names a workflow to dispatch for an untrusted head. `ci_subject` says what `ci_head`
+    and `ci_verdict` are about: `pr_head` the pull request's own CI (as always) or `tested`
+    the fresh run on the latest pair's `tested` commit, which `merge_ci.run_stands` then
+    compares with the head, `ci_run_inert` being its reading of what master gained since the
+    pair's master (None: not read)."""
 
     task_id: str
     status: str | None
@@ -4822,6 +4844,12 @@ class MergeFacts:
     # record of this very head deferred (`deferral_state`), `None` when it deferred none.
     deferral: ci.CoveringState | None = None
     deferral_jobs: tuple[str, ...] = ()
+    # GH-463: a `ci:` product's fresh GitHub run in place of the local checks.
+    ci_subject: Literal["pr_head", "tested"] = "pr_head"
+    merge_ci: tuple[MergeCiRecord, ...] = ()
+    ci_dispatch_declared: bool = False
+    ci_covered: bool | None = None
+    ci_run_inert: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -4853,11 +4881,13 @@ def required_paths_missing(required: Sequence[str], touched: Sequence[str]) -> t
 @dataclass(frozen=True)
 class MergeDecision:
     """`merge`: call `Tracker.merge`. `run_checks`: the recorded checks do not cover this
-    head on this master and attempts remain. `wait`: the CI is not decidable yet; nothing
+    head on this master and attempts remain. `ci_run` (GH-463): the same for a product that
+    declares `ci:`, where the answer is one fresh GitHub run of the head on the current master
+    and never a local check. `wait`: the CI is not decidable yet; nothing
     is refused, counted or written, and the next round asks again. `refuse`: leave it,
     `reason` says why."""
 
-    kind: Literal["merge", "run_checks", "wait", "refuse"]
+    kind: Literal["merge", "run_checks", "ci_run", "wait", "refuse"]
     reason: MergeRefusal | None
 
 
@@ -5016,6 +5046,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         # A deferral no job covers (skipped, missing) is no CI verdict: the checks run here.
         if gate is not None and facts.deferral != "uncovered":
             return gate
+    if declares_ci(facts):
+        return _ci_run_decision(facts)
     covers = (
         facts.checks_passed is not None
         and facts.checks_head == facts.pr_head
@@ -5029,6 +5061,40 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def declares_ci(facts: MergeFacts) -> bool:
+    """Whether the stack declares `ci:` (GH-463): a required name the plan did not add. Such a
+    product never runs its suite locally at merge; the plan's names alone do not make it one."""
+    return bool(set(facts.ci_required) - set(facts.ci_plan_only))
+
+
+def _ci_run_decision(facts: MergeFacts) -> MergeDecision:
+    """What replaces `run_checks` for a product that declares `ci:` (GH-463), in this order:
+    `merge` when a GitHub pass covers the head on the current master (#353,
+    `merge_ci.masters_covered_ci`) and is trusted; `ci_untrusted_no_dispatch` at once for a head
+    that touches the CI's definition when the stack has no `ci_dispatch`; `ci_stale_exhausted`
+    and `ci_no_verdict` once their own bound is spent; else `ci_run`, one fresh GitHub run."""
+    if facts.ci_covered is True and _covered_trusted(facts):
+        return MergeDecision("merge", None)
+    if facts.ci_untrusted is True and not facts.ci_dispatch_declared:
+        return MergeDecision("refuse", "ci_untrusted_no_dispatch")
+    counts = merge_ci.pair_counts(facts.merge_ci, facts.pr_head)
+    if counts.stale >= ci.CI_STALE_PAIRS_MAX:
+        return MergeDecision("refuse", "ci_stale_exhausted")
+    if counts.no_verdict >= ci.CI_NO_VERDICT_PAIRS_MAX:
+        return MergeDecision("refuse", "ci_no_verdict")
+    return MergeDecision("ci_run", None)
+
+
+def _covered_trusted(facts: MergeFacts) -> bool:
+    """Whether a covering GitHub pass may decide a `merge` (invariant 6 of GH-463): the head does
+    not touch the CI's definition (`ci_untrusted is False`), or the pass is a dispatched run of
+    the base's workflow -- the `full_checks` one (`ci_dispatched`) or the latest fresh pair's."""
+    latest = merge_ci.latest(facts.merge_ci, facts.pr_head)
+    return ci_trusted(facts.ci_untrusted, facts.ci_dispatched) or (
+        latest is not None and latest["mode"] == "dispatch"
+    )
 
 
 def _master_covered(facts: MergeFacts) -> bool:
@@ -5118,9 +5184,9 @@ def gain_probe_wanted(facts: MergeFacts) -> bool:
     exactly when a covered verdict would change the decision, that is, when no refusal ahead
     of the checks and no CI that merges already settles the pull request, and the recorded
     pass or the attempts left leave it open."""
-    return auto_merge_decision(replace(facts, masters_covered=True)) != auto_merge_decision(
-        replace(facts, masters_covered=False)
-    )
+    return auto_merge_decision(
+        replace(facts, masters_covered=True, ci_covered=True)
+    ) != auto_merge_decision(replace(facts, masters_covered=False, ci_covered=False))
 
 
 def adr_probe_wanted(facts: MergeFacts) -> bool:
@@ -5169,9 +5235,14 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     if facts.ci_unreadable is not None:
         return MergeDecision("refuse", "ci_unreadable") if spent else MergeDecision("wait", None)
     verdict = facts.ci_verdict
-    if verdict is None or not (
-        full_commit_id(facts.ci_head) and same_commit(facts.ci_head, facts.pr_head)
-    ):
+    fresh_run = (
+        merge_ci.latest(facts.merge_ci, facts.pr_head) if facts.ci_subject == "tested" else None
+    )
+    if facts.ci_subject == "tested":
+        about_head = merge_ci.run_belongs(fresh_run, facts.pr_head, facts.ci_head)
+    else:
+        about_head = full_commit_id(facts.ci_head) and same_commit(facts.ci_head, facts.pr_head)
+    if verdict is None or not about_head:
         return MergeDecision("wait", None)
     if verdict.state == "red":
         return MergeDecision("refuse", "ci_failed")
@@ -5180,6 +5251,18 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
             return MergeDecision("refuse", "ci_blocked_by_conflict")
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
     declared = set(facts.ci_required) - set(facts.ci_plan_only)
+    if facts.ci_subject == "tested":
+        # A fresh run stands by `merge_ci.run_stands`, and is trusted when the base's workflow
+        # judged it or the head does not touch the CI's definition.
+        stands = merge_ci.run_stands(
+            fresh_run, facts.pr_head, facts.current_master, facts.ci_run_inert, ran=facts.ci_head
+        )
+        trusted = (fresh_run is not None and fresh_run["mode"] == "dispatch") or (
+            facts.ci_untrusted is False
+        )
+        if declared and stands and trusted:
+            return MergeDecision("merge", None)
+        return None
     if declared and facts.ci_fresh is True and ci_trusted(facts.ci_untrusted, facts.ci_dispatched):
         return MergeDecision("merge", None)
     return None

@@ -317,6 +317,17 @@ CI_DISPATCH_SKEW_S = 120
 CI_DISPATCH_ATTEMPTS = 2
 
 
+# How many pairs (a head merged with a master) of the merge gate's fresh GitHub run may end
+# `stale` per head -- master overtook a decided run with a gain that is not inert -- before the
+# gate refuses `ci_stale_exhausted` and the landing syncs master instead (GH-463).
+CI_STALE_PAIRS_MAX = 3
+
+# How many pairs may end `no_verdict` per head (counted since the last release) before the gate
+# refuses `ci_no_verdict`: a pair counts once its one republish or second dispatch was spent
+# and GitHub still gave no verdict (GH-463).
+CI_NO_VERDICT_PAIRS_MAX = 1
+
+
 @dataclass(frozen=True)
 class DispatchedRun:
     """One workflow run as the port reports it (GH-462): `event` and `display_title` are what

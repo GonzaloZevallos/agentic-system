@@ -313,6 +313,16 @@ def landing_step(
             if spent.conflict_ci_syncs_on_pair >= 1:
                 return exhausted()
             return _sync(step, exhausted, spent, conflicting=False)
+        case "ci_untrusted_no_dispatch":
+            # GH-463: no workflow of the base can judge this head and the local suite no longer
+            # runs for a `ci:` product: left to the human at once.
+            return step("none")
+        case "ci_stale_exhausted":
+            # GH-463: master overtook the fresh runs of this head; it takes master in instead.
+            return _sync(step, exhausted, spent, conflicting=False)
+        case "ci_no_verdict":
+            # GH-463: GitHub gave no verdict for a fresh run; the release is the landing's.
+            return step("escalate")
         case "not_approved" | "head_not_reviewed":
             return pass_("re_review")
         case "open_findings_blocking":
