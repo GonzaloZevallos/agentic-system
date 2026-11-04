@@ -45,6 +45,9 @@ from ...application.ports import (
     AddedLine,
     Checkout,
     FastForwardView,
+    MergeConflict,
+    MergeFailed,
+    MergeRefusal,
     Upstream,
     UpstreamMerge,
 )
@@ -251,15 +254,23 @@ class GitWorkspace:
         # The same flags `system_version` uses, so the two never disagree about a tree.
         return not self._git("status", "--porcelain", "--untracked-files=no", cwd=path)
 
-    def merge(self, path: Path, branch: str, message: str | None = None) -> str | None:
-        """A conflict is not an error of the system: the merge is undone so the
-        checkout stays clean, and the reason goes back for a role to resolve by hand."""
+    def merge(self, path: Path, branch: str, message: str | None = None) -> MergeRefusal | None:
+        """A conflict is not an error of the system: the unmerged paths are read, then the
+        merge is undone so the checkout stays clean, and the reason goes back for a role to
+        resolve by hand. Only a merge that left unmerged paths is a `MergeConflict`
+        (GH-492); a refusal that left none is a `MergeFailed`."""
         notes = ("-m", message) if message is not None else ("--no-edit",)
         result = self._run_locked("merge", *notes, "-q", branch, cwd=path)
         if result.returncode == 0:
             return None
+        # Raw output, read before the abort clears it: the first column is part of a code.
+        status = self._run("status", "--porcelain", cwd=path)
+        unmerged = tuple(
+            line[3:] for line in status.stdout.splitlines() if line[:2] in UNMERGED_CODES
+        )
         self._run("merge", "--abort", cwd=path)
-        return (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
+        reason = (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
+        return MergeConflict(unmerged, reason) if unmerged else MergeFailed(reason)
 
     def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:
         """See `Workspace.build_slice`. `checkout -B` puts `branch` on `master` in the

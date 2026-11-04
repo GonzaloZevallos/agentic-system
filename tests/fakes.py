@@ -45,6 +45,8 @@ from agentic.core.process.application.ports import (
     ListedPullRequest,
     LoadReader,
     MergeCallFailed,
+    MergeConflict,
+    MergeFailed,
     OwnerRuleEntry,
     PerfLock,
     PerfRunner,
@@ -754,6 +756,8 @@ class MemoryWorkspace:
         self.dispatch_refs: dict[str, str] = {}
         # Branches whose merge does not apply, as a real conflict would.
         self.conflicts: set[str] = set()
+        # GH-492: branches `merge` refuses without any unmerged path (`MergeFailed`).
+        self.failed_merges: set[str] = set()
         # `merge_keeping_conflicts` calls, and the paths a scripted conflict leaves
         # (`x.py` when a branch is in `conflicts` but not given here). A branch in
         # `refused_branches` conflicts with nothing to resolve: a refusal with no
@@ -1004,10 +1008,21 @@ class MemoryWorkspace:
     def is_committed(self, path: Path) -> bool:
         return path not in self.uncommitted
 
-    def merge(self, path: Path, branch: str, message: str | None = None) -> str | None:
+    def merge(
+        self, path: Path, branch: str, message: str | None = None
+    ) -> MergeConflict | MergeFailed | None:
+        """A branch in `conflicts` merges with a content conflict (`MergeConflict`, paths
+        from `conflict_paths`, `x.py` by default); one in `failed_merges` is refused with
+        no unmerged path (`MergeFailed`, GH-492)."""
         self.merges.append((path, branch))
         self.merge_messages.append(message)
-        return f"CONFLICT in {branch}" if branch in self.conflicts else None
+        if branch in self.failed_merges:
+            return MergeFailed(f"refused: {branch}")
+        if branch in self.conflicts:
+            return MergeConflict(
+                self.conflict_paths.get(branch, ("x.py",)), f"CONFLICT in {branch}"
+            )
+        return None
 
     def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:
         """GH-297: a head in `slice_conflicts` makes the build answer `None`, a clean one

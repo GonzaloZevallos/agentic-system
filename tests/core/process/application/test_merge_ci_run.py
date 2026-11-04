@@ -362,6 +362,20 @@ def test_a_head_that_conflicts_with_master_publishes_nothing(tmp_path):
     assert set(ports.workspace.removed_checkouts) == {"merge-GH-5"}
 
 
+def test_a_head_the_merge_is_refused_for_without_a_conflict_publishes_nothing_the_same_way(
+    tmp_path,
+):
+    """GH-492: a `MergeFailed` gives the outcome and reason a `MergeConflict` gives today."""
+    ports, clock = _world(), _Clock()
+    ports.workspace.failed_merges.add(MASTER)
+
+    result = _call(ports, tmp_path, clock)
+
+    assert (result.kind, result.reason) == ("refused", "merge_conflict")
+    assert ports.workspace.ci_ref_calls == [] and _pairs(ports) == []
+    assert set(ports.workspace.removed_checkouts) == {"merge-GH-5"}
+
+
 def test_a_spent_stale_bound_refuses_with_the_count_in_its_comment(tmp_path):
     pairs = [
         _pair(master=f"{n}" * 40, outcome="stale") for n in range(4, 4 + ci.CI_STALE_PAIRS_MAX)

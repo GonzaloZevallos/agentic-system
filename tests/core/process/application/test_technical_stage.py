@@ -1073,6 +1073,20 @@ async def test_a_merge_the_fan_in_cannot_do_is_left_for_the_integrator(cfg):
     assert "escalated" not in patch
 
 
+async def test_a_merge_the_fan_in_is_refused_without_a_conflict_is_left_the_same_way(cfg):
+    """GH-492: `MergeFailed` and `MergeConflict` give the same outcome here, byte for byte."""
+    state = {**TASK, "subtasks": {"api": approved("api"), "domain": approved("domain")}}
+    ports = memory_ports(ScriptedRunner())
+    ports.workspace.failed_merges.add("agentic/GH-12.domain")
+    patch = await integrate(state, cfg, ports)
+
+    integration = patch["subtasks"][INTEGRATION]
+    assert integration["conflicts"] == ["agentic/GH-12.domain"]
+    assert integration["status"] == "pending"
+    assert "`agentic/GH-12.domain`" in integration["brief"]
+    assert "escalated" not in patch
+
+
 async def test_the_integrator_runs_when_the_plan_declared_integration_work(cfg):
     """No conflict and the merges are the whole job: nothing for a Developer to do, and
     the integration goes to its review delivered. Unless the plan said otherwise."""
