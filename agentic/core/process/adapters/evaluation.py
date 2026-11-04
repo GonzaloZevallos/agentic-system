@@ -222,3 +222,25 @@ class EvaluationStack:
         if name.startswith("_"):
             raise AttributeError(name)
         return getattr(self._inner, name)
+
+
+class ClosedInbox:
+    """The inbox of an evaluation root whose frozen entry is not at the conventional path
+    (`file_inbox.frozen_input_path`): it lists no issue and holds no task, so nothing is
+    ever read from the tracker through it. A run handed its entry with `--issue-input`
+    replaces it with the file's own `FileInbox` (`cli`)."""
+
+    def task(self, number: int) -> Any:
+        raise ValueError(f"issue {number}: an evaluation root has no frozen entry to read")
+
+    def task_id(self, number: int) -> str:
+        raise ValueError(f"issue {number}: an evaluation root has no frozen entry to read")
+
+    def issue_of(self, task_id: str) -> int | None:
+        return None
+
+    def open_issues(self) -> list[tuple[str, str]]:
+        return []
+
+    def open_issue_bodies(self) -> list[tuple[str, str]]:
+        return []

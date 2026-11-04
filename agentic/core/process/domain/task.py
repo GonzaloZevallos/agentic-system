@@ -52,6 +52,10 @@ Status = Literal[
     # A task whose plan is only work on the issue tracker (GH-336): the checklist is posted
     # for the human and the run ends with no pull request. An end like `split`.
     "tracker_only",
+    # An evaluation run that reached the end of its road (GH-470, part 2): the graph sends a
+    # task carrying `evaluation` here instead of `deliver`. An end like `tracker_only`, with
+    # no pull request and no tracker write.
+    "evaluated",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -753,7 +757,7 @@ class ReleasePatch(TypedDict, total=False):
 class FinishedPatch(TypedDict):
     """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
 
-    status: Literal["discarded", "split", "tracker_only"]
+    status: Literal["discarded", "split", "tracker_only", "evaluated"]
     finished_at: str
 
 

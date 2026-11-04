@@ -117,6 +117,8 @@ def _mapped(facts: IssueFacts) -> tuple[Etapa, str | None]:
             return "Necesita humano", SPLIT
         case "tracker_only":
             return "Necesita humano", TRACKER_ONLY
+        case "evaluated":
+            return "Hecha", None
         case _:
             assert_never(status)
 

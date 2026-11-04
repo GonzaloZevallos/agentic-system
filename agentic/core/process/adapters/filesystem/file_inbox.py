@@ -16,6 +16,15 @@ import yaml
 
 from ...domain.task import TaskInput
 
+# Where the driver puts a root's frozen entry: `<root>/.agentic/eval-input/<root name>.yaml`,
+# the root name being the run's task id. `composition.default_ports` reads it by this
+# convention, because the graph builds its ports per node and never sees `--issue-input`.
+FROZEN_DIR = Path(".agentic") / "eval-input"
+
+
+def frozen_input_path(root: Path) -> Path:
+    return root / FROZEN_DIR / f"{root.resolve().name}.yaml"
+
 
 class FileInbox:
     def __init__(self, path: Path):
