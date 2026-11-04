@@ -543,3 +543,5 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-451
+  GH-462@review:
+    cost_usd: 0.1102
