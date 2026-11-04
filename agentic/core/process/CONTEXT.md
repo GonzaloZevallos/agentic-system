@@ -199,6 +199,11 @@ _Campo_: invoke_agent — OpenTelemetry GenAI semantic conventions, hoy en estad
 Un hijo de merge o un hijo de `land` que sólo chequea: no corre ningún modelo y no cuenta contra el tope de concurrencia. A lo sumo una está viva por máquina y a lo sumo una se arranca por vuelta. Un aterrizaje que gasta modelo (`land_model`) no es una corrida exenta: cuenta contra el tope y, cuando no queda cupo, usa el Cupo reservado para aterrizaje.
 _Avoid_: corrida libre, non-counting run
 _Campo_: sin término de arte
+Quién la recibe lo decide la Cola exenta.
+
+**Cola exenta**:
+El orden en que los merges y los aterrizajes `land_checks` de todos los productos de la máquina compiten por la única Corrida exenta del tope. Arranca el candidato que más tiempo lleva sin intento (el instante de su último intento, o de su primera vez visto); a igualdad, un merge antes que un aterrizaje, y luego la raíz y el número de issue. Sin registros, es el orden de siempre: todos los merges antes que los aterrizajes, el issue más bajo primero. Un merge que acaba de rechazarse queda al final. Cada poller publica la espera de su cabeza (con TTL) y cede ante la más antigua de otra raíz; un candidato en `backoff`, ocupado o en una vuelta retenida no se publica. Un merge rechazado por `ci_untrusted_no_dispatch` no se reintenta sobre el mismo head y master hasta que uno cambie o venza `EXEMPT_REFUSAL_BACKOFF`; el poller dice una vez, tras `EXEMPT_STARVED_AFTER`, quién tiene el cupo. Las constantes viven en `domain/exempt_queue.py`.
+_Avoid_: turno, cola de merges
 
 **Cupo reservado para aterrizaje**:
 El único cupo por encima del tope de concurrencia que sólo puede usar un aterrizaje que gasta modelo (`land_model`) de una tarea entregada: ni un lanzamiento, ni una reanudación, ni una retoma lo usan. Lo ocupa el aterrizaje mientras vive y, después, la reanudación que lanzó, que el aterrizaje espera ver registrada antes de terminar; así las corridas vivas que cuentan llegan a lo sumo al tope más uno. No es una exención: el aterrizaje y su reanudación cuentan. No arranca mientras una pausa por límite de cuenta del mismo producto espera su calendario. Lo que ve el resto de los productos mientras ese aterrizaje espera es la Espera de aterrizaje.
