@@ -157,7 +157,8 @@ usage: agentic eval [-h] {run,score,compare,findings} ...
 
 positional arguments:
   {run,score,compare,findings}
-    run                 run every task of the evaluation set from scratch, one at a time
+    run                 run every entry of the evaluation set from its pinned base, once per arm,
+                        each in its own root and one at a time
     score               write one JSONL line per evaluation-set task, read off its own document
     compare             ADR-0028's scorecard for two baselines, from task documents and local git
                         alone
@@ -171,11 +172,13 @@ options:
 ## `agentic eval run`
 
 ```text
-usage: agentic eval run [-h] --budget USD [--yes] [--dry-run] [--detach] [--set PATH]
-                        [--product-dir PRODUCT_DIR]
+usage: agentic eval run [-h] [--experiment ID] --budget USD [--yes] [--dry-run] [--detach]
+                        [--set PATH] [--product-dir PRODUCT_DIR]
 
 options:
   -h, --help            show this help message and exit
+  --experiment ID       run each entry once per arm of this experiment (master's
+                        .agentic/experiment.yaml); without it, once as `default`
   --budget USD          stop launching further tasks once the observed spend would exceed this
   --yes                 confirm the estimated spend; required to launch anything
   --dry-run             show the set, the resolved issues and the estimate, spending nothing
