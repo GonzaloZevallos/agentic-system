@@ -132,6 +132,7 @@ async def drive(
     ports=None,
     cap=2,
     sleep=None,
+    clock=None,
     **kw,
 ):
     registry = registry or MemoryRunRegistry()
@@ -153,7 +154,7 @@ async def drive(
         yes,
         dry_run,
         sleep=sleep or (lambda s: None),
-        clock=lambda: NOW,
+        clock=clock or (lambda: NOW),
         **kw,
     )
     return registry, roots, spawner
@@ -290,6 +291,43 @@ async def test_another_products_land_wait_or_an_account_pause_holds_until_lifted
     assert len(again.calls) == 1
 
 
+@pytest.mark.anyio
+async def test_an_account_pause_holds_the_launch_and_lifting_it_launches(product):
+    from datetime import timedelta
+
+    from agentic.core.process.application.ports import IssueComment
+
+    escalated = datetime(2026, 10, 2, 19, 30, tzinfo=UTC)
+    ports = memory_ports(free_space=FakeFreeSpace(), experiment=FakeExperimentFile(EXPERIMENT))
+    ports.documents.save(
+        {
+            "id": "GH-19",
+            "escalated": "Developer failed 2 times: API Error: 429",
+            "pause_log": [
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "escalation", "value": "failure"},
+            ],
+        }
+    )
+    ports.tracker.timestamped["GH-19"] = [
+        IssueComment(
+            body="Escalated: Developer failed 2 times: API Error: 429",
+            created_at="2026-10-02T19:30:00Z",
+        )
+    ]
+    now = [escalated + timedelta(minutes=5)]  # the first wait (15 min) has not elapsed
+    held: list[datetime] = []
+
+    def sleep(seconds):
+        held.append(now[0])
+        now[0] = escalated + timedelta(minutes=16)  # the wait elapses: the pause lifts
+
+    registry, _, spawner = await drive(product, ports=ports, sleep=sleep, clock=lambda: now[0])
+    assert len(held) == 1 and len(spawner.calls) == 1
+    assert registry.exclusive_entries >= 2  # looked once while paused, launched the next time
+
+
 def test_the_hold_reasons_come_from_the_pollers_rules(product):
     registry = MemoryRunRegistry()
     paused = [rules.ResumeCandidate(1, "account_limit", NOW, 0, 3, 0, False, None, False)]
@@ -376,6 +414,19 @@ async def test_two_drivers_never_exceed_the_cap_and_a_pollers_count_includes_the
     await drive(products[0], registry=registry, spawner=Watch(registry), cap=1)
     # The second driver starts while a child of the first is registered: it must wait.
     registry.entries.append(RunRegistration(1, "h", "product", "EVAL-1-x-default-1", "role"))
+    # A poller round of the same machine counts that child: nothing starts above the cap.
+    from agentic.core.process.application.ports import IssueState
+    from tests.core.process.application.test_poll import _cfg, _round, _seed_body
+    from tests.fakes import FakeLauncher
+
+    ports = memory_ports(free_space=FakeFreeSpace())
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path / "a", max_concurrent_runs=1), ports, registry, launcher, NOW)
+    assert launcher.spawned == [] and lines == ["agentic: poll: nothing to do this round"]
+    assert counted() == 1
 
     def sleep(seconds):
         first_waits.append(1)
@@ -386,14 +437,32 @@ async def test_two_drivers_never_exceed_the_cap_and_a_pollers_count_includes_the
 
 
 def test_a_poller_round_keeps_an_evaluation_childs_scratch_and_names_it_to_no_tracker(tmp_path):
+    from datetime import timedelta
+
+    from agentic.core.process.domain import reaping
+    from agentic.core.process.domain import scratch as scratch_domain
     from tests.core.process.application.test_poll import _cfg, _no_sleep, _round
-    from tests.fakes import FakeLauncher
+    from tests.fakes import FakeLauncher, MemoryScratch
 
     eval_id = f"EVAL-1-{SHA8}-default-1"
-    ports = memory_ports(free_space=FakeFreeSpace())
+    root = tmp_path / ".agentic/eval" / eval_id
+    child_key = reaping.product_key(str(root.resolve()))
+    old = NOW - timedelta(days=1)
+    alive = scratch_domain.RecordFact(old, True)
+    owner = scratch_domain.OwnerEntry(eval_id, "role-1", old, alive)
+    scratch = MemoryScratch()
+    # The child's partition is keyed by its root; a dead product's is quiet and past its grace.
+    scratch.other_partitions = [
+        scratch_domain.PartitionFolder(
+            child_key, old, (scratch_domain.TaskFolder(eval_id, old, (owner,), (old,)),)
+        ),
+        scratch_domain.PartitionFolder("deadproduct0", old, ()),
+    ]
+    ports = memory_ports(free_space=FakeFreeSpace(), scratch=scratch)
     registry = MemoryRunRegistry([RunRegistration(4, "h", "product", eval_id, "role")])
     lines = _round(_cfg(tmp_path), ports, registry, FakeLauncher(), NOW, sleep=_no_sleep)
     assert not any(eval_id in line for line in lines)
+    assert [p.name for p in scratch.other_partitions] == [child_key]  # the dead one went
     tracker = ports.tracker
     named = [*tracker.comments, *tracker.labels]
     assert all(eval_id not in str(call) for call in named)
