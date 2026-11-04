@@ -65,6 +65,7 @@ from .core.process.adapters.filesystem import (
     FilesystemTaskDocuments,
     liveness,
 )
+from .core.process.adapters.filesystem.file_inbox import FileInbox
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import EventStopFlag, inhibitor
@@ -277,6 +278,12 @@ def build_parser() -> CommandTree:
         type=int,
         metavar="N",
         help="take title and description from GitHub issue N of the product repo (needs gh)",
+    )
+    run.add_argument(
+        "--issue-input",
+        metavar="FILE",
+        help="take the task from this frozen entry file instead of a GitHub issue "
+        "(an evaluation run's input; `eval run` writes it)",
     )
     run.add_argument(
         "--fresh",
@@ -636,8 +643,11 @@ def main() -> None:
     if args.command == "perf":
         sys.exit(_perf_main(args))
     if args.command == "run":
-        if args.issue is None and (args.title is None or args.description is None):
-            run.error("give a title and a description, or --issue N")
+        if args.issue_input is not None:
+            if args.issue is not None or args.title is not None:
+                run.error("--issue-input replaces the title, the description and --issue")
+        elif args.issue is None and (args.title is None or args.description is None):
+            run.error("give a title and a description, or --issue N, or --issue-input FILE")
         if args.issue is not None and args.title is not None:
             run.error("--issue replaces the title and description; give one or the other")
     elif args.command == "resume":
@@ -859,7 +869,13 @@ def main() -> None:
                 child_argv=_child_argv(),
             )
         else:
-            if args.issue is not None:
+            if args.issue_input is not None:
+                # An evaluation run's task is its frozen entry and nothing else: the inbox
+                # of the run is that file for the whole process, so no read reaches `gh`.
+                frozen = _frozen_inbox(Path(args.issue_input))
+                ports = replace(ports, inbox=frozen)
+                task = frozen.task(frozen.issue)
+            elif args.issue is not None:
                 task = ports.inbox.task(args.issue)
             else:
                 task = {
@@ -902,6 +918,22 @@ def main() -> None:
         anyio.run(_signal_guarded, *guard_args)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
+
+
+def _frozen_inbox(path: Path) -> FileInbox:
+    """The inbox over the frozen entry at `path`, refused (`CannotStart`, before anything
+    spends) when the file is unreadable, its entry breaks the set's own rule
+    (`evaluation.entry_refusal`) or its id is not an evaluation id of its own issue."""
+    try:
+        inbox = FileInbox(path)
+    except ValueError as exc:
+        raise CannotStart(str(exc)) from exc
+    if (reason := evaluation.entry_refusal(inbox.entry, path)) is not None:
+        raise CannotStart(reason)
+    parsed = evaluation.parse_eval_task_id(inbox.id)
+    if parsed is None or parsed.issue != inbox.issue:
+        raise CannotStart(f"{path}: id {inbox.id!r} is not an evaluation id of issue {inbox.issue}")
+    return inbox
 
 
 def _load_declaration(path: Path) -> experiment.Experiment:

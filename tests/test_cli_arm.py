@@ -4,8 +4,11 @@ document that holds one (GH-470, subtask `run-arm`). The seams: the `agentic run
 `cli._resume` from a document. No test here spends: the graph is a double."""
 
 import pytest
+import yaml
 
 from agentic import cli
+from agentic.core.process.adapters.filesystem.file_inbox import FileInbox
+from agentic.core.process.adapters.github.inbox import GhInbox
 from agentic.core.process.adapters.langgraph.graph import configuration_from
 from agentic.core.process.application import poll
 from agentic.core.process.domain.experiment import ARM_FLAG, EXPERIMENT_FILE_FLAG
@@ -344,3 +347,89 @@ async def test_a_fresh_run_carries_the_arm_through_the_real_graph(monkeypatch, t
     )
     assert state["assignment"] == LIGHT
     assert seen and all(cfg.review_mode == "light" for cfg in seen)
+
+
+# --- `run --issue-input`: the task of an evaluation run comes from its frozen entry ---
+
+FROZEN = {
+    "id": "EVAL-7-aaaaaaaa-control-1",
+    "issue": 7,
+    "base": "a" * 40,
+    "title": "Frozen title",
+    "body": "Frozen body",
+}
+
+
+def frozen_file(tmp_path, **overrides):
+    path = tmp_path / "entry.yaml"
+    path.write_text(yaml.safe_dump({**FROZEN, **overrides}))
+    return path
+
+
+def run_input(monkeypatch, root, *extra):
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "--product-dir", str(root), *extra])
+    cli.main()
+
+
+def test_run_issue_input_builds_the_task_from_the_file_and_never_asks_the_tracker(
+    monkeypatch, tmp_path
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("gh was called")
+
+    monkeypatch.setattr(GhInbox, "task", forbidden)
+    monkeypatch.setattr(GhInbox, "open_issues", forbidden)
+    root = declared(tmp_path)
+    seen = capture(monkeypatch)
+    run_input(monkeypatch, root, "--issue-input", str(frozen_file(tmp_path)), ARM_FLAG, "light")
+    task, _cfg, ports = seen["args"][:3]
+    assert task == {
+        "id": "EVAL-7-aaaaaaaa-control-1",
+        "title": "Frozen title",
+        "description": "Frozen body",
+        "evaluation": {"issue": 7, "base": "a" * 40, "ci": "local"},
+    }
+    assert isinstance(ports.inbox, FileInbox)
+    assert ports.inbox.open_issues() == []
+    assert seen["keywords"]["assignment"] == LIGHT
+
+
+@pytest.mark.parametrize("extra", [["--issue", "7"], ["t", "d"]])
+def test_run_issue_input_excludes_the_other_ways_to_name_a_task(
+    monkeypatch, tmp_path, capsys, extra
+):
+    capture(monkeypatch)
+    with pytest.raises(SystemExit) as info:
+        run_input(monkeypatch, product(tmp_path, "p"), *extra, "--issue-input", "x.yaml")
+    assert info.value.code == 2
+    assert "--issue-input" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"base": "main"}, "base"),
+        ({"base": "A" * 40}, "base"),
+        ({"issue": 0}, "issue"),
+        ({"body": ""}, "body"),
+        ({"id": "GH-7"}, "GH-7"),
+        ({"id": "EVAL-8-aaaaaaaa-control-1"}, "issue 7"),
+    ],
+)
+def test_run_issue_input_with_a_malformed_entry_is_refused_before_anything_spends(
+    monkeypatch, tmp_path, capsys, overrides, reason
+):
+    capture(monkeypatch)
+    path = frozen_file(tmp_path, **overrides)
+    with pytest.raises(SystemExit) as info:
+        run_input(monkeypatch, product(tmp_path, "p"), "--issue-input", str(path))
+    assert info.value.code == 2
+    assert reason in capsys.readouterr().err.splitlines()[-1]
+
+
+def test_run_issue_input_with_a_missing_file_is_refused(monkeypatch, tmp_path, capsys):
+    capture(monkeypatch)
+    with pytest.raises(SystemExit) as info:
+        run_input(monkeypatch, product(tmp_path, "p"), "--issue-input", str(tmp_path / "no.yaml"))
+    assert info.value.code == 2
+    assert "no.yaml" in capsys.readouterr().err
