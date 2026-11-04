@@ -5,15 +5,18 @@ and any way the CI cannot be used runs the local tier with the cause written dow
 
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
 
 from agentic.core.process.application.checkouts import task_base
+from agentic.core.process.application.full_checks import _DISPATCH_DETAIL
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from agentic.core.process.domain.presubmit import CiCover, CiDispatch
 from agentic.core.process.domain.roles import DEVELOPER_INTEGRATOR
-from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, apply
+from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, CiCause, apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryCheckResults,
@@ -429,7 +432,8 @@ async def test_a_github_head_with_the_key_is_judged_by_a_dispatched_green_run_an
     assert record["ran_on"] == "ci_dispatch" and record["run_id"] == 99
     assert "ci_fallback" not in record and record["head"] == FULL
     assert ports.commands.ran == [] and ports.check_scheduler.requests == []
-    assert ports.workspace.ci_ref_calls == [] and ports.tracker.branch_reads == []
+    assert ports.workspace.ci_ref_calls == [("publish_dispatch", "GH-1")]
+    assert ports.tracker.branch_reads == []
     [(workflow, ref, inputs)] = ports.tracker.dispatch_calls
     assert (workflow, ref, inputs) == ("ci.yml", "", {"sha": FULL})
     assert f"{LINK}/unit" in patch["sections"]["Full checks"]
@@ -628,3 +632,86 @@ async def test_correcting_the_name_in_the_document_and_resuming_goes_green_with_
     after = apply(resumed, patch)
     assert after["subtasks"][INTEGRATION]["status"] == before["status"]
     assert after["subtasks"][INTEGRATION].get("returns", 0) == before.get("returns", 0)
+
+
+# --- the head is published to the dispatch ref before it is dispatched (GH-504) --------------
+
+DISPATCH_REF = rules.ci_dispatch_ref("GH-1")
+
+
+def ordered(ports) -> list[str]:
+    """Record the order of `publish_dispatch_ref` and `dispatch_ci` on one list."""
+    calls: list[str] = []
+    publish, dispatch = ports.workspace.publish_dispatch_ref, ports.tracker.dispatch_ci
+
+    def publishing(path, ref):
+        calls.append("publish")
+        return publish(path, ref)
+
+    def dispatching_ci(*args):
+        calls.append("dispatch")
+        return dispatch(*args)
+
+    ports.workspace.publish_dispatch_ref = publishing
+    ports.tracker.dispatch_ci = dispatching_ci
+    return calls
+
+
+async def test_the_head_is_published_to_the_dispatch_ref_before_each_dispatch_and_kept():
+    ports = dispatching((), (), (run_of(job("unit"), job("web")),))
+    calls = ordered(ports)
+    patch = await run(state_of(), ports)
+    assert patch["full_checks"]["ran_on"] == "ci_dispatch"
+    assert calls == ["publish", "dispatch", "publish", "dispatch"]
+    assert list(ports.workspace.dispatch_refs) == ["GH-1"]
+    assert [v for v, _ in ports.workspace.ci_ref_calls] == ["publish_dispatch"] * 2
+    assert ("delete_dispatch", "GH-1") not in ports.workspace.ci_ref_calls
+
+
+async def test_the_dispatch_ref_stays_when_the_verdict_is_red():
+    ports = dispatching((run_of(job("unit"), job("web", "FAILURE")),))
+    await run(state_of(), ports)
+    assert list(ports.workspace.dispatch_refs) == ["GH-1"]
+    assert not any(verb.startswith("delete") for verb, _ in ports.workspace.ci_ref_calls)
+
+
+async def test_a_failed_publish_escalates_as_ci_and_dispatches_nothing():
+    ports = dispatching((run_of(job("unit"), job("web")),))
+    ports.workspace.ci_ref_error = "git push failed: scripted"
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert ports.tracker.dispatch_calls == [] and ports.tracker.dispatched_reads == []
+    assert "publish_failed" in patch["escalated"]
+    assert DISPATCH_REF in patch["escalated"] and FULL[:7] in patch["escalated"]
+    assert "push of ci.yml" not in patch["escalated"]
+
+
+@pytest.mark.parametrize("stage", ["checkout", "setup"])
+async def test_a_run_whose_only_failing_job_failed_before_the_suite_is_ci_not_usable(stage):
+    failed = CiCheck("web", "COMPLETED", "FAILURE", f"{LINK}/web", failed_stage=stage)
+    ports = dispatching((run_of(job("unit"), failed),))
+    state = state_of()
+    patch = await run(state, ports)
+    assert_escalated_ci(patch, ports, state)
+    text = patch["escalated"]
+    assert "checkout_failed" in text and stage in text
+    assert DISPATCH_REF in text and FULL[:7] in text
+    assert "returns" not in patch and "pairs" not in patch
+    assert len(ports.tracker.dispatch_calls) == 1
+
+
+async def test_a_suite_failure_stays_red_and_returns_the_integration():
+    failed = CiCheck("web", "COMPLETED", "FAILURE", f"{LINK}/web", failed_stage="suite")
+    ports = dispatching((run_of(job("unit"), failed),))
+    patch = await run(state_of(), ports)
+    assert patch["full_checks"]["passed"] is False
+
+
+def test_every_ci_cause_has_its_own_dispatch_message_and_none_speaks_of_a_push():
+    for cause in get_args(CiCause):
+        assert cause in _DISPATCH_DETAIL, cause
+        rendered = _DISPATCH_DETAIL[cause].format(
+            ref="ci.yml", min=1.0, stage="checkout", dispatch_ref=DISPATCH_REF, sha="abc1234"
+        )
+        assert "push of ci.yml" not in rendered
+    assert set(_DISPATCH_DETAIL) == set(get_args(CiCause))
