@@ -11,8 +11,8 @@ from agentic.core.process.application.checkouts import task_base
 from agentic.core.process.application.full_checks import full_checks
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.domain import rules
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
-from agentic.core.process.domain.presubmit import CiCover
+from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.presubmit import CiCover, CiDispatch
 from agentic.core.process.domain.roles import DEVELOPER_INTEGRATOR
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, apply
 from agentic.shared.configuration import Configuration
@@ -386,3 +386,168 @@ async def test_an_unreadable_ci_past_the_grace_keeps_waiting_and_never_republish
     assert_escalated_ci(patch, ports, state_of())
     assert clock.now >= CFG.check_timeout_s
     assert ports.workspace.ci_ref_calls == [("publish", REF)]
+
+
+# --- an untrusted head judged by a dispatched run of the base's workflow (GH-462) -----------
+
+FULL = "c" * 40
+DISPATCH = CiDispatch(workflow="ci.yml", sha_input="sha")
+
+
+def run_of(*jobs: CiCheck, run_id: int = 99, title: str = f"CI {FULL}", **more) -> DispatchedRun:
+    fields = {
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "created_at": "2026-11-03T10:00:00Z",
+        **more,
+    }
+    return DispatchedRun(
+        run_id=run_id, display_title=title, link=f"{LINK}/{run_id}", jobs=tuple(jobs), **fields
+    )
+
+
+class FullHead(MemoryWorkspace):
+    """A workspace whose head is a full 40-character sha, as a real one answers."""
+
+    def full_head(self, path):
+        return FULL
+
+
+def dispatching(*listings, dispatch=DISPATCH, **more):
+    ports = ports_of(GREEN, workspace=FullHead(), **more)
+    ports.workspace.diff_paths = ("src/a.py", ".github/workflows/ci.yml")
+    ports.stack.declared_ci_dispatch = dispatch
+    ports.tracker.dispatched = list(listings)
+    return ports
+
+
+async def test_a_github_head_with_the_key_is_judged_by_a_dispatched_green_run_and_runs_nothing():
+    ports = dispatching((run_of(job("unit"), job("web")),))
+    patch = await run(state_of(), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is True
+    assert record["ran_on"] == "ci_dispatch" and record["run_id"] == 99
+    assert "ci_fallback" not in record and record["head"] == FULL
+    assert ports.commands.ran == [] and ports.check_scheduler.requests == []
+    assert ports.workspace.ci_ref_calls == [] and ports.tracker.branch_reads == []
+    [(workflow, ref, inputs)] = ports.tracker.dispatch_calls
+    assert (workflow, ref, inputs) == ("ci.yml", "", {"sha": FULL})
+    assert f"{LINK}/unit" in patch["sections"]["Full checks"]
+
+
+async def test_the_listing_is_asked_with_an_iso_lower_bound_for_the_workflow():
+    ports = dispatching((run_of(job("unit"), job("web")),))
+    await run(state_of(), ports)
+    [(workflow, since)] = ports.tracker.dispatched_reads
+    assert workflow == "ci.yml" and since.endswith("Z") and len(since) == 20
+
+
+async def test_a_dispatched_run_still_going_is_awaited_by_polling():
+    going = run_of(job("unit"), job("web", None, "IN_PROGRESS"), status="in_progress")
+    ports = dispatching((), (going,), (run_of(job("unit"), job("web")),))
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert patch["full_checks"]["ran_on"] == "ci_dispatch"
+    assert clock.slept == [30, 30]
+    assert len(ports.tracker.dispatch_calls) == 1
+
+
+async def test_a_dispatched_red_run_returns_the_integration_and_names_the_run():
+    ports = dispatching((run_of(job("unit"), job("web", "FAILURE")),))
+    state = state_of()
+    patch = await run(state, ports)
+    record = patch["full_checks"]
+    assert record["passed"] is False and record["failed_step"] == "web"
+    assert record["ran_on"] == "ci_dispatch" and record["run_id"] == 99
+    assert patch["subtasks"][INTEGRATION]["returned_by"] == "full_checks"
+    assert apply(state, patch)["subtasks"][INTEGRATION]["status"] == "returned"
+    assert ports.commands.ran == []
+
+
+async def test_a_refused_dispatch_escalates_at_once_with_one_call_and_no_sleep():
+    ports = dispatching()
+    ports.tracker.dispatch_result = CiUnreadable("dispatch_refused")
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert len(ports.tracker.dispatch_calls) == 1 and clock.slept == []
+    assert ports.tracker.dispatched_reads == []
+    assert "dispatch_refused" in patch["escalated"] and "ci.yml" in patch["escalated"]
+
+
+async def test_a_dispatch_with_no_gh_escalates_as_unavailable_without_waiting():
+    ports = dispatching()
+    ports.tracker.dispatch_result = CiUnreadable("gh_unavailable")
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "gh_unavailable" in patch["escalated"]
+    assert len(ports.tracker.dispatch_calls) == 1
+
+
+async def test_no_dispatched_run_dispatches_twice_within_two_graces_and_escalates():
+    ports = dispatching()
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert len(ports.tracker.dispatch_calls) == 2
+    assert clock.now == 2 * CFG.ci_start_grace_s < CFG.check_timeout_s
+    assert "no dispatched run" in patch["escalated"] and "ci.yml" in patch["escalated"]
+    assert "no_run" in patch["escalated"]
+
+
+async def test_a_run_that_appears_after_the_second_dispatch_is_judged():
+    ports = dispatching((), (), (run_of(job("unit"), job("web")),))
+    patch = await run(state_of(), ports)
+    assert patch["full_checks"]["ran_on"] == "ci_dispatch"
+    assert len(ports.tracker.dispatch_calls) == 2
+
+
+async def test_a_push_run_naming_the_head_is_no_dispatched_run():
+    push = run_of(job("unit"), job("web"), event="push")
+    ports = dispatching((push,))
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "full_checks" not in patch
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    [(job("unit"),), (job("unit"), job("web", "SKIPPED"))],
+    ids=["lacks", "skips"],
+)
+async def test_a_completed_run_lacking_or_skipping_a_declared_job_escalates_as_jobs_missing(jobs):
+    ports = dispatching((run_of(*jobs),))
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "jobs_missing" in patch["escalated"] or "without a declared job" in patch["escalated"]
+
+
+async def test_a_dispatched_run_whose_jobs_never_started_escalates_as_not_started():
+    ports = dispatching((run_of(job("unit", "STARTUP_FAILURE"), job("web", "CANCELLED")),))
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "did not start" in patch["escalated"]
+
+
+async def test_an_unreadable_listing_keeps_the_check_timeout_then_escalates():
+    ports = dispatching(CiUnreadable("gh_unreadable"))
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert clock.now >= CFG.check_timeout_s and len(ports.tracker.dispatch_calls) == 1
+
+
+async def test_a_trusted_head_never_dispatches_even_with_the_key():
+    ports = ports_of(GREEN)
+    ports.stack.declared_ci_dispatch = DISPATCH
+    patch = await run(state_of(), ports)
+    assert patch["full_checks"]["ran_on"] == "ci"
+    assert ports.tracker.dispatch_calls == []
+
+
+async def test_without_the_key_the_untrusted_head_still_runs_local():
+    ports = ports_of(GREEN)
+    ports.workspace.diff_paths = (".github/workflows/ci.yml",)
+    patch = await run(state_of(), ports)
+    assert patch["full_checks"]["ran_on"] == "local"
+    assert ports.tracker.dispatch_calls == [] and ports.tracker.dispatched_reads == []

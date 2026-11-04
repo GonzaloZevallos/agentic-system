@@ -71,7 +71,13 @@ from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
-from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment, JobLog
+from agentic.core.process.domain.ci import (
+    CiReport,
+    CiUnreadable,
+    Containment,
+    DispatchedRun,
+    JobLog,
+)
 from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.performance import Run, Scenario
@@ -1491,6 +1497,13 @@ class MemoryTracker:
         self.branch_reports: dict[str, CiReport | CiUnreadable] = {}
         self.ci_reads: list[str] = []
         self.branch_reads: list[str] = []
+        # GH-462: `dispatch_ci` answers `dispatch_result` (None is accepted) and records each
+        # call; `dispatched_ci` answers the scripted listings in order, the last one for good
+        # (an empty list is no run), and records each ask.
+        self.dispatch_result: CiUnreadable | None = None
+        self.dispatch_calls: list[tuple[str, str, dict[str, str]]] = []
+        self.dispatched: list[tuple[DispatchedRun, ...] | CiUnreadable] = []
+        self.dispatched_reads: list[tuple[str, str]] = []
 
     def ci_report(self, reference: str) -> CiReport | CiUnreadable:
         self.ci_reads.append(reference)
@@ -1503,6 +1516,18 @@ class MemoryTracker:
     def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
         self.branch_reads.append(branch)
         return self.branch_reports.get(branch, CiUnreadable("gh_unreadable"))
+
+    def dispatch_ci(
+        self, workflow: str, ref: str, inputs: Mapping[str, str]
+    ) -> CiUnreadable | None:
+        self.dispatch_calls.append((workflow, ref, dict(inputs)))
+        return self.dispatch_result
+
+    def dispatched_ci(self, workflow: str, since: str) -> tuple[DispatchedRun, ...] | CiUnreadable:
+        self.dispatched_reads.append((workflow, since))
+        if not self.dispatched:
+            return ()
+        return self.dispatched.pop(0) if len(self.dispatched) > 1 else self.dispatched[0]
 
     def pull_request(self, reference: str) -> PullRequest | None:
         pull_request_number(reference)  # the adapter's own strictness: a bad reference raises
