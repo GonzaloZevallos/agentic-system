@@ -1079,3 +1079,22 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T00:50:28.601+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before you write in a comment or in your Decisions that a name is re-exported or imported, grep for it and check it is the same object; a moved name must stay reachable under its old path.
+  confidence: medium
+  seen_in:
+  - GH-474
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T04:16:32.166+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a port, a component or a package, update the hand-written architecture pages (ports table, component page) in the same change; regenerating the generated pages is not enough.
+  confidence: medium
+  seen_in:
+  - GH-474
+  sources:
+  - finding
+  added_at: '2026-11-04T04:16:32.166+00:00'
