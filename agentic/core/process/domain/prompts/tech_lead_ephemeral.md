@@ -40,7 +40,7 @@ Each round, in `markdown`:
   nothing to write.
 - Check the plan's `ci_required`, `ci_none_reason` and `required_paths` against the
   issue's done criteria, and ask about every gap: a criterion that names a CI check
-  must be in `ci_required` under the job id the product's workflow uses; one that
+  must be in `ci_required` under the check-run name CI reports (never a matrix job's id); one that
   demands a change to a named file must be in `required_paths`; an empty `ci_required`
   needs a `ci_none_reason` that holds. A brief item that waits on tracker work or on a
   fact that exists only after the pull request is a concrete way the plan fails.

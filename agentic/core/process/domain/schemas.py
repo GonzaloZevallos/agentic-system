@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
 
+from . import ci_workflow
+from .ci_workflow import WorkflowNames
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
@@ -522,8 +524,8 @@ class TechPlan(RoleOutput):
 
     ci_required: list[str] = Field(
         description="The job/check names the issue's done criteria need green on the pull "
-        "request head, copied from the job ids of the product's CI workflow; empty when the "
-        "issue requires no external check (then `ci_none_reason` says why)"
+        "request head: the check-run names CI reports (a matrix job's id is not one); empty "
+        "when the issue requires no external check (then `ci_none_reason` says why)"
     )
     ci_none_reason: str = Field(
         description="When `ci_required` is empty: one line saying why the issue requires no "
@@ -935,12 +937,31 @@ def plan_fits(
     return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
 
 
+def _ci_names_check(
+    data: dict[str, Any], workflow: WorkflowNames | None, stack_ci: Sequence[str]
+) -> None:
+    """Refuses the `ci_required` names the workflows prove are not check-run names
+    (`ci_workflow.refusals`), all of them in one reason."""
+    texts = [*(data.get("required_paths") or [])]
+    for subtask in data.get("subtasks") or []:
+        texts.append(subtask.get("title", ""))
+        texts.append(subtask.get("brief", ""))
+        texts.extend(subtask.get("seams") or [])
+    reasons = ci_workflow.refusals(
+        data.get("ci_required") or [], workflow, stack_ci, ci_workflow.touched_workflows(texts)
+    )
+    if reasons:
+        raise ValueError("; ".join(reasons))
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
     *,
     fit_waived: bool = False,
     part_of: tuple[str, int] | None = None,
+    workflow: WorkflowNames | None = None,
+    stack_ci: Sequence[str] = (),
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -960,7 +981,12 @@ def plan_check_for(
     A task that is itself a part (`part_of`, the `(task id, part)` of its marker) is never
     split again: any `parts` is refused first, with the rule and no remedy that names
     parts, and subtasks over the line are not refused here -- the plan stage asks the human
-    once instead (`plan_fits` decides, ADR-0054)."""
+    once instead (`plan_fits` decides, ADR-0054).
+
+    A `ci_required` name the base's workflows (`workflow`, `None` when there is none to
+    read) prove no check run carries is refused with the names to use instead, unless the
+    plan declares the workflow it would change (GH-485); the stack's `ci:` names are always
+    names a check run carries."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import TRACKER_WITH_PARTS
@@ -970,6 +996,7 @@ def plan_check_for(
     def check(data: dict[str, Any]) -> None:
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
+        _ci_names_check(data, workflow, stack_ci)
         if parts and part_of is not None:
             raise ValueError(
                 f"this task is part {part_of[1]} of {part_of[0]}; a part is never split "

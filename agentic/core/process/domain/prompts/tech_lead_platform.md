@@ -105,9 +105,10 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    {{tracker_with_parts}}
 Done criteria, outside the numbered sections: read the request's done criteria for
 what only GitHub can say and for what must change in a named file, and write them
-down so the system checks them, not a reader's memory. `ci_required`: the job ids of the product's CI workflow (copy them from
-`.github/workflows/`, never invent a name) that the criteria need green on the pull
-request head. If the issue requires no external check, leave it empty and give
+down so the system checks them, not a reader's memory. `ci_required`: the check-run names of the product's CI (read them from
+`.github/workflows/`, never invent a name, and never a matrix job's id: its check runs are
+`id (values)`, so require a job that `needs:` it, or the stack's `ci:` names) that the
+criteria need green on the pull request head. If the issue requires no external check, leave it empty and give
 `ci_none_reason` in one line; exactly one of the two is filled. `required_paths`: for a
 criterion that demands a change to a named file (a flag flipped in `.agentic/stack.yaml`,
 say), the path the integrated diff must touch; empty when none. Never make a brief item
