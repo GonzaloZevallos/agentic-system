@@ -157,6 +157,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.signals": "state",
     "domain.stack_review": "roles",
     "domain.stack_signals": "roles",
+    "domain.speculation": "checks",
     "domain.stall": "machine",
     "domain.suppressions": "checks",
     "domain.system_lessons": "playbook",

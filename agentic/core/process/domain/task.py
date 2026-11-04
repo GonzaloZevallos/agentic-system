@@ -1059,6 +1059,15 @@ class CloseDocs(TypedDict):
     paths: list[str]
 
 
+class CiSpeculation(TypedDict):
+    """The push `review()` made of the final unit's head to `agentic-ci/<id>` ahead of
+    `full_checks` (GH-465): `head` the whole sha pushed, `pushed_at` the ISO instant. Replaced
+    whole by every review of the final unit; carries no verdict."""
+
+    head: str
+    pushed_at: str
+
+
 OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
 """Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
 `owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
@@ -1107,6 +1116,9 @@ class FullChecksRecord(TypedDict):
     # The checks deferred to CI (GH-453), a declared name each; written only when there is one,
     # so a record without a deferral is as it always was.
     deferred: NotRequired[list[str]]
+    # Whether the CI run that gave the verdict was the one a review pushed ahead of this run
+    # (GH-465, `speculation.consumable`); written only when it was, `ran_on` stays `ci`.
+    speculative: NotRequired[bool]
 
 
 class TaskState(TaskInput, total=False):
@@ -1237,6 +1249,10 @@ class TaskState(TaskInput, total=False):
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str
     pushed_at: str
+    # The head the final unit's review published to the CI ref and when (GH-465): the push
+    # fact, never a verdict. Written only by that review (its approval with a whole sha, `None`
+    # on its return), written to the document only when set, read with `.get`.
+    ci_speculation: NotRequired[CiSpeculation | None]
     # The processes a role left running that the release stopped when the task closed
     # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
     # and it is read with `.get`.
