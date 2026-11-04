@@ -15,6 +15,7 @@ graph TD
     m_domain__check_schedule["domain.check_schedule"]
     m_domain__ci["domain.ci"]
     m_domain__ci_push["domain.ci_push"]
+    m_domain__ci_workflow["domain.ci_workflow"]
     m_domain__coverage["domain.coverage"]
     m_domain__master_gain["domain.master_gain"]
     m_domain__merge_ci["domain.merge_ci"]

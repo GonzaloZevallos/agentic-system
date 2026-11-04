@@ -33,6 +33,7 @@ graph TD
     m_application__plan --> g_application__definition
     m_application__plan --> g_application__reflection
     m_application__plan --> g_application__support
+    m_application__plan --> g_domain__checks
     m_application__plan --> g_domain__landing
     m_application__plan --> g_domain__roles
     m_application__plan --> g_domain__state
