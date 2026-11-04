@@ -66,9 +66,13 @@ def test_red_then_green_prints_the_block(tmp_path):
     first = junit(case("test_a", "failure"), case("test_b"))
     second = junit(case("test_a"))
     result = run(tmp_path, first, second)
-    assert result.stdout == (
-        FLAKE_BLOCK_PREFIX + json.dumps({"v": 1, "check": "tests", "tests": [f"{MOD}::test_a"]})
-    ) + "\n"
+    assert (
+        result.stdout
+        == (
+            FLAKE_BLOCK_PREFIX + json.dumps({"v": 1, "check": "tests", "tests": [f"{MOD}::test_a"]})
+        )
+        + "\n"
+    )
     assert result.returncode == 0
 
 
@@ -195,7 +199,7 @@ def test_what_the_script_prints_the_parser_returns_whole(tmp_path):
     assert [r["tests"] for r in records] == [[f"{MOD}::test_p[a b]", f"{MOD}::t2"]]
 
 
-TINY_TESTS = '''
+TINY_TESTS = """
 import pathlib
 
 import pytest
@@ -230,7 +234,7 @@ def test_always_red():
 
 def test_green():
     pass
-'''
+"""
 
 
 def pytest_in(project, *args):
