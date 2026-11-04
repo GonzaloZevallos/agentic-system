@@ -31,6 +31,7 @@ from typing import (
     get_type_hints,
 )
 
+from .ci_push import PushKind
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate
 from .reaping import ReapedProcess
 
@@ -1164,6 +1165,11 @@ class FullChecksRecord(TypedDict):
     # Whether the CI run that gave the verdict was the one a review pushed ahead of this run
     # (GH-465, `speculation.consumable`); written only when it was, `ran_on` stays `ci`.
     speculative: NotRequired[bool]
+    # How many tries the node's own push of the CI ref took and how git's error read at the
+    # last failed one (GH-487); written only when it needed more than one, never when a
+    # review's speculative push was consumed. A number and a closed word, no git text.
+    push_attempts: NotRequired[int]
+    push_kind: NotRequired[PushKind]
 
 
 class MergeCiRecord(TypedDict):

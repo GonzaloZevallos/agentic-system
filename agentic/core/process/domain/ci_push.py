@@ -98,3 +98,13 @@ def scrub(text: str, limit: int = GIT_SAID_LIMIT) -> str:
     if len(line) <= limit:
         return line
     return line[: limit - 1] + "…"
+
+
+def push_failure_markdown(cause: str, ref: str, attempts: int, kind: PushKind, said: str) -> str:
+    """The `Full checks` section of a push that did not go through: the closed `cause`, the
+    ref, how many times it was tried and how git's error read, and git's own words in a quoted
+    block. `said` goes through `scrub` here too, so a text that was not cleaned cannot reach
+    the section; it is joined, never used as a template."""
+    head = f"GitHub CI gave no verdict ({cause}): the push of `{ref}` failed after "
+    tried = f"{attempts} attempt(s) ({kind})."
+    return f"{head}{tried}\n\nGit said:\n\n> {scrub(said)}"
