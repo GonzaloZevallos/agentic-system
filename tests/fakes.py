@@ -2015,10 +2015,22 @@ class FakeCiLogs:
     def __init__(self, logs: list[JobLog] | None = None) -> None:
         self.logs = list(logs or [])
         self.asked: list[tuple[str, str]] = []
+        self.blocks: list[tuple[str, list[str]]] | CiUnreadable | None = None
+        self.flake_asked: list[tuple[str, str, tuple[str, ...]]] = []
 
     def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
         self.asked.append((reference, head))
         return list(self.logs)
+
+    def flake_block(
+        self, reference: str, head: str, jobs: Sequence[str]
+    ) -> list[tuple[str, list[str]]] | CiUnreadable:
+        """GH-464: answers `blocks` (default: every job read, no block) and records the
+        `(reference, head, jobs)` it was asked for."""
+        self.flake_asked.append((reference, head, tuple(jobs)))
+        if self.blocks is not None:
+            return self.blocks
+        return [(job, []) for job in jobs]
 
 
 class FakeExperimentFile:
