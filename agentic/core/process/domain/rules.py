@@ -3699,6 +3699,7 @@ _NOT_INTERRUPTED_STATUSES = (
     "discarded",
     "split",
     "tracker_only",
+    "evaluated",
     "waiting_on_human",
 )
 

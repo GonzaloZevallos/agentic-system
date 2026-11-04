@@ -27,6 +27,7 @@ graph TD
     m_application__delivered["application.delivered"]
     m_application__develop["application.develop"]
     m_application__escalate["application.escalate"]
+    m_application__evaluated["application.evaluated"]
     m_application__integrate["application.integrate"]
     m_application__deliver --> g_application__build__2
     m_application__deliver --> g_application__support
@@ -46,6 +47,10 @@ graph TD
     m_application__escalate --> g_application__support
     m_application__escalate --> g_domain__state
     m_application__escalate --> g_pkg__agentic__shared
+    m_application__evaluated --> g_application__support
+    m_application__evaluated --> g_domain__roles
+    m_application__evaluated --> g_domain__state
+    m_application__evaluated --> g_pkg__agentic__shared
     m_application__integrate --> g_application__build__2
     m_application__integrate --> g_application__support
     m_application__integrate --> g_domain__roles
