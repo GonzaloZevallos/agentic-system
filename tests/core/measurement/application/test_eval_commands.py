@@ -249,7 +249,7 @@ async def test_experiment_counts_the_evaluation_documents_beside_the_tasks(root,
     write_evaluation(root, "EVAL-7-aaaaaaaa-control-1", "bl-a", "control")
     write_evaluation(root, "EVAL-7-aaaaaaaa-fast-1", "bl-a", "fast")
     (root / ".agentic" / "eval" / "docs" / "stray.md").write_text(
-        "---\nid: GH-5\ntitle: t\nstatus: open\nsystem_baseline: bl-a\n---\n\n## Original request\n\nd\n"
+        "---\nid: GH-5\ntitle: t\nstatus: open\nsystem_baseline: bl-a\n---\n\n## Original request\n"
     )
     await eval_commands._eval_compare_experiment(
         Configuration(product_dir=root), memory_ports(), "ex-1", resolve

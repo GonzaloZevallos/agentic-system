@@ -151,7 +151,7 @@ def entry_refusal(entry: object, source: object) -> str | None:
     if unknown := [key for key in entry if key not in ENTRY_KEYS]:
         return f"{source}: unknown entry key(s) {', '.join(sorted(unknown))}; expected {ENTRY_KEYS}"
     issue = entry.get("issue")
-    if not _is_int(issue) or issue < 1:
+    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
         return f"{source}: expected a positive integer `issue` in an entry, got {issue!r}"
     base = entry.get("base")
     if not isinstance(base, str) or not _FULL_SHA.fullmatch(base):

@@ -647,7 +647,7 @@ def main() -> None:
             if args.issue is not None or args.title is not None:
                 run.error("--issue-input replaces the title, the description and --issue")
         elif args.issue is None and (args.title is None or args.description is None):
-            run.error("give a title and a description, or --issue N, or --issue-input FILE")
+            run.error("give a title and a description, or --issue N")
         if args.issue is not None and args.title is not None:
             run.error("--issue replaces the title and description; give one or the other")
     elif args.command == "resume":

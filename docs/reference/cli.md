@@ -44,8 +44,8 @@ options:
 ## `agentic run`
 
 ```text
-usage: agentic run [-h] [--issue N] [--fresh] [--arm NAME] [--experiment-file PATH]
-                   [--product-dir PRODUCT_DIR] [--verbose] [--detach]
+usage: agentic run [-h] [--issue N] [--issue-input FILE] [--fresh] [--arm NAME]
+                   [--experiment-file PATH] [--product-dir PRODUCT_DIR] [--verbose] [--detach]
                    [title] [description]
 
 positional arguments:
@@ -56,6 +56,8 @@ options:
   -h, --help            show this help message and exit
   --issue N             take title and description from GitHub issue N of the product repo (needs
                         gh)
+  --issue-input FILE    take the task from this frozen entry file instead of a GitHub issue (an
+                        evaluation run's input; `eval run` writes it)
   --fresh               start over a task that is paused or ran before: its checkpoint is dropped
                         and its previous branches, if any, archived under archive/run<N>-<sha>/
                         before a fresh run begins

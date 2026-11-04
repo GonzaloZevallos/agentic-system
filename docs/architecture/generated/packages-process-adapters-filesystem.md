@@ -21,6 +21,7 @@ graph TD
     m_adapters__filesystem__check_results["adapters.filesystem.check_results"]
     m_adapters__filesystem__documents["adapters.filesystem.documents"]
     m_adapters__filesystem__experiment_file["adapters.filesystem.experiment_file"]
+    m_adapters__filesystem__file_inbox["adapters.filesystem.file_inbox"]
     m_adapters__filesystem__free_space["adapters.filesystem.free_space"]
     m_adapters__filesystem__liveness["adapters.filesystem.liveness"]
     m_adapters__filesystem__lock["adapters.filesystem.lock"]
@@ -36,6 +37,7 @@ graph TD
     m_adapters__filesystem__check_results --> g_pkg__domain
     m_adapters__filesystem__documents --> g_pkg__adapters
     m_adapters__filesystem__documents --> g_pkg__domain
+    m_adapters__filesystem__file_inbox --> g_pkg__domain
     m_adapters__filesystem__free_space --> g_pkg__domain
     m_adapters__filesystem__liveness --> g_pkg__domain
     m_adapters__filesystem__lock --> g_pkg__application
