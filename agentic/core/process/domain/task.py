@@ -1125,7 +1125,10 @@ class MergeCiRecord(TypedDict):
     decided the pair, when it could be read; `outcome` how the pair ended; `released_at` the
     instant the landing released a `no_verdict` pair. `failing` names the declared checks a `red`
     pair failed and `cause` the closed `CiCause` of a `no_verdict` one, so the landing reads
-    both off the document and never from `gh`'s text. No free text in any field."""
+    both off the document and never from `gh`'s text. `rerun_at` is the instant the landing reran a
+    `red` pair's run by its `run_id`, which also clears `outcome` and `failing`: the gate reads
+    the run again and the wait for its new verdict counts from that instant. No free text in any
+    field."""
 
     head: str
     master: str
@@ -1139,6 +1142,7 @@ class MergeCiRecord(TypedDict):
     released_at: NotRequired[str]
     failing: NotRequired[list[str]]
     cause: NotRequired[CiCause]
+    rerun_at: NotRequired[str]
 
 
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:

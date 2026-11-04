@@ -24,6 +24,7 @@ from ..domain.task import (
     FindingRecord,
     PlanSettledRow,
     TaskState,
+    add_merge_ci,
     apply,
 )
 from . import escalate, landing_plan, landing_sync, merge
@@ -245,6 +246,14 @@ def _rerun_fresh(context: LandingContext, failing: list[str]) -> None:
         context.log(f"agentic: land: {context.task_id}: rerun refused: {refused.cause}")
         return
     _remember_rerun(context, failing)
+    if latest is not None and isinstance(records, list):
+        # The run has a new verdict to come: the pair is undecided again, so the next poll
+        # round sends the merge child to read it (green merges, red is the second red, a `fix`).
+        # Its wait counts from now (`rerun_at`).
+        row = merge_ci.reopened(latest, (context.clock or _now)())
+        context.ports.documents.record_closure(
+            context.task_id, {"merge_ci": add_merge_ci(records, [row])}
+        )
     context.log(f"agentic: land: {context.task_id}: reran run {run_id} on {context.head}")
 
 

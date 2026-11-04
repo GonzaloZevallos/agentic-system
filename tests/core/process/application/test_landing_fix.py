@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.application import landing, landing_fix, landing_plan, poll
+from agentic.core.process.application import landing, landing_fix, landing_plan, merge, poll
 from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.landing_sync import reopen
 from agentic.core.process.application.ports import (
@@ -23,6 +23,7 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.domain import document, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.adr_numbers import Ambiguous, Renaming
+from agentic.core.process.domain.ci import CiCheck, CiReport
 from agentic.core.process.domain.roles import PAIR_PM_TECH_LEAD
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
@@ -2132,23 +2133,87 @@ def _red_pair(**over):
     return pair
 
 
-def test_a_red_fresh_run_of_the_gate_is_rerun_by_its_id_once_then_the_second_red_is_a_fix(tmp_path):
-    """GH-463: `land` reads the gate's red fresh run off the document's `merge_ci` pair, as the
-    merge child does, so the rerun reaches the run by id and the pull request's own runs are
-    never rerun."""
-    ports = _ci_world(_report(_check()))  # the pull request's own CI is green and stale
+REF = "agentic-ci/GH-5"
+RERUN_AT = "2026-10-14T00:00:00+00:00"
+
+
+def _fresh_read(conclusion: str | None):
+    """What the branch's CI says of the pair's `tested` commit after the rerun."""
+    status = "COMPLETED" if conclusion else "IN_PROGRESS"
+    check = CiCheck("web", status, conclusion, "https://github.com/o/r/actions/runs/777/job/1")
+    return CiReport("d" * 40, None, None, None, (check,))
+
+
+def _gate(ports, tmp_path, seconds: int = 60):
+    """One round of the merge child, `seconds` after the rerun."""
+    at = datetime.fromisoformat(RERUN_AT) + timedelta(seconds=seconds)
+    return merge.merge_task(
+        "GH-5",
+        5,
+        _cfg(tmp_path),
+        ports,
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        lambda _line: None,
+        lambda: at.isoformat(),
+    )
+
+
+def _rerun_red_pair(tmp_path):
+    # The pull request's own CI is green and stale: it ran on an older master.
+    ports = _ci_world(_report(_check(), base="9" * 40))
+    ports.workspace.contains_answer = "no"
     ports.documents.record_closure("GH-5", {"merge_ci": [_red_pair(run_id="777")]})
-
     first, _ = _land(ports, tmp_path)
-
     assert first.step == "rerun"
     assert ports.tracker.run_reruns == ["777"]
     assert ports.tracker.rerun_calls == []
     [entry] = [e for e in _doc(ports)["landing"] if e["step"] == "rerun"]
     assert entry["checks"] == ["web"]
+    [pair] = _doc(ports)["merge_ci"]
+    # The run has a verdict to come: the pair is undecided and its wait restarts at the rerun.
+    assert "outcome" not in pair and "failing" not in pair
+    assert pair["run_id"] == "777" and pair["rerun_at"] == RERUN_AT
+    return ports
 
-    launcher = FakeLauncher()
-    second, _ = _land(ports, tmp_path, launcher)
+
+def test_a_red_fresh_run_of_the_gate_is_rerun_by_its_id_and_a_green_rerun_merges(tmp_path):
+    """GH-463: `land` reads the gate's red fresh run off the document's `merge_ci` pair, as the
+    merge child does, so the rerun reaches the run by id and the pull request's own runs are
+    never rerun; the merge child then reads the rerun's verdict, and green merges."""
+    ports = _rerun_red_pair(tmp_path)
+    ports.tracker.branch_reports[REF] = _fresh_read("SUCCESS")
+
+    result = _gate(ports, tmp_path)
+
+    assert result.kind == "merged"
+    assert ports.tracker.merge_calls == [(URL.format(5), HEAD)]
+    assert ports.tracker.rerun_calls == []
+
+
+def test_a_rerun_still_pending_is_waited_for_and_never_a_fix(tmp_path):
+    ports = _rerun_red_pair(tmp_path)
+    ports.tracker.branch_reports[REF] = _fresh_read(None)
+
+    # The wait counts from the rerun, not from the first publication: an hour after the pair was
+    # published is still seconds after the rerun.
+    result = _gate(ports, tmp_path)
+    assert (result.kind, result.reason) == ("stopped", "ci_wait")
+    again, _ = _land(ports, tmp_path)
+    assert again.kind == "skipped" and again.step is None
+    assert ports.tracker.merge_calls == []
+    assert "outcome" not in _doc(ports)["merge_ci"][0]
+
+
+def test_a_second_red_after_the_rerun_is_a_fix(tmp_path):
+    ports = _rerun_red_pair(tmp_path)
+    ports.tracker.branch_reports[REF] = _fresh_read("FAILURE")
+
+    refused = _gate(ports, tmp_path)
+    assert (refused.kind, refused.reason) == ("refused", "ci_failed")
+    assert _doc(ports)["merge_ci"][0]["outcome"] == "red"
+
+    second, _ = _land(ports, tmp_path, FakeLauncher())
 
     assert second.step == "fix"
     assert ports.tracker.run_reruns == ["777"]  # once per head

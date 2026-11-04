@@ -111,7 +111,10 @@ paso que da es `wait`: la puerta decide de nuevo en la ronda siguiente. Una corr
 reintenta con `Tracker.rerun_ci_run(run_id)` (`agentic/core/process/adapters/github/tracker.py`, llamado por `_rerun_fresh` en `agentic/core/process/application/landing_fix.py`) una vez por par, nunca con los runs del pull request; sin
 `run_id` no se reintenta y la puerta republica dentro del par. El aterrizaje ve esa corrida roja por el par
 registrado (`poll.with_recorded_red` y `merge_ci.decided_red`, en `agentic/core/process/application/poll.py` y `agentic/core/process/domain/merge_ci.py`), sin leer GitHub; si
-master ya la superó, el par ya no es el vigente y no hay nada que reintentar.
+master ya la superó, el par ya no es el vigente y no hay nada que reintentar. Al reintentar, `_rerun_fresh`
+deja el par sin decidir (`merge_ci.reopened` borra `outcome` y `failing` y estampa `rerun_at`, desde donde
+cuenta la espera), de modo que la ronda siguiente envía al hijo de merge, que lee la corrida de nuevo: verde
+mergea, pendiente espera y un segundo rojo es un `fix`.
 
 **Cabezas no confiables.**
 

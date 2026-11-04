@@ -538,7 +538,9 @@ def _read_pair(
     republish; after that, no run or a run still undecided is `no_verdict`."""
     tested = pair["tested"]
     published = _instant(pair["published_at"])
-    waited = (_instant(clock()) - published).total_seconds()
+    # The wait counts from the last time GitHub was asked for a run: a rerun restarts it.
+    started = max(published, _instant(pair["rerun_at"])) if "rerun_at" in pair else published
+    waited = (_instant(clock()) - started).total_seconds()
     report: ci.CiReport | None = None
     run_id: str | None = None
     if pair["mode"] == "push":

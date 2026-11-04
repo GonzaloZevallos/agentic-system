@@ -100,6 +100,29 @@ def decided_red(
     return pair if run_stands(pair, pr_head, current_master, None) else None
 
 
+def reopened(record: MergeCiRecord, at: str) -> MergeCiRecord:
+    """`record` after the landing reran its run (`rerun_at` `at`): the pair is undecided again,
+    so it carries no `outcome` and no `failing`, and the gate reads the run once more. Every
+    other field is kept, the `run_id` included."""
+    row = MergeCiRecord(
+        head=record["head"],
+        master=record["master"],
+        tested=record["tested"],
+        mode=record["mode"],
+        published_at=record["published_at"],
+        republished=record["republished"],
+        superseded=list(record["superseded"]),
+        rerun_at=at,
+    )
+    if "run_id" in record:
+        row["run_id"] = record["run_id"]
+    if "released_at" in record:
+        row["released_at"] = record["released_at"]
+    if "cause" in record:
+        row["cause"] = record["cause"]
+    return row
+
+
 def masters_covered_ci(
     full_checks: FullChecksRecord | None,
     fresh: MergeCiRecord | None,
