@@ -797,6 +797,7 @@ def gather_merges(
     busy: frozenset[str] = frozenset(),
     cfg: Configuration | None = None,
     reruns: list[int] | None = None,
+    backed_off: list[int] | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -821,7 +822,9 @@ def gather_merges(
     both have no step, so they are `land_model`. A task is in `found` or in `lands`, never
     both. A task whose pull request closed unmerged after slices landed for it (`cfg` given)
     is closed in its document when git says every unit landed, or its issue goes into
-    `reruns` (when given) when work is left; each says so in one line (GH-334)."""
+    `reruns` (when given) when work is left; each says so in one line (GH-334). A candidate
+    whose `merge_refusal` still holds on its head and master (`exempt_queue.backed_off`, GH-500)
+    goes into `backed_off` (when given) instead of the result: `rules.poll_plan` defers it."""
     out = lines if lines is not None else []
     now = now or datetime.now(UTC)
     if current_master is None:
@@ -909,7 +912,13 @@ def gather_merges(
                     # runs it on the same entry. No step: it can spend a model, so it counts.
                     lands.append(rules.LandCandidate(number, landing_rules.run_kind_of(None, None)))
         else:
-            found.append(number)
+            head = pull_request.head_oid if pull_request is not None else None
+            if backed_off is not None and exempt_queue.backed_off(
+                raw.get("merge_refusal"), head, current_master, now
+            ):
+                backed_off.append(number)
+            else:
+                found.append(number)
     return found
 
 
@@ -2038,6 +2047,7 @@ def run_once(
             experiment_notes,
         )
         merges: list[int] = []
+        backed_off_merges: list[int] = []
         merge_lines: list[str] = []
         lands: list[rules.LandCandidate] = []
         reruns: list[int] = []
@@ -2054,6 +2064,7 @@ def run_once(
                 busy,
                 cfg,
                 reruns,
+                backed_off_merges,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())
@@ -2079,6 +2090,7 @@ def run_once(
                 *crash_retakes,
                 *(r.issue for r in resumes),
                 *merges,
+                *backed_off_merges,
                 *(c.issue for c in lands),
                 *reruns,
             }
@@ -2139,6 +2151,7 @@ def run_once(
             retakes=retakes,
             crash_retakes=sorted(crash_retakes),
             merges=merges,
+            backed_off_merges=backed_off_merges,
             lands=lands,
             live_exempt=exempt_live,
             pace=pace,
@@ -2163,7 +2176,7 @@ def run_once(
         )
         could_start = exempt_head is not None and exempt_queue.startable(
             exempt_head,
-            backed_off=False,
+            backed_off=exempt_head.kind == "merge" and exempt_head.issue in backed_off_merges,
             busy=exempt_live > 0,
             held=bool(held),
             own_live_exempt=own_exempt_live,
