@@ -44,7 +44,8 @@ options:
 ## `agentic run`
 
 ```text
-usage: agentic run [-h] [--issue N] [--fresh] [--product-dir PRODUCT_DIR] [--verbose] [--detach]
+usage: agentic run [-h] [--issue N] [--fresh] [--arm NAME] [--experiment-file PATH]
+                   [--product-dir PRODUCT_DIR] [--verbose] [--detach]
                    [title] [description]
 
 positional arguments:
@@ -58,6 +59,12 @@ options:
   --fresh               start over a task that is paused or ran before: its checkpoint is dropped
                         and its previous branches, if any, archived under archive/run<N>-<sha>/
                         before a fresh run begins
+  --arm NAME            run the task as this arm of the product's experiment: its switches are
+                        written to the task's document and applied to every role (refused when the
+                        environment sets a switch the experiment's arms name)
+  --experiment-file PATH
+                        the experiment declaration to read the arm from (default:
+                        <product>/.agentic/experiment.yaml)
   --product-dir PRODUCT_DIR
                         root of the product repo (AGENTIC_PRODUCT_DIR)
   --verbose             stream each role's generation to stderr

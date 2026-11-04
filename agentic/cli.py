@@ -108,12 +108,13 @@ from .core.process.application.restore import restore_task
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
+from .core.process.domain import experiment, legacy_names, reaping, rules, stack_signals
 from .core.process.domain import landing as landing_rules
-from .core.process.domain import legacy_names, reaping, rules, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
 from .core.process.domain.task import (
+    ArmAssignment,
     Carried,
     PullRequest,
     TaskInput,
@@ -283,6 +284,19 @@ def build_parser() -> CommandTree:
         help="start over a task that is paused or ran before: its checkpoint is dropped and "
         "its previous branches, if any, archived under archive/run<N>-<sha>/ before a fresh "
         "run begins",
+    )
+    run.add_argument(
+        experiment.ARM_FLAG,
+        metavar="NAME",
+        help="run the task as this arm of the product's experiment: its switches are written "
+        "to the task's document and applied to every role (refused when the environment sets "
+        "a switch the experiment's arms name)",
+    )
+    run.add_argument(
+        experiment.EXPERIMENT_FILE_FLAG,
+        metavar="PATH",
+        help="the experiment declaration to read the arm from "
+        "(default: <product>/.agentic/experiment.yaml)",
     )
     resume = add(("resume",), sub, "resume", help="resume the task of issue N where it paused")
     resume.add_argument("--issue", type=int, metavar="N", required=True)
@@ -862,6 +876,7 @@ def main() -> None:
             # `preflight`'s own check at HEAD is what governs the checkout that follows.
             if not args.fresh:
                 declared_stack_of(task["id"], ports)
+            assignment, declared_id = _arm_for_run(args, cfg)
             log_file = _log_file_for(cfg, task["id"])
             stop = StopCause(flag=stop_flag, reaper=ports.reaper)
             work = partial(
@@ -870,11 +885,15 @@ def main() -> None:
                 cfg,
                 bind_task(ports, task["id"]),
                 args.fresh,
+                assignment=assignment,
+                experiment_id=declared_id,
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
                 stop=stop,
             )
+    except CannotStart as exc:  # `run --arm` refused before anything spends
+        parser.exit(exc.code, f"agentic: {exc}\n")
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
@@ -883,6 +902,52 @@ def main() -> None:
         anyio.run(_signal_guarded, *guard_args)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
+
+
+def _load_declaration(path: Path) -> experiment.Experiment:
+    """The experiment declaration at `path`: the one place `agentic run` reads the file."""
+    try:
+        data = yaml.safe_load(path.read_text())
+    except OSError as exc:
+        raise experiment.InvalidExperiment(f"{path}: {exc.strerror or exc}") from exc
+    except yaml.YAMLError as exc:
+        raise experiment.InvalidExperiment(f"{path}: not valid YAML") from exc
+    return experiment.parse_experiment(data, str(path))
+
+
+def _arm_for_run(
+    args: argparse.Namespace, cfg: Configuration
+) -> tuple[ArmAssignment | None, str | None]:
+    """What `agentic run` writes as the task's `assignment`, and the id of the experiment now
+    declared (what a `--fresh` run keeps the previous arm under). Without `--arm`:
+    `(None, id)` for `--fresh` over a valid declaration and `(None, None)` otherwise, so a
+    run that names no arm changes nothing. With it: `CannotStart` -- one line, before
+    anything spends -- when the declaration is invalid, the arm is not in it, or the
+    environment holds a non-default value for a switch some arm names."""
+    path = (
+        Path(args.experiment_file) if args.experiment_file else cfg.agentic_dir / "experiment.yaml"
+    )
+    if args.arm is None:
+        if not args.fresh or not path.is_file():
+            return None, None
+        try:
+            return None, _load_declaration(path).id
+        except experiment.InvalidExperiment:
+            return None, None
+    try:
+        declaration = _load_declaration(path)
+    except experiment.InvalidExperiment as exc:
+        raise CannotStart(str(exc)) from exc
+    chosen = next((arm for arm in declaration.arms if arm.name == args.arm), None)
+    if chosen is None:
+        names = ", ".join(arm.name for arm in declaration.arms)
+        raise CannotStart(f"{path}: no arm named {args.arm!r} (the arms are: {names})")
+    if clash := experiment.conflicts(declaration, cfg):
+        raise CannotStart(
+            f"{experiment.ARM_FLAG} {chosen.name}: the environment sets {', '.join(clash)} to a "
+            "non-default value, which would override the arm: unset it"
+        )
+    return experiment.assignment_of(declaration, chosen), declaration.id
 
 
 def _perf_usage_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
@@ -1486,6 +1551,8 @@ async def _run(
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
     stop: StopCause | None = None,
+    assignment: ArmAssignment | None = None,
+    experiment_id: str | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -1507,6 +1574,12 @@ async def _run(
             # Read before the archive moves the document: a landing restart (GH-239) carries its
             # depth, its cost and the diagnoser's section into the run that replaces it.
             carried, diagnosis = _landing_carry(task["id"], ports) if fresh else (None, "")
+            # A `--fresh` run keeps the arm only under the experiment still declared; under
+            # any other id the task starts unassigned and leaves the old experiment's counts.
+            if assignment is None and fresh:
+                assignment = experiment.carried(
+                    _previous_document(task["id"], ports), experiment_id
+                )
             if diagnosis:
                 task = {**task, "description": f"{task['description']}\n\n{diagnosis}"}
             archive_failures = _archive_previous_run(task["id"], ports)
@@ -1521,6 +1594,8 @@ async def _run(
                 # The one place `decided` is set (`rules.entering`): before any node
                 # runs, so `--fresh`, the poller and `eval run` all reach it.
                 entered = rules.entering(task, cap=cfg.decided_cap, carried=carried)
+                if assignment is not None:
+                    entered = {**entered, "assignment": assignment}
                 if archive_failures:
                     # The archive notice that did not land (GH-389) enters through the state's
                     # reducer with the seed itself: no line edit, no second update on a new thread.
@@ -1529,6 +1604,15 @@ async def _run(
                     migrated_app, entered, config, entered, ports, cfg, "run", stop=stop
                 )
     _report(final, task["id"], ports)
+
+
+def _previous_document(task_id: str, ports: Ports) -> dict | None:
+    """The document `--fresh` is about to archive, read before it moves; `None` when absent
+    or unreadable."""
+    try:
+        return ports.documents.load(task_id)
+    except (ValueError, OSError):
+        return None
 
 
 def _landing_carry(task_id: str, ports: Ports) -> tuple[Carried | None, str]:
@@ -1744,6 +1828,14 @@ async def _resume(
         except ValueError as exc:
             raise CannotStart(str(exc)) from exc
 
+        assigned = r.paused.get("assignment")
+        if assigned and (differing := experiment.disagreements(cfg, assigned["switches"])):
+            # A resume is never refused: the document's arm stays, whatever `.env` says now.
+            print(
+                f"agentic: {task_id}: the environment sets {', '.join(differing)} differently "
+                f"from arm {assigned['arm']!r}; the document's arm is kept",
+                file=sys.stderr,
+            )
         print(resuming.summary(r, cfg, ports))
         if dry_run:
             _print_lock(lock, task_id)
@@ -2871,6 +2963,10 @@ async def _invoke(
     # or `_resume`'s paused state. `finish_invocation` diffs it against the state the
     # invocation leaves with, so a resume reports only what it spent (README.md, 14).
     entering = cast(TaskState, task)
+    # The arm's switches win over the environment's, as they do in every node
+    # (`graph.configuration_from`): the task span carries the arm the roles run under.
+    if assigned := entering.get("assignment"):
+        cfg = experiment.with_switches(cfg, assigned["switches"])
     # The live arm of this invocation's own `Configuration` (ADR-0030): `cli.py` is the
     # composition root, so it calls `metrics.arm_label` directly, the same function
     # `composition._arm_for` closes over for the graph's own per-node role spans.

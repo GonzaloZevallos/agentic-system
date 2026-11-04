@@ -25,6 +25,7 @@ graph TD
     m_domain__document --> m_domain__legacy_names
     m_domain__document --> m_domain__task
     m_domain__experiment --> g_pkg__agentic__shared
+    m_domain__experiment --> m_domain__task
     m_domain__returns --> m_domain__rules
     m_domain__returns --> m_domain__task
     m_domain__rules --> g_domain__checks
