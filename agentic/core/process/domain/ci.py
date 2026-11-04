@@ -32,17 +32,39 @@ _GREEN = frozenset({"SUCCESS", "NEUTRAL"})
 _UNDECIDED = frozenset({"PENDING", "EXPECTED"})
 
 
+# Where a dispatched job failed (GH-504): before the suite (`setup`, `checkout`) CI is not usable
+# and the Developer's code was never run; `suite` is a real red.
+FailedStage = Literal["setup", "checkout", "suite"]
+
+_SETUP_STEP = "Set up job"
+_CHECKOUT_STEP_PREFIX = "Run actions/checkout@"
+
+
+def failed_stage(step_name: str) -> FailedStage:
+    """The stage a failed step belongs to (GH-504): exactly `Set up job` is `setup`; a name that
+    starts with `Run actions/checkout@` (any version) is `checkout`; every other name is `suite`,
+    a `Post Run actions/checkout@...` or a step that merely mentions checkout included."""
+    if step_name == _SETUP_STEP:
+        return "setup"
+    if step_name.startswith(_CHECKOUT_STEP_PREFIX):
+        return "checkout"
+    return "suite"
+
+
 @dataclass(frozen=True)
 class CiCheck:
     """One check run, or one commit status, as GraphQL reports it. `status` and
     `conclusion` hold the raw enum values. A `StatusContext` maps `context` to `name`,
     `state` to `conclusion` and `targetUrl` to `link`, with `status` `COMPLETED` or
-    `PENDING`."""
+    `PENDING`. `failed_stage` is where a dispatched job's first failing step sits (GH-504);
+    its `None` default keeps the GraphQL path and every existing constructor unchanged, and
+    `None` is also what a job with no readable failing step carries: it reads red."""
 
     name: str
     status: str
     conclusion: str | None
     link: str
+    failed_stage: FailedStage | None = None
 
 
 _RUN_SEGMENT = re.compile(r"/actions/runs/(\d+)(?=[/?#]|$)")
@@ -309,6 +331,8 @@ CI_POLL_S = 30
 # A conclusion of a job that never ran any code: GitHub could not start it or it was
 # cancelled. Every red run of this kind reads as "CI not usable", not as a failing suite.
 _NOT_STARTED = frozenset({"STARTUP_FAILURE", "CANCELLED"})
+# The stages before the suite: a job that failed in one of them never ran the code under test.
+_BEFORE_SUITE: frozenset[FailedStage | None] = frozenset({"setup", "checkout"})
 
 
 @dataclass(frozen=True)
@@ -437,7 +461,9 @@ def dispatch_verdict(
     run is `waiting` until `grace_s` and `unreachable/no_run` from then on; a run that is not
     completed is `waiting` until `timeout_s`, then `timed_out`. A completed run that lacks a
     declared job or skipped it is `unreachable/jobs_missing`, before red or the bound; a
-    declared job that never started alone is `unreachable/not_started`. Then `ci_state` decides:
+    declared job that never started alone is `unreachable/not_started`, and one whose every
+    failing declared job failed at `setup` or `checkout` is `unreachable/checkout_failed`
+    (GH-504; a `suite` or unknown stage anywhere among them is red). Then `ci_state` decides:
     undeclared jobs are ignored. No clock of this machine is compared with a GitHub one."""
     declared = tuple(dict.fromkeys(names))
     run = chosen_run(runs, head)
@@ -459,6 +485,8 @@ def dispatch_verdict(
     if verdict.failing:
         if all(check.conclusion in _NOT_STARTED for check in verdict.failing):
             return FullTierVerdict("unreachable", verdict.failing, pending, "not_started")
+        if all(check.failed_stage in _BEFORE_SUITE for check in verdict.failing):
+            return FullTierVerdict("unreachable", verdict.failing, pending, "checkout_failed")
         return FullTierVerdict("red", verdict.failing, pending, None)
     if verdict.state == "green":
         return FullTierVerdict("green", (), (), None)

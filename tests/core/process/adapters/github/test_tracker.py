@@ -1750,6 +1750,97 @@ def test_dispatched_ci_lists_the_dispatch_runs_of_the_workflow_since_a_bound_wit
     assert view == ["gh", "run", "view", "7", "--json", "jobs"]
 
 
+def _job_with_steps(name, conclusion, steps):
+    return {
+        "name": name,
+        "status": "completed",
+        "conclusion": conclusion,
+        "url": f"u/{name}",
+        "steps": steps,
+    }
+
+
+def _dispatched_jobs(*jobs):
+    run = Viewing(
+        _listing((9, "workflow_dispatch", f"CI {SHA}", "completed", "2026-11-03T10:00:00Z")),
+        {"9": json.dumps({"jobs": list(jobs)})},
+    )
+    answer = GhTracker(Path("/p"), run).dispatched_ci("ci.yml", "2026-11-03T09:58:00Z")
+    assert isinstance(answer, tuple)
+    return answer[0].jobs
+
+
+def _step(name, conclusion):
+    return {"name": name, "status": "completed", "conclusion": conclusion, "number": 1}
+
+
+@pytest.mark.parametrize(
+    ("failing_step", "stage"),
+    [
+        ("Run actions/checkout@v7", "checkout"),
+        ("Set up job", "setup"),
+        ("Run uv run pytest", "suite"),
+        ("Post Run actions/checkout@v7", "suite"),
+    ],
+)
+def test_a_failed_step_of_a_dispatched_job_gives_the_stage_of_the_first_failure(
+    failing_step, stage
+):
+    steps = [
+        _step("Set up job", "success" if failing_step != "Set up job" else "failure"),
+        _step("Run actions/checkout@v7", "success"),
+        _step(failing_step, "failure"),
+        _step("Complete job", "skipped"),
+    ]
+    (job,) = _dispatched_jobs(_job_with_steps("check", "failure", steps))
+    assert job == CiCheck("check", "COMPLETED", "FAILURE", "u/check", stage)
+
+
+def test_the_first_failing_step_decides_even_when_a_later_one_failed_too():
+    steps = [
+        _step("Run actions/checkout@v7", "failure"),
+        _step("Run uv run pytest", "failure"),
+    ]
+    (job,) = _dispatched_jobs(_job_with_steps("check", "failure", steps))
+    assert job.failed_stage == "checkout"
+
+
+def test_a_job_without_a_failing_step_or_without_steps_has_no_stage_and_still_parses():
+    green = [_step("Set up job", "success"), _step("Run actions/checkout@v7", "success")]
+    with_steps, without_key = _dispatched_jobs(
+        _job_with_steps("a", "success", green),
+        {"name": "b", "status": "completed", "conclusion": "failure", "url": "u/b"},
+    )
+    assert with_steps.failed_stage is None
+    assert without_key == CiCheck("b", "COMPLETED", "FAILURE", "u/b", None)
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [None, "steps", [1], [{"conclusion": "failure"}], [{"name": 3, "conclusion": "failure"}]],
+    ids=["null", "string", "not-objects", "no-name", "name-not-text"],
+)
+def test_steps_it_cannot_read_leave_the_stage_unknown_and_never_make_the_job_unreadable(steps):
+    (job,) = _dispatched_jobs(_job_with_steps("check", "failure", steps))
+    assert job == CiCheck("check", "COMPLETED", "FAILURE", "u/check", None)
+
+
+def test_a_dispatched_run_whose_only_failure_is_the_checkout_is_unreachable_without_a_return():
+    """End to end over the adapter: the gh JSON of a failed checkout reaches
+    `dispatch_verdict` as `unreachable/checkout_failed`, not red."""
+    from agentic.core.process.domain import ci
+
+    steps = [_step("Set up job", "success"), _step("Run actions/checkout@v7", "failure")]
+    run = Viewing(
+        _listing((9, "workflow_dispatch", f"CI {SHA}", "completed", "2026-11-03T10:00:00Z")),
+        {"9": json.dumps({"jobs": [_job_with_steps("check", "failure", steps)]})},
+    )
+    answer = GhTracker(Path("/p"), run).dispatched_ci("ci.yml", "2026-11-03T09:58:00Z")
+    assert isinstance(answer, tuple)
+    verdict = ci.dispatch_verdict(answer, SHA, ("check",), 10.0, 180.0, 1500.0)
+    assert (verdict.state, verdict.cause) == ("unreachable", "checkout_failed")
+
+
 def test_a_push_run_that_names_the_sha_is_returned_as_what_it_is_and_the_verdict_drops_it():
     """The listing is not trusted to have filtered: the event stays on the run, and
     `ci.chosen_run` is what ignores a `push` whose title holds the sha."""
