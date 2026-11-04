@@ -206,3 +206,34 @@ que git había dicho.
   `anyio.to_thread.run_sync`. Es aceptable ante `agentic stop` porque el desenrollado no deja estado
   a medias: la marca se escribe antes de la señal, el push sólo toca el ref de la propia tarea y la
   reanudación vuelve a entrar al nodo sobre la misma cabeza.
+
+## Adenda GH-492: el conflicto que git encuentra en el par fresco es un hecho
+
+**Contexto.** En GH-475 (PR #490) la puerta de merge construía la cabeza fusionada con master, git
+encontraba un conflicto y el verbo rechazaba `merge_conflict` sin escribir nada. GitHub seguía
+diciendo `UNKNOWN` más de una hora, así que `conflicts` quedaba en `None`, la decisión llegaba a
+`ci_run`, `land` respondía `skipped: decision_ci_run` y el poller volvía a lanzar `merge` cada
+~90 s: nadie resolvía el conflicto.
+
+**Decisión.**
+
+- **Se registra.** El conflicto que git encuentra al construir el par fresco (`merge._build_pair`,
+  sólo si el merge dejó rutas sin resolver: `MergeConflict`) se guarda como un hecho de ese
+  `(cabeza, master)` exacto: `merge_conflict: {head, master, at}`, una sola fila que cada escritura
+  reemplaza, por el camino de patch y reductor, nunca reescribiendo el documento. Un fallo del
+  merge sin rutas sin resolver (`MergeFailed`) no es un conflicto: no se registra y la ronda se
+  detiene con `ci_publish_failed`.
+- **Gana sobre GitHub.** `rules.merge_conflicts_from` lee, en orden, el `CONFLICTING` de GitHub sobre
+  esta cabeza y esta base, el conflicto registrado y la sonda. El registrado vale `True` sobre
+  `MERGEABLE` y sobre `UNKNOWN`. `UNKNOWN` es no leído, nunca limpio: con git limpio y sin registro,
+  sigue siendo `ci_run`.
+- **Sólo para su par.** Vale sólo para el par exacto, comparado con `same_commit` y nunca por texto
+  (`domain/merge_conflict.applies`): si se mueve la cabeza o el master, se ignora.
+- **Dónde se aplica.** En la lectura base de `conflicts`: `merge.decide()` y la primera `facts` de
+  `poll.assess_merge`, así un par `unlandable` también rechaza `merge_conflict`.
+- **El bucle termina sin contador.** En la ronda siguiente, `assess_merge` rechaza `merge_conflict`:
+  el poller sigue el camino del aterrizaje y deja de lanzar `merge`, y `land` entra al mismo paso de
+  conflicto, con el mismo presupuesto, que cuando GitHub reporta `CONFLICTING`. La regla de GH-255
+  (un rechazo no escribe nada) vale para todo otro rechazo.
+- **Fuera de alcance.** `integrate.py` y la fusión de `run_checks` siguen tratando todo fallo de
+  `Workspace.merge` como conflicto: es la misma clase de defecto y queda como seguimiento.

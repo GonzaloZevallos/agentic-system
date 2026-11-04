@@ -12,6 +12,7 @@ from agentic.core.knowledge.adapters.git.stack import GitStack
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.git import workspace as workspace_module
 from agentic.core.process.adapters.git.workspace import GitError, UnstageablePath
+from agentic.core.process.application.ports import MergeConflict
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci_push import classify
 from agentic.shared.configuration import Configuration
@@ -225,7 +226,7 @@ def test_a_merge_that_applies_returns_nothing_and_one_that_conflicts_says_why(pr
     (domain.path / "api.py").write_text("post\n")
     ws.commit_all(domain.path, "domain")
     reason = ws.merge(task.path, domain.branch)
-    assert reason is not None and "api.py" in reason
+    assert isinstance(reason, MergeConflict) and "api.py" in reason.reason
     # Undone, so the checkout is one a role can work in and nothing half-merged ships.
     assert ws.is_clean(task.path)
     assert (task.path / "api.py").read_text() == "get\n"

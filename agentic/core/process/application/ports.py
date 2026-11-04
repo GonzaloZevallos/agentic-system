@@ -843,6 +843,29 @@ class FastForwardView:
 
 
 @dataclass(frozen=True)
+class MergeConflict:
+    """`Workspace.merge` could not merge because the two sides edit the same code (GH-492):
+    the merge left `paths` unmerged before it was undone. A fact about the code. `reason` is
+    git's own text, the one the callers already log."""
+
+    paths: tuple[str, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
+class MergeFailed:
+    """`Workspace.merge` did not merge for any reason but a content conflict (GH-492): an
+    unknown branch, a file the merge would overwrite, a git that refused. Nothing was left
+    unmerged, so nothing is known about the code; never recorded as a conflict. `reason`
+    is git's own text."""
+
+    reason: str
+
+
+MergeRefusal = MergeConflict | MergeFailed
+
+
+@dataclass(frozen=True)
 class UpstreamMerge:
     """What `Workspace.merge_upstream_into` reports (GH-239, the landing's sync): `clean`
     says the upstream is now in the checkout's history and committed; otherwise
@@ -953,15 +976,16 @@ class Workspace(Protocol):
         because a new file a Developer forgot to add is missing work."""
         ...
 
-    def merge(self, path: Path, branch: str, message: str | None = None) -> str | None:
+    def merge(self, path: Path, branch: str, message: str | None = None) -> MergeRefusal | None:
         """Bring `branch` into the checkout at `path`: a subtask starts on the code of
         the subtasks it depends on, and the fan-in brings each approved one into the
         task branch. `message` is the merge commit's message when one is made (GH-463: the
         merge gate builds a fresh-run commit with a fixed one); `None` keeps git's own.
-        Merging again is a no-op. Returns why the merge did not happen, or
-        None; a conflict leaves the checkout as it was, for a role to resolve on its
-        own. It is a fact about the code, not a failure of the system, so the use case
-        decides what to do with it."""
+        Merging again is a no-op. Returns `None` for a merge that happened, `MergeConflict`
+        when it left unmerged paths and `MergeFailed` for any other refusal (GH-492); either
+        way the checkout is as it was, for a role to resolve on its own. A conflict is a
+        fact about the code, not a failure of the system, so the use case decides what to
+        do with it."""
         ...
 
     def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:

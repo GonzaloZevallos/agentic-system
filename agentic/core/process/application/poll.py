@@ -29,7 +29,7 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, experiment, merge_ci, presubmit, rules
+from ..domain import ci, document, experiment, merge_ci, merge_conflict, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
@@ -512,20 +512,23 @@ def ci_wait_line(
     return f"agentic: poll: auto-merge #{number} -> waiting: ci {what} ({bound})"
 
 
-ConflictSource = Literal["github", "probe"]
+ConflictSource = Literal["github", "probe", "recorded"]
 
 
 def read_conflicts(
-    ports: Ports, pull_request: PullRequest | None, head: str, master: str
+    ports: Ports, pull_request: PullRequest | None, head: str, master: str, *, recorded: bool
 ) -> tuple[bool | None, ConflictSource]:
-    """`MergeFacts.conflicts` for `head` on `master` (GH-326), shared by the poller and the
-    merge verb so both read it the same way: GitHub's reading when
-    `rules.merge_conflicts_from` takes it as a conflict -- git is then not asked -- and the
-    merge-tree probe otherwise. The source is log text, nothing else."""
-    if rules.merge_conflicts_from(pull_request, head, master, None) is True:
+    """`MergeFacts.conflicts` for `head` on `master` (GH-326, GH-492), shared by the poller and
+    the merge verb so both read it the same way: GitHub's reading, or the conflict git recorded
+    for this exact pair (`recorded`), when `rules.merge_conflicts_from` takes it as a conflict
+    -- git is then not asked -- and the merge-tree probe otherwise. The source is log text,
+    nothing else."""
+    if rules.merge_conflicts_from(pull_request, head, master, None, recorded=False) is True:
         return True, "github"
+    if recorded:
+        return True, "recorded"
     probe = ports.workspace.merge_conflicts(head, master)
-    return rules.merge_conflicts_from(pull_request, head, master, probe), "probe"
+    return rules.merge_conflicts_from(pull_request, head, master, probe, recorded=False), "probe"
 
 
 def read_criteria(ports: Ports, head: str, master: str) -> tuple[str, ...] | None:
@@ -591,6 +594,14 @@ def assess_merge(
     if pull_request is not None and rules.pr_abandoned(pull_request.state):
         return Abandoned(pull_request)
     facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
+    # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this
+    # exact pair, so a recorded conflict refuses `merge_conflict` here, unlandable pair or not.
+    recorded = merge_conflict.applies(raw.get("merge_conflict"), facts.pr_head, current_master)
+    base_conflicts = rules.merge_conflicts_from(
+        pull_request, facts.pr_head, current_master, None, recorded=recorded
+    )
+    if base_conflicts is True:
+        facts = replace(facts, conflicts=True)
     try:
         declared = ports.stack.ci(task_base(raw, ports))
     except ValueError as exc:
@@ -629,7 +640,9 @@ def assess_merge(
     ):
         # GH-255: a head that does not merge with master is a conflict before it is a CI
         # fact. Git is asked only now, with every git-free refusal ahead of it ruled out.
-        conflicts, source = read_conflicts(ports, pull_request, facts.pr_head, current_master)
+        conflicts, source = read_conflicts(
+            ports, pull_request, facts.pr_head, current_master, recorded=recorded
+        )
         unread = conflicts is None
         facts = replace(facts, conflicts=conflicts)
         decision = rules.auto_merge_decision(gated(facts))
