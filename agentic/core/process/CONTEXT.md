@@ -581,7 +581,7 @@ La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform e
 _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)
 
 **Asignación de brazo**:
-La decisión del poller, al lanzar una tarea, de bajo qué brazo del experimento declarado por el producto (`.agentic/experiment.yaml`) corre: `alternate` reparte por déficit sobre las cuentas y `seeded` por el hash del issue. Queda en el documento como `assignment` (`experiment`, `arm`, `switches`) y en el registro del lanzamiento mientras no hay documento; el relanzamiento conserva el brazo. Con la declaración inválida o un conflicto con el `.env`, la tarea corre sin asignar. Se lee solo a través de `metrics.arm_of`, nunca por el nombre del brazo (ADR-0080, que enmienda el ADR-0030).
+La decisión del poller, al lanzar una tarea, de bajo qué brazo del experimento declarado por el producto (`.agentic/experiment.yaml`) corre: `alternate` reparte por déficit sobre las cuentas y `seeded` por el hash del issue. Queda en el documento como `assignment` (`experiment`, `arm`, `switches`) y en el registro del lanzamiento mientras no hay documento; el relanzamiento conserva el brazo. Con la declaración inválida o un conflicto con el `.env`, la tarea corre sin asignar. Se lee solo a través de `metrics.arm_of`, nunca por el nombre del brazo (ADR-0081, que enmienda el ADR-0030).
 _Avoid_: tratamiento, cohorte, grupo
 _Campo_: random assignment / allocation — de los ensayos controlados; `alternate` es *deficit round-robin* y `seeded` un *hash bucketing*
 

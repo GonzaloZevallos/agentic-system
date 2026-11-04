@@ -185,6 +185,6 @@ primer síntoma.
   paralelismo y sí compra una barrera de fan-in, un merge de dependencia y una revisión más para
   nueve archivos, con un solo escritor real de `telemetry.py` y del README.
 
-## Addendum (GH-470, ADR-0080): la asignación es la segunda fuente del brazo
+## Addendum (GH-470, ADR-0081): la asignación es la segunda fuente del brazo
 
-El brazo de una tarea sale de su `assignment` si lo tiene y del `experiment` si no, siempre por `metrics.arm_of` y siempre como `arm_label` sobre interruptores. `ARM_KEYS` pasa a derivarse de `ARM_SWITCHES` (`agentic/shared/configuration.py`). Nada de lo decidido arriba cambia; ver ADR-0080.
+El brazo de una tarea sale de su `assignment` si lo tiene y del `experiment` si no, siempre por `metrics.arm_of` y siempre como `arm_label` sobre interruptores. `ARM_KEYS` pasa a derivarse de `ARM_SWITCHES` (`agentic/shared/configuration.py`). Nada de lo decidido arriba cambia; ver ADR-0081.
