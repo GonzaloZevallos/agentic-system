@@ -26,7 +26,7 @@ def test_the_same_head_and_names_are_not_asked_twice():
 
 
 def test_no_budget_is_read_or_spent_even_when_all_are_exhausted():
-    spent = {"passes": landing.LANDING_PASSES_MAX, "syncs": 9, "diagnoses": 1, "waited_s": 1e6}
+    spent = {"passes": landing.LANDING_PASSES_MAX, "syncs": 9, "waited_s": 1e6}
     assert _step(**spent).kind == "escalate"
 
 

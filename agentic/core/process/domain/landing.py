@@ -290,15 +290,16 @@ def landing_step(
     def pass_(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return step(kind, units) if spent.passes < LANDING_PASSES_MAX else exhausted()
 
+    if spent.unlandable:
+        return step("none")
     if refusal == "ci_unknown_names":
         # GH-485: a planning defect, never a failed check. One `escalate` per (head, names)
-        # (`names_escalated`), then nothing; it reads and spends no budget (not even after an
-        # `unlandable` diagnosis) and never goes to `exhausted()`: no diagnose, slice or restart.
+        # (`names_escalated`), then nothing; it spends no budget and never goes to
+        # `exhausted()`: no diagnose, slice or restart. After an `unlandable` diagnosis the
+        # human already owns the task, so that `none` above stands.
         if names_escalated:
             return step("none")
         return LandingStep("escalate", refusal, names=tuple(sorted(facts.ci_unreported)))
-    if spent.unlandable:
-        return step("none")
     if spent.verdict_sync_due:
         return _verdict_sync(step, exhausted, spent)
     match refusal:
