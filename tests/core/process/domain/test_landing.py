@@ -13,6 +13,7 @@ from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import (
     Carried,
+    CiCause,
     CiLogRecord,
     DiagnosisVerdict,
     FailureReason,
@@ -64,6 +65,9 @@ EXPECTED = {
     "ci_unreadable": "wait",
     "ci_blocked_by_conflict": "sync_master",
     "ci_unknown_names": "escalate",
+    "ci_untrusted_no_dispatch": "none",
+    "ci_stale_exhausted": "sync_master",
+    "ci_no_verdict": "escalate",
     "not_approved": "re_review",
     "head_not_reviewed": "re_review",
     "open_findings_blocking": "fix",
@@ -474,6 +478,7 @@ _SAMPLE: dict[object, object] = {
     list[CiLogRecord]: [{"job": "check", "bytes": 1, "cause": "read"}],
     FailureReason: "account_limit",
     DiagnosisVerdict: "sync",
+    CiCause: "no_run",
 }
 
 

@@ -714,6 +714,21 @@ class GhTracker:
             return CiUnreadable("gh_unavailable")
         return None
 
+    def rerun_ci_run(self, run_id: str) -> CiUnreadable | None:
+        """See `Tracker.rerun_ci_run`: `gh run rerun <id> --failed`, the one run the merge gate
+        decided red, never a run listing and never the pull request's. A `run_id` that is not
+        all digits is refused before any call: it would be read by `gh` as a flag or a url."""
+        if not run_id.isascii() or not run_id.isdigit():
+            return CiUnreadable("dispatch_refused")
+        try:
+            self._gh_retrying("run", "rerun", run_id, "--failed")
+        except ValueError as exc:  # `_gh`'s own failure: a refusal, or no `gh` at all
+            missing = isinstance(exc.__cause__, FileNotFoundError)
+            return CiUnreadable("gh_unavailable" if missing else "dispatch_refused")
+        except OSError:  # a `gh` that cannot be run at all (not executable, no permission)
+            return CiUnreadable("gh_unavailable")
+        return None
+
     def dispatched_ci(self, workflow: str, since: str) -> tuple[DispatchedRun, ...] | CiUnreadable:
         """See `Tracker.dispatched_ci`: the listing, then one `gh run view` per run for its
         jobs. `gh` writes statuses and conclusions in lower case; the run keeps `status` as

@@ -113,6 +113,17 @@ sequenceDiagram
    paso siguiente se guardan en una sola escritura de `documents.save`, así que ningún fallo
    deja una liberación sin su paso siguiente. Un escalado que no es de CI (libro
    mayor, ADR, diagnóstico de profundidad 1, GH-328) conserva su comportamiento.
+   **El escalado `ci_no_verdict` (GH-463).** Cuando GitHub no dio veredicto para una corrida
+   fresca, la tabla da `escalate` y `landing_plan.release_asked` también se cumple para ese
+   paso `escalate`, no solo para `diagnose`, si el documento tiene la forma de
+   `agentic/core/process/domain/landing.py:ci_no_verdict_entry`. Ese escalado se libera una vez
+   por par (cabeza, upstream) (`landing_plan._no_verdict_release`): por un upstream nuevo o por un
+   comentario del dueño, y nunca porque la base esté en verde. La liberación la escribe
+   `landing.released_no_verdict`: desescala el documento, marca `released_at` en la entrada
+   `escalate` y en el par `merge_ci` de la cabeza, que le concede un par más al contador
+   `no_verdict` (`agentic/core/process/domain/merge_ci.py:pair_counts`). El paso liberado es `wait`
+   (`landing_plan.released_step`), que `_land` guarda directamente, sin ejecutor, y el poller
+   (`poll._landing_step`) lo devuelve para que un hijo lo persista.
    `agentic resume` consulta la misma decisión
    (`agentic/core/process/application/resume.py:_landing_owns_line`) y solo nombra
    `agentic land` si `land` puede mover la tarea; si espera la CI de la base o un comentario

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agentic.core.process.application import landing
 from agentic.core.process.application.ports import RawResult, Upstream
+from agentic.core.process.domain import ci
 from agentic.core.process.domain.ci import CiCheck, CiReport
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import _cfg
@@ -174,8 +175,29 @@ def test_gh53_master_moving_over_the_units_own_paths_restarts_with_no_clean_slic
     assert ports.tracker.merge_calls == [] and ports.workspace.slice_builds == []
 
 
+def _stale_pairs(ports):
+    """GH-463: a `ci:` product has no local attempts to spend; master overtaking the fresh runs
+    of its head `CI_STALE_PAIRS_MAX` times is what sends it to the landing's sync and slices."""
+    document = ports.documents.load("GH-5") or {}
+    pairs = [
+        {
+            "head": HEAD,
+            "master": f"{n}" * 40,
+            "tested": f"{n + 3}" * 40,
+            "mode": "push",
+            "published_at": "2026-10-22T00:00:00+00:00",
+            "republished": False,
+            "superseded": [],
+            "outcome": "stale",
+        }
+        for n in range(1, 1 + ci.CI_STALE_PAIRS_MAX)
+    ]
+    ports.documents.save({**document, "merge_ci": pairs})
+
+
 def _ci(ports, conclusion: str | None, status: str = "COMPLETED", head: str = SLICE_HEAD):
     ports.stack.declared_ci_all = ("ci",)
+    _stale_pairs(ports)
     checks = (CiCheck("ci", status, conclusion, "link"),)
     ports.tracker.ci_reports[SLICE_URL] = CiReport(head, None, None, "2026-10-22T00:00:00Z", checks)
     # the task's own pull request is green on CI, so its budget (the sync attempts) is what ends

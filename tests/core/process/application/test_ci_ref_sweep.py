@@ -83,7 +83,8 @@ def test_a_listing_that_fails_is_one_line_and_deletes_nothing():
     ports, workspace = _ports({"GH-1": ENDED})
     workspace.ci_ref_error = "git ls-remote failed: could not resolve host"
     lines = ci_ref_sweep.sweep(ports, set())
-    assert len(lines) == 1 and "could not resolve host" in lines[0]
+    # One line per namespace: the branch refs and the dispatch refs are listed apart.
+    assert len(lines) == 2 and all("could not resolve host" in line for line in lines)
     assert ("delete", "agentic-ci/GH-1") not in workspace.ci_ref_calls
 
 
@@ -139,4 +140,77 @@ def test_a_ci_key_that_cannot_be_read_is_one_line_and_no_call_to_the_remote():
     ports.stack.ci_error = "ci: must be a list of names"
     lines = ci_ref_sweep.sweep(ports, set())
     assert len(lines) == 1 and "ci: must be a list" in lines[0]
+    assert workspace.ci_ref_calls == []
+
+
+# -- the dispatch namespace (GH-463) -------------------------------------------------------
+
+
+def _with_dispatch(refs: dict[str, dict[str, object] | None]) -> tuple[Ports, MemoryWorkspace]:
+    ports, workspace = _ports({})
+    for task_id, extra in refs.items():
+        workspace.dispatch_refs[task_id] = "a" * 40
+        if extra is not None:
+            ports.documents.save({"id": task_id, **extra})
+    return ports, workspace
+
+
+def test_an_ended_task_with_no_live_run_loses_its_dispatch_ref_by_the_same_rule():
+    ports, workspace = _with_dispatch(
+        {
+            "GH-1": ENDED,  # ended and dead: deleted
+            "GH-2": ENDED,  # ended but a run is alive: kept
+            "GH-3": {"status": "escalated"},  # not ended: kept
+            "GH-9": None,  # no document: kept
+        }
+    )
+    lines = ci_ref_sweep.sweep(ports, {"GH-2"})
+    assert lines == ["agentic: poll: swept 1 CI dispatch ref(s)"]
+    assert set(workspace.dispatch_refs) == {"GH-2", "GH-3", "GH-9"}
+
+
+def test_both_namespaces_are_swept_in_one_round_and_each_counted():
+    ports, workspace = _ports({"GH-1": ENDED})
+    workspace.dispatch_refs["GH-1"] = "b" * 40
+    lines = ci_ref_sweep.sweep(ports, set())
+    assert lines == [
+        "agentic: poll: swept 1 CI ref(s)",
+        "agentic: poll: swept 1 CI dispatch ref(s)",
+    ]
+    assert not workspace.ci_refs and not workspace.dispatch_refs
+
+
+def test_a_dispatch_listing_that_fails_is_one_line_and_the_branch_refs_are_still_swept():
+    class _NoDispatchListing(MemoryWorkspace):
+        def remote_dispatch_refs(self) -> tuple[str, ...]:
+            raise GitError("git ls-remote failed: could not resolve host")
+
+    ports, workspace = _ports({"GH-1": ENDED}, workspace=_NoDispatchListing())
+    lines = ci_ref_sweep.sweep(ports, set())
+    assert lines[0] == "agentic: poll: swept 1 CI ref(s)"
+    assert len(lines) == 2 and "dispatch" in lines[1] and "could not resolve host" in lines[1]
+
+
+def test_a_dispatch_delete_that_fails_is_one_line_and_the_sweep_goes_on():
+    class _FailsOnOneDispatch(MemoryWorkspace):
+        def delete_dispatch_ref(self, ref: str) -> None:
+            if ref == "GH-1":
+                raise GitError("push rejected")
+            super().delete_dispatch_ref(ref)
+
+    ports, workspace = _ports({}, workspace=_FailsOnOneDispatch())
+    for task_id in ("GH-1", "GH-2"):
+        workspace.dispatch_refs[task_id] = "a" * 40
+        ports.documents.save({"id": task_id, **ENDED})
+    lines = ci_ref_sweep.sweep(ports, set())
+    assert lines[0] == "agentic: poll: swept 1 CI dispatch ref(s)"
+    assert len(lines) == 2 and "GH-1" in lines[1] and "push rejected" in lines[1]
+    assert set(workspace.dispatch_refs) == {"GH-1"}
+
+
+def test_a_product_without_ci_makes_no_dispatch_call_either():
+    ports, workspace = _with_dispatch({"GH-1": ENDED})
+    ports = memory_ports(workspace=workspace, documents=ports.documents, stack=MemoryStack())
+    assert ci_ref_sweep.sweep(ports, set()) == []
+    assert set(workspace.dispatch_refs) == {"GH-1"}
     assert workspace.ci_ref_calls == []

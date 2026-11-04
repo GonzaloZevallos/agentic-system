@@ -325,6 +325,7 @@ _LANDING_WAITS: dict[landing_plan.ReleaseWhy, str] = {
         "removed and the issue open"
     ),
     "waiting_on_base_ci": ("it waits for the base branch CI to turn green, or an owner comment"),
+    "waiting_on_upstream": "it waits for a new base branch sha, or an owner comment",
     "task_cap": "its task cap is spent: raise the task budget",
 }
 
@@ -369,6 +370,7 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
     if (
         step.kind == "escalate"
         and state.get("escalated")
+        and landing_rules.ci_no_verdict_entry(state, head) is None
         and landing_rules.already_dispatched(
             landing_plan.live_entries(state), head, step.kind, master, names=step.names
         )

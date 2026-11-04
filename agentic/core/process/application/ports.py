@@ -946,10 +946,12 @@ class Workspace(Protocol):
         because a new file a Developer forgot to add is missing work."""
         ...
 
-    def merge(self, path: Path, branch: str) -> str | None:
+    def merge(self, path: Path, branch: str, message: str | None = None) -> str | None:
         """Bring `branch` into the checkout at `path`: a subtask starts on the code of
         the subtasks it depends on, and the fan-in brings each approved one into the
-        task branch. Merging again is a no-op. Returns why the merge did not happen, or
+        task branch. `message` is the merge commit's message when one is made (GH-463: the
+        merge gate builds a fresh-run commit with a fixed one); `None` keeps git's own.
+        Merging again is a no-op. Returns why the merge did not happen, or
         None; a conflict leaves the checkout as it was, for a role to resolve on its
         own. It is a fact about the code, not a failure of the system, so the use case
         decides what to do with it."""
@@ -1068,6 +1070,25 @@ class Workspace(Protocol):
         the checkout at `path` to it again, so GitHub sees a branch create: what `full_checks`
         does once when no CI run started on the first push (GH-462). Same ref rules as
         `publish_ci_ref`. Raises `GitError` on any failure; the ref may then be absent."""
+        ...
+
+    def publish_dispatch_ref(self, path: Path, ref: str) -> None:
+        """Force push `HEAD` of the checkout at `path` to `refs/agentic-ci-dispatch/<ref>` on
+        `origin` (GH-463), a ref outside `refs/heads/`: it fires no `push` event, and only a
+        dispatched run of the base's workflow ever reads it. The commit built from an
+        untrusted head goes here and never under `refs/heads/`. Raises `GitError` on any
+        failure."""
+        ...
+
+    def delete_dispatch_ref(self, ref: str) -> None:
+        """Delete `refs/agentic-ci-dispatch/<ref>` from `origin` (GH-463). Raises `GitError`,
+        a ref `origin` lacks included."""
+        ...
+
+    def remote_dispatch_refs(self) -> tuple[str, ...]:
+        """The task ids `origin` holds a `refs/agentic-ci-dispatch/<id>` ref for (GH-463), without
+        the namespace: what `ci_ref_sweep` walks. A failed read or an unreachable origin
+        raises `GitError`: it is never an empty answer."""
         ...
 
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
@@ -1404,6 +1425,14 @@ class Tracker(Protocol):
         (GH-239) and returns the URL of each run it asked to re-run, none when no run on
         that head failed. Raises `ValueError` for a reference that is not a pull request
         URL, before any call, and when the platform cannot answer."""
+        ...
+
+    def rerun_ci_run(self, run_id: str) -> CiUnreadable | None:
+        """Re-runs the failed jobs of the workflow run `run_id` (GH-463), the fresh run of the
+        merge gate that decided red, and nothing else: never the pull request's own runs
+        (`rerun_failed_ci`). `None` means GitHub accepted it; a refusal is
+        `CiUnreadable("dispatch_refused")` and a missing `gh` is `gh_unavailable`, chosen from
+        the step that failed. Never raises."""
         ...
 
     def close_pull_request(self, reference: str) -> None:

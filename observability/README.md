@@ -200,6 +200,15 @@ cuando termine. Los ids son derivados, así que repetirlo completa huecos sin du
 costo es lineal en los documentos: a lo sumo dos lecturas de `gh` y dos envíos (el span y el
 lote de scores) por documento.
 
+## Rechazos del aterrizaje (GH-463)
+
+El atributo de cadena `agentic.landing.refusal` (`agentic/core/measurement/adapters/otel/telemetry.py`) lleva el `MergeRefusal` cerrado (`agentic/core/process/domain/rules.py`) que el aterrizaje
+atiende. Tres valores nuevos, de la corrida fresca de GitHub que reemplaza los chequeos locales de un
+producto con `ci:`: `ci_stale_exhausted` (master adelantó `CI_STALE_PAIRS_MAX` corridas; el
+aterrizaje sincroniza), `ci_no_verdict` (GitHub no dio veredicto; escala y se libera una vez por par
+cabeza/upstream) y `ci_untrusted_no_dispatch` (cabeza no confiable sin `ci_dispatch`; queda para el
+humano). No se agregan métricas ni spans.
+
 ## Dashboards
 
 Cuatro dashboards por producto, definidos en `agentic/core/measurement/domain/dashboards.py`

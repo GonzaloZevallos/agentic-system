@@ -18,6 +18,7 @@ from typing import Any, Literal, assert_never
 from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
+from ..domain import merge_ci
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
@@ -191,7 +192,7 @@ def _land(
     if landing_plan.release_asked(raw, step.kind):
         outcome = landing_plan.release(ports, cfg, task_id, raw, number, head=head, upstream=master)
         if not outcome.released:
-            return _waiting_on_human(task_id, head, outcome.why, log)
+            return _waiting_on_human(task_id, head, outcome.why, log, step.kind)
         # The step after the release is the table's on the document as the release leaves it
         # (a sync, a rerun, a wait), never the diagnose the escalated view gave; it must be
         # one this run may take before anything is written.
@@ -208,6 +209,14 @@ def _land(
         )
         if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
             return _refused(task_id, raw, run_kind, step.kind, head, log)
+        if step.kind == "wait" and released and step.refusal == "ci_no_verdict":
+            # GH-463: the release of a `ci_no_verdict` escalation has no step of its own; the
+            # gate decides again next round. Persisting it is what grants the pair.
+            ports.documents.save(apply(state_from(dict(raw)), released))
+            if outcome.decision is None:
+                ports.tracker.drop_label(task_id, NEEDS_HUMAN)
+            log(f"agentic: land: {task_id}: {head} ci_no_verdict: released, one more pair")
+            return LandResult("dispatched", step=step.kind)
         if not landing_plan.takes_action(step.kind, live):
             log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
             return LandResult("skipped", "not_live", step.kind)
@@ -276,6 +285,12 @@ def _land(
             entry["names"] = list(step.names)
         if upstream.sha is not None:
             entry[UPSTREAM_KEY] = upstream.sha
+        if step.refusal == "ci_no_verdict":
+            # The cause the gate's fresh run recorded on its pair, not the pull request's own
+            # report's: `merge_ci` holds the closed `CiCause`.
+            pair = merge_ci.latest(raw.get("merge_ci", []), head)
+            if pair is not None and "cause" in pair:
+                entry["cause"] = pair["cause"]
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:
@@ -364,6 +379,11 @@ _WAITING_ON: dict[landing_plan.ReleaseWhy, tuple[str, str]] = {
     ),
     "released": ("escalated_waiting_on_human", ""),
     "released_by_ci": ("escalated_waiting_on_human", ""),
+    "released_no_verdict": ("escalated_waiting_on_human", ""),
+    "waiting_on_upstream": (
+        "escalated_waiting_on_upstream",
+        "waiting for a new base branch sha, or an owner comment",
+    ),
 }
 
 
@@ -372,12 +392,13 @@ def _waiting_on_human(
     head: str,
     why: landing_plan.ReleaseWhy,
     log: Callable[[str], None],
+    kind: LandingStepKind = "diagnose",
 ) -> LandResult:
     """An escalated diagnose that stays escalated (GH-328): nothing is written, and the line
     says what releases it instead of reading as a retry that is waiting."""
     reason, needs = _WAITING_ON[why]
-    log(f"agentic: land: {task_id}: {head} diagnose: escalated, waiting on a human ({needs})")
-    return LandResult("skipped", reason, "diagnose")
+    log(f"agentic: land: {task_id}: {head} {kind}: escalated, waiting on a human ({needs})")
+    return LandResult("skipped", reason, kind)
 
 
 MERGING_STEPS: frozenset[LandingStepKind] = frozenset({"sync_master", "re_review", "renumber"})
@@ -537,7 +558,10 @@ def _dispatch(context: LandingContext) -> None:
         case "diagnose":
             landing_fix.diagnose(context)
         case "escalate":
-            landing_fix.escalate_red_on_base(context)
+            if context.step.refusal == "ci_no_verdict":
+                landing_fix.escalate_no_verdict(context)
+            else:
+                landing_fix.escalate_red_on_base(context)
         case "land_slice":
             landing_slice.land_slice(context)
         case "settle":

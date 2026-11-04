@@ -294,6 +294,10 @@ def _decide(
         ci_head=ci_head,
         ci_verdict=ci_verdict,
         ci_unreadable=ci_unreadable,
+        # The slice is built on the current master (a moved one is refused above) and its pull
+        # request's report is about its head: a green CI is fresh. A `ci:` product's decision
+        # asks a fresh GitHub run otherwise, which a slice never gets (GH-463).
+        ci_fresh=True,
         ci_waited_s=ci_waited_s,
         ci_unreported=ci_unreported,
         ci_reported=ci_reported,
