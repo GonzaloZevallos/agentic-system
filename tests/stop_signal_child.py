@@ -218,7 +218,7 @@ async def _run_graph(cfg: Configuration, ports: Ports, product: Path, box: dict[
         seeded = _state(
             type="feature", branch=f"agentic/{TASK}", task_head=head, owner_rules_seen=head
         )
-        # The fan-in has run: the next node the graph reaches is `full_checks`.
+        # The fan-in has run: the next node the graph reaches is `verify`, where `full_checks` runs alone and first.
         await app.aupdate_state(_config(product), seeded, as_node="integrate")
         await app.ainvoke(None, config=_config(product))
 
@@ -252,7 +252,7 @@ async def _resume(scenario: str, product: Path, workdir: Path) -> dict[str, Any]
         report["setup_ran"] = (workdir / "setup.ran").exists()
         return report
     async with composition.checkpointer(cfg, TASK) as saver:
-        app = _graph(ports).compile(checkpointer=saver, interrupt_after=["full_checks"])
+        app = _graph(ports).compile(checkpointer=saver, interrupt_after=["verify"])
         before = await app.aget_state(_config(product))
         saved = await saver.aget_tuple(_config(product))
         report["next"] = list(before.next)
