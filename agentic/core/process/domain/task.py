@@ -721,6 +721,8 @@ class ReleasePatch(TypedDict, total=False):
     pause_log: list[PauseEntry]
     landing: list[LandingEntry]
     sections: dict[str, str]
+    # GH-463: the `merge_ci` pair a `ci_no_verdict` release stamps with `released_at`.
+    merge_ci: list[MergeCiRecord]
 
 
 class FinishedPatch(TypedDict):
@@ -930,6 +932,9 @@ class LandingEntry(TypedDict, total=False):
     # GH-442, `escalate` entries: the upstream sha whose CI release (`landing.released_by_ci`)
     # was recorded for this entry's head, with `released_at` its time. Absent until then.
     ci_released: str
+    # GH-463, `escalate` entries answering `ci_no_verdict`: why GitHub gave no verdict, from the
+    # closed `CiCause`; absent when the cause could not be read.
+    cause: CiCause
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
     # entry it is the master sha the diagnosis was made against.
