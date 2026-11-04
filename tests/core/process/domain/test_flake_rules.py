@@ -1,13 +1,18 @@
 """The pure rules of the rerun (ADR-0066): the verdict, the ids a failure names, and which
 command the rerun uses."""
 
+import pytest
+
 from agentic.core.process.domain.presubmit import (
     FAILED_IDS_MAX,
     FAILED_IDS_TAIL_BYTES,
     RerunForm,
+    check_runs,
     failed_ids,
     flake_verdict,
+    ids_complete,
     rerun_command,
+    rerun_resolved,
 )
 
 FORM = RerunForm(command="pytest --lf", test_id=r"(?m)^FAILED (\S+)")
@@ -100,20 +105,81 @@ def test_a_rerun_row_is_never_rerun():
     )
 
 
-def test_the_delivery_gate_reruns_the_form_when_ids_were_parsed():
+@pytest.mark.parametrize("gate", ["delivery", "merge", "full_checks"])
+def test_every_gate_reruns_the_form_when_ids_were_parsed(gate):
     first = row(False, "FAILED a.py::t\n")
-    assert rerun_command("pytest", first, FORM, "delivery") == "pytest --lf"
+    assert rerun_command("pytest", first, FORM, gate) == "pytest --lf"
 
 
-def test_the_delivery_gate_reruns_the_full_command_when_no_id_was_parsed():
-    assert rerun_command("pytest", row(False, "boom\n"), FORM, "delivery") == "pytest"
+@pytest.mark.parametrize("gate", ["delivery", "merge", "full_checks"])
+def test_every_gate_reruns_the_full_command_when_no_id_was_parsed(gate):
+    assert rerun_command("pytest", row(False, "boom\n"), FORM, gate) == "pytest"
 
 
-def test_the_delivery_gate_reruns_the_full_command_with_no_form():
-    assert rerun_command("pytest", row(False, "FAILED a.py::t\n"), None, "delivery") == "pytest"
+@pytest.mark.parametrize("gate", ["delivery", "merge", "full_checks"])
+def test_every_gate_reruns_the_full_command_with_no_form(gate):
+    assert rerun_command("pytest", row(False, "FAILED a.py::t\n"), None, gate) == "pytest"
 
 
-def test_the_merge_gate_and_full_checks_rerun_the_full_command_never_the_form():
-    first = row(False, "FAILED a.py::t\n")
-    assert rerun_command("pytest", first, FORM, "merge") == "pytest"
-    assert rerun_command("pytest", first, FORM, "full_checks") == "pytest"
+def test_a_not_ready_row_is_never_rerun():
+    assert (
+        rerun_command("pytest", row(False, "FAILED a.py::t\n", not_ready=True), FORM, "merge")
+        is None
+    )
+
+
+def test_the_full_command_reruns_when_the_ids_may_be_incomplete():
+    at_cap = "".join(f"FAILED t{n}.py::t\n" for n in range(FAILED_IDS_MAX + 10))
+    assert rerun_command("pytest", row(False, at_cap), FORM, "merge") == "pytest"
+    assert rerun_command(
+        "pytest", row(False, "FAILED a.py::t\n" + "x" * 70_000), FORM, "merge"
+    ) == ("pytest")
+
+
+# --- ids_complete ------------------------------------------------------------------------
+
+
+def test_ids_are_complete_below_the_cap_and_within_the_tail():
+    assert ids_complete("FAILED a\n", ["a"])
+    assert ids_complete("x" * FAILED_IDS_TAIL_BYTES, ["a"])
+    assert ids_complete("", [f"t{n}" for n in range(FAILED_IDS_MAX - 1)])
+
+
+def test_ids_are_not_complete_at_the_cap_or_past_the_tail():
+    assert not ids_complete("", [f"t{n}" for n in range(FAILED_IDS_MAX)])
+    assert not ids_complete("x" * (FAILED_IDS_TAIL_BYTES + 1), ["a"])
+    # counted in bytes: 2 bytes per character
+    assert not ids_complete("é" * (FAILED_IDS_TAIL_BYTES // 2 + 1), ["a"])
+
+
+# --- rerun_resolved ----------------------------------------------------------------------
+
+
+def test_a_green_form_row_is_resolved():
+    assert rerun_resolved(row(True, "", rerun=True), ["a.py::t"], FORM)
+
+
+def test_a_red_form_row_naming_one_of_the_ids_is_resolved():
+    form_row = row(False, "FAILED a.py::t\nFAILED c.py::u\n", rerun=True)
+    assert rerun_resolved(form_row, ["a.py::t", "b.py::t"], FORM)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "no tests ran\n",  # nothing selected
+        "FAILED a.py::t[a\n",  # a truncated id
+        "error: unrecognized arguments: --lf\n",  # a command error
+        "FAILED other.py::t\n",  # red, but not the tests it was asked to rerun
+    ],
+)
+def test_a_red_form_row_that_names_none_of_the_ids_is_unresolved(output):
+    assert not rerun_resolved(row(False, output, rerun=True), ["a.py::t"], FORM)
+
+
+# --- check_runs --------------------------------------------------------------------------
+
+
+def test_a_check_with_a_form_runs_three_times_at_most_and_without_one_twice():
+    assert check_runs(True) == 3
+    assert check_runs(False) == 2

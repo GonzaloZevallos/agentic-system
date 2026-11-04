@@ -4,7 +4,8 @@ Esta página muestra los módulos del grupo `landing` de `application` y los imp
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks](packages-process-application-checks.md)
+  - [application: checks (parte 1)](packages-process-application-checks-1.md)
+  - [application: checks (parte 2)](packages-process-application-checks-2.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 1)](packages-process-application-landing-1.md)
@@ -28,6 +29,7 @@ graph TD
     m_application__landing_sync["application.landing_sync"]
     m_application__merge["application.merge"]
     m_application__landing_flakes --> g_application__support
+    m_application__landing_flakes --> g_pkg__agentic__shared
     m_application__landing_flakes --> g_pkg__domain
     m_application__landing_plan --> g_application__build
     m_application__landing_plan --> g_application__lifecycle

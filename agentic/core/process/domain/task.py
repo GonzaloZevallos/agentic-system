@@ -293,6 +293,9 @@ class FlakeRecord(TypedDict):
     head: str
     gate: FlakeGate
     tests: list[str]
+    # ISO 8601 UTC instant the gate recorded it (GH-464): what the issue threshold counts. A
+    # record from before it has none and does not count.
+    at: NotRequired[str]
 
 
 def _flake_key(record: FlakeRecord) -> tuple[str, str, str]:
@@ -303,6 +306,7 @@ def add_flakes(existing: list[FlakeRecord], new: list[FlakeRecord]) -> list[Flak
     """The flakes of `existing` and `new` as one list: one record per `(check, head, gate)`,
     its `tests` the two sides' ids as a sorted set capped at `FAILED_IDS_MAX` (sorted, because
     first-seen order would differ with the side that arrives first), the output sorted by key.
+    When records of one key carry `at`, the earliest is kept, for the same reason.
     Idempotent and commutative, so parallel branches that saw the same flake merge to one
     record, whichever lands first. The only way `flakes` is ever written."""
     joined: dict[tuple[str, str, str], FlakeRecord] = {}
@@ -310,6 +314,9 @@ def add_flakes(existing: list[FlakeRecord], new: list[FlakeRecord]) -> list[Flak
         key = _flake_key(record)
         if key not in joined:
             joined[key] = {**record, "tests": []}
+        at, held = record.get("at"), joined[key].get("at")
+        if at is not None and (held is None or at < held):
+            joined[key]["at"] = at
         known = joined[key]["tests"]
         known.extend(t for t in record["tests"] if t not in known)
     for record in joined.values():

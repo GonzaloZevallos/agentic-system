@@ -481,3 +481,115 @@ def test_the_arm_survives_every_rewrite_of_the_launch_record_and_clears_with_it(
     assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 3, "control")
     registry.clear_launch("apostrophe", 20)
     assert registry.launch_attempts("apostrophe", 20) is None
+
+
+# --- the per-product flake lock (GH-464) -------------------------------------------------
+
+
+class _Clock:
+    """A clock that only moves when `sleep` is called: a timeout is tested without waiting."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _hold(path: Path):
+    import fcntl
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "w")
+    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return handle
+
+
+def _is_free(path: Path) -> bool:
+    import fcntl
+
+    with open(path, "w") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
+
+
+def test_flake_lock_is_acquired_on_its_own_file_and_released_after_the_block(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    lock_file = tmp_path / "runs" / "flakes" / "apostrophe.lock"
+    with registry.flake_lock("apostrophe") as acquired:
+        assert acquired is True
+        assert lock_file.is_file()
+        assert not _is_free(lock_file)  # held inside the block
+    assert _is_free(lock_file)
+
+
+def test_flake_lock_is_released_when_the_block_raises(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    with pytest.raises(RuntimeError, match="boom"):
+        with registry.flake_lock("apostrophe") as acquired:
+            assert acquired
+            raise RuntimeError("boom")
+    assert _is_free(tmp_path / "runs" / "flakes" / "apostrophe.lock")
+
+
+def test_flake_lock_held_by_another_times_out_with_false_after_the_bounded_wait(tmp_path):
+    clock = _Clock()
+    registry = FilesystemRunRegistry(tmp_path / "runs", clock=clock, sleep=clock.sleep)
+    other = _hold(tmp_path / "runs" / "flakes" / "apostrophe.lock")
+    try:
+        with registry.flake_lock("apostrophe") as acquired:
+            assert acquired is False
+    finally:
+        other.close()
+    assert clock.sleeps  # it polled, it did not give up at the first refusal
+    assert sum(clock.sleeps) >= 10  # FLAKE_LOCK_WAIT_S, on the fake clock: no real sleep
+    assert sum(clock.sleeps) < 12  # and it stopped there
+
+
+def test_flake_lock_taken_while_polling_when_the_other_lets_go(tmp_path):
+    clock = _Clock()
+    other = _hold(tmp_path / "runs" / "flakes" / "apostrophe.lock")
+
+    def release_after_two(seconds: float) -> None:
+        clock.sleep(seconds)
+        if len(clock.sleeps) == 2:
+            other.close()
+
+    registry = FilesystemRunRegistry(tmp_path / "runs", clock=clock, sleep=release_after_two)
+    with registry.flake_lock("apostrophe") as acquired:
+        assert acquired is True
+    assert len(clock.sleeps) == 2
+
+
+def test_flake_lock_of_another_product_is_not_blocked(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    other = _hold(tmp_path / "runs" / "flakes" / "gym.lock")
+    try:
+        with registry.flake_lock("apostrophe") as acquired:
+            assert acquired is True
+    finally:
+        other.close()
+
+
+def test_flake_lock_in_an_unwritable_directory_is_false_never_an_exception(tmp_path):
+    blocker = tmp_path / "runs"
+    blocker.write_text("a file where the registry directory should be", encoding="utf-8")
+    registry = FilesystemRunRegistry(blocker)
+    with registry.flake_lock("apostrophe") as acquired:
+        assert acquired is False
+
+
+def test_flake_lock_file_name_cannot_leave_its_directory(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    with registry.flake_lock("../../escape") as acquired:
+        assert acquired is True
+    assert not (tmp_path / "escape.lock").exists()
+    assert [p.parent for p in (tmp_path / "runs").rglob("*.lock")] == [tmp_path / "runs" / "flakes"]

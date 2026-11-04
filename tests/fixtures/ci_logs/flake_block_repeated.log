@@ -1,0 +1,8 @@
+check	Run checks	2026-11-04T10:00:00.0000000Z test_module_0.py::test_case_0 PASSED [  0%]
+check	Run checks	2026-11-04T10:00:01.0000001Z test_module_1.py::test_case_1 PASSED [  1%]
+check	Run checks	2026-11-04T10:00:02.0000002Z test_module_2.py::test_case_2 PASSED [  2%]
+check	Run checks	2026-11-04T10:00:10.0000010Z agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_a.py::first"]}
+check	Run checks	2026-11-04T10:00:11.0000011Z test_module_0.py::test_case_0 PASSED [  0%]
+check	Run checks	2026-11-04T10:00:12.0000012Z test_module_1.py::test_case_1 PASSED [  1%]
+check	Run checks	2026-11-04T10:00:20.0000020Z agentic-flakes: {"v":1,"check":"lint","tests":["lint-flake"]}
+check	Run checks	2026-11-04T10:00:21.0000021Z agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_a.py::second","tests/test_b.py::third"]}

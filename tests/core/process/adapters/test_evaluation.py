@@ -180,7 +180,7 @@ def test_every_inbox_member_is_a_read_the_frozen_inbox_and_the_closed_one_both_h
     from agentic.core.process.adapters.filesystem.file_inbox import FileInbox
     from agentic.core.process.application.ports import Inbox
 
-    reads = {"task", "task_id", "issue_of", "open_issues", "open_issue_bodies"}
+    reads = {"task", "task_id", "issue_of", "open_issues", "open_issue_bodies", "open_issue_refs"}
 
     assert get_protocol_members(Inbox) == reads
     for implementation in (FileInbox, ClosedInbox):

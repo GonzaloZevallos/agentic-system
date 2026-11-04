@@ -83,6 +83,7 @@ from agentic.core.process.domain.ci import (
 )
 from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Docs
+from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
@@ -95,6 +96,7 @@ from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
     DependencyState,
+    FlakeRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
@@ -241,6 +243,17 @@ class MemoryDocuments:
 
     def ids_touched_since(self, since: datetime) -> list[str]:
         return [i for i in self.ids() if i not in self.untouched]
+
+    def flakes_since(self, cutoff: datetime) -> dict[str, list[FlakeRecord]]:
+        """The flakes of each task's latest saved state: this fake has no mtime, so every
+        saved document counts as touched, as `ids_touched_since` does."""
+        found: dict[str, list[FlakeRecord]] = {}
+        for task_id in self.ids():
+            loaded = self.load(task_id)
+            raw = (loaded or {}).get("flakes")
+            if isinstance(raw, list) and raw:
+                found[task_id] = list(raw)
+        return found
 
     def load(self, task_id: str) -> dict[str, object] | None:
         mine = [s for s in self.saved if s["id"] == task_id]
@@ -682,6 +695,11 @@ class MemoryInbox:
         # state_errors` already uses for `issue_state` -- a declared rejected input,
         # never an accidental `KeyError` off an inbox a scenario forgot to seed.
         self.task_errors = task_errors or set()
+        # GH-464: the flake path's own read. `refs` seeds it with titled issues, `refs_error`
+        # makes it raise, `refs_calls` counts how often a path listed (none below the threshold).
+        self.refs: list[IssueRef] | None = None
+        self.refs_error: Exception | None = None
+        self.refs_calls = 0
 
     def task(self, number: int) -> TaskInput:
         if number in self.task_errors:
@@ -699,6 +717,17 @@ class MemoryInbox:
 
     def open_issue_bodies(self) -> list[tuple[str, str]]:
         return self._open_issues
+
+    def open_issue_refs(self) -> list[IssueRef]:
+        """What `GhInbox.open_issue_refs` hands back: `refs` when a test seeds them, else the
+        `(url, body)` pairs with no title. `refs_error` makes it raise, the shape a saturated
+        list or a `gh` failure takes."""
+        self.refs_calls += 1
+        if self.refs_error is not None:
+            raise self.refs_error
+        if self.refs is not None:
+            return list(self.refs)
+        return [IssueRef(url, "", body) for url, body in self._open_issues]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1787,6 +1816,9 @@ class MemoryRunRegistry:
         self.registered_kinds: list[rules.RunKind] = []
         self.unregistered = 0
         self.exclusive_entries = 0
+        self.flake_lock_acquired = True
+        self.flake_lock_open = False
+        self.flake_locks: list[str] = []
         self.attempts: dict[tuple[str, int], LaunchAttempt] = {}
         self.cleared: list[tuple[str, int]] = []
         # GH-177: what each root published, and every call, so a test can assert none
@@ -1814,6 +1846,17 @@ class MemoryRunRegistry:
     def exclusive(self) -> Iterator[None]:
         self.exclusive_entries += 1
         yield
+
+    @contextlib.contextmanager
+    def flake_lock(self, product: str) -> Iterator[bool]:
+        """GH-464: no file. `flake_lock_acquired = False` is a lock that could not be taken;
+        `flake_locks` lists the products it was asked for, `flake_lock_open` is true inside."""
+        self.flake_locks.append(product)
+        self.flake_lock_open = self.flake_lock_acquired
+        try:
+            yield self.flake_lock_acquired
+        finally:
+            self.flake_lock_open = False
 
     def launch_attempts(self, product: str, issue: int) -> LaunchAttempt | None:
         return self.attempts.get((product, issue))
@@ -2032,10 +2075,22 @@ class FakeCiLogs:
     def __init__(self, logs: list[JobLog] | None = None) -> None:
         self.logs = list(logs or [])
         self.asked: list[tuple[str, str]] = []
+        self.blocks: list[tuple[str, list[str]]] | CiUnreadable | None = None
+        self.flake_asked: list[tuple[str, str, tuple[str, ...]]] = []
 
     def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
         self.asked.append((reference, head))
         return list(self.logs)
+
+    def flake_block(
+        self, reference: str, head: str, jobs: Sequence[str]
+    ) -> list[tuple[str, list[str]]] | CiUnreadable:
+        """GH-464: answers `blocks` (default: every job read, no block) and records the
+        `(reference, head, jobs)` it was asked for."""
+        self.flake_asked.append((reference, head, tuple(jobs)))
+        if self.blocks is not None:
+            return self.blocks
+        return [(job, []) for job in jobs]
 
 
 class FakeExperimentFile:

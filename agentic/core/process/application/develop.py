@@ -21,6 +21,7 @@ from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
+from . import ci_flakes
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
@@ -267,7 +268,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         # ADR-0066: the checks that went red and then passed on the gate's one rerun. A
         # persisted key, merged by `add_flakes` at the fan-in so a re-delivery of the same head
         # adds nothing; recording it never changes the delivery.
-        patch["flakes"] = flakes
+        patch["flakes"] = ci_flakes.dated(flakes, ci_flakes.now())
 
     # The system decides the dependency landed, never the model's own word for it
     # (README.md's own rule for this task): a marker scan runs only on a delivery whose

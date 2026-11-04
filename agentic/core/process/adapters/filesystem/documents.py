@@ -12,10 +12,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
+
+import yaml
 
 from ...domain import document
-from ...domain.task import TaskState
+from ...domain.presubmit import FlakeGate
+from ...domain.task import FlakeRecord, TaskState
 from .. import plugins
 
 # The parse cache's byte budget, in bytes of *file* (`st_size`) admitted: a document is
@@ -117,6 +120,23 @@ class FilesystemTaskDocuments:
             except OSError:
                 continue
         return sorted(touched)
+
+    def flakes_since(self, cutoff: datetime) -> dict[str, list[FlakeRecord]]:
+        """The `flakes` of every document whose file `mtime` is at or after `cutoff`, by task
+        id. An older file is skipped on its `stat`, before anything is parsed (the linear cost
+        is the `stat`s); a document that cannot be read or parsed, or whose `flakes` is not a
+        list of records, contributes nothing. Only what is on disk now: an archived run's
+        flakes are gone with its document (ADR-0078)."""
+        found: dict[str, list[FlakeRecord]] = {}
+        for task_id in self.ids_touched_since(cutoff):
+            try:
+                loaded = self.load(task_id)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError, yaml.YAMLError):
+                continue
+            records = _flake_records((loaded or {}).get("flakes"))
+            if records:
+                found[task_id] = records
+        return found
 
     def save(self, state: TaskState) -> Path:
         path = self.path_for(state["id"])
@@ -233,6 +253,34 @@ class FilesystemTaskDocuments:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         return destination
+
+
+_GATES: dict[Any, FlakeGate] = {gate: gate for gate in get_args(FlakeGate)}
+
+
+def _flake_records(raw: object) -> list[FlakeRecord]:
+    """The well-formed records of a document's `flakes`: a dict naming its check, head, a known gate
+    and a list of string ids, `at` kept only when it is a string. Anything else is dropped, so
+    the threshold never meets one."""
+    if not isinstance(raw, list):
+        return []
+    records: list[FlakeRecord] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        check, head, gate, tests = (item.get(n) for n in ("check", "head", "gate", "tests"))
+        if not (isinstance(check, str) and isinstance(head, str)):
+            continue
+        if gate not in _GATES:
+            continue
+        if not (isinstance(tests, list) and all(isinstance(test, str) for test in tests)):
+            continue
+        record = FlakeRecord(check=check, head=head, gate=_GATES[gate], tests=list(tests))
+        at = item.get("at")
+        if isinstance(at, str):
+            record["at"] = at
+        records.append(record)
+    return records
 
 
 def system_commit() -> str | None:

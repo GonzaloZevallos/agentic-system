@@ -58,7 +58,7 @@ from ..domain.task import (
     FullChecksRecord,
     TaskState,
 )
-from . import ci_push
+from . import ci_flakes, ci_push
 from .checkouts import Checkout, task_base
 from .ci_push import Pushed, PushFailed
 from .ports import GitError, Ports
@@ -287,6 +287,7 @@ async def _local_full_checks(
         witness=ports.stack.witness(base),
         parallel=ports.stack.parallel_checks(base),
         reuse=reuse_of(ports, base),
+        rerun_forms=ports.stack.rerun_checks(base),
         flake_gate="full_checks",
         readiness=readiness_of(ports, base, cfg.check_cores),
     )
@@ -342,7 +343,7 @@ async def _local_full_checks(
         text = f"CI not used ({fallback}): ran locally.\n\n{text}"
     patch["sections"] = _section(state, record["version"], text)
     if flakes := gate.flakes():
-        patch["flakes"] = flakes
+        patch["flakes"] = ci_flakes.dated(flakes, ci_flakes.now())
     return finish(state, patch, ports)
 
 
@@ -431,6 +432,13 @@ async def _ci_full_checks(
         patch["full_checks"]["speculative"] = True
     else:
         _with_pushes(patch, pushes)
+    # The flake block of the jobs on this head: evidence only, it adds records and decides
+    # nothing (the verdict above is already made).
+    flakes = await anyio.to_thread.run_sync(
+        ci_flakes.block_records, ports, ref, head, base, names, "full_checks", ci_flakes.now()
+    )
+    if flakes:
+        patch["flakes"] = flakes
     return patch
 
 

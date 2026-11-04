@@ -2211,6 +2211,7 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
             upstream,
             _upstream_eval_set(ports, upstream),
             lambda line: print(line, flush=True),
+            registry=_registry_for(cfg),
         )
         closed = _close_document(task_id, cfg, ports) if result.kind == "merged" else None
     suffix = f": {result.reason}" if result.reason else ""
