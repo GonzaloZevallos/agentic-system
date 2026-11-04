@@ -1085,6 +1085,12 @@ class Workspace(Protocol):
         a ref `origin` lacks included."""
         ...
 
+    def remote_dispatch_refs(self) -> tuple[str, ...]:
+        """The task ids `origin` holds a `refs/agentic-ci-dispatch/<id>` ref for (GH-463), without
+        the namespace: what `ci_ref_sweep` walks. A failed read or an unreachable origin
+        raises `GitError`: it is never an empty answer."""
+        ...
+
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
         """The branch names `origin` holds under `refs/heads/<prefix>`, without
         `refs/heads/`. A failed read or an unreachable origin raises `GitError`: it is

@@ -41,6 +41,17 @@ class CiCheck:
     link: str
 
 
+_RUN_SEGMENT = re.compile(r"/actions/runs/(\d+)(?=[/?#]|$)")
+
+
+def run_id_of_link(link: str) -> str | None:
+    """The workflow run id in a check run's `detailsUrl` (the `/actions/runs/<id>` segment), or
+    `None` when the link has none or it is not all digits: a commit status of another system,
+    an empty link, a malformed url (GH-463). The merge gate stores it to rerun that run."""
+    found = _RUN_SEGMENT.search(link)
+    return found.group(1) if found else None
+
+
 @dataclass(frozen=True)
 class CiReport:
     """What one read of a commit's CI says. `head_sha` is the commit the checks belong

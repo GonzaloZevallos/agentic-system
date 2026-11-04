@@ -1666,6 +1666,26 @@ def ci_ref(task_id: str) -> str:
     return f"{CI_REF_PREFIX}{task_id}"
 
 
+CI_DISPATCH_REF_PREFIX = "refs/agentic-ci-dispatch/"
+
+
+def ci_dispatch_ref(task_id: str) -> str:
+    """The full ref the merge gate publishes a commit built from an untrusted head to
+    (GH-463): outside `refs/heads/`, so no `push` event fires for it and no branch of the
+    repository holds that code. `Workspace.publish_dispatch_ref` takes the task id and
+    writes this ref."""
+    return f"{CI_DISPATCH_REF_PREFIX}{task_id}"
+
+
+def stale_ci_dispatch_refs(
+    task_ids: Sequence[str], live_ids: Collection[str], ended_ids: Collection[str]
+) -> tuple[str, ...]:
+    """The task ids among `task_ids` whose dispatch ref the poller may delete, in input
+    order: the same rule as `stale_ci_refs` (no live run AND the task ended; an escalated
+    task and an orphan are kept)."""
+    return tuple(t for t in task_ids if t not in live_ids and t in ended_ids)
+
+
 def stale_ci_refs(
     refs: Sequence[str], live_ids: Collection[str], ended_ids: Collection[str]
 ) -> tuple[str, ...]:
