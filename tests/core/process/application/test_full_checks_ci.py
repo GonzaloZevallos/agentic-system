@@ -623,21 +623,20 @@ async def test_a_permanent_push_refusal_escalates_after_one_attempt_with_what_gi
 
 
 async def test_an_unknown_push_failure_is_tried_twice_and_escalates_with_its_kind():
-    workspace = FlakyPush("fatal: something nobody has seen")
+    stderr = "fatal: something nobody has seen"
+    workspace = FlakyPush(stderr)
     patch = await run(state_of(), ports_of(GREEN, workspace=workspace))
     assert len(workspace.ci_ref_calls) == 2
-    assert (
-        "after 2 attempt(s) (unknown); git said: fatal: something nobody has seen"
-        in (patch["escalated"])
-    )
+    assert f"after 2 attempt(s) (unknown); git said: {ci_push.scrub(stderr)}" in patch["escalated"]
 
 
 async def test_a_push_failure_without_git_text_keeps_the_escalation_it_always_had():
     ports = ports_of(GREEN)
     ports.workspace.ci_ref_error = "push refused"
     patch = await run(state_of(), ports)
+    said = ci_push.scrub("push refused")
     assert (
-        f"push of {REF} failed after 2 attempt(s) (unknown); git said: push refused"
+        f"push of {REF} failed after 2 attempt(s) (unknown); git said: {said}"
         in (patch["escalated"])
     )
 
@@ -658,19 +657,22 @@ async def test_two_escalations_on_the_same_head_keep_the_first_section_as_histor
 
 async def test_a_green_run_after_an_escalation_keeps_the_escalation_section_as_history():
     state = state_of()
-    first = await run(state, ports_of(GREEN, workspace=FlakyPush("remote: permission denied")))
+    stderr = "remote: permission denied `x`"
+    first = await run(state, ports_of(GREEN, workspace=FlakyPush(stderr)))
     state = apply(state, first)
     done = await run(state, ports_of(GREEN))
     state = apply(state, done)
     assert state["sections"]["Full checks"].startswith("Passed on CI")
-    assert "remote: permission denied" in state["sections"]["Full checks (v1)"]
+    assert ci_push.scrub(stderr) in state["sections"]["Full checks (v1)"]
 
 
 async def test_a_failed_delete_of_the_republish_carries_git_said():
+    stderr = "remote: Permission to o/r denied to workflow"
+
     class Refused(MemoryWorkspace):
         def delete_ci_ref(self, path, ref):
-            raise GitError("x", stderr="remote: Permission to o/r denied to workflow")
+            raise GitError("x", stderr=stderr)
 
     ports = ports_of(report(sha="f" * 40), workspace=Refused())
     patch = await run(state_of(), ports)
-    assert "git said: remote: Permission to o/r denied to workflow" in patch["escalated"]
+    assert f"git said: {ci_push.scrub(stderr)}" in patch["escalated"]
