@@ -29,4 +29,5 @@ classDiagram
     class board__IssueFacts["IssueFacts"]
     class cost_history__Bucket["Bucket"]
     class cost_history__History["History"]
+    class cost_history__Pair["Pair"]
 ```

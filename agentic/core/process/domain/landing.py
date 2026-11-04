@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
@@ -29,6 +29,7 @@ from .task import (
     CiLogRecord,
     DiagnosisVerdict,
     FailureReason,
+    FlakeRecord,
     JobLogCause,
     LandedSlice,
     LandedSliceRef,
@@ -1651,6 +1652,69 @@ def flake_marker(check: str) -> str:
     """The first line of a flake issue body, which the deduplication reads back: one open
     issue per check name, whichever task saw it flake."""
     return f"<!-- agentic:flake check={check} -->"
+
+
+def flake_key(record: FlakeRecord) -> list[tuple[str, str]]:
+    """The keys a flake record counts under (GH-464): `(check, test)` per test id, or
+    `[(check, "")]` when it named none. The only function the marker, the threshold and the
+    deduplication take a key from."""
+    tests = record["tests"]
+    return [(record["check"], test) for test in tests] if tests else [(record["check"], "")]
+
+
+def _flake_instant(record: FlakeRecord) -> datetime | None:
+    """The record's `at` as an aware UTC instant (a naive one is read as UTC), `None` when it
+    has none or cannot be parsed: such a record does not count."""
+    value = record.get("at")
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def keys_over_threshold(
+    records_by_task: Mapping[str, Sequence[FlakeRecord]], now: datetime, tasks: int, days: int
+) -> dict[tuple[str, str], list[str]]:
+    """The flake keys over the issue threshold (GH-464), each with the ids of the tasks that
+    count for it, in `records_by_task` order: a key is over when at least `tasks` distinct tasks
+    have a record under it with `at >= now - days`. A record without a readable `at` does not
+    count, a task counts once per key, and `now` is the caller's (an aware instant): nothing
+    here reads a clock."""
+    cutoff = now - timedelta(days=days)
+    seen: dict[tuple[str, str], list[str]] = {}
+    for task_id, records in records_by_task.items():
+        for record in records:
+            at = _flake_instant(record)
+            if at is None or at < cutoff:
+                continue
+            for key in flake_key(record):
+                if task_id not in seen.setdefault(key, []):
+                    seen[key].append(task_id)
+    return {key: ids for key, ids in seen.items() if len(ids) >= tasks}
+
+
+# How long a flake filing waits for the per-product lock (GH-464), in seconds: a bound on the
+# merge it runs inside, not a measure. A lock not taken in time skips the filing.
+FLAKE_LOCK_WAIT_S = 10
+
+
+@dataclass(frozen=True)
+class IssueRef:
+    """An open tracker issue as the flake path reads it: its URL, title and body."""
+
+    url: str
+    title: str
+    body: str
+
+
+def flake_issue_for(issues: Sequence[IssueRef], check: str) -> IssueRef | None:
+    """The first of `issues` that is the flake issue of `check` (GH-464): its body holds
+    `flake_marker(check)` or its title is exactly `Flaky check: <check>`."""
+    marker, title = flake_marker(check), f"Flaky check: {check}"
+    return next((i for i in issues if marker in i.body or i.title == title), None)
 
 
 # What a red job's log is reduced to for a diagnosis (GH-449): at most this many jobs, this

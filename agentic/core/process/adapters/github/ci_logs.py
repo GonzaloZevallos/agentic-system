@@ -15,23 +15,42 @@ from pathlib import Path
 from typing import Protocol
 
 from ...domain import rules
-from ...domain.ci import CiCheck, CiReport, CiUnreadable, JobLog, JobLogCause, red_checks
+from ...domain.ci import (
+    FLAKE_BLOCK_PREFIX,
+    CiCheck,
+    CiReport,
+    CiUnreadable,
+    JobLog,
+    JobLogCause,
+    red_checks,
+)
 from ...domain.landing import CI_LOG_JOBS
 from .run import StreamRead, bounded_stream
 
 # Declared, not measured: a failed step's log is a few hundred KB at most on this product's CI.
 CI_LOG_JOB_BYTES = 1024 * 1024
+# What `flake_block` keeps of one green job's whole log (GH-464): the LAST 4 MiB, where the block
+# is printed. Declared, not measured; the ADR of the flake block says so.
+CI_FLAKE_LOG_BYTES = 4 * 1024 * 1024
 # One job's wait; the longest a landing waits on this is `CI_LOG_JOBS` times it.
 CI_LOG_TIMEOUT_S = 30.0
 # `https://github.com/<owner>/<repo>/actions/runs/<run>/job/<job>`: what a check run of Actions
 # links to. Anything else (a commit status of another service) has no log to read here.
 _JOB_LINK = re.compile(r"/actions/runs/(\d+)/job/(\d+)(?:[/?#]|$)")
+# What `gh run view --log` prints per line: `<job>\t<step>\t<timestamp> <text>`, the first line of
+# a log with a byte-order mark before the timestamp. Only a line with all three columns has a
+# `<text>` to look at.
+_LOG_TIMESTAMP = re.compile(r"\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ")
 
 
 class _Stream(Protocol):
     def __call__(
         self, args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float
     ) -> StreamRead: ...
+
+
+def _tail_stream(args: Sequence[str], *, cwd: Path, max_bytes: int, timeout_s: float) -> StreamRead:
+    return bounded_stream(args, cwd=cwd, max_bytes=max_bytes, timeout_s=timeout_s, tail=True)
 
 
 class GhCiLogs:
@@ -46,12 +65,16 @@ class GhCiLogs:
         stream: _Stream = bounded_stream,
         max_bytes: int = CI_LOG_JOB_BYTES,
         timeout_s: float = CI_LOG_TIMEOUT_S,
+        flake_stream: _Stream = _tail_stream,
+        flake_max_bytes: int = CI_FLAKE_LOG_BYTES,
     ) -> None:
         self._product_dir = product_dir
         self._ci_report = ci_report
         self._stream = stream
         self._max_bytes = max_bytes
         self._timeout_s = timeout_s
+        self._flake_stream = flake_stream
+        self._flake_max_bytes = flake_max_bytes
 
     def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
         """See `CiLogs.failed_job_logs`: at most `CI_LOG_JOBS` entries, one per red job, none
@@ -90,6 +113,63 @@ class GhCiLogs:
         if not text.strip():
             return _unread(check.name, check.link, "empty")
         return JobLog(check.name, check.link, text, len(read.data), "read", read.truncated)
+
+    def flake_block(
+        self, reference: str, head: str, jobs: Sequence[str]
+    ) -> list[tuple[str, list[str]]] | CiUnreadable:
+        """See `CiLogs.flake_block`: one `(job, lines)` per completed check of the report named
+        in `jobs`; the whole answer is `CiUnreadable` when the report is not `head`'s or any
+        read fails, because a log that was not read may hold the block."""
+        try:
+            report = self._ci_report(reference)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return CiUnreadable("gh_unavailable")
+        if isinstance(report, CiUnreadable):
+            return report
+        if not rules.same_commit(report.head_sha, head):
+            return CiUnreadable("gh_unreadable")
+        wanted = [c for c in report.checks if c.name in set(jobs) and c.status == "COMPLETED"]
+        found: list[tuple[str, list[str]]] = []
+        for check in wanted:
+            lines = self._read_flake_lines(check)
+            if lines is None:
+                return CiUnreadable("gh_unreadable")
+            found.append((check.name, lines))
+        return found
+
+    def _read_flake_lines(self, check: CiCheck) -> list[str] | None:
+        ids = _JOB_LINK.search(check.link)
+        if ids is None:
+            return None
+        args = ["gh", "run", "view", ids.group(1), "--job", ids.group(2), "--log"]
+        try:
+            read = self._flake_stream(
+                args,
+                cwd=self._product_dir,
+                max_bytes=self._flake_max_bytes,
+                timeout_s=self._timeout_s,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+        # The tail cap is no failure (the block is printed last); a wait that ran out or a
+        # failing exit leaves a log whose end may be missing.
+        if read.timed_out or read.returncode != 0:
+            return None
+        return _flake_lines(read.data.decode("utf-8", errors="replace"))
+
+
+def _flake_lines(text: str) -> list[str]:
+    """The lines whose text, after the `<job>\t<step>\t<timestamp> ` columns of `gh`, starts
+    with `FLAKE_BLOCK_PREFIX`; a line cut by the tail cap has lost its columns and drops."""
+    kept: list[str] = []
+    for line in text.split("\n"):
+        columns = line.rstrip("\r").split("\t", 2)
+        if len(columns) != 3:
+            continue
+        stamp = _LOG_TIMESTAMP.match(columns[2])
+        if stamp is not None and columns[2].startswith(FLAKE_BLOCK_PREFIX, stamp.end()):
+            kept.append(columns[2][stamp.end() :])
+    return kept
 
 
 def _unread(job: str, link: str, cause: JobLogCause) -> JobLog:

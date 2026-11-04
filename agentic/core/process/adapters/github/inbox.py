@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from ...domain.landing import IssueRef
 from ...domain.task import TaskInput
 from .run import bounded_run, print_line, run_gh
 from .tracker import Run, issue_number
@@ -13,6 +14,10 @@ from .tracker import Run, issue_number
 # `gh issue list`'s own page size cap high enough that a product's open issues never
 # spill past one call, low enough that a runaway poller cannot ask for the world.
 _OPEN_ISSUES_LIMIT = 100
+
+# The flake path's own page size (GH-464): it reads the whole list once, so a flake issue past
+# the first hundred is still found. A list as long as this is treated as possibly cut.
+_OPEN_ISSUE_REFS_LIMIT = 1000
 
 
 class GhInbox:
@@ -80,3 +85,33 @@ class GhInbox:
     def open_issue_bodies(self) -> list[tuple[str, str]]:
         """The landing's read of the same list as `open_issues` (GH-239)."""
         return self.open_issues()
+
+    def open_issue_refs(self) -> list[IssueRef]:
+        """Every open issue as `(url, title, body)` for the flake path (GH-464): no `--label`,
+        no `--search`, so a flake issue is found by `landing.flake_issue_for` wherever it sits.
+        A list exactly as long as the limit may have been cut, and a cut list would let a
+        second flake issue open: that is a `ValueError`, like a `gh` failure."""
+        raw = run_gh(
+            self._run,
+            (
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--json",
+                "url,title,body",
+                "--limit",
+                str(_OPEN_ISSUE_REFS_LIMIT),
+            ),
+            cwd=self.product_dir,
+            log=self._log,
+            not_installed="gh is not installed; filing a flake needs the CLI",
+            failed=lambda stderr: f"gh issue list failed: {stderr}",
+        )
+        issues = json.loads(raw)
+        if len(issues) >= _OPEN_ISSUE_REFS_LIMIT:
+            raise ValueError(
+                f"gh issue list returned {len(issues)} issues, the limit it was asked for: "
+                "the list may be cut, so no flake issue is matched against it"
+            )
+        return [IssueRef(i["url"], i.get("title") or "", i.get("body") or "") for i in issues]

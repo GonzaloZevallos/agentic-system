@@ -518,3 +518,64 @@ def test_a_document_without_restorations_writes_none_and_loads_as_empty(tmp_path
 
     assert "restorations" not in path.read_text(encoding="utf-8")
     assert documents.load("T-1").get("restorations", []) == []
+
+
+# --- flakes_since (GH-464) --------------------------------------------------------------
+
+
+def _flake(check="tests", at="2026-11-01T10:00:00+00:00", tests=("test_a",)):
+    return {"check": check, "head": "abc", "gate": "merge", "tests": list(tests), "at": at}
+
+
+def test_flakes_since_reads_the_flakes_of_the_documents_touched_since_the_cutoff(tmp_path):
+    import os
+    from datetime import UTC, datetime
+
+    documents = FilesystemTaskDocuments(tmp_path)
+    base = {"title": "t", "description": "d"}
+    documents.save({**base, "id": "T-new", "flakes": [_flake()]})
+    documents.save({**base, "id": "T-old", "flakes": [_flake("lint")]})
+    documents.save({**base, "id": "T-none"})
+    cutoff = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    os.utime(documents.path_for("T-new"), (cutoff.timestamp() + 60,) * 2)
+    os.utime(documents.path_for("T-none"), (cutoff.timestamp() + 60,) * 2)
+    os.utime(documents.path_for("T-old"), (cutoff.timestamp() - 60,) * 2)
+    assert documents.flakes_since(cutoff) == {"T-new": [_flake()]}
+
+
+def test_flakes_since_skips_an_old_file_before_parsing_and_an_unreadable_one_after(tmp_path):
+    import os
+    from datetime import UTC, datetime
+
+    documents = FilesystemTaskDocuments(tmp_path)
+    cutoff = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    stamp = cutoff.timestamp()
+    garbage_old = documents.path_for("T-garbage-old")
+    garbage_old.parent.mkdir(parents=True)
+    garbage_old.write_text("\x00 not a document", encoding="utf-8")
+    os.utime(garbage_old, (stamp - 10, stamp - 10))
+    garbage_new = documents.path_for("T-garbage-new")
+    garbage_new.write_text("---\n: : [unclosed\n---\n", encoding="utf-8")
+    os.utime(garbage_new, (stamp + 10, stamp + 10))
+    wrong_shape = documents.path_for("T-shape")
+    wrong_shape.write_text("---\nid: T-shape\nflakes: not-a-list\n---\n", encoding="utf-8")
+    os.utime(wrong_shape, (stamp + 10, stamp + 10))
+    assert documents.flakes_since(cutoff) == {}
+
+
+def test_flakes_since_with_no_documents_dir_is_empty(tmp_path):
+    from datetime import UTC, datetime
+
+    assert FilesystemTaskDocuments(tmp_path).flakes_since(datetime(2000, 1, 1, tzinfo=UTC)) == {}
+
+
+def test_a_restarted_task_whose_live_document_lost_the_old_flakes_contributes_nothing(tmp_path):
+    """ADR-0078: a restart archives the old run and the live document starts without its
+    `flakes`: the count is local to what is on disk now, so it under-counts, never over."""
+    from datetime import UTC, datetime
+
+    documents = FilesystemTaskDocuments(tmp_path)
+    base = {"title": "t", "description": "d", "id": "T-1"}
+    documents.save({**base, "flakes": [_flake()]})
+    documents.save(base)  # the restart rewrote the document without the old run's flakes
+    assert documents.flakes_since(datetime(2000, 1, 1, tzinfo=UTC)) == {}
