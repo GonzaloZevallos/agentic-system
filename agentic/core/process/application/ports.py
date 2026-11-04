@@ -21,6 +21,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobL
 from ..domain.design import Design, NotReady
 from ..domain.docs import Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
+from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
@@ -40,6 +41,7 @@ from ..domain.suppressions import Forbidden
 from ..domain.task import (
     DependencyState,
     FailureReason,
+    FlakeRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
     PullRequest,
@@ -312,6 +314,14 @@ class TaskDocuments(Protocol):
         before anything is parsed), sorted: what a poller reads to learn the recent
         spend without parsing the whole corpus (GH-177). Inside this port's own
         documents directory only."""
+        ...
+
+    def flakes_since(self, cutoff: datetime) -> dict[str, list[FlakeRecord]]:
+        """The `flakes` of the documents on disk modified at or after `cutoff` (file `mtime`,
+        read before anything is parsed), by task id: what the flake threshold counts
+        (GH-464). A document that cannot be read, or whose `flakes` is not a list of records,
+        contributes nothing, and so does a task without flakes. Only what is on disk now: an
+        archived run's flakes are not here (ADR-0078), so the count is a lower bound."""
         ...
 
     def load(self, task_id: str) -> dict | None:
@@ -677,6 +687,14 @@ class Inbox(Protocol):
         `open_issues` makes, kept apart so the deduplication of its follow-up and flake
         issues does not depend on the stack review's verb. The caller matches its marker
         locally, as a plain substring."""
+        ...
+
+    def open_issue_refs(self) -> list[IssueRef]:
+        """Every open issue as an `IssueRef` (url, title, body) (GH-464), for the flake path,
+        which matches an issue by its marker or its exact title (`landing.flake_issue_for`).
+        One call with no label and no search filter, so a titled issue whose body lost its
+        marker is still found. Raises `ValueError` when the list is as long as the limit it
+        asked for -- the issue could be past it -- or when the tracker fails."""
         ...
 
 
@@ -1804,6 +1822,14 @@ class RunRegistry(Protocol):
         not only within one product's."""
         ...
 
+    def flake_lock(self, product: str) -> AbstractContextManager[bool]:
+        """The per-product lock the flake filing runs under (GH-464): a check-then-open of one
+        tracker issue is atomic across the tasks of one machine. Yields `True` once it holds
+        the lock, released when the block ends; yields `False` when it could not take it within
+        `landing.FLAKE_LOCK_WAIT_S` or the lock cannot be made at all. Never raises out: a caller
+        that gets `False` skips the filing, and a merge never waits on it past the bound."""
+        ...
+
     def launch_attempts(self, product: str, issue: int) -> LaunchAttempt | None:
         """The schedule of a launch attempt that has not cleared yet; `None` when this
         issue has never been attempted, or its attempt already cleared."""
@@ -2188,6 +2214,18 @@ class CiLogs(Protocol):
         when the CI report belongs to `head` (`rules.same_commit`); each is bounded in bytes
         and time. Never raises: a log that was not read says why in `cause`. The text is for one
         prompt and is never stored."""
+        ...
+
+    def flake_block(
+        self, reference: str, head: str, jobs: Sequence[str]
+    ) -> list[tuple[str, list[str]]] | CiUnreadable:
+        """GH-464: per job of `jobs` (the names the stack's `ci:` declares) that the pull
+        request's CI report holds, the lines of its whole log that start with `agentic-flakes: `
+        once gh's columns and timestamp are stripped, in log order. Reads only when the report
+        belongs to `head` (`rules.same_commit`); the log is read as its last
+        `CI_FLAKE_LOG_BYTES`, and a cap hit is no failure. `CiUnreadable` when the report is
+        not `head`'s, a read times out or fails, or a log cannot be read. Never raises. The
+        lines are evidence from the head under test: `parse_flake_blocks` reads them."""
         ...
 
 

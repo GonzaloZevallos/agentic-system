@@ -247,21 +247,52 @@ def failed_ids(output: str, pattern: str) -> tuple[str, ...]:
     return tuple(ids)
 
 
+def ids_complete(output: str, ids: Sequence[str]) -> bool:
+    """Whether `ids` can be taken as every test the failure named: fewer than `FAILED_IDS_MAX`
+    (at the cap `failed_ids` stopped reading, so there may be more) and an output no longer
+    than `FAILED_IDS_TAIL_BYTES` (a longer one has a head `failed_ids` never read). Only then
+    is a form rerun of just those ids a fair retry of the check."""
+    return (
+        len(ids) < FAILED_IDS_MAX
+        and len(output.encode("utf-8", "replace")) <= FAILED_IDS_TAIL_BYTES
+    )
+
+
 def rerun_command(
     full_command: str, first: CheckResult, form: RerunForm | None, gate: FlakeGate
 ) -> str | None:
     """The command that reruns a red check, or None when it is not rerun at all: a green
-    row, a `timed_out` one and a rerun row never are. The product's form runs only at the
-    delivery gate, only when it exists and `failed_ids` found at least one id in the
-    failure; every other case reruns the full command (ADR-0066)."""
+    row, a `timed_out` one, a `not_ready` one and a rerun row never are. The product's form
+    runs at every gate, only when it exists, `failed_ids` found at least one id in the
+    failure and `ids_complete` holds for them; every other case reruns the full command
+    (ADR-0066). `gate` is kept for the callers' signature: no gate is treated apart."""
     if first["passed"] or first.get("timed_out", False) or first.get("rerun", False):
         return None
     # A machine too loaded to say is not a red a rerun may turn into a flake (GH-451).
     if first.get("not_ready", False):
         return None
-    if gate == "delivery" and form is not None and failed_ids(first["output"], form.test_id):
-        return form.command
+    if form is not None:
+        ids = failed_ids(first["output"], form.test_id)
+        if ids and ids_complete(first["output"], ids):
+            return form.command
     return full_command
+
+
+def rerun_resolved(form_row: CheckResult, ids: Sequence[str], form: RerunForm) -> bool:
+    """Whether the rerun of the form settles the check. A green row does. A red one does only
+    when `failed_ids` finds in its output one of the `ids` it was asked to rerun: nothing
+    selected, a truncated id (`test_x[a`) or a command error is red without having rerun
+    them, so the check goes back once to its whole command (ADR-0066)."""
+    if form_row["passed"]:
+        return True
+    return any(found in ids for found in failed_ids(form_row["output"], form.test_id))
+
+
+def check_runs(has_form: bool) -> int:
+    """The most times one check runs in one look at a gate: the first run, the form rerun
+    when the product declares one, and the whole-command rerun that follows an unresolved
+    form (ADR-0066). The one source of it for every timeout the gate computes."""
+    return 3 if has_form else 2
 
 
 def outcomes(rows: Sequence[CheckResult]) -> dict[str, FlakeVerdict]:

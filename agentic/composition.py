@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -60,6 +60,7 @@ from .core.process.adapters.github.run import (
     GH_RATE_WAIT_MAX_S,
     GhRetry,
 )
+from .core.process.adapters.github.tracker import pull_request_number
 from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import (
     NullStopFlag,
@@ -77,6 +78,7 @@ from .core.process.application.preflight import (
 from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
+from .core.process.domain.ci import CiReport, CiUnreadable
 from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
 
@@ -176,6 +178,21 @@ def default_ports(
     refuse_its_own_checkout(cfg, ports)
     refuse_scratch_in_a_repository(cfg, ports)
     return ports
+
+
+def ci_reader(tracker: GhTracker) -> Callable[[str], CiReport | CiUnreadable]:
+    """The CI report `GhCiLogs` reads logs for: a pull-request URL goes to `ci_report`, any
+    other reference is a branch (the `agentic-ci/<id>` ref `full_checks` publishes, GH-464) and
+    goes to `branch_ci`, which `ci_report` would refuse as unreadable."""
+
+    def read(reference: str) -> CiReport | CiUnreadable:
+        try:
+            pull_request_number(reference)
+        except ValueError:
+            return tracker.branch_ci(reference)
+        return tracker.ci_report(reference)
+
+    return read
 
 
 def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
@@ -283,7 +300,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
-        ci_logs=GhCiLogs(cfg.product_dir, tracker.ci_report),
+        ci_logs=GhCiLogs(cfg.product_dir, ci_reader(tracker)),
         # GH-470: the product's experiment declaration, read once per poller round.
         experiment=FilesystemExperimentFile(cfg.product_dir),
         stack=stack,

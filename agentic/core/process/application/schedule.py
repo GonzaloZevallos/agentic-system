@@ -34,7 +34,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 
-from ..domain.task import TaskState, apply, delta
+from ..domain.task import FlakeRecord, TaskState, apply, delta
 from .ports import Ports, TaskDocuments
 
 BranchRunner = Callable[[TaskState, Ports], Coroutine[object, object, TaskState]]
@@ -62,6 +62,9 @@ class _Delegating:
 
     def ids_touched_since(self, since: datetime) -> list[str]:
         return self._inner.ids_touched_since(since)
+
+    def flakes_since(self, cutoff: datetime) -> dict[str, list[FlakeRecord]]:
+        return self._inner.flakes_since(cutoff)
 
     def load(self, task_id: str) -> dict[str, object] | None:
         return self._inner.load(task_id)

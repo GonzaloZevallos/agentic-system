@@ -158,12 +158,21 @@ class StreamRead:
 
 
 def bounded_stream(
-    args: Sequence[str], *, cwd: Path | str | None, max_bytes: int, timeout_s: float
+    args: Sequence[str],
+    *,
+    cwd: Path | str | None,
+    max_bytes: int,
+    timeout_s: float,
+    tail: bool = False,
 ) -> StreamRead:
     """Runs `args` and reads its stdout as a stream (GH-449): keeps the first `max_bytes`,
     counts and discards the rest, gives up at `timeout_s` seconds having killed the child's
     process group. Memory is bounded by `max_bytes`, whatever the child prints. stderr is
-    never read; no stdin."""
+    never read; no stdin.
+
+    With `tail` (GH-464) it keeps the LAST `max_bytes` instead: a ring buffer that drops the
+    oldest bytes before each chunk is added, so it never holds more than `max_bytes`, and
+    `truncated` counts what was dropped from the head."""
     proc = subprocess.Popen(
         args,
         cwd=cwd,
@@ -187,6 +196,12 @@ def bounded_stream(
             chunk = os.read(fd, 65536)
             if not chunk:
                 break
+            if tail:
+                old = min(len(kept), max(len(kept) + len(chunk) - max_bytes, 0))
+                del kept[:old]
+                kept += chunk[len(chunk) - min(len(chunk), max_bytes) :]
+                dropped += old + max(len(chunk) - max_bytes, 0)
+                continue
             room = max_bytes - len(kept)
             kept += chunk[:room]
             dropped += max(len(chunk) - room, 0)

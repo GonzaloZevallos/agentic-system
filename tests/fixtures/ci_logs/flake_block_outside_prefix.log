@@ -1,0 +1,8 @@
+check	Run checks	2026-11-04T10:00:00.0000000Z test_module_0.py::test_case_0 PASSED [  0%]
+check	Run checks	2026-11-04T10:00:01.0000001Z test_module_1.py::test_case_1 PASSED [  1%]
+check	Run checks	2026-11-04T10:00:02.0000002Z test_module_2.py::test_case_2 PASSED [  2%]
+check	Run checks	2026-11-04T10:00:10.0000010Z + echo 'agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_trace.py::traced"]}'
+check	Run checks	2026-11-04T10:00:11.0000011Z echo agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_mid.py::mid"]}
+agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_raw.py::no_columns"]}
+check	agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_two.py::one_column"]}
+check	Run checks	agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_nots.py::no_timestamp"]}

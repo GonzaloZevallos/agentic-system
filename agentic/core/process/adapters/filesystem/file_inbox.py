@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from ...domain.landing import IssueRef
 from ...domain.task import TaskInput
 
 # Where the driver puts a root's frozen entry: `<root>/.agentic/eval-input/<root name>.yaml`,
@@ -87,4 +88,7 @@ class FileInbox:
         return []
 
     def open_issue_bodies(self) -> list[tuple[str, str]]:
+        return []
+
+    def open_issue_refs(self) -> list[IssueRef]:
         return []

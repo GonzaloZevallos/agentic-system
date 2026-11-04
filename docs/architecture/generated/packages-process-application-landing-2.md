@@ -28,6 +28,7 @@ graph TD
     m_application__landing_sync["application.landing_sync"]
     m_application__merge["application.merge"]
     m_application__landing_flakes --> g_application__support
+    m_application__landing_flakes --> g_pkg__agentic__shared
     m_application__landing_flakes --> g_pkg__domain
     m_application__landing_plan --> g_application__build
     m_application__landing_plan --> g_application__lifecycle

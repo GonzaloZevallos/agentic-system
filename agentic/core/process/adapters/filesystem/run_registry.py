@@ -21,13 +21,15 @@ import os
 import re
 import socket
 import tempfile
+import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import IO
 
 from ...application.ports import LaunchAttempt, RunRegistration
-from ...domain import exempt_queue, rules
+from ...domain import exempt_queue, landing, rules
 from .liveness import current_boot_id, is_alive
 
 _LOCK_NAME = ".lock"
@@ -37,12 +39,26 @@ _WAITING_DIR = "waiting"
 _EXEMPT_DIR = "exempt"
 _EXEMPT_ATTEMPTS = "attempts"
 _EXEMPT_WAITING = "waiting"
+_FLAKES_DIR = "flakes"
+# How often a flake lock that is held is tried again, in seconds.
+_FLAKE_LOCK_POLL_S = 0.25
 
 
 class FilesystemRunRegistry:
-    def __init__(self, dir: Path, boot_id: Callable[[], str | None] = current_boot_id):
+    def __init__(
+        self,
+        dir: Path,
+        boot_id: Callable[[], str | None] = current_boot_id,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
         self.dir = dir
         self._boot_id = boot_id
+        # The flake lock's wait is measured with these, so a test passes a clock that only
+        # moves when it sleeps and never waits for real; `composition` never passes them.
+        self._clock = clock
+        self._sleep = sleep
 
     # -- live runs ----------------------------------------------------------------
 
@@ -84,6 +100,38 @@ class FilesystemRunRegistry:
                 yield
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
+
+    @contextlib.contextmanager
+    def flake_lock(self, product: str) -> Iterator[bool]:
+        """`flakes/<product>.lock`, `flock(LOCK_EX | LOCK_NB)` polled for at most
+        `landing.FLAKE_LOCK_WAIT_S`, released when the block ends. `False` -- never an
+        exception -- when it was not taken in time or the file cannot be opened. Unlike
+        `exclusive` this never blocks without a bound: a merge waits on it."""
+        handle = self._take_flake_lock(product)
+        try:
+            yield handle is not None
+        finally:
+            if handle is not None:
+                handle.close()  # closing the descriptor drops the flock
+
+    def _take_flake_lock(self, product: str) -> IO[str] | None:
+        # The product name is a file name, never a path: anything outside this alphabet is `_`.
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", product).lstrip(".") or "_"
+        try:
+            (self.dir / _FLAKES_DIR).mkdir(parents=True, exist_ok=True)
+            handle = open(self.dir / _FLAKES_DIR / f"{name}.lock", "w")
+        except OSError:
+            return None
+        deadline = self._clock() + landing.FLAKE_LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return handle
+            except OSError:  # held by another (BlockingIOError), or no locking here at all
+                if self._clock() >= deadline:
+                    handle.close()
+                    return None
+                self._sleep(_FLAKE_LOCK_POLL_S)
 
     def _write(
         self,
