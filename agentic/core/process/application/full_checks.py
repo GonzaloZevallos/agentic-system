@@ -113,6 +113,43 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _head_trust(ports: Ports, checkout: Checkout, base: str) -> tuple[str, bool]:
+    """The integrated head and whether the product's own CI may judge it: `False` when the
+    change touches the CI definition or the diff cannot be read (fail closed,
+    `rules.ci_untrusted`). The one place the two are read, for the node and for
+    `full_checks_mode`."""
+    head = ports.workspace.full_head(checkout.path)
+    try:
+        paths: tuple[str, ...] | None = ports.workspace.changed_paths(base, head)
+    except GitError:
+        paths = None
+    return head, rules.ci_untrusted(paths) is False
+
+
+def _pushed_for(state: TaskState, head: str) -> bool:
+    """Whether a review already pushed this very commit and its run can be waited for
+    (GH-465): the one place `speculation.consumable` is asked."""
+    return bool(state.get("ci_speculation")) and speculation.consumable(state, head)
+
+
+def full_checks_mode(
+    state: TaskState, cfg: Configuration, ports: Ports, checkout: Checkout
+) -> Literal["local", "consumable", "wait"]:
+    """How the integrated head's `full_checks` will be decided (GH-469), from the same reads
+    the node makes and with no side effect: `local` when the suite runs on this machine (no
+    `ci:`, or a head the product's workflow cannot judge and no `ci_dispatch`), `consumable`
+    when the run a review pushed for this very commit only has to be read, `wait` when a CI
+    verdict has to be waited for (a push, or a dispatched run). Only `wait` is slow enough to
+    be worth running beside the roles."""
+    base = task_base(state, ports)
+    if not ports.stack.ci(base):
+        return "local"
+    head, trusted = _head_trust(ports, checkout, base)
+    if not trusted:
+        return "wait" if ports.stack.ci_dispatch(base) is not None else "local"
+    return "consumable" if _pushed_for(state, head) else "wait"
+
+
 async def full_checks(
     state: TaskState,
     cfg: Configuration,
@@ -121,16 +158,22 @@ async def full_checks(
     sleep: Sleep = anyio.sleep,
     clock: Clock = time.monotonic,
     now: Now = _utc_now,
+    checkout: Checkout | None = None,
 ) -> TaskState:
     """`sleep` and `clock` are the CI wait's, injectable so a test does not wait; `now` is the
-    wall clock `speculation.event_lost` measures the speculative push against."""
-    try:
-        task = await task_checkout_in_thread(state, cfg, ports)
-    except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
+    wall clock `speculation.event_lost` measures the speculative push against. A `checkout`
+    handed in (the verifier set resolves the task's once, GH-469) is used as is: no resolution
+    and no clean check here, the caller made both."""
     workspace = ports.workspace
-    if not workspace.is_clean(task.path):
-        return finish(state, _dirty(task.branch), ports)
+    if checkout is None:
+        try:
+            task = await task_checkout_in_thread(state, cfg, ports)
+        except SetupFailed as unprepared:
+            return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
+        if not workspace.is_clean(task.path):
+            return finish(state, dirty_patch(task.branch), ports)
+    else:
+        task = checkout
     base = task_base(state, ports)
     names = ports.stack.ci(base)
     if not names:
@@ -249,13 +292,9 @@ async def _ci_full_checks(
     paths are read from the workspace only and the head is published to the task's own CI
     ref; the wait takes no check slot and runs no command (ADR-0070)."""
     workspace = ports.workspace
-    head = workspace.full_head(task.path)
-    try:
-        paths: tuple[str, ...] | None = workspace.changed_paths(base, head)
-    except GitError:
-        paths = None
+    head, trusted = _head_trust(ports, task, base)
     gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
-    if rules.ci_untrusted(paths) is not False:
+    if not trusted:
         if (dispatch := ports.stack.ci_dispatch(base)) is None:
             return "untrusted"
         return await _dispatched_full_checks(
@@ -264,7 +303,7 @@ async def _ci_full_checks(
     ref = rules.ci_ref(state["id"])
     speculative = False
     pushed = state.get("ci_speculation")
-    if pushed and speculation.consumable(state, head):
+    if pushed and _pushed_for(state, head):
         # A review already pushed this very commit (GH-465): its run is waited for, not
         # pushed again. A run that never came, or was cancelled, is today's path from the
         # republish on, and only the wait that follows it may escalate.
@@ -647,7 +686,7 @@ def _section(state: TaskState, version: int, text: str) -> dict[str, str]:
     return sections
 
 
-def _dirty(branch: str) -> dict[str, Any]:
+def dirty_patch(branch: str) -> dict[str, Any]:
     """The task checkout holds uncommitted work the suite would be run over: no command
     runs, and nothing is cleaned, which could throw away what a human left there."""
     return rules.logged(
