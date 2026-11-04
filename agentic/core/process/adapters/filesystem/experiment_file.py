@@ -17,7 +17,8 @@ class FilesystemExperimentFile:
         if not self.path.is_file():
             return None
         try:
-            return yaml.safe_load(self.path.read_text(encoding="utf-8"))
+            data: object = yaml.safe_load(self.path.read_text(encoding="utf-8"))
+            return data
         except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
             detail = " ".join(str(exc).split()) or type(exc).__name__
             raise ValueError(f"{EXPERIMENT_RELATIVE_PATH}: cannot be read: {detail}") from exc
