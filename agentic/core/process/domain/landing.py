@@ -178,6 +178,8 @@ class LandingStep:
     units: tuple[str, ...] = ()
     # Only on a `diagnose` that `slice_or_restart` decided: the reason no slice was landed.
     restart_why: RestartWhy | None = None
+    # Only on the `escalate` of `ci_unknown_names` (GH-485): the sorted names no check run carries.
+    names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -246,6 +248,7 @@ def landing_step(
     pending: Sequence[object] = (),
     escalated: bool = False,
     adr_escalated: bool = False,
+    names_escalated: bool = False,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
     (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
@@ -293,6 +296,14 @@ def landing_step(
 
     if spent.unlandable:
         return step("none")
+    if refusal == "ci_unknown_names":
+        # GH-485: a planning defect, never a failed check. One `escalate` per (head, names)
+        # (`names_escalated`), then nothing; it spends no budget and never goes to
+        # `exhausted()`: no diagnose, slice or restart. After an `unlandable` diagnosis the
+        # human already owns the task, so that `none` above stands.
+        if names_escalated:
+            return step("none")
+        return LandingStep("escalate", refusal, names=tuple(sorted(facts.ci_unreported)))
     if spent.verdict_sync_due:
         return _verdict_sync(step, exhausted, spent)
     match refusal:
@@ -691,6 +702,8 @@ def slice_facts(
     ci_unreadable: ci.CiUnreadable | None = None,
     ci_fresh: bool | None = None,
     ci_waited_s: float | None = None,
+    ci_unreported: tuple[str, ...] = (),
+    ci_reported: tuple[str, ...] = (),
     followups_filed: bool = False,
     important_pass_done: bool = False,
 ) -> rules.MergeFacts:
@@ -745,6 +758,8 @@ def slice_facts(
         ci_unreadable=ci_unreadable,
         ci_fresh=ci_fresh,
         ci_waited_s=ci_waited_s,
+        ci_unreported=ci_unreported,
+        ci_reported=ci_reported,
         followups_filed=followups_filed,
         perf_convened=perf_convened,
         perf_verdict=perf_verdict,
@@ -833,6 +848,7 @@ def already_dispatched(
     upstream: str | None,
     *,
     unstarted: bool = False,
+    names: Sequence[str] = (),
 ) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
@@ -847,7 +863,8 @@ def already_dispatched(
     (GH-412): an entry recorded without its comment posted does not silence the next round.
     With `unstarted` (`rules.landing_pass` says the pass is `unstarted`, GH-450) the last entry
     is recorded and the executor never reopened anything, so it is not taken and `land` runs it
-    again on the same entry."""
+    again on the same entry. An `escalate` asked with `names` (GH-485) is taken only by an entry
+    that recorded the same names, so a new set of wrong names is asked again on the same head."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
@@ -870,6 +887,8 @@ def already_dispatched(
             return not isinstance(recorded, str) or recorded == upstream
         if step == "escalate_adr":
             return bool(entry.get("resolved_at"))
+        if step == "escalate" and names:
+            return entry.get("names") == list(names)
         if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
             return not entry.get("released_at")  # GH-463: a released pair owes a new escalation
         return True

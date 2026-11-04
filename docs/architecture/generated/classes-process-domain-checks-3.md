@@ -20,6 +20,8 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
+    class presubmit__BudgetBreach["BudgetBreach"]
+    class presubmit__CheckResult["CheckResult"]
     class presubmit__CiCover["CiCover"]
     class presubmit__CiDispatch["CiDispatch"]
     class presubmit__RerunForm["RerunForm"]

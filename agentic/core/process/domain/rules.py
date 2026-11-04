@@ -2647,6 +2647,22 @@ def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
     )
 
 
+def ci_planning_defect(head: str, text: str) -> dict[str, Any]:
+    """The patch of a `full_checks` whose required CI names no check run of `head` carries
+    (GH-485): a planning defect, never a failed check. The task stops for the human under class
+    `ci`; no `full_checks` record, no return and no counter, so the Developer is not charged and
+    a resume enters the node again on the same head. `text` names the names, the reported ones
+    and where to fix them."""
+    reason = f"Planning defect, not a CI failure ({head[:7]}): {text}"
+    return logged(
+        {
+            "current_role": DEVELOPER.name,
+            "status": WAITING_ON_HUMAN,
+            **escalation("ci", reason),
+        }
+    )
+
+
 def after_full_checks(state: TaskState) -> str | None:
     """Always back to the fan-in, like `after_qa_performance`: on a green run
     `full_checks_due` now reads `False` and `after_integrate` goes on; on a red one the
@@ -4663,6 +4679,7 @@ MergeRefusal = Literal[
     "ci_missing",
     "ci_unreadable",
     "ci_blocked_by_conflict",
+    "ci_unknown_names",
     "ci_no_verdict",
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
@@ -4717,6 +4734,11 @@ MergeRefusal = Literal[
 - `ci_blocked_by_conflict` (GH-395): GitHub reads the head as conflicting with its base and
   no required check has a result on it; GitHub runs no CI on such a head, so none will come.
   Decided in the same round with no wait; the landing syncs master instead.
+- `ci_unknown_names` (GH-485): a required name no check run of this head carries while every
+  workflow run of it is completed (`MergeFacts.ci_unreported`, from `ci.unreported`), seen at
+  least `2 * ci.CI_POLL_S` into the wait. A planning defect, not a slow CI: red still wins
+  (`ci_failed`), and a conflicting head with no suites is `ci_blocked_by_conflict`. The
+  landing escalates it once per head and names, spending no budget.
 - `ci_no_verdict` (GH-463): a product that declares `ci:` asked GitHub for a fresh run of the
   head on the current master and got no verdict, after the one republish (or second dispatch)
   of the pair: `ci.CI_NO_VERDICT_PAIRS_MAX` pairs since the last release. The landing escalates
@@ -4761,6 +4783,9 @@ class MergeFacts:
     `ci_red_on_base` (GH-371) is the failing required names that are also red on the base
     branch's latest CI report (`ci.red_on_base`): `()` when none, when that report was not read,
     or in a `MergeFacts` built without it; only the landing reads it.
+    `ci_unreported` (GH-485) is the required names `ci.unreported` finds no check run for (the
+    report's workflow runs all completed), `ci_reported` the names the report did carry: `()`
+    in a `MergeFacts` built without them, and then the gate waits as it always did.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -4813,6 +4838,8 @@ class MergeFacts:
     ci_unreadable: ci.CiUnreadable | None = None
     ci_fresh: bool | None = None
     ci_waited_s: float | None = None
+    ci_unreported: tuple[str, ...] = ()
+    ci_reported: tuple[str, ...] = ()
     ci_untrusted: bool | None = None
     ci_dispatched: bool | None = None
     followups_filed: bool = False
@@ -5218,6 +5245,12 @@ def _deferral_gate(facts: MergeFacts) -> MergeDecision | None:
     return None
 
 
+def _ci_confirmed(facts: MergeFacts) -> bool:
+    """Whether the wait has run long enough for `ci.unreported` to be believed (GH-485): two
+    polls into it, so the same complete answer was given twice. No anchor is not confirmed."""
+    return facts.ci_waited_s is not None and facts.ci_waited_s >= 2 * ci.CI_POLL_S
+
+
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     """The CI's part of `auto_merge_decision`: `None` means a green CI that is not fresh,
     which goes on to the local checks, as does any green CI whose definition is untrusted and
@@ -5241,6 +5274,8 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     if verdict.state == "pending":
         if ci_never_coming(facts):
             return MergeDecision("refuse", "ci_blocked_by_conflict")
+        if facts.ci_unreported and _ci_confirmed(facts):
+            return MergeDecision("refuse", "ci_unknown_names")
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
     declared = set(facts.ci_required) - set(facts.ci_plan_only)
     if facts.ci_subject == "tested":

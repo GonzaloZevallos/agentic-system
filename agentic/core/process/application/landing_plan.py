@@ -285,6 +285,10 @@ def step_for(
         adr_escalated=escalation_recorded(
             raw, facts.pr_head, refusal, "escalate_adr", resolved_only=True
         ),
+        names_escalated=refusal == "ci_unknown_names"
+        and escalation_recorded(
+            raw, facts.pr_head, refusal, "escalate", names=sorted(facts.ci_unreported)
+        ),
     )
 
 
@@ -295,16 +299,19 @@ def escalation_recorded(
     kind: LandingStepKind,
     *,
     resolved_only: bool = False,
+    names: Sequence[str] | None = None,
 ) -> bool:
     """Whether the `landing` list holds an entry of step `kind` for this head and refusal: the
     one question the human was asked, never twice. `resolved_only` counts only an entry that
     carries `resolved_at`, i.e. one written after its comment was posted, so a question whose
-    comment failed is asked again."""
+    comment failed is asked again. With `names` (GH-485) the entry must also have recorded exactly
+    those names; callers that do not pass it keep their behaviour."""
     return any(
         entry.get("step") == kind
         and entry.get("head") == head
         and entry.get("refusal") == refusal
         and (not resolved_only or bool(entry.get("resolved_at")))
+        and (names is None or entry.get("names") == list(names))
         for entry in live_entries(raw)
     )
 
@@ -663,6 +670,7 @@ def pending(
             step.kind,
             facts.current_master,
             unstarted=landing.landing_pass(raw) == "unstarted",
+            names=step.names,
         )
     ):
         return None

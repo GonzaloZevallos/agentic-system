@@ -1066,6 +1066,7 @@ CiCause = Literal[
     "not_started",
     "dispatch_refused",
     "jobs_missing",
+    "unknown_names",
 ]
 
 

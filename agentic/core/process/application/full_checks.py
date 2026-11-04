@@ -79,6 +79,7 @@ _CI_DETAIL: dict[CiCause, str] = {
     "not_started": "the declared CI jobs on {ref} did not start (startup failure or cancelled)",
     "dispatch_refused": "`gh` refused to dispatch the workflow for that head",
     "jobs_missing": "the run completed without a declared job",
+    "unknown_names": "no check run carries a declared job name",
 }
 # The same causes when the verdict was asked of a dispatched run: `{ref}` is the workflow file.
 _DISPATCH_DETAIL: dict[CiCause, str] = {
@@ -91,6 +92,7 @@ _DISPATCH_DETAIL: dict[CiCause, str] = {
     "(startup failure or cancelled)",
     "dispatch_refused": "`gh` refused to dispatch {ref} for that head",
     "jobs_missing": "the dispatched {ref} completed without a declared job",
+    "unknown_names": "no check run carries a declared job name",
 }
 
 
@@ -102,6 +104,9 @@ class _NoVerdict:
     waited_s: float
     # The workflow file of a dispatched run that gave none; None for the task's own CI ref.
     workflow: str | None = None
+    # `unknown_names` only (GH-485): the names no check run carries, and the names that did report.
+    unknown: tuple[str, ...] = ()
+    reported: tuple[str, ...] = ()
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -138,6 +143,12 @@ async def full_checks(
     outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock, now)
     if outcome == "untrusted":
         return await _local_full_checks(state, cfg, ports, task, base, outcome)
+    if isinstance(outcome, _NoVerdict) and outcome.cause == "unknown_names":
+        head = workspace.full_head(task.path)
+        plan_only = rules.ci_gate_names(names, state.get("ci_required") or []).plan_only
+        return finish(
+            state, rules.ci_planning_defect(head, _unknown_text(outcome, head, plan_only)), ports
+        )
     if isinstance(outcome, _NoVerdict):
         head = workspace.full_head(task.path)
         table = _CI_DETAIL if outcome.workflow is None else _DISPATCH_DETAIL
@@ -147,6 +158,12 @@ async def full_checks(
         )
         return finish(state, rules.ci_unavailable(outcome.cause, head, detail), ports)
     return finish(state, outcome, ports)
+
+
+def _unknown_text(outcome: _NoVerdict, head: str, plan_only: tuple[str, ...]) -> str:
+    """The escalation for names no check run carries (GH-485): `ci.unreported_text`, the one
+    wording the full tier, the merge gate and the landing share."""
+    return ci.unreported_text(outcome.unknown, outcome.reported, head, plan_only)
 
 
 async def _local_full_checks(
@@ -297,7 +314,10 @@ async def _ci_full_checks(
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
     if verdict.state == "unreachable":
-        return _NoVerdict(verdict.cause or "no_run", waited)
+        reported = ci.reported_names(read) if isinstance(read, CiReport) else ()
+        return _NoVerdict(
+            verdict.cause or "no_run", waited, unknown=verdict.unknown, reported=reported
+        )
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
     if verdict.state == "green":
         patch = _ci_green(state, head, gate_names, read, waited)
@@ -353,6 +373,7 @@ async def _wait_ci(
     `cfg.check_timeout_s` once one does (`ci.full_tier_verdict`). `first` is a read already
     taken, used for the first round instead of asking again."""
     started = clock()
+    previous: CiReport | CiUnreadable | None = None
     while True:
         read = (
             first
@@ -362,11 +383,35 @@ async def _wait_ci(
         first = None
         waited = clock() - started
         verdict = ci.full_tier_verdict(
-            read, head, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
+            read,
+            head,
+            names,
+            waited,
+            cfg.check_timeout_s,
+            cfg.ci_start_grace_s,
+            _same_complete_read(previous, read, head),
         )
         if verdict.state != "waiting":
             return verdict, read, waited
+        previous = read
         await sleep(ci.CI_POLL_S)
+
+
+def _same_complete_read(
+    previous: CiReport | CiUnreadable | None, read: CiReport | CiUnreadable, head: str
+) -> bool:
+    """Whether two consecutive reads agree that `head`'s workflow runs are completed and carry
+    the same check names (GH-485): the one confirmation `ci.unreported` asks for, so a name that
+    appears late is waited for. Held in memory by the wait, never stored."""
+    return (
+        isinstance(previous, CiReport)
+        and isinstance(read, CiReport)
+        and rules.same_commit(previous.head_sha, head)
+        and rules.same_commit(read.head_sha, head)
+        and previous.runs_completed is True
+        and read.runs_completed is True
+        and set(ci.reported_names(previous)) == set(ci.reported_names(read))
+    )
 
 
 async def _dispatched_full_checks(
@@ -408,7 +453,7 @@ async def _dispatched_full_checks(
         return _NoVerdict(verdict.cause or "no_run", waited, dispatch.workflow)
     run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
     assert run is not None  # a verdict other than `unreachable` came from a chosen run
-    read = CiReport(head, None, None, None, run.jobs)
+    read = CiReport(head, None, None, None, run.jobs, run.status == "completed")
     if verdict.state == "green":
         patch = _ci_green(state, head, names, read, waited)
     else:

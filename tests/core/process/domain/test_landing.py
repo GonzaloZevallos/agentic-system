@@ -64,6 +64,7 @@ EXPECTED = {
     "ci_missing": "wait",
     "ci_unreadable": "wait",
     "ci_blocked_by_conflict": "sync_master",
+    "ci_unknown_names": "escalate",
     "ci_untrusted_no_dispatch": "none",
     "ci_stale_exhausted": "sync_master",
     "ci_no_verdict": "escalate",
