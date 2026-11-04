@@ -22,18 +22,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
-from ..application.ports import ProductStack, Tracker, Workspace
-from ..domain.task import TrackerFailure
+from ..application.ports import IssueComment, ProductStack, Tracker, Workspace
+from ..domain.task import TaskInput, TrackerFailure
 
 
 class EvaluationWrite(RuntimeError):
     """An evaluation run tried to write where it may not: the tracker or a remote ref."""
 
 
-def _refusal(port: str, name: str) -> Callable[..., Any]:
-    def refuse(*args: object, **kwargs: object) -> Any:
+def _refusal(port: str, name: str) -> Callable[..., NoReturn]:
+    def refuse(*args: object, **kwargs: object) -> NoReturn:
         raise EvaluationWrite(
             f"{port}.{name}: an evaluation run writes neither the tracker nor a ref"
         )
@@ -86,7 +86,7 @@ class EvaluationTracker:
         the real issue afterwards."""
         return []
 
-    def timestamped_comments(self, task_id: str) -> list[Any]:
+    def timestamped_comments(self, task_id: str) -> list[IssueComment]:
         return []
 
     def comment(self, task_id: str, text: str) -> None:
@@ -230,7 +230,7 @@ class ClosedInbox:
     ever read from the tracker through it. A run handed its entry with `--issue-input`
     replaces it with the file's own `FileInbox` (`cli`)."""
 
-    def task(self, number: int) -> Any:
+    def task(self, number: int) -> TaskInput:
         raise ValueError(f"issue {number}: an evaluation root has no frozen entry to read")
 
     def task_id(self, number: int) -> str:
