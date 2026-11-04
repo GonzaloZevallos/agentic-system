@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class scratch__PartitionListing["PartitionListing"]
     class scratch__RecordFact["RecordFact"]
     class scratch__Removal["Removal"]
     class scratch__ScratchListing["ScratchListing"]

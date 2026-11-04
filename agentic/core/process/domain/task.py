@@ -741,6 +741,8 @@ class ReleasePatch(TypedDict, total=False):
     pause_log: list[PauseEntry]
     landing: list[LandingEntry]
     sections: dict[str, str]
+    # GH-463: the `merge_ci` pair a `ci_no_verdict` release stamps with `released_at`.
+    merge_ci: list[MergeCiRecord]
 
 
 class FinishedPatch(TypedDict):
@@ -950,6 +952,9 @@ class LandingEntry(TypedDict, total=False):
     # GH-442, `escalate` entries: the upstream sha whose CI release (`landing.released_by_ci`)
     # was recorded for this entry's head, with `released_at` its time. Absent until then.
     ci_released: str
+    # GH-463, `escalate` entries answering `ci_no_verdict`: why GitHub gave no verdict, from the
+    # closed `CiCause`; absent when the cause could not be read.
+    cause: CiCause
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
     # entry it is the master sha the diagnosis was made against.
@@ -1079,6 +1084,15 @@ class CloseDocs(TypedDict):
     paths: list[str]
 
 
+class CiSpeculation(TypedDict):
+    """The push `review()` made of the final unit's head to `agentic-ci/<id>` ahead of
+    `full_checks` (GH-465): `head` the whole sha pushed, `pushed_at` the ISO instant. Replaced
+    whole by every review of the final unit; carries no verdict."""
+
+    head: str
+    pushed_at: str
+
+
 OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
 """Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
 `owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
@@ -1127,6 +1141,51 @@ class FullChecksRecord(TypedDict):
     # The checks deferred to CI (GH-453), a declared name each; written only when there is one,
     # so a record without a deferral is as it always was.
     deferred: NotRequired[list[str]]
+    # Whether the CI run that gave the verdict was the one a review pushed ahead of this run
+    # (GH-465, `speculation.consumable`); written only when it was, `ran_on` stays `ci`.
+    speculative: NotRequired[bool]
+
+
+class MergeCiRecord(TypedDict):
+    """One pair of the merge gate's fresh GitHub run (GH-463): the pull request `head`
+    merged with `master`, built as the commit `tested`, which `mode` published (`push`:
+    `agentic-ci/<id>`; `dispatch`: `refs/agentic-ci-dispatch/<id>`, judged by a dispatched run
+    of the base's workflow). All shas are full ids. Written before anything is published or
+    dispatched, so a poll round never fires a second run for the same pair. `republished` says
+    the one republish (or second dispatch) of the pair was spent and `superseded` holds the
+    earlier `tested` shas of the pair, whose verdicts never apply. `run_id` is the run that
+    decided the pair, when it could be read; `outcome` how the pair ended; `released_at` the
+    instant the landing released a `no_verdict` pair. `failing` names the declared checks a `red`
+    pair failed and `cause` the closed `CiCause` of a `no_verdict` one, so the landing reads
+    both off the document and never from `gh`'s text. `rerun_at` is the instant the landing reran a
+    `red` pair's run by its `run_id`, which also clears `outcome` and `failing`: the gate reads
+    the run again and the wait for its new verdict counts from that instant. No free text in any
+    field."""
+
+    head: str
+    master: str
+    tested: str
+    mode: Literal["push", "dispatch"]
+    published_at: str
+    republished: bool
+    superseded: list[str]
+    run_id: NotRequired[str]
+    outcome: NotRequired[Literal["stale", "no_verdict", "green", "red"]]
+    released_at: NotRequired[str]
+    failing: NotRequired[list[str]]
+    cause: NotRequired[CiCause]
+    rerun_at: NotRequired[str]
+
+
+def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
+    """The pairs of `existing` and `new` as one list in the order first seen, one row per
+    `(head, master)`: a row for a known pair replaces it whole, so a record is written before
+    the trigger and updated in place as the pair is republished, decided or released. The
+    only way `merge_ci` is ever written; a document without the key reads as no record."""
+    joined: dict[tuple[str, str], MergeCiRecord] = {}
+    for row in (*existing, *new):
+        joined[(row["head"], row["master"])] = row
+    return list(joined.values())
 
 
 class TaskState(TaskInput, total=False):
@@ -1227,6 +1286,9 @@ class TaskState(TaskInput, total=False):
     task_head: str
     # The latest `full_checks` run (GH-358), persisted as one flow line; absent until one ran.
     full_checks: FullChecksRecord
+    # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
+    # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
+    merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str
@@ -1257,6 +1319,10 @@ class TaskState(TaskInput, total=False):
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str
     pushed_at: str
+    # The head the final unit's review published to the CI ref and when (GH-465): the push
+    # fact, never a verdict. Written only by that review (its approval with a whole sha, `None`
+    # on its return), written to the document only when set, read with `.get`.
+    ci_speculation: NotRequired[CiSpeculation | None]
     # The processes a role left running that the release stopped when the task closed
     # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
     # and it is read with `.get`.
@@ -1428,6 +1494,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
                 patch[key] = fresh
+        elif reducer is add_merge_ci:
+            prior = {(r["head"], r["master"]): r for r in old}
+            if grown := [r for r in value if prior.get((r["head"], r["master"])) != r]:
+                patch[key] = grown
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:

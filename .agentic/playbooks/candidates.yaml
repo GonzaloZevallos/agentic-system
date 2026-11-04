@@ -1098,3 +1098,42 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-04T04:16:32.166+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, take each plan invariant and grep your diff for every way it could break, including legacy data missing a new field and decisions made outside the module that owns the rule.
+  confidence: medium
+  seen_in:
+  - GH-466
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T07:23:17.187+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a contract between components (argv, comment prefixes, tracker writes), grep the hand-written docs for the old shape and update them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-466
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T07:23:17.187+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change alters a documented flow or rule, update the architecture doc that describes it in the same change, citing the files and symbols involved.
+  confidence: medium
+  seen_in:
+  - GH-463
+  sources:
+  - finding
+  added_at: '2026-11-04T10:45:04.731+00:00'
+- slug: tech_lead_platform
+  category: integration-crosscut
+  lesson: At integration, trace each new path from the production entry point and check that the state it depends on is set there. Passing tests with hand-built state do not prove the path is reachable.
+  confidence: medium
+  seen_in:
+  - GH-463
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T10:45:04.731+00:00'

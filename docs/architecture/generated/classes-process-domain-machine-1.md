@@ -23,6 +23,7 @@ classDiagram
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
     class reaping__ReapedProcess["ReapedProcess"]
+    class retakes__Budget["Budget"]
     class scratch__KeptFolder["KeptFolder"]
     class scratch__Leftover["Leftover"]
     class scratch__Orphans["Orphans"]
@@ -30,5 +31,4 @@ classDiagram
     class scratch__OwnerEntry["OwnerEntry"]
     class scratch__OwnerRecord["OwnerRecord"]
     class scratch__PartitionFolder["PartitionFolder"]
-    class scratch__PartitionListing["PartitionListing"]
 ```

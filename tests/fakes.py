@@ -219,6 +219,8 @@ class MemoryDocuments:
         # task_id -> the closure values recorded for it, folded over successive calls
         # the way the filesystem adapter's line-level replace-or-append does.
         self.closures: dict[str, dict[str, object]] = {}
+        # Task ids whose document `ids_touched_since` does not name: unwritten for a long time.
+        self.untouched: set[str] = set()
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
@@ -237,7 +239,7 @@ class MemoryDocuments:
         return sorted({state["id"] for state in self.saved})
 
     def ids_touched_since(self, since: datetime) -> list[str]:
-        return self.ids()
+        return [i for i in self.ids() if i not in self.untouched]
 
     def flakes_since(self, cutoff: datetime) -> dict[str, list[FlakeRecord]]:
         """The flakes of each task's latest saved state: this fake has no mtime, so every
@@ -775,6 +777,10 @@ class MemoryWorkspace:
         self.restored: list[Path] = []
         self.commits: list[tuple[Path, str]] = []
         self.merges: list[tuple[Path, str]] = []
+        # GH-463: the `message` of every `merge`, in order, and the sha each
+        # `refs/agentic-ci-dispatch/` ref holds on the fake remote.
+        self.merge_messages: list[str | None] = []
+        self.dispatch_refs: dict[str, str] = {}
         # Branches whose merge does not apply, as a real conflict would.
         self.conflicts: set[str] = set()
         # `merge_keeping_conflicts` calls, and the paths a scripted conflict leaves
@@ -1027,8 +1033,9 @@ class MemoryWorkspace:
     def is_committed(self, path: Path) -> bool:
         return path not in self.uncommitted
 
-    def merge(self, path: Path, branch: str) -> str | None:
+    def merge(self, path: Path, branch: str, message: str | None = None) -> str | None:
         self.merges.append((path, branch))
+        self.merge_messages.append(message)
         return f"CONFLICT in {branch}" if branch in self.conflicts else None
 
     def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:
@@ -1191,6 +1198,26 @@ class MemoryWorkspace:
         if self.ci_ref_error is not None:
             raise GitError(self.ci_ref_error)
         self.ci_refs[ref] = self.head(path)
+
+    def publish_dispatch_ref(self, path: Path, ref: str) -> None:
+        self.ci_ref_calls.append(("publish_dispatch", ref))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        self.dispatch_refs[ref] = self.head(path)
+
+    def delete_dispatch_ref(self, ref: str) -> None:
+        self.ci_ref_calls.append(("delete_dispatch", ref))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        if ref not in self.dispatch_refs:
+            raise GitError(f"git push origin --delete {ref} failed: no such ref")
+        del self.dispatch_refs[ref]
+
+    def remote_dispatch_refs(self) -> tuple[str, ...]:
+        self.ci_ref_calls.append(("list_dispatch", ""))
+        if self.ci_ref_error is not None:
+            raise GitError(self.ci_ref_error)
+        return tuple(self.dispatch_refs)
 
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
         self.ci_ref_calls.append(("list", prefix))
@@ -1456,6 +1483,9 @@ class MemoryTracker:
         self.rerun_calls: list[tuple[str, str]] = []
         self.failed_runs: list[str] = []
         self.rerun_error: str | None = None
+        # GH-463: every run id `rerun_ci_run` was asked for, and the refusal it answers.
+        self.run_reruns: list[str] = []
+        self.rerun_run_error: CiUnreadable | None = None
         self.closed_pull_requests: list[str] = []
         # The restoring verb: every number `reopen_pull_request` reopened (an open one is
         # not recorded twice) and the `ValueError` text that makes it refuse instead.
@@ -1510,6 +1540,7 @@ class MemoryTracker:
         self.comment_failures = 0
         # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).
         self.drop_label_failures = 0
+        self.label_failures = 0
         # `pull_requests_on`: the pull requests scripted per head branch, `lookup_error`
         # to make it raise `ValueError` (`gh`'s own failure shape), and each branch asked.
         self.on_branch: dict[str, list[BranchPullRequest]] = {}
@@ -1625,6 +1656,13 @@ class MemoryTracker:
             raise ValueError(self.rerun_error)
         return list(self.failed_runs)
 
+    def rerun_ci_run(self, run_id: str) -> CiUnreadable | None:
+        """GH-463: the run ids asked to rerun, in `run_reruns`; `rerun_run_error` is the
+        refusal answered (None: accepted)."""
+        self.events.append("rerun_ci_run")
+        self.run_reruns.append(run_id)
+        return self.rerun_run_error
+
     def close_pull_request(self, reference: str) -> None:
         pull_request_number(reference)
         self.events.append("close_pull_request")
@@ -1655,6 +1693,10 @@ class MemoryTracker:
         self.comments.append((task_id, text))
 
     def label(self, task_id: str, label: str) -> None:
+        if self.label_failures > 0:
+            self.label_failures -= 1
+            raise ValueError("gh issue edit failed: scripted")
+        self.events.append("label")
         self.labels.append((task_id, label))
 
     def unlabel(self, task_id: str, label: str) -> None:

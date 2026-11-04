@@ -103,7 +103,7 @@ def test_a_stale_green_ci_with_a_declared_name_still_goes_to_the_checks():
         ci_fresh=False,
         checks_passed=None,
     )
-    assert rules.auto_merge_decision(facts) == MergeDecision("run_checks", None)
+    assert rules.auto_merge_decision(facts) == MergeDecision("ci_run", None)
 
 
 def test_facts_without_plan_names_decide_as_before():

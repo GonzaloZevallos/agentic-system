@@ -1496,3 +1496,67 @@ def test_record_closure_round_trips_a_full_checks_record_judged_by_a_dispatched_
     }
     _assert_roundtrip_and_replace("full_checks", dispatched, local)
     _assert_roundtrip_and_replace("full_checks", local, dispatched)
+
+
+def test_a_merge_ci_record_is_one_flow_line_written_by_record_closure_and_by_render():
+    """GH-463: the merge gate's fresh-run pairs are replaced whole by a merge child with no
+    state owner, and a later `render` of the state keeps them as the same one flow line."""
+    pair = {
+        "head": "a" * 40,
+        "master": "b" * 40,
+        "tested": "c" * 40,
+        "mode": "push",
+        "published_at": "2026-11-03T10:00:00+00:00",
+        "republished": False,
+        "superseded": [],
+    }
+    decided = {**pair, "outcome": "green", "run_id": "42", "superseded": ["d" * 40]}
+    _assert_roundtrip_and_replace("merge_ci", [pair], [decided, {**pair, "master": "e" * 40}])
+    state = {"id": "T-1", "title": "t", "description": "d", "merge_ci": [pair]}
+    rendered = document.render(state)
+    _one_flow_line(rendered, "merge_ci")
+    assert document.parse(rendered)["merge_ci"] == [pair]
+    assert "merge_ci" not in document.render({**state, "merge_ci": []})
+
+
+_SPECULATION = {"head": "a" * 40, "pushed_at": "2026-11-03T12:00:00+00:00"}
+
+
+def _speculative_state(**extra):
+    return {"id": "T-9", "title": "Speculate", "description": "d", "sections": {}, **extra}
+
+
+def test_ci_speculation_roundtrips_through_the_frontmatter():
+    text = document.render(_speculative_state(ci_speculation=_SPECULATION))
+    assert document.parse(text)["ci_speculation"] == _SPECULATION
+
+
+def test_full_checks_speculative_roundtrips_inside_the_record():
+    record = {
+        "version": 1,
+        "head": "a" * 40,
+        "passed": True,
+        "duration_s": 3.0,
+        "declared": {"tests": "pytest"},
+        "results": [],
+        "witness": None,
+        "ran_on": "ci",
+        "speculative": True,
+    }
+    parsed = document.parse(document.render(_speculative_state(full_checks=record)))
+    assert parsed["full_checks"] == record
+
+
+@pytest.mark.parametrize("value", [None, {}])
+def test_a_document_without_ci_speculation_is_as_before(value):
+    plain = document.render(_speculative_state())
+    absent = document.render(_speculative_state(ci_speculation=value))
+    assert absent == plain
+    assert "ci_speculation" not in plain
+    assert "ci_speculation" not in document.parse(plain)
+
+
+def test_ci_speculation_is_not_the_deliverys_anchor():
+    parsed = document.parse(document.render(_speculative_state(ci_speculation=_SPECULATION)))
+    assert "pushed_head" not in parsed
+    assert "pushed_at" not in parsed

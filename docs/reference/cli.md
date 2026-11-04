@@ -6,10 +6,10 @@ Generada por `scripts/docs/generate.py` recorriendo `agentic.cli.build_parser()`
 
 ```text
 usage: agentic [-h]
-               {run,resume,close,merge,land,restore,eval,stack,scores,dashboards,poll,reflect,perf} ...
+               {run,resume,close,merge,land,restore,stop,eval,stack,scores,dashboards,poll,reflect,perf} ...
 
 positional arguments:
-  {run,resume,close,merge,land,restore,eval,stack,scores,dashboards,poll,reflect,perf}
+  {run,resume,close,merge,land,restore,stop,eval,stack,scores,dashboards,poll,reflect,perf}
     run                 run one task through the feature path
     resume              resume the task of issue N where it paused
     close               record the human's verdict on a task's pull request and close it
@@ -21,6 +21,8 @@ positional arguments:
     restore             bring an archived, approved task back from its archive/run<N>-<sha> refs --
                         branches, document and pull request -- so it can land without a fresh run
                         (GH-406)
+    stop                stop the run of issue N on purpose and mark it so the poller never retakes
+                        it (GH-466); `agentic resume --issue N` continues it
     eval                drive or score README.md 9's fixed five-task evaluation set
     stack               the product's own stack (ADR-0034)
     scores              a task's numbers as Langfuse scores (GH-273)
@@ -75,7 +77,8 @@ options:
 
 ```text
 usage: agentic resume [-h] --issue N [--task-budget USD] [--estimate USD] [--from-document]
-                      [--dry-run] [--yes] [--product-dir PRODUCT_DIR] [--verbose] [--detach]
+                      [--dry-run] [--yes] [--by-poller] [--product-dir PRODUCT_DIR] [--verbose]
+                      [--detach]
 
 options:
   -h, --help            show this help message and exit
@@ -87,6 +90,7 @@ options:
   --from-document       seed the state from the task document instead of the checkpoint
   --dry-run             show what would resume and stop, spending nothing
   --yes                 do not ask for confirmation
+  --by-poller           the poller spawned this resume (GH-466): it does not reset the retake budget
   --product-dir PRODUCT_DIR
                         root of the product repo (AGENTIC_PRODUCT_DIR)
   --verbose             stream each role's generation to stderr
@@ -144,6 +148,18 @@ options:
   --issue N
   --from archive/run<N>-<sha>
                         the prefix the archived run's branches live under
+  --product-dir PRODUCT_DIR
+                        root of the product repo (AGENTIC_PRODUCT_DIR)
+```
+
+## `agentic stop`
+
+```text
+usage: agentic stop [-h] --issue N [--product-dir PRODUCT_DIR]
+
+options:
+  -h, --help            show this help message and exit
+  --issue N
   --product-dir PRODUCT_DIR
                         root of the product repo (AGENTIC_PRODUCT_DIR)
 ```

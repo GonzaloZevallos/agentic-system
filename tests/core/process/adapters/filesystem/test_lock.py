@@ -218,3 +218,106 @@ def test_a_record_without_the_crash_key_reads_as_none_and_is_not_written_with_on
     assert "crashed_version" not in lock._path("GH-1").read_text(encoding="utf-8")
     lock.keep_at_shutdown("GH-1")
     assert lock.read("GH-1").crashed_version is None
+
+
+def test_acquire_records_the_holders_starttime_and_the_mark_is_absent(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    record = lock.read("GH-1")
+    assert record.starttime is not None
+    assert record.stopped_deliberately is False
+    assert "stopped_deliberately" not in lock._path("GH-1").read_text(encoding="utf-8")
+
+
+def test_keep_stopped_marks_the_record_and_keeps_pid_boot_id_and_starttime(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    before = lock.read("GH-1")
+    lock.keep_stopped("GH-1", before.pid)
+    after = lock.read("GH-1")
+    assert after.stopped_deliberately is True
+    assert (after.pid, after.host, after.boot_id, after.starttime) == (
+        before.pid,
+        before.host,
+        before.boot_id,
+        before.starttime,
+    )
+    assert (after.started_at, after.command) == (before.started_at, before.command)
+
+
+def test_keep_stopped_marks_a_dead_holders_record_without_taking_it_over(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock._write(
+        "GH-1",
+        pid=DEAD_PID,
+        host=lock._host(),
+        started_at="2026-09-15T00:00:00Z",
+        boot_id="boot-0",
+        starttime="123",
+    )
+    lock.keep_stopped("GH-1", DEAD_PID)
+    record = lock.read("GH-1")
+    assert (record.pid, record.boot_id, record.starttime) == (DEAD_PID, "boot-0", "123")
+    assert record.stopped_deliberately is True
+
+
+def test_keep_stopped_leaves_a_record_that_names_another_pid_untouched(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    lock.keep_stopped("GH-1", os.getpid() + 1)
+    assert lock.read("GH-1").stopped_deliberately is False
+
+
+def test_keep_stopped_with_no_record_is_a_no_op(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.keep_stopped("GH-1", 1)
+    assert lock.read("GH-1") is None
+
+
+def test_a_recordless_mark_writes_this_processs_own_identity(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.mark_stopped_recordless("GH-1")
+    record = lock.read("GH-1")
+    assert record.stopped_deliberately is True
+    assert record.pid == os.getpid()
+    assert record.boot_id == "boot-1"
+    assert record.starttime is not None
+
+
+def test_a_recordless_mark_never_overwrites_an_existing_record(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock._write("GH-1", pid=DEAD_PID, host=lock._host(), started_at="2026-09-15T00:00:00Z")
+    lock.mark_stopped_recordless("GH-1")
+    assert lock.read("GH-1").pid == DEAD_PID
+    assert lock.read("GH-1").stopped_deliberately is False
+
+
+def test_a_record_written_before_the_mark_existed_reads_as_not_stopped(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock._path("GH-1").parent.mkdir(parents=True, exist_ok=True)
+    lock._path("GH-1").write_text(
+        '{"pid": 7, "host": "h", "started_at": "2026-09-15T00:00:00Z", "command": "c"}',
+        encoding="utf-8",
+    )
+    record = lock.read("GH-1")
+    assert (record.stopped_deliberately, record.starttime) == (False, None)
+
+
+def test_the_other_marks_keep_the_starttime(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    starttime = lock.read("GH-1").starttime
+    lock.keep_at_shutdown("GH-1")
+    assert lock.read("GH-1").starttime == starttime
+    lock.keep_crashed("GH-1", "abc123")
+    assert lock.read("GH-1").starttime == starttime
+
+
+def test_the_starttime_is_field_22_of_stat_even_when_the_command_holds_a_parenthesis(tmp_path):
+    from agentic.core.process.adapters.filesystem.liveness import starttime_of
+
+    (tmp_path / "7").mkdir()
+    rest = " ".join(["S", *[str(n) for n in range(4, 22)], "98765", "23"])
+    (tmp_path / "7" / "stat").write_text(f"7 (we) ird) {rest}\n", encoding="utf-8")
+    assert starttime_of(7, tmp_path) == "98765"
+    assert starttime_of(8, tmp_path) is None

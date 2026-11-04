@@ -29,11 +29,13 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, experiment, presubmit, rules
+from ..domain import ci, document, experiment, merge_ci, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStep, LandingStepKind
+from ..domain.retakes import RETAKEN, RETAKEN_AFTER_CRASH, RETAKEN_ORPHANED
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
 from . import (
     adr_collision,
@@ -70,20 +72,10 @@ from .registration import REGISTER_WAIT_S, await_registration
 # on the next `agentic resume`.
 AUTO_RESUMED = "Auto-resumed: "
 
-# How the comment of a retake after a reboot starts (GH-176): registered into
-# `resume.SYSTEM_COMMENTS` beside `AUTO_RESUMED`, posted only once the spawn returned a pid.
-RETAKEN = "Retaken after reboot: "
-
-# How the comment of a retake after the run raised under the graph starts (GH-308): registered
-# into `resume.SYSTEM_COMMENTS` too. Its text after the prefix is `rules.crash_retake_comment`'s,
-# the one function that writes it and `rules.crash_retake_counts` reads it.
-RETAKEN_AFTER_CRASH = "Retaken after crash: "
-
-# How the comment of a retake of a run that left no lock starts (GH-403): registered into
-# `resume.SYSTEM_COMMENTS` too, or it would read as a human's and reset its own cap. Written
-# by `orphaned_comment`, the one function, and read by `_orphan_counts`, which counts it.
-# Neither a prefix of nor prefixed by `RETAKEN` or `RETAKEN_AFTER_CRASH`.
-RETAKEN_ORPHANED = "Retaken with no lock: "
+# How the comments of a retake start (GH-176, GH-308, GH-403): `RETAKEN` after a reboot,
+# `RETAKEN_AFTER_CRASH` after the run raised under the graph, `RETAKEN_ORPHANED` for a run that
+# left no lock. Defined in `domain/retakes.py`, the one place that counts them, and re-exported
+# here for `resume.py`, which registers them in `resume.SYSTEM_COMMENTS`.
 
 # The two comments the automatic merge posts (GH-178, ADR-0045), both registered into
 # `resume.SYSTEM_COMMENTS` the same way: a refusal the human can act on, and the merge
@@ -163,14 +155,17 @@ def _prior_auto_resumes(comments: Sequence[IssueComment]) -> int:
     )
 
 
-def _prior_retakes(comments: Sequence[IssueComment]) -> int:
-    """How many `Retaken after reboot:` comments followed the last comment that is not
-    the system's own: the same shape as `_prior_auto_resumes`, so a human comment resets
-    the count `rules.RETAKE_AFTER_REBOOT_MAX` bounds."""
-    from .resume import SYSTEM_COMMENTS
+def _retake_budget(comments: Sequence[IssueComment]) -> retake_rules.Budget:
+    """The task's retake budget (`retakes.budget`) over its comments: the system prefixes and
+    the human's `Resumed: ` come from `resume`, imported here only at call time for the cycle
+    `resume.py` importing from this module would otherwise make."""
+    from .resume import RESUMED, SYSTEM_COMMENTS
 
-    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
-    return sum(1 for comment in comments[last_non_system + 1 :] if comment.body.startswith(RETAKEN))
+    return retake_rules.budget(
+        [(comment.body, _parse_timestamp(comment.created_at)) for comment in comments],
+        SYSTEM_COMMENTS,
+        RESUMED,
+    )
 
 
 def _retake_times(comments: Sequence[IssueComment]) -> list[datetime]:
@@ -302,6 +297,7 @@ def _merge_facts(
         in_eval_set=None if eval_set is None else number in eval_set,
         touched_paths=None,
         ci_untrusted=None,
+        merge_ci=tuple(raw.get("merge_ci") or ()),
         attempts=count if isinstance(count, int) and attempts.get("head") == pr_head else 0,
         checks_head=_text(checks.get("head")),
         checks_master=_text(checks.get("master")),
@@ -347,6 +343,27 @@ def ci_gate(raw: TaskState, declared: tuple[str, ...]) -> rules.CiGate:
     Every caller that builds `MergeFacts` asks here, so none rebuilds the list its own way."""
     plan = raw.get("ci_required")
     return rules.ci_gate_names(declared, plan if isinstance(plan, list) else [])
+
+
+def with_recorded_red(facts: rules.MergeFacts) -> rules.MergeFacts:
+    """`facts` read the way `merge.with_ci_run` reads a decided red fresh run (GH-463), from the
+    head's `merge_ci` pair instead of GitHub: `ci_subject` `tested`, the pair's `tested` sha as
+    `ci_head` and a red verdict over the names the pair recorded as failing. Anything else (no
+    red pair on the current master) leaves `facts` as they were."""
+    pair = merge_ci.decided_red(facts.merge_ci, facts.pr_head, facts.current_master)
+    if pair is None:
+        return facts
+    failing = tuple(
+        ci.CiCheck(name, "COMPLETED", "FAILURE", "") for name in pair.get("failing", [])
+    )
+    return replace(
+        facts,
+        ci_subject="tested",
+        ci_head=pair["tested"],
+        ci_verdict=ci.CiVerdict("red", failing, ()),
+        ci_unreadable=None,
+        ci_fresh=True,
+    )
 
 
 def with_red_on_base(
@@ -404,6 +421,9 @@ def _landing_step(
     step = landing_plan.released_step(raw, outcome, facts, refusal, at=at, ancestry=ancestry)
     patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
+    if step.kind == "wait" and patch and refusal == "ci_no_verdict":
+        # GH-463: the release of a `ci_no_verdict` escalation is persisted by a `land` child.
+        return step
     if not landing_plan.takes_action(step.kind, live) or landing_rules.already_dispatched(
         landing_plan.live_entries(view), facts.pr_head, step.kind, facts.current_master
     ):
@@ -563,11 +583,20 @@ def assess_merge(
     except ValueError as exc:
         raise StackUnreadable(str(exc)) from exc
     gate = ci_gate(raw, declared)
+    try:
+        dispatch_declared = ports.stack.ci_dispatch(task_base(raw, ports)) is not None
+    except ValueError:
+        dispatch_declared = False
 
     def gated(candidate: rules.MergeFacts) -> rules.MergeFacts:
         # What the decision reads before the CI is: the names, so a refusal ahead of the CI
         # is the same one, and no verdict, so the CI itself is a `wait`.
-        return replace(candidate, ci_required=gate.names, ci_plan_only=gate.plan_only)
+        return replace(
+            candidate,
+            ci_required=gate.names,
+            ci_plan_only=gate.plan_only,
+            ci_dispatch_declared=dispatch_declared,
+        )
 
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(gated(facts))
@@ -597,6 +626,11 @@ def assess_merge(
         report = ports.tracker.ci_report(str(reference))
         facts = with_red_on_base(ports, with_ci(facts, raw, declared, report), report)
         decision = rules.auto_merge_decision(facts)
+        if rules.declares_ci(facts) and decision.kind != "refuse":
+            # GH-463: the gate's fresh run, once it ended red, is the CI fact of this head;
+            # the merge child refuses `ci_failed` on it, so the landing must see the same.
+            facts = with_recorded_red(facts)
+            decision = rules.auto_merge_decision(facts)
     return MergeAssessment(
         facts, decision, report, pull_request, unread, source if facts.conflicts else None
     )
@@ -939,42 +973,40 @@ def escalate_persisted_limits(
 @dataclass(frozen=True)
 class CrashRetake:
     """What `gather_retakes` read once about a run that raised under the graph, handed to
-    `execute` so it never recounts: the retakes already made under `key`, the version the
-    run recorded when it raised, and the key (the current version, without `+dirty`) this
-    retake resumes under."""
+    `execute` so it never recounts: the retakes already made, the version the run recorded when
+    it raised, and the key (the current version, without `+dirty`) this retake resumes under."""
 
-    prior_at_version: int
+    prior: int
     crashed_version: str
     key: str
 
 
-def _prior_crash_retakes(comments: Sequence[IssueComment], key: str) -> tuple[int, int]:
-    """`(at_version, total)` of the `Retaken after crash:` comments after the last comment
-    that is not the system's own, so a human comment resets both."""
-    from .resume import SYSTEM_COMMENTS
+@dataclass(frozen=True)
+class RetakesSpent:
+    """What `gather_retakes` or `gather_orphans` read once about a task whose retake budget is
+    spent (or whose dead lock went stale) and that nobody was told about yet, handed to `execute`
+    so it never rereads: the `shape` of what happened, the retakes `used`, the `createdAt` of the
+    first and the last of them, and the dead run's lock (`pid`, `started_at`, `boot_id`; `None`
+    for an orphan, which left none). `reap` says the run died in this boot, so its own scope is
+    reaped when the notice is written (ADR-0052)."""
 
-    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
-    bodies = [comment.body for comment in comments[last_non_system + 1 :]]
-    return rules.crash_retake_counts(bodies, key, RETAKEN_AFTER_CRASH)
+    issue: int
+    shape: retake_rules.RetakeShape
+    used: int
+    first_at: datetime | None
+    last_at: datetime | None
+    pid: int | None = None
+    started_at: str | None = None
+    boot_id: str | None = None
+    reap: bool = False
 
 
-def _human_line(
-    number: int,
-    record: LockRecord,
-    other_boot: bool | None,
-    verdict_cap_spent: bool,
-    crash_why: str | None = None,
-) -> str:
-    """The one line a run left to the human says: what happened to its lock, whose it
-    was, and the command that takes it up. It repeats every round (the poller keeps no
-    state), which is how a human watching the output learns of it. `crash_why` is what a
-    record with a crash mark adds: which of the crash caps is spent, or that the system
-    version says nothing."""
-    if crash_why is not None:
-        what = f"crashed, {crash_why}"
-    elif verdict_cap_spent:
-        what = "retake cap spent"
-    elif record.stopped_at_shutdown:
+def _human_line(number: int, record: LockRecord, other_boot: bool | None) -> str:
+    """The one line a run left to the human says when its document is one the poller cannot
+    read (no `status`): what happened to its lock, whose it was, and the command that takes it
+    up. A spent budget or a stale lock is not this: it is announced once, on the issue
+    (`RetakesSpent`)."""
+    if record.stopped_at_shutdown:
         what = "stopped at shutdown"
     elif other_boot is None:
         what = "died (boot unknown)"
@@ -986,6 +1018,25 @@ def _human_line(
     )
 
 
+def _notice_pending(comments: Sequence[IssueComment]) -> bool:
+    """Whether the spent budget was not announced yet (`retakes.notice_posted` over the comments
+    already fetched)."""
+    from .resume import RESUMED, SYSTEM_COMMENTS
+
+    return not retake_rules.notice_posted([c.body for c in comments], SYSTEM_COMMENTS, RESUMED)
+
+
+def _lock_shape(
+    decision: Literal["spent", "stale"], record: LockRecord, other_boot: bool | None
+) -> retake_rules.RetakeShape:
+    """What killed the run, as the notice names it."""
+    if decision == "stale":
+        return "stale"
+    if record.crashed_version is not None:
+        return "crash"
+    return "reboot" if other_boot else "same_boot"
+
+
 def gather_retakes(
     ports: Ports,
     lock: RunLock,
@@ -993,15 +1044,22 @@ def gather_retakes(
     *,
     system_version: Callable[[], str | None] = lambda: None,
     crash: dict[int, CrashRetake] | None = None,
+    now: datetime | None = None,
+    spent: dict[int, RetakesSpent] | None = None,
 ) -> tuple[list[int], list[str]]:
-    """Every open task whose run a reboot interrupted (`rules.interrupted_run`), and the
-    lines for the ones left to the human. A run that raised under the graph (its record
-    carries `crashed_version`, GH-308) is retaken the same way, but is returned apart: its
-    issue is a key of `crash` (the mapping the caller hands in, filled here, the same shape
-    as `gather_merges`' `lands`) with the counts `execute` needs, and is not in the list.
-    `system_version` is read only when some record carries the mark, at most once per
-    round, and keys the per-version count (`rules.crash_version_key`); the counts come from
-    the comments after the last human one, read once with the reboot count. The lock is
+    """Every open task in the tray whose run is gone (`rules.interrupted_run`, one budget for
+    every shape, GH-466), and the lines for the ones left to the human. A task whose budget is
+    spent, or whose dead lock went stale, is a `RetakesSpent` fact under its issue in `spent`
+    (filled here like `crash`) unless its issue already carries the notice; this function writes
+    nothing: the tracker, the lock and the documents are `execute`'s to change. A run that
+    raised under the graph (its record carries `crashed_version`, GH-308) is retaken the same way,
+    but is returned apart: its issue is a key of `crash` (the mapping the caller hands in, filled
+    here, the same shape as `gather_merges`' `lands`) with the count `execute` needs, and is not in
+    the list. `system_version` is read only when some record carries the mark, at most once per
+    round, and names the version the crash retake resumes under; the count comes from the
+    comments after the reset boundary. The tray (`Tracker.queue`) and the documents written
+    inside `retakes.STALE_AFTER` are read at most once per round, when a record needs them. The
+    lock is
     only ever *read* here
     (`RunLock.read`, and `RunLock.refusal` for liveness, which never writes): taking it
     over is the retaken `resume`'s own first act, never the poller's, and a decision made
@@ -1013,7 +1071,13 @@ def gather_retakes(
     retakes: list[int] = []
     lines: list[str] = []
     crashes = crash if crash is not None else {}
+    notices = spent if spent is not None else {}
     read_version = functools.cache(system_version)
+    moment = now if now is not None else datetime.now(UTC)
+    tray = functools.cache(lambda: frozenset(ports.tracker.queue()))
+    fresh = functools.cache(
+        lambda: frozenset(ports.documents.ids_touched_since(moment - retake_rules.STALE_AFTER))
+    )
     for task_id in ports.documents.ids():
         number = ports.inbox.issue_of(task_id)
         if number is None:
@@ -1028,47 +1092,50 @@ def gather_retakes(
             other_boot,
             alive=lock.refusal(task_id) is not None,
             crashed_version=record.crashed_version,
+            stopped_deliberately=record.stopped_deliberately,
         )
-        key = (
-            rules.crash_version_key(read_version()) if record.crashed_version is not None else None
+        # The document's write time is only known as "inside the stale window or not".
+        written_at = moment if task_id in fresh() else moment - retake_rules.STALE_AFTER
+        in_tray = number in tray()
+        first = rules.interrupted_run(
+            raw,
+            facts,
+            retake_rules.Budget(0, None, None),
+            moment,
+            in_tray=in_tray,
+            document_written_at=written_at,
         )
-        first = rules.interrupted_run(raw, facts, 0, 0, 0, key)
         if first in ("none", "running"):
             continue
         comments = ports.tracker.timestamped_comments(task_id)
-        prior = _prior_retakes(comments)
-        at_version, total = (0, 0) if key is None else _prior_crash_retakes(comments, key)
-        decision = rules.interrupted_run(raw, facts, prior, at_version, total, key)
+        used = _retake_budget(comments)
+        decision = rules.interrupted_run(
+            raw, facts, used, moment, in_tray=in_tray, document_written_at=written_at
+        )
         match decision:
             case "retake":
                 retakes.append(number)
             case "retake_crash":
-                assert key is not None and record.crashed_version is not None  # the rule's own
-                crashes[number] = CrashRetake(at_version, record.crashed_version, key)
+                assert record.crashed_version is not None  # the rule's own
+                key = rules.crash_version_key(read_version()) or "unknown"
+                crashes[number] = CrashRetake(used.used, record.crashed_version, key)
+            case "calendar":
+                continue  # a retake is made, and the next one is only waiting for its time
             case "human":
-                cap_spent = first in ("retake", "retake_crash")  # only the count turned it
-                crash_why = None
-                if record.crashed_version is not None:
-                    if key is None:
-                        crash_why = "system version unknown"
-                    elif first == "retake_crash":
-                        crash_why = "crash retake cap spent" + (
-                            " for this system version"
-                            if at_version >= rules.CRASH_RETAKE_PER_VERSION_MAX
-                            else ""
-                        )
-                line = _human_line(number, record, other_boot, cap_spent, crash_why)
-                # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052):
-                # its own scope only, never the task's. An other-boot record has nothing
-                # alive, and an unknown boot proves nothing. Repeating it every round is
-                # fine: a re-scan of a reaped scope finds nothing.
-                if other_boot is False and (
-                    reaped := release.summary(
-                        release.release_processes(ports, task_id, run=record.pid)
+                lines.append(_human_line(number, record, other_boot))
+            case "spent" | "stale":
+                if _notice_pending(comments):
+                    notices[number] = RetakesSpent(
+                        number,
+                        _lock_shape(decision, record, other_boot),
+                        used.used,
+                        used.first_at,
+                        used.last_at,
+                        record.pid,
+                        record.started_at,
+                        record.boot_id,
+                        reap=other_boot is False,
                     )
-                ):
-                    line += f"; {reaped}"
-                lines.append(line)
             case "none" | "running":
                 continue
             case _:
@@ -1168,6 +1235,10 @@ def _blocked(
             case reason:
                 closed.append((blocker, reason))
     return rules.BlockerReport(tuple(open_), tuple(closed), tuple(unknown))
+
+
+# A budget with nothing used: what the cheap, fields-only verdicts are asked with.
+_NO_RETAKES = retake_rules.Budget(0, None, None)
 
 
 def queue_documents(ports: Ports) -> dict[int, TaskState | None]:
@@ -1310,26 +1381,9 @@ def _arm_for(
 
 
 def orphaned_comment(counted: int) -> str:
-    """The comment an orphan retake posts: `RETAKEN_ORPHANED` and which retake of the cap it
-    is, `counted` being the ones that ran nothing before it. The one function that writes it;
-    `_orphan_counts` reads the prefix."""
-    return f"{RETAKEN_ORPHANED}retake {counted + 1} of {rules.ORPHANED_RETAKE_MAX}"
-
-
-def _orphan_counts(raw: TaskState, comments: Sequence[IssueComment]) -> tuple[int, datetime | None]:
-    """`(counted, last_own_at)` of an orphan: its own retake comments after the last comment
-    that is not the system's (a human comment resets them) that no later `runs[]` entry
-    followed (`rules.orphaned_retake_count`), and when the last own one was posted."""
-    from .resume import SYSTEM_COMMENTS
-
-    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
-    own = [
-        _parse_timestamp(c.created_at)
-        for c in comments[last_non_system + 1 :]
-        if c.body.startswith(RETAKEN_ORPHANED)
-    ]
-    starts = [run.get("started_at") for run in raw.get("runs", [])]
-    return rules.orphaned_retake_count(own, starts), max(own, default=None)
+    """The comment an orphan retake posts: `RETAKEN_ORPHANED` and which retake of the budget it
+    is, `counted` being the ones already made. The one function that writes it."""
+    return f"{RETAKEN_ORPHANED}retake {counted + 1} of {retake_rules.RETAKE_MAX}"
 
 
 def gather_orphans(
@@ -1343,6 +1397,7 @@ def gather_orphans(
     upstream: Callable[[], Upstream],
     reports: list[rules.BlockerReport],
     by_issue: dict[int, rules.BlockerReport],
+    spent: dict[int, RetakesSpent] | None = None,
 ) -> tuple[dict[int, int], list[str]]:
     """The orphan retakes of this round (GH-403, `rules.orphaned_run`) and the lines for the
     orphans it cannot retake now. `documents` is `queue_documents`' answer, so only an issue in
@@ -1355,8 +1410,11 @@ def gather_orphans(
     no slot, no comment, no attempt, no line -- as it holds a fresh launch), whether the
     document was written inside `rules.ORPHANED_QUIET` (one `ids_touched_since` for the whole
     round) and, only for what is left, the issue's comments.
-    Returns `{issue: counted}` in issue order, `counted` being the retakes that ran nothing."""
+    Returns `{issue: counted}` in issue order, `counted` being the retakes of the shared budget
+    already made (`retakes.budget`). A spent budget is a `RetakesSpent` fact of shape `orphan`
+    in `spent` unless the notice is already on the issue; it adds no line here."""
     orphans: dict[int, int] = {}
+    notices = spent if spent is not None else {}
     lines: list[str] = []
     touched: set[str] | None = None
     for number in sorted(documents):
@@ -1365,7 +1423,7 @@ def gather_orphans(
             continue
         task_id = ports.inbox.task_id(number)
         fields_only = rules.orphaned_run(
-            raw, live=False, has_lock=False, quiet=True, prior=0, last_own_at=None, now=now
+            raw, live=False, has_lock=False, quiet=True, used=_NO_RETAKES, now=now
         )
         if fields_only == "none":
             continue
@@ -1391,26 +1449,27 @@ def gather_orphans(
             minutes = int(rules.ORPHANED_QUIET.total_seconds() // 60)
             lines.append(rules.orphaned_line(number, "quiet", f"{minutes} min"))
             continue
-        counted, last_own_at = _orphan_counts(raw, ports.tracker.timestamped_comments(task_id))
+        comments = ports.tracker.timestamped_comments(task_id)
+        used = _retake_budget(comments)
         verdict = rules.orphaned_run(
             raw,
             live=False,
             has_lock=False,
             quiet=True,
-            prior=counted,
-            last_own_at=last_own_at,
+            used=used,
             now=now,
         )
         match verdict:
             case "retake":
-                orphans[number] = counted
+                orphans[number] = used.used
             case "calendar":
-                assert last_own_at is not None  # the rule's own: a calendar needs a last retake
-                due = rules.orphaned_due(last_own_at, counted).astimezone(UTC)
+                due = retake_rules.due(used, now, rules.ORPHANED_QUIET).astimezone(UTC)
                 lines.append(rules.orphaned_line(number, "calendar", due.strftime("%H:%M UTC")))
             case "cap_spent":
-                spent = f"{counted} of {rules.ORPHANED_RETAKE_MAX}"
-                lines.append(rules.orphaned_line(number, "cap_spent", spent))
+                if _notice_pending(comments):
+                    notices[number] = RetakesSpent(
+                        number, "orphan", used.used, used.first_at, used.last_at
+                    )
             case "none" | "quiet":
                 continue
             case _:
@@ -1469,18 +1528,21 @@ def _spawn_resume(
     number = action.issue
     task_id = ports.inbox.task_id(number)
     if crash is not None:
-        prior, cap = crash.prior_at_version, rules.CRASH_RETAKE_PER_VERSION_MAX
+        prior = crash.prior
     elif orphan_prior is not None:
-        prior, cap = orphan_prior, rules.ORPHANED_RETAKE_MAX
+        prior = orphan_prior
     else:
         prior = (
-            _prior_retakes(ports.tracker.timestamped_comments(task_id))
+            _retake_budget(ports.tracker.timestamped_comments(task_id)).used
             if action.kind == "retake"
             else 0
         )
-        cap = rules.RETAKE_AFTER_REBOOT_MAX
+    cap = retake_rules.RETAKE_MAX
     document = ("--from-document",) if orphan_prior is not None else ()
-    argv = _argv(argv0, "resume", number, product_dir, "--yes", "--detach", *document)
+    # Every resume the poller spawns says so: the resume it starts must not reset the budget.
+    argv = _argv(
+        argv0, "resume", number, product_dir, "--yes", "--detach", "--by-poller", *document
+    )
     try:
         pid = launcher.spawn(argv)
     except OSError as exc:
@@ -1499,6 +1561,74 @@ def _spawn_resume(
     return lines
 
 
+_SHAPE_TEXT: Mapping[retake_rules.RetakeShape, str] = {
+    "same_boot": "crashed: the run died in this boot",
+    "reboot": "crashed: the run died after a reboot",
+    "crash": "crashed: the run raised under the graph",
+    "orphan": "crashed: the run left no lock",
+    "stale": "stale: untouched 24 h",
+}
+
+
+def _span(notice: RetakesSpent) -> str:
+    if notice.first_at is None or notice.last_at is None:
+        return "none made"
+    stamp = "%Y-%m-%d %H:%M UTC"
+    first = notice.first_at.astimezone(UTC).strftime(stamp)
+    last = notice.last_at.astimezone(UTC).strftime(stamp)
+    return f"over {first}..{last}"
+
+
+def spent_comment(notice: RetakesSpent) -> str:
+    """The one comment a spent budget leaves on the issue: what crashed, the dead run's lock, how
+    many retakes were made and over what span, and the command that takes the task up."""
+    lock = (
+        f" (lock pid {notice.pid} since {notice.started_at}, boot {notice.boot_id or 'unknown'})"
+        if notice.pid is not None
+        else ""
+    )
+    document = " --from-document" if notice.shape == "orphan" else ""
+    return (
+        f"{retake_rules.RETAKES_SPENT}{_SHAPE_TEXT[notice.shape]}{lock}; "
+        f"{notice.used} of {retake_rules.RETAKE_MAX} retakes, {_span(notice)}; "
+        f"resume it with `agentic resume --issue {notice.issue}{document}`."
+    )
+
+
+def _announce_spent(ports: Ports, cfg: Configuration, notice: RetakesSpent) -> list[str]:
+    """Tell the owner a task's retake budget is spent: the `needs-human` label first, then one
+    comment. Both are best effort, a failure is a line and never the end of the round; a comment
+    that did not land is retried next round, because the marker is still absent. The poll line
+    is printed only in the round the comment landed."""
+    number = notice.issue
+    task_id = ports.inbox.task_id(number)
+    lines: list[str] = []
+    if notice.reap and notice.pid is not None:
+        # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052): its own
+        # scope only, never the task's.
+        reaped = release.summary(release.release_processes(ports, task_id, run=notice.pid))
+        if reaped:
+            lines.append(f"agentic: poll: #{number} {reaped}")
+    try:
+        ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
+    except ValueError as exc:  # a TrackerCallFailed is one
+        lines.append(
+            f"agentic: poll: #{number} -> label {escalate_module.NEEDS_HUMAN} failed: {exc}"
+        )
+    if ports.tracker.note(task_id, spent_comment(notice)) is not None:
+        lines.append(
+            f"agentic: poll: #{number} -> retakes-spent comment failed, retried next round"
+        )
+        return lines
+    document = " --from-document" if notice.shape == "orphan" else ""
+    lines.append(
+        f"agentic: poll: #{number} retake budget spent ({_SHAPE_TEXT[notice.shape]}; "
+        f"{notice.used} of {retake_rules.RETAKE_MAX}), left to the human: "
+        f"agentic resume --issue {number}{document}"
+    )
+    return lines
+
+
 def execute(
     actions: Sequence[rules.PollAction],
     cfg: Configuration,
@@ -1513,6 +1643,7 @@ def execute(
     crash_retakes: Mapping[int, CrashRetake] | None = None,
     reruns: frozenset[int] = frozenset(),
     orphan_retakes: Mapping[int, int] | None = None,
+    spent_notices: Mapping[int, RetakesSpent] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -1539,7 +1670,8 @@ def execute(
     --fresh`: the same archive-and-start-over the landing's restart spawns, on the launch's
     own calendar. A `retake` whose `reason` is `orphaned` (GH-403) resumes `--from-document` and
     posts `RETAKEN_ORPHANED` with `orphaned_comment`, from the count `orphan_retakes[issue]`
-    that `gather_orphans` made."""
+    that `gather_orphans` made. A `retakes_spent` action announces the spent budget of
+    `spent_notices[issue]` (`_announce_spent`), spawning nothing."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -1554,6 +1686,8 @@ def execute(
                 lines.append(f"agentic: poll: close #{action.issue} -> not launched: {exc}")
                 continue
             lines.append(f"agentic: poll: close #{action.issue} -> pid {pid}")
+        elif action.kind == "retakes_spent":
+            lines += _announce_spent(ports, cfg, (spent_notices or {})[action.issue])
         elif action.kind == "resume":
             raw = ports.documents.load(task_id) or {}
             reason = rules.auto_resumable(raw) or "other"
@@ -1573,8 +1707,8 @@ def execute(
             text = rules.crash_retake_comment(
                 crash.crashed_version,
                 crash.key,
-                crash.prior_at_version + 1,
-                rules.CRASH_RETAKE_PER_VERSION_MAX,
+                crash.prior + 1,
+                retake_rules.RETAKE_MAX,
             )
             lines += _spawn_resume(
                 action,
@@ -1768,8 +1902,15 @@ def run_once(
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}
+    spent_notices: dict[int, RetakesSpent] = {}
     retakes, human_lines = gather_retakes(
-        ports, lock, current_boot, system_version=system_version, crash=crash_retakes
+        ports,
+        lock,
+        current_boot,
+        system_version=system_version,
+        crash=crash_retakes,
+        now=now,
+        spent=spent_notices,
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
@@ -1867,6 +2008,7 @@ def run_once(
                 upstream,
                 blocker_reports,
                 blockers_by_issue,
+                spent_notices,
             )
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
@@ -1900,6 +2042,7 @@ def run_once(
             earlier_land_wait=rules.land_queued_behind(previous, own_key, others),
             held=held,
             orphan_retakes=sorted(orphans),
+            spent_retakes=sorted(spent_notices),
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.
@@ -1925,6 +2068,7 @@ def run_once(
             crash_retakes,
             frozenset(reruns),
             orphans,
+            spent_notices,
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
         orphan_lines += [

@@ -562,3 +562,34 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-474
+  GH-466@review:
+    cost_usd: 0.1327
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-466
+  GH-465@review:
+    cost_usd: 0.043
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-465
+  GH-463@review:
+    cost_usd: 0.1655
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-463
+    decisions: 1

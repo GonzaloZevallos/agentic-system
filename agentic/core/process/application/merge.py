@@ -10,19 +10,29 @@ nothing here writes in stage0. The merge call runs only after that subprocess ex
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import adr_numbers, ci, master_gain, presubmit, rules
+from ..domain import adr_numbers, ci, master_gain, merge_ci, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.check_schedule import CheckPriority
-from ..domain.task import PullRequest, TaskState, add_flakes, add_tracker_failures
+from ..domain.presubmit import CiDispatch
+from ..domain.task import (
+    CiCause,
+    MergeCiRecord,
+    PullRequest,
+    TaskState,
+    add_flakes,
+    add_merge_ci,
+    add_tracker_failures,
+)
 from . import adr_collision, ci_flakes, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
@@ -64,6 +74,9 @@ COMMENTED: tuple[str, ...] = (
     "perf_unverified",
     "criteria_over_cap",
     "criteria_unreadable",
+    "ci_no_verdict",
+    "ci_stale_exhausted",
+    "ci_untrusted_no_dispatch",
 )
 
 LEFT_TO_HUMAN = "Left for the human to merge."
@@ -71,6 +84,13 @@ LEFT_TO_HUMAN = "Left for the human to merge."
 # Nothing was committed before the merge worktree existed: every head differs from it, so
 # `CheckoutPresubmit` runs the checks even when the upstream was already in the head.
 _NOTHING_BEFORE = ""
+
+# The merge commit the gate builds for a fresh GitHub run (GH-463). A dispatched one carries
+# `[skip ci]`: only the dispatch ever reads that commit, never a `push` event.
+_FRESH_MESSAGE = "Merge {master} into {head} for the merge gate's CI run"
+_FRESH_DISPATCH_MESSAGE = _FRESH_MESSAGE + " [skip ci]"
+# The id of the workflow run a check link names: `.../actions/runs/<id>/job/<n>`.
+_RUN_ID = re.compile(r"/actions/runs/(\d+)(?:/|$)")
 
 
 @dataclass(frozen=True)
@@ -133,6 +153,9 @@ def merge_task(
             return MergeResult("stopped", f"adr_unreadable: {exc}")
     declared = ports.stack.ci(base)
     names = ci_gate(raw, declared).names
+    dispatch = _dispatch(ports, base)
+    # GH-463: the decided fresh run, once there is one: it replaces the pull request's own report.
+    fresh_runs: list[ci.CiReport] = []
     report: ci.CiReport | ci.CiUnreadable | None = None
     fresh: bool | None = None
     if names:
@@ -162,6 +185,13 @@ def merge_task(
             report,
             fresh,
         )
+        facts = replace(
+            facts,
+            merge_ci=tuple(document.get("merge_ci", [])),
+            ci_dispatch_declared=dispatch is not None,
+        )
+        if fresh_runs:
+            facts = with_ci_run(facts, fresh_runs[0], names)
         facts = with_red_on_base(ports, facts, report)
         facts = _with_deferral(ports, facts, document, base, head, report)
         # GH-334: the criteria caps, read once on this one master and only when no refusal
@@ -173,7 +203,9 @@ def merge_task(
         # GH-353: what master gained since the rows' masters, read once and only when no
         # refusal ahead of the checks has ruled the pull request out and the answer would
         # change the decision.
-        if head is not None and rules.gain_probe_wanted(facts):
+        if head is not None and rules.declares_ci(facts):
+            facts = _with_ci_gain(ports, facts, document, head, master, base, touched, globs, gains)
+        elif head is not None and rules.gain_probe_wanted(facts):
             covered = _masters_covered(ports, document, head, master, base, touched, globs, gains)
             facts = replace(facts, masters_covered=covered)
         return facts
@@ -188,13 +220,38 @@ def merge_task(
         raw = ports.documents.load(task_id) or raw
         facts = decide(raw)
         decision = rules.auto_merge_decision(facts)
+    cause: CiCause | None = None
+    if decision.kind == "ci_run":
+        # GH-463: a `ci:` product never runs its suite here; one fresh GitHub run decides.
+        assert head is not None  # a decision never asks for a run without a head
+        step = _fresh_run(
+            task_id, raw, head, master, base, facts, dispatch, names, cfg, ports, clock, log
+        )
+        if step.stopped is not None:
+            return step.stopped
+        cause = step.cause
+        if step.report is not None:
+            fresh_runs.append(step.report)
+            report = step.report
+        raw = ports.documents.load(task_id) or raw
+        facts = decide(raw)
+        decision = rules.auto_merge_decision(facts)
+        if decision.kind in ("wait", "ci_run"):
+            return MergeResult("stopped", "ci_wait")
     if decision.kind == "refuse":
         assert decision.reason is not None
         if decision.reason == "merge_conflict":
             log(f"agentic: merge: {task_id}: {head} conflicts with master {master} (github)")
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
         return _refuse(
-            task_id, head, decision.reason, ports, failure=failure, facts=facts, report=report
+            task_id,
+            head,
+            decision.reason,
+            ports,
+            failure=failure,
+            facts=facts,
+            report=report,
+            cause=cause,
         )
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
@@ -212,6 +269,10 @@ def merge_task(
         head=head,
     )
     relied = _ci_links(report, facts.ci_required) if _merges_on_ci(facts) else None
+    if rules.declares_ci(facts) and relied is None:
+        # A `ci:` product never merged on a local check (GH-463): a recorded GitHub pass or a
+        # fresh run decided it, and only the fresh run has a report of its own to link.
+        relied = _ci_links(report, facts.ci_required) if fresh_runs else []
     inert_from = _inert_from(raw, master) if facts.masters_covered is True else None
     return _merge(
         task_id,
@@ -253,6 +314,337 @@ def _with_ci_flakes(
         log(f"agentic: merge: {task_id}: flake block not recorded: {exc}")
         return raw
     return ports.documents.load(task_id) or raw
+
+
+def with_ci_run(
+    facts: rules.MergeFacts, report: ci.CiReport, names: tuple[str, ...]
+) -> rules.MergeFacts:
+    """`facts` plus the verdict of the decided fresh run (GH-463): `ci_subject` becomes `tested`,
+    so the decision compares `report.head_sha` (the commit the run was about) with the latest
+    pair through `merge_ci.run_stands` and never with the pull request's head. The verdict is
+    `ci.ci_state`'s, over `names`, and `ci_fresh` says whether the run stands for this master."""
+    pair = merge_ci.latest(facts.merge_ci, facts.pr_head)
+    return replace(
+        facts,
+        ci_subject="tested",
+        ci_head=report.head_sha,
+        ci_verdict=ci.ci_state(report, names),
+        ci_unreadable=None,
+        ci_fresh=merge_ci.run_stands(
+            pair, facts.pr_head, facts.current_master, facts.ci_run_inert, ran=report.head_sha
+        ),
+    )
+
+
+def _dispatch(ports: Ports, base: str) -> CiDispatch | None:
+    """The workflow the stack names for an untrusted head; an unreadable stack names none."""
+    try:
+        return ports.stack.ci_dispatch(base)
+    except ValueError:
+        return None
+
+
+def _with_ci_gain(
+    ports: Ports,
+    facts: rules.MergeFacts,
+    document: TaskState,
+    head: str,
+    master: str,
+    base: str,
+    touched: tuple[str, ...] | None,
+    globs: list[tuple[str, ...]],
+    gains: dict[str, tuple[str, ...] | None],
+) -> rules.MergeFacts:
+    """`ci_covered` and `ci_run_inert` (GH-463, #353 for a `ci:` product): what master gained
+    since the master of the recorded GitHub pass and of the head's latest fresh pair, read at
+    most once per call and only when the answer would change the decision."""
+    pair = merge_ci.latest(facts.merge_ci, head)
+    wanted = rules.gain_probe_wanted(facts)
+    behind = pair is not None and not rules.same_commit(pair["master"], master)
+    if not wanted and not behind:
+        return facts
+    base_of: str | None = None
+    if wanted:
+        try:
+            base_of = ports.workspace.merge_base(head, master)
+        except GitError:
+            base_of = None
+    older = [
+        m for m in (base_of, pair["master"] if pair is not None else None) if m and m != master
+    ]
+    if not globs:
+        try:
+            globs.append(ports.stack.merge_inert(head))
+        except ValueError:
+            globs.append(())
+    if globs[0]:
+        for row_master in older:
+            if row_master not in gains:
+                gains[row_master] = _gain(ports, row_master, master)
+    setup = list(ports.stack.setup(base).values())
+    inert = (
+        master_gain.masters_covered(master, [pair["master"]], gains, globs[0], setup, touched)
+        is True
+        if pair is not None and behind
+        else None
+    )
+    covered = (
+        merge_ci.masters_covered_ci(
+            document.get("full_checks"),
+            pair,
+            pr_head=head,
+            current_master=master,
+            merge_base=base_of,
+            required=facts.ci_required,
+            gains=gains,
+            globs=globs[0],
+            setup_commands=setup,
+            task_touched=touched,
+        )
+        if wanted
+        else None
+    )
+    return replace(facts, ci_covered=covered, ci_run_inert=inert)
+
+
+@dataclass(frozen=True)
+class _Fresh:
+    """What one look at the gate's fresh run did: `stopped` the result to return (a run was
+    triggered or is still running), `report` the decided run's, `cause` why no verdict came."""
+
+    stopped: MergeResult | None = None
+    report: ci.CiReport | None = None
+    cause: CiCause | None = None
+
+
+def _instant(text: str) -> datetime:
+    return datetime.fromisoformat(text).astimezone(UTC)
+
+
+def _write_pairs(
+    ports: Ports, task_id: str, document_pairs: list[MergeCiRecord], *rows: MergeCiRecord
+) -> None:
+    """The pairs, with `rows` replacing the ones of the same `(head, master)`: written whole."""
+    ports.documents.record_closure(task_id, {"merge_ci": add_merge_ci(document_pairs, list(rows))})
+
+
+def _fresh_run(
+    task_id: str,
+    raw: TaskState,
+    head: str,
+    master: str,
+    base: str,
+    facts: rules.MergeFacts,
+    dispatch: CiDispatch | None,
+    names: tuple[str, ...],
+    cfg: Configuration,
+    ports: Ports,
+    clock: Callable[[], str],
+    log: Callable[[str], None],
+) -> _Fresh:
+    """The gate's one fresh GitHub run of `head` merged with `master` (GH-463). A pair that
+    already stands for the head is read, never rebuilt or triggered again; otherwise the pair
+    is recorded and then published. Nothing here runs a command in a checkout."""
+    pairs: list[MergeCiRecord] = list(raw.get("merge_ci", []))
+    pair = merge_ci.latest(pairs, head)
+    if pair is not None and merge_ci.run_stands(
+        pair, head, master, facts.ci_run_inert, ran=pair["tested"]
+    ):
+        return _read_pair(
+            task_id, pairs, pair, head, master, names, dispatch, cfg, ports, clock, log
+        )
+    return _build_pair(
+        task_id,
+        pairs,
+        pair,
+        None,
+        head,
+        master,
+        facts.ci_untrusted is not False,
+        dispatch,
+        ports,
+        clock,
+        log,
+    )
+
+
+def _build_pair(
+    task_id: str,
+    pairs: list[MergeCiRecord],
+    previous: MergeCiRecord | None,
+    again: MergeCiRecord | None,
+    head: str,
+    master: str,
+    untrusted: bool,
+    dispatch: CiDispatch | None,
+    ports: Ports,
+    clock: Callable[[], str],
+    log: Callable[[str], None],
+) -> _Fresh:
+    """Builds `head` merged with `master` with git only, records the pair, publishes it. `again`
+    is the pair being republished (the second dispatch): its new `tested` is written to the
+    same pair and the old one moves to `superseded`. A newer master than the pair's marks it
+    `stale` when it was decided or undecided, never when it already ended otherwise."""
+    name = _name(task_id)
+    mode: Literal["push", "dispatch"] = "dispatch" if untrusted else "push"
+    if again is not None:
+        mode = again["mode"]
+    message = (_FRESH_DISPATCH_MESSAGE if mode == "dispatch" else _FRESH_MESSAGE).format(
+        master=master, head=head
+    )
+    try:
+        path = ports.workspace.detached_checkout(name, head)
+        if ports.workspace.merge(path, master, message) is not None:
+            log(f"agentic: merge: {task_id}: {head} does not merge with {master}")
+            return _Fresh(stopped=MergeResult("refused", "merge_conflict"))
+        tested = ports.workspace.full_head(path)
+        if again is None:
+            record: MergeCiRecord = {
+                "head": head,
+                "master": master,
+                "tested": tested,
+                "mode": mode,
+                "published_at": clock(),
+                "republished": False,
+                "superseded": [],
+            }
+            rows = [record]
+            if (
+                previous is not None
+                and not rules.same_commit(previous["master"], master)
+                and previous.get("outcome") in (None, "green")
+            ):
+                rows.insert(0, {**previous, "outcome": "stale"})
+            _write_pairs(ports, task_id, pairs, *rows)
+        else:
+            superseded = [*again["superseded"]]
+            if not rules.same_commit(again["tested"], tested):
+                superseded.append(again["tested"])
+            record = {
+                **again,
+                "tested": tested,
+                "superseded": superseded,
+                "republished": True,
+                "published_at": clock(),
+            }
+            _write_pairs(ports, task_id, pairs, record)
+        if mode == "push":
+            ref = rules.ci_ref(task_id)
+            if again is None:
+                ports.workspace.publish_ci_ref(path, ref)
+            else:
+                ports.workspace.republish_ci_ref(path, ref)
+        else:
+            if dispatch is None:
+                return _Fresh(stopped=MergeResult("stopped", "ci_dispatch_undeclared"))
+            ports.workspace.publish_dispatch_ref(path, task_id)
+            refused = ports.tracker.dispatch_ci(dispatch.workflow, "", {dispatch.sha_input: tested})
+            if refused is not None:
+                # A refusal ends the pair at once: no second dispatch (as `full_checks`).
+                ended: MergeCiRecord = {
+                    **record,
+                    "republished": True,
+                    "outcome": "no_verdict",
+                    "cause": refused.cause,
+                }
+                _write_pairs(ports, task_id, pairs, ended)
+                return _Fresh(cause=refused.cause)
+    except GitError as exc:
+        log(f"agentic: merge: {task_id}: could not publish the fresh CI run: {exc}")
+        return _Fresh(stopped=MergeResult("stopped", "ci_publish_failed"))
+    finally:
+        release_checkout(ports, ports.workspace.checkout_path(name))
+        ports.workspace.remove_checkout(name)
+    return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
+
+
+def _read_pair(
+    task_id: str,
+    pairs: list[MergeCiRecord],
+    pair: MergeCiRecord,
+    head: str,
+    master: str,
+    names: tuple[str, ...],
+    dispatch: CiDispatch | None,
+    cfg: Configuration,
+    ports: Ports,
+    clock: Callable[[], str],
+    log: Callable[[str], None],
+) -> _Fresh:
+    """Reads the verdict of the pair's run once (`ci.full_tier_verdict`, `ci.dispatch_verdict`).
+    Waiting is not blocking: an undecided run is `stopped ci_wait`, bounded by the grace period
+    while no run exists and by the check timeout once one does. The grace is spent once by a
+    republish; after that, no run or a run still undecided is `no_verdict`."""
+    tested = pair["tested"]
+    published = _instant(pair["published_at"])
+    # The wait counts from the last time GitHub was asked for a run: a rerun restarts it.
+    started = max(published, _instant(pair["rerun_at"])) if "rerun_at" in pair else published
+    waited = (_instant(clock()) - started).total_seconds()
+    report: ci.CiReport | None = None
+    run_id: str | None = None
+    if pair["mode"] == "push":
+        read = ports.tracker.branch_ci(rules.ci_ref(task_id))
+        verdict = ci.full_tier_verdict(
+            read, tested, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
+        )
+        if isinstance(read, ci.CiReport) and verdict.state in ("green", "red"):
+            report = read
+            link = next((c.link for c in (*verdict.failing, *read.checks) if c.link), None)
+            run_id = _run_id_of(link)
+    else:
+        if dispatch is None:
+            return _Fresh(stopped=MergeResult("stopped", "ci_dispatch_undeclared"))
+        since = (published - timedelta(seconds=ci.CI_DISPATCH_SKEW_S)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        runs = ports.tracker.dispatched_ci(dispatch.workflow, since)
+        if isinstance(runs, ci.CiUnreadable):
+            verdict = ci.full_tier_verdict(
+                runs, tested, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
+            )
+        else:
+            verdict = ci.dispatch_verdict(
+                runs, tested, names, waited, cfg.ci_start_grace_s, cfg.check_timeout_s
+            )
+            chosen = ci.chosen_run(runs, tested)
+            if chosen is not None and verdict.state in ("green", "red"):
+                report = ci.CiReport(tested, None, None, None, chosen.jobs)
+                run_id = str(chosen.run_id)
+    if verdict.state == "waiting":
+        return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
+    if report is not None:
+        row: MergeCiRecord = {**pair, "outcome": "green" if verdict.state == "green" else "red"}
+        if run_id is not None:
+            row["run_id"] = run_id
+        if verdict.state == "red":
+            row["failing"] = [check.name for check in verdict.failing]
+        _write_pairs(ports, task_id, pairs, row)
+        return _Fresh(report=report)
+    if verdict.cause == "no_run" and not pair["republished"]:
+        return _build_pair(
+            task_id,
+            pairs,
+            pair,
+            pair,
+            head,
+            master,
+            pair["mode"] == "dispatch",
+            dispatch,
+            ports,
+            clock,
+            log,
+        )
+    undecided: MergeCiRecord = {**pair, "republished": True, "outcome": "no_verdict"}
+    if verdict.cause is not None:
+        undecided["cause"] = verdict.cause
+    _write_pairs(ports, task_id, pairs, undecided)
+    return _Fresh(cause=verdict.cause)
+
+
+def _run_id_of(link: str | None) -> str | None:
+    """The workflow run a check link names, or None when it names none."""
+    found = _RUN_ID.search(link or "")
+    return found.group(1) if found else None
 
 
 def _recorded_masters(record: object) -> tuple[str, ...] | None:
@@ -748,6 +1140,25 @@ def _deferral_evidence(facts: rules.MergeFacts, report: ci.CiReport) -> str:
     return "\n".join([f"The CI job covering a deferred check ({facts.deferral}):", *lines])
 
 
+def _fresh_run_evidence(reason: str, facts: rules.MergeFacts | None, cause: CiCause | None) -> str:
+    """What a refusal of the gate's fresh run says (GH-463), from closed facts only: the
+    `CiCause` of the missing verdict, the stale pairs spent, or a fixed sentence."""
+    if reason == "ci_untrusted_no_dispatch":
+        return (
+            "The head changes the CI's own definition and the stack declares no `ci_dispatch`: "
+            "no workflow of the base can judge it. Declare `ci_dispatch` in `.agentic/stack.yaml`."
+        )
+    if reason == "ci_stale_exhausted":
+        spent = merge_ci.pair_counts(facts.merge_ci, facts.pr_head).stale if facts else 0
+        return (
+            f"Master overtook {spent} of {ci.CI_STALE_PAIRS_MAX} fresh CI runs of this head; "
+            "the landing takes master in."
+        )
+    if cause is None:
+        return "GitHub gave no verdict for the head merged with master within the check timeout."
+    return f"GitHub gave no verdict for the head merged with master ({cause})."
+
+
 def _adr_evidence(facts: rules.MergeFacts) -> str:
     """What an `adr_number_taken` refusal says, from the structured collision only: one
     `old -> new` line per move, or the ambiguity's reason and detail."""
@@ -790,6 +1201,7 @@ def _refuse(
     failure: rules.MergeFailure | None = None,
     facts: rules.MergeFacts | None = None,
     report: ci.CiReport | ci.CiUnreadable | None = None,
+    cause: CiCause | None = None,
 ) -> MergeResult:
     """Comments a refusal the human can act on, once per (head, reason): the last
     `Auto-merge refused:` comment naming the same head and reason is enough. A
@@ -823,6 +1235,10 @@ def _refuse(
             text = "\n\n".join(part for part in (first, _perf_evidence(facts), closing) if part)
         if facts is not None and reason == "criteria_over_cap":
             text = "\n\n".join(part for part in (first, _criteria_evidence(facts), closing) if part)
+        if reason in ("ci_no_verdict", "ci_stale_exhausted", "ci_untrusted_no_dispatch"):
+            text = "\n\n".join(
+                part for part in (first, _fresh_run_evidence(reason, facts, cause), closing) if part
+            )
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]

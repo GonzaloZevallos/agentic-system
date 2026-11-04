@@ -45,6 +45,17 @@ class CiCheck:
     link: str
 
 
+_RUN_SEGMENT = re.compile(r"/actions/runs/(\d+)(?=[/?#]|$)")
+
+
+def run_id_of_link(link: str) -> str | None:
+    """The workflow run id in a check run's `detailsUrl` (the `/actions/runs/<id>` segment), or
+    `None` when the link has none or it is not all digits: a commit status of another system,
+    an empty link, a malformed url (GH-463). The merge gate stores it to rerun that run."""
+    found = _RUN_SEGMENT.search(link)
+    return found.group(1) if found else None
+
+
 @dataclass(frozen=True)
 class CiReport:
     """What one read of a commit's CI says. `head_sha` is the commit the checks belong
@@ -319,6 +330,17 @@ CI_DISPATCH_SKEW_S = 120
 # How many times a workflow is dispatched for one head when no run of it ever shows up: the
 # first dispatch and one more after a grace period without a run (GH-462).
 CI_DISPATCH_ATTEMPTS = 2
+
+
+# How many pairs (a head merged with a master) of the merge gate's fresh GitHub run may end
+# `stale` per head -- master overtook a decided run with a gain that is not inert -- before the
+# gate refuses `ci_stale_exhausted` and the landing syncs master instead (GH-463).
+CI_STALE_PAIRS_MAX = 3
+
+# How many pairs may end `no_verdict` per head (counted since the last release) before the gate
+# refuses `ci_no_verdict`: a pair counts once its one republish or second dispatch was spent
+# and GitHub still gave no verdict (GH-463).
+CI_NO_VERDICT_PAIRS_MAX = 1
 
 
 @dataclass(frozen=True)

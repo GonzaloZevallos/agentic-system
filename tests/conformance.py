@@ -199,6 +199,10 @@ UNCOVERED: dict[str, Uncovered] = {
         ),
         _INLINE,
     ),
+    "RunProcess": Uncovered(
+        (("tests/core/process/application/test_stop.py", "_Process"),),
+        _INLINE,
+    ),
 }
 
 

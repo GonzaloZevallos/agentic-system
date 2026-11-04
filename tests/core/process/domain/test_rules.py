@@ -6,7 +6,7 @@ from typing import Any, cast, get_args
 import pytest
 
 from agentic.core.process.application.ports import BranchPullRequest
-from agentic.core.process.domain import ci, document, roles, rules, schemas, task
+from agentic.core.process.domain import ci, document, retakes, roles, rules, schemas, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.docs import Docs, conflict_line
@@ -2392,27 +2392,82 @@ def _interrupted_task(**more) -> dict:
 PREVIOUS_BOOT = rules.LockFacts(other_boot=True, alive=False)
 SAME_BOOT = rules.LockFacts(other_boot=False, alive=False)
 UNKNOWN_BOOT = rules.LockFacts(other_boot=None, alive=False)
+CRASHED = rules.LockFacts(other_boot=False, alive=False, crashed_version="abc123")
+STOPPED = rules.LockFacts(other_boot=False, alive=False, stopped_deliberately=True)
+
+INTERRUPT_NOW = datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
+NO_BUDGET = retakes.Budget(0, None, None)
 
 
-def test_a_dead_lock_from_a_previous_boot_is_retaken():
-    assert rules.interrupted_run(_interrupted_task(), PREVIOUS_BOOT, 0) == "retake"
+def _used(n: int, last_minutes_ago: int = 600) -> retakes.Budget:
+    last = INTERRUPT_NOW - timedelta(minutes=last_minutes_ago)
+    return retakes.Budget(n, last, last) if n else NO_BUDGET
 
 
-def test_a_dead_lock_from_the_same_boot_is_left_to_the_human():
-    assert rules.interrupted_run(_interrupted_task(), SAME_BOOT, 0) == "human"
+def _interrupted(raw=None, lock=SAME_BOOT, used=NO_BUDGET, **over):
+    kwargs = {
+        "in_tray": True,
+        "document_written_at": INTERRUPT_NOW - timedelta(minutes=10),
+        **over,
+    }
+    task_doc = _interrupted_task() if raw is None else raw
+    return rules.interrupted_run(task_doc, lock, used, INTERRUPT_NOW, **kwargs)
 
 
-def test_a_dead_lock_with_no_boot_id_is_never_retaken():
-    assert rules.interrupted_run(_interrupted_task(), UNKNOWN_BOOT, 0) == "human"
+@pytest.mark.parametrize(
+    ("name", "lock", "expected"),
+    [
+        ("SIGKILL or OOM in the same boot", SAME_BOOT, "retake"),
+        ("a killed scope, boot unknown", UNKNOWN_BOOT, "retake"),
+        ("a reboot (shutdown-kept record)", PREVIOUS_BOOT, "retake"),
+        ("the graph raised, crash mark", CRASHED, "retake_crash"),
+        ("a crash mark of another boot", rules.LockFacts(True, False, "abc123"), "retake_crash"),
+    ],
+)
+def test_every_crash_shape_is_retaken_while_the_budget_is_unspent(name, lock, expected):
+    assert _interrupted(lock=lock) == expected, name
+    assert _interrupted(lock=lock, used=_used(2)) == expected, name
 
 
-def test_a_lock_whose_process_is_alive_is_running():
+def test_the_oom_kill_of_this_boot_is_a_retake_named_case():
+    # An OOM kill leaves the lock and no crash mark: what used to go straight to the human.
+    oom = rules.LockFacts(other_boot=False, alive=False)
+    assert _interrupted(lock=oom) == "retake"
+
+
+def test_a_deliberate_mark_is_never_retaken_whatever_else_the_record_says():
+    assert _interrupted(lock=STOPPED) == "none"
+    marked_crash = rules.LockFacts(False, False, "abc123", stopped_deliberately=True)
+    assert _interrupted(lock=marked_crash) == "none"
+    assert _interrupted(lock=rules.LockFacts(True, False, stopped_deliberately=True)) == "none"
+
+
+def test_a_task_waiting_on_the_owner_or_paused_on_the_account_limit_is_not_retaken():
+    assert _interrupted({"status": "waiting_on_human"}) == "none"
+    paused = _interrupted_task(escalated="Account limit: resets 7:30pm")
+    assert _interrupted(paused) == "none"
+
+
+def test_a_task_out_of_the_tray_is_not_retaken():
+    assert _interrupted(in_tray=False) == "none"
+    assert _interrupted(in_tray=False, lock=CRASHED) == "none"
+    assert _interrupted({}, in_tray=False) == "none"
+
+
+def test_a_live_process_is_running_even_with_a_stale_starttime_fed_as_alive():
     alive = rules.LockFacts(other_boot=False, alive=True)
-    assert rules.interrupted_run(_interrupted_task(), alive, 0) == "running"
+    assert _interrupted(lock=alive) == "running"
+    assert _interrupted(lock=rules.LockFacts(True, True)) == "running"
+    assert _interrupted(lock=alive, used=_used(3)) == "running"
+
+
+def test_a_crash_mark_proves_the_process_ended_even_when_the_pid_reads_alive():
+    lock = rules.LockFacts(other_boot=False, alive=True, crashed_version="abc123")
+    assert _interrupted(lock=lock) == "retake_crash"
 
 
 def test_no_lock_record_means_there_is_nothing_to_retake():
-    assert rules.interrupted_run(_interrupted_task(), None, 0) == "none"
+    assert _interrupted(lock=None) == "none"
 
 
 def test_a_task_with_any_of_these_fields_is_not_an_interrupted_run():
@@ -2421,36 +2476,62 @@ def test_a_task_with_any_of_these_fields_is_not_an_interrupted_run():
         {"escalated": "needs a human"},
         {"pull_request": "https://github.com/o/r/pull/3"},
     ):
-        task_doc = _interrupted_task(**extra)
-        assert rules.interrupted_run(task_doc, PREVIOUS_BOOT, 0) == "none", extra
+        assert _interrupted(_interrupted_task(**extra), lock=PREVIOUS_BOOT) == "none", extra
 
 
 def test_a_task_in_a_finished_or_waiting_status_is_not_an_interrupted_run():
-    for status in ("ready_for_review", "discarded", "split", "waiting_on_human"):
-        assert rules.interrupted_run({"status": status}, PREVIOUS_BOOT, 0) == "none", status
+    for status in ("ready_for_review", "discarded", "split", "tracker_only", "waiting_on_human"):
+        assert _interrupted({"status": status}, lock=PREVIOUS_BOOT) == "none", status
 
 
 def test_a_falsy_closed_at_escalated_or_pull_request_does_not_stop_a_retake():
     task_doc = _interrupted_task(closed_at=None, escalated="", pull_request=None)
-    assert rules.interrupted_run(task_doc, PREVIOUS_BOOT, 0) == "retake"
+    assert _interrupted(task_doc, lock=PREVIOUS_BOOT) == "retake"
 
 
 def test_a_document_with_no_status_goes_to_the_human():
-    assert rules.interrupted_run({}, PREVIOUS_BOOT, 0) == "human"
+    assert _interrupted({}, lock=PREVIOUS_BOOT) == "human"
 
 
-def test_retakes_stop_at_the_cap_and_the_task_goes_to_the_human():
-    under = rules.RETAKE_AFTER_REBOOT_MAX - 1
-    assert rules.interrupted_run(_interrupted_task(), PREVIOUS_BOOT, under) == "retake"
-    spent = rules.RETAKE_AFTER_REBOOT_MAX
-    assert rules.interrupted_run(_interrupted_task(), PREVIOUS_BOOT, spent) == "human"
+def test_the_budget_is_shared_so_three_retakes_of_any_shape_spend_it():
+    for lock in (SAME_BOOT, PREVIOUS_BOOT, CRASHED, UNKNOWN_BOOT):
+        assert _interrupted(lock=lock, used=_used(retakes.RETAKE_MAX - 1)) != "spent"
+        assert _interrupted(lock=lock, used=_used(retakes.RETAKE_MAX)) == "spent"
+
+
+def test_a_stale_dead_lock_of_this_boot_is_the_humans_but_a_fresh_one_is_retaken():
+    old = INTERRUPT_NOW - timedelta(hours=25)
+    fresh = INTERRUPT_NOW - timedelta(hours=23)
+    assert _interrupted(document_written_at=old) == "stale"
+    assert _interrupted(document_written_at=old, lock=UNKNOWN_BOOT) == "stale"
+    assert _interrupted(document_written_at=fresh) == "retake"
+    # A reboot and a crash mark are explained by what killed them, so age does not make them stale.
+    assert _interrupted(document_written_at=old, lock=PREVIOUS_BOOT) == "retake"
+    assert _interrupted(document_written_at=old, lock=CRASHED) == "retake_crash"
+    assert _interrupted(document_written_at=None) == "retake"  # unknown is not stale
+
+
+def test_a_stale_lock_is_stale_even_with_the_budget_spent():
+    old = INTERRUPT_NOW - timedelta(hours=25)
+    assert _interrupted(document_written_at=old, used=_used(3)) == "stale"
+
+
+def test_the_first_retake_of_a_dead_lock_is_immediate_and_the_second_follows_the_calendar():
+    just_now = INTERRUPT_NOW
+    assert _interrupted(document_written_at=just_now) == "retake"
+    assert _interrupted(used=_used(1, last_minutes_ago=29)) == "calendar"
+    assert _interrupted(used=_used(1, last_minutes_ago=30)) == "retake"
+    assert _interrupted(used=_used(2, last_minutes_ago=59)) == "calendar"
+    assert _interrupted(used=_used(2, last_minutes_ago=60)) == "retake"
+
+
+def test_a_second_crash_retake_waits_on_the_calendar_too():
+    assert _interrupted(lock=CRASHED, used=_used(1, last_minutes_ago=5)) == "calendar"
 
 
 def test_a_live_process_stays_running_even_when_the_boot_is_another():
-    # A record from another boot whose pid `liveness` still reads as alive: not ours to
-    # retake, whatever the caller derived `other_boot` as.
     alive = rules.LockFacts(other_boot=True, alive=True)
-    assert rules.interrupted_run(_interrupted_task(), alive, 0) == "running"
+    assert _interrupted(lock=alive) == "running"
 
 
 def test_poll_plan_orders_closes_then_retakes_then_resumes_then_a_launch():
@@ -3429,20 +3510,6 @@ def test_ending_a_task_without_a_delivery_stamps_finished_at_and_nothing_else_do
 
 # --- crash retake: a run that raised under the graph (GH-308) ---
 
-CRASHED = rules.LockFacts(other_boot=False, alive=False, crashed_version="abc123")
-CRASH_PREFIX = "Retaken after crash: "
-
-
-def _crash_verdict(lock=CRASHED, at_version=0, total=0, key="def456", prior=0):
-    return rules.interrupted_run(
-        _interrupted_task(),
-        lock,
-        prior,
-        crash_prior_at_version=at_version,
-        crash_prior_total=total,
-        version_key=key,
-    )
-
 
 def test_crash_version_key_strips_dirty_and_refuses_unknown():
     assert rules.crash_version_key("abc123") == "abc123"
@@ -3457,64 +3524,6 @@ def test_the_crash_comment_names_both_versions_and_the_count():
         rules.crash_retake_comment("abc+dirty", "def", 2, 2)
         == "run raised under abc+dirty; resuming under def (retake 2 of 2)"
     )
-
-
-def test_crash_retake_counts_read_what_the_formatter_wrote():
-    mine = CRASH_PREFIX + rules.crash_retake_comment("a", "def456", 1, 2)
-    other_version = CRASH_PREFIX + rules.crash_retake_comment("a", "def4567", 1, 2)
-    prefix_of_mine = CRASH_PREFIX + rules.crash_retake_comment("a", "def45", 1, 2)
-    unrelated = "Auto-resumed: resuming under def456 (retake 1 of 2)"
-    bodies = [mine, other_version, prefix_of_mine, unrelated, "a human said so"]
-    assert rules.crash_retake_counts(bodies, "def456", CRASH_PREFIX) == (1, 3)
-    assert rules.crash_retake_counts([], "def456", CRASH_PREFIX) == (0, 0)
-
-
-def test_a_crash_mark_under_both_caps_is_a_crash_retake():
-    assert _crash_verdict() == "retake_crash"
-    one_short = rules.CRASH_RETAKE_PER_VERSION_MAX - 1
-    assert _crash_verdict(at_version=one_short) == "retake_crash"
-
-
-def test_the_per_version_cap_spent_leaves_the_task_to_the_human():
-    assert _crash_verdict(at_version=rules.CRASH_RETAKE_PER_VERSION_MAX) == "human"
-
-
-def test_the_total_cap_spent_leaves_the_task_to_the_human_even_with_a_fresh_version():
-    assert _crash_verdict(total=rules.CRASH_RETAKE_TOTAL_MAX, at_version=0) == "human"
-    assert _crash_verdict(total=rules.CRASH_RETAKE_TOTAL_MAX - 1) == "retake_crash"
-
-
-def test_an_unreadable_version_key_never_retakes_a_crash():
-    assert _crash_verdict(key=None) == "human"
-
-
-def test_a_crash_mark_with_the_caps_spent_falls_to_the_reboot_branch_on_another_boot():
-    lock = rules.LockFacts(other_boot=True, alive=False, crashed_version="abc123")
-    spent = rules.CRASH_RETAKE_PER_VERSION_MAX
-    assert _crash_verdict(lock, at_version=spent) == "retake"
-    assert _crash_verdict(lock, at_version=spent, prior=rules.RETAKE_AFTER_REBOOT_MAX) == "human"
-    assert _crash_verdict(lock, key=None) == "retake"
-
-
-def test_a_crash_mark_proves_the_process_ended_even_when_the_pid_reads_alive():
-    lock = rules.LockFacts(other_boot=False, alive=True, crashed_version="abc123")
-    assert _crash_verdict(lock) == "retake_crash"
-    spent = rules.CRASH_RETAKE_TOTAL_MAX
-    assert _crash_verdict(lock, total=spent) == "human"
-
-
-def test_a_crash_mark_does_not_override_the_document_checks():
-    for task_doc in (
-        {"status": "developing", "escalated": "needs a human"},
-        {"status": "ready_for_review"},
-    ):
-        assert rules.interrupted_run(task_doc, CRASHED, 0, version_key="def456") == "none", task_doc
-    assert rules.interrupted_run({}, CRASHED, 0, version_key="def456") == "human"
-
-
-def test_a_lock_without_a_crash_mark_ignores_the_crash_arguments():
-    assert _crash_verdict(SAME_BOOT) == "human"
-    assert _crash_verdict(PREVIOUS_BOOT) == "retake"
 
 
 def test_poll_plan_crash_retakes_share_the_slots_with_reboot_retakes_lowest_first():
@@ -4236,8 +4245,7 @@ def _orphan(raw: dict[str, Any] | None = None, **over: Any) -> str:
         "live": False,
         "has_lock": False,
         "quiet": True,
-        "prior": 0,
-        "last_own_at": None,
+        "used": retakes.Budget(0, None, None),
         "now": ORPHAN_NOW,
     }
     return rules.orphaned_run(cast(Any, {"status": "planned", **(raw or {})}), **{**facts, **over})
@@ -4282,8 +4290,7 @@ def _orphan_facts(**over: Any) -> dict[str, Any]:
         "live": False,
         "has_lock": False,
         "quiet": True,
-        "prior": 0,
-        "last_own_at": None,
+        "used": retakes.Budget(0, None, None),
         "now": ORPHAN_NOW,
         **over,
     }
@@ -4300,51 +4307,23 @@ def test_orphaned_run_waits_for_the_quiet_hour_only_for_the_first_retake():
     assert _orphan() == "retake"
 
 
+def _orphan_used(n: int, minutes_ago: int) -> retakes.Budget:
+    last = ORPHAN_NOW - timedelta(minutes=minutes_ago)
+    return retakes.Budget(n, last, last)
+
+
 def test_orphaned_run_follows_the_retake_calendar_after_the_first_retake():
-    own = ORPHAN_NOW - timedelta(minutes=29)
-    assert _orphan(prior=1, last_own_at=own) == "calendar"
-    assert _orphan(prior=1, last_own_at=ORPHAN_NOW - timedelta(minutes=30)) == "retake"
-    assert _orphan(prior=2, last_own_at=ORPHAN_NOW - timedelta(minutes=59)) == "calendar"
-    assert _orphan(prior=2, last_own_at=ORPHAN_NOW - timedelta(minutes=60)) == "retake"
-    assert rules.orphaned_due(own, 1) == own + timedelta(minutes=30)
+    assert _orphan(used=_orphan_used(1, 29)) == "calendar"
+    assert _orphan(used=_orphan_used(1, 30)) == "retake"
+    assert _orphan(used=_orphan_used(2, 59)) == "calendar"
+    assert _orphan(used=_orphan_used(2, 60)) == "retake"
 
 
-def test_orphaned_run_stops_at_the_cap_whatever_the_calendar_says():
-    old = ORPHAN_NOW - timedelta(days=1)
-    assert _orphan(prior=rules.ORPHANED_RETAKE_MAX, last_own_at=old) == "cap_spent"
-    assert _orphan(prior=rules.ORPHANED_RETAKE_MAX - 1, last_own_at=old) == "retake"
-    assert rules.ORPHANED_RETAKE_MAX == 3 and rules.ORPHANED_QUIET == timedelta(hours=1)
-
-
-def _stamp_at(moment: datetime) -> str:
-    return moment.isoformat().replace("+00:00", "Z")
-
-
-def test_an_orphan_retake_followed_by_a_later_run_is_not_counted():
-    posted = ORPHAN_NOW
-    after = _stamp_at(posted + timedelta(minutes=2))
-    assert rules.orphaned_retake_count([posted], [after]) == 0
-
-
-def test_an_orphan_retake_no_run_followed_is_counted():
-    posted = ORPHAN_NOW
-    before = _stamp_at(posted - timedelta(minutes=2))
-    assert rules.orphaned_retake_count([posted], [before]) == 1
-    assert rules.orphaned_retake_count([posted], []) == 1
-
-
-@pytest.mark.parametrize("entry", [None, "", "yesterday", 7, "2026-10-28T12:05:00", {"x": 1}])
-def test_a_run_that_cannot_be_dated_never_counts_as_progress(entry):
-    # The rejected input: an undatable entry (missing, not text, not ISO, no offset) must not
-    # clear the retake, however late it might have been.
-    assert rules.orphaned_retake_count([ORPHAN_NOW], [entry]) == 1
-
-
-def test_each_orphan_retake_is_judged_against_the_runs_later_than_itself():
-    first = ORPHAN_NOW
-    second = ORPHAN_NOW + timedelta(hours=1)
-    run = _stamp_at(first + timedelta(minutes=5))  # follows the first, not the second
-    assert rules.orphaned_retake_count([first, second], [run]) == 1
+def test_orphaned_run_stops_at_the_shared_cap_whatever_the_calendar_says():
+    old = 24 * 60
+    assert _orphan(used=_orphan_used(retakes.RETAKE_MAX, old)) == "cap_spent"
+    assert _orphan(used=_orphan_used(retakes.RETAKE_MAX - 1, old)) == "retake"
+    assert rules.ORPHANED_QUIET == timedelta(hours=1)
 
 
 def test_orphaned_line_says_how_to_hold_a_waiting_orphan():
@@ -4454,3 +4433,34 @@ def test_retry_turns_table_is_closed_and_read_only():
     assert dict(rules.RETRY_TURNS) == {"landing_diagnoser": 64}
     with pytest.raises(TypeError):
         rules.RETRY_TURNS["developer"] = 1  # type: ignore[index]
+
+
+def test_poll_plan_orders_a_spent_notice_after_the_closes_and_outside_the_cap():
+    plan = rules.poll_plan(
+        closes=[9],
+        resumes=[],
+        launches=[],
+        available_slots=0,
+        now=datetime(2026, 11, 3, tzinfo=UTC),
+        retakes=[4],
+        spent_retakes=[8, 5],
+    )
+    assert plan.actions == [
+        rules.PollAction("close", 9),
+        rules.PollAction("retakes_spent", 5),
+        rules.PollAction("retakes_spent", 8),
+    ]  # no slot: the retake of 4 starts nothing, the notices need none
+
+
+def test_poll_plan_keeps_a_spent_notice_in_a_held_round():
+    plan = rules.poll_plan(
+        closes=[],
+        resumes=[],
+        launches=[],
+        available_slots=2,
+        now=datetime(2026, 11, 3, tzinfo=UTC),
+        retakes=[4],
+        spent_retakes=[5],
+        held=["scratch"],
+    )
+    assert plan.actions == [rules.PollAction("retakes_spent", 5)]

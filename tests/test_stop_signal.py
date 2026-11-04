@@ -143,10 +143,10 @@ def child(tmp_path: Path, product: Path) -> Iterator[Callable[[str], Child]]:
                 pass
 
 
-def _stop(made: Child) -> tuple[int, float]:
+def _stop(made: Child, signum: int = signal.SIGTERM) -> tuple[int, float]:
     """The operator's `kill -TERM <pid>`, once: the exit code and the seconds it took."""
     sent = time.monotonic()
-    os.kill(made.process.pid, signal.SIGTERM)
+    os.kill(made.process.pid, signum)
     code = made.process.wait(timeout=BOUND_S + 30)
     return code, time.monotonic() - sent
 
@@ -158,12 +158,24 @@ def _snapshot(product: Path) -> dict[str, str]:
     }
 
 
+def _assert_marked_stopped(made: Child) -> None:
+    """The signal that is not a shutdown keeps the run's own record, marked, so the poller
+    does not retake it as an orphan: same pid, a deliberate stop, no shutdown or crash mark."""
+    path = made.product / ".agentic" / "runs" / f"{TASK}.lock"
+    assert path.exists(), "the record of a deliberate stop was released"
+    record = json.loads(path.read_text())
+    assert record["pid"] == made.process.pid
+    assert record["stopped_deliberately"] is True
+    assert "stopped_at_shutdown" not in record
+    assert "crashed_version" not in record
+
+
 def _assert_left_nothing(made: Child, before: dict[str, str]) -> None:
     product = made.product
     after = _snapshot(product)
     assert after["head"] == before["head"]
     assert after["document"] == DOCUMENT
-    assert not (product / ".agentic" / "runs" / f"{TASK}.lock").exists(), "lock still held"
+    _assert_marked_stopped(made)
     checkout = product / ".agentic" / "worktrees" / TASK
     if checkout.exists():
         assert _git(checkout, "status", "--porcelain") == ""
@@ -296,3 +308,23 @@ def test_a_signal_during_qa_performance_stops_the_measure_and_leaves_no_worktree
     assert not list(worktrees.glob("perf-*")), "the throwaway checkout was left behind"
     assert "perf-" not in _git(product, "worktree", "list")
     assert not (tmp_path / "xdg-state" / "agentic" / "perf.lock").exists(), "perf lock still held"
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP, signal.SIGINT])
+def test_a_term_hup_or_int_outside_a_shutdown_keeps_the_record_marked_as_a_deliberate_stop(
+    child, product, signum
+):
+    before = _snapshot(product)
+    made = child("gate")
+    made.pin("check")
+    started = json.loads((product / ".agentic" / "runs" / f"{TASK}.lock").read_text())
+
+    code, seconds = _stop(made, signum)
+
+    assert code == 1
+    assert seconds < PROMPT_S
+    assert _gone(made.pins["check"])
+    _assert_left_nothing(made, before)
+    kept = json.loads((product / ".agentic" / "runs" / f"{TASK}.lock").read_text())
+    for kept_field in ("pid", "host", "boot_id", "starttime", "started_at", "command"):
+        assert kept[kept_field] == started[kept_field]

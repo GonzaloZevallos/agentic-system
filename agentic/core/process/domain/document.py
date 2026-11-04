@@ -72,7 +72,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # `flakes` is the task's flake records, which the merge gate and the landing slice replace
 # whole with `add_flakes`' result. `tracker_failures` (GH-389) is the best-effort tracker
 # writes that failed, which a merge child (no state owner) replaces whole with
-# `add_tracker_failures`' result.
+# `add_tracker_failures`' result. `merge_ci` (GH-463) is the merge gate's fresh-run pairs, which
+# the merge child writes whole with `add_merge_ci`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -82,6 +83,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "closed_by_slices",
         "tracker_checklist_posted",
         "full_checks",
+        "merge_ci",
         "flake_comments",
         "flakes",
         "tracker_failures",
@@ -90,7 +92,14 @@ RECORD_KEYS: frozenset[str] = frozenset(
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
 # The record keys `render` writes as one flow line, swapped in for a placeholder: a list the
 # landing keeps about itself, which `record_closure` then replaces whole (GH-242, GH-297).
-_FLOW_KEYS = ("landing", "landed_slices", "full_checks", "flakes", "tracker_failures")
+_FLOW_KEYS = (
+    "landing",
+    "landed_slices",
+    "full_checks",
+    "merge_ci",
+    "flakes",
+    "tracker_failures",
+)
 
 
 def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
@@ -177,6 +186,10 @@ def render(
         # them, so a document without them is byte-identical to one written before.
         **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),
         **({"pushed_at": pushed_at} if (pushed_at := state.get("pushed_at")) else {}),
+        # The head a review published to the CI ref ahead of `full_checks` (GH-465) and when:
+        # the push fact, never a verdict. Written only when set, cleared with `None`, so a
+        # document without one is byte-identical to one written before.
+        **({"ci_speculation": s} if (s := state.get("ci_speculation")) else {}),
         # What the release reaped when the task closed (GH-282, ADR-0052), written only when
         # something was, so a document without one is byte-identical to one written before.
         **({"reaped_at_cleanup": r} if (r := state.get("reaped_at_cleanup")) else {}),
@@ -195,6 +208,9 @@ def render(
         **({"task_head": h} if (h := state.get("task_head")) else {}),
         **({"full_checks": _LANDING_PLACEHOLDER} if state.get("full_checks") else {}),
         **({"full_checks_healed": h} if (h := state.get("full_checks_healed")) else {}),
+        # The merge gate's fresh GitHub runs (GH-463): one flow line, replaced whole by the
+        # merge child, which has no state owner.
+        **({"merge_ci": _LANDING_PLACEHOLDER} if state.get("merge_ci") else {}),
         # The flakes the gates observed (ADR-0066) and the flake issues already commented on:
         # each written only when non-empty, `flakes` as one flow line like the records above.
         **({"flakes": _LANDING_PLACEHOLDER} if state.get("flakes") else {}),

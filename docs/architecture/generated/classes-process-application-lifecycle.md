@@ -19,6 +19,7 @@ classDiagram
     class poll__Abandoned["Abandoned"]
     class poll__CrashRetake["CrashRetake"]
     class poll__MergeAssessment["MergeAssessment"]
+    class poll__RetakesSpent["RetakesSpent"]
     class poll__StackUnreadable["StackUnreadable"]
     class restore__RestoreResult["RestoreResult"]
     class resume__Increment["Increment"]

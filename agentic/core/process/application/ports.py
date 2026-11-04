@@ -964,10 +964,12 @@ class Workspace(Protocol):
         because a new file a Developer forgot to add is missing work."""
         ...
 
-    def merge(self, path: Path, branch: str) -> str | None:
+    def merge(self, path: Path, branch: str, message: str | None = None) -> str | None:
         """Bring `branch` into the checkout at `path`: a subtask starts on the code of
         the subtasks it depends on, and the fan-in brings each approved one into the
-        task branch. Merging again is a no-op. Returns why the merge did not happen, or
+        task branch. `message` is the merge commit's message when one is made (GH-463: the
+        merge gate builds a fresh-run commit with a fixed one); `None` keeps git's own.
+        Merging again is a no-op. Returns why the merge did not happen, or
         None; a conflict leaves the checkout as it was, for a role to resolve on its
         own. It is a fact about the code, not a failure of the system, so the use case
         decides what to do with it."""
@@ -1086,6 +1088,25 @@ class Workspace(Protocol):
         the checkout at `path` to it again, so GitHub sees a branch create: what `full_checks`
         does once when no CI run started on the first push (GH-462). Same ref rules as
         `publish_ci_ref`. Raises `GitError` on any failure; the ref may then be absent."""
+        ...
+
+    def publish_dispatch_ref(self, path: Path, ref: str) -> None:
+        """Force push `HEAD` of the checkout at `path` to `refs/agentic-ci-dispatch/<ref>` on
+        `origin` (GH-463), a ref outside `refs/heads/`: it fires no `push` event, and only a
+        dispatched run of the base's workflow ever reads it. The commit built from an
+        untrusted head goes here and never under `refs/heads/`. Raises `GitError` on any
+        failure."""
+        ...
+
+    def delete_dispatch_ref(self, ref: str) -> None:
+        """Delete `refs/agentic-ci-dispatch/<ref>` from `origin` (GH-463). Raises `GitError`,
+        a ref `origin` lacks included."""
+        ...
+
+    def remote_dispatch_refs(self) -> tuple[str, ...]:
+        """The task ids `origin` holds a `refs/agentic-ci-dispatch/<id>` ref for (GH-463), without
+        the namespace: what `ci_ref_sweep` walks. A failed read or an unreachable origin
+        raises `GitError`: it is never an empty answer."""
         ...
 
     def remote_refs(self, prefix: str) -> tuple[str, ...]:
@@ -1424,6 +1445,14 @@ class Tracker(Protocol):
         URL, before any call, and when the platform cannot answer."""
         ...
 
+    def rerun_ci_run(self, run_id: str) -> CiUnreadable | None:
+        """Re-runs the failed jobs of the workflow run `run_id` (GH-463), the fresh run of the
+        merge gate that decided red, and nothing else: never the pull request's own runs
+        (`rerun_failed_ci`). `None` means GitHub accepted it; a refusal is
+        `CiUnreadable("dispatch_refused")` and a missing `gh` is `gh_unavailable`, chosen from
+        the step that failed. Never raises."""
+        ...
+
     def close_pull_request(self, reference: str) -> None:
         """Closes the pull request at `reference` unmerged (GH-239): the terminal path
         replaces the system's own pull request with a fresh one. Raises `ValueError` for
@@ -1584,6 +1613,12 @@ class LockRecord:
     # The system version a run recorded when it raised under the graph
     # (`RunLock.keep_crashed`); `None` for a record with no such mark.
     crashed_version: str | None = None
+    # The holder's start time as the kernel counts it (`/proc/<pid>/stat`, field 22), so a
+    # later process that reuses the pid is told apart; `None` for a record older than it.
+    starttime: str | None = None
+    # A human, a signal outside a shutdown or `agentic stop` ended this run on purpose: the
+    # poller never retakes it (`RunLock.keep_stopped`).
+    stopped_deliberately: bool = False
 
 
 class LockHeld(Exception):
@@ -1646,6 +1681,41 @@ class RunLock(Protocol):
         `crashed_version` set to `system_version`, keeping its boot id, so the poller can
         retake the run. A no-op when there is none, or when the record belongs to another
         pid. Exclusive with `release` and `keep_at_shutdown`: a run calls one of the three."""
+        ...
+
+    def keep_stopped(self, task_id: str, pid: int) -> None:
+        """Mark the record as a deliberate stop, only if it still names `pid`: rewrite it
+        with `stopped_deliberately` set and keep everything else it holds (pid, host, boot
+        id, starttime, start time, command). A run calls it on itself instead of `release`
+        when a signal that is not a shutdown stopped it; `agentic stop` calls it with the
+        pid of the run it is about to signal, before the signal. A no-op when there is no
+        record or it names another pid (a takeover is never undone)."""
+        ...
+
+    def mark_stopped_recordless(self, task_id: str) -> None:
+        """`agentic stop` found no record: write one with `stopped_deliberately` and the
+        identity (pid, host, boot id, starttime) of the calling process, which is gone as
+        soon as the command ends. Leaves an existing record alone."""
+        ...
+
+
+class RunProcess(Protocol):
+    """The process a lock record names, as `agentic stop` reaches it. Never a bare pid: every
+    call takes the whole `LockRecord`, and a process that is not the one the record names
+    (another host, another boot, a different start time) is neither found nor signalled."""
+
+    def holds(self, record: LockRecord) -> bool:
+        """Is the process the record names still running: same host, same boot, the pid
+        alive, and the start time the record holds (when it holds one) unchanged."""
+        ...
+
+    def terminate(self, record: LockRecord) -> None:
+        """SIGTERM to the process the record names, only after the same check `holds`
+        makes. Silent when it is gone or is not that process."""
+        ...
+
+    def kill(self, record: LockRecord) -> None:
+        """SIGKILL, with the same guard as `terminate`."""
         ...
 
 

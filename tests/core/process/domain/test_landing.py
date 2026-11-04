@@ -13,6 +13,7 @@ from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import (
     Carried,
+    CiCause,
     CiLogRecord,
     DiagnosisVerdict,
     FailureReason,
@@ -63,6 +64,9 @@ EXPECTED = {
     "ci_missing": "wait",
     "ci_unreadable": "wait",
     "ci_blocked_by_conflict": "sync_master",
+    "ci_untrusted_no_dispatch": "none",
+    "ci_stale_exhausted": "sync_master",
+    "ci_no_verdict": "escalate",
     "not_approved": "re_review",
     "head_not_reviewed": "re_review",
     "open_findings_blocking": "fix",
@@ -99,7 +103,14 @@ def test_every_refusal_still_has_a_step_when_every_budget_is_spent(refusal):
     )
     step = _step(refusal, spent, owners=("api",))
     assert isinstance(step, LandingStep) and step.refusal == refusal
-    assert step.kind in {"none", "wait", "diagnose", "file_followups_and_land", "escalate_adr"}
+    assert step.kind in {
+        "none",
+        "wait",
+        "diagnose",
+        "file_followups_and_land",
+        "escalate_adr",
+        "escalate",
+    }
 
 
 @pytest.mark.parametrize("refusal", get_args(rules.MergeRefusal))
@@ -466,6 +477,7 @@ _SAMPLE: dict[object, object] = {
     list[CiLogRecord]: [{"job": "check", "bytes": 1, "cause": "read"}],
     FailureReason: "account_limit",
     DiagnosisVerdict: "sync",
+    CiCause: "no_run",
 }
 
 

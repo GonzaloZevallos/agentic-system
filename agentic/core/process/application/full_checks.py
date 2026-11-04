@@ -43,7 +43,7 @@ from pydantic import TypeAdapter
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, presubmit, rules
+from ..domain import ci, presubmit, rules, speculation
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun, FullTierVerdict
 from ..domain.presubmit import CheckResult, CiCover, CiDispatch
@@ -107,6 +107,11 @@ class _NoVerdict:
 
 Sleep = Callable[[float], Awaitable[None]]
 Clock = Callable[[], float]
+Now = Callable[[], datetime]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 async def full_checks(
@@ -116,8 +121,10 @@ async def full_checks(
     *,
     sleep: Sleep = anyio.sleep,
     clock: Clock = time.monotonic,
+    now: Now = _utc_now,
 ) -> TaskState:
-    """`sleep` and `clock` are the CI wait's, injectable so a test does not wait."""
+    """`sleep` and `clock` are the CI wait's, injectable so a test does not wait; `now` is the
+    wall clock `speculation.event_lost` measures the speculative push against."""
     try:
         task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
@@ -129,7 +136,7 @@ async def full_checks(
     names = ports.stack.ci(base)
     if not names:
         return await _local_full_checks(state, cfg, ports, task, base, None)
-    outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock)
+    outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock, now)
     if outcome == "untrusted":
         return await _local_full_checks(state, cfg, ports, task, base, outcome)
     if isinstance(outcome, _NoVerdict):
@@ -236,6 +243,7 @@ async def _ci_full_checks(
     names: tuple[str, ...],
     sleep: Sleep,
     clock: Clock,
+    now: Now,
 ) -> dict[str, Any] | _NoVerdict | Literal["untrusted"]:
     """The patch of a run decided on GitHub, `untrusted` for running the local tier, or the
     `_NoVerdict` GitHub gave no verdict for. When no run starts within the grace period the
@@ -256,20 +264,40 @@ async def _ci_full_checks(
             state, cfg, ports, head, gate_names, dispatch, sleep, clock
         )
     ref = rules.ci_ref(state["id"])
-    try:
-        await anyio.to_thread.run_sync(workspace.publish_ci_ref, task.path, ref)
-    except GitError:
-        return _NoVerdict("publish_failed", 0.0)
-    verdict, read, waited = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
-    if verdict.state == "unreachable" and verdict.cause == "no_run":
-        # Once per call: a CI that never started on the first push is told that it may have
-        # missed the event, and the second wait is bounded by the grace period again.
+    speculative = False
+    pushed = state.get("ci_speculation")
+    if pushed and speculation.consumable(state, head):
+        # A review already pushed this very commit (GH-465): its run is waited for, not
+        # pushed again. A run that never came, or was cancelled, is today's path from the
+        # republish on, and only the wait that follows it may escalate.
+        decided, read, waited = await _speculated_wait(
+            pushed["pushed_at"], cfg, ports, ref, head, gate_names, sleep, clock, now
+        )
+        speculative = decided is not None
+        if decided is None:
+            try:
+                await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
+            except GitError:
+                return _NoVerdict("publish_failed", waited)
+            verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+            waited += again
+        else:
+            verdict = decided
+    else:
         try:
-            await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
+            await anyio.to_thread.run_sync(workspace.publish_ci_ref, task.path, ref)
         except GitError:
-            return _NoVerdict("publish_failed", waited)
-        verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
-        waited += again
+            return _NoVerdict("publish_failed", 0.0)
+        verdict, read, waited = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+        if verdict.state == "unreachable" and verdict.cause == "no_run":
+            # Once per call: a CI that never started on the first push is told that it may have
+            # missed the event, and the second wait is bounded by the grace period again.
+            try:
+                await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
+            except GitError:
+                return _NoVerdict("publish_failed", waited)
+            verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+            waited += again
     if verdict.state == "unreachable":
         return _NoVerdict(verdict.cause or "no_run", waited)
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
@@ -277,6 +305,8 @@ async def _ci_full_checks(
         patch = _ci_green(state, head, gate_names, read, waited)
     else:
         patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited)
+    if speculative:
+        patch["full_checks"]["speculative"] = True
     # The flake block of the jobs on this head: evidence only, it adds records and decides
     # nothing (the verdict above is already made).
     flakes = await anyio.to_thread.run_sync(
@@ -287,6 +317,36 @@ async def _ci_full_checks(
     return patch
 
 
+async def _speculated_wait(
+    pushed_at: str,
+    cfg: Configuration,
+    ports: Ports,
+    ref: str,
+    head: str,
+    names: tuple[str, ...],
+    sleep: Sleep,
+    clock: Clock,
+    now: Now,
+) -> tuple[FullTierVerdict | None, CiReport | CiUnreadable, float]:
+    """The wait on the run a review pushed for `head` (GH-465), from one read of the ref. The
+    verdict is `None` when that run cannot be counted on and the caller publishes again: the
+    event never started a run (`speculation.event_lost`), or the run was cancelled or never
+    appeared, which is not a verdict of the suite (`no_run`, `not_started`). Any other end,
+    unreadable CI included, is the verdict as the wait gave it."""
+    first = await anyio.to_thread.run_sync(ports.tracker.branch_ci, ref)
+    has_run = (
+        isinstance(first, CiReport)
+        and rules.same_commit(first.head_sha, head)
+        and any(check.name in names for check in first.checks)
+    )
+    if speculation.event_lost(pushed_at, now(), cfg.ci_start_grace_s, has_run):
+        return None, first, 0.0
+    verdict, read, waited = await _wait_ci(ports, ref, head, names, cfg, sleep, clock, first)
+    if verdict.state == "unreachable" and verdict.cause in ("no_run", "not_started"):
+        return None, read, waited
+    return verdict, read, waited
+
+
 async def _wait_ci(
     ports: Ports,
     ref: str,
@@ -295,13 +355,20 @@ async def _wait_ci(
     cfg: Configuration,
     sleep: Sleep,
     clock: Clock,
+    first: CiReport | CiUnreadable | None = None,
 ) -> tuple[FullTierVerdict, CiReport | CiUnreadable, float]:
     """Read the CI of `ref` every `CI_POLL_S` until a verdict that is not `waiting`, counted
     from the first read: bounded by `cfg.ci_start_grace_s` while no run exists on `head` and by
-    `cfg.check_timeout_s` once one does (`ci.full_tier_verdict`)."""
+    `cfg.check_timeout_s` once one does (`ci.full_tier_verdict`). `first` is a read already
+    taken, used for the first round instead of asking again."""
     started = clock()
     while True:
-        read = await anyio.to_thread.run_sync(ports.tracker.branch_ci, ref)
+        read = (
+            first
+            if first is not None
+            else await anyio.to_thread.run_sync(ports.tracker.branch_ci, ref)
+        )
+        first = None
         waited = clock() - started
         verdict = ci.full_tier_verdict(
             read, head, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
