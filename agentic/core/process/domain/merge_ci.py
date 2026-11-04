@@ -123,6 +123,8 @@ def pair_counts(records: Sequence[MergeCiRecord], head: str | None) -> PairCount
     ended `stale`. `no_verdict` counts those that ended `no_verdict` after their republish (or
     second dispatch) was spent, and only the ones recorded after the last pair the landing
     released (`released_at`), by position in the list and never by a clock."""
+    if not rules.full_commit_id(head):
+        return PairCounts(0, 0)
     own = [record for record in records if rules.same_commit(record["head"], head)]
     released = max((i for i, record in enumerate(own) if record.get("released_at")), default=-1)
     stale = sum(1 for record in own if record.get("outcome") == "stale")

@@ -5110,10 +5110,12 @@ def _ci_run_decision(facts: MergeFacts) -> MergeDecision:
 def _covered_trusted(facts: MergeFacts) -> bool:
     """Whether a covering GitHub pass may decide a `merge` (invariant 6 of GH-463): the head does
     not touch the CI's definition (`ci_untrusted is False`), or the pass is a dispatched run of
-    the base's workflow -- the `full_checks` one (`ci_dispatched`) or the latest fresh pair's."""
+    the base's workflow -- the `full_checks` one (`ci_dispatched`) or the latest fresh pair's,
+    which counts only once it ended `green`: a dispatched pair master overtook (`stale`) or that
+    gave no verdict vouches for nothing."""
     latest = merge_ci.latest(facts.merge_ci, facts.pr_head)
     return ci_trusted(facts.ci_untrusted, facts.ci_dispatched) or (
-        latest is not None and latest["mode"] == "dispatch"
+        latest is not None and latest["mode"] == "dispatch" and latest.get("outcome") == "green"
     )
 
 

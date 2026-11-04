@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from agentic.core.process.domain import ci, rules
+from agentic.core.process.domain import ci, merge_ci, rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiVerdict
 from agentic.core.process.domain.rules import MergeDecision, MergeFacts
 from agentic.core.process.domain.task import MergeCiRecord
@@ -211,6 +211,21 @@ def test_a_covered_verdict_on_an_untrusted_head_needs_a_dispatched_pass():
     facts = _facts(ci_covered=True, ci_untrusted=True, ci_dispatch_declared=True)
     assert rules.auto_merge_decision(facts) == CI_RUN
     assert rules.auto_merge_decision(replace(facts, ci_dispatched=True)) == MERGE
+
+
+def test_a_dispatched_pair_vouches_for_a_covered_head_only_once_green():
+    facts = _facts(ci_covered=True, ci_untrusted=True, ci_dispatch_declared=True)
+    green = _pair(mode="dispatch", outcome="green")
+    assert rules.auto_merge_decision(replace(facts, merge_ci=(green,))) == MERGE
+    for outcome in ("stale", "no_verdict", None):
+        pair = _pair(mode="dispatch", **({"outcome": outcome} if outcome else {}))
+        assert rules.auto_merge_decision(replace(facts, merge_ci=(pair,))) == CI_RUN
+
+
+def test_a_short_head_counts_no_pairs():
+    pair = _pair(outcome="stale")
+    assert merge_ci.pair_counts([pair], HEAD[:7]).stale == 0
+    assert merge_ci.pair_counts([pair], HEAD).stale == 1
 
 
 def test_a_local_pass_never_covers_a_ci_product():
