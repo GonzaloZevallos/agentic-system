@@ -400,7 +400,11 @@ def _landing_step(
     patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
     if not landing_plan.takes_action(step.kind, live) or landing_rules.already_dispatched(
-        landing_plan.live_entries(view), facts.pr_head, step.kind, facts.current_master
+        landing_plan.live_entries(view),
+        facts.pr_head,
+        step.kind,
+        facts.current_master,
+        names=step.names,
     ):
         return None
     return step
@@ -445,6 +449,8 @@ def with_ci(
         ci_required=names,
         ci_head=report.head_sha,
         ci_verdict=ci.ci_state(report, names),
+        ci_unreported=ci.unreported(report, names, True),
+        ci_reported=ci.reported_names(report),
         ci_fresh=fresh,
         ci_waited_s=_seconds_since(anchor, now),
     )
@@ -458,6 +464,13 @@ def ci_wait_line(
     waited = "?" if facts.ci_waited_s is None else str(int(facts.ci_waited_s))
     if facts.ci_unreadable is not None:
         what = f"unreadable {facts.ci_unreadable.cause}"
+    elif facts.ci_unreported:
+        # GH-485: `ci.unreported` first -- a name no check run carries is not pending; the gate
+        # refuses it once the wait is confirmed, so a line that waits is that confirmation.
+        what = (
+            f"unreported {', '.join(facts.ci_unreported)}: not a check-run name on this head, "
+            "confirming"
+        )
     elif facts.ci_verdict is not None and facts.ci_verdict.missing:
         what = f"missing {', '.join(facts.ci_verdict.missing)}"
         if facts.ci_plan_only and isinstance(report, ci.CiReport):

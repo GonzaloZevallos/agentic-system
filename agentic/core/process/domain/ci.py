@@ -190,6 +190,34 @@ def unreported(report: CiReport, names: tuple[str, ...], confirmed: bool) -> tup
     return tuple(name for name in dict.fromkeys(names) if name not in carried)
 
 
+def unreported_text(
+    unknown: tuple[str, ...], reported: tuple[str, ...], head: str, plan_only: tuple[str, ...]
+) -> str:
+    """The planning-defect text for `unknown` names (GH-485), the one wording the full tier, the
+    merge gate and the landing share: which names, on which head, what did report, and where each
+    is fixed. A plan-only name lives in the task document's `ci_required`, a stack `ci:` name in
+    `.agentic/stack.yaml` on master."""
+    shown = ", ".join(f"`{r}`" for r in reported) or "none"
+    lines = [
+        f"no check run named `{name}` on this head `{head}` "
+        f"(workflow runs completed); reported: {shown}; either the name is wrong or its "
+        "workflow does not run for this event."
+        for name in unknown
+    ]
+    fixes: list[str] = []
+    if owned := [name for name in unknown if name in plan_only]:
+        fixes.append(
+            f"Edit `ci_required` in the task document's frontmatter ({', '.join(owned)}), "
+            "then `agentic resume`."
+        )
+    if stack := [name for name in unknown if name not in plan_only]:
+        fixes.append(
+            f"Change `ci:` in `.agentic/stack.yaml` on master ({', '.join(stack)}), then "
+            "`agentic resume`."
+        )
+    return " ".join(lines) + " " + " ".join(fixes) + " Resume re-enters on the same head."
+
+
 def red_on_base(head: CiReport, base: CiReport | None, names: tuple[str, ...]) -> tuple[str, ...]:
     """The `names` that fail on `head` and also fail on `base`, the base branch's latest
     report, in `names` order (GH-371). `()` without a base report: a base that was not read

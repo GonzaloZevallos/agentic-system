@@ -370,7 +370,7 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
         step.kind == "escalate"
         and state.get("escalated")
         and landing_rules.already_dispatched(
-            landing_plan.live_entries(state), head, step.kind, master
+            landing_plan.live_entries(state), head, step.kind, master, names=step.names
         )
     ):
         # The escalation itself, taken on this head: `land` answers "already taken" and moves
