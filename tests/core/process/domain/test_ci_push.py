@@ -140,3 +140,20 @@ def test_scrub_of_a_short_text_changes_nothing_else():
     assert scrub("  remote: Permission to o/r.git denied to workflow.\n") == (
         "remote: Permission to o/r.git denied to workflow."
     )
+
+
+def test_the_failure_section_quotes_git_through_scrub_and_names_the_attempts():
+    said = "remote: Permission to o/r denied to workflow `x` {y} https://u:tok@github.com/o/r"
+    text = ci_push.push_failure_markdown("publish_failed", "agentic-ci/GH-1", 1, "permanent", said)
+    assert "agentic-ci/GH-1" in text and "publish_failed" in text
+    assert "1 attempt(s)" in text and "permanent" in text
+    quoted = [line for line in text.splitlines() if line.startswith("> ")]
+    assert quoted == [f"> {scrub(said)}"]
+    assert "tok" not in text and "`x`" not in text
+
+
+def test_the_failure_section_scrubs_what_it_is_given_even_when_unscrubbed():
+    text = ci_push.push_failure_markdown(
+        "publish_failed", "agentic-ci/GH-1", 2, "unknown", "line one\nline two ghp_abc123"
+    )
+    assert "> line one line two ***" in text
