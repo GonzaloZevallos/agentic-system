@@ -212,3 +212,61 @@ def test_an_unreadable_ci_past_the_grace_keeps_waiting_until_the_bound(
     unreadable: CiUnreadable,
 ) -> None:
     assert verdict(unreadable, GRACE + 1) == FullTierVerdict("waiting", (), NAMES, None)
+
+
+# -- GH-485: a required name no check run carries is a planning defect, not a slow CI ------
+
+MATRIX = tuple(run(f"e2e ({n})", "SUCCESS") for n in range(1, 5))
+
+
+def complete(*checks: CiCheck, completed: bool | None = True) -> CiReport:
+    return CiReport(HEAD, None, None, None, tuple(checks), completed)
+
+
+def test_unreported_lists_the_names_no_check_run_carries_in_declared_order_once() -> None:
+    read = complete(*MATRIX, run("lint", "SUCCESS"))
+    assert ci.unreported(read, ("lint", "pytest", "e2e", "pytest"), True) == ("pytest", "e2e")
+
+
+def test_unreported_matches_exactly_never_by_prefix() -> None:
+    assert ci.unreported(complete(*MATRIX), ("e2e",), True) == ("e2e",)
+    assert ci.unreported(complete(run("e2e", "SUCCESS")), ("e2e",), True) == ()
+
+
+@pytest.mark.parametrize(
+    ("completed", "confirmed"),
+    [(None, True), (False, True), (True, False)],
+    ids=["status-unknown", "status-false", "not-confirmed"],
+)
+def test_unreported_decides_nothing_without_a_confirmed_completed_run(completed, confirmed) -> None:
+    read = complete(*MATRIX, completed=completed)
+    assert ci.unreported(read, ("e2e",), confirmed) == ()
+
+
+def gh543(read: CiReport, confirmed: bool = True, elapsed_s: float = 0.0) -> FullTierVerdict:
+    return ci.full_tier_verdict(read, HEAD, ("e2e",), elapsed_s, BOUND, GRACE, confirmed)
+
+
+def test_gh543_matrix_runs_green_with_the_job_id_required_is_unknown_not_a_timeout() -> None:
+    assert gh543(complete(*MATRIX)) == FullTierVerdict(
+        "unreachable", (), ("e2e",), "unknown_names", ("e2e",)
+    )
+    # Before either bound: the wait is not run out first.
+    assert gh543(complete(*MATRIX), elapsed_s=BOUND * 5).cause == "unknown_names"
+
+
+def test_the_same_report_with_the_run_status_not_known_is_a_wait() -> None:
+    assert gh543(complete(*MATRIX, completed=None)).state == "waiting"
+    # Past the grace it is today's `no_run`, never `unknown_names`.
+    assert gh543(complete(*MATRIX, completed=None), elapsed_s=GRACE).cause == "no_run"
+
+
+def test_the_first_read_alone_is_a_wait_so_a_name_that_appears_next_is_not_unknown() -> None:
+    assert gh543(complete(*MATRIX), confirmed=False).state == "waiting"
+    assert gh543(complete(*MATRIX, run("e2e", "SUCCESS")), confirmed=True).state == "green"
+
+
+def test_red_wins_over_an_unknown_name() -> None:
+    bad = run("unit", "FAILURE")
+    got = ci.full_tier_verdict(complete(bad), HEAD, ("unit", "e2e"), 0.0, BOUND, GRACE, True)
+    assert got.state == "red" and got.failing == (bad,) and got.unknown == ()

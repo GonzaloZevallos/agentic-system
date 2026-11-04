@@ -2619,6 +2619,22 @@ def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
     )
 
 
+def ci_planning_defect(head: str, text: str) -> dict[str, Any]:
+    """The patch of a `full_checks` whose required CI names no check run of `head` carries
+    (GH-485): a planning defect, never a failed check. The task stops for the human under class
+    `ci`; no `full_checks` record, no return and no counter, so the Developer is not charged and
+    a resume enters the node again on the same head. `text` names the names, the reported ones
+    and where to fix them."""
+    reason = f"Planning defect, not a CI failure ({head[:7]}): {text}"
+    return logged(
+        {
+            "current_role": DEVELOPER.name,
+            "status": WAITING_ON_HUMAN,
+            **escalation("ci", reason),
+        }
+    )
+
+
 def after_full_checks(state: TaskState) -> str | None:
     """Always back to the fan-in, like `after_qa_performance`: on a green run
     `full_checks_due` now reads `False` and `after_integrate` goes on; on a red one the

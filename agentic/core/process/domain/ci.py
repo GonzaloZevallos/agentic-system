@@ -45,13 +45,17 @@ class CiCheck:
 class CiReport:
     """What one read of a commit's CI says. `head_sha` is the commit the checks belong
     to, read in the same query as `checks`. `base_ref`, `base_sha` and `opened_at` (an ISO
-    UTC string) are None for a branch's report, which has no pull request."""
+    UTC string) are None for a branch's report, which has no pull request. `runs_completed` is
+    True only when the source says every workflow run of the commit is completed (the tracker
+    adapter's check-suite read, the dispatched-run builder from `run.status`); None is "not
+    known", and is always a wait (GH-485)."""
 
     head_sha: str
     base_ref: str | None
     base_sha: str | None
     opened_at: str | None
     checks: tuple[CiCheck, ...]
+    runs_completed: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +178,18 @@ def reported_names(report: CiReport) -> tuple[str, ...]:
     return tuple(dict.fromkeys(check.name for check in report.checks))
 
 
+def unreported(report: CiReport, names: tuple[str, ...], confirmed: bool) -> tuple[str, ...]:
+    """The `names`, in declared order and deduplicated, that no check run of `report` carries
+    (GH-485): a wrong name (a matrix job id, a job whose `name:` differs from its id), not a
+    slow CI. The one place that decision is made. Only when `confirmed` (the caller saw the same
+    complete answer twice) and `report.runs_completed is True`; otherwise `()`, because a
+    name can still appear while a run is going. Matching is exact, as in `ci_state`."""
+    if not confirmed or report.runs_completed is not True:
+        return ()
+    carried = {check.name for check in report.checks}
+    return tuple(name for name in dict.fromkeys(names) if name not in carried)
+
+
 def red_on_base(head: CiReport, base: CiReport | None, names: tuple[str, ...]) -> tuple[str, ...]:
     """The `names` that fail on `head` and also fail on `base`, the base branch's latest
     report, in `names` order (GH-371). `()` without a base report: a base that was not read
@@ -262,6 +278,7 @@ class FullTierVerdict:
     failing: tuple[CiCheck, ...]
     pending: tuple[str, ...]
     cause: CiCause | None
+    unknown: tuple[str, ...] = ()
 
 
 def full_tier_verdict(
@@ -271,6 +288,7 @@ def full_tier_verdict(
     elapsed_s: float,
     timeout_s: float,
     grace_s: float,
+    confirmed: bool = False,
 ) -> FullTierVerdict:
     """The verdict of one read of the CI over the declared job `names`, `elapsed_s` into
     a wait bounded by `timeout_s`. A report of another commit than `head` counts as no run
@@ -280,7 +298,9 @@ def full_tier_verdict(
     job has a run on `head`, queued included, only `timeout_s` bounds it, and an unreadable
     CI keeps `timeout_s` too. Red wins over the bound; a job that never started, alone, says
     the CI is unusable, not that the suite failed; nothing is inferred from a skip (`SKIPPED`
-    is red, as in `ci_state`)."""
+    is red, as in `ci_state`). Red still wins; then a declared name that `unreported` finds (with
+    `confirmed` by the caller) is `unreachable/unknown_names` at once, before either bound: a
+    planning defect, not a slow CI (GH-485)."""
     at_bound = elapsed_s >= timeout_s
     if isinstance(read, CiUnreadable):
         if at_bound:
@@ -299,6 +319,9 @@ def full_tier_verdict(
         return FullTierVerdict("red", verdict.failing, pending, None)
     if verdict.state == "green":
         return FullTierVerdict("green", (), (), None)
+    unknown = unreported(read, names, confirmed)
+    if unknown:
+        return FullTierVerdict("unreachable", (), pending, "unknown_names", unknown)
     no_run = len(verdict.missing) == len(set(names))
     if no_run and (elapsed_s >= grace_s or at_bound):
         return FullTierVerdict("unreachable", (), pending, "no_run")
@@ -368,7 +391,7 @@ def dispatch_verdict(
         if elapsed_s >= grace_s:
             return FullTierVerdict("unreachable", (), (), "no_run")
         return FullTierVerdict("waiting", (), declared, None)
-    report = CiReport(head, None, None, None, run.jobs)
+    report = CiReport(head, None, None, None, run.jobs, run.status == "completed")
     verdict = ci_state(report, declared)
     waiting_on = set(verdict.missing) | set(pending_names(report, declared))
     pending = tuple(name for name in declared if name in waiting_on)

@@ -118,6 +118,15 @@ statusCheckRollup {
 }
 """
 
+# The workflow runs of the same commit (GH-485): a suite with a `workflowRun` is a GitHub Actions
+# one; the other apps' suites carry none. Read with the checks so they describe the same commit.
+_SUITES = """
+checkSuites(first: 50) {
+  pageInfo { hasNextPage }
+  nodes { status workflowRun { databaseId } }
+}
+"""
+
 _PULL_REQUEST_CI_QUERY = (
     """
 query($owner: String!, $repo: String!, $number: Int!) {
@@ -128,6 +137,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       headRefOid
       commits(last: 1) { nodes { commit { oid """
     + _ROLLUP
+    + _SUITES
     + """ } } }
     }
   }
@@ -141,6 +151,7 @@ query($owner: String!, $repo: String!, $ref: String!) {
   repository(owner: $owner, name: $repo) {
     ref(qualifiedName: $ref) { target { ... on Commit { oid """
     + _ROLLUP
+    + _SUITES
     + """ } } }
   }
 }
@@ -171,6 +182,27 @@ def _commit_ci(commit: object) -> tuple[str, tuple[CiCheck, ...]]:
     if contexts["pageInfo"]["hasNextPage"]:
         raise _Unreadable("more checks than one page")
     return oid, tuple(check for node in contexts["nodes"] if (check := _ci_check(node)) is not None)
+
+
+def _runs_completed(commit: object) -> bool | None:
+    """Whether every GitHub Actions run of the commit is completed (GH-485): True only when
+    there is at least one suite with a `workflowRun`, every such suite is `COMPLETED` and the
+    list is whole (`hasNextPage` false). Anything else, a missing or mistyped field included, is
+    None: not known, so a wait and never an unreadable CI."""
+    if not isinstance(commit, dict):
+        return None
+    suites = commit.get("checkSuites")
+    if not isinstance(suites, dict):
+        return None
+    page, nodes = suites.get("pageInfo"), suites.get("nodes")
+    if not isinstance(page, dict) or page.get("hasNextPage") is not False:
+        return None
+    if not isinstance(nodes, list) or not all(isinstance(node, dict) for node in nodes):
+        return None
+    actions = [node for node in nodes if node.get("workflowRun")]
+    if not actions:
+        return None
+    return True if all(node.get("status") == "COMPLETED" for node in actions) else None
 
 
 def _ci_check(node: dict) -> CiCheck | None:
@@ -637,6 +669,7 @@ class GhTracker:
                 base_sha=None,
                 opened_at=_text(pull_request["createdAt"]),
                 checks=checks,
+                runs_completed=_runs_completed(commit),
             )
         except (_Unreadable, KeyError, IndexError, TypeError):
             return CiUnreadable("gh_unreadable")
@@ -650,11 +683,17 @@ class GhTracker:
         if isinstance(answer, CiUnreadable):
             return answer
         try:
-            head_sha, checks = _commit_ci(answer["data"]["repository"]["ref"]["target"])
+            target = answer["data"]["repository"]["ref"]["target"]
+            head_sha, checks = _commit_ci(target)
         except (_Unreadable, KeyError, TypeError):
             return CiUnreadable("gh_unreadable")
         return CiReport(
-            head_sha=head_sha, base_ref=None, base_sha=None, opened_at=None, checks=checks
+            head_sha=head_sha,
+            base_ref=None,
+            base_sha=None,
+            opened_at=None,
+            checks=checks,
+            runs_completed=_runs_completed(target),
         )
 
     def dispatch_ci(
