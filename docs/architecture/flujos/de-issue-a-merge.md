@@ -45,7 +45,11 @@ sequenceDiagram
    cuántas corridas caben bajo `max_concurrent_runs` y
    `agentic/core/process/application/poll.py:execute` lanza un hijo
    `agentic run --issue N --detach` por medio de `agentic/cli.py:SpawnLauncher`. El poller
-   no corre ningún rol.
+   no corre ningún rol. El único hijo exento (merge o `land_checks`) que la máquina permite
+   no va al número de issue más bajo: `poll_plan` elige al candidato que más tiempo lleva
+   sin intento (`agentic/core/process/domain/exempt_queue.py:rank`, la Cola exenta), y un
+   merge rechazado por `ci_untrusted_no_dispatch` sobre el mismo head y master queda en
+   `backoff` hasta que uno se mueva.
 3. **Corrida.** `agentic/cli.py:_run` toma el lock de la tarea, la registra, abre el
    checkpointer (`agentic/composition.py:checkpointer`) e invoca el grafo
    `agentic/composition.py:graph`.

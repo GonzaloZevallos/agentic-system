@@ -1237,6 +1237,18 @@ class MergeConflictRecord(TypedDict):
     at: str
 
 
+class MergeRefusalRecord(TypedDict):
+    """A refusal the `merge` verb wrote nothing else for (GH-500): `reason` is the closed
+    refusal, `head` and `master` the full ids it decided with, `at` the ISO instant. One row for
+    the task, replaced whole on each write; the poller honours it only for that exact pair
+    (`exempt_queue.backed_off`). No free text."""
+
+    reason: Literal["ci_untrusted_no_dispatch"]
+    head: str
+    master: str
+    at: str
+
+
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
     """The pairs of `existing` and `new` as one list in the order first seen, one row per
     `(head, master)`: a row for a known pair replaces it whole, so a record is written before
@@ -1353,6 +1365,10 @@ class TaskState(TaskInput, total=False):
     # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
     # reads as no record.
     merge_conflict: Annotated[MergeConflictRecord, last]
+    # The refusal the merge verb wrote nothing else for (GH-500), one row replaced whole on each
+    # write (`last`). Read with `.get("merge_refusal")`: a document written before it has none,
+    # which reads as no refusal.
+    merge_refusal: Annotated[MergeRefusalRecord, last]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str

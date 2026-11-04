@@ -20,6 +20,7 @@ from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
 from ..domain.design import Design, NotReady
 from ..domain.docs import Docs
+from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
@@ -1891,6 +1892,51 @@ class RunRegistry(Protocol):
         replaced atomically: the `issues` whose land waits for a slot, `since` when the wait
         began (`now` when `None`). Empty `issues` remove the record. Called under
         `exclusive()`; `waiting/` is created only when something is published."""
+        ...
+
+    def exempt_attempts(self, product: str) -> dict[tuple[int, ExemptKind], ExemptAttempt]:
+        """The poller's own attempt records of `product` (GH-500), keyed `(issue, kind)`: the
+        registry key is `(product, issue, kind)`, never the issue number alone. A damaged
+        file is skipped. Nothing is created by reading."""
+        ...
+
+    def record_exempt_seen(self, product: str, issue: int, kind: ExemptKind, now: datetime) -> None:
+        """Set `first_seen` of the record to `now` when it has none (or does not exist); an
+        existing `first_seen` is kept. Called under `exclusive()` by the poller alone."""
+        ...
+
+    def record_exempt_attempt(
+        self, product: str, issue: int, kind: ExemptKind, now: datetime
+    ) -> None:
+        """A child for the candidate starts at `now`: `last_attempt=now` and `starved_reported`
+        is reset; `first_seen` is kept, or is `now` when there is no record. Called under
+        `exclusive()` by the poller alone."""
+        ...
+
+    def mark_exempt_starved(self, product: str, issue: int, kind: ExemptKind) -> None:
+        """The starvation line was said for the candidate: set `starved_reported`. A no-op
+        without a record. Called under `exclusive()` by the poller alone."""
+        ...
+
+    def clear_exempt_attempt(self, product: str, issue: int, kind: ExemptKind) -> None:
+        """Forget the record. A no-op when there is none. Called under `exclusive()` by the
+        poller alone, and only on a fact (`exempt_queue.stale_keys`)."""
+        ...
+
+    def exempt_waits(self, now: datetime) -> tuple[list[ExemptWait], list[str]]:
+        """Every product's published exempt wait (GH-500) that is still fresh at `now`, and a
+        note per file it could not read. It filters for staleness only -- a record older than
+        `exempt_queue.EXEMPT_WAIT_TTL` or written under another boot -- exactly as `land_waits`
+        does, and decides nothing: whether to yield is `exempt_queue.behind`'s."""
+        ...
+
+    def publish_exempt_wait(
+        self, root: Path, product: str, candidate: ExemptCandidate | None, now: datetime
+    ) -> None:
+        """Write this poller's own record, keyed by the resolved `root`, whole and replaced
+        atomically: the head of its queue (`exempt_queue.rank` of `candidate` gives the `since`).
+        `None` removes the record. Called under `exclusive()`; the directories are created
+        only when something is published."""
         ...
 
 

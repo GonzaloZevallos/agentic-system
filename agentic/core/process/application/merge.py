@@ -28,6 +28,7 @@ from ..domain.presubmit import CiDispatch
 from ..domain.task import (
     CiCause,
     MergeCiRecord,
+    MergeRefusalRecord,
     PullRequest,
     TaskState,
     add_flakes,
@@ -252,6 +253,16 @@ def merge_task(
             return MergeResult("stopped", "ci_wait")
     if decision.kind == "refuse":
         assert decision.reason is not None
+        if decision.reason == "ci_untrusted_no_dispatch" and head is not None:
+            # GH-500: this refusal writes nothing else, so it would repeat every round. The
+            # row names the pair it was decided on, and the poller holds the merge back on it.
+            refusal: MergeRefusalRecord = {
+                "reason": "ci_untrusted_no_dispatch",
+                "head": head,
+                "master": master,
+                "at": clock(),
+            }
+            ports.documents.record_closure(task_id, {"merge_refusal": refusal})
         if decision.reason == "merge_conflict":
             where = (
                 "recorded"
@@ -999,11 +1010,16 @@ def _merge(
         log(f"agentic: merge: {task_id}: master moved since the checks ({master} -> {again.sha})")
         return MergeResult("refused", "master_moved")
     # GH-255: the last look at the merge itself. A head that conflicts with this master is
-    # refused with nothing written (no intent, no failure count, no comment: `merge_conflict`
-    # is not in `COMMENTED`) and `Tracker.merge` is never called. Unread changes nothing.
+    # refused without an intent, a failure count or a comment (`merge_conflict` is not in
+    # `COMMENTED`) and `Tracker.merge` is never called. GH-500: the one `merge_conflict` row is
+    # written, as the GH-492 path does, so the next round refuses it from the document and hands
+    # over to the landing instead of starting this verb again. Unread changes nothing.
     conflicts, source = read_conflicts(ports, pull_request, head, master, recorded=False)
     if conflicts is True:
         log(f"agentic: merge: {task_id}: {head} conflicts with master {master} ({source})")
+        ports.documents.record_closure(
+            task_id, {"merge_conflict": merge_conflict.record(head, master, clock())}
+        )
         return MergeResult("refused", "merge_conflict")
     # The intent, immediately before the merge call: after a crash the document still
     # shows the system meant to merge this head (`delivery_outcome` reads it). The method

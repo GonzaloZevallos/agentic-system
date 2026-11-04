@@ -16,7 +16,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, merge_ci, presubmit, retakes
+from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -4345,13 +4345,15 @@ class Deferred:
     `exempt_busy` (the one exempt
     child the machine allows is already live, or this round already starts one),
     `pause_waiting` (a `land_model` land while this product has an `account_limit` pause
-    still waiting out its calendar: the land would spend the session the pause protects) or
+    still waiting out its calendar: the land would spend the session the pause protects),
     `land_queued` (a `land_model` land with a slot to start in, yielding to another product's
-    land whose wait began earlier: first come, first landed, GH-362)."""
+    land whose wait began earlier: first come, first landed, GH-362) or `backoff` (a merge whose
+    refusal wrote nothing and still holds on the same head and master, GH-500: it is not tried
+    again until one moves or `exempt_queue.EXEMPT_REFUSAL_BACKOFF` runs out)."""
 
     kind: Literal["merge", "land", "orphan"]
     issue: int
-    reason: Literal["no_slot", "land_queued", "exempt_busy", "pause_waiting"]
+    reason: Literal["no_slot", "land_queued", "exempt_busy", "pause_waiting", "backoff"]
 
 
 def holds_launches(deferred: Deferred) -> bool:
@@ -4360,11 +4362,14 @@ def holds_launches(deferred: Deferred) -> bool:
     land while it lasts. Only a `land` that waits does, for a slot (`no_slot`) or for an earlier
     wait of another product (`land_queued`): `exempt_busy` is the serialisation of the children
     that take no slot, and `pause_waiting` waits on the
-    account's calendar, which another product's start does not lengthen."""
+    account's calendar, which another product's start does not lengthen. `backoff` is a merge
+    that waits on its own refusal, never on a slot."""
     match deferred.reason:
         case "no_slot" | "land_queued":
             return deferred.kind == "land"
         case "exempt_busy" | "pause_waiting":
+            return False
+        case "backoff":
             return False
         case _:
             assert_never(deferred.reason)
@@ -4480,6 +4485,9 @@ def poll_plan(
     held: Sequence[str] = (),
     orphan_retakes: Sequence[int] = (),
     spent_retakes: Sequence[int] = (),
+    exempt_attempts: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt] = {},
+    backed_off_merges: Sequence[int] = (),
+    exempt_yield: bool = False,
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -4541,13 +4549,20 @@ def poll_plan(
 
     The children that do not count (`merge`, `land_checks`) are bounded together instead:
     `live_exempt` is how many are live on the machine right now, and at most one is live
-    and at most one starts per round -- the lowest merge if there is one, otherwise the
-    lowest `land_checks` land. They come last in `actions`, after every action that takes a
-    slot, so the wait for a child to register never delays a role action.
+    and at most one starts per round -- the one that has waited longest since its last attempt
+    (GH-500, `exempt_queue.ordered`; `exempt_attempts` holds the instants per `(issue, kind)`),
+    and with no record at all the lowest merge if there is one, otherwise the lowest
+    `land_checks` land. A merge that just refused has the latest attempt, so it goes to the
+    back. `backed_off_merges` are merges whose refusal still holds on their head and master:
+    each is `Deferred(backoff)` and never starts. `exempt_yield` is true while another
+    product's published wait outranks this product's (`exempt_queue.behind`): no exempt child
+    starts and every candidate is `exempt_busy`. They come last in `actions`, after every action
+    that takes a slot, so the wait for a child to register never delays a role action.
 
     Everything held back is in `PollPlan.deferred`: a `land_model` land with no slot is
     `no_slot`, one held by an account-limit pause is `pause_waiting`; every merge or
-    `land_checks` land that did not start is `exempt_busy`.
+    `land_checks` land that did not start is `exempt_busy`, except a backed-off merge, which is
+    `backoff`.
 
     `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
     if `paced_launch_fits` says so, counting this round's retakes and resumes as live
@@ -4665,17 +4680,42 @@ def poll_plan(
             actions.append(PollAction("launch", ready[0].issue, arm=ready[0].arm))
             slots_left -= 1
 
-    exempt_merges = sorted(merges)
+    deferred.extend(Deferred("merge", issue, "backoff") for issue in sorted(set(backed_off_merges)))
+    exempt_merges = sorted(set(merges) - set(backed_off_merges))
     exempt_lands = sorted(c.issue for c in lands if not counts_against_cap(c.kind))
-    if live_exempt == 0 and exempt_merges:
-        actions.append(PollAction("merge", exempt_merges[0]))
-        exempt_merges = exempt_merges[1:]
-    elif live_exempt == 0 and exempt_lands:
-        actions.append(PollAction("land", exempt_lands[0]))
-        exempt_lands = exempt_lands[1:]
+    if live_exempt == 0 and not exempt_yield:
+        # One product's candidates: the root and the product are the same for all of them, so
+        # the order is the instant of the last attempt, then merge before land, then the issue.
+        queue = [
+            exempt_queue.ExemptCandidate(
+                "merge", "", "", issue, *_attempt_instants(exempt_attempts.get((issue, "merge")))
+            )
+            for issue in exempt_merges
+        ] + [
+            exempt_queue.ExemptCandidate(
+                "land", "", "", issue, *_attempt_instants(exempt_attempts.get((issue, "land")))
+            )
+            for issue in exempt_lands
+        ]
+        first = exempt_queue.ordered(queue)[0] if queue else None
+        if first is not None:
+            actions.append(PollAction(first.kind, first.issue))
+            if first.kind == "merge":
+                exempt_merges.remove(first.issue)
+            else:
+                exempt_lands.remove(first.issue)
     deferred.extend(Deferred("merge", issue, "exempt_busy") for issue in exempt_merges)
     deferred.extend(Deferred("land", issue, "exempt_busy") for issue in exempt_lands)
     return PollPlan(actions, deferred)
+
+
+def _attempt_instants(
+    attempt: exempt_queue.ExemptAttempt | None,
+) -> tuple[datetime | None, datetime | None]:
+    """The `(first_seen, last_attempt)` of a candidate's record, both `None` without one."""
+    if attempt is None:
+        return None, None
+    return attempt.first_seen, attempt.last_attempt
 
 
 # How many times the checks run on one pull request head before the poller leaves it to
