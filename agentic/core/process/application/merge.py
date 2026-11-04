@@ -42,9 +42,11 @@ from .ports import (
     GitError,
     MergeCallFailed,
     Ports,
+    RunRegistry,
     TrackerUnreachable,
     Upstream,
 )
+from .preflight import product_name
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .release import release_checkout
 
@@ -95,6 +97,7 @@ def merge_task(
     eval_set: frozenset[int] | None,
     log: Callable[[str], None],
     clock: Callable[[], str] = _now,
+    registry: RunRegistry | None = None,
 ) -> MergeResult:
     raw = ports.documents.load(task_id)
     reference = raw.get("pull_request") if raw else None
@@ -198,8 +201,16 @@ def merge_task(
     if declared:
         raw = _with_ci_flakes(ports, task_id, raw, str(reference), head, base, declared, log)
     # A check that failed on this head, was rerun by the landing and now passes is flaky.
-    landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
-    landing_flakes.file_task_flakes(ports, task_id, raw, log)
+    landing_flakes.file_task_flakes(
+        ports,
+        task_id,
+        raw,
+        log,
+        cfg=cfg,
+        now=datetime.now(UTC),
+        flake_lock=(lambda: registry.flake_lock(product_name(ports))) if registry else None,
+        head=head,
+    )
     relied = _ci_links(report, facts.ci_required) if _merges_on_ci(facts) else None
     inert_from = _inert_from(raw, master) if facts.masters_covered is True else None
     return _merge(

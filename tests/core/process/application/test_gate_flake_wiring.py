@@ -97,7 +97,9 @@ def merge_once(ports, tmp_path):
     return _run(ports, tmp_path)
 
 
-def test_a_flake_at_the_merge_gate_is_recorded_as_a_flake_then_filed_at_the_decision(tmp_path):
+def test_a_flake_at_the_merge_gate_is_recorded_as_a_flake_and_files_no_issue_below_the_threshold(
+    tmp_path,
+):
     commands = MemoryCommands(**{"run tests": [RED, GREEN]})
     ports = merge_world(tmp_path, commands)
     result, _ = merge_once(ports, tmp_path)
@@ -111,9 +113,7 @@ def test_a_flake_at_the_merge_gate_is_recorded_as_a_flake_then_filed_at_the_deci
     [flake] = document["flakes"]
     assert isinstance(flake.pop("at"), str)  # dated by the gate (GH-464)
     assert flake == {"check": "tests", "head": "base", "gate": "merge", "tests": []}
-    [(title, body)] = ports.tracker.opened_issues
-    assert title == "Flaky check: tests" and "<!-- agentic:flake check=tests -->" in body
-    assert ports.tracker.opened_labels == ["agentic"]
+    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 0
 
 
 def test_a_failure_that_repeats_at_the_merge_gate_refuses_and_files_nothing(tmp_path):
