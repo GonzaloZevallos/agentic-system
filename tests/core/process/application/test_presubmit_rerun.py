@@ -9,7 +9,15 @@ import pytest
 from agentic.core.process.application.ports import CommandResult, RunStopped
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
 from agentic.core.process.domain.check_schedule import CheckPriority
-from agentic.core.process.domain.presubmit import AffectedPlan, FlakeGate, RerunForm
+from agentic.core.process.domain.presubmit import (
+    FAILED_IDS_TAIL_BYTES,
+    AffectedPlan,
+    FlakeGate,
+    RerunForm,
+    failed_ids,
+    flake_verdict,
+    outcomes,
+)
 from tests.fakes import (
     FakeCheckScheduler,
     MemoryCheckResults,
@@ -18,6 +26,7 @@ from tests.fakes import (
     memory_ports,
 )
 
+FIXTURES = Path(__file__).parents[3] / "fixtures" / "presubmit"
 PATH = Path("/memory/worktrees/GH-360.gate")
 CHECKS = {"tests": "pytest", "lint": "ruff check ."}
 FORM = RerunForm(command="pytest --lf", test_id=r"(?m)^FAILED (\S+)")
@@ -34,6 +43,7 @@ def gate(
     parallel: bool = False,
     plan: AffectedPlan | None = None,
     checks: dict[str, str] | None = None,
+    timeouts: dict[str, float] | None = None,
 ) -> CheckoutPresubmit:
     workspace = MemoryWorkspace()
     workspace.diff_paths = ("src/a.py",)
@@ -53,6 +63,7 @@ def gate(
         affected=plan,
         rerun_forms=forms,
         flake_gate=flake_gate,
+        timeouts=timeouts,
         priority=CheckPriority.SUBTASK,
     )
 
@@ -125,12 +136,87 @@ def test_the_full_command_reruns_when_the_form_parsed_no_ids():
 
 
 @pytest.mark.parametrize("flake_gate", ["merge", "full_checks"])
-def test_gates_other_than_delivery_rerun_the_full_command_never_the_form(flake_gate):
-    commands = MemoryCommands(pytest=[PYTEST_RED, CommandResult(0, "ok")])
+def test_gates_other_than_delivery_rerun_the_form_too(flake_gate):
+    commands = MemoryCommands(pytest=[PYTEST_RED], **{"pytest --lf": [CommandResult(0, "ok")]})
     g = gate(commands, forms={"tests": FORM}, flake_gate=flake_gate)
     assert g() is None
-    assert "pytest --lf" not in ran(commands) and ran(commands).count("pytest") == 2
+    assert ran(commands) == ["pytest", "pytest --lf", "ruff check ."]
     assert g.flakes()[0]["gate"] == flake_gate
+
+
+def test_sixty_failing_ids_rerun_the_whole_command():
+    sixty = CommandResult(1, "".join(f"FAILED tests/test_a.py::t{n}\n" for n in range(60)))
+    commands = MemoryCommands(pytest=[sixty, CommandResult(0, "ok")])
+    g = gate(commands, forms={"tests": FORM})
+    assert g() is None
+    assert ran(commands) == ["pytest", "pytest", "ruff check ."]
+
+
+def test_an_output_past_the_tail_window_reruns_the_whole_command():
+    real = (FIXTURES / "pytest_noisy_failures.txt").read_text()
+    assert len(real.encode()) > FAILED_IDS_TAIL_BYTES
+    assert failed_ids(real, FORM.test_id)  # the tail names ids, yet they are not trusted
+    commands = MemoryCommands(pytest=[CommandResult(1, real), CommandResult(0, "ok")])
+    g = gate(commands, forms={"tests": FORM})
+    assert g() is None
+    assert ran(commands) == ["pytest", "pytest", "ruff check ."]
+
+
+def test_three_ids_in_a_small_output_rerun_the_form():
+    three = red("a.py::t1", "a.py::t2", "a.py::t3")
+    commands = MemoryCommands(pytest=[three], **{"pytest --lf": [CommandResult(0, "ok")]})
+    g = gate(commands, forms={"tests": FORM})
+    assert g() is None
+    assert ran(commands) == ["pytest", "pytest --lf", "ruff check ."]
+
+
+def test_an_uncaptured_error_line_beside_a_named_id_still_reruns_the_form_and_flakes():
+    """The documented residual risk: the pattern names one id, the collection error beside it
+    is not captured, the form reruns only that id and its green makes the check a flake."""
+    output = "FAILED tests/test_a.py::t1\nERROR tests/test_b.py - ImportError\n"
+    commands = MemoryCommands(
+        pytest=[CommandResult(1, output)], **{"pytest --lf": [CommandResult(0, "ok")]}
+    )
+    g = gate(commands, forms={"tests": FORM})
+    assert g() is None
+    assert ran(commands) == ["pytest", "pytest --lf", "ruff check ."]
+    assert g.results is not None
+    assert outcomes(g.results)["tests"] == "flake"
+
+
+@pytest.mark.parametrize(
+    "form_output",
+    ["no tests ran\n", "FAILED tests/test_a.py::t[a\n", "error: unrecognized arguments: --lf\n"],
+)
+@pytest.mark.parametrize("whole_green", [True, False])
+def test_an_unresolved_red_form_falls_back_once_to_the_whole_command(form_output, whole_green):
+    whole = CommandResult(0, "ok") if whole_green else CommandResult(1, "still red")
+    commands = MemoryCommands(
+        pytest=[red("tests/test_a.py::t1"), whole],
+        **{"pytest --lf": [CommandResult(1, form_output)]},
+    )
+    g = gate(commands, forms={"tests": FORM})
+    reason = g()
+    assert ran(commands) == ["pytest", "pytest --lf", "pytest", "ruff check ."]
+    assert g.results is not None
+    tests_rows = [r for r in g.results if r["name"] == "tests"]
+    assert [(r["command"], r.get("rerun", False)) for r in tests_rows] == [
+        ("pytest", False),
+        ("pytest", True),
+    ]  # the form row is dropped
+    assert outcomes(g.results)["tests"] == flake_verdict(tests_rows[0], tests_rows[1])
+    assert (reason is None) is whole_green  # never a fail by itself
+    assert bool(g.flakes()) is whole_green
+
+
+def test_a_form_that_stays_red_on_one_of_its_ids_is_a_fail_with_no_third_run():
+    commands = MemoryCommands(
+        pytest=[red("tests/test_a.py::t1")],
+        **{"pytest --lf": [red("tests/test_a.py::t1")]},
+    )
+    g = gate(commands, forms={"tests": FORM})
+    assert g() is not None
+    assert ran(commands) == ["pytest", "pytest --lf", "ruff check ."]
 
 
 def test_an_affected_red_is_followed_by_the_full_form_and_only_the_full_reds_rerun():
@@ -193,6 +279,35 @@ def test_a_flaked_check_stores_nothing_but_a_green_one_still_does():
 )
 def test_timeout_s_includes_the_possible_rerun(parallel, plan, expected):
     assert gate(MemoryCommands(), parallel=parallel, plan=plan).timeout_s == expected
+
+
+@pytest.mark.parametrize(
+    ("parallel", "forms", "expected"),
+    [
+        (False, None, 30.0 * 2 + 30.0 * 2),  # today's: a run and a rerun per check
+        (True, None, 30.0 * 2),
+        (False, {"tests": FORM}, 30.0 * 2 + 30.0 * 3),  # tests: form, then whole, as reruns
+        (True, {"tests": FORM}, 30.0 * 3),  # first, form, whole in the slowest worker
+    ],
+)
+def test_timeout_s_covers_a_form_then_a_whole_rerun(parallel, forms, expected):
+    assert gate(MemoryCommands(), parallel=parallel, forms=forms).timeout_s == expected
+
+
+def test_timeout_s_with_a_plan_and_a_form_adds_the_affected_run():
+    serial = gate(MemoryCommands(), plan=PLAN, forms={"tests": FORM}).timeout_s
+    parallel = gate(MemoryCommands(), parallel=True, plan=PLAN, forms={"tests": FORM}).timeout_s
+    assert serial == 30.0 * 3 + 30.0 * 3
+    assert parallel == 30.0 * 4
+
+
+@pytest.mark.parametrize(
+    ("forms", "expected"),
+    [(None, 100.0 * 2), ({"tests": FORM}, 100.0 * 3), ({"lint": FORM}, 100.0 * 2)],
+)
+def test_a_declared_wall_is_multiplied_by_that_checks_runs(forms, expected):
+    g = gate(MemoryCommands(), forms=forms, timeouts={"tests": 100.0})
+    assert g.timeout_s == expected
 
 
 def red(*ids: str) -> CommandResult:

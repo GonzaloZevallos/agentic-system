@@ -112,6 +112,11 @@ class Configuration(BaseModel):
     # no environment that was valid before this field is refused, and one role per subtask
     # in flight means a review never waits for a slot behind a new Developer.
     max_parallel_subtasks: int | None = Field(default=None, ge=1)
+    # When a flaky test opens a tracker issue (GH-464): at least this many distinct tasks must
+    # have recorded it within the last `flake_issue_days` days. Below it a flake is only a
+    # record. Declared values, not measured ones.
+    flake_issue_tasks: int = Field(default=3, ge=1)
+    flake_issue_days: int = Field(default=14, ge=1)
     # Rounds an interview may take before the interviewer closes with what it has
     # (ADR-0014).
     interview_max_rounds: int = Field(default=4, ge=1)

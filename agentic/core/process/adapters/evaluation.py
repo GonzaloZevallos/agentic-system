@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from ..application.ports import IssueComment, ProductStack, Tracker, Workspace
+from ..domain.landing import IssueRef
 from ..domain.task import TaskInput, TrackerFailure
 
 
@@ -255,4 +256,7 @@ class ClosedInbox:
         return []
 
     def open_issue_bodies(self) -> list[tuple[str, str]]:
+        return []
+
+    def open_issue_refs(self) -> list[IssueRef]:
         return []

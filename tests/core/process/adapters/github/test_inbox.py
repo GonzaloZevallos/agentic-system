@@ -147,3 +147,74 @@ def test_a_stalled_gh_call_raises_tracker_timed_out_and_logs_one_line(tmp_path, 
     assert str(raised.value) == wording
     assert lines == [f"agentic: {wording}; this read fails and the next round retries"]
     assert not any("secret" in line or "issue body" in line for line in lines)
+
+
+# --- open_issue_refs (GH-464) -----------------------------------------------------------
+
+
+def _issues(count, *, marker_at=None, title_at=None, check="tests"):
+    from agentic.core.process.domain import landing
+
+    issues = []
+    for n in range(1, count + 1):
+        body, title = f"body {n}", f"Issue {n}"
+        if n == marker_at:
+            body = f"{landing.flake_marker(check)}\nthe check flakes"
+        if n == title_at:
+            title = f"Flaky check: {check}"
+        issues.append({"url": f"https://x/{n}", "title": title, "body": body})
+    return issues
+
+
+def test_open_issue_refs_lists_every_open_issue_with_its_title_in_one_unfiltered_call(tmp_path):
+    from agentic.core.process.domain import landing
+    from agentic.core.process.domain.landing import IssueRef
+
+    run = _Recorder(
+        stdout=json.dumps(
+            [{"url": "https://x/1", "title": "T", "body": "b"}, {"url": "https://x/2"}]
+        )
+    )
+    refs = GhInbox(tmp_path, run=run).open_issue_refs()
+    assert refs == [IssueRef("https://x/1", "T", "b"), IssueRef("https://x/2", "", "")]
+    [call] = run.calls
+    assert call[:3] == ["gh", "issue", "list"]
+    assert call[call.index("--json") + 1] == "url,title,body"
+    assert call[call.index("--limit") + 1] == "1000"
+    assert "--label" not in call and "--search" not in call
+    assert landing.flake_issue_for(refs, "tests") is None
+
+
+def test_the_flake_issue_is_found_when_it_is_the_120th_of_150(tmp_path):
+    """The old 100-issue page would have cut it off: the whole list comes back."""
+    from agentic.core.process.domain import landing
+
+    run = _Recorder(stdout=json.dumps(_issues(150, marker_at=120)))
+    refs = GhInbox(tmp_path, run=run).open_issue_refs()
+    assert len(refs) == 150
+    found = landing.flake_issue_for(refs, "tests")
+    assert found is not None and found.url == "https://x/120"
+
+
+def test_a_list_as_long_as_the_limit_is_a_value_error_never_a_partial_answer(tmp_path):
+    run = _Recorder(stdout=json.dumps(_issues(1000, marker_at=5)))
+    with pytest.raises(ValueError, match="1000"):
+        GhInbox(tmp_path, run=run).open_issue_refs()
+
+
+def test_a_list_one_short_of_the_limit_is_returned_whole(tmp_path):
+    run = _Recorder(stdout=json.dumps(_issues(999)))
+    assert len(GhInbox(tmp_path, run=run).open_issue_refs()) == 999
+
+
+def test_an_issue_with_the_exact_title_and_no_marker_is_still_found(tmp_path):
+    from agentic.core.process.domain import landing
+
+    run = _Recorder(stdout=json.dumps(_issues(30, title_at=7)))
+    found = landing.flake_issue_for(GhInbox(tmp_path, run=run).open_issue_refs(), "tests")
+    assert found is not None and found.url == "https://x/7"
+
+
+def test_open_issue_refs_failure_is_a_value_error(tmp_path):
+    with pytest.raises(ValueError, match="gh issue list failed: no auth"):
+        GhInbox(tmp_path, run=_Recorder(fail=True, stderr="no auth")).open_issue_refs()

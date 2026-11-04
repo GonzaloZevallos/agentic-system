@@ -37,7 +37,7 @@ from tests.core.process.application.test_poll_merge import (
     _pr,
 )
 from tests.core.process.domain.test_landing import _facts
-from tests.fakes import FakeLauncher, MemoryStack, ScriptedRunner
+from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryStack, ScriptedRunner
 from tests.gh150_stranded import GH150_STRANDED
 
 NOW = "2026-10-14T00:00:00+00:00"
@@ -698,6 +698,7 @@ class _Driver(FakeLauncher):
                 frozenset(),
                 lambda line: None,
                 clock=lambda: NOW,
+                registry=MemoryRunRegistry(),
             )
         elif argv[1] == "resume" and self.on_resume is not None:
             self.on_resume(self.ports)
@@ -706,7 +707,6 @@ class _Driver(FakeLauncher):
 
 def _tick(ports, tmp_path, driver):
     from tests.core.process.application.test_poll import ESCALATED_AT, _round
-    from tests.fakes import MemoryRunRegistry
 
     return _round(_cfg(tmp_path), ports, MemoryRunRegistry(), driver, ESCALATED_AT)
 
@@ -782,8 +782,40 @@ def _ci_world(*reports):
     return ports
 
 
-def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_files_the_flake_and_merges(tmp_path):
+def _prior_flakes(ports, check: str) -> None:
+    """Two other tasks that flaked on `check` a day ago: with the one of the landing, the
+    check-level key reaches the threshold of three tasks."""
+    from datetime import UTC, datetime, timedelta
+
+    at = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    for task in ("GH-3", "GH-4"):
+        ports.documents.saved.append(
+            {
+                "id": task,
+                "flakes": [{"check": check, "head": "h", "gate": "merge", "tests": [], "at": at}],
+            }
+        )
+
+
+def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_is_below_the_threshold_and_merges(
+    tmp_path,
+):
     ports = _ci_world(_report(_check(conclusion="FAILURE")))
+    driver = _Driver(ports, tmp_path)
+
+    _tick(ports, tmp_path, driver)
+    ports.tracker.ci_reports = [_report(_check())]
+    _tick(ports, tmp_path, driver)
+
+    assert ports.tracker.merge_calls == [(URL.format(5), HEAD)]
+    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 0
+
+
+def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_files_the_flake_at_the_threshold(
+    tmp_path,
+):
+    ports = _ci_world(_report(_check(conclusion="FAILURE")))
+    _prior_flakes(ports, "web")
     driver = _Driver(ports, tmp_path)
 
     _tick(ports, tmp_path, driver)
@@ -800,6 +832,7 @@ def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_files_the_flake_and_
 
 def test_acceptance_an_open_flake_issue_for_the_check_is_not_filed_twice(tmp_path):
     ports = _ci_world(_report(_check(conclusion="FAILURE")))
+    _prior_flakes(ports, "web")
     ports.inbox._open_issues = [("u", landing_rules.flake_marker("web") + "\nolder")]
     driver = _Driver(ports, tmp_path)
 
@@ -846,8 +879,20 @@ def _local_world():
     return ports
 
 
-def test_acceptance_failed_local_checks_rerun_green_files_the_flake_and_merges(tmp_path):
+def test_acceptance_failed_local_checks_rerun_green_below_the_threshold_files_nothing(tmp_path):
     ports = _local_world()
+    driver = _Driver(ports, tmp_path)
+
+    _tick(ports, tmp_path, driver)  # rerun of the failed check only, green this time
+    _tick(ports, tmp_path, driver)
+
+    assert ports.tracker.merge_calls == [(URL.format(5), HEAD)]
+    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 0
+
+
+def test_acceptance_failed_local_checks_rerun_green_files_the_flake_at_the_threshold(tmp_path):
+    ports = _local_world()
+    _prior_flakes(ports, "tests")
     driver = _Driver(ports, tmp_path)
 
     _tick(ports, tmp_path, driver)  # rerun of the failed check only, green this time

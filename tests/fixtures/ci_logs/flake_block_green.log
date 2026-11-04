@@ -1,0 +1,8 @@
+check	Run checks	﻿2026-11-04T10:00:00.0000000Z Current runner version: '2.338.0'
+check	Run checks	2026-11-04T10:00:01.0000001Z test_module_0.py::test_case_0 PASSED [  0%]
+check	Run checks	2026-11-04T10:00:02.0000002Z test_module_1.py::test_case_1 PASSED [  1%]
+check	Run checks	2026-11-04T10:00:03.0000003Z test_module_2.py::test_case_2 PASSED [  2%]
+check	Run checks	2026-11-04T10:00:04.0000004Z test_module_3.py::test_case_3 PASSED [  3%]
+check	Run checks	2026-11-04T10:00:05.0000005Z test_module_4.py::test_case_4 PASSED [  4%]
+check	Run checks	2026-11-04T10:00:10.0000010Z agentic-flakes: {"v":1,"check":"tests","tests":["tests/test_a.py::test_x[1]","tests/test_a.py::test_y"]}
+check	Run checks	2026-11-04T10:00:11.0000011Z ##[group]Post job cleanup.

@@ -43,8 +43,10 @@ Es el adaptador de entrada: `agentic/cli.py:main` arma el árbol de comandos con
 Antes de invocar el grafo, cada verbo que corre una tarea toma el lock de la tarea en
 `.agentic/runs/` (`agentic/core/process/adapters/filesystem/lock.py:FilesystemRunLock`) y se
 anota en el registro de corridas
-(`agentic/core/process/adapters/filesystem/run_registry.py:FilesystemRunRegistry`); con
-`--detach` la CLI se vuelve a ejecutar en una sesión propia
+(`agentic/core/process/adapters/filesystem/run_registry.py:FilesystemRunRegistry`). El mismo
+registro guarda `flakes/<producto>.lock`, el lock por producto que el archivado de issues de flake
+toma, con espera acotada, solo cuando una clave pasó el umbral
+(`FilesystemRunRegistry.flake_lock`, ADR-0085); con `--detach` la CLI se vuelve a ejecutar en una sesión propia
 (`agentic/cli.py:_spawn_detached`) y el padre sale.
 
 ## Las unidades del poller
