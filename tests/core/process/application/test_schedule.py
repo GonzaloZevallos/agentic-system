@@ -19,6 +19,7 @@ from agentic.core.process.domain.task import (
     REDUCERS,
     add,
     add_flakes,
+    add_merge_ci,
     add_restorations,
     add_tracker_failures,
     apply,
@@ -415,6 +416,20 @@ def value_for(key: str, branch: str, n: int):
                 "landing_cut": n % 3,
             }
         ]
+    if reducer is add_merge_ci:
+        # One row per (head, master) pair, a function of the pair alone: the known pair is
+        # replaced whole, so a row that differed by branch would depend on the order.
+        return [
+            {
+                "head": "h",
+                "master": f"m{n % 3}",
+                "tested": "t",
+                "mode": "push",
+                "published_at": "at",
+                "republished": False,
+                "superseded": [],
+            }
+        ]
     if reducer is last:
         return f"{branch}:{key}:{n}"
     return f"{branch}:{key}:{n}"
@@ -430,6 +445,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             merge,
             first,
             add_flakes,
+            add_merge_ci,
             add_restorations,
             add_tracker_failures,
             last,

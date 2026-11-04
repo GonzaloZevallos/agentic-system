@@ -620,7 +620,7 @@ def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
 
 
 def test_run_ended_is_true_only_for_ready_for_review_discarded_split_and_tracker_only():
-    ended = {"ready_for_review", "discarded", "split", "tracker_only"}
+    ended = {"ready_for_review", "discarded", "split", "tracker_only", "evaluated"}
     for status in get_args(task.Status):
         assert rules.run_ended(status) is (status in ended)
 
@@ -4258,6 +4258,7 @@ def test_the_orphan_statuses_are_the_non_terminal_non_waiting_ones_of_task_statu
         "discarded",
         "split",
         "tracker_only",
+        "evaluated",
     }
     expected = set(get_args(task.Status)) - ended_or_waiting
     assert set(rules.ORPHANED_STATUSES) == expected

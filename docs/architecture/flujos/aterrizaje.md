@@ -31,6 +31,8 @@ sequenceDiagram
         Land->>GitHub: open follow-up issues, merge
     else adr_number_taken
         Land->>GitHub: renumber when the rule can decide, else escalate_adr asks the human once, then none
+    else ci_unknown_names
+        Land->>GitHub: escalate once per (head, names) as a planning defect, no budget spent, then none
     else budget spent, ledger only
         Land->>GitHub: escalate_ledger asks the human once, then none
     else budget spent, a clean slice exists
@@ -88,6 +90,14 @@ sequenceDiagram
    El rechazo `adr_number_taken` no pasa por `exhausted()`: es `renumber` cuando la regla decide
    la colisión y quedan renumeraciones (`LANDING_RENUMBERS_MAX`); si no, una sola `escalate_adr`
    por (cabeza, rechazo), y después `none`. Nunca `diagnose` ni `restart` (ADR-0049, adenda GH-412).
+   El rechazo `ci_unknown_names` (GH-485) tampoco pasa por `exhausted()`: un nombre exigido que
+   ninguna corrida de chequeo de la cabeza lleva, con todas las corridas de workflow completadas,
+   es un defecto de planificación y no un CI lento. `landing_step` lo manda a un solo `escalate`
+   por (cabeza, nombres), con los nombres ordenados en la entrada `landing`
+   (`agentic/core/process/domain/landing.py:landing_step`), y después a `none`; otros nombres
+   sobre la misma cabeza se publican de nuevo (`MergeFacts.ci_unreported` y `ci_reported`,
+   `LandingStep.names`, `already_dispatched(names=)`). No gasta presupuesto, ni `diagnose`, ni
+   reinicio (ADR-0045, adenda GH-485).
 7. **Un escalado se libera por una sola decisión (GH-442).** Un documento escalado cuyo paso
    de la tabla es `diagnose` no se despacha: `agentic/core/process/application/landing.py:_land`
    (y el poller, en `gather_merges`) preguntan a
@@ -103,6 +113,17 @@ sequenceDiagram
    paso siguiente se guardan en una sola escritura de `documents.save`, así que ningún fallo
    deja una liberación sin su paso siguiente. Un escalado que no es de CI (libro
    mayor, ADR, diagnóstico de profundidad 1, GH-328) conserva su comportamiento.
+   **El escalado `ci_no_verdict` (GH-463).** Cuando GitHub no dio veredicto para una corrida
+   fresca, la tabla da `escalate` y `landing_plan.release_asked` también se cumple para ese
+   paso `escalate`, no solo para `diagnose`, si el documento tiene la forma de
+   `agentic/core/process/domain/landing.py:ci_no_verdict_entry`. Ese escalado se libera una vez
+   por par (cabeza, upstream) (`landing_plan._no_verdict_release`): por un upstream nuevo o por un
+   comentario del dueño, y nunca porque la base esté en verde. La liberación la escribe
+   `landing.released_no_verdict`: desescala el documento, marca `released_at` en la entrada
+   `escalate` y en el par `merge_ci` de la cabeza, que le concede un par más al contador
+   `no_verdict` (`agentic/core/process/domain/merge_ci.py:pair_counts`). El paso liberado es `wait`
+   (`landing_plan.released_step`), que `_land` guarda directamente, sin ejecutor, y el poller
+   (`poll._landing_step`) lo devuelve para que un hijo lo persista.
    `agentic resume` consulta la misma decisión
    (`agentic/core/process/application/resume.py:_landing_owns_line`) y solo nombra
    `agentic land` si `land` puede mover la tarea; si espera la CI de la base o un comentario

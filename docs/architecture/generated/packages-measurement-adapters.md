@@ -11,11 +11,13 @@ graph TD
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
+    m_adapters__git__eval_roots["adapters.git.eval_roots"]
     m_adapters__langfuse__dashboards["adapters.langfuse.dashboards"]
     m_adapters__langfuse__scores["adapters.langfuse.scores"]
     m_adapters__langfuse__widget_data["adapters.langfuse.widget_data"]
     m_adapters__otel__semconv["adapters.otel.semconv"]
     m_adapters__otel__telemetry["adapters.otel.telemetry"]
+    m_adapters__git__eval_roots --> g_pkg__agentic__core__process
     m_adapters__langfuse__dashboards --> g_pkg__application
     m_adapters__langfuse__dashboards --> g_pkg__domain
     m_adapters__langfuse__scores --> g_pkg__domain

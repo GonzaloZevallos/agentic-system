@@ -10,6 +10,11 @@ Esta página muestra las clases públicas de los módulos del grupo `toplevel` d
 
 ```mermaid
 classDiagram
+    class evaluation__ClosedInbox["ClosedInbox"]
+    class evaluation__EvaluationStack["EvaluationStack"]
+    class evaluation__EvaluationTracker["EvaluationTracker"]
+    class evaluation__EvaluationWorkspace["EvaluationWorkspace"]
+    class evaluation__EvaluationWrite["EvaluationWrite"]
     class telemetry__NoTelemetry["NoTelemetry"]
     class telemetry__RoleSpan["RoleSpan"]
     class telemetry__Telemetry["Telemetry"]

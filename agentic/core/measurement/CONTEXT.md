@@ -80,8 +80,23 @@ _Avoid_: experimento (es el conjunto de brazos que se comparan), variante, confi
 _Campo_: arm — de los ensayos controlados y del A/B testing
 
 **Set de evaluación**:
-Las cinco tareas fijas que se re-corren idénticas contra cada versión de prompts.
+Las tareas fijas que se re-corren idénticas contra cada versión de prompts, declaradas en
+`.agentic/eval-set.yaml` como `entries: [{issue, base, title, body}]`: el número del issue, el sha
+completo del commit del producto sobre el que se corre y el texto del issue congelado una vez.
+`EvalSet.issues` (los números distintos de las entradas) es la única fuente de los issues del set.
+_Avoid_: la forma vieja `issues: [...]`, que ya no existe
 _Campo_: eval set — `evalset` en Google ADK, dataset en LangSmith; el benchmark del campo es SWE-bench
+
+**Corrida de evaluación**:
+Una entrada del Set de evaluación vuelta a correr una vez por Brazo, en una raíz propia
+(`<producto>/.agentic/eval/EVAL-<issue>-<sha8>-<brazo>-<k>/`, un worktree desprendido en `base`),
+con el texto congelado como única entrada y sin escribir en el tracker ni publicar ninguna
+referencia. Termina en el estado `evaluated`, nunca se reanuda, y su documento queda copiado en
+`<producto>/.agentic/eval/docs/`, fuera de `tasks/`. Se compara contra las corridas de los otros
+brazos de la misma entrada y base; el desenlace histórico de la tarea real es solo una referencia.
+_Avoid_: tarea de evaluación (es una corrida, no una tarea del producto), re-corrida
+_Campo_: sin término de arte — el vecino más cercano es una ejecución de un caso de evaluación
+contra una versión fija del sistema bajo prueba (SWE-bench fija el commit base de cada instancia)
 
 **Muestra residual**:
 La plata de una patch que ninguna Corrida de rol contabiliza: los intentos fallidos de una

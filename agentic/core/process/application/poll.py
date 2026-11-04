@@ -29,7 +29,7 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, experiment, presubmit, rules
+from ..domain import ci, document, experiment, merge_ci, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
@@ -297,6 +297,7 @@ def _merge_facts(
         in_eval_set=None if eval_set is None else number in eval_set,
         touched_paths=None,
         ci_untrusted=None,
+        merge_ci=tuple(raw.get("merge_ci") or ()),
         attempts=count if isinstance(count, int) and attempts.get("head") == pr_head else 0,
         checks_head=_text(checks.get("head")),
         checks_master=_text(checks.get("master")),
@@ -342,6 +343,27 @@ def ci_gate(raw: TaskState, declared: tuple[str, ...]) -> rules.CiGate:
     Every caller that builds `MergeFacts` asks here, so none rebuilds the list its own way."""
     plan = raw.get("ci_required")
     return rules.ci_gate_names(declared, plan if isinstance(plan, list) else [])
+
+
+def with_recorded_red(facts: rules.MergeFacts) -> rules.MergeFacts:
+    """`facts` read the way `merge.with_ci_run` reads a decided red fresh run (GH-463), from the
+    head's `merge_ci` pair instead of GitHub: `ci_subject` `tested`, the pair's `tested` sha as
+    `ci_head` and a red verdict over the names the pair recorded as failing. Anything else (no
+    red pair on the current master) leaves `facts` as they were."""
+    pair = merge_ci.decided_red(facts.merge_ci, facts.pr_head, facts.current_master)
+    if pair is None:
+        return facts
+    failing = tuple(
+        ci.CiCheck(name, "COMPLETED", "FAILURE", "") for name in pair.get("failing", [])
+    )
+    return replace(
+        facts,
+        ci_subject="tested",
+        ci_head=pair["tested"],
+        ci_verdict=ci.CiVerdict("red", failing, ()),
+        ci_unreadable=None,
+        ci_fresh=True,
+    )
 
 
 def with_red_on_base(
@@ -399,8 +421,15 @@ def _landing_step(
     step = landing_plan.released_step(raw, outcome, facts, refusal, at=at, ancestry=ancestry)
     patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
+    if step.kind == "wait" and patch and refusal == "ci_no_verdict":
+        # GH-463: the release of a `ci_no_verdict` escalation is persisted by a `land` child.
+        return step
     if not landing_plan.takes_action(step.kind, live) or landing_rules.already_dispatched(
-        landing_plan.live_entries(view), facts.pr_head, step.kind, facts.current_master
+        landing_plan.live_entries(view),
+        facts.pr_head,
+        step.kind,
+        facts.current_master,
+        names=step.names,
     ):
         return None
     return step
@@ -445,6 +474,8 @@ def with_ci(
         ci_required=names,
         ci_head=report.head_sha,
         ci_verdict=ci.ci_state(report, names),
+        ci_unreported=ci.unreported(report, names, True),
+        ci_reported=ci.reported_names(report),
         ci_fresh=fresh,
         ci_waited_s=_seconds_since(anchor, now),
     )
@@ -458,6 +489,13 @@ def ci_wait_line(
     waited = "?" if facts.ci_waited_s is None else str(int(facts.ci_waited_s))
     if facts.ci_unreadable is not None:
         what = f"unreadable {facts.ci_unreadable.cause}"
+    elif facts.ci_unreported:
+        # GH-485: `ci.unreported` first -- a name no check run carries is not pending; the gate
+        # refuses it once the wait is confirmed, so a line that waits is that confirmation.
+        what = (
+            f"unreported {', '.join(facts.ci_unreported)}: not a check-run name on this head, "
+            "confirming"
+        )
     elif facts.ci_verdict is not None and facts.ci_verdict.missing:
         what = f"missing {', '.join(facts.ci_verdict.missing)}"
         if facts.ci_plan_only and isinstance(report, ci.CiReport):
@@ -558,11 +596,20 @@ def assess_merge(
     except ValueError as exc:
         raise StackUnreadable(str(exc)) from exc
     gate = ci_gate(raw, declared)
+    try:
+        dispatch_declared = ports.stack.ci_dispatch(task_base(raw, ports)) is not None
+    except ValueError:
+        dispatch_declared = False
 
     def gated(candidate: rules.MergeFacts) -> rules.MergeFacts:
         # What the decision reads before the CI is: the names, so a refusal ahead of the CI
         # is the same one, and no verdict, so the CI itself is a `wait`.
-        return replace(candidate, ci_required=gate.names, ci_plan_only=gate.plan_only)
+        return replace(
+            candidate,
+            ci_required=gate.names,
+            ci_plan_only=gate.plan_only,
+            ci_dispatch_declared=dispatch_declared,
+        )
 
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(gated(facts))
@@ -592,6 +639,11 @@ def assess_merge(
         report = ports.tracker.ci_report(str(reference))
         facts = with_red_on_base(ports, with_ci(facts, raw, declared, report), report)
         decision = rules.auto_merge_decision(facts)
+        if rules.declares_ci(facts) and decision.kind != "refuse":
+            # GH-463: the gate's fresh run, once it ended red, is the CI fact of this head;
+            # the merge child refuses `ci_failed` on it, so the landing must see the same.
+            facts = with_recorded_red(facts)
+            decision = rules.auto_merge_decision(facts)
     return MergeAssessment(
         facts, decision, report, pull_request, unread, source if facts.conflicts else None
     )

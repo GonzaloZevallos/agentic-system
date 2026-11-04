@@ -840,9 +840,27 @@ def test_pull_requests_on_just_under_the_limit_is_returned_whole():
 # -- GH-216: the CI of a pull request and of a branch, read in one GraphQL query ---------
 
 
-def _graphql(nodes, *, oid="a" * 40, rollup=True, more=False, created="2026-10-07T10:00:00Z"):
+def _suites(*statuses, actions=True, more=False):
+    """The `checkSuites` field of a commit: one suite per status, each from a workflow run
+    (`actions`) or from another app (no `workflowRun`)."""
+    run = {"databaseId": 1} if actions else None
+    nodes = [{"status": status, "workflowRun": run} for status in statuses]
+    return {"pageInfo": {"hasNextPage": more}, "nodes": nodes}
+
+
+def _graphql(
+    nodes,
+    *,
+    oid="a" * 40,
+    rollup=True,
+    more=False,
+    created="2026-10-07T10:00:00Z",
+    suites=None,
+):
     contexts = {"nodes": nodes, "pageInfo": {"hasNextPage": more}}
     commit = {"oid": oid, "statusCheckRollup": {"contexts": contexts} if rollup else None}
+    if suites is not None:
+        commit["checkSuites"] = suites
     pull_request = {
         "createdAt": created,
         "baseRefName": "master",
@@ -852,9 +870,11 @@ def _graphql(nodes, *, oid="a" * 40, rollup=True, more=False, created="2026-10-0
     return json.dumps({"data": {"repository": {"pullRequest": pull_request}}})
 
 
-def _branch_graphql(nodes, *, oid="b" * 40):
+def _branch_graphql(nodes, *, oid="b" * 40, suites=None):
     contexts = {"nodes": nodes, "pageInfo": {"hasNextPage": False}}
     target = {"oid": oid, "statusCheckRollup": {"contexts": {**contexts}}}
+    if suites is not None:
+        target["checkSuites"] = suites
     return json.dumps({"data": {"repository": {"ref": {"target": target}}}})
 
 
@@ -1769,3 +1789,80 @@ def test_dispatched_ci_with_a_missing_gh_is_unavailable_and_a_failing_one_unread
     assert GhTracker(Path("/p"), Recorder(fail=True)).dispatched_ci("ci.yml", "s") == CiUnreadable(
         "gh_unreadable"
     )
+
+
+# -- GH-485: whether the commit's workflow runs are all completed ------------------------
+
+_DONE = [_run_node("e2e (1)", "COMPLETED", "SUCCESS")]
+
+
+@pytest.mark.parametrize(
+    ("suites", "expected"),
+    [
+        (_suites("COMPLETED", "COMPLETED"), True),
+        (_suites("COMPLETED", "IN_PROGRESS"), None),
+        (_suites("QUEUED"), None),
+        (_suites("COMPLETED", more=True), None),
+        (_suites("COMPLETED", actions=False), None),
+        (_suites(), None),
+        (None, None),
+        ({"pageInfo": {"hasNextPage": False}, "nodes": "x"}, None),
+    ],
+    ids=[
+        "all-completed",
+        "one-running",
+        "queued",
+        "more-pages",
+        "no-actions-suite",
+        "no-suites",
+        "field-missing",
+        "mistyped",
+    ],
+)
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_runs_completed_is_true_only_for_a_whole_list_of_completed_actions_suites(
+    read, suites, expected
+):
+    if read == "ci_report":
+        stdout = _graphql(_DONE, suites=suites)
+        report = GhTracker(Path("/p"), Recorder(stdout=stdout)).ci_report(PR)
+    else:
+        stdout = _branch_graphql(_DONE, suites=suites)
+        report = GhTracker(Path("/p"), Recorder(stdout=stdout)).branch_ci("master")
+    assert isinstance(report, CiReport)  # an absent or odd suites field is not unreadable
+    assert report.runs_completed is expected
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_the_ci_query_asks_for_the_check_suites_of_the_same_commit(read):
+    run = Recorder(stdout=_graphql([]) if read == "ci_report" else _branch_graphql([]))
+    getattr(GhTracker(Path("/p"), run), read)(PR if read == "ci_report" else "master")
+    assert any("checkSuites(first: 50)" in arg and "workflowRun" in arg for arg in run.calls[0])
+
+
+# -- rerun_ci_run (GH-463) ------------------------------------------------------------------
+
+
+def test_rerun_ci_run_reruns_the_failed_jobs_of_that_run_and_nothing_else():
+    run = Recorder(stdout="")
+    assert GhTracker(Path("/p"), run).rerun_ci_run("123456789") is None
+    assert run.calls == [["gh", "run", "rerun", "123456789", "--failed"]]
+
+
+def test_a_refused_rerun_is_dispatch_refused_whatever_gh_printed():
+    answer = GhTracker(Path("/p"), Recorder(fail=True)).rerun_ci_run("123456789")
+    assert answer == CiUnreadable("dispatch_refused")
+
+
+def test_a_missing_gh_on_rerun_is_unavailable_never_raised():
+    assert GhTracker(Path("/p"), Missing()).rerun_ci_run("1") == CiUnreadable("gh_unavailable")
+    assert GhTracker(Path("/p"), NotExecutable()).rerun_ci_run("1") == CiUnreadable(
+        "gh_unavailable"
+    )
+
+
+@pytest.mark.parametrize("run_id", ["", "abc", "12/34", "-1", "12 --web"])
+def test_a_run_id_that_is_not_digits_is_refused_before_any_gh_call(run_id):
+    run = Recorder(stdout="")
+    assert GhTracker(Path("/p"), run).rerun_ci_run(run_id) == CiUnreadable("dispatch_refused")
+    assert run.calls == []

@@ -17,7 +17,7 @@ from difflib import SequenceMatcher
 from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
 
-from . import ci, presubmit, rules
+from . import ci, merge_ci, presubmit, rules
 from .adr_numbers import Renaming
 from .document import HUMAN
 from .roles import LANDING_DIAGNOSER
@@ -33,6 +33,7 @@ from .task import (
     LandedSlice,
     LandedSliceRef,
     LandingEntry,
+    MergeCiRecord,
     ReleasePatch,
     SlicesClosedPatch,
     Subtask,
@@ -177,6 +178,8 @@ class LandingStep:
     units: tuple[str, ...] = ()
     # Only on a `diagnose` that `slice_or_restart` decided: the reason no slice was landed.
     restart_why: RestartWhy | None = None
+    # Only on the `escalate` of `ci_unknown_names` (GH-485): the sorted names no check run carries.
+    names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -223,6 +226,9 @@ class LandingSpent:
     # holds the upstream sha (`Workspace.is_ancestor`, `None`: unreadable, or not asked).
     ci_release_due: bool = False
     head_has_upstream: bool | None = None
+    # GH-463: the `ci_no_verdict` escalation of the head was released (`released_no_verdict`)
+    # and the pair it granted is not yet spent: the table waits instead of escalating again.
+    no_verdict_released: bool = False
 
     @property
     def unlandable(self) -> bool:
@@ -242,6 +248,7 @@ def landing_step(
     pending: Sequence[object] = (),
     escalated: bool = False,
     adr_escalated: bool = False,
+    names_escalated: bool = False,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
     (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
@@ -289,6 +296,14 @@ def landing_step(
 
     if spent.unlandable:
         return step("none")
+    if refusal == "ci_unknown_names":
+        # GH-485: a planning defect, never a failed check. One `escalate` per (head, names)
+        # (`names_escalated`), then nothing; it spends no budget and never goes to
+        # `exhausted()`: no diagnose, slice or restart. After an `unlandable` diagnosis the
+        # human already owns the task, so that `none` above stands.
+        if names_escalated:
+            return step("none")
+        return LandingStep("escalate", refusal, names=tuple(sorted(facts.ci_unreported)))
     if spent.verdict_sync_due:
         return _verdict_sync(step, exhausted, spent)
     match refusal:
@@ -313,6 +328,17 @@ def landing_step(
             if spent.conflict_ci_syncs_on_pair >= 1:
                 return exhausted()
             return _sync(step, exhausted, spent, conflicting=False)
+        case "ci_untrusted_no_dispatch":
+            # GH-463: no workflow of the base can judge this head and the local suite no longer
+            # runs for a `ci:` product: left to the human at once.
+            return step("none")
+        case "ci_stale_exhausted":
+            # GH-463: master overtook the fresh runs of this head; it takes master in instead.
+            return _sync(step, exhausted, spent, conflicting=False)
+        case "ci_no_verdict":
+            # GH-463: GitHub gave no verdict for a fresh run; the release is the landing's.
+            # Released this very round (`no_verdict_released`): nothing to do but persist it.
+            return step("wait") if spent.no_verdict_released else step("escalate")
         case "not_approved" | "head_not_reviewed":
             return pass_("re_review")
         case "open_findings_blocking":
@@ -676,6 +702,8 @@ def slice_facts(
     ci_unreadable: ci.CiUnreadable | None = None,
     ci_fresh: bool | None = None,
     ci_waited_s: float | None = None,
+    ci_unreported: tuple[str, ...] = (),
+    ci_reported: tuple[str, ...] = (),
     followups_filed: bool = False,
     important_pass_done: bool = False,
 ) -> rules.MergeFacts:
@@ -730,6 +758,8 @@ def slice_facts(
         ci_unreadable=ci_unreadable,
         ci_fresh=ci_fresh,
         ci_waited_s=ci_waited_s,
+        ci_unreported=ci_unreported,
+        ci_reported=ci_reported,
         followups_filed=followups_filed,
         perf_convened=perf_convened,
         perf_verdict=perf_verdict,
@@ -818,6 +848,7 @@ def already_dispatched(
     upstream: str | None,
     *,
     unstarted: bool = False,
+    names: Sequence[str] = (),
 ) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
@@ -832,7 +863,8 @@ def already_dispatched(
     (GH-412): an entry recorded without its comment posted does not silence the next round.
     With `unstarted` (`rules.landing_pass` says the pass is `unstarted`, GH-450) the last entry
     is recorded and the executor never reopened anything, so it is not taken and `land` runs it
-    again on the same entry."""
+    again on the same entry. An `escalate` asked with `names` (GH-485) is taken only by an entry
+    that recorded the same names, so a new set of wrong names is asked again on the same head."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
@@ -855,6 +887,10 @@ def already_dispatched(
             return not isinstance(recorded, str) or recorded == upstream
         if step == "escalate_adr":
             return bool(entry.get("resolved_at"))
+        if step == "escalate" and names:
+            return entry.get("names") == list(names)
+        if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
+            return not entry.get("released_at")  # GH-463: a released pair owes a new escalation
         return True
 
     return step != "land_slice" and any(taken(entry) for entry in landing)
@@ -900,6 +936,9 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
+    for cause in get_args(ci.CiCause):
+        if raw.get("cause") == cause:
+            out["cause"] = cause
     if isinstance(cost := raw.get("cost_usd"), int | float) and not isinstance(cost, bool):
         out["cost_usd"] = float(cost)
     if isinstance(base := raw.get("cost_base"), int | float) and not isinstance(base, bool):
@@ -1096,6 +1135,84 @@ def ci_escalation(raw: Mapping[str, object], head: str | None) -> bool:
     """Whether `raw` is escalated for CI alone on `head` (`ci_escalation_entry`): the one
     predicate the landing's release asks, so no caller holds a second copy of the condition."""
     return ci_escalation_entry(raw, head) is not None
+
+
+def ci_no_verdict_entry(raw: Mapping[str, object], head: str | None) -> Mapping[str, object] | None:
+    """The live `escalate` entry when `raw` is a landing escalation that only a missing GitHub
+    verdict caused (GH-463), else `None`: the document is escalated and the last live `escalate`
+    entry is for `ci_no_verdict` on `head`, with nothing recorded after it. The twin of
+    `ci_escalation_entry`, and the one predicate the landing's release asks. Pure."""
+    if head is None or not raw.get("escalated"):
+        return None
+    live = live_entries(raw)
+    found = _last_escalate(live)
+    if found is None:
+        return None
+    index, entry = found
+    if entry.get("refusal") != "ci_no_verdict" or entry.get("head") != head:
+        return None
+    return entry if index == len(live) - 1 else None
+
+
+def no_verdict_released(
+    entries: Sequence[Mapping[str, object]], records: Sequence[MergeCiRecord], head: str
+) -> bool:
+    """Whether the `ci_no_verdict` escalation of `head` was released and still owes its pair
+    (GH-463): the last `escalate` entry of the head is for `ci_no_verdict` and carries
+    `released_at`, and so does the head's latest `merge_ci` record. A pair recorded after the
+    release does not carry the stamp, so a second missing verdict escalates again."""
+    found = _last_escalate(entries, head)
+    if found is None or found[1].get("refusal") != "ci_no_verdict":
+        return False
+    if not found[1].get("released_at"):
+        return False
+    latest = merge_ci.latest(records, head)
+    return latest is not None and bool(latest.get("released_at"))
+
+
+def released_no_verdict(
+    raw: Mapping[str, object], upstream: str | None, at: str, decision: str | None = None
+) -> ReleasePatch:
+    """The one patch that releases a `ci_no_verdict` escalation (GH-463), because the upstream
+    moved (`decision` None) or on an owner's comment (`decision`, as `released` writes it): the
+    escalation cleared, `released_at` (and `ci_released`, the upstream) stamped on the last
+    `escalate` entry, and `released_at` on the head's latest `merge_ci` record, which grants the
+    head one more no-verdict pair (`merge_ci.pair_counts`). `{}` when the document is not
+    escalated for it, so a second call writes nothing. Never writes `cost_usd`."""
+    entries = raw.get("landing")
+    written = (
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    found = _last_escalate(written)
+    if not raw.get("escalated") or found is None:
+        return {}
+    index, last = found
+    head = last.get("head")
+    stamped = entry_of(last)
+    stamped["released_at"] = at
+    if upstream is not None:
+        stamped["ci_released"] = upstream
+    written[index] = stamped
+    if decision is not None:
+        patch = released(raw, decision, at)
+    else:
+        cleared = unescalated(raw)
+        patch = {
+            "escalated": cleared["escalated"],
+            "escalation_class": cleared["escalation_class"],
+            "status": cleared["status"],
+            "pause_log": cleared["pause_log"],
+        }
+    patch["landing"] = written
+    records = raw.get("merge_ci")
+    latest = merge_ci.latest(records if isinstance(records, list) else [], str(head))
+    if latest is not None:
+        copy = latest.copy()
+        copy["released_at"] = at
+        patch["merge_ci"] = [copy]
+    return patch
 
 
 def escalation_checks(entry: Mapping[str, object], required: tuple[str, ...]) -> tuple[str, ...]:

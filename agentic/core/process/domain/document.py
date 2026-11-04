@@ -26,6 +26,9 @@ from .legacy_names import rename_legacy_roles
 from .task import RoleRun
 
 TASKS_SUBDIR = Path(".agentic/tasks")
+# Where an evaluation run's document is kept once its root is gone (GH-470): outside
+# `TASKS_SUBDIR`, so no scanner of the tasks sees it.
+EVAL_DOCS_SUBDIR = Path(".agentic/eval/docs")
 ORIGINAL = "Original request"
 # What the human decided on each escalation, written by the system on a resume (ADR-0003).
 HUMAN = "Human"
@@ -72,7 +75,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # `flakes` is the task's flake records, which the merge gate and the landing slice replace
 # whole with `add_flakes`' result. `tracker_failures` (GH-389) is the best-effort tracker
 # writes that failed, which a merge child (no state owner) replaces whole with
-# `add_tracker_failures`' result.
+# `add_tracker_failures`' result. `merge_ci` (GH-463) is the merge gate's fresh-run pairs, which
+# the merge child writes whole with `add_merge_ci`' result.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -82,6 +86,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "closed_by_slices",
         "tracker_checklist_posted",
         "full_checks",
+        "merge_ci",
         "flake_comments",
         "flakes",
         "tracker_failures",
@@ -90,7 +95,14 @@ RECORD_KEYS: frozenset[str] = frozenset(
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
 # The record keys `render` writes as one flow line, swapped in for a placeholder: a list the
 # landing keeps about itself, which `record_closure` then replaces whole (GH-242, GH-297).
-_FLOW_KEYS = ("landing", "landed_slices", "full_checks", "flakes", "tracker_failures")
+_FLOW_KEYS = (
+    "landing",
+    "landed_slices",
+    "full_checks",
+    "merge_ci",
+    "flakes",
+    "tracker_failures",
+)
 
 
 def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
@@ -202,6 +214,9 @@ def render(
         **({"task_head": h} if (h := state.get("task_head")) else {}),
         **({"full_checks": _LANDING_PLACEHOLDER} if state.get("full_checks") else {}),
         **({"full_checks_healed": h} if (h := state.get("full_checks_healed")) else {}),
+        # The merge gate's fresh GitHub runs (GH-463): one flow line, replaced whole by the
+        # merge child, which has no state owner.
+        **({"merge_ci": _LANDING_PLACEHOLDER} if state.get("merge_ci") else {}),
         # The flakes the gates observed (ADR-0066) and the flake issues already commented on:
         # each written only when non-empty, `flakes` as one flow line like the records above.
         **({"flakes": _LANDING_PLACEHOLDER} if state.get("flakes") else {}),
@@ -271,6 +286,9 @@ def render(
         # when assigned, so a document of an unassigned task is byte-identical to one
         # written before it. Parsed back under the same name by `parse`.
         **({"assignment": assigned} if (assigned := state.get("assignment")) else {}),
+        # Marks an evaluation run (GH-470), written only when set, so a real task's document
+        # is byte-identical to one written before it. Parsed back under the same name.
+        **({"evaluation": evaluated} if (evaluated := state.get("evaluation")) else {}),
         # Whether the request entered with a `## Decided` heading and so runs one-round
         # interviews (`rules.entering`): written only when true, so a document without it
         # is byte-identical to one written before the cap existed, and reads as not decided.

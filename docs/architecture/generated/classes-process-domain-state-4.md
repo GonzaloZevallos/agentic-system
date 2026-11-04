@@ -20,7 +20,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksRecord["FullChecksRecord"]
     class task__GateRecord["GateRecord"]
     class task__InterviewStats["InterviewStats"]
@@ -28,12 +27,14 @@ classDiagram
     class task__LandedSliceRef["LandedSliceRef"]
     class task__LandingEntry["LandingEntry"]
     class task__LapsePauseEntry["LapsePauseEntry"]
+    class task__MergeCiRecord["MergeCiRecord"]
     class task__MergeOutcome["MergeOutcome"]
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
     class task__PendingCloseDocs["PendingCloseDocs"]
     class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
+    class task__PullRequestCommit["PullRequestCommit"]
 ```
 
 ## Relaciones con otras páginas

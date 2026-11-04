@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import cost_history, docs, plan_view, rules, schemas
+from ..domain import ci_workflow, cost_history, docs, plan_view, rules, schemas
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -27,7 +27,7 @@ from ..domain.roles import (
 from ..domain.task import Subtask, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
-from .ports import Ports
+from .ports import GitError, Ports
 from .reflect_run import closed_documents
 from .run_role import Check, Output, finish, run_role
 
@@ -66,7 +66,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(interviewed, history, part_of),
+        check=_estimate_check(interviewed, history, part_of, ports),
         cwd=task.path,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
@@ -90,15 +90,48 @@ def _part_of(state: TaskState) -> tuple[str, int] | None:
 
 
 def _estimate_check(
-    state: TaskState, history: cost_history.History, part_of: tuple[str, int] | None
+    state: TaskState,
+    history: cost_history.History,
+    part_of: tuple[str, int] | None,
+    ports: Ports,
 ) -> Check:
     """The plan check both arms share: the structural one plus the estimate's refusals,
     which read the history, what the task has spent so far and whether the task is a part
-    (ADR-0054)."""
+    (ADR-0054). It also holds the names the base's workflows can report, so a `ci_required`
+    name no check run carries is refused while the plan is written (GH-485)."""
     spent = state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0)
+    base = task_base(state, ports)
     return schemas.plan_check_for(
-        history, spent, fit_waived=bool(state.get("fit_waived")), part_of=part_of
+        history,
+        spent,
+        fit_waived=bool(state.get("fit_waived")),
+        part_of=part_of,
+        workflow=ci_workflow.check_run_names(_workflow_texts(ports, base)),
+        stack_ci=_stack_ci(ports, base),
     )
+
+
+def _workflow_texts(ports: Ports, base: str) -> dict[str, str]:
+    """The workflows of the task base, path to text: read-only, and empty when the base has
+    none or git cannot say -- the plan check then proves nothing and refuses nothing."""
+    try:
+        names = ports.workspace.tree_names(base, ci_workflow.WORKFLOWS_DIR)
+        texts = {
+            path: ports.workspace.show(base, path)
+            for path in (f"{ci_workflow.WORKFLOWS_DIR}/{n}" for n in names)
+            if path.endswith((".yml", ".yaml"))
+        }
+    except (GitError, OSError):
+        return {}
+    return {path: text for path, text in texts.items() if text is not None}
+
+
+def _stack_ci(ports: Ports, base: str) -> tuple[str, ...]:
+    """The stack's `ci:` names at the base; none when the stack cannot be read."""
+    try:
+        return ports.stack.ci(base)
+    except ValueError:
+        return ()
 
 
 def _after_delivery(
@@ -174,7 +207,7 @@ async def _plan_cold(
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(state, history, part_of),
+        check=_estimate_check(state, history, part_of, ports),
         cwd=cwd,
         proposed_invariants=_SKIPPED_PROPOSAL,
         cost_history=history.text(),

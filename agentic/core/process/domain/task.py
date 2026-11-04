@@ -52,6 +52,10 @@ Status = Literal[
     # A task whose plan is only work on the issue tracker (GH-336): the checklist is posted
     # for the human and the run ends with no pull request. An end like `split`.
     "tracker_only",
+    # An evaluation run that reached the end of its road (GH-470, part 2): the graph sends a
+    # task carrying `evaluation` here instead of `deliver`. An end like `tracker_only`, with
+    # no pull request and no tracker write.
+    "evaluated",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -384,6 +388,17 @@ class ArmAssignment(TypedDict):
     switches: dict[str, str]
 
 
+class EvaluationRef(TypedDict):
+    """`TaskState.evaluation`: what marks a task as an evaluation run (GH-470) -- the issue
+    it re-runs, the commit it runs from, and that its full check always runs locally. The
+    key's presence is the marker (`measurement.domain.evaluation.is_evaluation`); whether a
+    process is wired as one is decided by its root, never by this."""
+
+    issue: int
+    base: str
+    ci: Literal["local"]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -413,6 +428,9 @@ class TaskInput(TypedDict):
     # it the graph's `input_schema` drops the key and the arm never reaches the state.
     # Absent reads as unassigned.
     assignment: NotRequired[ArmAssignment]
+    # What marks an evaluation run (GH-470): `FileInbox` sets it from the frozen entry.
+    # Declared for the same reason as `decided`. Absent reads as a real task.
+    evaluation: NotRequired[EvaluationRef]
 
 
 @dataclass(frozen=True)
@@ -734,13 +752,24 @@ class ReleasePatch(TypedDict, total=False):
     pause_log: list[PauseEntry]
     landing: list[LandingEntry]
     sections: dict[str, str]
+    # GH-463: the `merge_ci` pair a `ci_no_verdict` release stamps with `released_at`.
+    merge_ci: list[MergeCiRecord]
 
 
 class FinishedPatch(TypedDict):
     """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
 
-    status: Literal["discarded", "split", "tracker_only"]
+    status: Literal["discarded", "split", "tracker_only", "evaluated"]
     finished_at: str
+
+
+class EvaluatedPatch(FinishedPatch, total=False):
+    """What the `evaluated` node writes when an evaluation run ends (GH-470): the keys of
+    `rules.finished` plus the role that closes it and the processes the release reaped. A
+    partial patch, so `apply` takes it as a mapping, not as a whole `TaskState`."""
+
+    current_role: str
+    reaped_at_cleanup: list[ReapedProcess]
 
 
 class FindingRecord(TypedDict):
@@ -948,6 +977,9 @@ class LandingEntry(TypedDict, total=False):
     # GH-442, `escalate` entries: the upstream sha whose CI release (`landing.released_by_ci`)
     # was recorded for this entry's head, with `released_at` its time. Absent until then.
     ci_released: str
+    # GH-463, `escalate` entries answering `ci_no_verdict`: why GitHub gave no verdict, from the
+    # closed `CiCause`; absent when the cause could not be read.
+    cause: CiCause
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
     # entry it is the master sha the diagnosis was made against.
@@ -1039,6 +1071,7 @@ CiCause = Literal[
     "not_started",
     "dispatch_refused",
     "jobs_missing",
+    "unknown_names",
 ]
 
 
@@ -1150,6 +1183,48 @@ class FullChecksRecord(TypedDict):
     speculative: NotRequired[bool]
 
 
+class MergeCiRecord(TypedDict):
+    """One pair of the merge gate's fresh GitHub run (GH-463): the pull request `head`
+    merged with `master`, built as the commit `tested`, which `mode` published (`push`:
+    `agentic-ci/<id>`; `dispatch`: `refs/agentic-ci-dispatch/<id>`, judged by a dispatched run
+    of the base's workflow). All shas are full ids. Written before anything is published or
+    dispatched, so a poll round never fires a second run for the same pair. `republished` says
+    the one republish (or second dispatch) of the pair was spent and `superseded` holds the
+    earlier `tested` shas of the pair, whose verdicts never apply. `run_id` is the run that
+    decided the pair, when it could be read; `outcome` how the pair ended; `released_at` the
+    instant the landing released a `no_verdict` pair. `failing` names the declared checks a `red`
+    pair failed and `cause` the closed `CiCause` of a `no_verdict` one, so the landing reads
+    both off the document and never from `gh`'s text. `rerun_at` is the instant the landing reran a
+    `red` pair's run by its `run_id`, which also clears `outcome` and `failing`: the gate reads
+    the run again and the wait for its new verdict counts from that instant. No free text in any
+    field."""
+
+    head: str
+    master: str
+    tested: str
+    mode: Literal["push", "dispatch"]
+    published_at: str
+    republished: bool
+    superseded: list[str]
+    run_id: NotRequired[str]
+    outcome: NotRequired[Literal["stale", "no_verdict", "green", "red"]]
+    released_at: NotRequired[str]
+    failing: NotRequired[list[str]]
+    cause: NotRequired[CiCause]
+    rerun_at: NotRequired[str]
+
+
+def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
+    """The pairs of `existing` and `new` as one list in the order first seen, one row per
+    `(head, master)`: a row for a known pair replaces it whole, so a record is written before
+    the trigger and updated in place as the pair is republished, decided or released. The
+    only way `merge_ci` is ever written; a document without the key reads as no record."""
+    joined: dict[tuple[str, str], MergeCiRecord] = {}
+    for row in (*existing, *new):
+        joined[(row["head"], row["master"])] = row
+    return list(joined.values())
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -1248,6 +1323,9 @@ class TaskState(TaskInput, total=False):
     task_head: str
     # The latest `full_checks` run (GH-358), persisted as one flow line; absent until one ran.
     full_checks: FullChecksRecord
+    # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
+    # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
+    merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str
@@ -1335,6 +1413,10 @@ class TaskState(TaskInput, total=False):
     # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
     # `experiment`. Written once when the run starts, so no reducer.
     assignment: ArmAssignment
+    # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
+    # Written once when the run starts, from the frozen entry, so no reducer; omitted from
+    # the document when absent.
+    evaluation: EvaluationRef
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str
@@ -1393,9 +1475,10 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState | ReleasePatch) -> TaskState:
+def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) -> TaskState:
     """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
-    patch is a `TaskState` or the partial `ReleasePatch`, so every key stays checked."""
+    patch is a `TaskState` or the partial `ReleasePatch` / `EvaluatedPatch`, so every key stays
+    checked."""
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)
@@ -1458,6 +1541,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
                 patch[key] = fresh
+        elif reducer is add_merge_ci:
+            prior = {(r["head"], r["master"]): r for r in old}
+            if grown := [r for r in value if prior.get((r["head"], r["master"])) != r]:
+                patch[key] = grown
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:

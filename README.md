@@ -808,7 +808,7 @@ No aplica a bugs ni a platform enhancements.
 ## 8. Los dos productos y la costura
 
 El sistema es **agnóstico al producto**. Lo que cambia por producto entra como parámetro;
-lo que no cambia es el proceso. Hay **dos productos**: el SaaS de gimnasios, que es el de
+lo que no cambia es el proceso. Hay **dos productos**: apostrophe, que es el de
 prueba y la base del set de evaluación de §9, y el propio sistema, que desde ADR-0017 se
 desarrolla a sí mismo.
 
@@ -922,6 +922,17 @@ v0: tareas reales, escritas por alguien con el problema en la mano. Se re-corren
 contra cada versión de los prompts. Cinco tareas distintas cada vez no miden nada, porque no
 se puede separar si mejoró el prompt o si las tareas eran más fáciles.
 
+**El producto de evaluación es apostrophe** (ADR-0083). Cada entrada de su
+`.agentic/eval-set.yaml` nombra un issue, el sha completo de la base sobre la que se corre y el
+texto del issue congelado una vez (`entries: [{issue, base, title, body}]`). `agentic eval run`
+la re-corre una vez por brazo del experimento (o una como `default`) en una raíz aparte,
+`<producto>/.agentic/eval/EVAL-<issue>-<sha8>-<brazo>-<k>/`, un worktree desprendido en esa
+base. La corrida **no deja rastro**: no escribe en el tracker, no publica ninguna rama ni
+`agentic-ci/<id>`, no abre pull request ni mergea, y termina en el estado `evaluated`; su
+documento queda en `<producto>/.agentic/eval/docs/`, fuera de `tasks/`. La comparación es entre
+brazos sobre una misma entrada y una misma base; el desenlace histórico de la tarea real es solo
+una referencia.
+
 **Puntaje binario y estricto.** Una tarea cuenta solo si el diff pasa los tests y el humano
 lo mergea **sin tocar**. No hay crédito parcial: es lo único que no se corre con el humor
 del día. Desde ADR-0045 el puntaje cuenta entregas **juzgadas por un humano**: el poller
@@ -950,10 +961,12 @@ humo que escala a mitad de corrida es **sin puntaje**, no un peor puntaje: compa
 contra la línea de base exige la misma profundidad de corrida en las dos, y una
 escalada corta menos que la corrida completa que dejó el puntaje anterior.
 
-**El loop humano.** `agentic eval run --budget <USD> --yes` corre el set (o, en una
-tarea de humo, la única del set que la declaración marca) desde cero, una tarea a la
-vez; el humano mergea cada pull request o no (el poller no mergea las del set, ADR-0045);
-`agentic close --issue N` por cada tarea del set registra el veredicto -- se niega con `"no metrics endpoint configured;
+**El loop humano.** `agentic eval run --budget <USD> --yes` re-corre cada entrada del set
+(`--experiment <id>` una vez por brazo) desde su base, un hijo a la vez, sin abrir pull
+request: no hay veredicto del humano sobre una corrida de evaluación, así que su documento
+(`evaluated`) se compara entre brazos con `agentic eval compare --experiment <id>`. El
+puntaje binario de arriba sigue siendo el de la tarea real: `agentic close --issue N` registra
+su veredicto -- se niega con `"no metrics endpoint configured;
 nothing recorded"` si no hay endpoint de métricas (`cli.py`, `_close`), la línea que
 alguien lee seis semanas después cuando la línea de base son cinco nulos; `agentic eval
 score --out <archivo>.jsonl` escribe una línea por tarea,
@@ -1486,13 +1499,14 @@ variables, y un `AGENTIC_PRODUCT_DIR` heredado habla de la corrida de afuera.
 
 Langfuse no puntúa. El puntaje sigue siendo el de la sección 9: binario, humano.
 El set de tareas vive en `.agentic/eval-set.yaml` del producto (como `stack.yaml`,
-`flags.yaml` y `BRIEF.md`): los números de issue y cuál de ellos es la tarea de humo, nada
-más. `agentic eval run --budget <USD> --yes` corre cada tarea del set (o, con `--dry-run`,
-solo la muestra sin gastar nada) desde cero -- un `agentic run --fresh --issue N` por
-tarea, esperado antes de lanzar el siguiente, nunca en paralelo -- y se niega antes de
-lanzar el primero si la declaración no es válida, si el nombre del producto no se puede
-leer, si el pull request o el lock de alguna tarea del set siguen abiertos, o si el propio
-lock de `eval` está tomado. `agentic eval score --out <archivo>.jsonl` escribe una línea
+`flags.yaml` y `BRIEF.md`): `entries` (issue, sha de la base, título y cuerpo congelados) y
+cuál de ellos es la tarea de humo. `agentic eval run --budget <USD> --yes` corre cada entrada
+(o, con `--dry-run`, solo la muestra sin gastar nada) una vez por brazo -- un
+`agentic run --issue-input <archivo>` por corrida, en su propia raíz de evaluación (ADR-0083),
+esperado antes de lanzar el siguiente -- y se niega antes de lanzar el primero si la
+declaración no es válida, si el nombre del producto no se puede leer, si la base de alguna
+entrada no resuelve o no declara `.agentic/stack.yaml`, o si el propio lock de `eval` está
+tomado. `agentic eval score --out <archivo>.jsonl` escribe una línea
 JSON por tarea, leída entera del documento de esa tarea -- nunca de una métrica ni de
 `gh` -- y se niega si `<archivo>.jsonl` ya existe, para que ninguna corrida pueda pisar una
 línea de base. Cada línea lleva lo que un span no puede dar por sí solo: hash de prompts, el

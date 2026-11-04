@@ -39,6 +39,7 @@ graph TD
     g_pkg__adapters__shell["adapters.shell (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
+    g_pkg__adapters --> g_pkg__application
     g_pkg__adapters --> g_pkg__domain
     g_pkg__adapters__claude_sdk --> g_pkg__adapters
     g_pkg__adapters__claude_sdk --> g_pkg__application

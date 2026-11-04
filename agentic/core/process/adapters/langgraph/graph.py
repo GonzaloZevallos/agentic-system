@@ -56,6 +56,7 @@ from ...application.develop import develop
 from ...application.diagnose import diagnose
 from ...application.discard import discard
 from ...application.escalate import escalate
+from ...application.evaluated import evaluated
 from ...application.final_validation import final_validation
 from ...application.full_checks import full_checks
 from ...application.integrate import integrate, integrate_turn
@@ -414,6 +415,9 @@ def build_graph(
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node("split", _system_node(split, shared))
     graph.add_node("tracker_only", _system_node(tracker_only, shared))
+    # The end of an evaluation run (GH-470): `rules.after_integrate` sends a task carrying
+    # `evaluation` here instead of `deliver`. No role, no model, no tracker write.
+    graph.add_node("evaluated", _system_node(evaluated, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
     graph.add_node(PAUSE, pause)
 
@@ -468,6 +472,7 @@ def build_graph(
             "owner_rules",
             VERIFY,
             "deliver",
+            "evaluated",
             ESCALATE,
             END,
         ],
@@ -481,6 +486,7 @@ def build_graph(
     graph.add_conditional_edges(VERIFY, _route(rules.after_verify), [INTEGRATE, ESCALATE])
     graph.add_conditional_edges("deliver", _route(rules.after_deliver), [INTEGRATE, END, ESCALATE])
     graph.add_conditional_edges("discard", _route(rules.after_discard), [END, ESCALATE])
+    graph.add_edge("evaluated", END)
     graph.add_edge(ESCALATE, PAUSE)
     graph.add_conditional_edges(
         PAUSE,

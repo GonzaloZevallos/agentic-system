@@ -70,12 +70,23 @@ def test_each_refusal_has_the_input_that_provokes_it(reason, over, conflicts):
 def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_is_the_verbs():
     given = {reason for reason, _ in REFUSALS}
     # The CI's own reasons are given, one row each, by `test_auto_merge_ci.py`.
-    ci_reasons = {"ci_failed", "ci_missing", "ci_unreadable", "ci_blocked_by_conflict"}
+    # `ci_unknown_names` (GH-485) is given by `test_auto_merge_unknown_names.py`.
+    ci_reasons = {
+        "ci_failed",
+        "ci_missing",
+        "ci_unreadable",
+        "ci_blocked_by_conflict",
+        "ci_unknown_names",
+    }
     # `merge_conflict` has its own table below: it needs `conflicts=True`, no `over` row.
     # The ADR collision's is given by `test_adr_refusal.py`.
     # The performance gate's (GH-318) is given by `test_auto_merge_perf.py`.
     # The criteria gate's (GH-334) is given by `test_auto_merge_criteria.py`.
+    # The fresh GitHub run's (GH-463) are given by `test_auto_merge_ci_run.py`.
     others = {
+        "ci_no_verdict",
+        "ci_stale_exhausted",
+        "ci_untrusted_no_dispatch",
         "master_moved",
         "merge_conflict",
         "adr_number_taken",

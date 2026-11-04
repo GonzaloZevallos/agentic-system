@@ -1118,3 +1118,42 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T07:23:17.187+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change alters a documented flow or rule, update the architecture doc that describes it in the same change, citing the files and symbols involved.
+  confidence: medium
+  seen_in:
+  - GH-463
+  sources:
+  - finding
+  added_at: '2026-11-04T10:45:04.731+00:00'
+- slug: tech_lead_platform
+  category: integration-crosscut
+  lesson: At integration, trace each new path from the production entry point and check that the state it depends on is set there. Passing tests with hand-built state do not prove the path is reachable.
+  confidence: medium
+  seen_in:
+  - GH-463
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T10:45:04.731+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each invariant the plan names, list every entry point that can reach it (every CLI path or flag) and confirm the guard runs before any spend on each one, with a test that refuses.
+  confidence: medium
+  seen_in:
+  - GH-475
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T14:07:10.980+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change adds a branch, refusal arm or contract field to a documented flow, update the hand-written architecture doc and its diagram in the same change; check the docs diff is not empty before delivering.
+  confidence: medium
+  seen_in:
+  - GH-485
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T14:32:10.595+00:00'
