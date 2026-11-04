@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from datetime import UTC, datetime
 
-from ..domain import ci, plan_settlement, presubmit, rules
+from ..domain import ci, merge_ci, plan_settlement, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.copy import copy_location_parts
@@ -190,6 +190,9 @@ def rerun(context: LandingContext) -> None:
     if context.step.refusal == "ci_failed":
         verdict = context.facts.ci_verdict
         failing = [check.name for check in verdict.failing] if verdict is not None else []
+        if context.facts.ci_subject == "tested":
+            _rerun_fresh(context, failing)
+            return
         try:
             runs = context.ports.tracker.rerun_failed_ci(str(reference), context.head)
         except ValueError as exc:
@@ -197,6 +200,11 @@ def rerun(context: LandingContext) -> None:
             return
         _remember_rerun(context, failing)
         context.log(f"agentic: land: {context.task_id}: reran {len(runs)} run(s) on {context.head}")
+        return
+    if rules.declares_ci(context.facts):
+        # GH-463: a `ci:` product's suite never runs on this machine; the next gate round reads
+        # GitHub again.
+        context.log(f"agentic: land: {context.task_id}: rerun: no local checks for a ci: product")
         return
     recorded = loaded.get("merge_checks")
     names = presubmit.failed_names(recorded) if isinstance(recorded, Mapping) else []
@@ -219,6 +227,42 @@ def rerun(context: LandingContext) -> None:
         context.log,
         only=names or None,
     )
+
+
+def _rerun_fresh(context: LandingContext, failing: list[str]) -> None:
+    """The rerun of a red fresh run of the merge gate (GH-463): the failed jobs of the run the
+    pair's `merge_ci` record names (`run_id`), never the pull request's own runs. Without a
+    `run_id` nothing is rerun: the next gate round republishes inside the pair."""
+    raw = context.ports.documents.load(context.task_id) or {}
+    records = raw.get("merge_ci")
+    latest = merge_ci.latest(records if isinstance(records, list) else [], context.head)
+    run_id = latest.get("run_id") if latest is not None else None
+    if not run_id:
+        context.log(f"agentic: land: {context.task_id}: rerun: no run id for the fresh run")
+        return
+    refused = context.ports.tracker.rerun_ci_run(run_id)
+    if refused is not None:
+        context.log(f"agentic: land: {context.task_id}: rerun refused: {refused.cause}")
+        return
+    _remember_rerun(context, failing)
+    context.log(f"agentic: land: {context.task_id}: reran run {run_id} on {context.head}")
+
+
+def escalate_no_verdict(context: LandingContext) -> None:
+    """The `escalate` step of `ci_no_verdict` (GH-463): GitHub gave no verdict for the fresh run
+    of the head on the current master. Class `questions`, no model run; the reason names the
+    closed cause the `escalate` entry carries, never text `gh` printed."""
+    loaded = context.ports.documents.load(context.task_id) or {}
+    entry = next(
+        (e for e in reversed(landing_plan.all_entries(loaded)) if e.get("step") == "escalate"), {}
+    )
+    cause = entry.get("cause")
+    why = f" ({cause})" if isinstance(cause, str) else ""
+    reason = (
+        f"GitHub gave no verdict for the fresh run of {context.head} on the current "
+        f"master{why}. It is released when master moves or you comment."
+    )
+    _escalate(context, reason, "questions")
 
 
 def _followup_body(rows: Sequence[FindingRecord], task_id: str, lineage: int) -> str:

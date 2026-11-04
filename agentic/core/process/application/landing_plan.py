@@ -25,6 +25,7 @@ from ..domain.task import (
     VERDICT_SYNC,
     VERDICT_UNLANDABLE,
     DiagnosisVerdict,
+    MergeCiRecord,
     ReleasePatch,
     TaskState,
     apply,
@@ -213,7 +214,15 @@ def spent(
         checks_rerun_on_head=_gate_reran(raw, head),
         ci_release_due=release_due,
         head_has_upstream=ancestry() if release_due and ancestry is not None else None,
+        no_verdict_released=head is not None
+        and landing.no_verdict_released(live, _merge_ci_records(raw), head),
     )
+
+
+def _merge_ci_records(raw: Mapping[str, object]) -> list[MergeCiRecord]:
+    """The document's fresh-run pairs (GH-463); `[]` for one written before them."""
+    records = raw.get("merge_ci")
+    return records if isinstance(records, list) else []
 
 
 def _after_restoration(written: object, restored_at: str | None) -> bool:
@@ -403,15 +412,19 @@ def stranded_now(ports: Ports, task_id: str, raw: Mapping[str, object]) -> bool:
 ReleaseWhy = Literal[
     "released",
     "released_by_ci",
+    "released_no_verdict",
     "waiting_on_human",
     "waiting_on_base_ci",
+    "waiting_on_upstream",
     "needs_restart",
     "task_cap",
 ]
 """Why an escalated landing is or is not released (GH-328, GH-442): a human's decision released
 it (`released`), the base's CI went green and released a CI escalation (`released_by_ci`), it
 waits for a human (or for the label to go, or for an open issue), a CI escalation waits for the
-base's CI or an owner comment (`waiting_on_base_ci`), its shape is a restart only a human
+base's CI or an owner comment (`waiting_on_base_ci`), a `ci_no_verdict` escalation (GH-463) is
+released by a new upstream sha (`released_no_verdict`) or waits for one or for an owner comment
+(`waiting_on_upstream`), its shape is a restart only a human
 starts, or the task cap is spent. Closed: `land` maps each to its log line and its
 `LandResult.reason`."""
 
@@ -461,7 +474,7 @@ def _owner_release(
     return Release(decision, "released", True)
 
 
-def _escalated_head(raw: TaskState) -> str | None:
+def _escalated_head(raw: Mapping[str, object]) -> str | None:
     """The head of the last live `escalate` entry: what the CI shape is judged on when the
     caller did not say which head it holds."""
     found = [e for e in live_entries(raw) if e.get("step") == "escalate"]
@@ -492,7 +505,12 @@ def release_asked(raw: Mapping[str, object], kind: LandingStepKind) -> bool:
     `kind`: only a `diagnose` is (GH-328), every other step is dispatched as if the document
     were not escalated. The one condition `land`, the poller and `resume` ask before they ask
     `release`, so none holds a copy of it."""
-    return kind == "diagnose" and bool(raw.get("escalated"))
+    if not raw.get("escalated"):
+        return False
+    if kind == "escalate":
+        # GH-463: the `ci_no_verdict` escalation is released on a new upstream sha or a comment.
+        return landing.ci_no_verdict_entry(raw, _escalated_head(raw)) is not None
+    return kind == "diagnose"
 
 
 def release(
@@ -521,6 +539,8 @@ def release(
     shape = _escalated_head(raw)
     if shape is not None and head in (None, shape) and landing.ci_escalation(raw, shape):
         return _ci_release(ports, cfg, task_id, raw, number, shape, upstream)
+    if shape is not None and head in (None, shape) and landing.ci_no_verdict_entry(raw, shape):
+        return _no_verdict_release(ports, cfg, task_id, raw, number, shape, upstream)
     if raw.get("escalation_class") != "failure" or not landing.diagnose_attempts(raw):
         return _unreleased("needs_restart")
     return _owner_release(ports, cfg, task_id, raw, number)
@@ -558,6 +578,35 @@ def _ci_release(
     return owner if owner.released else wait
 
 
+def _no_verdict_release(
+    ports: Ports,
+    cfg: Configuration,
+    task_id: str,
+    raw: TaskState,
+    number: int,
+    head: str,
+    upstream: str | None,
+) -> Release:
+    """The release of a `ci_no_verdict` escalation (GH-463), once per (head, upstream) pair: the
+    upstream differs from the one the escalation was recorded at, or an owner commented through
+    the same route as any landing escalation. The base's CI is never read: a green base alone
+    releases nothing."""
+    wait = _unreleased("waiting_on_upstream")
+    entry = landing.ci_no_verdict_entry(raw, head)
+    if entry is None:
+        return wait
+    if upstream is None:
+        upstream = ports.workspace.upstream().sha
+    if (
+        upstream is not None
+        and entry.get(UPSTREAM_KEY) != upstream
+        and not landing.ci_released_for(entry, upstream)
+    ):
+        return Release(None, "released_no_verdict", True)
+    owner = _owner_release(ports, cfg, task_id, raw, number)
+    return owner if owner.released else wait
+
+
 def released_step(
     raw: TaskState,
     outcome: Release,
@@ -584,6 +633,8 @@ def release_patch(raw: TaskState, outcome: Release, upstream: str | None, at: st
     was computed on."""
     if not outcome.released:
         return {}
+    if landing.ci_no_verdict_entry(raw, _escalated_head(raw)) is not None:
+        return landing.released_no_verdict(raw, upstream, at, outcome.decision)
     if outcome.decision is not None:
         return landing.released(raw, outcome.decision, at)
     return landing.released_by_ci(raw, upstream, at) if upstream is not None else {}

@@ -404,6 +404,9 @@ def _landing_step(
     step = landing_plan.released_step(raw, outcome, facts, refusal, at=at, ancestry=ancestry)
     patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
+    if step.kind == "wait" and patch and refusal == "ci_no_verdict":
+        # GH-463: the release of a `ci_no_verdict` escalation is persisted by a `land` child.
+        return step
     if not landing_plan.takes_action(step.kind, live) or landing_rules.already_dispatched(
         landing_plan.live_entries(view), facts.pr_head, step.kind, facts.current_master
     ):

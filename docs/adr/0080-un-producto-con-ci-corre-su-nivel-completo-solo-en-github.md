@@ -77,3 +77,51 @@ entrega de siempre.
 3. **La cabeza de esta tarea.** Su base no tiene la clave, así que toma el camino local que queda para
    cabezas no confiables. La primera corrida despachada real queda probada por el primer pull request
    verde que la use.
+
+## Adenda GH-463: la puerta de merge pide una corrida fresca a GitHub
+
+Para un producto que declara `ci:`, la puerta de merge ya no corre la suite en la máquina del dueño.
+Donde antes devolvía `run_checks`, decide `ci_run`: una corrida fresca de GitHub sobre la cabeza
+fusionada con el master actual, cuyo veredicto decide. Antes, #353 sigue mandando: si nada de lo que
+la tarea toca cambió en master, no se vuelve a chequear.
+
+**Mecanismo.** La puerta arma `cabeza + master` sólo con git, escribe el par en el registro
+`merge_ci` del documento antes de disparar nada y lo publica. Una cabeza confiable va a
+`agentic-ci/<id>` y se lee con `branch_ci`; una no confiable va a `refs/agentic-ci-dispatch/<id>`
+(fuera de `refs/heads/`, no dispara `push`) y se despacha el workflow de la base con el sha probado.
+Se rechazaron: actualizar la rama (mueve `pr_head` y rompe `head_reviewed`), repetir la corrida del
+pull request (conserva un `GITHUB_SHA` viejo) y cerrar y reabrir el pull request (efectos laterales).
+
+**Cotas.** Dos constantes en `domain/ci.py`, contadas por cabeza: `CI_STALE_PAIRS_MAX = 3` (master
+adelantó una corrida verde con una ganancia no inerte) y `CI_NO_VERDICT_PAIRS_MAX = 1` (GitHub no dio
+veredicto tras el único republicado o segundo despacho).
+
+**Rechazos y pasos del aterrizaje.**
+
+| Rechazo | Paso |
+|---|---|
+| `ci_stale_exhausted` | `sync_master` (sin conflicto) |
+| `ci_no_verdict` | `escalate`, con `{refusal, head, upstream, cause}` |
+| `ci_untrusted_no_dispatch` | `none`: queda para el humano de inmediato |
+
+**Liberación de `ci_no_verdict`.** Una sola vez por par (cabeza, upstream): cuando el upstream es
+otro que el de la escalación, o cuando el dueño comenta. Un base verde por sí solo nunca la libera. La
+liberación estampa `released_at` en el par de `merge_ci`, lo que concede un par más sin veredicto, y el
+paso que da es `wait`: la puerta decide de nuevo en la ronda siguiente. Una corrida fresca roja se
+reintenta con `rerun_ci_run(run_id)` una vez por par, nunca con los runs del pull request; sin
+`run_id` no se reintenta y la puerta republica dentro del par.
+
+**Cabezas no confiables.**
+
+| Cabeza | Pila | Resultado |
+|---|---|---|
+| no confiable, fresca | declara `ci_dispatch` y hay un registro `ci_dispatch` vigente | mergea, como hoy |
+| no confiable, vieja | declara `ci_dispatch` | una corrida fresca despachada |
+| no confiable | sin `ci_dispatch` | `ci_untrusted_no_dispatch`, para el humano. **Cambio de comportamiento:** la suite local ya no corre |
+
+**Residuo 1, ahora acotado.** La CI vieja al mergear ya no cae en la suite local: persigue a master
+hasta `CI_STALE_PAIRS_MAX` pares y luego sincroniza.
+
+**Hecho abierto.** Si `actions/checkout` puede traer un sha alcanzable sólo desde una ref que no es
+rama es algo que sólo GitHub produce. Si no puede, el resultado es `ci_no_verdict`, nunca un push de
+la cabeza no confiable a `refs/heads/`.
