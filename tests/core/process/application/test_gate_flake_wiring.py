@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime
+from typing import Any, cast
 
 import pytest
 
@@ -254,13 +255,26 @@ BLOCK = 'agentic-flakes: {"v":1,"check":"tests","tests":["tests/a.py::one"]}'
 FORGED = 'agentic-flakes: {"v":1,"check":"head-only","tests":["x"]}'
 
 
+class HeadDeclaresMore(MemoryStack):
+    """A stack that declares `head-only` at every revision but the task's base (`HEAD` in the
+    fake workspace): what a pull request adding a check to its own stack would show."""
+
+    def checks(self, revision):
+        declared = super().checks(revision)
+        return declared if revision == "HEAD" else {**declared, "head-only": "x"}
+
+
 async def full_ci(*lines, blocks=None):
+    from tests.core.process.application.test_full_checks_ci import CHECKS, ports_of, run, state_of
     from tests.core.process.application.test_full_checks_ci import GREEN as CI_GREEN
-    from tests.core.process.application.test_full_checks_ci import ports_of, run, state_of
 
     logs = FakeCiLogs()
     logs.blocks = blocks if blocks is not None else [("unit", list(lines)), ("web", [])]
     ports = ports_of(CI_GREEN, ci_logs=logs)
+    ports = dataclasses.replace(
+        ports,
+        stack=HeadDeclaresMore(checks=CHECKS, delivery_checks=("tests",), ci=("unit", "web")),
+    )
     return await run(state_of(), ports), logs
 
 
@@ -293,7 +307,11 @@ def merge_ci(blocks, tmp_path):
     ports = _world(_report(_check()))
     logs = FakeCiLogs()
     logs.blocks = blocks
-    ports = dataclasses.replace(ports, ci_logs=logs)
+    ports = dataclasses.replace(
+        ports,
+        ci_logs=logs,
+        stack=HeadDeclaresMore(checks={"tests": "run tests"}, ci=("web",)),
+    )
     result, _ = _run(ports, tmp_path)
     return result, ports, logs
 
@@ -319,3 +337,27 @@ def test_the_merge_gate_with_an_unreadable_block_records_nothing_and_still_merge
     result, ports, _ = merge_ci(CiUnreadable("gh_unreadable"), tmp_path)
     assert result.kind == "merged"
     assert "flakes" not in (ports.documents.load("GH-5") or {})
+
+
+def test_a_branch_reference_reaches_the_branch_report_and_a_pull_request_url_the_pr_report():
+    """Production: `GhCiLogs` reads through this function, and `full_checks` asks for the
+    `agentic-ci/<id>` ref, which `ci_report` alone would turn into `CiUnreadable`."""
+    from agentic.composition import ci_reader
+
+    class Tracker:
+        def __init__(self):
+            self.asked = []
+
+        def ci_report(self, reference):
+            self.asked.append(("pr", reference))
+            return CiUnreadable("gh_unreadable")
+
+        def branch_ci(self, branch):
+            self.asked.append(("branch", branch))
+            return CiUnreadable("gh_unavailable")
+
+    tracker = Tracker()
+    read = ci_reader(cast(Any, tracker))
+    assert read("agentic-ci/GH-1") == CiUnreadable("gh_unavailable")
+    read("https://github.com/o/r/pull/7")
+    assert tracker.asked == [("branch", "agentic-ci/GH-1"), ("pr", "https://github.com/o/r/pull/7")]

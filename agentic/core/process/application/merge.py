@@ -231,7 +231,7 @@ def _with_ci_flakes(
     """`raw` once the flake block the CI jobs printed on `head` is recorded in the document
     (GH-464). Evidence only: it adds records for the filing that follows and changes no
     decision, so an unreadable block or a write that fails leaves `raw` as it was."""
-    records = ci_flakes.block_records(ports, reference, head, base, jobs, "merge", _now())
+    records = ci_flakes.block_records(ports, reference, head, base, jobs, "merge", ci_flakes.now())
     if not records:
         return raw
     try:
