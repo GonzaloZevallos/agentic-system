@@ -31,7 +31,16 @@ from tests.fakes import (
 )
 
 NOW = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
-RESUME = ["agentic", "resume", "--issue", "7", "--yes", "--detach", "--from-document"]
+RESUME = [
+    "agentic",
+    "resume",
+    "--issue",
+    "7",
+    "--yes",
+    "--detach",
+    "--by-poller",
+    "--from-document",
+]
 
 
 class _Documents(MemoryDocuments):
@@ -206,11 +215,17 @@ def test_a_spent_cap_spawns_nothing_and_hands_the_task_to_the_human():
     ]
     lines, launcher = _go(ports)
     assert launcher.spawned == []
-    assert lines == [rules.orphaned_line(7, "cap_spent", "3 of 3")]
-    assert "agentic resume --issue 7 --from-document" in lines[0]
+    assert lines == [
+        "agentic: poll: #7 retake budget spent (crashed: the run left no lock; 3 of 3), "
+        "left to the human: agentic resume --issue 7 --from-document"
+    ]
+    assert ports.tracker.labels == [("GH-7", "needs-human")]
+    [(_, notice)] = ports.tracker.comments
+    assert notice.startswith("Retakes spent: crashed: the run left no lock; 3 of 3 retakes")
+    assert notice.endswith("`agentic resume --issue 7 --from-document`.")
 
 
-def test_a_retake_that_ran_something_does_not_count_against_the_cap():
+def test_a_retake_that_ran_something_still_counts_against_the_shared_budget():
     ports = _ports(
         runs=[
             {
@@ -224,8 +239,9 @@ def test_a_retake_that_ran_something_does_not_count_against_the_cap():
         _comment(f"Retaken with no lock: retake {n} of 3", NOW - timedelta(hours=5))
         for n in (1, 2, 3)
     ]
-    _, launcher = _go(ports)
-    assert len(launcher.spawned) == 1
+    lines, launcher = _go(ports)
+    assert launcher.spawned == []  # ADR 0082: the budget does not refill when the run progresses
+    assert [line.split(" (")[0] for line in lines] == ["agentic: poll: #7 retake budget spent"]
 
 
 def test_the_second_retake_waits_on_the_retake_calendar():
@@ -427,3 +443,17 @@ def test_a_rerun_still_launches_an_issue_whose_body_has_an_open_blocker(tmp_path
     launcher = FakeLauncher()
     lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
     assert "agentic: poll: launch #5 -> pid 4242" in lines
+
+
+def test_a_spent_orphan_is_announced_once_and_a_posted_notice_silences_later_rounds():
+    ports = _ports()
+    ports.tracker.timestamped["GH-7"] = [
+        _comment(f"Retaken with no lock: retake {n} of 3", NOW - timedelta(hours=5 - n))
+        for n in (1, 2, 3)
+    ]
+    _go(ports)
+    assert len(ports.tracker.comments) == 1
+    ports.tracker.timestamped["GH-7"].append(_comment(ports.tracker.comments[0][1], NOW))
+    lines, launcher = _go(ports)
+    assert launcher.spawned == [] and len(ports.tracker.comments) == 1
+    assert not any("budget spent" in line for line in lines)

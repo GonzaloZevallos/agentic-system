@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ...application.ports import LockHeld, LockRecord
-from .liveness import current_boot_id, is_alive
+from .liveness import current_boot_id, is_alive, starttime_of
 
 
 class FilesystemRunLock:
@@ -33,6 +33,8 @@ class FilesystemRunLock:
             data.get("boot_id"),
             bool(data.get("stopped_at_shutdown", False)),
             data.get("crashed_version"),
+            data.get("starttime"),
+            bool(data.get("stopped_deliberately", False)),
         )
 
     def acquire(self, task_id: str, command: str) -> LockRecord | None:
@@ -50,6 +52,7 @@ class FilesystemRunLock:
             started_at=_now(),
             command=command,
             boot_id=self._boot_id(),
+            starttime=starttime_of(os.getpid()),
         )
         return taken_over
 
@@ -93,6 +96,7 @@ class FilesystemRunLock:
                 started_at=existing.started_at,
                 command=existing.command,
                 boot_id=existing.boot_id,
+                starttime=existing.starttime,
                 stopped_at_shutdown=True,
             )
 
@@ -108,8 +112,39 @@ class FilesystemRunLock:
                 started_at=existing.started_at,
                 command=existing.command,
                 boot_id=existing.boot_id,
+                starttime=existing.starttime,
                 crashed_version=system_version,
             )
+
+    def keep_stopped(self, task_id: str, pid: int) -> None:
+        existing = self.read(task_id)
+        if existing is None or existing.pid != pid:
+            return
+        self._write(
+            task_id,
+            pid=existing.pid,
+            host=existing.host,
+            started_at=existing.started_at,
+            command=existing.command,
+            boot_id=existing.boot_id,
+            starttime=existing.starttime,
+            crashed_version=existing.crashed_version,
+            stopped_deliberately=True,
+        )
+
+    def mark_stopped_recordless(self, task_id: str) -> None:
+        if self.read(task_id) is not None:
+            return
+        self._write(
+            task_id,
+            pid=os.getpid(),
+            host=self._host(),
+            started_at=_now(),
+            command="agentic stop",
+            boot_id=self._boot_id(),
+            starttime=starttime_of(os.getpid()),
+            stopped_deliberately=True,
+        )
 
     def _path(self, task_id: str) -> Path:
         return self.runs_dir / f"{task_id}.lock"
@@ -128,6 +163,8 @@ class FilesystemRunLock:
         boot_id: str | None = None,
         stopped_at_shutdown: bool = False,
         crashed_version: str | None = None,
+        starttime: str | None = None,
+        stopped_deliberately: bool = False,
     ) -> None:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         record: dict[str, object] = {
@@ -141,6 +178,10 @@ class FilesystemRunLock:
             record["stopped_at_shutdown"] = True
         if crashed_version is not None:
             record["crashed_version"] = crashed_version
+        if starttime is not None:
+            record["starttime"] = starttime
+        if stopped_deliberately:
+            record["stopped_deliberately"] = True
         self._path(task_id).write_text(json.dumps(record), encoding="utf-8")
 
 

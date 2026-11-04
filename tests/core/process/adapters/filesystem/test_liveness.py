@@ -54,3 +54,86 @@ def test_a_pid_owned_by_someone_else_is_alive(monkeypatch):
 
     monkeypatch.setattr(liveness.os, "kill", denied)
     assert liveness.is_alive(1, None, None) is True
+
+
+def _spawn_sleeper():
+    import subprocess
+
+    return subprocess.Popen(["sleep", "60"])
+
+
+def _record_of(process, **over):
+    import socket
+
+    from agentic.core.process.application.ports import LockRecord
+
+    fields = dict(
+        pid=process.pid,
+        host=socket.gethostname(),
+        started_at="2026-11-03T00:00:00Z",
+        command="agentic run",
+        boot_id=liveness.current_boot_id(),
+        starttime=liveness.starttime_of(process.pid),
+    )
+    return LockRecord(**{**fields, **over})
+
+
+def test_run_process_terminates_the_process_the_record_names():
+    process = _spawn_sleeper()
+    try:
+        control = liveness.OsRunProcess()
+        record = _record_of(process)
+        assert control.holds(record) is True
+        control.terminate(record)
+        assert process.wait(timeout=10) == -15
+    finally:
+        process.kill()
+        process.wait()
+
+
+def test_run_process_never_signals_a_process_whose_start_time_differs():
+    """The rejected input: the pid is alive and on this boot, but its start time is not the
+    one the record holds, as after a pid reuse."""
+    process = _spawn_sleeper()
+    try:
+        control = liveness.OsRunProcess()
+        record = _record_of(process, starttime="1")
+        assert control.holds(record) is False
+        control.terminate(record)
+        control.kill(record)
+        assert process.poll() is None
+    finally:
+        process.kill()
+        process.wait()
+
+
+def test_run_process_never_signals_a_record_that_holds_no_start_time():
+    """The rejected input: a record written before start times were recorded names a live
+    pid on this boot, but cannot tell which process it was, so nothing is signalled."""
+    process = _spawn_sleeper()
+    try:
+        control = liveness.OsRunProcess()
+        record = _record_of(process, starttime=None)
+        assert control.holds(record) is False
+        control.terminate(record)
+        control.kill(record)
+        assert process.poll() is None
+    finally:
+        process.kill()
+        process.wait()
+
+
+def test_run_process_never_signals_another_boots_or_another_hosts_record():
+    process = _spawn_sleeper()
+    try:
+        control = liveness.OsRunProcess()
+        for record in (
+            _record_of(process, boot_id="other-boot"),
+            _record_of(process, host="elsewhere"),
+        ):
+            assert control.holds(record) is False
+            control.kill(record)
+        assert process.poll() is None
+    finally:
+        process.kill()
+        process.wait()

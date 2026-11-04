@@ -784,12 +784,19 @@ class FakeLock:
         self.released: list[str] = []
         self.kept: list[str] = []
         self.kept_crashed: list[tuple[str, str]] = []
+        self.kept_stopped: list[tuple[str, int]] = []
 
     def read(self, task_id):
         return self.held
 
     def keep_at_shutdown(self, task_id):
         self.kept.append(task_id)
+
+    def keep_stopped(self, task_id, pid):
+        self.kept_stopped.append((task_id, pid))
+
+    def mark_stopped_recordless(self, task_id):
+        raise AssertionError("only `agentic stop` marks a task with no record")
 
     def keep_crashed(self, task_id, system_version):
         self.kept_crashed.append((task_id, system_version))
@@ -1412,13 +1419,19 @@ async def test_a_signal_at_system_shutdown_keeps_the_lock_record_marked(monkeypa
 
 
 @pytest.mark.anyio
-async def test_a_signal_outside_a_shutdown_releases_the_lock(monkeypatch, tmp_path):
+async def test_a_signal_outside_a_shutdown_keeps_the_lock_record_as_a_deliberate_stop(
+    monkeypatch, tmp_path
+):
     from agentic.core.process.adapters.filesystem import FilesystemRunLock
 
     lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "boot-1")
     stop = await _signalled_run(monkeypatch, tmp_path, lock, lambda: False)
     assert stop.at_shutdown is False
-    assert lock.read("T-9") is None
+    record = lock.read("T-9")
+    assert record is not None
+    assert record.stopped_deliberately is True
+    assert record.stopped_at_shutdown is False
+    assert (record.pid, record.boot_id) == (os.getpid(), "boot-1")
 
 
 def test_each_invocation_has_its_own_stop_cause():
@@ -1462,13 +1475,14 @@ async def _signalled_then_raising_run(monkeypatch, tmp_path, lock, probe):
 
 
 @pytest.mark.anyio
-async def test_a_signal_followed_by_a_graph_exception_releases_the_lock_unmarked(
+async def test_a_signal_followed_by_a_graph_exception_keeps_the_stop_mark_not_the_crash_mark(
     monkeypatch, tmp_path
 ):
     lock = FakeLock()
     stop = await _signalled_then_raising_run(monkeypatch, tmp_path, lock, lambda: False)
     assert (stop.signalled, stop.crashed, stop.at_shutdown) == (True, True, False)
-    assert lock.released == ["T-9"]
+    assert lock.kept_stopped == [("T-9", os.getpid())]
+    assert lock.released == []
     assert lock.kept_crashed == []
     assert lock.kept == []
 
@@ -1480,6 +1494,7 @@ async def test_a_shutdown_and_a_crash_keep_the_lock_for_the_shutdown_only(monkey
     assert (stop.signalled, stop.crashed, stop.at_shutdown) == (True, True, True)
     assert lock.kept == ["T-9"]
     assert lock.kept_crashed == []
+    assert lock.kept_stopped == []
     assert lock.released == []
 
 
@@ -3159,6 +3174,12 @@ class FakeKeyedLock:
     def keep_crashed(self, task_id, system_version):
         self.kept_crashed.append((task_id, system_version))
 
+    def keep_stopped(self, task_id, pid):
+        pass
+
+    def mark_stopped_recordless(self, task_id):
+        pass
+
     def release(self, task_id):
         self.released.append(task_id)
         self.held.pop(task_id, None)
@@ -4195,6 +4216,7 @@ async def test_the_poller_retakes_a_run_a_reboot_cut_and_resume_takes_over_its_l
     cfg = Configuration(product_dir=tmp_path)
     ports = memory_ports()
     ports.documents.save({"id": "GH-30", "title": "t", "status": "developing"})
+    ports.tracker._queue = [30]  # in the tray: open, with the `agentic` label
     old_boot = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "old")
     old_boot.acquire("GH-30", "agentic run")  # this very pid: `os.kill` alone says alive
     lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "new")
@@ -5902,7 +5924,8 @@ async def test_the_deadline_reaps_roles_releases_the_lock_once_and_exits_once():
         ("run", "check", pid, None),
         ("run", "perf", pid, None),
     ]
-    assert lock.released == ["T-9"]  # the deadline released it; `_locked`'s finally did not
+    # The deadline kept it as a deliberate stop; `_locked`'s finally did not touch it again.
+    assert (lock.kept_stopped, lock.released) == ([("T-9", pid)], [])
     assert (exits, flushed) == ([1], [1])
 
 
@@ -5950,7 +5973,7 @@ async def test_a_run_stopped_that_reaches_the_guard_is_the_cancellation_not_a_tr
 
 
 @pytest.mark.anyio
-async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed():
+async def test_a_stopped_run_marks_its_lock_a_deliberate_stop_once_and_never_crashed():
     lock = FakeLock()
     stop = cli.StopCause()
 
@@ -5958,11 +5981,13 @@ async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed()
         with cli._locked(lock, "T-9", stop):
             from agentic.core.process.application.ports import RunStopped
 
+            stop.signalled = True  # what `on_signal` sets before it marks the flag
             raise RunStopped
 
     with pytest.raises(SystemExit):
         await cli._signal_guarded(work, stop)
-    assert (lock.released, lock.kept, lock.kept_crashed) == (["T-9"], [], [])
+    assert (lock.released, lock.kept, lock.kept_crashed) == ([], [], [])
+    assert lock.kept_stopped == [("T-9", os.getpid())]
 
 
 # `build_parser()` (GH-400, subtask `entry-points`): the command line as a tree the docs
@@ -5974,6 +5999,7 @@ COMMAND_PATHS = [
     ("merge",),
     ("land",),
     ("restore",),
+    ("stop",),
     ("eval",),
     ("eval", "run"),
     ("eval", "score"),
@@ -6208,8 +6234,10 @@ class Raises:
 async def test_a_runtime_error_inside_a_node_leaves_a_record_the_poller_retakes(
     monkeypatch, tmp_path
 ):
+    from datetime import UTC, datetime
+
     from agentic.core.process.adapters.filesystem import FilesystemRunLock
-    from agentic.core.process.domain import rules
+    from agentic.core.process.domain import retakes, rules
     from agentic.shared.configuration import Configuration
     from tests.fakes import memory_ports
 
@@ -6229,9 +6257,83 @@ async def test_a_runtime_error_inside_a_node_leaves_a_record_the_poller_retakes(
     assert record is not None and record.crashed_version == "abc123"
     facts = rules.LockFacts(other_boot=False, alive=False, crashed_version=record.crashed_version)
     verdict = rules.interrupted_run(
-        {"status": "developing"}, facts, 0, version_key=rules.crash_version_key("def456")
+        {"status": "developing"},
+        facts,
+        retakes.Budget(0, None, None),
+        datetime.now(UTC),
+        in_tray=True,
+        document_written_at=None,
     )
     assert verdict == "retake_crash"
+
+
+# --- agentic stop (GH-466) -----------------------------------------------------------------
+
+
+def test_stop_takes_the_issue_and_runs_the_stop(monkeypatch, tmp_path):
+    root = product(tmp_path, "stopping")
+    asked: list[object] = []
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: memory_ports())
+    monkeypatch.setattr(cli.anyio, "run", lambda func, *args: asked.append(args[0]))
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "stop", "--issue", "466", "--product-dir", str(root)]
+    )
+
+    cli.main()
+
+    (work,) = asked
+    assert work.func is cli._stop
+    assert work.args[:2] == ("GH-466", 466)
+
+
+def test_stop_without_an_issue_is_refused_before_anything_is_touched(monkeypatch, tmp_path):
+    root = product(tmp_path, "stopping")
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: memory_ports())
+    monkeypatch.setattr("sys.argv", ["agentic", "stop", "--product-dir", str(root)])
+
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("outcome", "line"),
+    [
+        ("signalled", "stopped #466 (signalled); to continue: agentic resume --issue 466"),
+        ("killed", "stopped #466 (killed); to continue: agentic resume --issue 466"),
+        ("marked_dead", "stopped #466 (marked_dead); to continue: agentic resume --issue 466"),
+        (
+            "marked_recordless",
+            "stopped #466 (marked_recordless); to continue: agentic resume --issue 466",
+        ),
+    ],
+)
+async def test_stop_prints_one_line_with_the_outcome_and_the_command_to_continue(
+    monkeypatch, tmp_path, capsys, outcome, line
+):
+    from agentic.shared.configuration import Configuration
+
+    monkeypatch.setattr(cli.stopmod, "stop", lambda *a, **k: outcome)
+    # Returning normally (no raise, no SystemExit) is the exit 0 of every outcome.
+    assert (
+        await cli._stop("GH-466", 466, Configuration(product_dir=tmp_path), memory_ports()) is None
+    )
+    assert capsys.readouterr().out.strip() == line
+
+
+@pytest.mark.anyio
+async def test_stop_with_no_task_document_says_to_remove_the_agentic_label(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+
+    monkeypatch.setattr(cli.stopmod, "stop", lambda *a, **k: "no_document")
+    await cli._stop("GH-466", 466, Configuration(product_dir=tmp_path), memory_ports())
+    out = capsys.readouterr().out
+    assert "no task document" in out
+    assert "remove the `agentic` label" in out
 
 
 # --- agentic restore (GH-406) --------------------------------------------------------------
