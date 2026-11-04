@@ -308,6 +308,8 @@ async def run_through_the_real_graph(monkeypatch, tmp_path, previous=None, **opt
     monkeypatch.setattr(cli, "graph", build_graph(ports_for, arm_for=composition._arm_for))
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
+    for switch in ("AGENTIC_REVIEW_MODE", "AGENTIC_SKIP_EPHEMERAL"):
+        monkeypatch.delenv(switch, raising=False)
     cfg = Configuration.from_sources({}, os.environ)
     saver = Saver()
     task = {"id": "GH-1", "title": "Export", "description": "CSV."}
