@@ -260,6 +260,10 @@ def render(
         # the switches are at their default -- so a default-path document stays
         # byte-identical to one written before this task (issue #28).
         **({"experiment": experiment} if (experiment := state.get("experiment")) else {}),
+        # The arm this task was given by its product's experiment (GH-470), written only
+        # when assigned, so a document of an unassigned task is byte-identical to one
+        # written before it. Parsed back under the same name by `parse`.
+        **({"assignment": assigned} if (assigned := state.get("assignment")) else {}),
         # Whether the request entered with a `## Decided` heading and so runs one-round
         # interviews (`rules.entering`): written only when true, so a document without it
         # is byte-identical to one written before the cap existed, and reads as not decided.

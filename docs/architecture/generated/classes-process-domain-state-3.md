@@ -20,6 +20,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__CiLogRecord["CiLogRecord"]
+    class task__CloseDocs["CloseDocs"]
     class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]
     class task__EscalationPatch["EscalationPatch"]
@@ -32,10 +34,4 @@ classDiagram
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
-    class task__FullChecksRecord["FullChecksRecord"]
 ```
-
-## Relaciones con otras páginas
-
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `task.TaskState` se asocia con `task.FullChecksRecord`

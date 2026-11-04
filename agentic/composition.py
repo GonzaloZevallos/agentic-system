@@ -33,6 +33,7 @@ from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskD
 from .core.process.adapters.filesystem.board_sent import FilesystemBoardSent
 from .core.process.adapters.filesystem.check_ledger import FilesystemCheckLedger
 from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
+from .core.process.adapters.filesystem.experiment_file import FilesystemExperimentFile
 from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
@@ -256,6 +257,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
         ci_logs=GhCiLogs(cfg.product_dir, tracker.ci_report),
+        # GH-470: the product's experiment declaration, read once per poller round.
+        experiment=FilesystemExperimentFile(cfg.product_dir),
         stack=stack,
         # No task yet: a port is built per node, before a task is known, so the scratch of
         # a check is filed under `_untasked` until `bind_task` names the task.

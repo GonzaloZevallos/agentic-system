@@ -20,6 +20,9 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class experiment__Arm["Arm"]
+    class experiment__Experiment["Experiment"]
+    class experiment__InvalidExperiment["InvalidExperiment"]
     class rules__BlockerReport["BlockerReport"]
     class rules__CiGate["CiGate"]
     class rules__Commit["Commit"]
@@ -31,6 +34,4 @@ classDiagram
     class rules__LandWait["LandWait"]
     class rules__LaunchCandidate["LaunchCandidate"]
     class rules__LockFacts["LockFacts"]
-    class rules__MergeDecision["MergeDecision"]
-    class rules__MergeFacts["MergeFacts"]
 ```

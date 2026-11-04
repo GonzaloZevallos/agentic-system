@@ -24,7 +24,7 @@ from agentic.core.process.domain.task import INTEGRATION, RoleRun
 Interval = tuple[datetime, datetime]
 
 
-def _interval(run: RoleRun) -> Interval | None:
+def interval(run: RoleRun) -> Interval | None:
     """The run's `[started_at, ended_at]`, or `None` when it lacks either bound or one does
     not parse (a run recorded before the fields existed, or a hand-edited document)."""
     started, ended = run.get("started_at"), run.get("ended_at")
@@ -47,7 +47,7 @@ def _is_subtask_review(run: RoleRun) -> bool:
     return section.startswith(rules.REVIEW_PREFIX) and section != rules.review_section(INTEGRATION)
 
 
-def _union_seconds(intervals: Iterable[Interval]) -> float:
+def union_seconds(intervals: Iterable[Interval]) -> float:
     total = 0.0
     reach: datetime | None = None
     for start, end in sorted(intervals):
@@ -67,10 +67,10 @@ def busy_seconds(document: Mapping[str, Any]) -> tuple[float, float]:
     denominator is the length of the union of those intervals and the subtask reviews'.
     Runs without both timestamps are ignored on both sides."""
     runs: list[RoleRun] = list(document.get("runs") or [])
-    developers = [i for r in runs if _is_developer(r) and (i := _interval(r))]
-    reviews = [i for r in runs if _is_subtask_review(r) and (i := _interval(r))]
+    developers = [i for r in runs if _is_developer(r) and (i := interval(r))]
+    reviews = [i for r in runs if _is_subtask_review(r) and (i := interval(r))]
     numerator = sum((end - start).total_seconds() for start, end in developers)
-    return numerator, _union_seconds([*developers, *reviews])
+    return numerator, union_seconds([*developers, *reviews])
 
 
 def aggregate(documents: Iterable[Mapping[str, Any]]) -> float | None:
