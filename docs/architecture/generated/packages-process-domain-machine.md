@@ -13,9 +13,11 @@ graph TD
     g_domain__state["state (grupo)"]
     m_domain__account_reset["domain.account_reset"]
     m_domain__boot["domain.boot"]
+    m_domain__exempt_queue["domain.exempt_queue"]
     m_domain__reaping["domain.reaping"]
     m_domain__retakes["domain.retakes"]
     m_domain__scratch["domain.scratch"]
     m_domain__stall["domain.stall"]
     m_domain__account_reset --> g_domain__state
+    m_domain__exempt_queue --> g_domain__state
 ```

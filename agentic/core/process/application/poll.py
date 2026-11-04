@@ -1845,8 +1845,9 @@ def deferred_line(deferred: rules.Deferred) -> str:
     """The poll line for a merge or land `rules.poll_plan` held back: built from the plan's
     own `Deferred`, never from a second slot count (GH-263). The reason is printed as it is:
     `no_slot`, `exempt_busy`, `pause_waiting` for a land held by an account-limit pause
-    (GH-270) or `land_queued` for one yielding to an earlier wait of another product
-    (GH-362)."""
+    (GH-270), `land_queued` for one yielding to an earlier wait of another product
+    (GH-362) or `backoff` for a merge whose refusal still holds on its head and master
+    (GH-500)."""
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
