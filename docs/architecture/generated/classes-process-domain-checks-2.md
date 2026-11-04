@@ -20,10 +20,10 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class coverage__Entry["Entry"]
     class coverage__Parsed["Parsed"]
     class coverage__Refusal["Refusal"]
     class coverage__Rejected["Rejected"]
+    class merge_ci__PairCounts["PairCounts"]
     class performance__Limit["Limit"]
     class performance__Measurement["Measurement"]
     class performance__MetricResult["MetricResult"]
@@ -32,6 +32,7 @@ classDiagram
     class performance__Scenario["Scenario"]
     class presubmit__AffectedPlan["AffectedPlan"]
     class presubmit__BudgetBreach["BudgetBreach"]
+    class presubmit__CheckResult["CheckResult"]
     coverage__Rejected --> coverage__Refusal
     performance__MetricResult --> performance__Limit
 ```
