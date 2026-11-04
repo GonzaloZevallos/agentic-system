@@ -237,26 +237,33 @@ class CheckoutPresubmit:
     def timeout_s(self) -> float:
         # A declared wall longer than the default keeps the share held while its command may
         # still be running, and its one `not_ready` retry; nothing declared leaves this as is.
-        longest = max(self.timeouts.values(), default=0.0)
-        return max(self._timeout_s(), longest * 2 + (self.check_timeout_s if self.witness else 0))
+        witness = self.check_timeout_s if self.witness else 0
+        declared = max(
+            (
+                wall * presubmit.check_runs(name in self.rerun_forms)
+                for name, wall in self.timeouts.items()
+            ),
+            default=0.0,
+        )
+        return max(self._timeout_s(), declared + witness)
 
     def _timeout_s(self) -> float:
         witness = self.check_timeout_s if self.witness else 0
+        per_check = [presubmit.check_runs(name in self.rerun_forms) for name in self.checks]
         if self.parallel:
             # Every check runs at once, each under its own `check_timeout_s`: the
             # slowest one bounds the call, and the witness runs before them, alone. With
-            # an affected plan that one worker may run its affected form and then the
-            # full one, one after the other.
-            # The worker's last row may be red and rerun once more (ADR-0066).
-            runs = (2 if self.affected is not None else 1) + 1
-            return self.check_timeout_s * runs + witness
-        # Serial: each declared check may be rerun once, one more run per check.
-        reruns = self.check_timeout_s * len(self.checks)
+            # an affected plan that one worker may run its affected form first. The
+            # worker's last row may be red and rerun (ADR-0066): `check_runs` says how often.
+            runs = max(per_check, default=presubmit.check_runs(False))
+            return self.check_timeout_s * (runs + (1 if self.affected is not None else 0)) + witness
+        # Serial: one first run per check, the affected forms, and every rerun a check may
+        # take (`check_runs` less its first run).
+        reruns = self.check_timeout_s * sum(runs - 1 for runs in per_check)
+        first_runs = len(self.checks)
         if self.affected is not None:
-            runs = len(self.checks) + len(self.affected.commands)
-            return self.check_timeout_s * max(runs, 1) + reruns + witness
-        base = self.check_timeout_s * max(len(self.checks), 1)
-        return base + reruns + (self.check_timeout_s if self.witness else 0)
+            first_runs += len(self.affected.commands)
+        return self.check_timeout_s * max(first_runs, 1) + reruns + witness
 
     @property
     def wait_max_s(self) -> float:
@@ -481,7 +488,16 @@ class CheckoutPresubmit:
             return rows
         again = self._execute(name, rerun_as, last.get("mode"))
         again["rerun"] = True
-        return [*rows, again]
+        if form is None or rerun_as != form.command:
+            return [*rows, again]
+        ids = presubmit.failed_ids(last["output"], form.test_id)
+        if presubmit.rerun_resolved(again, ids, form):
+            return [*rows, again]
+        # The form went red without rerunning what it was asked to: once more, the whole
+        # command, and its row stands for the rerun. The form row is dropped (invariant).
+        whole = self._execute(name, command, last.get("mode"))
+        whole["rerun"] = True
+        return [*rows, whole]
 
     def flakes(self) -> list[FlakeRecord]:
         """The flakes of the last call: one record per check the domain judges a `flake`,
