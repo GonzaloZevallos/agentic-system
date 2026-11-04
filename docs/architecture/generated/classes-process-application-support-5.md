@@ -15,6 +15,8 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__SentEntry["SentEntry"]
+    class ports__SentMemory["SentMemory"]
     class ports__StopFlag["StopFlag"]
     class ports__TaskDocuments["TaskDocuments"]
     class ports__Tracker["Tracker"]
@@ -27,8 +29,6 @@ classDiagram
     class ports__UnstageablePath["UnstageablePath"]
     class ports__Upstream["Upstream"]
     class ports__UpstreamMerge["UpstreamMerge"]
-    class ports__Workspace["Workspace"]
-    class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
     ports__TrackerTimedOut --|> ports__TrackerCallFailed
     ports__TrackerTransient --|> ports__TrackerCallFailed
@@ -46,4 +46,3 @@ classDiagram
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
-  - `ports.Ports` se asocia con `ports.Workspace`

@@ -1214,6 +1214,16 @@ class MergeCiRecord(TypedDict):
     rerun_at: NotRequired[str]
 
 
+class MergeConflictRecord(TypedDict):
+    """The conflict git found merging `head` with `master` (GH-492): full ids, `at` the ISO
+    instant it was read. One row for the task, replaced whole on each write, and it holds only
+    for that exact pair (`merge_conflict.applies`). No free text."""
+
+    head: str
+    master: str
+    at: str
+
+
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
     """The pairs of `existing` and `new` as one list in the order first seen, one row per
     `(head, master)`: a row for a known pair replaces it whole, so a record is written before
@@ -1326,6 +1336,10 @@ class TaskState(TaskInput, total=False):
     # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
     # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
+    # The conflict git found building a fresh pair (GH-492), one row replaced whole on each write
+    # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
+    # reads as no record.
+    merge_conflict: Annotated[MergeConflictRecord, last]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str

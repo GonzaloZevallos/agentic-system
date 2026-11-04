@@ -20,7 +20,7 @@ from typing import Literal
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import adr_numbers, ci, master_gain, merge_ci, presubmit, rules
+from ..domain import adr_numbers, ci, master_gain, merge_ci, merge_conflict, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import CiDispatch
@@ -51,6 +51,8 @@ from .ports import (
     CommandResult,
     GitError,
     MergeCallFailed,
+    MergeConflict,
+    MergeFailed,
     Ports,
     TrackerUnreachable,
     Upstream,
@@ -170,7 +172,14 @@ def merge_task(
         base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
         # GitHub's reading of a conflict on this head and master (GH-326), git-free; the
         # probe is the last look's, immediately before the merge call.
-        github = rules.merge_conflicts_from(pull_request, head, master, None)
+        # GH-492: git's own conflict on this exact pair, once recorded, counts as well.
+        github = rules.merge_conflicts_from(
+            pull_request,
+            head,
+            master,
+            None,
+            recorded=merge_conflict.applies(document.get("merge_conflict"), head, master),
+        )
         facts = with_ci(
             replace(
                 base_facts,
@@ -239,7 +248,12 @@ def merge_task(
     if decision.kind == "refuse":
         assert decision.reason is not None
         if decision.reason == "merge_conflict":
-            log(f"agentic: merge: {task_id}: {head} conflicts with master {master} (github)")
+            where = (
+                "recorded"
+                if merge_conflict.applies(raw.get("merge_conflict"), head, master)
+                else "github"
+            )
+            log(f"agentic: merge: {task_id}: {head} conflicts with master {master} ({where})")
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
         return _refuse(
             task_id,
@@ -456,9 +470,19 @@ def _build_pair(
     )
     try:
         path = ports.workspace.detached_checkout(name, head)
-        if ports.workspace.merge(path, master, message) is not None:
+        merged = ports.workspace.merge(path, master, message)
+        if isinstance(merged, MergeConflict):
+            # GH-492: git's own finding is a fact about this exact head and master: written as
+            # the one `merge_conflict` row, so the next round (and the landing) refuses it.
             log(f"agentic: merge: {task_id}: {head} does not merge with {master}")
+            ports.documents.record_closure(
+                task_id, {"merge_conflict": merge_conflict.record(head, master, clock())}
+            )
             return _Fresh(stopped=MergeResult("refused", "merge_conflict"))
+        if isinstance(merged, MergeFailed):
+            # A refusal with no unmerged path says nothing about the code: nothing is recorded.
+            log(f"agentic: merge: {task_id}: could not publish the fresh CI run: {merged.reason}")
+            return _Fresh(stopped=MergeResult("stopped", "ci_publish_failed"))
         tested = ports.workspace.full_head(path)
         if again is None:
             record: MergeCiRecord = {
@@ -916,7 +940,7 @@ def _merge(
     # GH-255: the last look at the merge itself. A head that conflicts with this master is
     # refused with nothing written (no intent, no failure count, no comment: `merge_conflict`
     # is not in `COMMENTED`) and `Tracker.merge` is never called. Unread changes nothing.
-    conflicts, source = read_conflicts(ports, pull_request, head, master)
+    conflicts, source = read_conflicts(ports, pull_request, head, master, recorded=False)
     if conflicts is True:
         log(f"agentic: merge: {task_id}: {head} conflicts with master {master} ({source})")
         return MergeResult("refused", "merge_conflict")

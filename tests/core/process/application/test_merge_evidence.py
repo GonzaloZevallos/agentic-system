@@ -101,6 +101,14 @@ def test_two_runs_with_different_failing_checks_comment_twice_and_other_tails_on
     assert summaries == ["Failed: tests", "Failed: lint, tests"]
 
 
+def test_a_merge_refused_without_a_conflict_records_the_same_failed_step(tmp_path, monkeypatch):
+    """GH-492: `MergeFailed` stops the run at `conflict`, as a `MergeConflict` does."""
+    failed = _world(tmp_path)
+    failed.workspace.failed_merges.add(MASTER)
+    _run(failed, tmp_path)
+    assert _record(failed)["failed_step"] == "conflict"
+
+
 def test_a_conflict_a_setup_step_and_a_worktree_error_each_record_where_it_stopped(
     tmp_path, monkeypatch
 ):

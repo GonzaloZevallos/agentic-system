@@ -5245,19 +5245,26 @@ def merge_conflicts_from(
     pr_head: str | None,
     current_master: str | None,
     probe: bool | None,
+    *,
+    recorded: bool,
 ) -> bool | None:
-    """The only place GitHub's mergeability becomes a fact (GH-326): `MergeFacts.conflicts`
-    from the two readings of it. GitHub's `CONFLICTING` counts, `True` whatever the probe
-    says, only when it was read on the head (`head_oid`) and on the base tip (`base_oid`)
-    this decision is made on (`pr_head`, `current_master`). Anything else -- `MERGEABLE`,
+    """The only place a conflict becomes `MergeFacts.conflicts` (GH-326, GH-492), from three
+    readings, in this order. GitHub's `CONFLICTING` counts, `True` whatever the probe says,
+    only when it was read on the head (`head_oid`) and on the base tip (`base_oid`) this
+    decision is made on (`pr_head`, `current_master`). Then `recorded`: git itself found a
+    conflict on this exact head and master (`merge_conflict.applies`, decided by the caller),
+    which is `True` over `MERGEABLE` and over `UNKNOWN`. Anything else -- `MERGEABLE`,
     `UNKNOWN` (still computing: read again on the next poll), no reading, a stale head, a
-    different or absent base tip -- is the `probe`'s value, unchanged."""
+    different or absent base tip -- is the `probe`'s value, unchanged: `UNKNOWN` is unread,
+    never clean. `recorded` has no default, so every caller states what it passes."""
     if (
         pull_request is not None
         and pull_request.mergeable == "CONFLICTING"
         and same_commit(pull_request.head_oid, pr_head)
         and same_commit(pull_request.base_oid, current_master)
     ):
+        return True
+    if recorded:
         return True
     return probe
 

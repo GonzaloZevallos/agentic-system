@@ -14,7 +14,7 @@ import pytest
 
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.adapters.git import workspace as workspace_module
-from agentic.core.process.application.ports import GitError
+from agentic.core.process.application.ports import GitError, MergeConflict, MergeFailed
 from agentic.shared.configuration import Configuration
 
 IDENTITY = Configuration(product_dir=Path("/tmp/p")).git_identity
@@ -96,20 +96,24 @@ def test_a_merge_that_keeps_meeting_the_lock_gives_up_after_the_bound(
     run = Scripted(*[completed(128, LOCK_ERROR)] * 50)
     monkeypatch.setattr(GitWorkspace, "_run", lambda self, *a, cwd=None: run(*a, cwd=cwd))
 
-    reason = workspace(tmp_path).merge(tmp_path, "agentic/GH-1.api")
+    result = workspace(tmp_path).merge(tmp_path, "agentic/GH-1.api")
 
-    assert reason is not None and "Unable to create" in reason
+    assert isinstance(result, MergeFailed) and "Unable to create" in result.reason
     merges = [call for call in run.calls if "merge" in call and "--abort" not in call]
     assert len(merges) == workspace_module.LOCK_RETRIES + 1
 
 
 def test_a_conflict_is_not_a_lock_error_and_is_not_retried(tmp_path, monkeypatch, sleeps):
-    run = Scripted(completed(1, "CONFLICT (content): Merge conflict in shared.txt"))
+    run = Scripted(
+        completed(1, "CONFLICT (content): Merge conflict in shared.txt"),
+        subprocess.CompletedProcess([], 0, stdout="UU shared.txt\n", stderr=""),
+    )
     monkeypatch.setattr(GitWorkspace, "_run", lambda self, *a, cwd=None: run(*a, cwd=cwd))
 
-    reason = workspace(tmp_path).merge(tmp_path, "agentic/GH-1.api")
+    result = workspace(tmp_path).merge(tmp_path, "agentic/GH-1.api")
 
-    assert reason is not None and "shared.txt" in reason
+    assert isinstance(result, MergeConflict) and "shared.txt" in result.reason
+    assert result.paths == ("shared.txt",)
     assert len([call for call in run.calls if "--no-edit" in call]) == 1
     assert sleeps == []
 
