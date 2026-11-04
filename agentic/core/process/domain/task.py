@@ -52,6 +52,10 @@ Status = Literal[
     # A task whose plan is only work on the issue tracker (GH-336): the checklist is posted
     # for the human and the run ends with no pull request. An end like `split`.
     "tracker_only",
+    # An evaluation run that reached the end of its road (GH-470, part 2): the graph sends a
+    # task carrying `evaluation` here instead of `deliver`. An end like `tracker_only`, with
+    # no pull request and no tracker write.
+    "evaluated",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -384,6 +388,17 @@ class ArmAssignment(TypedDict):
     switches: dict[str, str]
 
 
+class EvaluationRef(TypedDict):
+    """`TaskState.evaluation`: what marks a task as an evaluation run (GH-470) -- the issue
+    it re-runs, the commit it runs from, and that its full check always runs locally. The
+    key's presence is the marker (`measurement.domain.evaluation.is_evaluation`); whether a
+    process is wired as one is decided by its root, never by this."""
+
+    issue: int
+    base: str
+    ci: Literal["local"]
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -413,6 +428,9 @@ class TaskInput(TypedDict):
     # it the graph's `input_schema` drops the key and the arm never reaches the state.
     # Absent reads as unassigned.
     assignment: NotRequired[ArmAssignment]
+    # What marks an evaluation run (GH-470): `FileInbox` sets it from the frozen entry.
+    # Declared for the same reason as `decided`. Absent reads as a real task.
+    evaluation: NotRequired[EvaluationRef]
 
 
 @dataclass(frozen=True)
@@ -741,8 +759,17 @@ class ReleasePatch(TypedDict, total=False):
 class FinishedPatch(TypedDict):
     """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
 
-    status: Literal["discarded", "split", "tracker_only"]
+    status: Literal["discarded", "split", "tracker_only", "evaluated"]
     finished_at: str
+
+
+class EvaluatedPatch(FinishedPatch, total=False):
+    """What the `evaluated` node writes when an evaluation run ends (GH-470): the keys of
+    `rules.finished` plus the role that closes it and the processes the release reaped. A
+    partial patch, so `apply` takes it as a mapping, not as a whole `TaskState`."""
+
+    current_role: str
+    reaped_at_cleanup: list[ReapedProcess]
 
 
 class FindingRecord(TypedDict):
@@ -1364,6 +1391,10 @@ class TaskState(TaskInput, total=False):
     # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
     # `experiment`. Written once when the run starts, so no reducer.
     assignment: ArmAssignment
+    # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
+    # Written once when the run starts, from the frozen entry, so no reducer; omitted from
+    # the document when absent.
+    evaluation: EvaluationRef
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str
@@ -1422,9 +1453,10 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState | ReleasePatch) -> TaskState:
+def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) -> TaskState:
     """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
-    patch is a `TaskState` or the partial `ReleasePatch`, so every key stays checked."""
+    patch is a `TaskState` or the partial `ReleasePatch` / `EvaluatedPatch`, so every key stays
+    checked."""
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)

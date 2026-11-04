@@ -27,13 +27,21 @@ from .core.knowledge.adapters.filesystem import FilesystemFlags, FilesystemKnowl
 from .core.knowledge.adapters.git import GitStack
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
+from .core.measurement.domain import evaluation
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
+from .core.process.adapters.evaluation import (
+    ClosedInbox,
+    EvaluationStack,
+    EvaluationTracker,
+    EvaluationWorkspace,
+)
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
 from .core.process.adapters.filesystem.board_sent import FilesystemBoardSent
 from .core.process.adapters.filesystem.check_ledger import FilesystemCheckLedger
 from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
 from .core.process.adapters.filesystem.experiment_file import FilesystemExperimentFile
+from .core.process.adapters.filesystem.file_inbox import FileInbox, frozen_input_path
 from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
@@ -61,7 +69,7 @@ from .core.process.adapters.shell import (
     ShellSampleApp,
 )
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
-from .core.process.application.ports import Ports, StopFlag
+from .core.process.application.ports import Inbox, Ports, StopFlag
 from .core.process.application.preflight import (
     refuse_its_own_checkout,
     refuse_scratch_in_a_repository,
@@ -157,6 +165,10 @@ def default_ports(
     `close` and every other verb, ADR-0050)."""
     flag = stop_flag if stop_flag is not None else NullStopFlag()
     ports = _ports(cfg, flag, gh_retry)
+    # GH-470: the root alone decides that a process is wired as an evaluation.
+    if evaluation.is_evaluation_root(cfg.product_dir):
+        frozen = frozen_input_path(cfg.product_dir)
+        ports = evaluation_ports(ports, FileInbox(frozen) if frozen.is_file() else ClosedInbox())
     # Here and not only in `preflight`, which is the CLI's: `langgraph dev`, Studio and
     # the LangGraph API import the wired graph and never see the CLI, and this is the
     # door all of them share. The refusal is the application's; the root only asks
@@ -164,6 +176,21 @@ def default_ports(
     refuse_its_own_checkout(cfg, ports)
     refuse_scratch_in_a_repository(cfg, ports)
     return ports
+
+
+def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
+    """`ports` as an evaluation root runs them (GH-470): the tracker and the workspace lose
+    what writes, the stack declares no `ci:`, the task comes from the frozen entry and the
+    Project board is not mirrored. The one place that wraps; no use case asks."""
+    return replace(
+        ports,
+        tracker=EvaluationTracker(ports.tracker),
+        workspace=EvaluationWorkspace(ports.workspace),
+        stack=EvaluationStack(ports.stack),
+        inbox=inbox,
+        board=None,
+        board_sent=None,
+    )
 
 
 def bind_task(ports: Ports, task_key: str) -> Ports:

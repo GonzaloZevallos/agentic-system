@@ -16,7 +16,6 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli, composition
-from agentic.core.measurement.domain import evaluation
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import GhInbox
 from agentic.core.process.adapters.github.tracker import pull_request_number
@@ -24,7 +23,13 @@ from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain import legacy_names
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import ENV_PREFIX, Configuration
-from tests.fakes import MemoryKnowledge, MemoryStack, MemoryTracker, memory_ports
+from tests.fakes import (
+    MemoryKnowledge,
+    MemoryStack,
+    MemoryTracker,
+    eval_set_yaml,
+    memory_ports,
+)
 
 # `_run`/`_resume` now open their checkpointer twice per invocation (ADR-0003, addendum
 # 2026-10-04: a second open after `adelete_thread` is how a task migrates). This double
@@ -3129,7 +3134,7 @@ def test_close_all_reports_a_task_after_the_stopped_one_as_not_attempted_not_sti
 # or patches `subprocess` (Tech Lead plan: "the cheap test to write is one that spends
 # $200").
 
-EVAL_SET_YAML = "issues:\n  - 1\n  - 2\nsmoke: 1\n"
+EVAL_SET_YAML = eval_set_yaml(1, 2)
 
 
 def eval_root(tmp_path: Path, eval_set: str | None = EVAL_SET_YAML) -> Path:
@@ -3261,276 +3266,6 @@ def test_eval_score_dispatch_builds_the_eval_score_work(monkeypatch, tmp_path):
     assert cfg.product_dir == root
     assert set_path is None
     assert out_path == out
-
-
-@pytest.mark.anyio
-async def test_eval_run_refuses_when_the_declaration_file_is_missing(tmp_path):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path, eval_set=None)
-    with pytest.raises(cli.CannotStart, match="eval-set.yaml"):
-        await cli._eval_run(
-            Configuration(product_dir=root), memory_ports(), None, 200.0, True, False
-        )
-
-
-@pytest.mark.anyio
-async def test_eval_run_dry_run_prefers_the_set_override_over_the_products_own(tmp_path, capsys):
-    """`--set` overrides the product's own `.agentic/eval-set.yaml` for a spike, and
-    the printed line says which of the two it read (Tech Lead plan)."""
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")  # never read
-    override = tmp_path / "spike.yaml"
-    override.write_text("issues:\n  - 9\nsmoke: 9\n")
-    await cli._eval_run(
-        Configuration(product_dir=root), memory_ports(), str(override), 200.0, False, True
-    )
-    out = capsys.readouterr().out
-    assert str(override) in out
-    assert "GH-9 (issue 9)" in out
-    assert "GH-1" not in out
-
-
-@pytest.mark.anyio
-async def test_eval_score_uses_the_set_override_and_reports_it_as_the_source(tmp_path):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")  # never read
-    override = tmp_path / "spike.yaml"
-    override.write_text("issues:\n  - 9\nsmoke: 9\n")
-    ports = memory_ports()
-    ports.documents.save({"id": "GH-9", "status": "open", "prompts": {"developer": "abc"}})
-    out = tmp_path / "out.jsonl"
-    await cli._eval_score(Configuration(product_dir=root), ports, str(override), str(out))
-    (line,) = out.read_text().splitlines()
-    record = json.loads(line)
-    assert record["issue"] == 9
-    assert record["declaration_source"] == str(override)
-    assert record["baseline_id"]
-
-
-@pytest.mark.anyio
-async def test_eval_run_refuses_when_the_declaration_names_an_unknown_key(tmp_path):
-    """The pure verdict `evaluation.eval_set_refusal` on an input it must reject,
-    exercised through the CLI seam: the offending key names itself in the message."""
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\nextra: nope\n")
-    with pytest.raises(cli.CannotStart, match="extra"):
-        await cli._eval_run(
-            Configuration(product_dir=root), memory_ports(), None, 200.0, True, False
-        )
-
-
-@pytest.mark.anyio
-async def test_eval_run_refuses_when_the_product_has_no_name(tmp_path):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    ports = memory_ports(stack=MemoryStack(product=None))
-    with pytest.raises(cli.CannotStart, match="expected `product`"):
-        await cli._eval_run(Configuration(product_dir=root), ports, None, 200.0, True, False)
-
-
-@pytest.mark.anyio
-async def test_eval_run_refuses_when_a_set_tasks_pull_request_has_no_recorded_closure(tmp_path):
-    """Read off the document alone, never `gh`: `memory_ports()`'s own `MemoryTracker`
-    carries no `pull_request` method at all, so a call to it would raise `AttributeError`
-    -- a different exception than `CannotStart` -- and fail this test outright, proving
-    the refusal never reaches for `gh` (the plan's invariant: neither `eval` phase calls
-    it)."""
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    reference = "https://github.com/o/r/pull/7"
-    ports = memory_ports()
-    ports.documents.save({"id": "GH-1", "pull_request": reference})
-    launch = FakeLaunch()
-    with pytest.raises(cli.CannotStart, match="no recorded closure"):
-        await cli._eval_run(
-            Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
-        )
-    assert launch.calls == []
-
-
-@pytest.mark.anyio
-async def test_eval_run_does_not_refuse_a_set_tasks_already_closed_pull_request(tmp_path):
-    """The accept side of the same rule: `closed_at` recorded is `agentic close`'s own
-    word that the pull request is no longer open, so `--fresh` archiving its branch is
-    no longer a hazard and the task launches."""
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    ports = memory_ports()
-    ports.documents.save(
-        {
-            "id": "GH-1",
-            "pull_request": "https://github.com/o/r/pull/7",
-            "closed_at": "2026-09-20T00:00:00.000Z",
-        }
-    )
-
-    def launch(argv, env_overlay):
-        issue = argv[-1]
-        ports.documents.save({"id": f"GH-{issue}", "status": "ready_for_review", "cost_usd": 40.0})
-
-    await cli._eval_run(
-        Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
-    )
-
-
-@pytest.mark.anyio
-async def test_eval_run_refuses_when_a_set_tasks_own_run_lock_is_held(tmp_path):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    lock = FakeKeyedLock(held={"GH-2": lock_record()})
-    launch = FakeLaunch()
-    with pytest.raises(cli.CannotStart, match="GH-2 is already running"):
-        await cli._eval_run(
-            Configuration(product_dir=root),
-            memory_ports(),
-            None,
-            200.0,
-            True,
-            False,
-            run_lock=lock,
-            launch=launch,
-        )
-    assert launch.calls == []
-
-
-@pytest.mark.anyio
-async def test_eval_run_refuses_when_the_eval_lock_itself_is_held(tmp_path):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    lock = FakeKeyedLock(held={"eval": lock_record()})
-    launch = FakeLaunch()
-    with pytest.raises(cli.CannotStart, match="eval is already running"):
-        await cli._eval_run(
-            Configuration(product_dir=root),
-            memory_ports(),
-            None,
-            200.0,
-            True,
-            False,
-            run_lock=lock,
-            launch=launch,
-        )
-    assert launch.calls == []
-    assert lock.released == []  # never acquired: nothing to release
-
-
-@pytest.mark.anyio
-async def test_eval_run_requires_yes_before_spending_and_prints_the_estimate_first(
-    tmp_path, capsys
-):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    launch = FakeLaunch()
-    with pytest.raises(cli.CannotStart, match=r"estimated spend \$90.00"):
-        await cli._eval_run(
-            Configuration(product_dir=root),
-            memory_ports(),
-            None,
-            200.0,
-            False,
-            False,
-            launch=launch,
-        )
-    assert "estimated $90.00" in capsys.readouterr().out
-    assert launch.calls == []
-
-
-@pytest.mark.anyio
-async def test_eval_run_dry_run_reports_and_spends_nothing(tmp_path, capsys):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    ports = memory_ports()
-    ports.documents.save({"id": "GH-1", "status": "ready_for_review"})
-    launch = FakeLaunch()
-    lock = FakeKeyedLock()
-    await cli._eval_run(
-        Configuration(product_dir=root),
-        ports,
-        None,
-        200.0,
-        False,
-        True,
-        run_lock=lock,
-        launch=launch,
-    )
-    out = capsys.readouterr().out
-    assert "GH-1 (issue 1): ready_for_review" in out
-    assert "GH-2 (issue 2): no document yet" in out
-    assert launch.calls == []
-    assert lock.acquired == []
-
-
-@pytest.mark.anyio
-async def test_eval_run_launches_each_task_in_order_waited(tmp_path):
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path)
-    ports = memory_ports()
-
-    def launch(argv, env_overlay):
-        launch.calls.append((argv, env_overlay))
-        issue = argv[-1]
-        ports.documents.save({"id": f"GH-{issue}", "status": "ready_for_review", "cost_usd": 40.0})
-
-    launch.calls = []
-    await cli._eval_run(
-        Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
-    )
-    assert [argv for argv, _ in launch.calls] == [
-        [cli.sys.argv[0], "run", "--fresh", "--issue", "1"],
-        [cli.sys.argv[0], "run", "--fresh", "--issue", "2"],
-    ]
-
-
-@pytest.mark.anyio
-async def test_eval_run_hands_each_child_the_products_dir_and_never_a_log_file_key(tmp_path):
-    """`_eval_run` builds its overlay from `cfg.product_dir` alone (Tech Lead plan): the
-    `AGENTIC_LOG_FILE` drop is the default `_run_eval_child`'s own job on `os.environ`
-    (not exercised here, since no test in this diff patches `subprocess`), but the
-    overlay the loop hands to *any* launcher -- fake or real -- must never itself carry
-    that key, or the default would have nothing to drop it from."""
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")
-    ports = memory_ports()
-    launch = FakeLaunch()
-    await cli._eval_run(
-        Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
-    )
-    (call,) = launch.calls
-    _argv, overlay = call
-    assert overlay == {cli.ENV_PREFIX + "PRODUCT_DIR": str(root)}
-    assert cli.ENV_PREFIX + "LOG_FILE" not in overlay
-
-
-@pytest.mark.anyio
-async def test_eval_run_charges_the_full_estimate_when_a_childs_document_never_moved(
-    tmp_path, capsys
-):
-    """A child that dies before writing anything cannot loop for free: the budget
-    check that follows sees the full per-task estimate, not zero."""
-    from agentic.shared.configuration import Configuration
-
-    root = eval_root(tmp_path, eval_set="issues:\n  - 1\n  - 2\nsmoke: 1\n")
-    ports = memory_ports()
-    launch = FakeLaunch()  # never writes a document
-    await cli._eval_run(
-        Configuration(product_dir=root), ports, None, 45.0, True, False, launch=launch
-    )
-    # Budget of one task's estimate: the second task never launches.
-    assert len(launch.calls) == 1
-    assert f"${evaluation.PER_TASK_ESTIMATE_USD:.2f} spent so far" in capsys.readouterr().out
 
 
 @pytest.mark.anyio

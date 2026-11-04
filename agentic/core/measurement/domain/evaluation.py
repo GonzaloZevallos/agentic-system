@@ -30,12 +30,22 @@ rather than fast.
 with no `closed_at` yet scores `None`, with a reason naming the exact command that would
 score it -- a zero and "the human has not looked yet" are different facts, and conflating
 them corrupts the baseline.
+
+**An evaluation run is a task whose document carries `evaluation`** (GH-470, part 2):
+`is_evaluation` is the one predicate for that, and every reader of
+`<product>/.agentic/eval/docs/` filters through `evaluation_documents`. Whether a process
+is wired as one is decided by its *root* alone (`is_evaluation_root`), checked against its
+task id by `wiring_refusal` -- never by the document's key, which a reader sees only after
+the run has already spent. The root test resolves symlinks (`os.path.realpath`), the one
+read of the filesystem this module makes: it opens no file.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +54,7 @@ from typing import NotRequired, TypedDict
 from agentic.core.process.domain.task import TaskState
 
 from .metrics import DeliveryOutcome, changes_requested_total, prompts_fingerprint, run_duration_s
-from .scorecard import LANDED_UNJUDGED, task_figures
+from .scorecard import LANDED_UNJUDGED, ParsedDocument, task_figures
 
 # `.agentic/eval-set.yaml`, relative to the product root, like `stack.yaml`, `flags.yaml`
 # and `BRIEF.md`: the set travels with the product whose issues it names. The caller
@@ -52,10 +62,15 @@ from .scorecard import LANDED_UNJUDGED, task_figures
 DECLARATION_PATH = Path(".agentic/eval-set.yaml")
 # Every key the declaration may carry. An unknown one is a typo, not an extension --
 # `core.knowledge.domain.stack`'s own rule for its own keys, quoted here for the same
-# reason: a product that misspells `issues` would otherwise run a set of nothing and
-# never know. The declaration carries the issue numbers and the smoke task and nothing
-# else -- no per-task expectations, no thresholds; the score is README.md 9's own.
-EVAL_SET_KEYS = ("issues", "smoke")
+# reason: a product that misspells `entries` would otherwise run a set of nothing and
+# never know. The declaration carries the entries and the smoke task and nothing else --
+# no per-task expectations, no thresholds; the score is README.md 9's own. The old
+# `issues:` form is not a key any more: no product ever held the file (GH-470).
+EVAL_SET_KEYS = ("entries", "smoke")
+# What one entry freezes: the issue it re-runs, the commit it runs from and the text the
+# roles receive -- the issue's body as it was, never read again from the tracker.
+ENTRY_KEYS = ("issue", "base", "title", "body")
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
 # The request's own 35-45 USD per-task band, taken at its top: an estimate for a set
 # budget's floor, never a measurement -- the actual figure is `cost_usd`, read off each
 # task's own document once it exists.
@@ -95,14 +110,60 @@ class TaskDocument(TaskState, total=False):
 
 
 @dataclass(frozen=True)
+class EvalEntry:
+    """One frozen input of the set: `issue` re-run from `base` (a full sha) with `title`
+    and `body` as its request."""
+
+    issue: int
+    base: str
+    title: str
+    body: str
+
+
+@dataclass(frozen=True)
 class EvalSet:
-    """*Set de evaluación* (`CONTEXT.md`): the fixed issues re-run identical against
-    every version of prompts, and which one of them stands in as the smoke task for a
+    """*Set de evaluación* (`CONTEXT.md`): the frozen entries re-run identical against
+    every version of prompts, and which issue of them stands in as the smoke task for a
     prompt or parameter change (README.md 9's addendum). Nothing else: no per-task
     expectations, no thresholds live here."""
 
-    issues: tuple[int, ...]
+    entries: tuple[EvalEntry, ...]
     smoke: int
+
+    @property
+    def issues(self) -> tuple[int, ...]:
+        """The distinct issue numbers of `entries`, sorted: the one source of the set's
+        issues for the merge guard, `eval score` and `eval compare` (GH-470)."""
+        return tuple(sorted({entry.issue for entry in self.entries}))
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def entry_refusal(entry: object, source: object) -> str | None:
+    """Why `entry` is not a frozen input, or `None`. The one definition of an entry, read
+    by the declaration (`eval_set_refusal`) and by the file a run is handed
+    (`FileInbox`): `issue` a positive integer, `base` 40 lowercase hex characters, `title`
+    and `body` non-empty text, no other key."""
+    if not isinstance(entry, dict):
+        return f"{source}: expected an entry mapping with {ENTRY_KEYS}, got {entry!r}"
+    if unknown := [key for key in entry if key not in ENTRY_KEYS]:
+        return f"{source}: unknown entry key(s) {', '.join(sorted(unknown))}; expected {ENTRY_KEYS}"
+    issue = entry.get("issue")
+    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
+        return f"{source}: expected a positive integer `issue` in an entry, got {issue!r}"
+    base = entry.get("base")
+    if not isinstance(base, str) or not _FULL_SHA.fullmatch(base):
+        return (
+            f"{source}: issue {issue}: expected `base` as a full 40-character lowercase "
+            f"hex sha, got {base!r}"
+        )
+    for key in ("title", "body"):
+        text = entry.get(key)
+        if not isinstance(text, str) or not text.strip():
+            return f"{source}: issue {issue}: expected a non-empty `{key}`, got {text!r}"
+    return None
 
 
 def eval_set_refusal(data: object, source: object) -> str | None:
@@ -111,26 +172,29 @@ def eval_set_refusal(data: object, source: object) -> str | None:
     `no_brief` and `brief_refusal` keep them apart in `cli.py` -- so the caller reads the
     file and hands in whatever `yaml.safe_load` returned only when there is something to
     load. Rejected: anything that is not a non-empty mapping, any key outside
-    `EVAL_SET_KEYS`, an empty or missing `issues` list, a non-integer entry in it, a
-    duplicated issue number, and a `smoke` task that is not itself one of `issues`."""
+    `EVAL_SET_KEYS` (the old `issues:` form included), an empty or missing `entries`
+    list, an entry `entry_refusal` rejects, a duplicated `(issue, base)` pair, and a
+    `smoke` task that is not the issue of one of the entries."""
     if not isinstance(data, dict) or not data:
         return f"{source}: expected a non-empty mapping with {EVAL_SET_KEYS}"
     if unknown := [key for key in data if key not in EVAL_SET_KEYS]:
         return f"{source}: unknown key(s) {', '.join(sorted(unknown))}; expected {EVAL_SET_KEYS}"
-    issues = data.get("issues")
-    if not isinstance(issues, list) or not issues:
-        return f"{source}: expected a non-empty `issues` list of GitHub issue numbers"
-    for number in issues:
-        if not isinstance(number, int) or isinstance(number, bool):
-            return f"{source}: expected an integer issue number in `issues`, got {number!r}"
-    if len(set(issues)) != len(issues):
-        duplicated = sorted({n for n in issues if issues.count(n) > 1})
-        return f"{source}: duplicated issue number(s) in `issues`: {duplicated}"
+    entries = data.get("entries")
+    if not isinstance(entries, list) or not entries:
+        return f"{source}: expected a non-empty `entries` list of frozen issues"
+    for entry in entries:
+        if (reason := entry_refusal(entry, source)) is not None:
+            return reason
+    pairs = [(entry["issue"], entry["base"]) for entry in entries]
+    if duplicated := sorted({pair for pair in pairs if pairs.count(pair) > 1}):
+        shown = ", ".join(f"issue {issue} at {base[:8]}" for issue, base in duplicated)
+        return f"{source}: duplicated entry in `entries`: {shown}"
     smoke = data.get("smoke")
-    if not isinstance(smoke, int) or isinstance(smoke, bool):
+    if not _is_int(smoke):
         return f"{source}: expected an integer `smoke` task"
+    issues = sorted({issue for issue, _ in pairs})
     if smoke not in issues:
-        return f"{source}: `smoke` ({smoke}) must be one of `issues` {issues}"
+        return f"{source}: `smoke` ({smoke}) must be the issue of one of `entries` {issues}"
     return None
 
 
@@ -141,7 +205,79 @@ def parse_eval_set(data: object, source: object) -> EvalSet:
     if (reason := eval_set_refusal(data, source)) is not None:
         raise ValueError(reason)
     assert isinstance(data, dict)  # eval_set_refusal already ruled out anything else
-    return EvalSet(issues=tuple(data["issues"]), smoke=data["smoke"])
+    entries = tuple(
+        EvalEntry(issue=e["issue"], base=e["base"], title=e["title"], body=e["body"])
+        for e in data["entries"]
+    )
+    return EvalSet(entries=entries, smoke=data["smoke"])
+
+
+# --- what an evaluation run is ---
+
+EVAL_PREFIX = "EVAL-"
+# `<product>/.agentic/eval/EVAL-<id>/`: where a run's root lives and, beside it, `docs/`.
+_ROOT_PARENT = (".agentic", "eval")
+_EVAL_TASK_ID = re.compile(r"EVAL-(\d+)-([0-9a-f]{8})-([a-z0-9-]{1,24})-(\d+)")
+
+
+def is_evaluation(document: Mapping[str, object]) -> bool:
+    """Whether `document` is an evaluation run's: it carries the `evaluation` key."""
+    return "evaluation" in document
+
+
+def is_evaluation_root(product_dir: Path) -> bool:
+    """Whether `product_dir` is an evaluation run's root, by the shape of its resolved
+    path: `<x>/.agentic/eval/EVAL-...`. The only thing that wires a process as an
+    evaluation (the document's key never does). Symlinks are resolved first, so a link
+    into a root is a root and a link named like one is not."""
+    parts = Path(os.path.realpath(product_dir)).parts
+    return len(parts) >= 4 and parts[-3:-1] == _ROOT_PARENT and parts[-1].startswith(EVAL_PREFIX)
+
+
+def wiring_refusal(product_dir: Path, task_id: str) -> str | None:
+    """Why this root and this task id may not run together, or `None`: an `EVAL-` id in a
+    root that is not an evaluation's would write to the real tracker under a name the
+    tracker never saw; a real id in an evaluation root would run unrecorded. Asked before
+    anything spends."""
+    root = is_evaluation_root(product_dir)
+    if task_id.startswith(EVAL_PREFIX) and not root:
+        return f"{task_id}: an evaluation task id outside an evaluation root ({product_dir})"
+    if root and not task_id.startswith(EVAL_PREFIX):
+        return f"{task_id}: not an evaluation task id, inside an evaluation root ({product_dir})"
+    return None
+
+
+@dataclass(frozen=True)
+class EvalTaskId:
+    """The four facts an evaluation run's id carries: `issue`, `base` shortened to its
+    first 8 characters, `arm` and the ordinal `k` (1-based) of the run."""
+
+    issue: int
+    sha8: str
+    arm: str
+    k: int
+
+
+def eval_task_id(issue: int, base: str, arm: str, k: int) -> str:
+    """`EVAL-<issue>-<sha8>-<arm>-<k>`: unique per `(issue, base, arm, ordinal)`."""
+    return f"{EVAL_PREFIX}{issue}-{base[:8]}-{arm}-{k}"
+
+
+def parse_eval_task_id(task_id: str) -> EvalTaskId | None:
+    """The inverse of `eval_task_id` (with `base` shortened), or `None` for any string it
+    never makes. An arm may hold hyphens; the ordinal is the last segment, so it is
+    unambiguous."""
+    match = _EVAL_TASK_ID.fullmatch(task_id)
+    if match is None or int(match.group(4)) < 1:
+        return None
+    return EvalTaskId(int(match.group(1)), match.group(2), match.group(3), int(match.group(4)))
+
+
+def evaluation_documents(parsed: Sequence[ParsedDocument]) -> list[ParsedDocument]:
+    """Of the documents read from `eval/docs/`, the evaluation ones. The one filter every
+    reader of that directory goes through. A document its parser rejected (`None`) stays,
+    so the reader counts it as unreadable instead of silently dropping it."""
+    return [item for item in parsed if item is None or is_evaluation(item[1])]
 
 
 def baseline_id(system_version: str, declaration_text: str, experiment: Mapping[str, str]) -> str:

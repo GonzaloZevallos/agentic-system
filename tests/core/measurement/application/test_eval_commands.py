@@ -7,6 +7,8 @@ import pytest
 import yaml
 
 from agentic.core.measurement.application import eval_commands
+from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+from agentic.core.process.application import reflect_run
 from agentic.shared.configuration import Configuration
 from agentic.shared.errors import CannotStart
 from tests.fakes import memory_ports
@@ -209,3 +211,58 @@ async def test_experiment_nobody_ran_is_refused(root):
         await eval_commands._eval_compare_experiment(
             Configuration(product_dir=root), memory_ports(), "ex-9", resolve
         )
+
+
+# --- evaluation documents (GH-470): `eval/docs/` is read by --experiment alone ---
+
+EVALUATION = {"issue": 7, "base": "a" * 40, "ci": "local"}
+
+
+def write_evaluation(root: Path, task_id: str, baseline: str, arm: str, **extra) -> None:
+    write(root, task_id, baseline, arm=arm, evaluation=EVALUATION, **extra)
+    source = root / ".agentic" / "tasks" / f"{task_id}.md"
+    docs = root / ".agentic" / "eval" / "docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    source.rename(docs / f"{task_id}.md")
+
+
+def test_an_evaluation_document_is_invisible_to_every_scanner_of_tasks(root):
+    write(root, "GH-1", "bl-a")
+    write_evaluation(root, "EVAL-7-aaaaaaaa-control-1", "bl-a", "control")
+    buckets, unreadable = eval_commands._bucket_documents(root, resolve)
+    assert [task_id for _, tasks in buckets.items() for task_id, _ in tasks] == ["GH-1"]
+    assert unreadable == 0
+    assert FilesystemTaskDocuments(root).ids() == ["GH-1"]
+
+
+def test_the_reflector_never_sees_an_evaluation_document(root):
+    write_evaluation(
+        root, "EVAL-7-aaaaaaaa-control-1", "bl-a", "control", status="ready_for_review"
+    )
+    ports = memory_ports(documents=FilesystemTaskDocuments(root))
+    assert reflect_run.pending(Configuration(product_dir=root), ports) == []
+
+
+@pytest.mark.anyio
+async def test_experiment_counts_the_evaluation_documents_beside_the_tasks(root, capsys):
+    write(root, "GH-1", "bl-a", arm="control")
+    write_evaluation(root, "EVAL-7-aaaaaaaa-control-1", "bl-a", "control")
+    write_evaluation(root, "EVAL-7-aaaaaaaa-fast-1", "bl-a", "fast")
+    (root / ".agentic" / "eval" / "docs" / "stray.md").write_text(
+        "---\nid: GH-5\ntitle: t\nstatus: open\nsystem_baseline: bl-a\n---\n\n## Original request\n"
+    )
+    await eval_commands._eval_compare_experiment(
+        Configuration(product_dir=root), memory_ports(), "ex-1", resolve
+    )
+    out = capsys.readouterr().out
+    assert "experiment ex-1: 3 task(s), 2 arm(s)" in out  # the stray non-evaluation is out
+
+
+@pytest.mark.anyio
+async def test_compare_by_baseline_ignores_the_evaluation_documents(root, capsys):
+    write(root, "GH-1", "bl-a")
+    write(root, "GH-2", "bl-b")
+    write_evaluation(root, "EVAL-7-aaaaaaaa-control-1", "bl-c", "control")
+    await compare(root, "bl-a", "bl-b", capsys)
+    with pytest.raises(CannotStart, match="bl-c: unknown baseline"):
+        await compare(root, "bl-a", "bl-c", capsys)

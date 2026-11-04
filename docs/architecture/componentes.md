@@ -114,8 +114,19 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
   se lee solo por `metrics.arm_of`: su asignación si la tiene, si no su `experiment` (ADR-0081).
 - `application/`: el caso de uso de los dashboards, con sus propios puertos `DashboardStore`
   y `WidgetData` (`agentic/core/measurement/application/dashboards.py`), y los comandos de
-  solo lectura `eval score` y `eval compare`
-  (`agentic/core/measurement/application/eval_commands.py`), que `cli.py` envuelve.
+  `eval` (`agentic/core/measurement/application/eval_commands.py`), que `cli.py` envuelve:
+  `eval score` y `eval compare` son de solo lectura; `eval run` ya no lo es, es el driver
+  de las evaluaciones fijadas a una base (GH-470). Corre cada entrada del eval set una vez por
+  brazo en una raíz aislada `<producto>/.agentic/eval/<id>/` con id
+  `EVAL-<issue>-<sha8>-<brazo>-<k>`, cuenta cupo, esperas de land y pausa de cuenta dentro de un
+  solo `registry.exclusive()` con las funciones de `rules` del poller, lanza el hijo con
+  `AGENTIC_PRODUCT_DIR=<raíz>`, y al terminar copia el documento a `.agentic/eval/docs/`,
+  borra la raíz y las ramas `agentic/EVAL-*`. Sus puertos propios, en
+  `agentic/core/measurement/application/ports.py`: `EvalRoots` (resolver la base, crear,
+  listar y quitar raíces y ramas) y `EvalSpawn` (lanzar el hijo, que devuelve un `EvalChild`).
+- `adapters/git/`: `agentic/core/measurement/adapters/git/eval_roots.py:GitEvalRoots` cumple
+  `EvalRoots` con `git worktree add --detach` en la base de la entrada y su limpieza
+  (`worktree remove`, `prune`, `branch -D agentic/<id>`).
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
   proceso y la composición se lo pasa a `build_graph`.

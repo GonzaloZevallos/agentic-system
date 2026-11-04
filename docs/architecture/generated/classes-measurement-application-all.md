@@ -10,4 +10,8 @@ classDiagram
     class dashboards__StoreUnavailable["StoreUnavailable"]
     class dashboards__UnknownProject["UnknownProject"]
     class dashboards__WidgetData["WidgetData"]
+    class eval_commands__Launched["Launched"]
+    class ports__EvalChild["EvalChild"]
+    class ports__EvalRoots["EvalRoots"]
+    eval_commands__Launched --> ports__EvalChild
 ```

@@ -24,7 +24,7 @@ def _run(section: str) -> dict:
 
 
 def test_closeness_is_built_from_the_phases_with_launch_first_and_land_last():
-    assert rules.CLOSENESS == ("launch", *rules.PHASES, "delivered", "land")
+    assert rules.CLOSENESS == ("launch", *rules.PHASES, "delivered", "evaluated", "land")
     assert rules.CLOSENESS[0] == "launch"
     assert rules.CLOSENESS[-1] == "land"
 
@@ -32,7 +32,7 @@ def test_closeness_is_built_from_the_phases_with_launch_first_and_land_last():
 def test_every_phase_is_ranked_between_launch_and_delivered_so_a_new_one_needs_no_edit():
     # The phases are not listed again: whatever `PHASES` holds sits between the two ends.
     assert rules.CLOSENESS[1 : 1 + len(rules.PHASES)] == rules.PHASES
-    assert rules.CLOSENESS[1 + len(rules.PHASES) :] == ("delivered", "land")
+    assert rules.CLOSENESS[1 + len(rules.PHASES) :] == ("delivered", "evaluated", "land")
 
 
 def test_a_task_with_no_runs_is_in_definition():

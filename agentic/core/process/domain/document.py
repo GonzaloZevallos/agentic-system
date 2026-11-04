@@ -26,6 +26,9 @@ from .legacy_names import rename_legacy_roles
 from .task import RoleRun
 
 TASKS_SUBDIR = Path(".agentic/tasks")
+# Where an evaluation run's document is kept once its root is gone (GH-470): outside
+# `TASKS_SUBDIR`, so no scanner of the tasks sees it.
+EVAL_DOCS_SUBDIR = Path(".agentic/eval/docs")
 ORIGINAL = "Original request"
 # What the human decided on each escalation, written by the system on a resume (ADR-0003).
 HUMAN = "Human"
@@ -280,6 +283,9 @@ def render(
         # when assigned, so a document of an unassigned task is byte-identical to one
         # written before it. Parsed back under the same name by `parse`.
         **({"assignment": assigned} if (assigned := state.get("assignment")) else {}),
+        # Marks an evaluation run (GH-470), written only when set, so a real task's document
+        # is byte-identical to one written before it. Parsed back under the same name.
+        **({"evaluation": evaluated} if (evaluated := state.get("evaluation")) else {}),
         # Whether the request entered with a `## Decided` heading and so runs one-round
         # interviews (`rules.entering`): written only when true, so a document without it
         # is byte-identical to one written before the cap existed, and reads as not decided.
