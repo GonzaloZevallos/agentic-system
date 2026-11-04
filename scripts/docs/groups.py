@@ -123,6 +123,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.stop": "lifecycle",
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
+    "application.verifiers": "checks",
     "domain.account_reset": "machine",
     "domain.adr_numbers": "landing",
     "domain.board": "landing",
