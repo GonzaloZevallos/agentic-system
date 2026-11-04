@@ -4,16 +4,20 @@ stderr or a prose; the adapters fetch, the application decides what to do with t
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
 # The module, not the name: `rules` imports this one too, and reads it at call time.
 from . import rules
+from .presubmit import FAILED_IDS_MAX
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import CiCause as CiCause
 from .task import FallbackCause as FallbackCause
+from .task import FlakeGate, FlakeRecord
 from .task import JobLogCause as JobLogCause
 
 # How long a pending, missing or unreadable CI is waited for before the merge gate refuses.
@@ -456,3 +460,76 @@ def ci_findings(
             }
         )
     return extended
+
+
+# The line a CI job prints for the flakes its own reruns found (GH-464): `agentic-flakes: ` and a
+# JSON object `{"v":1,"check":"<name>","tests":["<id>",...]}`. The adapter that reads the log
+# strips gh's job and step columns and the timestamp and hands over only lines that start with
+# this prefix; the parser below does not strip anything and ignores a line that does not.
+FLAKE_BLOCK_PREFIX = "agentic-flakes: "
+FLAKE_BLOCK_VERSION = 1
+FLAKE_ID_MAX_CHARS = 200
+# An id lands in a tracker comment and a marker: nothing that could break out of either.
+_FLAKE_ID_FORBIDDEN = ("\n", "\r", "`", "<!--", "-->", "{{")
+
+
+@dataclass(frozen=True)
+class CiFlakeBlock:
+    """What one read of the CI log of a head's jobs gave (GH-464): per job name, in log order,
+    the lines that start with `FLAKE_BLOCK_PREFIX` (gh's columns and timestamp already
+    stripped). Evidence from the head under test, not a verdict: `parse_flake_blocks` is the
+    one reader."""
+
+    job_lines: Mapping[str, tuple[str, ...]]
+
+
+def _flake_ids(value: object) -> list[str] | None:
+    """The clean, bounded ids of a block's `tests`, `None` when it is not a list of strings."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    clean = [
+        item
+        for item in value
+        if len(item) <= FLAKE_ID_MAX_CHARS and not any(bad in item for bad in _FLAKE_ID_FORBIDDEN)
+    ]
+    return list(dict.fromkeys(clean))[:FAILED_IDS_MAX]
+
+
+def _flake_block(line: str) -> tuple[str, list[str]] | None:
+    """`(check, ids)` of one block line, `None` for anything malformed: not the prefix, bad
+    JSON, another version, a non-string check or ids that are not a list of strings."""
+    if not line.startswith(FLAKE_BLOCK_PREFIX):
+        return None
+    try:
+        data = json.loads(line[len(FLAKE_BLOCK_PREFIX) :])
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("v") != FLAKE_BLOCK_VERSION:
+        return None
+    check, ids = data.get("check"), _flake_ids(data.get("tests"))
+    if not isinstance(check, str) or ids is None:
+        return None
+    return check, ids
+
+
+def parse_flake_blocks(
+    job_lines: Mapping[str, Sequence[str]], declared: frozenset[str], head: str, gate: FlakeGate
+) -> list[FlakeRecord]:
+    """The flake records of the `agentic-flakes:` blocks in `job_lines` (job name to its lines,
+    already reduced to the prefixed ones by the adapter), for `head` seen by `gate`. Per
+    `(job, check)` the last block wins; different checks of one job add up; a check not in
+    `declared` (the stack's names at the task's base) is dropped, and so is every malformed line,
+    whole. Ids are cleaned and bounded in `_flake_ids`. Records carry no `at`: the application
+    stamps it. Only records, never a verdict (invariant 4 of GH-464)."""
+    records: list[FlakeRecord] = []
+    for lines in job_lines.values():
+        last: dict[str, list[str]] = {}
+        for line in lines:
+            block = _flake_block(line)
+            if block is not None and block[0] in declared:
+                last[block[0]] = block[1]
+        records += [
+            {"check": check, "head": head, "gate": gate, "tests": ids}
+            for check, ids in last.items()
+        ]
+    return records

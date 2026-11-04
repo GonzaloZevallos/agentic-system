@@ -32,6 +32,7 @@ classDiagram
     class performance__Scenario["Scenario"]
     class presubmit__AffectedPlan["AffectedPlan"]
     class presubmit__BudgetBreach["BudgetBreach"]
+    class presubmit__CheckResult["CheckResult"]
     coverage__Rejected --> coverage__Refusal
     performance__MetricResult --> performance__Limit
 ```

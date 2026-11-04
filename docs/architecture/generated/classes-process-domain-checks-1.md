@@ -26,6 +26,7 @@ classDiagram
     class check_schedule__Limits["Limits"]
     class check_schedule__Request["Request"]
     class ci__CiCheck["CiCheck"]
+    class ci__CiFlakeBlock["CiFlakeBlock"]
     class ci__CiReport["CiReport"]
     class ci__CiUnreadable["CiUnreadable"]
     class ci__CiVerdict["CiVerdict"]

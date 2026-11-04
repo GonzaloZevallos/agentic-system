@@ -21,6 +21,7 @@ graph TD
     m_domain__run_check["domain.run_check"]
     m_domain__suppressions["domain.suppressions"]
     m_domain__ci --> g_domain__state
+    m_domain__ci --> m_domain__presubmit
     m_domain__master_gain --> m_domain__check_results
     m_domain__presubmit --> g_domain__state
     m_domain__run_check --> m_domain__presubmit
