@@ -240,7 +240,7 @@ def test_a_retake_that_ran_something_still_counts_against_the_shared_budget():
         for n in (1, 2, 3)
     ]
     lines, launcher = _go(ports)
-    assert launcher.spawned == []  # ADR 0080: the budget does not refill when the run progresses
+    assert launcher.spawned == []  # ADR 0081: the budget does not refill when the run progresses
     assert [line.split(" (")[0] for line in lines] == ["agentic: poll: #7 retake budget spent"]
 
 
