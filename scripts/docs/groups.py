@@ -45,12 +45,9 @@ PHASES: Mapping[str, tuple[str, ...]] = {
         "tracker_only",
     ),
     "review": (
-        "copy_review",
-        "final_validation",
         "fix_important",
-        "full_checks",
         "owner_rules",
-        "qa_performance",
+        "verify",
     ),
 }
 

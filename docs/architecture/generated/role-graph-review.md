@@ -12,25 +12,16 @@ Esta página muestra los nodos de la fase `review` del grafo de roles y las aris
 
 ```mermaid
 graph TD
-    copy_review["copy_review"]
-    final_validation["final_validation"]
     fix_important["fix_important"]
-    full_checks["full_checks"]
     owner_rules["owner_rules"]
     phase_build["build (fase)"]
-    qa_performance["qa_performance"]
-    copy_review -.-> phase_build
-    final_validation -.-> phase_build
+    verify["verify"]
     fix_important -.-> phase_build
-    full_checks -.-> phase_build
     owner_rules -.-> phase_build
-    phase_build -.-> copy_review
-    phase_build -.-> final_validation
     phase_build -.-> fix_important
-    phase_build -.-> full_checks
     phase_build -.-> owner_rules
-    phase_build -.-> qa_performance
-    qa_performance -.-> phase_build
+    phase_build -.-> verify
+    verify -.-> phase_build
 ```
 
-Pueden escalar: `copy_review`, `final_validation`, `fix_important`, `full_checks`, `owner_rules`, `qa_performance`
+Pueden escalar: `fix_important`, `owner_rules`, `verify`

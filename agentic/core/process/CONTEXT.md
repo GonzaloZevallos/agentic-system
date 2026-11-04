@@ -130,7 +130,7 @@ _Avoid_: revisión heurística (una lista de criterios sin navegar no es fuente 
 _Campo_: cognitive walkthrough — Wharton, Rieman, Lewis y Polson (1994). Donde el flujo pasa por una pantalla que el prototipo no tiene, ese tramo se evalúa sobre el texto y el hallazgo lo dice ("sin prototipo")
 
 **Revisión de textos**:
-Lo que hace Tech Writer después de la implementación, en el nodo `copy_review` y antes de la validación final: compara los textos del diff con los vigentes y con `WRITING_STANDARDS.md`. Sus hallazgos son `important` u `observation`, nunca bloqueantes: no devuelve ni forma par, y un importante se corrige en el pase final (ADR-0053), una sola vez por tarea. Solo ese nodo escribe y salda las filas de textos, que llevan el identificador `copy:<n>.<i>:<ubicación>`.
+Lo que hace Tech Writer después de la implementación, en el nodo `verify`, junto con la validación final y los demás verificadores de la cabeza integrada: compara los textos del diff con los vigentes y con `WRITING_STANDARDS.md`. Sus hallazgos son `important` u `observation`, nunca bloqueantes: no devuelve ni forma par, y un importante se corrige en el pase final (ADR-0053), una sola vez por tarea. Solo ese nodo escribe y salda las filas de textos, que llevan el identificador `copy:<n>.<i>:<ubicación>`.
 _Avoid_: validación de textos (no valida ni devuelve), aprobación de textos
 _Campo_: content review / copy edit
 
@@ -278,9 +278,13 @@ En el código se llama `Presubmit`, el port, y `CheckoutPresubmit`, la implement
 _Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 _Campo_: presubmit check — Software Engineering at Google, cap. 20: "an analysis that blocks committing a pending code change". required status check en GitHub, gated commit en Azure DevOps, admission control (validating, no mutating) en Kubernetes
 
+**Conjunto de verificadores**:
+Los verificadores de solo lectura de la cabeza integrada que aplican a la tarea (`full_checks`, `copy_review`, `final_validation`, `qa_performance`), que arrancan juntos en el nodo `verify` sobre la misma cabeza; `deliver` espera a todos. Una devolución lleva los hallazgos de todos los que devolvieron (`returned_by` el primero en orden fijo, `returned_with` los demás), un hermano que escala conserva los deltas de los demás, y los archivos de capacidad que aprobó `final_validation` se commitean una sola vez al final (`pending_close_docs`), solo si ninguno devolvió (ADR-0083).
+En el código se llama `verify` (`application/verifiers.py`) y `rules.combined_return`.
+
 **Chequeo completo de la tarea**:
 La corrida de todos los `checks` del producto, sin forma afectada, una sola vez sobre la cabeza integrada y antes de abrir el pull request, para un producto que declara `delivery_checks` (ADR-0064). La hace el sistema, sin rol ni costo de modelo, en el checkout de la tarea, que exige limpio y deja limpio. Una corrida roja reabre la integración con una fila por chequeo fallido; una verde la asienta. La entrega empuja sólo con una corrida pasada de esta cabeza (o de una que difiere sólo en el documento de la tarea): sin ella no empuja y vuelve a correr. Si el producto declara `ci:`, el chequeo completo es el CI de GitHub sobre la cabeza integrada (ref `agentic-ci/<id>`) y no corre `checks` en local; si el CI no se puede usar (el push falló, ninguna corrida empezó, un job no arrancó, `gh` ilegible), la tarea escala con clase `ci`: no corre `checks` en local, no escribe registro ni devuelve la tarea, y al reanudar vuelve a entrar al nodo sobre la misma cabeza (ADR-0064, adenda GH-376 y GH-462). Sólo una cabeza que toca `.github/` en un producto sin `ci_dispatch` corre el nivel local (`ci_fallback: untrusted`). Si en esa corrida un chequeo agota su tiempo y el stack lo mapea (`ci_covers`) a un job de CI, la fila queda diferida: no es un fallo ni un pase, el registro lo anota en `deferred`, no devuelve la tarea ni asienta hallazgos, y el merge exige que ese job esté verde en la cabeza del pull request (ADR-0064, adenda GH-453). Con `ci:`, la revisión de la unidad final puede haber empujado ya esa cabeza: ver *Empuje especulativo* (ADR-0080, adenda GH-465).
-En el código se llama `full_checks`, el nodo y el registro del frontmatter.
+Corre dentro del conjunto de verificadores: solo y primero cuando no espera nada lento, junto con los demás cuando espera el veredicto del CI (ADR-0083). En el código se llama `full_checks`, el verificador y el registro del frontmatter.
 _Avoid_: suite final, gate completo
 
 **Empuje especulativo**:
