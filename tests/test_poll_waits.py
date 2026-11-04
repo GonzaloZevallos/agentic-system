@@ -178,3 +178,23 @@ def test_main_prints_one_block_per_measure_for_the_product(
 def test_a_block_with_no_closed_interval_prints_a_dash_for_the_median():
     out = script.render("apostrophe", script.measure([]))
     assert "  median_min: -" in out
+
+
+def test_backoff_is_its_own_counted_reason_and_the_starved_line_is_a_report():
+    lines = [
+        _poll("08:00:00", "merge #5 waits: backoff"),
+        _poll("08:01:00", "merge #5 waits: backoff"),
+        _poll("08:02:00", "merge #6 waits: exempt_busy"),
+        _poll("08:22:00", "merge #6 starved: 20 min behind product p task GH-9 kind merge"),
+        _poll("08:23:00", "merge #6 -> pid 41"),
+    ]
+
+    result = script.measure(lines)
+
+    assert result.backoff == 2
+    assert result.starved == ("merge #6 20 min behind product p task GH-9 kind merge",)
+    [interval] = result.intervals  # only the exempt_busy wait is timed; backoff and starved are not
+    assert (interval.block, interval.issue, interval.closed) == ("exempt", 6, True)
+    out = script.render("p", result)
+    assert "backoff (counted only)\n  count: 2" in out
+    assert "    merge #6 20 min behind product p task GH-9 kind merge" in out

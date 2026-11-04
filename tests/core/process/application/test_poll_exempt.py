@@ -509,3 +509,45 @@ def test_a_filtered_or_busy_candidate_keeps_its_record_and_a_closed_task_loses_i
     _round(cfg, ports, registry, FakeLauncher(), _at(3))
 
     assert set(registry.exempt_attempts("product")) == {(5, "merge")}
+
+
+# -- GH-500: the starvation line ---------------------------------------------------------------
+
+
+def _starved(lines) -> list[str]:
+    return [line for line in lines if " starved: " in line]
+
+
+def test_a_merge_waiting_behind_a_live_exempt_child_is_reported_once_naming_it(tmp_path):
+    cfg, ports, registry = _cfg(tmp_path), _ports(5), MemoryRunRegistry()
+    registry.entries.append(_child("merge", "GH-9", product="other", pid=7))
+    registry.record_exempt_seen("product", 5, "merge", T0)
+    minutes = int(exempt_queue.EXEMPT_STARVED_AFTER.total_seconds() // 60)
+
+    early = _round(cfg, ports, registry, FakeLauncher(), _at(minutes - 1))
+    first = _round(cfg, ports, registry, FakeLauncher(), _at(minutes + 1))
+    again = _round(cfg, ports, registry, FakeLauncher(), _at(minutes + 2))
+
+    assert _starved(early) == [] and _starved(again) == []
+    assert _starved(first) == [
+        f"agentic: poll: merge #5 starved: {minutes + 1} min behind "
+        "product other task GH-9 kind merge"
+    ]
+    assert registry.exempt_attempts("product")[(5, "merge")].starved_reported
+
+
+def test_a_merge_yielding_to_another_product_is_reported_naming_that_product(tmp_path):
+    a_ports, b_ports, a_cfg, b_cfg = _two_products(tmp_path)
+    registry = MemoryRunRegistry()
+    registry.record_exempt_seen("b", 5, "merge", T0)
+    a_key = rules.root_key(str(_tasks_root(a_cfg)))
+    older = exempt_queue.ExemptCandidate("merge", "a", a_key, 5, first_seen=_at(-10))
+    registry.publish_exempt_wait(_tasks_root(a_cfg), "a", older, _at(29))
+    late = exempt_queue.EXEMPT_STARVED_AFTER + timedelta(minutes=9)
+
+    lines = _round(b_cfg, b_ports, registry, FakeLauncher(), T0 + late)
+
+    assert _starved(lines) == [
+        f"agentic: poll: merge #5 starved: {int(late.total_seconds() // 60)} min behind "
+        "yielding to product a"
+    ]

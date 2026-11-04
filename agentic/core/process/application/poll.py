@@ -68,6 +68,7 @@ from .ports import (
     LockRecord,
     Ports,
     RunLock,
+    RunRegistration,
     RunRegistry,
     TrackerCallFailed,
     TrackerTimedOut,
@@ -1941,6 +1942,55 @@ def _sweep_exempt_attempts(
         attempts.pop((issue, kind), None)
 
 
+def _exempt_holder(
+    running: Sequence[RunRegistration],
+    yielding: Sequence[exempt_queue.ExemptWait],
+    started: str | None,
+) -> str:
+    """Who holds the exempt slot, in closed fields (GH-500): `yielding to product P` while this
+    product waits for another product's older wait, else the live exempt child (`product P task
+    T kind K`), else the child this very round starts."""
+    if yielding:
+        first = min(yielding, key=lambda w: (w.since, w.root_key))
+        return f"yielding to product {first.product}"
+    for r in running:
+        if not rules.counts_against_cap(r.kind):
+            return f"product {r.product} task {r.task_id} kind {r.kind}"
+    return started or "the child started this round"
+
+
+def _starvation_lines(
+    plan: rules.PollPlan,
+    registry: RunRegistry,
+    product: str,
+    records: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt],
+    now: datetime,
+    holder: Callable[[], str],
+) -> list[str]:
+    """One line per candidate that waited `exempt_busy` (a live child, a yield, or the child
+    started this round) for longer than `exempt_queue.EXEMPT_STARVED_AFTER` since its last
+    attempt or first sighting and was not reported yet; the record is then marked, so it is said
+    once. Backoff rounds are `backoff`, never `exempt_busy`, so they do not count. Closed fields
+    only, never a metric (GH-500)."""
+    found: list[str] = []
+    for deferred in plan.deferred:
+        if deferred.kind == "orphan" or deferred.reason != "exempt_busy":
+            continue
+        record = records.get((deferred.issue, deferred.kind))
+        since = (record.last_attempt or record.first_seen) if record else None
+        if record is None or since is None or record.starved_reported:
+            continue
+        if now - since < exempt_queue.EXEMPT_STARVED_AFTER:
+            continue
+        minutes = int((now - since).total_seconds() // 60)
+        found.append(
+            f"agentic: poll: {deferred.kind} #{deferred.issue} starved: "
+            f"{minutes} min behind {holder()}"
+        )
+        registry.mark_exempt_starved(product, deferred.issue, deferred.kind)
+    return found
+
+
 def run_once(
     cfg: Configuration,
     ports: Ports,
@@ -2142,6 +2192,9 @@ def run_once(
             *exempt_wait_notes,
             *_upstream_notes(upstream.cache_info().currsize > 0, upstream),
         ]
+        plan_yielded = exempt_queue.behind(
+            exempt_queue.rank(exempt_head) if exempt_head else None, exempt_others
+        )
         plan = rules.poll_plan(
             closes=closes,
             resumes=resumes,
@@ -2163,9 +2216,7 @@ def run_once(
             orphan_retakes=sorted(orphans),
             spent_retakes=sorted(spent_notices),
             exempt_attempts=exempt_records,
-            exempt_yield=exempt_queue.behind(
-                exempt_queue.rank(exempt_head) if exempt_head else None, exempt_others
-            ),
+            exempt_yield=plan_yielded,
         )
         # GH-500: the head of this product's queue is published only while it could start. A
         # round that starts it, or that has no such head, removes the record: the child that
@@ -2188,6 +2239,21 @@ def run_once(
             if could_start and exempt_head and (exempt_head.issue, exempt_head.kind) not in started
             else None,
             now,
+        )
+        starting = next((a for a in plan.actions if a.kind in ("merge", "land")), None)
+        starvation = _starvation_lines(
+            plan,
+            registry,
+            product,
+            exempt_records,
+            now,
+            lambda: _exempt_holder(
+                running,
+                exempt_others if exempt_head and plan_yielded else [],
+                f"product {product} task {ports.inbox.task_id(starting.issue)} kind {starting.kind}"
+                if starting
+                else None,
+            ),
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.
@@ -2216,6 +2282,7 @@ def run_once(
             spent_notices,
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
+        deferral_lines += starvation
         orphan_lines += [
             rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"
         ]

@@ -16,7 +16,8 @@ A land wait opens at the first `land #N waits: no_slot|land_queued` (both reason
 the same open wait) and closes at the next `land #N -> pid`. An exempt wait
 (`exempt_busy`, merge or land) is the same shape in a block of its own. A wait still open
 at the end of input, or cut by a restart, is reported as truncated and never enters the
-median. `pause_waiting` is only counted.
+median. `pause_waiting` and `backoff` (a merge held back by its own refusal, GH-500) are only
+counted, and the `<kind> #N starved: ...` line is listed as a report, not as a wait.
 """
 
 from __future__ import annotations
@@ -33,12 +34,15 @@ from typing import TextIO
 LAND_WAIT_REASONS = frozenset({"no_slot", "land_queued"})
 EXEMPT_REASON = "exempt_busy"
 PAUSE_REASON = "pause_waiting"
+BACKOFF_REASON = "backoff"
 
 # `2026-10-16T08:34:16-03:00 host unit[pid]: message` (journalctl -o short-iso).
 _LINE = re.compile(
     r"^(?P<ts>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:[.,]\d+)?(?:[+-]\d\d:?\d\d|Z)?)\s+\S+\s+(?P<rest>.*)$"
 )
 _WAIT = re.compile(r"agentic: poll: (?P<kind>land|merge) #(?P<issue>\d+) waits: (?P<reason>\w+)")
+# The one line the poller says once per starved candidate (GH-500): a report, not a wait.
+_STARVED = re.compile(r"agentic: poll: (?P<kind>land|merge) #(?P<issue>\d+) starved: (?P<what>.+)")
 _START = re.compile(r"agentic: poll: (?P<kind>land|merge) #(?P<issue>\d+) -> pid \d+")
 # systemd's own line for a (re)started unit: `systemd[3308]: Started <unit>.service - ...`.
 _RESTART = re.compile(r"^systemd\[\d+\]: Started \S+\.service\b")
@@ -79,6 +83,8 @@ class Interval:
 class Measure:
     intervals: tuple[Interval, ...]
     pause_waiting: int
+    backoff: int = 0
+    starved: tuple[str, ...] = ()
 
 
 def parse_line(line: str) -> Event | None:
@@ -94,6 +100,9 @@ def parse_line(line: str) -> Event | None:
     rest = matched["rest"]
     if _RESTART.match(rest):
         return Event(at, "restart")
+    starved = _STARVED.search(rest)
+    if starved is not None:
+        return Event(at, "starved", starved["kind"], int(starved["issue"]), starved["what"])
     wait = _WAIT.search(rest)
     if wait is not None:
         return Event(at, "wait", wait["kind"], int(wait["issue"]), wait["reason"])
@@ -116,6 +125,8 @@ def measure(lines: Iterable[str]) -> Measure:
     open_waits: dict[tuple[str, str, int], datetime] = {}
     done: list[Interval] = []
     pauses = 0
+    backoffs = 0
+    starved: list[str] = []
     last: datetime | None = None
 
     def cut(cause: str, at: datetime) -> None:
@@ -137,6 +148,10 @@ def measure(lines: Iterable[str]) -> Measure:
                     done.append(Interval(block, event.kind, event.issue, began, event.at, True))
         elif event.what == "wait" and event.reason == PAUSE_REASON:
             pauses += 1
+        elif event.what == "wait" and event.reason == BACKOFF_REASON:
+            backoffs += 1  # a merge held back by its own refusal: counted, never timed
+        elif event.what == "starved":
+            starved.append(f"{event.kind} #{event.issue} {event.reason}")
         elif event.what == "wait":
             opened = _block(event.reason)
             if opened is not None:
@@ -144,7 +159,7 @@ def measure(lines: Iterable[str]) -> Measure:
     if last is not None:
         cut("end of input", last)
     ordered = sorted(done, key=lambda i: (i.block, i.start, i.kind, i.issue))
-    return Measure(tuple(ordered), pauses)
+    return Measure(tuple(ordered), pauses, backoffs, tuple(starved))
 
 
 def _fmt(minutes: float) -> str:
@@ -180,6 +195,12 @@ def render(product: str, result: Measure) -> str:
             exempt,
         ),
         ["pause_waiting (counted only)", f"  count: {result.pause_waiting}"],
+        ["backoff (counted only)", f"  count: {result.backoff}"],
+        [
+            "starved (reported by the poller, one line per candidate)",
+            f"  count: {len(result.starved)}",
+        ]
+        + [f"    {item}" for item in result.starved],
     ]
     return "\n\n".join("\n".join(block) for block in blocks) + "\n"
 
