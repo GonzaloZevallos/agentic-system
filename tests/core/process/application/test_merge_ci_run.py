@@ -257,9 +257,9 @@ def test_a_local_pass_is_never_enough_for_a_ci_product(tmp_path):
 
 def test_a_fresh_pass_on_an_older_master_stands_when_master_gained_only_inert_paths(tmp_path):
     ports, clock = _world(merge_ci=[_pair()]), _Clock()
-    ports.stack.declared_merge_inert = ("docs/**",)
+    ports.stack.declared_merge_inert = ("notes/**",)
     ports.workspace.containment[(MASTER, OLD_MASTER)] = "yes"
-    ports.workspace.gains[(OLD_MASTER, MASTER)] = ("docs/a.md",)
+    ports.workspace.gains[(OLD_MASTER, MASTER)] = ("notes/a.md",)
 
     result = _call(ports, tmp_path, clock)
 
@@ -272,7 +272,7 @@ def test_a_master_that_moved_past_a_decided_run_starts_one_new_pair_and_marks_th
     tmp_path,
 ):
     ports, clock = _world(merge_ci=[_pair()]), _Clock()
-    ports.stack.declared_merge_inert = ("docs/**",)
+    ports.stack.declared_merge_inert = ("notes/**",)
     ports.workspace.containment[(MASTER, OLD_MASTER)] = "yes"
     ports.workspace.gains[(OLD_MASTER, MASTER)] = ("src/a.py",)
 
