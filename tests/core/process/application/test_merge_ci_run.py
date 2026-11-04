@@ -362,16 +362,17 @@ def test_a_head_that_conflicts_with_master_publishes_nothing(tmp_path):
     assert set(ports.workspace.removed_checkouts) == {"merge-GH-5"}
 
 
-def test_a_head_the_merge_is_refused_for_without_a_conflict_publishes_nothing_the_same_way(
+def test_a_head_the_merge_is_refused_for_without_a_conflict_stops_and_records_nothing(
     tmp_path,
 ):
-    """GH-492: a `MergeFailed` gives the outcome and reason a `MergeConflict` gives today."""
+    """GH-492: a `MergeFailed` is no conflict: it stops `ci_publish_failed`, never recorded."""
     ports, clock = _world(), _Clock()
     ports.workspace.failed_merges.add(MASTER)
 
     result = _call(ports, tmp_path, clock)
 
-    assert (result.kind, result.reason) == ("refused", "merge_conflict")
+    assert (result.kind, result.reason) == ("stopped", "ci_publish_failed")
+    assert "merge_conflict" not in (ports.documents.load("GH-5") or {})
     assert ports.workspace.ci_ref_calls == [] and _pairs(ports) == []
     assert set(ports.workspace.removed_checkouts) == {"merge-GH-5"}
 
