@@ -315,7 +315,7 @@ async def _dispatched_full_checks(
     input. A refusal ends the call at once: no wait, no second dispatch. No run after the
     grace period is dispatched once more, and the second wait is bounded by the grace again."""
     waited = 0.0
-    for attempt in (1, 2):
+    for attempt in range(1, ci.CI_DISPATCH_ATTEMPTS + 1):
         # A loose lower bound for the listing only: the run is found by its event, workflow
         # and the sha in its title, never by comparing this instant with GitHub's.
         since = (datetime.now(UTC) - timedelta(seconds=ci.CI_DISPATCH_SKEW_S)).strftime(
@@ -330,7 +330,10 @@ async def _dispatched_full_checks(
             ports, dispatch.workflow, since, head, names, cfg, sleep, clock
         )
         waited += took
-        if not (verdict.state == "unreachable" and verdict.cause == "no_run") or attempt == 2:
+        if (
+            not (verdict.state == "unreachable" and verdict.cause == "no_run")
+            or attempt == ci.CI_DISPATCH_ATTEMPTS
+        ):
             break
     if verdict.state == "unreachable":
         return _NoVerdict(verdict.cause or "no_run", waited, dispatch.workflow)

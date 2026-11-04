@@ -312,6 +312,10 @@ def full_tier_verdict(
 # and never decides whether a run exists, which the event, the workflow and the sha do.
 CI_DISPATCH_SKEW_S = 120
 
+# How many times a workflow is dispatched for one head when no run of it ever shows up: the
+# first dispatch and one more after a grace period without a run (GH-462).
+CI_DISPATCH_ATTEMPTS = 2
+
 
 @dataclass(frozen=True)
 class DispatchedRun:
