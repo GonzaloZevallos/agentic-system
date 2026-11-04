@@ -20,7 +20,7 @@ from ..domain import ci, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.check_schedule import CheckPriority
 from ..domain.task import TaskState, add_flakes
-from . import landing_plan
+from . import ci_flakes, landing_plan
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .poll import ci_gate, read_criteria
@@ -147,6 +147,7 @@ def _checks_pass(
             witness=ports.stack.witness(base),
             parallel=ports.stack.parallel_checks(base),
             reuse=reuse_of(ports, base),
+            rerun_forms=ports.stack.rerun_checks(base),
             flake_gate="merge",
             readiness=readiness_of(ports, base, cfg.check_cores),
         )
@@ -168,7 +169,12 @@ def _checks_pass(
         # the verdict; the `merge_checks` record itself stays the main pull request's.
         try:
             ports.documents.record_closure(
-                context.task_id, {"flakes": add_flakes(raw.get("flakes", []), flakes)}
+                context.task_id,
+                {
+                    "flakes": add_flakes(
+                        raw.get("flakes", []), ci_flakes.dated(flakes, ci_flakes.now())
+                    )
+                },
             )
         except (ValueError, OSError) as exc:
             # Invariant 8: recording a flake never refuses or delays a slice that passed.

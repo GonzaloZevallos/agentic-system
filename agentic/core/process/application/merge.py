@@ -23,7 +23,7 @@ from ..domain import adr_numbers, ci, master_gain, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.check_schedule import CheckPriority
 from ..domain.task import PullRequest, TaskState, add_flakes, add_tracker_failures
-from . import adr_collision, landing_flakes, landing_plan
+from . import adr_collision, ci_flakes, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
 from .poll import (
@@ -195,6 +195,8 @@ def merge_task(
         )
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
+    if declared:
+        raw = _with_ci_flakes(ports, task_id, raw, str(reference), head, base, declared, log)
     # A check that failed on this head, was rerun by the landing and now passes is flaky.
     landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
     landing_flakes.file_task_flakes(ports, task_id, raw, log)
@@ -214,6 +216,32 @@ def merge_task(
         pull_request,
         inert_from,
     )
+
+
+def _with_ci_flakes(
+    ports: Ports,
+    task_id: str,
+    raw: TaskState,
+    reference: str,
+    head: str,
+    base: str,
+    jobs: tuple[str, ...],
+    log: Callable[[str], None],
+) -> TaskState:
+    """`raw` once the flake block the CI jobs printed on `head` is recorded in the document
+    (GH-464). Evidence only: it adds records for the filing that follows and changes no
+    decision, so an unreadable block or a write that fails leaves `raw` as it was."""
+    records = ci_flakes.block_records(ports, reference, head, base, jobs, "merge", _now())
+    if not records:
+        return raw
+    try:
+        ports.documents.record_closure(
+            task_id, {"flakes": add_flakes(raw.get("flakes", []), records)}
+        )
+    except (ValueError, OSError) as exc:
+        log(f"agentic: merge: {task_id}: flake block not recorded: {exc}")
+        return raw
+    return ports.documents.load(task_id) or raw
 
 
 def _recorded_masters(record: object) -> tuple[str, ...] | None:
@@ -439,6 +467,7 @@ def run_checks(
                 witness=ports.stack.witness(base),
                 parallel=ports.stack.parallel_checks(base),
                 reuse=reuse_of(ports, base),
+                rerun_forms=ports.stack.rerun_checks(base),
                 flake_gate="merge",
                 readiness=readiness_of(ports, base, cfg.check_cores),
             )
@@ -473,7 +502,9 @@ def run_checks(
         record = presubmit.rerun_record(previous, record)
     closure: dict[str, object] = {"merge_checks": record}
     if gate is not None and (flakes := gate.flakes()):
-        closure["flakes"] = add_flakes(raw.get("flakes", []), flakes)
+        closure["flakes"] = add_flakes(
+            raw.get("flakes", []), ci_flakes.dated(flakes, ci_flakes.now())
+        )
     ports.documents.record_closure(task_id, closure)
     shown = presubmit.failed_checks_markdown(record, head, neutralise=False)
     for number, line in enumerate(shown.splitlines()):
