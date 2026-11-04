@@ -593,3 +593,21 @@ tasks:
       tasks:
       - GH-463
     decisions: 1
+  GH-475@review:
+    cost_usd: 0.1704
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-475
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-475
+    decisions: 3
