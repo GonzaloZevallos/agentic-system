@@ -1,4 +1,4 @@
-"""The one retake budget of a task (GH-466, ADR 0081): pure, no I/O.
+"""The one retake budget of a task (GH-466, ADR 0082): pure, no I/O.
 
 A retake is the poller resuming a run that is gone: after a reboot, after the run raised under
 the graph, after a kill inside the same boot, or with no lock at all. Every shape draws on the
@@ -39,7 +39,7 @@ RESUMED_BY_POLLER = "Resumed by the poller: "
 RETAKE_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 
 # How long a dead lock's document may have gone unwritten before the task is the human's rather
-# than the poller's. A judgement, not a measurement (ADR 0081).
+# than the poller's. A judgement, not a measurement (ADR 0082).
 STALE_AFTER = timedelta(hours=24)
 
 # What killed the run, as the poller names it in the notice and the comment.
