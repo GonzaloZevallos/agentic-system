@@ -40,17 +40,30 @@ from ..domain.design import (
 from ..domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL, UI_LEAD_FINAL, UX_LEAD_FINAL
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
-from .ports import Ports, SampleAppHandle
+from .ports import Checkout, Ports, SampleAppHandle
 from .run_role import Output, finish, run_role, with_context
 
 Started = SampleAppHandle | NotReady | str | None
 
 
-async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    try:
-        task = await task_checkout_in_thread(state, cfg, ports)
-    except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(PM_FINAL), ports)
+async def final_validation(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    *,
+    checkout: Checkout | None = None,
+    defer_close_docs: bool = False,
+) -> TaskState:
+    """A `checkout` handed in (the verifier set's, GH-469) is used as is. With
+    `defer_close_docs` an approval with capability files does not write or commit them: it
+    leaves them owed in `pending_close_docs` on the reviewed head, and `commit_close_docs`
+    commits them once the whole set has judged the same head."""
+    task = checkout
+    if task is None:
+        try:
+            task = await task_checkout_in_thread(state, cfg, ports)
+        except SetupFailed as unprepared:
+            return finish(state, unprepared.patch(PM_FINAL), ports)
     design_block = ports.stack.design(task_base(state, ports))
     started = _start(design_block, ports, task.path)
     try:
@@ -86,7 +99,10 @@ async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -
         if output is None:
             return finish(state, patch, ports)
         patch = apply(patch, _verdict_patch(state, cfg, output.data))
-        patch = apply(patch, _close_docs_patch(state, ports, task.path, output.data, reviewed))
+        if defer_close_docs:
+            patch = apply(patch, _pending_close_docs_patch(output.data, reviewed))
+        else:
+            patch = apply(patch, _close_docs_patch(state, ports, task.path, output.data, reviewed))
         return finish(state, patch, ports)
     finally:
         if isinstance(started, SampleAppHandle):
@@ -208,6 +224,49 @@ def _relative_paths(written: list[Path], root: Path) -> list[str]:
     return [path.relative_to(root).as_posix() for path in written]
 
 
+def _owes_close_docs(data: dict[str, Any], reviewed: str | None) -> bool:
+    return data["verdict"] == "approved" and bool(data["definitions"]) and bool(reviewed)
+
+
+def _pending_close_docs_patch(data: dict[str, Any], reviewed: str | None) -> TaskState:
+    """The files an approval owes, kept in the document instead of written (GH-469)."""
+    if not _owes_close_docs(data, reviewed) or reviewed is None:
+        return {}
+    return {"pending_close_docs": {"parent": reviewed, "definitions": data["definitions"]}}
+
+
+def _commit_definitions(
+    state: TaskState,
+    ports: Ports,
+    root: Path,
+    definitions: list[dict[str, Any]],
+    reviewed: str,
+) -> TaskState:
+    """Write `definitions` into the checkout `root` and commit them there: the `close_docs`
+    record of that commit, or nothing when the files were already what the checkout held."""
+    written = ports.knowledge.consolidate({"definitions": definitions, "glossary": []}, root)
+    relative = _relative_paths(written, root)
+    message = f"{state['id']}: capability files at close"
+    head = ports.workspace.commit_paths(root, relative, message)
+    if head is None:
+        return {}
+    return {"close_docs": rules.extend_close_docs(None, reviewed, head, relative)}
+
+
+def commit_close_docs(state: TaskState, ports: Ports, root: Path) -> TaskState:
+    """Commit the capability files `state['pending_close_docs']` owes, in the checkout `root`,
+    exactly as the approving run does when it does not defer (GH-469): the patch records
+    `close_docs` and clears the field. Only the verifier set calls it, once, when no verifier
+    returned and the files' `parent` is still the reviewed head (`rules.close_docs_committable`)."""
+    pending = state.get("pending_close_docs")
+    if not pending:
+        return {}
+    committed = _commit_definitions(
+        state, ports, root, list(pending["definitions"]), pending["parent"]
+    )
+    return {**committed, "pending_close_docs": None}
+
+
 def _close_docs_patch(
     state: TaskState, ports: Ports, root: Path, data: dict[str, Any], reviewed: str | None
 ) -> TaskState:
@@ -215,17 +274,9 @@ def _close_docs_patch(
     the task checkout and committed there, and `close_docs` records that commit. Nothing is
     written when PM returned none or no head was reviewed, and nothing is recorded when the
     files were already what the checkout held (no commit). `paths` is what was committed."""
-    if data["verdict"] != "approved" or not data["definitions"] or not reviewed:
+    if not _owes_close_docs(data, reviewed) or reviewed is None:
         return {}
-    written = ports.knowledge.consolidate(
-        {"definitions": data["definitions"], "glossary": []}, root
-    )
-    relative = _relative_paths(written, root)
-    message = f"{state['id']}: capability files at close"
-    head = ports.workspace.commit_paths(root, relative, message)
-    if head is None:
-        return {}
-    return {"close_docs": rules.extend_close_docs(None, reviewed, head, relative)}
+    return _commit_definitions(state, ports, root, data["definitions"], reviewed)
 
 
 def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -> TaskState:

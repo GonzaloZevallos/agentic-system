@@ -2664,6 +2664,13 @@ def combined_return(state: TaskState, patches: Mapping[Verifier, TaskState]) -> 
             "returned_with": [entry.get("returned_by", "review") for _, _, entry, _ in returns[1:]],
         }
         merged["subtasks"] = {**merged["subtasks"], target: combined}
+    elif returns and "returned_with" in returns[0][2]:
+        # A lone returner spread the target as the state held it: the others an earlier set
+        # returned it with are not this return's.
+        target = returns[0][1]
+        alone = merged["subtasks"][target].copy()
+        del alone["returned_with"]
+        merged["subtasks"] = {**merged["subtasks"], target: alone}
     for name, patch in ordered:
         if not (text := patch.get("escalated")):
             continue
