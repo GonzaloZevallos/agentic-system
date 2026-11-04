@@ -75,6 +75,7 @@ _Campo_: parallelism / speedup — la definición es la de la ley de Amdahl sobr
 La configuración de experimento bajo la que corrió una tarea: el valor de cada interruptor
 declarado (`review_mode`, `skip_ephemeral`, `reviewer_model`), o `default` cuando ninguno se
 movió. Toda muestra que lleva versión del sistema lleva también su brazo.
+Si la tarea tiene una asignación de brazo (ADR-0080), el brazo sale de los interruptores de esa asignación; si no, del `experiment` del documento.
 _Avoid_: experimento (es el conjunto de brazos que se comparan), variante, configuración
 _Campo_: arm — de los ensayos controlados y del A/B testing
 

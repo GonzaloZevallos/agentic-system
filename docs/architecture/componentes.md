@@ -43,7 +43,11 @@ vocabulario está en `agentic/core/process/CONTEXT.md`.
 
 - `domain/`: funciones puras sobre `TaskState`, sin clase agregado (ADR-0009). Las reglas de
   ruteo, de tope y de reanudación viven en `agentic/core/process/domain/rules.py`, y la tabla
-  del aterrizaje en `agentic/core/process/domain/landing.py:landing_step`.
+  del aterrizaje en `agentic/core/process/domain/landing.py:landing_step`. La declaración de
+  experimento del producto y la asignación de brazo a cada tarea son puras y viven en
+  `agentic/core/process/domain/experiment.py`; el brazo asignado llega a la `Configuration` de
+  cada nodo por `configuration_from` (`agentic/core/process/adapters/langgraph/graph.py`), que
+  lee la asignación del estado (ADR-0080).
 - `application/`: un caso de uso por nodo (`classify`, `define`, `plan`, `develop`, `review`,
   `integrate`, `deliver`, `escalate`...), más `poll`, `landing`, `merge` y `resume`. Reciben
   `Configuration` y `Ports`.
@@ -105,7 +109,9 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
 
 - `domain/`: retrabajo, devoluciones, puntajes y el scorecard
   (`agentic/core/measurement/domain/metrics.py`,
-  `agentic/core/measurement/domain/scorecard.py`).
+  `agentic/core/measurement/domain/scorecard.py`), y las cifras de tiempo de una tarea, el
+  ciclo y el tiempo activo (`agentic/core/measurement/domain/cycle.py`). El brazo de una tarea
+  se lee solo por `metrics.arm_of`: su asignación si la tiene, si no su `experiment` (ADR-0080).
 - `application/`: el caso de uso de los dashboards, con sus propios puertos `DashboardStore`
   y `WidgetData` (`agentic/core/measurement/application/dashboards.py`), y los comandos de
   solo lectura `eval score` y `eval compare`
