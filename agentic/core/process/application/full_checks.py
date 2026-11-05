@@ -232,11 +232,17 @@ async def full_checks(
         if outcome.git_said and outcome.push_attempts and outcome.push_kind:
             # Git's words reach the section only through `push_failure_markdown`, which
             # scrubs them; the older run stays as history under its own free `(vN)` key.
+            # A dispatched run's push was of the dispatch ref, not of the workflow file.
+            pushed_ref = rules.ci_dispatch_ref(state["id"]) if outcome.workflow else ref
             patch["sections"] = _section(
                 state,
                 0,
                 push_failure_markdown(
-                    outcome.cause, ref, outcome.push_attempts, outcome.push_kind, outcome.git_said
+                    outcome.cause,
+                    pushed_ref,
+                    outcome.push_attempts,
+                    outcome.push_kind,
+                    outcome.git_said,
                 ),
             )
         return finish(state, patch, ports)
@@ -252,18 +258,23 @@ def _git_said(outcome: _NoVerdict) -> str:
     return f" after {tries}; git said: {outcome.git_said}"
 
 
-def _publish_failed(exc: GitError, waited: float) -> _NoVerdict:
+def _publish_failed(
+    exc: GitError, waited: float, workflow: str | None = None, head: str | None = None
+) -> _NoVerdict:
     """The no-verdict of a push that failed. A `PushFailed` brings what git said; a `GitError`
-    that is not one is today's bare `publish_failed`."""
+    that is not one is today's bare `publish_failed`. `workflow` and `head` are a dispatched
+    run's (GH-504): the push was of the dispatch ref, and the message names it."""
     if isinstance(exc, PushFailed):
         return _NoVerdict(
             "publish_failed",
             waited,
+            workflow,
             git_said=exc.said,
             push_attempts=exc.attempts,
             push_kind=exc.kind,
+            head=head,
         )
-    return _NoVerdict("publish_failed", waited)
+    return _NoVerdict("publish_failed", waited, workflow, head=head)
 
 
 async def _push(op: Callable[[], None], push_sleep: PushSleep) -> Pushed:
@@ -396,7 +407,7 @@ async def _ci_full_checks(
         if (dispatch := ports.stack.ci_dispatch(base)) is None:
             return "untrusted"
         return await _dispatched_full_checks(
-            state, cfg, ports, task, head, gate_names, dispatch, sleep, clock
+            state, cfg, ports, task, head, gate_names, dispatch, sleep, clock, push_sleep
         )
     ref = rules.ci_ref(state["id"])
     speculative = False
@@ -562,6 +573,7 @@ async def _dispatched_full_checks(
     dispatch: CiDispatch,
     sleep: Sleep,
     clock: Clock,
+    push_sleep: PushSleep,
 ) -> dict[str, Any] | _NoVerdict:
     """An untrusted head judged by the base branch's own workflow (GH-462): dispatched on the
     repository's default branch, the one the pull request targets, with the head sha as its
@@ -569,8 +581,9 @@ async def _dispatched_full_checks(
     grace period is dispatched once more, and the second wait is bounded by the grace again.
 
     Before every dispatch (GH-504) the head is published to `rules.ci_dispatch_ref`, the ref
-    GitHub serves the checkout from; a push that fails ends the call with no dispatch. That ref
-    is never deleted here: the sweep is the only thing that does."""
+    GitHub serves the checkout from, retried like every push of the CI path (GH-487); a push that
+    still fails ends the call with no dispatch. That ref is never deleted here: the sweep is the
+    only thing that does."""
     waited = 0.0
     for attempt in range(1, ci.CI_DISPATCH_ATTEMPTS + 1):
         # A loose lower bound for the listing only: the run is found by its event, workflow
@@ -579,11 +592,11 @@ async def _dispatched_full_checks(
             "%Y-%m-%dT%H:%M:%SZ"
         )
         try:
-            await anyio.to_thread.run_sync(
-                ports.workspace.publish_dispatch_ref, task.path, state["id"]
+            await _push(
+                lambda: ports.workspace.publish_dispatch_ref(task.path, state["id"]), push_sleep
             )
-        except GitError:
-            return _NoVerdict("publish_failed", waited, dispatch.workflow, head=head)
+        except GitError as exc:
+            return _publish_failed(exc, waited, dispatch.workflow, head)
         refused = await anyio.to_thread.run_sync(
             ports.tracker.dispatch_ci, dispatch.workflow, "", {dispatch.sha_input: head}
         )

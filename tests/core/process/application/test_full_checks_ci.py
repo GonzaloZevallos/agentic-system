@@ -815,6 +815,52 @@ async def test_a_failed_publish_escalates_as_ci_and_dispatches_nothing():
     assert "push of ci.yml" not in patch["escalated"]
 
 
+def failing_dispatch_publish(ports, stderr: str, failures: int | None = None) -> list[str]:
+    """Make `publish_dispatch_ref` raise `GitError` with `stderr` for its first `failures` calls
+    (every call when None); returns the list of calls made."""
+    calls: list[str] = []
+    publish = ports.workspace.publish_dispatch_ref
+    left = [failures]
+
+    def flaky(path, ref):
+        calls.append(ref)
+        if left[0] is None or left[0] > 0:
+            if left[0] is not None:
+                left[0] -= 1
+            raise GitError("git push failed", stderr=stderr)
+        return publish(path, ref)
+
+    ports.workspace.publish_dispatch_ref = flaky
+    return calls
+
+
+async def test_a_transient_failure_of_the_dispatch_publish_is_retried_before_dispatching():
+    ports = dispatching((run_of(job("unit"), job("web")),))
+    calls = failing_dispatch_publish(ports, "fatal: Could not resolve host: github.com", 1)
+    waits: list[float] = []
+    clock = Clock()
+    patch = await full_checks_in_task_checkout(
+        state_of(), CFG, ports, sleep=clock.sleep, clock=clock, push_sleep=waits.append
+    )
+    assert patch["full_checks"]["ran_on"] == "ci_dispatch" and "escalated" not in patch
+    assert calls == [DISPATCH_REF.split("/")[-1]] * 2
+    assert waits == [ci_push.PUSH_BACKOFF_S[0]]
+    assert len(ports.tracker.dispatch_calls) == 1
+
+
+async def test_a_permanent_refusal_of_the_dispatch_publish_names_the_ref_and_git_and_no_dispatch():
+    stderr = "remote: permission denied to workflow {x}"
+    ports = dispatching((run_of(job("unit"), job("web")),))
+    calls = failing_dispatch_publish(ports, stderr)
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert len(calls) == 1 and ports.tracker.dispatch_calls == []
+    assert "after 1 attempt(s) (permanent); git said: " in patch["escalated"]
+    assert ci_push.scrub(stderr) in patch["escalated"]
+    section = patch["sections"]["Full checks"]
+    assert f"the push of `{DISPATCH_REF}` failed" in section and "push of `ci.yml`" not in section
+
+
 @pytest.mark.parametrize("stage", ["checkout", "setup"])
 async def test_a_run_whose_only_failing_job_failed_before_the_suite_is_ci_not_usable(stage):
     failed = CiCheck("web", "COMPLETED", "FAILURE", f"{LINK}/web", failed_stage=stage)
