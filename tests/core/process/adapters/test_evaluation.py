@@ -137,7 +137,7 @@ def test_every_workspace_member_is_allowed_or_overridden():
 REFUSED_WORKSPACE_CALLS = {
     "push": ("agentic/GH-1",),
     "publish_ci_ref": (None, "agentic-ci/GH-1"),
-    "republish_ci_ref": (None, "agentic-ci/GH-1"),
+    "delete_ci_ref": (None, "agentic-ci/GH-1"),
     "publish_dispatch_ref": (None, "GH-1"),
     "delete_dispatch_ref": ("GH-1",),
     "delete_remote_ref": ("agentic-ci/GH-1",),

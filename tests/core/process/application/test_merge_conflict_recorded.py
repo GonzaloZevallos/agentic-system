@@ -12,10 +12,11 @@ from pathlib import Path
 from agentic.core.process.application import landing_plan, merge, poll
 from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.ci_push import scrub
 from tests.core.process.application.test_conflict_probe import _land
 from tests.core.process.application.test_merge_ci_run import _world
 from tests.core.process.application.test_poll import _cfg
-from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _Locks
+from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _Locks, _ports
 
 AT = "2026-11-04T12:20:00+00:00"
 MOVED = "e" * 40
@@ -191,7 +192,23 @@ def test_a_merge_that_fails_without_a_conflict_writes_nothing_and_stops(tmp_path
 
     assert result == merge.MergeResult("stopped", "ci_publish_failed")
     assert _document(ports) == before
-    assert lines == [f"agentic: merge: GH-5: could not publish the fresh CI run: refused: {MASTER}"]
+    assert lines == [
+        "agentic: merge: GH-5: could not publish the fresh CI run: " + scrub(f"refused: {MASTER}")
+    ]
+
+
+def test_the_text_git_gave_for_a_failed_merge_reaches_the_log_only_through_scrub(tmp_path):
+    ports = _gh475()
+    ports.workspace.conflicts.discard(MASTER)
+    ports.workspace.failed_merges.add(MASTER)
+    said = "fatal: unable to access 'https://x-access-token:ghs_abc@github.com/o/r': `x`\nmore {y}"
+    ports.workspace.failed_merge_reasons[MASTER] = said
+
+    result, lines = _merge_round(ports, tmp_path)
+
+    assert result == merge.MergeResult("stopped", "ci_publish_failed")
+    assert lines == ["agentic: merge: GH-5: could not publish the fresh CI run: " + scrub(said)]
+    assert "ghs_abc" not in lines[0] and "`" not in lines[0] and "\n" not in lines[0]
 
 
 def test_the_base_reading_takes_a_recorded_conflict_over_every_other_reading():
@@ -199,3 +216,25 @@ def test_the_base_reading_takes_a_recorded_conflict_over_every_other_reading():
     assert rules.merge_conflicts_from(None, HEAD, MASTER, False, recorded=True) is True
     assert rules.merge_conflicts_from(None, HEAD, MASTER, None, recorded=False) is None
     assert rules.merge_conflicts_from(None, HEAD, MASTER, False, recorded=False) is False
+
+
+def test_gh500_the_last_look_conflict_writes_the_row_and_the_next_round_hands_over(tmp_path):
+    """The conflict found only at the last look (GitHub still says mergeable) was refused with
+    nothing written and tried again every round; now it writes the `merge_conflict` row."""
+    ports = _ports(5)  # the checks are recorded green on this head and master
+    ports.workspace.conflict_answers[(HEAD, MASTER)] = True
+    before = _document(ports)
+
+    first, _ = _merge_round(ports, tmp_path)
+
+    assert first == merge.MergeResult("refused", "merge_conflict")
+    after = _document(ports)
+    assert after.pop("merge_conflict") == {"head": HEAD, "master": MASTER, "at": AT}
+    assert after == before  # no intent, no failure count
+    assert ports.tracker.comments == [] and ports.tracker.merge_calls == []
+    assessed = _assess(ports)
+    assert (assessed.decision.kind, assessed.decision.reason) == ("refuse", "merge_conflict")
+    assert assessed.conflict_source == "recorded"
+    lands: list = []
+    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands)
+    assert found == [] and [(c.issue, c.kind) for c in lands] == [(5, "land_model")]

@@ -27,6 +27,9 @@ verdict, and what it lowered, at the head of the review's section."""
 
 from __future__ import annotations
 
+import sys
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,6 +41,7 @@ from agentic.shared.configuration import Configuration, experiment_snapshot
 from ..domain import ci, docs, presubmit, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
+from . import ci_push
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import GitError, Ports
@@ -45,7 +49,12 @@ from .presubmit import declared_checks
 from .run_role import finish, run_role
 
 
-async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+async def review(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    push_sleep: Callable[[float], None] = time.sleep,
+) -> TaskState:
     subtask_id = state["subtask_id"]
     subtask = state["subtasks"][subtask_id]
     reviewed_before = bool(subtask.get("reviewed_head"))
@@ -67,7 +76,9 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
-    pushed_at = await _push_speculatively(state, subtask_id, base, head, checkout.path, ports)
+    pushed_at = await _push_speculatively(
+        state, subtask_id, base, head, checkout.path, ports, push_sleep
+    )
     # A product that declares `ci`, or a plan that requires a check (GH-371), has the
     # system's own CI section in front of the reviewer and its red checks recorded as
     # findings; one that has neither is reviewed exactly as before, with no read of the
@@ -193,13 +204,20 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
 
 
 async def _push_speculatively(
-    state: TaskState, subtask_id: str, base: str, head: str, path: Path, ports: Ports
+    state: TaskState,
+    subtask_id: str,
+    base: str,
+    head: str,
+    path: Path,
+    ports: Ports,
+    sleep: Callable[[float], None],
 ) -> str | None:
     """Publish `head` to the task's CI ref when `speculation.push_due` says so (GH-465), so
     the full tier runs while the Tech Lead reads it; the ISO instant of the push, or `None`
     when nothing was pushed. A product without `ci:` or `delivery_checks` makes no call at
     all. A push that fails never fails the review: nothing is recorded and `full_checks`
-    publishes as it always did."""
+    publishes as it always did. The push is retried by what git said (`ci_push`); one that
+    still fails leaves one line in the log and nothing in the document."""
     ci_names = ports.stack.ci(base)
     tiered = bool(ports.stack.delivery_checks(base))
     if not ci_names or not tiered or subtask_id != rules.reviewed_unit_name(state):
@@ -217,11 +235,20 @@ async def _push_speculatively(
         head=head,
     ):
         return None
+    ref = rules.ci_ref(state["id"])
     try:
         await anyio.to_thread.run_sync(
-            ports.workspace.publish_ci_ref, path, rules.ci_ref(state["id"])
+            lambda: ci_push.publish_with_retry(
+                lambda: ports.workspace.publish_ci_ref(path, ref), sleep=sleep
+            )
         )
-    except GitError:
+    except ci_push.PushFailed as failed:
+        # The text is already through `scrub`: one line, no credentials. Never a span or label.
+        print(
+            f"agentic: review: {state['id']}: speculative push failed after "
+            f"{failed.attempts} attempt(s) ({failed.kind}): {failed.said}",
+            file=sys.stderr,
+        )
         return None
     return datetime.now(UTC).isoformat()
 

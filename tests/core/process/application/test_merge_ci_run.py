@@ -12,9 +12,11 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application import landing_plan, merge
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.merge import MergeResult
+from agentic.core.process.application.ports import GitError, Upstream
 from agentic.core.process.domain import ci, rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_BACKOFF_S, scrub
 from agentic.core.process.domain.presubmit import CiDispatch
 from agentic.core.process.domain.task import MergeCiRecord
 from tests.core.process.application.test_poll import _cfg
@@ -34,9 +36,25 @@ class _Workspace(MemoryWorkspace):
     def __init__(self) -> None:
         super().__init__()
         self.built = list(TESTED)
+        # What git says to each push, in order; once spent, `always` (or nothing) is said.
+        self.push_says: list[str] = []
+        self.always: str | None = None
 
     def full_head(self, path: Path) -> str:
         return self.built.pop(0)
+
+    def _push_fails(self) -> None:
+        said = self.push_says.pop(0) if self.push_says else self.always
+        if said is not None:
+            raise GitError("git push failed", stderr=said)
+
+    def publish_ci_ref(self, path: Path, ref: str) -> None:
+        super().publish_ci_ref(path, ref)
+        self._push_fails()
+
+    def publish_dispatch_ref(self, path: Path, ref: str) -> None:
+        super().publish_dispatch_ref(path, ref)
+        self._push_fails()
 
 
 class _Clock:
@@ -84,7 +102,8 @@ def _world(**document):
     return ports
 
 
-def _call(ports, tmp_path, clock):
+def _call(ports, tmp_path, clock, lines=None, sleeps=None):
+    """`sleeps` records the waits of a push's retry: a wait costs no real time here."""
     return merge.merge_task(
         "GH-5",
         5,
@@ -92,8 +111,9 @@ def _call(ports, tmp_path, clock):
         ports,
         Upstream("origin/master", MASTER, None),
         frozenset(),
-        lambda _line: None,
+        (lines if lines is not None else []).append,
         clock,
+        (sleeps if sleeps is not None else []).append,
     )
 
 
@@ -301,7 +321,7 @@ def test_a_run_that_never_starts_is_republished_once_then_refused_with_its_comme
 
     clock.advance(2)
     assert _call(ports, tmp_path, clock).reason == "ci_wait"
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     [pair] = _pairs(ports)
     assert (pair["tested"], pair["superseded"], pair["republished"]) == (
         TESTED[1],
@@ -320,7 +340,7 @@ def test_a_run_that_never_starts_is_republished_once_then_refused_with_its_comme
     assert "ci_no_verdict" in comment and "no_run" in comment
     again = _call(ports, tmp_path, clock)
     assert (again.kind, again.reason) == ("refused", "ci_no_verdict")
-    assert len(ports.workspace.ci_ref_calls) == 2 and len(_refusals(ports)) == 1
+    assert len(ports.workspace.ci_ref_calls) == 3 and len(_refusals(ports)) == 1
 
 
 def test_a_run_still_undecided_at_the_check_timeout_is_no_verdict(tmp_path):
@@ -426,3 +446,116 @@ def test_with_ci_run_reads_the_fresh_report_as_the_verdict_of_the_tested_commit(
     assert got.ci_subject == "tested" and got.ci_head == TESTED[0]
     assert got.ci_verdict is not None and got.ci_verdict.state == "green"
     assert got.ci_fresh is True
+
+
+# GH-487: every push of the fresh run is retried by what git said, one step at a time.
+TRANSIENT = (
+    "fatal: unable to access 'https://x-access-token:ghp_secret1234@github.com/o/r/': "
+    "Could not resolve host: github.com"
+)
+PERMANENT = (
+    "remote: Permission to o/r.git denied to workflow. https://u:ghp_secret1234@github.com/o/r"
+)
+STOPPED = MergeResult("stopped", "ci_publish_failed")
+
+
+def _dispatching(ports) -> None:
+    ports.workspace.diff_paths = (".github/workflows/ci.yml",)
+    ports.stack.declared_ci_dispatch = CiDispatch("ci.yml", "sha")
+
+
+def _publishes(ports) -> list[str]:
+    return [call[0] for call in ports.workspace.ci_ref_calls]
+
+
+def _released_and_removed(monkeypatch, ports, tmp_path) -> tuple[int, int]:
+    """How many times one `merge_task` call released and removed a checkout."""
+    released: list[str] = []
+    real = merge.release_checkout
+    monkeypatch.setattr(
+        merge, "release_checkout", lambda p, path: (released.append(str(path)), real(p, path))
+    )
+    before = len(ports.workspace.removed_checkouts)
+    _call(ports, tmp_path, _Clock())
+    return len(released), len(ports.workspace.removed_checkouts) - before
+
+
+@pytest.mark.parametrize("dispatch", [False, True])
+def test_a_permanent_refusal_of_the_fresh_push_stops_after_one_attempt(tmp_path, dispatch):
+    ports, lines, sleeps = _world(), [], []
+    if dispatch:
+        _dispatching(ports)
+    ports.workspace.always = PERMANENT
+
+    result = _call(ports, tmp_path, _Clock(), lines, sleeps)
+
+    assert result == STOPPED
+    assert _publishes(ports) == ["publish_dispatch" if dispatch else "publish"]
+    assert sleeps == [] and ports.tracker.dispatch_calls == []
+    [line] = [line for line in lines if "could not publish" in line]
+    assert "after 1 attempt(s) (permanent)" in line and scrub(PERMANENT) in line
+    assert "ghp_secret1234" not in line
+
+
+@pytest.mark.parametrize("dispatch", [False, True])
+def test_a_transient_failure_that_never_heals_stops_after_every_attempt(tmp_path, dispatch):
+    ports, lines, sleeps = _world(), [], []
+    if dispatch:
+        _dispatching(ports)
+    ports.workspace.always = TRANSIENT
+
+    result = _call(ports, tmp_path, _Clock(), lines, sleeps)
+
+    assert result == STOPPED
+    assert len(_publishes(ports)) == PUSH_ATTEMPTS
+    assert sleeps == list(PUSH_BACKOFF_S)
+    [line] = [line for line in lines if "could not publish" in line]
+    assert f"after {PUSH_ATTEMPTS} attempt(s) (transient)" in line and scrub(TRANSIENT) in line
+    assert "ghp_secret1234" not in line
+
+
+@pytest.mark.parametrize("dispatch", [False, True])
+def test_a_transient_failure_that_heals_goes_on_to_wait_for_the_run(
+    tmp_path, monkeypatch, dispatch
+):
+    baseline = _world()
+    if dispatch:
+        _dispatching(baseline)
+    expected = _released_and_removed(monkeypatch, baseline, tmp_path)
+    ports, lines, sleeps = _world(), [], []
+    if dispatch:
+        _dispatching(ports)
+    ports.workspace.push_says = [TRANSIENT]
+
+    result = _call(ports, tmp_path, _Clock(), lines, sleeps)
+
+    assert (result.kind, result.reason) == ("stopped", "ci_wait")
+    assert len(_publishes(ports)) == 2 and sleeps == [PUSH_BACKOFF_S[0]]
+    assert not [line for line in lines if "could not publish" in line]
+    assert len(_pairs(ports)) == 1
+    if dispatch:
+        assert ports.tracker.dispatch_calls == [("ci.yml", "", {"sha": TESTED[0]})]
+    # the checkout is given back once per call, however many tries the push took
+    assert _released_and_removed(monkeypatch, _healing(dispatch), tmp_path) == expected
+
+
+def _healing(dispatch: bool):
+    ports = _world()
+    if dispatch:
+        _dispatching(ports)
+    ports.workspace.push_says = [TRANSIENT]
+    return ports
+
+
+def test_a_republish_retries_its_create_without_repeating_its_delete(tmp_path):
+    ports, clock, sleeps = _world(), _Clock(), []
+    _call(ports, tmp_path, clock)
+    ports.tracker.branch_reports[REF] = _branch(OLD_MASTER)  # a run of another commit
+    clock.advance(_cfg(tmp_path).ci_start_grace_s + 1)
+    ports.workspace.push_says = [TRANSIENT]
+
+    result = _call(ports, tmp_path, clock, sleeps=sleeps)
+
+    assert (result.kind, result.reason) == ("stopped", "ci_wait")
+    assert _publishes(ports) == ["publish", "delete_ci", "publish", "publish"]
+    assert sleeps == [PUSH_BACKOFF_S[0]]

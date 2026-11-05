@@ -12,8 +12,9 @@ import pytest
 from agentic.core.process.application.checkouts import task_base
 from agentic.core.process.application.full_checks import _DISPATCH_DETAIL
 from agentic.core.process.application.ports import CommandResult, GitError
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import ci_push, rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_UNKNOWN_ATTEMPTS
 from agentic.core.process.domain.presubmit import CiCover, CiDispatch
 from agentic.core.process.domain.roles import DEVELOPER_INTEGRATOR
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, CiCause, apply
@@ -107,7 +108,9 @@ def ports_of(*reads, commands=None, ci=("unit", "web"), **more):
 
 async def run(state, ports, clock: Clock | None = None):
     clock = clock or Clock()
-    return await full_checks_in_task_checkout(state, CFG, ports, sleep=clock.sleep, clock=clock)
+    return await full_checks_in_task_checkout(
+        state, CFG, ports, sleep=clock.sleep, clock=clock, push_sleep=lambda _s: None
+    )
 
 
 async def test_green_ci_passes_with_no_local_check_and_publishes_the_head_once():
@@ -193,7 +196,7 @@ async def test_a_report_of_another_head_is_never_accepted_and_escalates_as_no_ru
     assert_escalated_ci(patch, ports, state_of())
     # Two grace periods (30 s each), not the 100 s check timeout.
     assert sum(clock.slept) == 60
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     assert "no CI run" in patch["escalated"] and HEAD[:7] in patch["escalated"]
     assert "pushed twice" in patch["escalated"] and "1 min" in patch["escalated"]
     assert ports.commands.ran == [] and "full_checks" not in patch
@@ -332,7 +335,7 @@ async def test_no_run_ever_publishes_once_republishes_once_and_escalates_within_
     clock = Clock()
     patch = await run(state_of(), ports, clock)
     assert_escalated_ci(patch, ports, state_of())
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     assert clock.now == 2 * CFG.ci_start_grace_s < CFG.check_timeout_s
     assert ports.commands.ran == []
 
@@ -344,7 +347,7 @@ async def test_a_run_that_appears_after_the_republish_is_awaited_and_recorded_gr
     patch = await run(state_of(), ports, clock)
     record = patch["full_checks"]
     assert record["passed"] is True and record["ran_on"] == "ci"
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
     assert ports.commands.ran == []
 
 
@@ -368,16 +371,16 @@ async def test_a_run_that_started_after_the_republish_is_bounded_by_the_check_ti
     assert clock.now > CFG.ci_start_grace_s * 2
 
 
-async def test_a_failed_republish_escalates_as_publish_failed_and_never_retries():
-    class Flaky(MemoryWorkspace):
-        def republish_ci_ref(self, path, ref):
-            super().republish_ci_ref(path, ref)
-            raise GitError("push refused")
+async def test_a_refused_republish_escalates_as_publish_failed_and_is_not_retried():
+    class Refused(MemoryWorkspace):
+        def delete_ci_ref(self, path, ref):
+            super().delete_ci_ref(path, ref)
+            raise GitError("push refused", stderr="remote: Permission to o/r denied to workflow")
 
-    ports = ports_of(report(sha="f" * 40), workspace=Flaky())
+    ports = ports_of(report(sha="f" * 40), workspace=Refused())
     patch = await run(state_of(), ports)
     assert_escalated_ci(patch, ports, state_of())
-    assert ports.workspace.ci_ref_calls == [("publish", REF), ("republish", REF)]
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF)]
     assert f"push of {REF} failed" in patch["escalated"]
     assert ports.commands.ran == []
 
@@ -555,6 +558,132 @@ async def test_without_the_key_the_untrusted_head_still_runs_local():
     patch = await run(state_of(), ports)
     assert patch["full_checks"]["ran_on"] == "local"
     assert ports.tracker.dispatch_calls == [] and ports.tracker.dispatched_reads == []
+
+
+class FlakyPush(MemoryWorkspace):
+    """`publish_ci_ref` raises `GitError` with `stderr` for its first `failures` calls."""
+
+    def __init__(self, stderr: str, failures: int | None = None) -> None:
+        super().__init__()
+        self.stderr = stderr
+        self.failures = failures
+
+    def publish_ci_ref(self, path, ref):
+        self.ci_ref_calls.append(("publish", ref))
+        if self.failures is None or self.failures > 0:
+            if self.failures is not None:
+                self.failures -= 1
+            raise GitError("git push failed", stderr=self.stderr)
+        self.ci_refs[ref] = self.head(path)
+
+
+async def test_a_transient_push_failure_is_retried_and_the_record_notes_it():
+    stderr = "fatal: unable to access 'https://github.com/o/r/': Could not resolve host: github.com"
+    ports = ports_of(GREEN, workspace=FlakyPush(stderr, failures=1))
+    waits: list[float] = []
+    clock = Clock()
+    patch = await full_checks_in_task_checkout(
+        state_of(), CFG, ports, sleep=clock.sleep, clock=clock, push_sleep=waits.append
+    )
+    assert patch.get("status") != WAITING_ON_HUMAN and "escalated" not in patch
+    record = patch["full_checks"]
+    assert record["passed"] is True and record["ran_on"] == "ci"
+    assert record["push_attempts"] == 2 and record["push_kind"] == "transient"
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("publish", REF)]
+    assert waits == [ci_push.PUSH_BACKOFF_S[0]]
+
+
+async def test_a_push_that_passed_first_leaves_no_push_keys():
+    patch = await run(state_of(), ports_of(GREEN))
+    assert "push_attempts" not in patch["full_checks"] and "push_kind" not in patch["full_checks"]
+
+
+async def test_a_red_run_after_a_retried_push_records_the_retry_too():
+    stderr = "fatal: unable to access 'x': Connection reset by peer"
+    red = report(job("unit", "FAILURE"), job("web"))
+    ports = ports_of(red, workspace=FlakyPush(stderr, failures=2))
+    patch = await run(state_of(), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is False
+    assert record["push_attempts"] == PUSH_ATTEMPTS and record["push_kind"] == "transient"
+
+
+async def test_a_permanent_push_refusal_escalates_after_one_attempt_with_what_git_said():
+    stderr = (
+        "remote: permission denied to workflow\nremote: refusing to update `workflow` "
+        "scope {x}\nfatal: unable to access 'https://u:ghp_secret1234@github.com/o/r/'"
+    )
+    workspace = FlakyPush(stderr)
+    ports = ports_of(GREEN, workspace=workspace)
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert workspace.ci_ref_calls == [("publish", REF)]
+    assert "permission denied to workflow" in patch["escalated"]
+    assert ci_push.scrub(stderr) in patch["escalated"]
+    assert "after 1 attempt(s) (permanent); git said: " in patch["escalated"]
+    assert "ghp_secret1234" not in patch["escalated"]
+    section = patch["sections"]["Full checks"]
+    assert ci_push.scrub(stderr) in section and "ghp_secret1234" not in section
+    assert ports.tracker.branch_reads == []
+
+
+async def test_an_unknown_push_failure_is_tried_twice_and_escalates_with_its_kind():
+    stderr = "fatal: something nobody has seen"
+    workspace = FlakyPush(stderr)
+    patch = await run(state_of(), ports_of(GREEN, workspace=workspace))
+    assert len(workspace.ci_ref_calls) == PUSH_UNKNOWN_ATTEMPTS
+    assert (
+        f"after {PUSH_UNKNOWN_ATTEMPTS} attempt(s) (unknown); git said: {ci_push.scrub(stderr)}"
+        in patch["escalated"]
+    )
+
+
+async def test_a_push_failure_without_git_text_keeps_the_escalation_it_always_had():
+    ports = ports_of(GREEN)
+    ports.workspace.ci_ref_error = "push refused"
+    patch = await run(state_of(), ports)
+    said = ci_push.scrub("push refused")
+    assert (
+        f"push of {REF} failed after {PUSH_UNKNOWN_ATTEMPTS} attempt(s) (unknown); git said: {said}"
+        in (patch["escalated"])
+    )
+
+
+async def test_two_escalations_on_the_same_head_keep_the_first_section_as_history():
+    stderr = "remote: permission denied to workflow"
+    state = state_of()
+    first = await run(state, ports_of(GREEN, workspace=FlakyPush(stderr)))
+    state = apply(state, first)
+    second = await run(state, ports_of(GREEN, workspace=FlakyPush(stderr)))
+    state = apply(state, second)
+    assert "Full checks (v1)" in state["sections"]
+    third = await run(state, ports_of(GREEN, workspace=FlakyPush(stderr)))
+    state = apply(state, third)
+    assert {"Full checks", "Full checks (v1)", "Full checks (v2)"} <= set(state["sections"])
+    assert rules.next_section_version(state, "Full checks") == 3
+
+
+async def test_a_green_run_after_an_escalation_keeps_the_escalation_section_as_history():
+    state = state_of()
+    stderr = "remote: permission denied `x`"
+    first = await run(state, ports_of(GREEN, workspace=FlakyPush(stderr)))
+    state = apply(state, first)
+    done = await run(state, ports_of(GREEN))
+    state = apply(state, done)
+    assert state["sections"]["Full checks"].startswith("Passed on CI")
+    assert ci_push.scrub(stderr) in state["sections"]["Full checks (v1)"]
+
+
+async def test_a_failed_delete_of_the_republish_carries_git_said():
+    stderr = "remote: Permission to o/r denied to workflow"
+
+    class Refused(MemoryWorkspace):
+        def delete_ci_ref(self, path, ref):
+            raise GitError("x", stderr=stderr)
+
+    ports = ports_of(report(sha="f" * 40), workspace=Refused())
+    patch = await run(state_of(), ports)
+    assert f"git said: {ci_push.scrub(stderr)}" in patch["escalated"]
 
 
 # -- GH-485: a required name no check run carries escalates as a planning defect ---------------

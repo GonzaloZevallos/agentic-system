@@ -168,6 +168,45 @@ Ninguna regla de arriba cambia: ningún chequeo se saltea y el veredicto sigue s
   `ci_speculation.head == full_checks.head` y `full_checks.speculative`; empuje perdido es
   `ci_speculation` presente con otro `full_checks.head`.
 
+## Adenda GH-487: los pushes del camino del CI se reintentan según lo que git dijo
+
+Un push de `agentic-ci/<id>` que falla una vez ya no escala a la primera: GH-475 escaló con
+`publish_failed` por un fallo de red que diez minutos después ya no existía, y no dejó escrito lo
+que git había dicho.
+
+- **La regla.** Cada paso de git del camino del CI (`publish_ci_ref`, `delete_ci_ref` y
+  `publish_dispatch_ref`) se reintenta solo, nunca en secuencia: un `republish` que ya borró el ref
+  no repite el borrado porque la creación falló. Todo push o borrado pasa por
+  `application/ci_push.publish_with_retry` (o por `republish`, que lo usa paso por paso); ningún
+  otro código escribe un bucle de reintento ni un número de intentos o segundos. Un `--delete` de
+  un ref que el remoto no tiene cuenta como hecho.
+- **Clasificación.** `domain/ci_push.classify` lee el stderr de git y devuelve `permanent`
+  (permiso o scope que falta, ref protegido, hook que rechaza, no fast-forward, autenticación),
+  `transient` (red, DNS, TLS, 5xx, el remoto cortó) o `unknown` (todo lo demás, también un error sin
+  stderr). `permanent` gana sobre `transient`. Intentos: `PUSH_ATTEMPTS = 3` para `transient`,
+  `PUSH_UNKNOWN_ATTEMPTS = 2` para `unknown` y uno solo para `permanent`, que nunca se reintenta.
+  La espera antes del 2.º y del 3.º intento es `PUSH_BACKOFF_S = (2.0, 8.0)`. Los números viven sólo
+  en `domain/ci_push.py`.
+- **Lo que git dijo.** Cuando los intentos se agotan, `PushFailed` (subclase de `GitError`) lleva el
+  stderr ya pasado por `domain/ci_push.scrub`: sin credenciales ni backticks, en una línea y con a
+  lo sumo `GIT_SAID_LIMIT = 400` caracteres. Ese texto va al escalado y a `## Full checks`, y a los
+  logs; nunca a un atributo de span, una etiqueta ni una métrica (ADR-0008), y la causa cerrada
+  sigue siendo `publish_failed` (ADR-0029).
+- **Push especulativo.** La revisión reintenta con la misma regla. Si aun así falla no escala ni
+  escribe `ci_speculation` ni nada en el documento: deja una sola línea en el log
+  (`speculative push failed after <n> attempt(s) (<kind>): <said>`) y `full_checks` publica como
+  siempre. Una corrida especulativa consumida no anota intentos: el registro de `full_checks` sólo
+  los anota cuando fue él quien empujó.
+- **Merge.** La corrida fresca de la puerta (GH-463) reintenta igual, en modo push y en modo
+  dispatch, y un push que no se cura sigue terminando en `MergeResult("stopped",
+  "ci_publish_failed")`. Merge no gana escalado ni `reason`: el log agrega los intentos, el `kind` y
+  el texto limpio.
+- **Fuera de alcance.** `tracker.dispatch_ci` es `gh`, no un push, y no se reintenta aquí.
+- **Peor caso de espera.** Unos 10 s por paso (2 s + 8 s), síncronos dentro de
+  `anyio.to_thread.run_sync`. Es aceptable ante `agentic stop` porque el desenrollado no deja estado
+  a medias: la marca se escribe antes de la señal, el push sólo toca el ref de la propia tarea y la
+  reanudación vuelve a entrar al nodo sobre la misma cabeza.
+
 ## Adenda GH-492: el conflicto que git encuentra en el par fresco es un hecho
 
 **Contexto.** En GH-475 (PR #490) la puerta de merge construía la cabeza fusionada con master, git

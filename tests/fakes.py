@@ -71,7 +71,7 @@ from agentic.core.process.application.ports import (
     Workspace,
 )
 from agentic.core.process.domain import check_results as check_results_domain
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import exempt_queue, rules
 from agentic.core.process.domain import scratch as scratch_domain
 from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import (
@@ -83,6 +83,7 @@ from agentic.core.process.domain.ci import (
 )
 from agentic.core.process.domain.design import Design, NotReady
 from agentic.core.process.domain.docs import Docs
+from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
@@ -788,6 +789,8 @@ class MemoryWorkspace:
         self.conflicts: set[str] = set()
         # GH-492: branches `merge` refuses without any unmerged path (`MergeFailed`).
         self.failed_merges: set[str] = set()
+        # The text git gave for a branch in `failed_merges`; `refused: <branch>` by default.
+        self.failed_merge_reasons: dict[str, str] = {}
         # `merge_keeping_conflicts` calls, and the paths a scripted conflict leaves
         # (`x.py` when a branch is in `conflicts` but not given here). A branch in
         # `refused_branches` conflicts with nothing to resolve: a refusal with no
@@ -1047,7 +1050,7 @@ class MemoryWorkspace:
         self.merges.append((path, branch))
         self.merge_messages.append(message)
         if branch in self.failed_merges:
-            return MergeFailed(f"refused: {branch}")
+            return MergeFailed(self.failed_merge_reasons.get(branch, f"refused: {branch}"))
         if branch in self.conflicts:
             return MergeConflict(
                 self.conflict_paths.get(branch, ("x.py",)), f"CONFLICT in {branch}"
@@ -1209,11 +1212,11 @@ class MemoryWorkspace:
             raise GitError(self.ci_ref_error)
         self.ci_refs[ref] = self.head(path)
 
-    def republish_ci_ref(self, path: Path, ref: str) -> None:
-        self.ci_ref_calls.append(("republish", ref))
+    def delete_ci_ref(self, path: Path, ref: str) -> None:
+        self.ci_ref_calls.append(("delete_ci", ref))
         if self.ci_ref_error is not None:
             raise GitError(self.ci_ref_error)
-        self.ci_refs[ref] = self.head(path)
+        self.ci_refs.pop(ref, None)
 
     def publish_dispatch_ref(self, path: Path, ref: str) -> None:
         self.ci_ref_calls.append(("publish_dispatch", ref))
@@ -1829,6 +1832,12 @@ class MemoryRunRegistry:
         self.land_wait_records: dict[Path, tuple[str, datetime, datetime, tuple[int, ...]]] = {}
         self.land_wait_notes: list[str] = []
         self.land_wait_publishes: list[tuple[Path, str, tuple[int, ...], datetime | None]] = []
+        # GH-500: the attempt records by `(product, issue, kind)`, the published exempt waits
+        # by resolved root, and every publish made (`None` is a removal).
+        self.exempt_records: dict[tuple[str, int, exempt_queue.ExemptKind], ExemptAttempt] = {}
+        self.exempt_wait_records: dict[Path, tuple[datetime, ExemptCandidate]] = {}
+        self.exempt_wait_notes: list[str] = []
+        self.exempt_wait_publishes: list[tuple[Path, str, ExemptCandidate | None]] = []
 
     def register(self, product: str, task_id: str, kind: rules.RunKind = "role") -> None:
         self.registered.append((product, task_id))
@@ -1906,6 +1915,65 @@ class MemoryRunRegistry:
             if now - written_at <= rules.LAND_WAIT_TTL
         ]
         return waits, list(self.land_wait_notes)
+
+    def exempt_attempts(
+        self, product: str
+    ) -> dict[tuple[int, exempt_queue.ExemptKind], ExemptAttempt]:
+        return {
+            (issue, kind): attempt
+            for (owner, issue, kind), attempt in self.exempt_records.items()
+            if owner == product
+        }
+
+    def record_exempt_seen(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind, now: datetime
+    ) -> None:
+        existing = self.exempt_records.get((product, issue, kind)) or ExemptAttempt()
+        if existing.first_seen is None:
+            self.exempt_records[(product, issue, kind)] = dataclasses.replace(
+                existing, first_seen=now
+            )
+
+    def record_exempt_attempt(
+        self, product: str, issue: int, kind: exempt_queue.ExemptKind, now: datetime
+    ) -> None:
+        existing = self.exempt_records.get((product, issue, kind)) or ExemptAttempt()
+        self.exempt_records[(product, issue, kind)] = ExemptAttempt(
+            existing.first_seen or now, now, False
+        )
+
+    def mark_exempt_starved(self, product: str, issue: int, kind: exempt_queue.ExemptKind) -> None:
+        existing = self.exempt_records.get((product, issue, kind))
+        if existing is not None:
+            self.exempt_records[(product, issue, kind)] = dataclasses.replace(
+                existing, starved_reported=True
+            )
+
+    def clear_exempt_attempt(self, product: str, issue: int, kind: exempt_queue.ExemptKind) -> None:
+        self.exempt_records.pop((product, issue, kind), None)
+
+    def exempt_waits(self, now: datetime) -> tuple[list[ExemptWait], list[str]]:
+        waits = [
+            ExemptWait(
+                candidate.product,
+                rules.root_key(str(root)),
+                written_at,
+                exempt_queue.rank(candidate).since,
+            )
+            for root, (written_at, candidate) in self.exempt_wait_records.items()
+            if now - written_at <= exempt_queue.EXEMPT_WAIT_TTL
+        ]
+        return waits, list(self.exempt_wait_notes)
+
+    def publish_exempt_wait(
+        self, root: Path, product: str, candidate: ExemptCandidate | None, now: datetime
+    ) -> None:
+        root = root.resolve()
+        self.exempt_wait_publishes.append((root, product, candidate))
+        if candidate is None:
+            self.exempt_wait_records.pop(root, None)
+        else:
+            self.exempt_wait_records[root] = (now, candidate)
 
 
 class FakeLoadReader:

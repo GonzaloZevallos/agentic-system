@@ -10,6 +10,7 @@ import pytest
 
 from agentic.core.process.application.ports import GitError
 from agentic.core.process.application.review import review
+from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_BACKOFF_S, scrub
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryStack, MemoryWorkspace, ScriptedRunner, memory_ports, reviewed
 
@@ -57,8 +58,12 @@ def ports_of(verdict, *, workspace=None, ci=("check",), delivery=("tests",)):
     return memory_ports(runner, stack=stack, workspace=workspace or FullIdWorkspace())
 
 
-async def run(state, ports):
-    return await review(state, Configuration(product_dir=MemoryWorkspace.ROOT), ports)
+async def run(state, ports, sleeps=None):
+    """`sleeps` records the waits of the push's retry: a wait costs no real time here."""
+    wait = sleeps.append if sleeps is not None else (lambda _seconds: None)
+    return await review(
+        state, Configuration(product_dir=MemoryWorkspace.ROOT), ports, push_sleep=wait
+    )
 
 
 async def test_an_approved_final_unit_pushes_its_head_first_and_records_the_push():
@@ -178,3 +183,61 @@ async def test_a_short_head_is_pushed_but_never_recorded():
     ports = ports_of(reviewed("approved"), workspace=Short())
     patch = await run(state_of(), ports)
     assert "ci_speculation" not in patch
+
+
+TRANSIENT = (
+    "fatal: unable to access 'https://x-access-token:ghp_secret1234@github.com/o/r/': "
+    "Could not resolve host: github.com"
+)
+PERMANENT = (
+    "remote: Permission to o/r.git denied to workflow. https://u:ghp_secret1234@github.com/o/r"
+)
+
+
+class Scripted(FullIdWorkspace):
+    """A push that says each scripted text in turn, then goes through."""
+
+    def __init__(self, *says: str, always: str | None = None):
+        super().__init__()
+        self.says = list(says)
+        self.always = always
+
+    def publish_ci_ref(self, path, ref):
+        super().publish_ci_ref(path, ref)
+        said = self.says.pop(0) if self.says else self.always
+        if said is not None:
+            raise GitError("git push failed", stderr=said)
+
+
+async def test_a_transient_failure_that_heals_still_records_the_push():
+    sleeps: list[float] = []
+    ports = ports_of(reviewed("approved"), workspace=Scripted(TRANSIENT))
+    patch = await run(state_of(), ports, sleeps)
+    assert ports.workspace.ci_ref_calls == [("publish", REF), ("publish", REF)]
+    assert sleeps == [PUSH_BACKOFF_S[0]]
+    assert patch["ci_speculation"]["head"] == HEAD
+    assert patch["subtasks"]["api"]["status"] == "approved"
+
+
+async def test_a_permanent_refusal_is_tried_once_leaves_no_record_and_logs_what_git_said(capsys):
+    sleeps: list[float] = []
+    ports = ports_of(reviewed("approved"), workspace=Scripted(always=PERMANENT))
+    patch = await run(state_of(), ports, sleeps)
+    assert ports.workspace.ci_ref_calls == [("publish", REF)] and sleeps == []
+    assert "ci_speculation" not in patch
+    assert patch["subtasks"]["api"]["status"] == "approved"
+    err = capsys.readouterr().err
+    assert (
+        f"agentic: review: GH-465: speculative push failed after 1 attempt(s) (permanent): "
+        f"{scrub(PERMANENT)}\n"
+    ) == err
+    assert "ghp_secret1234" not in err
+
+
+async def test_a_transient_failure_that_never_heals_is_logged_after_every_attempt(capsys):
+    ports = ports_of(reviewed("approved"), workspace=Scripted(always=TRANSIENT))
+    patch = await run(state_of(), ports)
+    assert len(ports.workspace.ci_ref_calls) == PUSH_ATTEMPTS
+    assert "ci_speculation" not in patch
+    err = capsys.readouterr().err
+    assert f"after {PUSH_ATTEMPTS} attempt(s) (transient): {scrub(TRANSIENT)}" in err

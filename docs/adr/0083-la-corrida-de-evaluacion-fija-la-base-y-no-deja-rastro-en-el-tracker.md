@@ -65,7 +65,7 @@ sobre evaluación:
 - `EvaluationTracker`: las lecturas permitidas pasan; `issue_comments` y `timestamped_comments`
   devuelven `[]`; `comment`, `label`, `unlabel`, `note` y `drop_label` no hacen nada; cualquier
   otra escritura lanza `EvaluationWrite`.
-- `EvaluationWorkspace`: `push`, `publish_ci_ref`, `republish_ci_ref` y `delete_remote_ref`
+- `EvaluationWorkspace`: `push`, `publish_ci_ref`, `delete_ci_ref` y `delete_remote_ref`
   lanzan `EvaluationWrite`, de modo que no sale ninguna rama ni `agentic-ci/<id>`.
 - `EvaluationStack.ci()` devuelve `()`, así que `full_checks` toma su camino local ya existente.
 - `FileInbox` reemplaza al inbox, y `board` y `board_sent` quedan en `None`.

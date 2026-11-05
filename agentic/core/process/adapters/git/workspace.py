@@ -115,6 +115,11 @@ _LOCK_OPTIONS = (
     f"core.packedRefsTimeout={LOCK_TIMEOUT_MS}",
 )
 _LOCK_ERROR = re.compile(r"Unable to create '[^']*\.lock': File exists|cannot lock ref")
+# The CI path's pushes and `ls-remote`s run in the C locale (GH-487): the retry reads git's
+# English words (`domain/ci_push.classify`), whatever language the machine runs in.
+_C_LOCALE = {"LC_ALL": "C"}
+# What git says of a `push --delete` whose ref a racing delete already removed: nothing left to do.
+_REMOTE_REF_GONE = "remote ref does not exist"
 # At most this many left-out local commits are named in a note.
 _LEFT_OUT_SHOWN = 10
 
@@ -454,7 +459,9 @@ class GitWorkspace:
             text=True,
         )
         if result.returncode != 0:
-            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+            raise GitError(
+                f"git {' '.join(args)} failed: {result.stderr.strip()}", stderr=result.stderr
+            )
         return result.stdout.strip()
 
     def _has_staged_changes(self, path: Path, relatives: Sequence[str] = ()) -> bool:
@@ -490,18 +497,28 @@ class GitWorkspace:
 
     def publish_ci_ref(self, path: Path, ref: str) -> None:
         # No lease: the ref is the task's own and the run holds the task's lock.
-        self._git("push", "--force", "origin", f"HEAD:refs/heads/{ref}", cwd=path)
+        self._git("push", "--force", "origin", f"HEAD:refs/heads/{ref}", cwd=path, env=_C_LOCALE)
 
-    def republish_ci_ref(self, path: Path, ref: str) -> None:
-        # Delete, then create: GitHub starts a run on a branch create, and a force push that
-        # moves nothing may start none (GH-462). A ref the remote no longer holds is just created.
-        if self._git("ls-remote", "--heads", "origin", f"refs/heads/{ref}", cwd=path).strip():
-            self._git("push", "origin", "--delete", ref, cwd=path)
-        self.publish_ci_ref(path, ref)
+    def delete_ci_ref(self, path: Path, ref: str) -> None:
+        # The delete half of a republish (GH-462): GitHub starts a run on a branch create, and
+        # a force push that moves nothing may start none. One step and no retry: the caller
+        # retries each step apart (GH-487). A ref the remote lacks is already deleted.
+        held = self._git(
+            "ls-remote", "--heads", "origin", f"refs/heads/{ref}", cwd=path, env=_C_LOCALE
+        )
+        if not held.strip():
+            return
+        try:
+            self._git("push", "origin", "--delete", ref, cwd=path, env=_C_LOCALE)
+        except GitError as exc:
+            if _REMOTE_REF_GONE not in exc.stderr.lower():
+                raise
 
     def publish_dispatch_ref(self, path: Path, ref: str) -> None:
         # No lease, as `publish_ci_ref`; and a full ref outside `refs/heads/`, so no push event.
-        self._git("push", "--force", "origin", f"HEAD:{self._dispatch_ref(ref)}", cwd=path)
+        self._git(
+            "push", "--force", "origin", f"HEAD:{self._dispatch_ref(ref)}", cwd=path, env=_C_LOCALE
+        )
 
     def delete_dispatch_ref(self, ref: str) -> None:
         full = self._dispatch_ref(ref)
@@ -1021,10 +1038,15 @@ class GitWorkspace:
         return self.base_of(branch) or self._git("rev-parse", "--short", branch)
 
     def _run(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        return self._run_with_env({}, *args, cwd=cwd)
+
+    def _run_with_env(
+        self, env: Mapping[str, str], *args: str, cwd: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["git", *args],
             cwd=cwd or self.product_dir,
-            env={**os.environ, **self.identity},
+            env={**os.environ, **self.identity, **env},
             capture_output=True,
             text=True,
         )
@@ -1056,10 +1078,16 @@ class GitWorkspace:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout
 
-    def _git(self, *args: str, cwd: Path | None = None) -> str:
-        result = self._run(*args, cwd=cwd)
+    def _git(
+        self, *args: str, cwd: Path | None = None, env: Mapping[str, str] | None = None
+    ) -> str:
+        result = (
+            self._run(*args, cwd=cwd) if env is None else self._run_with_env(env, *args, cwd=cwd)
+        )
         if result.returncode != 0:
-            raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+            raise GitError(
+                f"git {' '.join(args)} failed: {result.stderr.strip()}", stderr=result.stderr
+            )
         return result.stdout.strip()
 
 

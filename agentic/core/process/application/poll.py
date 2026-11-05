@@ -29,7 +29,16 @@ from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, document, experiment, merge_ci, merge_conflict, presubmit, rules
+from ..domain import (
+    ci,
+    document,
+    exempt_queue,
+    experiment,
+    merge_ci,
+    merge_conflict,
+    presubmit,
+    rules,
+)
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
@@ -59,6 +68,7 @@ from .ports import (
     LockRecord,
     Ports,
     RunLock,
+    RunRegistration,
     RunRegistry,
     TrackerCallFailed,
     TrackerTimedOut,
@@ -788,6 +798,8 @@ def gather_merges(
     busy: frozenset[str] = frozenset(),
     cfg: Configuration | None = None,
     reruns: list[int] | None = None,
+    backed_off: list[int] | None = None,
+    backoff_ends: dict[int, datetime] | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -812,7 +824,11 @@ def gather_merges(
     both have no step, so they are `land_model`. A task is in `found` or in `lands`, never
     both. A task whose pull request closed unmerged after slices landed for it (`cfg` given)
     is closed in its document when git says every unit landed, or its issue goes into
-    `reruns` (when given) when work is left; each says so in one line (GH-334)."""
+    `reruns` (when given) when work is left; each says so in one line (GH-334). A candidate
+    whose `merge_refusal` still holds on its head and master (`exempt_queue.backed_off`, GH-500)
+    goes into `backed_off` (when given) instead of the result: `rules.poll_plan` defers it. Its
+    backoff's end, for any candidate of that pair, goes into `backoff_ends` (when given): the
+    starvation clock starts there (`exempt_queue.backoff_ends`)."""
     out = lines if lines is not None else []
     now = now or datetime.now(UTC)
     if current_master is None:
@@ -900,7 +916,17 @@ def gather_merges(
                     # runs it on the same entry. No step: it can spend a model, so it counts.
                     lands.append(rules.LandCandidate(number, landing_rules.run_kind_of(None, None)))
         else:
-            found.append(number)
+            head = pull_request.head_oid if pull_request is not None else None
+            refusal = raw.get("merge_refusal")
+            ends = exempt_queue.backoff_ends(refusal, head, current_master)
+            if backoff_ends is not None and ends is not None:
+                backoff_ends[number] = ends
+            if backed_off is not None and exempt_queue.backed_off(
+                refusal, head, current_master, now
+            ):
+                backed_off.append(number)
+            else:
+                found.append(number)
     return found
 
 
@@ -1775,6 +1801,7 @@ def execute(
                 sleep,
             )
         elif action.kind == "merge":
+            registry.record_exempt_attempt(product, action.issue, "merge", now)
             argv = _argv(argv0, "merge", action.issue, product_dir)
             try:
                 pid = launcher.spawn(argv)
@@ -1785,6 +1812,8 @@ def execute(
             lines.append(f"agentic: poll: merge #{action.issue} -> pid {pid}")
         elif action.kind == "land":
             kind = (land_kinds or {}).get(action.issue, "land_model")
+            if not rules.counts_against_cap(kind):
+                registry.record_exempt_attempt(product, action.issue, "land", now)
             argv = _argv(argv0, "land", action.issue, product_dir, "--run-kind", kind)
             try:
                 pid = launcher.spawn(argv)
@@ -1845,8 +1874,9 @@ def deferred_line(deferred: rules.Deferred) -> str:
     """The poll line for a merge or land `rules.poll_plan` held back: built from the plan's
     own `Deferred`, never from a second slot count (GH-263). The reason is printed as it is:
     `no_slot`, `exempt_busy`, `pause_waiting` for a land held by an account-limit pause
-    (GH-270) or `land_queued` for one yielding to an earlier wait of another product
-    (GH-362)."""
+    (GH-270), `land_queued` for one yielding to an earlier wait of another product
+    (GH-362) or `backoff` for a merge whose refusal still holds on its head and master
+    (GH-500)."""
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
@@ -1871,6 +1901,106 @@ def _live_issues(
         if r.product == product and (issue := ports.inbox.issue_of(r.task_id)) is not None
     }
     return frozenset(running | {a.issue for a in actions if a.kind in _LIVE_ACTIONS})
+
+
+def _exempt_candidates(
+    product: str,
+    key: str,
+    merges: Sequence[int],
+    lands: Sequence[rules.LandCandidate],
+    attempts: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt],
+) -> list[exempt_queue.ExemptCandidate]:
+    """This product's merges and exempt (`land_checks`) lands as `exempt_queue` candidates,
+    with the instants its attempt records hold (GH-500)."""
+    wanted: list[tuple[int, exempt_queue.ExemptKind]] = [(n, "merge") for n in merges] + [
+        (c.issue, "land") for c in lands if not rules.counts_against_cap(c.kind)
+    ]
+    found = []
+    for issue, kind in wanted:
+        known = attempts.get((issue, kind)) or exempt_queue.ExemptAttempt()
+        found.append(
+            exempt_queue.ExemptCandidate(
+                kind, product, key, issue, known.first_seen, known.last_attempt
+            )
+        )
+    return found
+
+
+def _sweep_exempt_attempts(
+    ports: Ports,
+    registry: RunRegistry,
+    product: str,
+    attempts: dict[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt],
+) -> None:
+    """Delete the attempt records a fact has made stale (`exempt_queue.stale_keys`): the facts
+    are the task document's `closed_at` and `pull_request`, read once per record's issue, with
+    no call to the tracker. A task absent from this round's candidates keeps its record."""
+    facts: dict[tuple[str, int], exempt_queue.ExemptFacts] = {}
+    for issue in {issue for issue, _ in attempts}:
+        raw = ports.documents.load(ports.inbox.task_id(issue))
+        if raw is not None:
+            reference = raw.get("pull_request")
+            facts[(product, issue)] = exempt_queue.ExemptFacts(
+                bool(raw.get("closed_at")), str(reference) if reference else None, None
+            )
+    records = [(product, issue, kind) for issue, kind in attempts]
+    for _, issue, kind in exempt_queue.stale_keys(records, facts):
+        registry.clear_exempt_attempt(product, issue, kind)
+        attempts.pop((issue, kind), None)
+
+
+def _exempt_holder(
+    running: Sequence[RunRegistration],
+    yielding: Sequence[exempt_queue.ExemptWait],
+    started: str | None,
+) -> str:
+    """Who holds the exempt slot, in closed fields (GH-500): `yielding to product P` while this
+    product waits for another product's older wait, else the live exempt child (`product P task
+    T kind K`), else the child this very round starts."""
+    if yielding:
+        first = min(yielding, key=lambda w: (w.since, w.root_key))
+        return f"yielding to product {first.product}"
+    for r in running:
+        if not rules.counts_against_cap(r.kind):
+            return f"product {r.product} task {r.task_id} kind {r.kind}"
+    return started or "the child started this round"
+
+
+def _starvation_lines(
+    plan: rules.PollPlan,
+    registry: RunRegistry,
+    product: str,
+    records: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt],
+    now: datetime,
+    holder: Callable[[], str],
+    backoff_ends: Mapping[int, datetime] | None = None,
+) -> list[str]:
+    """One line per candidate that waited `exempt_busy` (a live child, a yield, or the child
+    started this round) for longer than `exempt_queue.EXEMPT_STARVED_AFTER` since its last
+    attempt or first sighting and was not reported yet; the record is then marked, so it is said
+    once. Backoff rounds are `backoff`, never `exempt_busy`, so they do not count: a merge whose
+    refusal backoff ran out waits from that instant (`backoff_ends`), not from its last attempt.
+    Closed fields only, never a metric (GH-500)."""
+    found: list[str] = []
+    for deferred in plan.deferred:
+        if deferred.kind == "orphan" or deferred.reason != "exempt_busy":
+            continue
+        record = records.get((deferred.issue, deferred.kind))
+        since = (record.last_attempt or record.first_seen) if record else None
+        ended = (backoff_ends or {}).get(deferred.issue) if deferred.kind == "merge" else None
+        if since is not None and ended is not None:
+            since = max(since, ended)
+        if record is None or since is None or record.starved_reported:
+            continue
+        if now - since < exempt_queue.EXEMPT_STARVED_AFTER:
+            continue
+        minutes = int((now - since).total_seconds() // 60)
+        found.append(
+            f"agentic: poll: {deferred.kind} #{deferred.issue} starved: "
+            f"{minutes} min behind {holder()}"
+        )
+        registry.mark_exempt_starved(product, deferred.issue, deferred.kind)
+    return found
 
 
 def run_once(
@@ -1979,6 +2109,8 @@ def run_once(
             experiment_notes,
         )
         merges: list[int] = []
+        backed_off_merges: list[int] = []
+        backoff_ends: dict[int, datetime] = {}
         merge_lines: list[str] = []
         lands: list[rules.LandCandidate] = []
         reruns: list[int] = []
@@ -1995,6 +2127,8 @@ def run_once(
                 busy,
                 cfg,
                 reruns,
+                backed_off_merges,
+                backoff_ends,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())
@@ -2020,6 +2154,7 @@ def run_once(
                 *crash_retakes,
                 *(r.issue for r in resumes),
                 *merges,
+                *backed_off_merges,
                 *(c.issue for c in lands),
                 *reruns,
             }
@@ -2039,6 +2174,26 @@ def run_once(
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
         own_key = rules.root_key(str(tasks_root))
+        # GH-500: the exempt queue. The records of tasks a fact closed go first; every candidate
+        # is noted the first time it is seen; this product yields to an older wait of another root.
+        exempt_records = registry.exempt_attempts(product)
+        _sweep_exempt_attempts(ports, registry, product, exempt_records)
+        for candidate in _exempt_candidates(product, own_key, merges, lands, exempt_records):
+            if candidate.first_seen is None:
+                registry.record_exempt_seen(product, candidate.issue, candidate.kind, now)
+                exempt_records[(candidate.issue, candidate.kind)] = exempt_queue.ExemptAttempt(
+                    now, candidate.last_attempt
+                )
+        exempt_head = next(
+            iter(
+                exempt_queue.ordered(
+                    _exempt_candidates(product, own_key, merges, lands, exempt_records)
+                )
+            ),
+            None,
+        )
+        exempt_waits, exempt_wait_notes = registry.exempt_waits(now)
+        exempt_others = [w for w in exempt_waits if w.root_key != own_key]
         waits, wait_notes = registry.land_waits(now)
         # A product never holds itself: only another root's fresh record holds this round.
         others = [w for w in waits if w.root_key != own_key]
@@ -2048,8 +2203,12 @@ def run_once(
             *experiment_notes,
             *spend_notes,
             *wait_notes,
+            *exempt_wait_notes,
             *_upstream_notes(upstream.cache_info().currsize > 0, upstream),
         ]
+        plan_yielded = exempt_queue.behind(
+            exempt_queue.rank(exempt_head) if exempt_head else None, exempt_others
+        )
         plan = rules.poll_plan(
             closes=closes,
             resumes=resumes,
@@ -2059,6 +2218,7 @@ def run_once(
             retakes=retakes,
             crash_retakes=sorted(crash_retakes),
             merges=merges,
+            backed_off_merges=backed_off_merges,
             lands=lands,
             live_exempt=exempt_live,
             pace=pace,
@@ -2069,6 +2229,46 @@ def run_once(
             held=held,
             orphan_retakes=sorted(orphans),
             spent_retakes=sorted(spent_notices),
+            exempt_attempts=exempt_records,
+            exempt_yield=plan_yielded,
+        )
+        # GH-500: the head of this product's queue is published only while it could start. A
+        # round that starts it, or that has no such head, removes the record: the child that
+        # runs is the claim, and a record of the old `since` would hold the others for nothing.
+        started = {(a.issue, a.kind) for a in plan.actions}
+        own_exempt_live = any(
+            r.product == product and not rules.counts_against_cap(r.kind) for r in running
+        )
+        could_start = exempt_head is not None and exempt_queue.startable(
+            exempt_head,
+            backed_off=exempt_head.kind == "merge" and exempt_head.issue in backed_off_merges,
+            busy=exempt_live > 0,
+            held=bool(held),
+            own_live_exempt=own_exempt_live,
+        )
+        registry.publish_exempt_wait(
+            tasks_root,
+            product,
+            exempt_head
+            if could_start and exempt_head and (exempt_head.issue, exempt_head.kind) not in started
+            else None,
+            now,
+        )
+        starting = next((a for a in plan.actions if a.kind in ("merge", "land")), None)
+        starvation = _starvation_lines(
+            plan,
+            registry,
+            product,
+            exempt_records,
+            now,
+            lambda: _exempt_holder(
+                running,
+                exempt_others if exempt_head and plan_yielded else [],
+                f"product {product} task {ports.inbox.task_id(starting.issue)} kind {starting.kind}"
+                if starting
+                else None,
+            ),
+            backoff_ends,
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.
@@ -2097,6 +2297,7 @@ def run_once(
             spent_notices,
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
+        deferral_lines += starvation
         orphan_lines += [
             rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"
         ]

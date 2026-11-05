@@ -56,6 +56,7 @@ from ..domain.ci import (
     FailedStage,
     FullTierVerdict,
 )
+from ..domain.ci_push import PushKind, push_failure_markdown
 from ..domain.presubmit import CheckResult, CiCover, CiDispatch
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
@@ -66,8 +67,9 @@ from ..domain.task import (
     FullChecksRecord,
     TaskState,
 )
-from . import ci_flakes
+from . import ci_flakes, ci_push
 from .checkouts import Checkout, task_base
+from .ci_push import Pushed, PushFailed
 from .ports import GitError, Ports
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .run_role import finish
@@ -120,6 +122,12 @@ class _NoVerdict:
     waited_s: float
     # The workflow file of a dispatched run that gave none; None for the task's own CI ref.
     workflow: str | None = None
+    # What a push that still failed after its retries reported (GH-487): git's stderr already
+    # through `ci_push.scrub`, the tries it took and how it read. Prose for the human only; the
+    # `cause` stays the closed value (ADR-0029). None for any other way of giving no verdict.
+    git_said: str | None = None
+    push_attempts: int | None = None
+    push_kind: PushKind | None = None
     # `unknown_names` only (GH-485): the names no check run carries, and the names that did report.
     unknown: tuple[str, ...] = ()
     reported: tuple[str, ...] = ()
@@ -130,6 +138,7 @@ class _NoVerdict:
 
 
 Sleep = Callable[[float], Awaitable[None]]
+PushSleep = Callable[[float], None]
 Clock = Callable[[], float]
 Now = Callable[[], datetime]
 
@@ -184,18 +193,22 @@ async def full_checks(
     clock: Clock = time.monotonic,
     now: Now = _utc_now,
     checkout: Checkout,
+    push_sleep: PushSleep = time.sleep,
 ) -> TaskState:
     """`sleep` and `clock` are the CI wait's, injectable so a test does not wait; `now` is the
-    wall clock `speculation.event_lost` measures the speculative push against. A `checkout`
-    handed in (the verifier set resolves the task's once, GH-469): no resolution and no clean
-    check here, `verifiers.verify` made both."""
+    wall clock `speculation.event_lost` measures the speculative push against; `push_sleep` is
+    the pause between the tries of a failed push of the CI ref (GH-487), a thread's, not the
+    wait's. A `checkout` handed in (the verifier set resolves the task's once, GH-469): no
+    resolution and no clean check here, `verifiers.verify` made both."""
     workspace = ports.workspace
     task = checkout
     base = task_base(state, ports)
     names = ports.stack.ci(base)
     if not names:
         return await _local_full_checks(state, cfg, ports, task, base, None)
-    outcome = await _ci_full_checks(state, cfg, ports, task, base, names, sleep, clock, now)
+    outcome = await _ci_full_checks(
+        state, cfg, ports, task, base, names, sleep, clock, now, push_sleep
+    )
     if outcome == "untrusted":
         return await _local_full_checks(state, cfg, ports, task, base, outcome)
     if isinstance(outcome, _NoVerdict) and outcome.cause == "unknown_names":
@@ -207,15 +220,65 @@ async def full_checks(
     if isinstance(outcome, _NoVerdict):
         head = workspace.full_head(task.path)
         table = _CI_DETAIL if outcome.workflow is None else _DISPATCH_DETAIL
+        ref = outcome.workflow or rules.ci_ref(state["id"])
         detail = table[outcome.cause].format(
-            ref=outcome.workflow or rules.ci_ref(state["id"]),
+            ref=ref,
             min=round(outcome.waited_s / 60, 1),
             stage=outcome.stage,
             dispatch_ref=rules.ci_dispatch_ref(state["id"]),
             sha=outcome.head or head,
         )
-        return finish(state, rules.ci_unavailable(outcome.cause, head, detail), ports)
+        patch = rules.ci_unavailable(outcome.cause, head, detail + _git_said(outcome))
+        if outcome.git_said and outcome.push_attempts and outcome.push_kind:
+            # Git's words reach the section only through `push_failure_markdown`, which
+            # scrubs them; the older run stays as history under its own free `(vN)` key.
+            patch["sections"] = _section(
+                state,
+                0,
+                push_failure_markdown(
+                    outcome.cause, ref, outcome.push_attempts, outcome.push_kind, outcome.git_said
+                ),
+            )
+        return finish(state, patch, ports)
     return finish(state, outcome, ports)
+
+
+def _git_said(outcome: _NoVerdict) -> str:
+    """What git said, as the tail of the escalation's detail. Added after the `str.format` of
+    the detail, never inside it: git's text is a third party's and may hold braces."""
+    if not (outcome.git_said and outcome.push_attempts and outcome.push_kind):
+        return ""
+    tries = f"{outcome.push_attempts} attempt(s) ({outcome.push_kind})"
+    return f" after {tries}; git said: {outcome.git_said}"
+
+
+def _publish_failed(exc: GitError, waited: float) -> _NoVerdict:
+    """The no-verdict of a push that failed. A `PushFailed` brings what git said; a `GitError`
+    that is not one is today's bare `publish_failed`."""
+    if isinstance(exc, PushFailed):
+        return _NoVerdict(
+            "publish_failed",
+            waited,
+            git_said=exc.said,
+            push_attempts=exc.attempts,
+            push_kind=exc.kind,
+        )
+    return _NoVerdict("publish_failed", waited)
+
+
+async def _push(op: Callable[[], None], push_sleep: PushSleep) -> Pushed:
+    """One git step of the CI path, retried by what git says (`ci_push.publish_with_retry`),
+    run in a worker thread: its pauses block the thread, never the loop."""
+    return await anyio.to_thread.run_sync(lambda: ci_push.publish_with_retry(op, sleep=push_sleep))
+
+
+def _with_pushes(patch: dict[str, Any], pushes: list[Pushed]) -> None:
+    """Note on the record the push that needed more than one try (the worst one, when two
+    steps did). A first-try push adds no key."""
+    worst = max(pushes, key=lambda pushed: pushed.attempts, default=None)
+    if worst is not None and worst.attempts > 1 and worst.kind is not None:
+        patch["full_checks"]["push_attempts"] = worst.attempts
+        patch["full_checks"]["push_kind"] = worst.kind
 
 
 def _unknown_text(outcome: _NoVerdict, head: str, plan_only: tuple[str, ...]) -> str:
@@ -318,12 +381,14 @@ async def _ci_full_checks(
     sleep: Sleep,
     clock: Clock,
     now: Now,
+    push_sleep: PushSleep,
 ) -> dict[str, Any] | _NoVerdict | Literal["untrusted"]:
     """The patch of a run decided on GitHub, `untrusted` for running the local tier, or the
     `_NoVerdict` GitHub gave no verdict for. When no run starts within the grace period the
     ref is published once more (GH-462). The
     paths are read from the workspace only and the head is published to the task's own CI
-    ref; the wait takes no check slot and runs no command (ADR-0070)."""
+    ref; the wait takes no check slot and runs no command (ADR-0070). Each push is retried
+    by what git said (GH-487); the one that needed it is noted on the record."""
     workspace = ports.workspace
     head, trusted = _head_trust(ports, task, base)
     gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
@@ -335,6 +400,7 @@ async def _ci_full_checks(
         )
     ref = rules.ci_ref(state["id"])
     speculative = False
+    pushes: list[Pushed] = []
     pushed = state.get("ci_speculation")
     if pushed and _pushed_for(state, head):
         # A review already pushed this very commit (GH-465): its run is waited for, not
@@ -346,26 +412,34 @@ async def _ci_full_checks(
         speculative = decided is not None
         if decided is None:
             try:
-                await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
-            except GitError:
-                return _NoVerdict("publish_failed", waited)
+                pushes.append(
+                    await anyio.to_thread.run_sync(
+                        lambda: ci_push.republish(workspace, task.path, ref, sleep=push_sleep)
+                    )
+                )
+            except GitError as exc:
+                return _publish_failed(exc, waited)
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
         else:
             verdict = decided
     else:
         try:
-            await anyio.to_thread.run_sync(workspace.publish_ci_ref, task.path, ref)
-        except GitError:
-            return _NoVerdict("publish_failed", 0.0)
+            pushes.append(await _push(lambda: workspace.publish_ci_ref(task.path, ref), push_sleep))
+        except GitError as exc:
+            return _publish_failed(exc, 0.0)
         verdict, read, waited = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
         if verdict.state == "unreachable" and verdict.cause == "no_run":
             # Once per call: a CI that never started on the first push is told that it may have
             # missed the event, and the second wait is bounded by the grace period again.
             try:
-                await anyio.to_thread.run_sync(workspace.republish_ci_ref, task.path, ref)
-            except GitError:
-                return _NoVerdict("publish_failed", waited)
+                pushes.append(
+                    await anyio.to_thread.run_sync(
+                        lambda: ci_push.republish(workspace, task.path, ref, sleep=push_sleep)
+                    )
+                )
+            except GitError as exc:
+                return _publish_failed(exc, waited)
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
     if verdict.state == "unreachable":
@@ -380,6 +454,8 @@ async def _ci_full_checks(
         patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited)
     if speculative:
         patch["full_checks"]["speculative"] = True
+    else:
+        _with_pushes(patch, pushes)
     # The flake block of the jobs on this head: evidence only, it adds records and decides
     # nothing (the verdict above is already made).
     flakes = await anyio.to_thread.run_sync(
@@ -775,7 +851,10 @@ def _section(state: TaskState, version: int, text: str) -> dict[str, str]:
     sections = {SECTION: text}
     previous = state.get("sections", {}).get(SECTION)
     if previous is not None:
-        sections[rules.superseded(SECTION, version - 1)] = previous
+        # The key is read from the section names, never from the text: a run that escalated
+        # wrote a section and no record, so `version - 1` alone could name a key in use.
+        free = rules.next_section_version(state, SECTION)
+        sections[rules.superseded(SECTION, max(version - 1, free))] = previous
     return sections
 
 

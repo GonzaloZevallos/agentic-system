@@ -30,11 +30,11 @@ classDiagram
     class task__MergeCiRecord["MergeCiRecord"]
     class task__MergeConflictRecord["MergeConflictRecord"]
     class task__MergeOutcome["MergeOutcome"]
+    class task__MergeRefusalRecord["MergeRefusalRecord"]
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
     class task__PendingCloseDocs["PendingCloseDocs"]
     class task__PlanSettledRow["PlanSettledRow"]
-    class task__PullRequest["PullRequest"]
 ```
 
 ## Relaciones con otras páginas

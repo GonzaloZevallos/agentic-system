@@ -31,6 +31,7 @@ from typing import (
     get_type_hints,
 )
 
+from .ci_push import PushKind
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate
 from .reaping import ReapedProcess
 
@@ -1189,6 +1190,11 @@ class FullChecksRecord(TypedDict):
     # Whether the CI run that gave the verdict was the one a review pushed ahead of this run
     # (GH-465, `speculation.consumable`); written only when it was, `ran_on` stays `ci`.
     speculative: NotRequired[bool]
+    # How many tries the node's own push of the CI ref took and how git's error read at the
+    # last failed one (GH-487); written only when it needed more than one, never when a
+    # review's speculative push was consumed. A number and a closed word, no git text.
+    push_attempts: NotRequired[int]
+    push_kind: NotRequired[PushKind]
 
 
 class MergeCiRecord(TypedDict):
@@ -1227,6 +1233,18 @@ class MergeConflictRecord(TypedDict):
     instant it was read. One row for the task, replaced whole on each write, and it holds only
     for that exact pair (`merge_conflict.applies`). No free text."""
 
+    head: str
+    master: str
+    at: str
+
+
+class MergeRefusalRecord(TypedDict):
+    """A refusal the `merge` verb wrote nothing else for (GH-500): `reason` is the closed
+    refusal, `head` and `master` the full ids it decided with, `at` the ISO instant. One row for
+    the task, replaced whole on each write; the poller honours it only for that exact pair
+    (`exempt_queue.backed_off`). No free text."""
+
+    reason: Literal["ci_untrusted_no_dispatch"]
     head: str
     master: str
     at: str
@@ -1348,6 +1366,10 @@ class TaskState(TaskInput, total=False):
     # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
     # reads as no record.
     merge_conflict: Annotated[MergeConflictRecord, last]
+    # The refusal the merge verb wrote nothing else for (GH-500), one row replaced whole on each
+    # write (`last`). Read with `.get("merge_refusal")`: a document written before it has none,
+    # which reads as no refusal.
+    merge_refusal: Annotated[MergeRefusalRecord, last]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str

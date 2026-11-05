@@ -15,7 +15,7 @@ import pytest
 
 from agentic.core.process.adapters.filesystem.run_registry import FilesystemRunRegistry
 from agentic.core.process.application.ports import LaunchAttempt, RunRegistration
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import exempt_queue, rules
 from agentic.core.process.domain.rules import SpendRun
 
 DEAD_PID = 999_999_999
@@ -481,6 +481,158 @@ def test_the_arm_survives_every_rewrite_of_the_launch_record_and_clears_with_it(
     assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(T0, 3, "control")
     registry.clear_launch("apostrophe", 20)
     assert registry.launch_attempts("apostrophe", 20) is None
+
+
+# -- exempt attempts and published exempt waits (GH-500) ------------------------------------
+
+SEEN = datetime(2026, 11, 4, 15, 0, tzinfo=UTC)
+
+
+def _candidate(issue=5, kind="merge", since=SEEN, root_key="k"):
+    return exempt_queue.ExemptCandidate(kind, "p", root_key, issue, first_seen=since)
+
+
+def test_an_attempt_record_is_read_back_whole_and_keyed_by_product_issue_and_kind(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    later = SEEN + timedelta(minutes=4)
+
+    registry.record_exempt_seen("a", 478, "merge", SEEN)
+    registry.record_exempt_attempt("a", 478, "merge", later)
+    registry.mark_exempt_starved("a", 478, "merge")
+
+    assert registry.exempt_attempts("a") == {
+        (478, "merge"): exempt_queue.ExemptAttempt(SEEN, later, True)
+    }
+
+
+def test_same_issue_in_two_products_and_two_kinds_never_collide(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    registry.record_exempt_seen("a", 7, "merge", SEEN)
+    registry.record_exempt_seen("a-1", 7, "merge", SEEN + timedelta(minutes=1))
+    registry.record_exempt_seen("a", 7, "land", SEEN + timedelta(minutes=2))
+
+    assert registry.exempt_attempts("a") == {
+        (7, "merge"): exempt_queue.ExemptAttempt(SEEN),
+        (7, "land"): exempt_queue.ExemptAttempt(SEEN + timedelta(minutes=2)),
+    }
+    assert registry.exempt_attempts("a-1") == {
+        (7, "merge"): exempt_queue.ExemptAttempt(SEEN + timedelta(minutes=1))
+    }
+    registry.clear_exempt_attempt("a", 7, "merge")
+    assert set(registry.exempt_attempts("a")) == {(7, "land")}
+    assert set(registry.exempt_attempts("a-1")) == {(7, "merge")}
+
+
+def test_seen_keeps_the_first_instant_and_an_attempt_resets_the_starved_flag(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    registry.record_exempt_seen("p", 5, "merge", SEEN)
+    registry.record_exempt_seen("p", 5, "merge", SEEN + timedelta(hours=1))
+    registry.mark_exempt_starved("p", 5, "merge")
+    registry.record_exempt_attempt("p", 5, "merge", SEEN + timedelta(hours=2))
+
+    assert registry.exempt_attempts("p")[(5, "merge")] == exempt_queue.ExemptAttempt(
+        SEEN, SEEN + timedelta(hours=2), False
+    )
+
+
+def test_an_attempt_with_no_seen_record_starts_one_and_starving_nothing_is_a_no_op(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    registry.mark_exempt_starved("p", 5, "merge")
+    registry.clear_exempt_attempt("p", 5, "merge")
+    assert not (tmp_path / "runs" / "exempt").exists()
+
+    registry.record_exempt_attempt("p", 5, "land", SEEN)
+
+    assert registry.exempt_attempts("p") == {(5, "land"): exempt_queue.ExemptAttempt(SEEN, SEEN)}
+
+
+def test_reading_attempts_and_waits_creates_nothing(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    assert registry.exempt_attempts("p") == {}
+    assert registry.exempt_waits(SEEN) == ([], [])
+    registry.publish_exempt_wait(tmp_path / "tasks", "p", None, SEEN)
+    assert not (tmp_path / "runs" / "exempt").exists()
+
+
+def test_a_damaged_attempt_file_is_skipped_and_the_others_still_read(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    registry.record_exempt_seen("p", 5, "merge", SEEN)
+    attempts = tmp_path / "runs" / "exempt" / "attempts"
+    (attempts / "p-6-merge.json").write_text("not json", encoding="utf-8")
+    (attempts / "p-7-merge.json").write_text('{"product": "q"}', encoding="utf-8")
+
+    assert set(registry.exempt_attempts("p")) == {(5, "merge")}
+    registry.record_exempt_attempt("p", 6, "merge", SEEN)  # a damaged record is replaced whole
+    assert registry.exempt_attempts("p")[(6, "merge")] == exempt_queue.ExemptAttempt(SEEN, SEEN)
+
+
+def test_a_published_exempt_wait_is_read_back_and_a_rewrite_replaces_it(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    root = tmp_path / "tasks"
+    key = rules.root_key(str(root.resolve()))
+    registry.publish_exempt_wait(root, "p", _candidate(5, root_key=key), SEEN)
+    registry.publish_exempt_wait(
+        root, "p", _candidate(6, "land", SEEN - timedelta(minutes=9), key), SEEN
+    )
+
+    waits, notes = registry.exempt_waits(SEEN)
+
+    assert notes == []
+    assert waits == [exempt_queue.ExemptWait("p", key, SEEN, SEEN - timedelta(minutes=9))]
+    record = json.loads(next((tmp_path / "runs" / "exempt" / "waiting").glob("*.json")).read_text())
+    assert (record["issue"], record["kind"], record["rank"]) == (6, "land", 1)
+
+
+def test_an_exempt_wait_older_than_the_ttl_is_dropped_and_one_at_the_ttl_is_kept(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.publish_exempt_wait(tmp_path / "tasks", "p", _candidate(), SEEN)
+
+    assert registry.exempt_waits(SEEN + exempt_queue.EXEMPT_WAIT_TTL)[0] != []
+    stale = SEEN + exempt_queue.EXEMPT_WAIT_TTL + timedelta(seconds=1)
+    assert registry.exempt_waits(stale) == ([], [])
+
+
+def test_an_exempt_wait_written_under_another_boot_is_dropped(tmp_path):
+    before = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    before.publish_exempt_wait(tmp_path / "tasks", "p", _candidate(), SEEN)
+    after = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-2")
+
+    assert before.exempt_waits(SEEN)[0] != []
+    assert after.exempt_waits(SEEN) == ([], [])
+
+
+def test_publishing_none_removes_the_record_and_two_roots_keep_their_own(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.publish_exempt_wait(tmp_path / "a", "a", _candidate(1), SEEN)
+    registry.publish_exempt_wait(tmp_path / "b", "b", _candidate(2), SEEN)
+    assert len(registry.exempt_waits(SEEN)[0]) == 2
+
+    registry.publish_exempt_wait(tmp_path / "a", "a", None, SEEN)
+
+    assert [w.product for w in registry.exempt_waits(SEEN)[0]] == ["b"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["not json", "{}", '{"product": "p", "root": "r", "written_at": "x", "since": "x"}', "[]"],
+)
+def test_an_unreadable_exempt_wait_file_is_skipped_with_a_note(tmp_path, content):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.publish_exempt_wait(tmp_path / "tasks", "good", _candidate(), SEEN)
+    (tmp_path / "runs" / "exempt" / "waiting" / "broken.json").write_text(content, encoding="utf-8")
+
+    waits, notes = registry.exempt_waits(SEEN)
+
+    assert [w.product for w in waits] == ["good"]
+    assert notes == ["agentic: poll: exempt wait file broken.json unreadable, skipped"]
+
+
+def test_exempt_files_never_count_as_live_runs(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.record_exempt_seen("p", 5, "merge", SEEN)
+    registry.publish_exempt_wait(tmp_path / "tasks", "p", _candidate(), SEEN)
+
+    assert registry.live() == []
 
 
 # --- the per-product flake lock (GH-464) -------------------------------------------------

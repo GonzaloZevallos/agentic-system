@@ -23,7 +23,13 @@ def _plan(**kwargs) -> rules.PollPlan:
 
 
 # Every value `Deferred.reason` can take, classed: a new reason fails here until it is.
-HOLDS = {"no_slot": True, "land_queued": True, "exempt_busy": False, "pause_waiting": False}
+HOLDS = {
+    "no_slot": True,
+    "land_queued": True,
+    "exempt_busy": False,
+    "pause_waiting": False,
+    "backoff": False,
+}
 
 
 def test_every_deferred_reason_is_classed_explicitly():
@@ -38,6 +44,7 @@ def test_a_deferred_land_holds_launches_only_for_the_reasons_that_open_a_wait(re
 
 def test_a_deferred_merge_never_opens_a_wait():
     assert rules.holds_launches(rules.Deferred("merge", 4, "exempt_busy")) is False
+    assert rules.holds_launches(rules.Deferred("merge", 4, "backoff")) is False
 
 
 def test_a_launch_is_held_while_others_land():

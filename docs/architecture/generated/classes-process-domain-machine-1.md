@@ -20,6 +20,11 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
+    class exempt_queue__ExemptAttempt["ExemptAttempt"]
+    class exempt_queue__ExemptCandidate["ExemptCandidate"]
+    class exempt_queue__ExemptFacts["ExemptFacts"]
+    class exempt_queue__ExemptRank["ExemptRank"]
+    class exempt_queue__ExemptWait["ExemptWait"]
     class reaping__ParsedMark["ParsedMark"]
     class reaping__ReapScope["ReapScope"]
     class reaping__ReapedProcess["ReapedProcess"]
@@ -29,6 +34,4 @@ classDiagram
     class scratch__Orphans["Orphans"]
     class scratch__Owner["Owner"]
     class scratch__OwnerEntry["OwnerEntry"]
-    class scratch__OwnerRecord["OwnerRecord"]
-    class scratch__PartitionFolder["PartitionFolder"]
 ```
