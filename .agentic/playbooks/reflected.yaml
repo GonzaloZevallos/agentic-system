@@ -647,3 +647,5 @@ tasks:
   GH-479@review:
     cost_usd: 0.1
     decisions: 1
+  GH-510@review:
+    cost_usd: 0.0
