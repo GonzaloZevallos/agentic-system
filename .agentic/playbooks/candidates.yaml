@@ -1254,3 +1254,22 @@ candidates:
   - finding
   - return
   added_at: '2026-11-05T17:59:52.366+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Before you edit an enforcement artefact (a review gate, check or rule), confirm it is in the brief's declared seams; if it is not, leave it alone and note the defect for a separate issue.
+  confidence: medium
+  seen_in:
+  - GH-471
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-05T19:38:57.207+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief or a code comment fixes an order, name or value, check it against what the code that writes it actually produces, and pin it with a test.
+  confidence: low
+  seen_in:
+  - GH-471
+  sources:
+  - finding
+  added_at: '2026-11-05T19:38:57.207+00:00'
