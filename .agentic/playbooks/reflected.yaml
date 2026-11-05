@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 12
-summarised: 120
+summaries: 13
+summarised: 130
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -648,4 +648,6 @@ tasks:
     cost_usd: 0.1
     decisions: 1
   GH-510@review:
+    cost_usd: 0.0
+  GH-511@review:
     cost_usd: 0.0
