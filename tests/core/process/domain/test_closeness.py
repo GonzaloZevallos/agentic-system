@@ -301,3 +301,16 @@ def test_at_most_one_land_starts_per_round(slots):
     plan = _plan(available_slots=slots, land_slots=slots + 1, lands=lands)
     assert [a for a in plan.actions if a.kind == "land"] == [rules.PollAction("land", 4)]
     assert plan.deferred == [rules.Deferred("land", 9, "no_slot")]
+
+
+# The plan_review arm (GH-472): the critic's section and the sizer's run are planning.
+
+
+def test_the_plan_critic_section_and_the_sizer_run_count_as_the_plan_phase():
+    assert rules.phase_of("Plan critic") == "plan"
+    # The sizer writes no section, so its run is keyed by the role's name (`closeness`).
+    assert rules.phase_of("Plan sizer") == "plan"
+    assert rules.phase_of("PM") == "definition"  # what the new names must not widen
+    state = {"runs": [{"role": "Plan sizer", "cost_usd": 0.1}]}
+    assert rules.closeness(state) == PLAN
+    assert rules.spent_by_phase(state)["plan"] == 0.1

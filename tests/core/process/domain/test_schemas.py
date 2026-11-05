@@ -1020,3 +1020,51 @@ def test_the_pin_never_accepts_subtasks_that_their_own_bucket_refuses():
     check(_estimated(38.0, 21, *SEVEN))
     with pytest.raises(ValueError, match="does not fit"):
         check(_estimated(38.0, 21, "a", "b"))
+
+
+# The plan sizer and the plan critic (GH-472): the pre-estimate and the adversarial review.
+def _finding(**more):
+    return {
+        "place": "plan.py:60",
+        "claim": "the draft reads the switch itself",
+        "evidence": "`grep -n critic plan.py` prints line 60",
+        "severity": "blocking",
+        **more,
+    }
+
+
+def test_a_plan_size_is_a_non_negative_cost_and_file_count():
+    ok = schemas.validate(
+        schemas.PlanSize, {"markdown": "", "estimated_cost_usd": 12.5, "estimated_files": 4}, {}
+    )
+    assert ok["estimated_cost_usd"] == 12.5 and ok["estimated_files"] == 4
+    for bad in (
+        {"estimated_cost_usd": -1.0, "estimated_files": 1},
+        {"estimated_cost_usd": 1.0, "estimated_files": -1},
+        {"estimated_cost_usd": 1.0},
+    ):
+        with pytest.raises(ValueError):
+            schemas.validate(schemas.PlanSize, {"markdown": "", **bad}, {})
+
+
+def test_a_plan_critique_carries_findings_with_evidence_and_proposed_invariants():
+    raw = {"markdown": "m", "findings": [_finding()], "invariants_proposed": "one\ntwo"}
+    data = schemas.validate(schemas.PlanCritique, raw, {})
+    assert data["invariants_proposed"] == ["one", "two"]
+    assert data["findings"][0]["severity"] == "blocking"
+    assert (
+        schemas.validate(
+            schemas.PlanCritique, {"markdown": "m", "findings": [], "invariants_proposed": ""}, {}
+        )["findings"]
+        == []
+    )
+
+
+def test_a_plan_critique_rejects_an_unknown_severity_and_a_finding_without_a_claim():
+    for bad in (_finding(severity="fatal"), {k: v for k, v in _finding().items() if k != "claim"}):
+        with pytest.raises(ValueError):
+            schemas.validate(
+                schemas.PlanCritique,
+                {"markdown": "m", "findings": [bad], "invariants_proposed": ""},
+                {},
+            )

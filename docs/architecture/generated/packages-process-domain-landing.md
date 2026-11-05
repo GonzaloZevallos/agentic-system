@@ -17,6 +17,7 @@ graph TD
     m_domain__board["domain.board"]
     m_domain__cost_history["domain.cost_history"]
     m_domain__landing["domain.landing"]
+    m_domain__plan_route["domain.plan_route"]
     m_domain__plan_settlement["domain.plan_settlement"]
     m_domain__plan_view["domain.plan_view"]
     m_domain__pull_request["domain.pull_request"]
