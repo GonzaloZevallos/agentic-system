@@ -61,6 +61,18 @@ _Campo_: sin término de arte
 Segundo Tech Lead que existe solo durante la entrevista técnica, con un modelo distinto del de Tech Lead y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
 _Campo_: sin término de arte
 
+**Crítico del plan**:
+Rol que revisa una sola vez el borrador en frío del Tech Lead bajo el brazo `plan_review=critic`, en contexto nuevo y con el modelo distinto del que escribe el plan. Es adversario: devuelve hallazgos con evidencia e invariantes propuestos, y el Tech Lead revisa el plan una sola vez. No es un rol de la lista: es el revisor del plan en esa ruta, como el Tech Lead efímero lo es en la entrevista.
+_Campo_: sin término de arte
+
+**Estimador previo**:
+Rol sin herramientas que lee el pedido y estima el costo y los archivos de la tarea antes de que exista el plan. Corre en toda tarea cuya asignación nombra `plan_review`, para medir el control en la misma escala. No es un rol de la lista. Si falla, la tarea va a la entrevista.
+_Campo_: sin término de arte
+
+**Ruta de planificación**:
+La decisión de qué etapa de solución toma una tarea, `interview` o `critic`, y lo que quedó registrado en `plan_route` del documento: estimación previa, umbral, ruta, si estuvo mal ruteada y cómo salió el crítico (`ran`, `failed` o `skipped`). `route` decide antes del plan con la estimación previa; `regate` lo repite con la estimación del borrador y manda a la entrevista a la que lo alcanza. Son funciones puras de `plan_route`; el nodo del plan solo las llama.
+_Campo_: sin término de arte
+
 **Developer integrador**:
 El Developer que termina de unir las subtareas en la rama de tarea: lo que la integración incremental no pudo mergear solo, y el trabajo de integración que el plan declare. Corre solo si hay algo de eso; sin conflicto y sin trabajo declarado, la rama ya está unida y va directo a su revisión. La revisión de la pieza integrada, en cambio, corre siempre. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
 _Campo_: sin término de arte

@@ -903,3 +903,29 @@ def test_walls_at_or_under_the_ceiling_and_no_walls_pass_preflight(stage0):
         check_timeouts={"tests": 30.0},
     )
     preflight(Configuration(product_dir=PRODUCT), ports)
+
+
+# -- the plan_review arm's roles (GH-472) --------------------------------------------
+
+PLAN_REVIEW_SLUGS = ("plan_sizer", "tech_lead_critic", "tech_lead_critic_platform")
+
+
+@pytest.mark.parametrize("slug", PLAN_REVIEW_SLUGS)
+def test_the_start_check_renders_each_plan_review_prompt_with_no_placeholder_left(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    ports = overlay_ports(tmp_path)
+    text = load_prompt(role, Configuration(product_dir=tmp_path), ports, {}, **PLACEHOLDERS).text
+    assert text.strip() and "{{" not in text
+    assert ("a draft plan" in text) is (slug != "plan_sizer")
+    assert ("- none" in text) is (slug == "plan_sizer")  # the sizer reads `{{cost_history}}`
+
+
+def test_a_plan_review_prompt_with_an_unknown_placeholder_refuses_at_the_start_check(
+    stage0, tmp_path
+):
+    overlay = tmp_path / ".agentic/prompts"
+    overlay.mkdir(parents=True)
+    (overlay / "tech_lead_critic.md").write_text("Critic {{no_such_placeholder}}\n")
+    ports = overlay_ports(tmp_path)
+    with pytest.raises(ValueError, match="no_such_placeholder"):
+        preflight(Configuration(product_dir=tmp_path), ports)

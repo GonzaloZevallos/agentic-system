@@ -137,6 +137,61 @@ def test_parse_refuses_with_one_line_naming_the_source(data, reason):
     assert "\n" not in message
 
 
+INTERVIEW = arm("interview", 0.5, {"plan_review": "interview"})
+CRITIC = arm("critic", 0.5, {"plan_review": "critic"})
+
+
+def test_an_experiment_with_plan_review_in_every_arm_parses():
+    parsed = parse_experiment(with_arms(INTERVIEW, CRITIC), "experiment.yaml")
+    assert [a.switches for a in parsed.arms] == [
+        {"plan_review": "interview"},
+        {"plan_review": "critic"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("data", "reason"),
+    [
+        pytest.param(
+            with_arms(INTERVIEW, arm("c", 0.5, {"plan_review": "critic", "skip_ephemeral": True})),
+            "skip_ephemeral",
+            id="critic-with-skip-ephemeral",
+        ),
+        pytest.param(with_arms(CONTROL, CRITIC), "plan_review: interview", id="control-silent"),
+        pytest.param(with_arms(INTERVIEW, arm("x", 0.5)), "plan_review: interview", id="mixed"),
+        pytest.param(
+            with_arms(INTERVIEW, arm("c", 0.5, {"plan_review": "both"})),
+            "plan_review",
+            id="plan_review-outside-annotation",
+        ),
+    ],
+)
+def test_plan_review_refusals_name_the_source_and_the_reason(data, reason):
+    with pytest.raises(InvalidExperiment) as raised:
+        parse_experiment(data, "/p/.agentic/experiment.yaml")
+    message = str(raised.value)
+    assert message.startswith("/p/.agentic/experiment.yaml: ")
+    assert reason in message
+    assert "\n" not in message
+
+
+def test_the_refusal_for_a_silent_arm_names_the_arms():
+    with pytest.raises(InvalidExperiment) as raised:
+        parse_experiment(with_arms(CONTROL, CRITIC), "experiment.yaml")
+    assert "control" in str(raised.value)
+
+
+def test_critic_with_skip_ephemeral_in_two_arms_is_refused_on_either():
+    with pytest.raises(InvalidExperiment, match="skip_ephemeral"):
+        parse_experiment(
+            with_arms(
+                arm("a", 0.5, {"plan_review": "interview"}),
+                arm("b", 0.5, {"plan_review": "critic", "skip_ephemeral": True}),
+            ),
+            "experiment.yaml",
+        )
+
+
 def test_arms_that_differ_only_in_the_switch_they_name_are_distinct():
     parse_experiment(
         with_arms(

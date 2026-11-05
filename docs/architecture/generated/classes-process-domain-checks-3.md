@@ -12,6 +12,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)

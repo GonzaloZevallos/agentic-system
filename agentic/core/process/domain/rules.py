@@ -31,6 +31,7 @@ from .roles import (
     PAIR_UI_LEAD,
     PAIR_UX_LEAD,
     PJM,
+    PLAN_SIZER,
     PM,
     PM_CONSOLIDATOR,
     PM_FINAL,
@@ -38,6 +39,7 @@ from .roles import (
     QA_PERFORMANCE,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
+    TECH_LEAD_CRITIC,
     TECH_WRITER,
     TECH_WRITER_REVIEW,
     UI_DESIGNER,
@@ -2255,14 +2257,16 @@ def phase_of(section: str) -> str:
     """The phase a run's section belongs to. PM's consultations during the plan write
     PM's section, so they count as definition. PM's early, UI-only final validation and
     the two leads' own final sections (ADR-0040) map to `review`, same as any other
-    review: it runs after the integration review approves, never before it."""
+    review: it runs after the integration review approves, never before it. The plan critic's
+    section and the sizer's run (no section: the key is the role's name) are `plan`
+    (GH-472)."""
     if section in _FINAL_VALIDATION_SECTIONS:
         return "review"
     if section.startswith(REVIEW_PREFIX):
         return "review"
     if section.startswith(f"{DEVELOPER.name}: "):
         return "development"
-    if section in (TECH_LEAD.name, SOLUTION_INTERVIEW):
+    if section in (TECH_LEAD.name, SOLUTION_INTERVIEW, TECH_LEAD_CRITIC.name, PLAN_SIZER.name):
         return "plan"
     return "definition"
 

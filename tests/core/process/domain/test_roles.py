@@ -5,10 +5,13 @@ import pytest
 from agentic.core.process.domain.roles import (
     PAIR_PM_PA,
     PJM,
+    PLAN_SIZER,
     PM,
     PRODUCT_ANALYST,
     PROMPTS_DIR,
     ROLES,
+    TECH_LEAD_CRITIC,
+    TECH_LEAD_CRITIC_PLATFORM,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_EPHEMERAL_PLATFORM,
     TECH_LEAD_EPHEMERAL_STACK,
@@ -20,13 +23,14 @@ from agentic.core.process.domain.roles import (
 from agentic.shared.configuration import Configuration
 
 EPHEMERAL_ROLES = (TECH_LEAD_EPHEMERAL, TECH_LEAD_EPHEMERAL_PLATFORM, TECH_LEAD_EPHEMERAL_STACK)
+CRITIC_ROLES = (TECH_LEAD_CRITIC, TECH_LEAD_CRITIC_PLATFORM)
 
 
 def test_every_role_but_the_ephemeral_tech_lead_runs_on_its_own_kind():
     # `runs_on` is what `model_for` is given (ADR-0014, addendum of 2026-10-05): for
     # every role but the three ephemeral slugs, it is exactly `kind`, unchanged.
     for role in ROLES:
-        if role not in EPHEMERAL_ROLES:
+        if role not in EPHEMERAL_ROLES + CRITIC_ROLES:
             assert role.runs_on == role.kind, role.slug
 
 
@@ -43,6 +47,30 @@ def test_the_three_ephemeral_slugs_run_on_the_actor_model(tmp_path):
         assert cfg.model_for(role.slug, role.runs_on) == cfg.actor_model
         # Rejected case: none of the three resolves to the verifier model.
         assert cfg.model_for(role.slug, role.runs_on) != cfg.verifier_model
+
+
+def test_the_plan_critics_run_on_the_ephemerals_model_and_only_read(tmp_path):
+    # GH-472: the critic is a Validador on the ephemeral's distinct model, with no way to write.
+    cfg = Configuration(product_dir=tmp_path, actor_model="a", verifier_model="v")
+    for role in CRITIC_ROLES:
+        assert role.kind == "verifier" and role.runs_on == TECH_LEAD_EPHEMERAL.runs_on
+        assert cfg.model_for(role.slug, role.runs_on) == "a"
+        assert not {"Edit", "Write"} & set(role.tools)
+        assert not any(rule.startswith(("Edit", "Write")) for rule in role.allowed)
+        assert "Bash(git log:*)" in role.allowed and set(role.skills) == {
+            "codebase-design",
+            "grilling",
+        }
+        assert role.max_turns == 12 and role.executes is False
+    assert TECH_LEAD_CRITIC.reads[1:] == ("PM",)
+    assert TECH_LEAD_CRITIC_PLATFORM.reads[1:] == (PJM.name,)
+    assert (TECH_LEAD_CRITIC.name, TECH_LEAD_CRITIC_PLATFORM.name) == ("Plan critic", "Plan critic")
+
+
+def test_the_plan_sizer_is_a_light_role_with_no_tools(tmp_path):
+    assert PLAN_SIZER in ROLES and PLAN_SIZER.slug == "plan_sizer"
+    assert PLAN_SIZER.tools == () and PLAN_SIZER.max_turns == 2 and PLAN_SIZER.skills == ()
+    assert PLAN_SIZER.runs_on == "actor"
 
 
 def test_an_explicit_override_still_wins_for_an_ephemeral_slug(tmp_path):
@@ -480,6 +508,9 @@ EXPECTED_CRITERIA = {
     "tech_lead_stack": ("engineering", "product"),
     "tech_lead_review": ("engineering",),
     "tech_lead_review_light": ("engineering",),
+    "plan_sizer": (),
+    "tech_lead_critic": ("engineering", "product"),
+    "tech_lead_critic_platform": ("engineering", "product"),
     "landing_diagnoser": ("engineering",),
     "developer": ("engineering",),
     "developer_integrator": ("engineering",),

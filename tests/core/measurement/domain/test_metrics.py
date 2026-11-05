@@ -502,6 +502,8 @@ def test_time_to_merge_seconds_is_none_without_a_merge():
     assert metrics.time_to_merge_seconds(pr) is None
 
 
+LIGHT_THREE_KEYS = "review_mode=light,skip_ephemeral=False,plan_review=interview"
+
 # `arm_label` (ADR-0030): the degenerate and rejecting inputs enumerated (ADR-0023),
 # never only the input it should accept.
 
@@ -510,31 +512,45 @@ def test_arm_label_of_an_empty_mapping_is_default():
     assert metrics.arm_label({}) == "default"
 
 
-def test_arm_label_of_both_switches_explicitly_at_default_is_default():
+def test_arm_label_of_every_switch_explicitly_at_default_is_default():
+    every = {"review_mode": "full", "skip_ephemeral": "False", "plan_review": "interview"}
+    assert metrics.arm_label(every) == "default"
     assert metrics.arm_label({"review_mode": "full", "skip_ephemeral": "False"}) == "default"
 
 
 def test_arm_label_with_one_key_missing_resolves_it_to_the_default():
     """A missing key means the default, resolved inside the function -- the other
     switch's value is enough to leave `default` behind."""
-    assert metrics.arm_label({"review_mode": "light"}) == "review_mode=light,skip_ephemeral=False"
+    assert metrics.arm_label({"review_mode": "light"}) == LIGHT_THREE_KEYS
 
 
 def test_arm_label_keys_come_out_in_arm_keys_order_regardless_of_input_order():
     forward = metrics.arm_label({"skip_ephemeral": "True", "review_mode": "light"})
-    assert forward == "review_mode=light,skip_ephemeral=True"
+    assert forward == "review_mode=light,skip_ephemeral=True,plan_review=interview"
 
 
 def test_arm_label_with_one_switch_moved():
     assert metrics.arm_label({"review_mode": "full", "skip_ephemeral": "True"}) == (
-        "review_mode=full,skip_ephemeral=True"
+        "review_mode=full,skip_ephemeral=True,plan_review=interview"
     )
 
 
 def test_arm_label_with_both_switches_moved():
     assert metrics.arm_label({"review_mode": "light", "skip_ephemeral": "True"}) == (
-        "review_mode=light,skip_ephemeral=True"
+        "review_mode=light,skip_ephemeral=True,plan_review=interview"
     )
+
+
+def test_arm_label_names_plan_review_when_it_is_the_only_switch_moved():
+    assert metrics.arm_label({"plan_review": "critic"}) == (
+        "review_mode=full,skip_ephemeral=False,plan_review=critic"
+    )
+
+
+def test_arm_label_with_plan_review_missing_reads_the_default_not_a_failure():
+    """A snapshot written before `plan_review` existed keeps meaning the same arm."""
+    old = {"review_mode": "light", "skip_ephemeral": "False", "reviewer_model": "m"}
+    assert metrics.arm_label(old) == LIGHT_THREE_KEYS
 
 
 def test_arm_label_never_names_reviewer_model():
@@ -568,7 +584,7 @@ def test_arm_keys_never_names_reviewer_model():
 def test_arm_of_reads_the_assignment_over_the_experiment_and_never_the_arms_name():
     light = {"review_mode": "light", "skip_ephemeral": "False"}
     assigned = {"assignment": {"experiment": "e", "arm": "fast", "switches": light}}
-    assert metrics.arm_of(assigned) == "review_mode=light,skip_ephemeral=False"
+    assert metrics.arm_of(assigned) == LIGHT_THREE_KEYS
     assert "fast" not in metrics.arm_of(assigned)
     # The assignment wins over a snapshot that says otherwise.
     both = {**assigned, "experiment": {"review_mode": "full", "skip_ephemeral": "True"}}
@@ -580,3 +596,10 @@ def test_arm_of_reads_the_assignment_over_the_experiment_and_never_the_arms_name
     assert metrics.arm_of({"assignment": {"experiment": "e", "arm": "a", "switches": {}}}) == (
         "default"
     )
+
+
+def test_arm_of_an_assignment_with_plan_review_critic_names_it():
+    critic = {"review_mode": "full", "skip_ephemeral": "False", "plan_review": "critic"}
+    assigned = {"assignment": {"experiment": "e", "arm": "critic", "switches": critic}}
+    assert "plan_review=critic" in metrics.arm_of(assigned)
+    assert metrics.arm_of({"experiment": critic}) == metrics.arm_of(assigned)

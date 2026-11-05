@@ -366,3 +366,7 @@ invariantes: con menos rondas se proponen menos (en este repo solo corre la entr
 de solución; la evidencia de la de definición sale de otro producto). Una corrida con
 `decided_cap=0` no deja marcador explícito: se infiere de «encabezado presente, clave
 ausente», y las pruebas del ida y vuelta del documento fijan esa inferencia.
+
+## Addendum (GH-472, ADR-0086): la solución puede ser un solo pase de crítico
+
+Bajo el brazo `plan_review=critic`, las tareas de estimación chica reemplazan la entrevista por un borrador en frío y un crítico adversario; la entrevista queda para las grandes. Nada de lo decidido arriba cambia con el valor por defecto; ver ADR-0086.
