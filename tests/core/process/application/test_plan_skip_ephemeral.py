@@ -80,7 +80,12 @@ async def test_skip_ephemeral_stamps_the_experiment_snapshot(cfg):
     runner = ScriptedRunner(tech_lead=[planned()])
     patch = await plan(TASK, cfg, memory_ports(runner))
     assert patch["experiment"]["skip_ephemeral"] == "True"
-    assert list(patch["experiment"]) == ["review_mode", "skip_ephemeral", "reviewer_model"]
+    assert list(patch["experiment"]) == [
+        "review_mode",
+        "skip_ephemeral",
+        "plan_review",
+        "reviewer_model",
+    ]
 
 
 async def test_a_plan_with_no_subtasks_heading_is_repaired_not_retried(cfg):
