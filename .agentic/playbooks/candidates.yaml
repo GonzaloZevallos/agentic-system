@@ -1226,3 +1226,21 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T23:39:35.523+00:00'
+- slug: tech_lead_platform
+  category: integration-crosscut
+  lesson: 'When splitting a plan, keep each subtask self-consistent: a new enum member or cause must land with every table or dispatch entry that consumes it, not in a sister subtask.'
+  confidence: medium
+  seen_in:
+  - GH-504
+  sources:
+  - finding
+  added_at: '2026-11-05T03:24:28.930+00:00'
+- slug: tech_lead_platform
+  category: integration-crosscut
+  lesson: After merging master, check whether it introduced a helper or invariant (retry, wrapper) that the branch's parallel call sites should now use, and that the docs the merge rewrote still hold.
+  confidence: low
+  seen_in:
+  - GH-504
+  sources:
+  - finding
+  added_at: '2026-11-05T03:24:28.930+00:00'

@@ -642,3 +642,5 @@ tasks:
     cost_usd: 0.1142
   GH-500@review:
     cost_usd: 0.0722
+  GH-504@review:
+    cost_usd: 0.0795
