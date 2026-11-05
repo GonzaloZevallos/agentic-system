@@ -462,9 +462,11 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 # Re-pinned by GH-391: the `disk_full` failure reason joins the failure-reason row.
 # Re-pinned by GH-409: the `render` failure reason joins the failure-reason row.
 # Re-pinned by GH-462: the `ci` escalation class joins the escalations row.
+# Re-pinned by GH-472: the plan sizer and the plan critics join `ROLES`, so their role-cost score
+# names join the row.
 UNCHANGED_ROWS = {
-    "agentic-system": "b0ad35d637f3ca2ff70e0f82be144bea4caa6921f3aa1494d0b0ea6dc25664bc",
-    "apostrophe": "aa46f309fdec117dc2c4756a174536098779eb90bd4e1f101a87fbc15de42569",
+    "agentic-system": "d0b00fb409bc3365f4faa4cd31512a9d208d04513523fa63103713d5b396c83f",
+    "apostrophe": "4c1f89f837c198822f91024aa06bff06afd98101978eb14ae0818f3b39e0b5ef",
 }
 
 
