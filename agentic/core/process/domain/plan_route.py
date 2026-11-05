@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 Route = Literal["interview", "critic"]
+CriticState = Literal["ran", "failed", "skipped"]
 
 
 def route(plan_review: str, pre_estimate_usd: float | None, threshold: float) -> Route:
@@ -25,6 +26,11 @@ def regate(draft_estimate_usd: float, threshold: float) -> Route:
     """The route once the cold draft has an estimate of its own: a draft that reaches
     `threshold` was misrouted and goes to the interview after all."""
     return "interview" if draft_estimate_usd >= threshold else "critic"
+
+
+def takes_critic(route: Route) -> bool:
+    """Whether `route` is the critic's: the one question `plan.py` asks of a route."""
+    return route == "critic"
 
 
 def sizes(assignment: Mapping[str, Any] | None, plan_review: str) -> bool:

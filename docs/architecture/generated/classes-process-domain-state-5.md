@@ -21,6 +21,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
     class task__ReleasePatch["ReleasePatch"]
@@ -47,3 +48,4 @@ classDiagram
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`
+  - `task.TaskState` se asocia con `task.PlanRoute`

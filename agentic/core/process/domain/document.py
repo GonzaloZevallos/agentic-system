@@ -294,6 +294,10 @@ def render(
         # when assigned, so a document of an unassigned task is byte-identical to one
         # written before it. Parsed back under the same name by `parse`.
         **({"assignment": assigned} if (assigned := state.get("assignment")) else {}),
+        # The route the plan took (GH-472, ADR-0086), written only when the sizer ran, so a
+        # document of any other task is byte-identical to one written before it. Parsed
+        # back under the same name by `parse`.
+        **({"plan_route": routed} if (routed := state.get("plan_route")) else {}),
         # Marks an evaluation run (GH-470), written only when set, so a real task's document
         # is byte-identical to one written before it. Parsed back under the same name.
         **({"evaluation": evaluated} if (evaluated := state.get("evaluation")) else {}),
