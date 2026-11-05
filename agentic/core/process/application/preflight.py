@@ -30,6 +30,7 @@ PLACEHOLDERS = {
     "cost_history": "- none",
     "checks": "- `tests`: `<the product's own command>`",
     "split_part": "",
+    "plan_shape_rule": rules.plan_shape_text("free"),
     # Empty for a product that declares no `docs`, so the gate renders the prompts as they ship.
     "docs_plan": docs.plan_text(None),
     "docs_review": docs.review_text(None),

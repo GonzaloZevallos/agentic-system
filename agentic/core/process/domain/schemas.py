@@ -941,9 +941,9 @@ def _single_check(subtasks: Sequence[Any], integration: str) -> None:
     """The refusals of `plan_shape: single` for a plan of subtasks (GH-471)."""
     if len(subtasks) != 1:
         raise ValueError(
-            f"{PLAN_SHAPE_REFUSAL} you wrote {len(subtasks)} subtasks and the arm takes exactly one: merge them "
-            "into one brief, keeping their dependency order. If the work does not fit one "
-            "task, write parts instead"
+            f"{PLAN_SHAPE_REFUSAL} you wrote {len(subtasks)} subtasks and the arm takes "
+            "exactly one: merge them into one brief, keeping their dependency order. If the "
+            "work does not fit one task, write parts instead"
         )
     if integration.strip():
         raise ValueError(

@@ -5677,6 +5677,20 @@ def split_part_text(part_of: tuple[str, int] | None) -> str:
     )
 
 
+def plan_shape_text(plan_shape: str) -> str:
+    """What the planning Tech Lead is told about the `plan_shape` arm (GH-471): empty under
+    `free`, so the prompt renders byte for byte as it did before the arm; under `single`,
+    the one rule the plan check enforces (`schemas.PLAN_SHAPE_REFUSAL`). A plan that does
+    not fit one task is still split into parts, never into several subtasks."""
+    if plan_shape == "free":
+        return ""
+    return (
+        "This task is planned in a single shape: write exactly one subtask, with an empty "
+        "`integration`. Put the whole work in that one brief, in dependency order. A plan "
+        "that does not fit one task is still split into `parts`.\n"
+    )
+
+
 # The Tech Lead prompts' instructions to split an over-the-line plan into `parts`, kept
 # here as the wording of a task that is not a part, so a part never reads them: a part
 # is never split again (ADR-0054). Each is the exact text the prompt carried before it

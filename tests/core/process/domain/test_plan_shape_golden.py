@@ -110,3 +110,15 @@ def rendered(name, **more):
 def test_the_tech_lead_prompts_render_as_they_did_under_the_default():
     for name, digest in PROMPT_GOLDENS.items():
         assert hashlib.sha256(rendered(name).text.encode()).hexdigest() == digest
+
+
+def test_the_template_hash_is_the_same_for_both_arms_and_the_free_text_adds_nothing():
+    from agentic.core.process.domain import rules
+
+    assert rules.plan_shape_text("free") == ""
+    for name in PROMPT_GOLDENS:
+        free = rendered(name, plan_shape_rule=rules.plan_shape_text("free"))
+        single = rendered(name, plan_shape_rule=rules.plan_shape_text("single"))
+        assert free.hash == single.hash
+        assert hashlib.sha256(free.text.encode()).hexdigest() == PROMPT_GOLDENS[name]
+        assert "exactly one subtask" in single.text and "exactly one subtask" not in free.text
