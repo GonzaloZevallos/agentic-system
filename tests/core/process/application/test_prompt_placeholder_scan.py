@@ -404,11 +404,11 @@ def test_an_allowlist_entry_for_a_call_site_that_does_not_exist_is_stale() -> No
 
 
 def test_an_allowlist_entry_for_a_call_site_the_scan_resolves_is_stale() -> None:
-    entries = {"plan.py:plan:spec.author": f"{ENTRY_POINTS}.test_review_renders_prompt"}
+    entries = {"plan.py:_cold_draft:spec.author": f"{ENTRY_POINTS}.test_review_renders_prompt"}
 
     problems = stale_entries(call_sites(real_sources()), entries)
 
-    assert [p.where for p in problems] == ["plan.py:plan:spec.author"]
+    assert [p.where for p in problems] == ["plan.py:_cold_draft:spec.author"]
     assert "resolves" in problems[0].message
 
 

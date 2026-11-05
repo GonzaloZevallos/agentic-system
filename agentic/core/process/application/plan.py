@@ -374,17 +374,15 @@ async def _plan_with_critic(
     ):
         carried = apply(carried, {"plan_route": {**recorded, "misrouted": True}})
         return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
-    critic_spec = (
-        TECH_LEAD_CRITIC_PLATFORM if spec is INTERVIEW_SOLUTION_PLATFORM else TECH_LEAD_CRITIC
-    )
-    critique, critic_patch = await run_role(
-        drafted,
-        critic_spec,
-        cfg,
-        ports,
-        cwd=cwd,
-        plan_draft=drafted["sections"][name],
-    )
+    draft_text = drafted["sections"][name]
+    if spec is INTERVIEW_SOLUTION_PLATFORM:
+        critique, critic_patch = await run_role(
+            drafted, TECH_LEAD_CRITIC_PLATFORM, cfg, ports, cwd=cwd, plan_draft=draft_text
+        )
+    else:
+        critique, critic_patch = await run_role(
+            drafted, TECH_LEAD_CRITIC, cfg, ports, cwd=cwd, plan_draft=draft_text
+        )
     critic_state = "ran"
     if critique is None:
         critic_patch, stopped = _soft(critic_patch)
