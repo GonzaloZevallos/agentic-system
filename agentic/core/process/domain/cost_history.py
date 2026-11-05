@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .experiment import plan_shape_of
 from .task import INTEGRATION
 
 # The bucket of every task with this many subtasks or more.
@@ -20,6 +21,9 @@ LAST_BUCKET = 6
 MIN_BUCKET = 5
 # How many of the latest estimate/actual pairs the Tech Lead sees.
 PAIRS = 20
+
+# The `plan_shape` whose closed tasks the history is made of.
+FREE = "free"
 
 EMPTY = "No closed task has a recorded cost yet: calibrate on the scope alone."
 
@@ -58,11 +62,13 @@ def _p90(sorted_costs: Sequence[float]) -> float:
 
 def build(documents: Sequence[Mapping[str, Any]]) -> History:
     """The buckets and the pairs of the closed documents, in the order given (oldest
-    first: the pairs keep the latest `PAIRS`). A document with no `cost_usd` is skipped."""
+    first: the pairs keep the latest `PAIRS`). A document with no `cost_usd` is skipped, and
+    so is one whose `plan_shape_of` is not `free` (GH-471): a single-subtask arm's costs are
+    not the free shape's, and the reference a plan is judged against must not move with them."""
     costs: dict[int, list[float]] = {}
     pairs: list[Pair] = []
     for document in documents:
-        if document.get("cost_usd") is None:
+        if document.get("cost_usd") is None or plan_shape_of(document) != FREE:
             continue
         cost = float(document["cost_usd"])
         count = len([sid for sid in document.get("subtasks") or {} if sid != INTEGRATION])

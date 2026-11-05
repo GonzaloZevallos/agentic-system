@@ -66,7 +66,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(interviewed, history, part_of, ports),
+        check=_estimate_check(cfg, interviewed, history, part_of, ports),
         cwd=task.path,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
@@ -90,6 +90,7 @@ def _part_of(state: TaskState) -> tuple[str, int] | None:
 
 
 def _estimate_check(
+    cfg: Configuration,
     state: TaskState,
     history: cost_history.History,
     part_of: tuple[str, int] | None,
@@ -108,6 +109,7 @@ def _estimate_check(
         part_of=part_of,
         workflow=ci_workflow.check_run_names(_workflow_texts(ports, base)),
         stack_ci=_stack_ci(ports, base),
+        plan_shape=cfg.plan_shape,
     )
 
 
@@ -207,7 +209,7 @@ async def _plan_cold(
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(state, history, part_of, ports),
+        check=_estimate_check(cfg, state, history, part_of, ports),
         cwd=cwd,
         proposed_invariants=_SKIPPED_PROPOSAL,
         cost_history=history.text(),
