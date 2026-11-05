@@ -27,7 +27,7 @@ from ...process.application.ports import Ports, RunRegistry
 from ...process.application.registration import REGISTER_WAIT_S, await_registration
 from ...process.domain import document as task_document
 from ...process.domain import experiment, rules
-from ..domain import evaluation, parallel_factor, role_usage, scorecard
+from ..domain import evaluation, parallel_factor, planning, role_usage, scorecard
 from .ports import EvalChild, EvalRoots, EvalSpawn
 
 # The one string that spells an unknown `system_version` wherever a task is scored: absent,
@@ -532,6 +532,21 @@ def _print_parallel_factor(
     )
 
 
+def _print_planning(
+    product: str, baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]
+) -> None:
+    """What planning cost and returned over one baseline's tasks, split by the route the
+    task took (GH-472, ADR-0086): a read over the documents' `runs`, `return_history` and
+    `plan_route`, nothing recorded. A task whose document has no `plan_route` is `unsized`."""
+    facts = [f.planning_facts for _, f in tasks if f.planning_facts is not None]
+    block = planning.lines(planning.aggregate(facts))
+    if not block:
+        return
+    print(f"-- planning -- {product} / {baseline} --")
+    for line in block:
+        print(line)
+
+
 ArmGroup = tuple[str, str, list[tuple[str, scorecard.TaskFigures]]]
 """One printed block: its heading name, its arm label and its tasks."""
 
@@ -615,6 +630,8 @@ async def _eval_compare(
         _print_parallel_factor(product, name, tasks)
     for name, _, tasks in (*frm_groups, *to_groups):
         _print_role_usage(product, name, tasks)
+    for name, _, tasks in (*frm_groups, *to_groups):
+        _print_planning(product, name, tasks)
 
     # The eval-set declaration is read on a warning path (ADR-0025's `no_brief`/
     # `brief_refusal` asymmetry): absent or malformed says so plainly and the
@@ -688,6 +705,12 @@ async def _eval_compare_experiment(
     for arm in arms:
         _print_scorecard(
             product, f"{baselines[0]} / experiment {experiment} / arm {arm}", cards[arm]
+        )
+    for arm in arms:
+        _print_planning(
+            product,
+            f"{baselines[0]} / experiment {experiment} / arm {arm}",
+            [(baseline, f) for baseline, f in chosen if f.arm == arm],
         )
     smallest = min(sizes.values())
     if len(arms) < 2:

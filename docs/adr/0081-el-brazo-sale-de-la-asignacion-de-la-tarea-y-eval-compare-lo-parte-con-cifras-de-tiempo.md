@@ -151,3 +151,7 @@ exactamente lo de hoy más dos filas de tiempo; no se agrega ninguna señal ni v
 - **Que el `.env` gane ante un conflicto**: el brazo declararía interruptores que no corrieron.
 - **Cachear la lectura de documentos del poller**: invalidación y estado nuevo a cambio de un
   costo que hoy no duele.
+
+## Addendum (GH-472, ADR-0086): el control debe nombrar `plan_review`
+
+Un experimento donde unos brazos fijan `plan_review` y otros no es inválido. Ver ADR-0086.

@@ -199,6 +199,7 @@ MEASUREMENT_CLUSTERS: Mapping[str, str] = {
     "domain.dashboards": "langfuse",
     "domain.evaluation": "scorecard",
     "domain.findings_report": "reports",
+    "domain.planning": "reports",
     "domain.playbook_window": "reports",
     "domain.role_usage": "reports",
     "domain.scorecard": "scorecard",
