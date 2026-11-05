@@ -26,6 +26,9 @@ que corra la primera tarea `single`.
 - **Sin cambio por defecto.** Con `free` (o sin experimento) el snapshot, la etiqueta del brazo,
   `baseline_id`, el documento y los prompts renderizados son idénticos byte a byte; lo fijan tests
   con literales. `plan_shape` solo aparece en `experiment` y en la etiqueta cuando no es `free`.
+- **Un solo origen del valor `free`.** `shared.configuration.DEFAULT_PLAN_SHAPE` se lee del campo
+  de `Configuration`; `cost_history`, `schemas` y `rules` comparan contra él y ninguno repite el
+  literal, de modo que renombrar el valor no deja un lector atrás.
 - **Los umbrales de partición no cambian** (150 USD, 40 ficheros) y los topes tampoco: 10 USD por
   intento, el tope de turnos y 250 USD por tarea. Una tarea `single` que no cabe se parte en
   `parts` igual que antes.
