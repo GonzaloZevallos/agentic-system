@@ -75,5 +75,7 @@ que corra la primera tarea `single`.
   un tope.
 - Con 10 a 20 tareas la potencia es baja; "indeciso" es un resultado probable.
 - Declarar `.agentic/experiment.yaml` es un paso del dueño y esta tarea no lo hace.
+- Fuera de alcance: que `required_paths` acepte un directorio como `docs/adr/` (compuerta de
+  revisión, #510); esta tarea no toca esa compuerta.
 - Fuera de alcance: un plan `free` con una sola subtarea sigue descartando en silencio el texto de
   `integration`.
