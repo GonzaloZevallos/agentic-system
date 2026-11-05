@@ -172,6 +172,10 @@ def test_required_paths_missing_an_entry_without_the_slash_is_a_file_not_a_direc
     assert rules.required_paths_missing(["docs/adr"], ["docs/adr/0086-x.md"]) == ("docs/adr",)
 
 
+def test_required_paths_missing_a_directory_is_not_met_by_a_file_of_the_same_name():
+    assert rules.required_paths_missing(["docs/adr/"], ["docs/adr"]) == ("docs/adr/",)
+
+
 def test_required_paths_missing_a_lone_slash_is_not_a_directory():
     assert rules.required_paths_missing(["/"], ["a.py"]) == ("/",)
 
