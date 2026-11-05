@@ -152,6 +152,16 @@ class Configuration(BaseModel):
     # skipped. `False` is today's path; the ephemeral-arm subtask is the only other
     # reader.
     skip_ephemeral: bool = False
+    # The plan-review arm switch (GH-472): `interview` is today's path, the ephemeral Tech
+    # Lead interviewing the Tech Lead. `critic` plans cold and has one adversarial critic
+    # review the draft, the full interview staying only for tasks sized at or above
+    # `plan_interview_min_usd`. Read only through `ARM_SWITCHES`, `Configuration` and
+    # `process.domain.plan_route`. It cannot be combined with `skip_ephemeral`.
+    plan_review: Literal["interview", "critic"] = "interview"
+    # Estimated cost, in USD, from which a task gets the full interview even under
+    # `plan_review=critic`. 55.0 is the p75 of the 95 `estimate.cost_usd` values in the
+    # history: calibrated on the plan's estimate, not on the pre-estimate's own scale.
+    plan_interview_min_usd: float = Field(default=55.0, gt=0)
     # Runs alive at once across every product on this machine (GH-137, the poller's
     # first piece): the human's own call is one at a time, default **1** -- two in
     # parallel already hit the account's own session limit (one 429 for the whole
@@ -264,6 +274,15 @@ class Configuration(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _critic_needs_the_draft_to_be_cold_not_skipped(self) -> Configuration:
+        if self.plan_review == "critic" and self.skip_ephemeral:
+            raise ValueError(
+                "plan_review=critic cannot be combined with skip_ephemeral: "
+                "skip_ephemeral already plans cold with no review"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _parallel_within_role_slots(self) -> Configuration:
         if (
             self.max_parallel_subtasks is not None
@@ -343,13 +362,13 @@ class Configuration(BaseModel):
         }
 
 
-# The two `Configuration` switches an experiment arm may set, in the order every writer
+# The `Configuration` switches an experiment arm may set, in the order every writer
 # uses: the single source (GH-470). `EXPERIMENT_KEYS`, `experiment_snapshot`, the
 # experiment validator (`process.domain.experiment`) and `metrics.ARM_KEYS`/`arm_label`
 # all derive from it. `reviewer_model` is not one: free text, not an enum (ADR-0030).
-ARM_SWITCHES = ("review_mode", "skip_ephemeral")
+ARM_SWITCHES = ("review_mode", "skip_ephemeral", "plan_review")
 
-# The three keys `experiment_snapshot` writes, in the order every writer uses
+# The keys `experiment_snapshot` writes, in the order every writer uses
 # (`document.render`'s frontmatter, `evaluation.baseline_id`'s digest): the switches
 # above, plus the model resolved for whichever reviewer actually ran.
 EXPERIMENT_KEYS = (*ARM_SWITCHES, "reviewer_model")
@@ -368,11 +387,13 @@ def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, st
     defaults = Configuration.model_fields
     if all(getattr(cfg, key) == defaults[key].default for key in ARM_SWITCHES):
         return {}
-    return {
-        "review_mode": cfg.review_mode,
-        "skip_ephemeral": str(cfg.skip_ephemeral),
-        "reviewer_model": reviewer_model,
-    }
+    return {**arm_switches(cfg), "reviewer_model": reviewer_model}
+
+
+def arm_switches(cfg: Configuration) -> dict[str, str]:
+    """Every `ARM_SWITCHES` key mapped to its value as a string (`str(bool)` for a flag),
+    the shape `metrics.arm_label`, the assignment and `experiment_snapshot` read."""
+    return {key: str(getattr(cfg, key)) for key in ARM_SWITCHES}
 
 
 def state_file_for(task_id: str) -> Path:

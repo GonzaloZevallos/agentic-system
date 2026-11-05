@@ -37,6 +37,12 @@ from agentic.shared.configuration import ARM_SWITCHES, Configuration
 # `EXPERIMENT_KEYS` by construction.
 ARM_KEYS = ARM_SWITCHES
 
+# The switches every non-default label names, whatever their value: the two that existed
+# before GH-472. Any switch after them is named only when it moved off its default, so a
+# label written before it existed (`review_mode=light,skip_ephemeral=False`) stays the
+# label of the same arm.
+_ALWAYS_LABELLED = ARM_KEYS[:2]
+
 # Below this, a residual is floating-point noise (an interview's runs summed in a
 # different order), not money nothing accounted for: `has_residual_sample`'s own
 # emission gate (ADR-0008, 2026-09-18 second addendum). Not a rounding tolerance — that
@@ -336,12 +342,17 @@ def arm_label(experiment: Mapping[str, str]) -> str:
     that moves someday moves this function's answer with it, never falls out of step
     with it. `reviewer_model` is not one of `ARM_KEYS`: it is free text, not an enum,
     and stays out of the label (ADR-0030) so the label's cardinality stays the closed
-    product of `review_mode` x `skip_ephemeral`."""
+    product of the switches. A switch beyond `_ALWAYS_LABELLED` appears only when moved."""
     defaults = Configuration.model_fields
     resolved = {key: experiment.get(key, str(defaults[key].default)) for key in ARM_KEYS}
     if all(resolved[key] == str(defaults[key].default) for key in ARM_KEYS):
         return "default"
-    return ",".join(f"{key}={resolved[key]}" for key in ARM_KEYS)
+    shown = [
+        key
+        for key in ARM_KEYS
+        if key in _ALWAYS_LABELLED or resolved[key] != str(defaults[key].default)
+    ]
+    return ",".join(f"{key}={resolved[key]}" for key in shown)
 
 
 def arm_of(document: Mapping[str, Any]) -> str:
