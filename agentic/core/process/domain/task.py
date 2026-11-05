@@ -396,6 +396,20 @@ class ArmAssignment(TypedDict):
     switches: dict[str, str]
 
 
+class PlanRoute(TypedDict):
+    """`TaskState.plan_route`: which stage of planning the task took and why (GH-472,
+    ADR-0086). Written whenever the sizer ran, on every arm of the experiment, so the control
+    is measured on the same scale; `pre_estimate_usd` and `files` are `None` when the sizer
+    failed. `critic` says whether the critic `ran`, `failed` or was `skipped`."""
+
+    pre_estimate_usd: float | None
+    files: int | None
+    threshold_usd: float
+    route: str
+    misrouted: bool
+    critic: str
+
+
 class EvaluationRef(TypedDict):
     """`TaskState.evaluation`: what marks a task as an evaluation run (GH-470) -- the issue
     it re-runs, the commit it runs from, and that its full check always runs locally. The
@@ -1456,6 +1470,9 @@ class TaskState(TaskInput, total=False):
     # Optional and omitted from the document when absent; `metrics.arm_of` prefers it to
     # `experiment`. Written once when the run starts, so no reducer.
     assignment: ArmAssignment
+    # The route the plan took (GH-472): written when the sizer ran, omitted from the document
+    # otherwise. Written once by the plan node, so no reducer.
+    plan_route: PlanRoute
     # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
     # Written once when the run starts, from the frozen entry, so no reducer; omitted from
     # the document when absent.

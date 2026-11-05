@@ -1587,3 +1587,30 @@ def test_record_closure_round_trips_a_merge_conflict_record_and_render_keeps_it(
         == first
     )
     assert "merge_conflict" not in document.parse(document.render(_bare()))
+
+
+PLAN_ROUTE = {
+    "pre_estimate_usd": 12.5,
+    "files": 4,
+    "threshold_usd": 55.0,
+    "route": "critic",
+    "misrouted": False,
+    "critic": "ran",
+}
+
+
+def test_a_document_without_plan_route_renders_byte_identically_to_the_golden():
+    assert document.render(golden_state(plan_route={})) == GOLDEN_WITHOUT_ASSIGNMENT
+
+
+def test_plan_route_round_trips_through_the_frontmatter():
+    rendered = document.render(golden_state(plan_route=PLAN_ROUTE))
+    assert "\nplan_route:" in rendered
+    assert document.parse(rendered)["plan_route"] == PLAN_ROUTE
+    assert "plan_route" not in document.parse(document.render(golden_state()))
+
+
+def test_plan_route_keeps_a_sizer_that_failed_as_null():
+    failed = {**PLAN_ROUTE, "pre_estimate_usd": None, "files": None, "route": "interview"}
+    read = document.parse(document.render(golden_state(plan_route=failed)))["plan_route"]
+    assert read["pre_estimate_usd"] is None and read["files"] is None
