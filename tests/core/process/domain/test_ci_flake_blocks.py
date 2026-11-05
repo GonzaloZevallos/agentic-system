@@ -2,7 +2,12 @@
 
 import json
 
-from agentic.core.process.domain.ci import FLAKE_BLOCK_PREFIX, parse_flake_blocks
+from agentic.core.process.domain.ci import (
+    FLAKE_BLOCK_PREFIX,
+    FLAKE_ID_MAX_CHARS,
+    clean_flake_ids,
+    parse_flake_blocks,
+)
 from agentic.core.process.domain.presubmit import FAILED_IDS_MAX
 
 DECLARED = frozenset({"tests", "lint"})
@@ -67,3 +72,18 @@ def test_a_malformed_line_is_dropped_whole_and_leaves_the_earlier_block():
 
 def test_a_line_that_merely_quotes_the_prefix_is_not_a_block():
     assert parse({"ci": [f"echo {line()}"]}) == []
+
+
+def test_clean_flake_ids_keeps_order_drops_duplicates_and_caps():
+    assert clean_flake_ids(["b", "a", "b"]) == ["b", "a"]
+    assert clean_flake_ids(f"t{n}" for n in range(FAILED_IDS_MAX + 10)) == [
+        f"t{n}" for n in range(FAILED_IDS_MAX)
+    ]
+
+
+def test_clean_flake_ids_drops_what_could_break_out_of_a_comment_or_a_marker():
+    hostile = ["a`b", "a{{b", "a<!--b", "a-->b", "a\nb", "a\rb", "x" * (FLAKE_ID_MAX_CHARS + 1)]
+    assert clean_flake_ids(["ok", *hostile, "x" * FLAKE_ID_MAX_CHARS]) == [
+        "ok",
+        "x" * FLAKE_ID_MAX_CHARS,
+    ]

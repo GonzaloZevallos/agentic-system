@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -584,16 +584,23 @@ class CiFlakeBlock:
     job_lines: Mapping[str, tuple[str, ...]]
 
 
+def clean_flake_ids(ids: Iterable[str]) -> list[str]:
+    """The ids that may go in a flake block: at most `FLAKE_ID_MAX_CHARS` characters and none of
+    the forbidden substrings, without duplicates (in order), at most `FAILED_IDS_MAX`. The one
+    copy of the rule: the parser reads blocks with it and `scripts/ci_flakes.py` writes them."""
+    clean = [
+        item
+        for item in ids
+        if len(item) <= FLAKE_ID_MAX_CHARS and not any(bad in item for bad in _FLAKE_ID_FORBIDDEN)
+    ]
+    return list(dict.fromkeys(clean))[:FAILED_IDS_MAX]
+
+
 def _flake_ids(value: object) -> list[str] | None:
     """The clean, bounded ids of a block's `tests`, `None` when it is not a list of strings."""
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         return None
-    clean = [
-        item
-        for item in value
-        if len(item) <= FLAKE_ID_MAX_CHARS and not any(bad in item for bad in _FLAKE_ID_FORBIDDEN)
-    ]
-    return list(dict.fromkeys(clean))[:FAILED_IDS_MAX]
+    return clean_flake_ids(value)
 
 
 def _flake_block(line: str) -> tuple[str, list[str]] | None:
