@@ -25,6 +25,8 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
 
+from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
+
 from . import ci_workflow
 from .ci_workflow import WorkflowNames
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
@@ -982,7 +984,7 @@ def plan_check_for(
     part_of: tuple[str, int] | None = None,
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
-    plan_shape: str = "free",
+    plan_shape: str = DEFAULT_PLAN_SHAPE,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1070,7 +1072,7 @@ def plan_check_for(
                 "(or the history's reference for this size does not): write parts, "
                 f"at least two chained tasks, and no subtasks. {SPLIT_NOT_WAIVED}"
             )
-        if plan_shape == "single":
+        if plan_shape != DEFAULT_PLAN_SHAPE:
             _single_check(subtasks, data.get("integration") or "")
         median = bucket_median(history, len(data["subtasks"]))
         if median is not None and cost < 0.5 * median:

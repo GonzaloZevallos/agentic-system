@@ -362,6 +362,11 @@ ARM_SWITCHES = ("review_mode", "skip_ephemeral", "plan_shape")
 EXPERIMENT_KEYS = (*ARM_SWITCHES[:2], "reviewer_model", *ARM_SWITCHES[2:])
 
 
+# The `plan_shape` of every path that runs no plan-shape arm, read off the field so the
+# modules that compare against it (`cost_history`, `schemas`, `rules`) share one source.
+DEFAULT_PLAN_SHAPE = str(Configuration.model_fields["plan_shape"].default)
+
+
 def arm_input(cfg: Configuration) -> dict[str, str]:
     """The input of `metrics.arm_label` for `cfg`: every `ARM_SWITCHES` value as the
     document holds it (`review_mode` verbatim, `skip_ephemeral` as `str(bool)`). The one

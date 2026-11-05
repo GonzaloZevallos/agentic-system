@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
+
 from .experiment import plan_shape_of
 from .task import INTEGRATION
 
@@ -23,7 +25,7 @@ MIN_BUCKET = 5
 PAIRS = 20
 
 # The `plan_shape` whose closed tasks the history is made of.
-FREE = "free"
+FREE = DEFAULT_PLAN_SHAPE
 
 EMPTY = "No closed task has a recorded cost yet: calibrate on the scope alone."
 
