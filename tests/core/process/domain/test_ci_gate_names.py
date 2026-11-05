@@ -143,3 +143,14 @@ def test_required_paths_missing_gives_the_required_paths_when_none_was_touched()
     required = [".agentic/stack.yaml", "web/app.ts"]
     assert rules.required_paths_missing(required, ["x.py"]) == tuple(required)
     assert rules.required_paths_missing(required, []) == tuple(required)
+
+
+def test_a_required_directory_is_touched_by_any_file_under_it_and_by_nothing_beside_it():
+    required = ["docs/adr/"]
+    assert rules.required_paths_missing(required, ["docs/adr/0086-x.md", "a.py"]) == ()
+    # Rejected: a file that only shares the prefix, a sibling directory, no paths at all.
+    assert rules.required_paths_missing(required, ["docs/adr-notes.md"]) == ("docs/adr/",)
+    assert rules.required_paths_missing(required, ["docs/other/0086-x.md"]) == ("docs/adr/",)
+    assert rules.required_paths_missing(required, []) == ("docs/adr/",)
+    # A path without the trailing slash is still an exact file.
+    assert rules.required_paths_missing(["docs/adr"], ["docs/adr/0086-x.md"]) == ("docs/adr",)

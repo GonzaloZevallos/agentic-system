@@ -356,10 +356,10 @@ class Configuration(BaseModel):
 ARM_SWITCHES = ("review_mode", "skip_ephemeral", "plan_shape")
 
 # The keys `experiment_snapshot` writes, in the order every writer uses
-# (`document.render`'s frontmatter, `evaluation.baseline_id`'s digest): the switches
-# above, plus the model resolved for whichever reviewer actually ran. `plan_shape` is
-# the last and is written only when it is not `free`.
-EXPERIMENT_KEYS = (*ARM_SWITCHES, "reviewer_model")
+# (`document.render`'s frontmatter, `evaluation.baseline_id`'s digest): the first two
+# switches, the model resolved for whichever reviewer actually ran, and the switches added
+# since (`plan_shape`, GH-471), which are written only when they moved off their default.
+EXPERIMENT_KEYS = (*ARM_SWITCHES[:2], "reviewer_model", *ARM_SWITCHES[2:])
 
 
 def arm_input(cfg: Configuration) -> dict[str, str]:

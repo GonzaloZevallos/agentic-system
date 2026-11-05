@@ -320,9 +320,10 @@ def test_the_switches_have_one_source():
     # `ARM_SWITCHES` is the single source: `EXPERIMENT_KEYS` is derived from it and adds
     # only the free-text `reviewer_model` (GH-470).
     assert ARM_SWITCHES == ("review_mode", "skip_ephemeral", "plan_shape")
-    assert EXPERIMENT_KEYS == (*ARM_SWITCHES, "reviewer_model")
-    # The old three keys keep their positions: `plan_shape` is appended, never inserted.
-    assert EXPERIMENT_KEYS[:2] == ("review_mode", "skip_ephemeral")
+    # The old three keys keep their positions: `plan_shape` is the fourth, after
+    # `reviewer_model`, the order `experiment_snapshot` writes.
+    assert EXPERIMENT_KEYS == ("review_mode", "skip_ephemeral", "reviewer_model", "plan_shape")
+    assert set(EXPERIMENT_KEYS) == {*ARM_SWITCHES, "reviewer_model"}
 
 
 def test_experiment_snapshot_carries_plan_shape_only_when_it_is_not_free():

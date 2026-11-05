@@ -50,10 +50,13 @@ que corra la primera tarea `single`.
   - Retrabajo y costo por entrega: del scorecard por brazo.
   - Tiempo de ciclo: de las cifras de tiempo de `eval compare` por brazo.
   - Hallazgos escapados: entradas de la lista `findings` del frontmatter con `location` que empieza
-    por `full_checks:` (`rules.FULL_CHECKS_PREFIX`) o con `subtask` igual a la clave de la unidad de
-    validación final, en cualquier estado salvo `dismissed`, sin las filas `copy:` ni el
-    aterrizaje, divididas por las tareas construidas. Se cuentan a mano hasta que una tarea de
-    seguimiento lo agregue a `eval compare`.
+    por `full_checks:` (`rules.FULL_CHECKS_PREFIX`) o igual a `PM_FINAL.name` (el hallazgo que
+    escribe la validación final), en cualquier estado salvo `dismissed`, sin las filas `copy:` ni
+    el aterrizaje, divididas por las tareas construidas. Se clavan por `location` y no por
+    `subtask`: bajo `single` no hay integración y la validación final apunta a la única subtarea
+    (`final_validation._verdict_patch`), de modo que `subtask` mezclaría con los hallazgos de la
+    revisión de esa subtarea y sesgaría la medida contra `single`. Se cuentan a mano hasta que una
+    tarea de seguimiento lo agregue a `eval compare`.
   - Fallas de `limit` o tope de turnos del Developer, y fallas de plan del Tech Lead que llevan
     `PLAN_SHAPE_REFUSAL`: se reportan aparte y no cuentan como fallas propias (el costo del
     reintento queda en el costo).
