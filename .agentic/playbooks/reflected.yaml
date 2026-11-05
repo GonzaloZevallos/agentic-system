@@ -644,3 +644,6 @@ tasks:
     cost_usd: 0.0722
   GH-504@review:
     cost_usd: 0.0795
+  GH-479@review:
+    cost_usd: 0.1
+    decisions: 1
