@@ -268,6 +268,7 @@ async def test_a_critic_stopped_by_the_task_cap_ends_the_node_with_the_escalatio
     assert "tech_lead_critic" not in runner.slugs
     assert patch["escalation_class"] == "cap"
     assert patch.get("status") != "planned"
+    assert patch["plan_route"]["route"] == "critic"
 
 
 async def test_a_draft_that_cannot_be_made_ends_the_node_with_its_escalation(critic_cfg):
@@ -278,3 +279,5 @@ async def test_a_draft_that_cannot_be_made_ends_the_node_with_its_escalation(cri
     assert "tech_lead_critic" not in runner.slugs
     assert patch["escalation_class"] == "failure"
     assert [r["slug"] for r in patch["runs"]] == ["plan_sizer"]
+    assert patch["plan_route"]["route"] == "critic"
+    assert patch["plan_route"]["critic"] == "skipped"

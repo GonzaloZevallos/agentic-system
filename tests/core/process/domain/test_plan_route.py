@@ -3,9 +3,14 @@ plan node only calls them."""
 
 import pytest
 
-from agentic.core.process.domain.plan_route import regate, route, sizes
+from agentic.core.process.domain.plan_route import regate, route, sizes, takes_critic
 
 THRESHOLD = 55.0
+
+
+def test_only_the_critic_route_takes_the_critic():
+    assert takes_critic("critic") is True
+    assert takes_critic("interview") is False
 
 
 def test_the_interview_switch_always_routes_to_the_interview():

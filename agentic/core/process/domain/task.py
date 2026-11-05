@@ -32,6 +32,7 @@ from typing import (
 )
 
 from .ci_push import PushKind
+from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate
 from .reaping import ReapedProcess
 
@@ -405,9 +406,9 @@ class PlanRoute(TypedDict):
     pre_estimate_usd: float | None
     files: int | None
     threshold_usd: float
-    route: str
+    route: Route
     misrouted: bool
-    critic: str
+    critic: CriticState
 
 
 class EvaluationRef(TypedDict):

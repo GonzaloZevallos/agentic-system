@@ -67,7 +67,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         files = size["estimated_files"] if size else None
         route = plan_route.route(cfg.plan_review, pre_estimate, cfg.plan_interview_min_usd)
         recorded = _route_record(pre_estimate, files, cfg, route)
-        if route == "critic":
+        if plan_route.takes_critic(route):
             return await _plan_with_critic(
                 state, spec, cfg, ports, task.path, history, carried, recorded
             )
@@ -133,7 +133,7 @@ def _route_record(
     route: plan_route.Route,
     *,
     misrouted: bool = False,
-    critic: str = "skipped",
+    critic: plan_route.CriticState = "skipped",
 ) -> PlanRoute:
     return {
         "pre_estimate_usd": pre_estimate,
@@ -361,6 +361,8 @@ async def _plan_with_critic(
     ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
     part_of = _part_of(state)
     name = spec.author.name
+    # Recorded from the start, so a node that escalates before it delivers still says its route.
+    carried = apply(carried, {"plan_route": recorded})
     draft, draft_patch = await _cold_draft(
         apply(state, carried), spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL
     )
@@ -368,13 +370,9 @@ async def _plan_with_critic(
     if draft is None:
         return finish(state, carried, ports)
     drafted = apply(state, carried)
-    if (
-        plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
-        == "interview"
-    ):
-        carried = apply(
-            carried, {"plan_route": {**recorded, "route": "interview", "misrouted": True}}
-        )
+    regated = plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
+    if not plan_route.takes_critic(regated):
+        carried = apply(carried, {"plan_route": {**recorded, "route": regated, "misrouted": True}})
         return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
     draft_text = drafted["sections"][name]
     if spec is INTERVIEW_SOLUTION_PLATFORM:
@@ -385,7 +383,7 @@ async def _plan_with_critic(
         critique, critic_patch = await run_role(
             drafted, TECH_LEAD_CRITIC, cfg, ports, cwd=cwd, plan_draft=draft_text
         )
-    critic_state = "ran"
+    critic_state: plan_route.CriticState = "ran"
     if critique is None:
         critic_patch, stopped = _soft(critic_patch)
         carried = apply(carried, critic_patch)
