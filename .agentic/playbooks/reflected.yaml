@@ -640,3 +640,5 @@ tasks:
     cost_usd: 0.0
   GH-487@review:
     cost_usd: 0.1142
+  GH-500@review:
+    cost_usd: 0.0722

@@ -1216,3 +1216,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-04T23:01:22.459+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a port's contract or storage model, update the matching docs/architecture page in the same change and confirm the doc diff lists it before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-500
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-04T23:39:35.523+00:00'
