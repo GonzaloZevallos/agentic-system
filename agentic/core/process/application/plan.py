@@ -102,11 +102,12 @@ async def _interview_and_plan(
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(interviewed, history, part_of, ports),
+        check=_estimate_check(cfg, interviewed, history, part_of, ports),
         cwd=cwd,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
+        plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -184,6 +185,7 @@ def _part_of(state: TaskState) -> tuple[str, int] | None:
 
 
 def _estimate_check(
+    cfg: Configuration,
     state: TaskState,
     history: cost_history.History,
     part_of: tuple[str, int] | None,
@@ -202,6 +204,7 @@ def _estimate_check(
         part_of=part_of,
         workflow=ci_workflow.check_run_names(_workflow_texts(ports, base)),
         stack_ci=_stack_ci(ports, base),
+        plan_shape=cfg.plan_shape,
     )
 
 
@@ -327,12 +330,13 @@ async def _cold_draft(
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(state, history, part_of, ports),
+        check=_estimate_check(cfg, state, history, part_of, ports),
         cwd=cwd,
         resume=resume,
         extra_input=extra_input,
         proposed_invariants=proposed_invariants,
         cost_history=history.text(),
+        plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),

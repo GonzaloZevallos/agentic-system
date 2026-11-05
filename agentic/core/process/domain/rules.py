@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
+from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
 from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
@@ -5727,6 +5728,20 @@ def split_part_text(part_of: tuple[str, int] | None) -> str:
         "reference, the system builds the part whole without asking; above it, the system "
         "asks the human. In both cases estimate honestly; do not shrink the estimate or inflate "
         "it to pick a path."
+    )
+
+
+def plan_shape_text(plan_shape: str) -> str:
+    """What the planning Tech Lead is told about the `plan_shape` arm (GH-471): empty under
+    `free`, so the prompt renders byte for byte as it did before the arm; under `single`,
+    the one rule the plan check enforces (`schemas.PLAN_SHAPE_REFUSAL`). A plan that does
+    not fit one task is still split into parts, never into several subtasks."""
+    if plan_shape == DEFAULT_PLAN_SHAPE:
+        return ""
+    return (
+        "This task is planned in a single shape: write exactly one subtask, with an empty "
+        "`integration`. Put the whole work in that one brief, in dependency order. A plan "
+        "that does not fit one task is still split into `parts`.\n"
     )
 
 

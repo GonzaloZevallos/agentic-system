@@ -129,7 +129,7 @@ from .shared.configuration import (
     LOGS_DIR,
     Configuration,
     MissingProductDir,
-    arm_switches,
+    arm_input,
 )
 from .shared.environment import without_own_toolchain
 from .shared.errors import CannotStart as CannotStart
@@ -2322,7 +2322,7 @@ async def _land(
 
     with _registered(registry, product_name(ports), task_id, run_kind):
         upstream = ports.workspace.upstream()
-        arm = delivery_metrics.arm_label(arm_switches(cfg))
+        arm = delivery_metrics.arm_label(arm_input(cfg))
         product = product_name(ports)
         try:
             # In a worker thread: the diagnoser runs a role, and `asyncio.run` cannot nest in
@@ -3022,7 +3022,7 @@ async def _invoke(
     # The live arm of this invocation's own `Configuration` (ADR-0030): `cli.py` is the
     # composition root, so it calls `metrics.arm_label` directly, the same function
     # `composition._arm_for` closes over for the graph's own per-node role spans.
-    arm = delivery_metrics.arm_label(arm_switches(cfg))
+    arm = delivery_metrics.arm_label(arm_input(cfg))
     try:
         with telemetry.task_span(task["id"], task["title"], product_name(ports), arm=arm) as run:
             try:

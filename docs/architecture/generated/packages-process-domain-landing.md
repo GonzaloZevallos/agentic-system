@@ -13,6 +13,7 @@ graph TD
     g_domain__checks["checks (grupo)"]
     g_domain__roles["roles (grupo)"]
     g_domain__state["state (grupo)"]
+    g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_domain__adr_numbers["domain.adr_numbers"]
     m_domain__board["domain.board"]
     m_domain__cost_history["domain.cost_history"]
@@ -23,6 +24,7 @@ graph TD
     m_domain__pull_request["domain.pull_request"]
     m_domain__board --> g_domain__state
     m_domain__cost_history --> g_domain__state
+    m_domain__cost_history --> g_pkg__agentic__shared
     m_domain__landing --> g_domain__checks
     m_domain__landing --> g_domain__roles
     m_domain__landing --> g_domain__state

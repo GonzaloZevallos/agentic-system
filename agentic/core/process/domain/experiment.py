@@ -13,7 +13,7 @@ import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, get_args, get_origin
+from typing import Any, Literal, get_args, get_origin
 
 from agentic.shared.configuration import ARM_SWITCHES, Configuration
 
@@ -189,6 +189,19 @@ def conflicts(declaration: Experiment, cfg: Configuration) -> tuple[str, ...]:
 def assignment_of(declaration: Experiment, arm: Arm) -> ArmAssignment:
     """`TaskState.assignment` for `arm` of `declaration`: what `agentic run --arm` writes."""
     return {"experiment": declaration.id, "arm": arm.name, "switches": dict(arm.switches)}
+
+
+def plan_shape_of(document: Mapping[str, Any]) -> str:
+    """The `plan_shape` a task document ran under (GH-471), the one reader of it: the
+    switches of its `assignment` when it has one (what the poller decided), else its
+    `experiment` snapshot, else the `Configuration` default. Pure; the arm's name is never
+    read."""
+    assignment = document.get("assignment")
+    if isinstance(assignment, Mapping):
+        source: Mapping[str, str] = assignment.get("switches") or {}
+    else:
+        source = document.get("experiment") or {}
+    return str(source.get("plan_shape", _default("plan_shape")))
 
 
 def _typed(key: str, value: str) -> object:

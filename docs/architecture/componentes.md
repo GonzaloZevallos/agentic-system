@@ -111,7 +111,9 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
   (`agentic/core/measurement/domain/metrics.py`,
   `agentic/core/measurement/domain/scorecard.py`), y las cifras de tiempo de una tarea, el
   ciclo y el tiempo activo (`agentic/core/measurement/domain/cycle.py`). El brazo de una tarea
-  se lee solo por `metrics.arm_of`: su asignación si la tiene, si no su `experiment` (ADR-0081).
+  se lee por `metrics.arm_of` (su asignación si la tiene, si no su `experiment`, ADR-0081) y, para
+  el único interruptor `plan_shape` que el historial de costos necesita, por
+  `experiment.plan_shape_of` (ADR-0087).
 - `application/`: el caso de uso de los dashboards, con sus propios puertos `DashboardStore`
   y `WidgetData` (`agentic/core/measurement/application/dashboards.py`), y los comandos de
   `eval` (`agentic/core/measurement/application/eval_commands.py`), que `cli.py` envuelve:

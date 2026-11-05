@@ -479,3 +479,46 @@ async def test_a_tracker_that_fails_does_not_stop_a_part_built_whole(arm, tmp_pa
     assert "escalated" not in patch and "fit_question" not in patch
     assert list(patch["subtasks"]) == ["api"]
     assert ports.tracker.comments == []
+
+
+# -- the plan_shape: single arm (GH-471), on both paths of the plan node --------------------
+
+
+def single_cfg(tmp_path, *, skip):
+    return Configuration(product_dir=tmp_path, plan_shape="single", skip_ephemeral=skip)
+
+
+EXTRA = {"id": "ui", "title": "UI", "brief": "Build the screen.", "seams": ["GET /y"]}
+
+
+@pytest.mark.parametrize("skip", [True, False])
+async def test_single_refuses_two_subtasks_and_accepts_the_retry_with_one(skip, tmp_path):
+    scripted = [planned(EXTRA), planned()]
+    runner = ScriptedRunner(tech_lead=scripted) if skip else interview_runner(*scripted)
+    patch = await plan(TASK, single_cfg(tmp_path, skip=skip), memory_ports(runner))
+
+    assert runner.slugs.count("tech_lead") == 2
+    assert patch["status"] == "planned"
+    assert [f["reason"] for f in patch["failures"]] == ["check"]
+    assert "plan_shape single: you wrote 2 subtasks" in patch["failures"][0]["error"]
+    first = runner.calls[runner.slugs.index("tech_lead")]
+    assert "exactly one subtask" in first["system_prompt"]
+    assert patch["experiment"]["plan_shape"] == "single"
+
+
+@pytest.mark.parametrize("skip", [True, False])
+async def test_single_refuses_an_integration_text(skip, tmp_path):
+    scripted = [planned(integration="wire the CLI"), planned()]
+    runner = ScriptedRunner(tech_lead=scripted) if skip else interview_runner(*scripted)
+    patch = await plan(TASK, single_cfg(tmp_path, skip=skip), memory_ports(runner))
+    assert "plan_shape single: write no `integration`" in patch["failures"][0]["error"]
+    assert patch["status"] == "planned"
+
+
+async def test_the_free_default_accepts_two_subtasks_and_says_nothing_of_the_shape(tmp_path):
+    runner = ScriptedRunner(tech_lead=[planned(EXTRA)])
+    patch = await plan(TASK, cold(tmp_path), memory_ports(runner))
+    assert patch["failures"] == []
+    assert len(patch["subtasks"]) == 2
+    assert "exactly one subtask" not in runner.calls[0]["system_prompt"]
+    assert "plan_shape" not in patch.get("experiment", {})

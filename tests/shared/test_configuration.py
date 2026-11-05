@@ -7,7 +7,7 @@ from agentic.shared.configuration import (
     EXPERIMENT_KEYS,
     Configuration,
     MissingProductDir,
-    arm_switches,
+    arm_input,
     experiment_snapshot,
     state_file_for,
 )
@@ -321,8 +321,33 @@ def test_experiment_snapshot_is_non_empty_when_only_skip_ephemeral_moves():
 def test_the_switches_have_one_source():
     # `ARM_SWITCHES` is the single source: `EXPERIMENT_KEYS` is derived from it and adds
     # only the free-text `reviewer_model` (GH-470).
-    assert ARM_SWITCHES == ("review_mode", "skip_ephemeral", "plan_review")
-    assert EXPERIMENT_KEYS == (*ARM_SWITCHES, "reviewer_model")
+    assert ARM_SWITCHES == ("review_mode", "skip_ephemeral", "plan_review", "plan_shape")
+    # The older keys keep their positions: `plan_shape` is the last, after
+    # `reviewer_model`, the order `experiment_snapshot` writes.
+    assert EXPERIMENT_KEYS == (
+        "review_mode",
+        "skip_ephemeral",
+        "plan_review",
+        "reviewer_model",
+        "plan_shape",
+    )
+    assert set(EXPERIMENT_KEYS) == {*ARM_SWITCHES, "reviewer_model"}
+
+
+def test_experiment_snapshot_carries_plan_shape_only_when_it_is_not_free():
+    single = Configuration(product_dir="/tmp/p", plan_shape="single")
+    snapshot = experiment_snapshot(single, "m")
+    assert snapshot == {
+        "review_mode": "full",
+        "skip_ephemeral": "False",
+        "plan_review": "interview",
+        "reviewer_model": "m",
+        "plan_shape": "single",
+    }
+    assert list(snapshot) == list(EXPERIMENT_KEYS)
+    assert experiment_snapshot(Configuration(product_dir="/tmp/p", plan_shape="free"), "m") == {}
+    light = experiment_snapshot(Configuration(product_dir="/tmp/p", review_mode="light"), "m")
+    assert "plan_shape" not in light
 
 
 def test_plan_review_defaults_to_the_interview_and_the_threshold_to_the_p75():
@@ -361,16 +386,20 @@ def test_critic_with_skip_ephemeral_is_refused():
         Configuration(product_dir="/tmp/p", plan_review="critic", skip_ephemeral=True)
 
 
-def test_arm_switches_maps_every_switch_to_its_string():
+def test_arm_input_maps_every_switch_to_its_string():
     default = Configuration(product_dir="/tmp/p")
-    assert arm_switches(default) == {
+    assert arm_input(default) == {
         "review_mode": "full",
         "skip_ephemeral": "False",
         "plan_review": "interview",
+        "plan_shape": "free",
     }
-    critic = Configuration(product_dir="/tmp/p", review_mode="light", plan_review="critic")
-    assert list(arm_switches(critic)) == list(ARM_SWITCHES)
-    assert arm_switches(critic)["plan_review"] == "critic"
+    critic = Configuration(
+        product_dir="/tmp/p", review_mode="light", plan_review="critic", plan_shape="single"
+    )
+    assert list(arm_input(critic)) == list(ARM_SWITCHES)
+    assert arm_input(critic)["plan_review"] == "critic"
+    assert arm_input(critic)["plan_shape"] == "single"
 
 
 @pytest.mark.parametrize("review_mode", ["full", "light"])

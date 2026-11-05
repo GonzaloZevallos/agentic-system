@@ -25,6 +25,8 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
 
+from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
+
 from . import ci_workflow
 from .ci_workflow import WorkflowNames
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
@@ -988,6 +990,21 @@ def plan_fits(
     return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
 
 
+def _single_check(subtasks: Sequence[Any], integration: str) -> None:
+    """The refusals of `plan_shape: single` for a plan of subtasks (GH-471)."""
+    if len(subtasks) != 1:
+        raise ValueError(
+            f"{PLAN_SHAPE_REFUSAL} you wrote {len(subtasks)} subtasks and the arm takes "
+            "exactly one: merge them into one brief, keeping their dependency order. If the "
+            "work does not fit one task, write parts instead"
+        )
+    if integration.strip():
+        raise ValueError(
+            f"{PLAN_SHAPE_REFUSAL} write no `integration`: move that work into the single "
+            "subtask's brief"
+        )
+
+
 def _ci_names_check(
     data: dict[str, Any], workflow: WorkflowNames | None, stack_ci: Sequence[str]
 ) -> None:
@@ -1005,6 +1022,11 @@ def _ci_names_check(
         raise ValueError("; ".join(reasons))
 
 
+# The start of both refusals of the `plan_shape: single` arm (GH-471): the one text a
+# reader, a test and the failure report match on.
+PLAN_SHAPE_REFUSAL = "plan_shape single:"
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
@@ -1013,6 +1035,7 @@ def plan_check_for(
     part_of: tuple[str, int] | None = None,
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
+    plan_shape: str = DEFAULT_PLAN_SHAPE,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1037,7 +1060,12 @@ def plan_check_for(
     A `ci_required` name the base's workflows (`workflow`, `None` when there is none to
     read) prove no check run carries is refused with the names to use instead, unless the
     plan declares the workflow it would change (GH-485); the stack's `ci:` names are always
-    names a check run carries."""
+    names a check run carries.
+
+    Under `plan_shape` `single` (GH-471) a plan of shape (A) must have exactly one subtask
+    and no integration, so the integration step the arm exists to remove never runs. It is
+    judged after the fit, so a plan over the line is still sent toward parts first, and
+    never for shape (B) or (C): a split or a tracker-only plan is not refused for its shape."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import TRACKER_WITH_PARTS
@@ -1095,6 +1123,8 @@ def plan_check_for(
                 "(or the history's reference for this size does not): write parts, "
                 f"at least two chained tasks, and no subtasks. {SPLIT_NOT_WAIVED}"
             )
+        if plan_shape != DEFAULT_PLAN_SHAPE:
+            _single_check(subtasks, data.get("integration") or "")
         median = bucket_median(history, len(data["subtasks"]))
         if median is not None and cost < 0.5 * median:
             raise ValueError(
