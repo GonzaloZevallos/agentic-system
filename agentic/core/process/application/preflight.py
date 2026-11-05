@@ -28,6 +28,7 @@ PLACEHOLDERS = {
     "invariants": "- none",
     "proposed_invariants": "- none",
     "cost_history": "- none",
+    "plan_draft": "a draft plan",
     "checks": "- `tests`: `<the product's own command>`",
     "split_part": "",
     # Empty for a product that declares no `docs`, so the gate renders the prompts as they ship.
