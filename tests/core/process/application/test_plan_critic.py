@@ -218,6 +218,7 @@ async def test_a_draft_over_the_threshold_is_re_gated_to_the_interview(critic_cf
     assert runner.slugs == ["plan_sizer", "tech_lead", "tech_lead_ephemeral", "tech_lead"]
     assert "tech_lead_critic" not in runner.slugs
     assert patch["plan_route"]["misrouted"] is True
+    assert patch["plan_route"]["route"] == "interview"
     assert patch["plan_route"]["critic"] == "skipped"
     assert "Tech Lead (v1)" in patch["sections"]
     assert patch["status"] == "planned"

@@ -372,7 +372,9 @@ async def _plan_with_critic(
         plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
         == "interview"
     ):
-        carried = apply(carried, {"plan_route": {**recorded, "misrouted": True}})
+        carried = apply(
+            carried, {"plan_route": {**recorded, "route": "interview", "misrouted": True}}
+        )
         return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
     draft_text = drafted["sections"][name]
     if spec is INTERVIEW_SOLUTION_PLATFORM:
