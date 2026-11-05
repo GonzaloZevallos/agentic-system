@@ -5055,18 +5055,10 @@ def ci_gate_names(declared: tuple[str, ...], plan_required: Sequence[str]) -> Ci
 
 def required_paths_missing(required: Sequence[str], touched: Sequence[str]) -> tuple[str, ...]:
     """The plan's `required_paths` when the integrated diff touches none of them, else the
-    empty tuple (also when nothing is required). A required path ending in `/` is a
-    directory: any touched path under it satisfies it (the plan of GH-471 requires
-    `docs/adr/`, and `git diff --name-only` lists files, never directories)."""
-    if not required or any(_touches(path, touched) for path in required):
+    empty tuple (also when nothing is required)."""
+    if not required or any(path in touched for path in required):
         return ()
     return tuple(required)
-
-
-def _touches(required: str, touched: Sequence[str]) -> bool:
-    if required.endswith("/"):
-        return any(path.startswith(required) for path in touched)
-    return required in touched
 
 
 @dataclass(frozen=True)
