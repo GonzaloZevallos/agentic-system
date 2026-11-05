@@ -24,7 +24,9 @@ and the section say so, unless the product declares `ci_dispatch`: then the base
 is dispatched with the head sha as its input, its run is found by event, workflow and the sha in
 its title, and its verdict is recorded with `ran_on: ci_dispatch` and the `run_id`. A refused
 dispatch escalates at once with no wait and no retry; no run after the grace period is dispatched
-once more.
+once more. The head is published to `rules.ci_dispatch_ref` before every dispatch and the ref is
+never deleted here (GH-504); a dispatched job that failed at `Set up job` or the checkout is
+`checkout_failed`, CI not usable, never a red check.
 
 In that run a check that timed out and that the stack maps to a CI job (`ci_covers`, GH-453)
 is deferred when `presubmit.deferred_verdict` says so: its row is marked `deferred`, it is no
@@ -46,7 +48,14 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import ci, presubmit, rules, speculation
 from ..domain.check_schedule import CheckPriority
-from ..domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun, FullTierVerdict
+from ..domain.ci import (
+    CiCheck,
+    CiReport,
+    CiUnreadable,
+    DispatchedRun,
+    FailedStage,
+    FullTierVerdict,
+)
 from ..domain.ci_push import PushKind, push_failure_markdown
 from ..domain.presubmit import CheckResult, CiCover, CiDispatch
 from ..domain.roles import DEVELOPER_INTEGRATOR
@@ -85,9 +94,10 @@ _CI_DETAIL: dict[CiCause, str] = {
     "jobs_missing": "the run completed without a declared job",
     "unknown_names": "no check run carries a declared job name",
 }
-# The same causes when the verdict was asked of a dispatched run: `{ref}` is the workflow file.
+# Every cause when the verdict was asked of a dispatched run (GH-504), none inherited from the CI
+# branch ref's table: `{ref}` is the workflow file, `{dispatch_ref}` the ref the head was
+# published to, `{sha}` the head, `{stage}` where a failed job stopped. All system data.
 _DISPATCH_DETAIL: dict[CiCause, str] = {
-    **_CI_DETAIL,
     "gh_unavailable": "`gh` could not be run for the whole {min:g} min wait on {ref}",
     "gh_unreadable": "`gh` answered something unreadable for the whole {min:g} min wait on {ref}",
     "no_run": "no dispatched run of {ref} for that head after {min:g} min, though it was "
@@ -97,6 +107,10 @@ _DISPATCH_DETAIL: dict[CiCause, str] = {
     "dispatch_refused": "`gh` refused to dispatch {ref} for that head",
     "jobs_missing": "the dispatched {ref} completed without a declared job",
     "unknown_names": "no check run carries a declared job name",
+    "publish_failed": "the push of the head {sha} to {dispatch_ref} failed, so {ref} was not "
+    "dispatched",
+    "checkout_failed": "the dispatched {ref} failed at its {stage} step before the suite ran; head "
+    "{sha} had been published to {dispatch_ref}",
 }
 
 
@@ -117,6 +131,10 @@ class _NoVerdict:
     # `unknown_names` only (GH-485): the names no check run carries, and the names that did report.
     unknown: tuple[str, ...] = ()
     reported: tuple[str, ...] = ()
+    # A dispatched run only (GH-504): the head that was published to the dispatch ref and, for
+    # `checkout_failed`, the stage the failed job(s) stopped at, so the message names them.
+    head: str | None = None
+    stage: FailedStage | None = None
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -203,16 +221,28 @@ async def full_checks(
         head = workspace.full_head(task.path)
         table = _CI_DETAIL if outcome.workflow is None else _DISPATCH_DETAIL
         ref = outcome.workflow or rules.ci_ref(state["id"])
-        detail = table[outcome.cause].format(ref=ref, min=round(outcome.waited_s / 60, 1))
+        detail = table[outcome.cause].format(
+            ref=ref,
+            min=round(outcome.waited_s / 60, 1),
+            stage=outcome.stage,
+            dispatch_ref=rules.ci_dispatch_ref(state["id"]),
+            sha=outcome.head or head,
+        )
         patch = rules.ci_unavailable(outcome.cause, head, detail + _git_said(outcome))
         if outcome.git_said and outcome.push_attempts and outcome.push_kind:
             # Git's words reach the section only through `push_failure_markdown`, which
             # scrubs them; the older run stays as history under its own free `(vN)` key.
+            # A dispatched run's push was of the dispatch ref, not of the workflow file.
+            pushed_ref = rules.ci_dispatch_ref(state["id"]) if outcome.workflow else ref
             patch["sections"] = _section(
                 state,
                 0,
                 push_failure_markdown(
-                    outcome.cause, ref, outcome.push_attempts, outcome.push_kind, outcome.git_said
+                    outcome.cause,
+                    pushed_ref,
+                    outcome.push_attempts,
+                    outcome.push_kind,
+                    outcome.git_said,
                 ),
             )
         return finish(state, patch, ports)
@@ -228,18 +258,23 @@ def _git_said(outcome: _NoVerdict) -> str:
     return f" after {tries}; git said: {outcome.git_said}"
 
 
-def _publish_failed(exc: GitError, waited: float) -> _NoVerdict:
+def _publish_failed(
+    exc: GitError, waited: float, workflow: str | None = None, head: str | None = None
+) -> _NoVerdict:
     """The no-verdict of a push that failed. A `PushFailed` brings what git said; a `GitError`
-    that is not one is today's bare `publish_failed`."""
+    that is not one is today's bare `publish_failed`. `workflow` and `head` are a dispatched
+    run's (GH-504): the push was of the dispatch ref, and the message names it."""
     if isinstance(exc, PushFailed):
         return _NoVerdict(
             "publish_failed",
             waited,
+            workflow,
             git_said=exc.said,
             push_attempts=exc.attempts,
             push_kind=exc.kind,
+            head=head,
         )
-    return _NoVerdict("publish_failed", waited)
+    return _NoVerdict("publish_failed", waited, workflow, head=head)
 
 
 async def _push(op: Callable[[], None], push_sleep: PushSleep) -> Pushed:
@@ -372,7 +407,7 @@ async def _ci_full_checks(
         if (dispatch := ports.stack.ci_dispatch(base)) is None:
             return "untrusted"
         return await _dispatched_full_checks(
-            state, cfg, ports, head, gate_names, dispatch, sleep, clock
+            state, cfg, ports, task, head, gate_names, dispatch, sleep, clock, push_sleep
         )
     ref = rules.ci_ref(state["id"])
     speculative = False
@@ -532,16 +567,23 @@ async def _dispatched_full_checks(
     state: TaskState,
     cfg: Configuration,
     ports: Ports,
+    task: Checkout,
     head: str,
     names: tuple[str, ...],
     dispatch: CiDispatch,
     sleep: Sleep,
     clock: Clock,
+    push_sleep: PushSleep,
 ) -> dict[str, Any] | _NoVerdict:
     """An untrusted head judged by the base branch's own workflow (GH-462): dispatched on the
     repository's default branch, the one the pull request targets, with the head sha as its
     input. A refusal ends the call at once: no wait, no second dispatch. No run after the
-    grace period is dispatched once more, and the second wait is bounded by the grace again."""
+    grace period is dispatched once more, and the second wait is bounded by the grace again.
+
+    Before every dispatch (GH-504) the head is published to `rules.ci_dispatch_ref`, the ref
+    GitHub serves the checkout from, retried like every push of the CI path (GH-487); a push that
+    still fails ends the call with no dispatch. That ref is never deleted here: the sweep is the
+    only thing that does."""
     waited = 0.0
     for attempt in range(1, ci.CI_DISPATCH_ATTEMPTS + 1):
         # A loose lower bound for the listing only: the run is found by its event, workflow
@@ -549,6 +591,12 @@ async def _dispatched_full_checks(
         since = (datetime.now(UTC) - timedelta(seconds=ci.CI_DISPATCH_SKEW_S)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
+        try:
+            await _push(
+                lambda: ports.workspace.publish_dispatch_ref(task.path, state["id"]), push_sleep
+            )
+        except GitError as exc:
+            return _publish_failed(exc, waited, dispatch.workflow, head)
         refused = await anyio.to_thread.run_sync(
             ports.tracker.dispatch_ci, dispatch.workflow, "", {dispatch.sha_input: head}
         )
@@ -564,7 +612,13 @@ async def _dispatched_full_checks(
         ):
             break
     if verdict.state == "unreachable":
-        return _NoVerdict(verdict.cause or "no_run", waited, dispatch.workflow)
+        return _NoVerdict(
+            verdict.cause or "no_run",
+            waited,
+            dispatch.workflow,
+            head=head,
+            stage=_stage_of(verdict),
+        )
     run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
     assert run is not None  # a verdict other than `unreachable` came from a chosen run
     read = CiReport(head, None, None, None, run.jobs, run.status == "completed")
@@ -573,6 +627,14 @@ async def _dispatched_full_checks(
     else:
         patch = _ci_red(state, cfg, head, names, verdict, read, waited)
     return _dispatched_record(patch, run)
+
+
+def _stage_of(verdict: FullTierVerdict) -> FailedStage | None:
+    """Where the failed job(s) of a `checkout_failed` verdict stopped (GH-504): the stage of the
+    first one, for the message; `None` for any other verdict."""
+    if verdict.cause != "checkout_failed":
+        return None
+    return next((c.failed_stage for c in verdict.failing if c.failed_stage), None)
 
 
 async def _wait_dispatched(

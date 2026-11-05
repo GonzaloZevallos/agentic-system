@@ -1080,6 +1080,7 @@ CiCause = Literal[
     "dispatch_refused",
     "jobs_missing",
     "unknown_names",
+    "checkout_failed",
 ]
 
 
