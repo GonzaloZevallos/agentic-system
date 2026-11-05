@@ -399,8 +399,8 @@ def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, st
     `document.render`): `{}` when every `ARM_SWITCHES` switch is at its default, so a
     document produced on the default path stays byte-identical to one written before
     this task (the plan's omit-at-default pattern). Otherwise `review_mode`,
-    `skip_ephemeral`, `plan_review` and `reviewer_model`, verbatim and in that order -- `reviewer_model`
-    travels even when it happens to equal the default model, so an operator who sets
+    `skip_ephemeral`, `plan_review` and `reviewer_model`, verbatim and in that order --
+    `reviewer_model` travels even when it happens to equal the default model, so an operator who sets
     `AGENTIC_REVIEW_MODE=light` without a matching `model_overrides` entry can be
     caught reading this key after the run, never prevented (out of this subtask's
     scope; said in the pull request body) -- and `plan_shape` after them only when it
