@@ -5053,10 +5053,22 @@ def ci_gate_names(declared: tuple[str, ...], plan_required: Sequence[str]) -> Ci
     return CiGate((*names, *plan_only), plan_only)
 
 
+def _required_path_met(entry: str, touched_path: str) -> bool:
+    """An entry ending in `/` (and longer than that one character) names a directory: any
+    touched path that starts with it meets it. Any other entry needs an exact match. No
+    normalisation: the entry and the path are compared as written."""
+    if entry.endswith("/") and len(entry) > 1:
+        return touched_path.startswith(entry)
+    return touched_path == entry
+
+
 def required_paths_missing(required: Sequence[str], touched: Sequence[str]) -> tuple[str, ...]:
     """The plan's `required_paths` when the integrated diff touches none of them, else the
-    empty tuple (also when nothing is required)."""
-    if not required or any(path in touched for path in required):
+    empty tuple (also when nothing is required). An entry ending in `/` names a directory,
+    met by any touched path under it."""
+    if not required or any(
+        _required_path_met(entry, path) for entry in required for path in touched
+    ):
         return ()
     return tuple(required)
 
