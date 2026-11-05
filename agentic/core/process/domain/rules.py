@@ -205,16 +205,53 @@ def landing_gate_text(names: Sequence[str]) -> str:
     return ", ".join(f"`{name}`" for name in names) if names else NO_LANDING_GATE
 
 
+def appended(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What a system writer added to the findings: the tail of `after` when `before` is its
+    prefix, else `[]` (GH-511). The writers only append, a contract their own tests hold;
+    when one ever breaks it the rows are not attributed to the system, and the review
+    keeps the reviewer's reason. Never raises."""
+    if after[: len(before)] != before:
+        return []
+    return after[len(before) :]
+
+
+def verdict_reason(
+    reviewer: list[dict[str, Any]], system: list[dict[str, Any]], reason: str
+) -> str:
+    """The reason a returned review carries (GH-511): the first blocking row's, as
+    `change_category` reads it. When that row is the system's (red CI, `required_paths`) the
+    reviewer's `reason` may be an approval, so the row's own `claim (location)` is the
+    reason; otherwise the reviewer's `reason`, unchanged."""
+    first = next((f for f in [*reviewer, *system] if f["severity"] == "blocking"), None)
+    if first is None or not any(first is row for row in system):
+        return reason
+    return f"{first['claim']} ({first['location']})"
+
+
+def system_blocking(system: list[dict[str, Any]]) -> list[str]:
+    """One line per blocking row the system wrote, for the review's section (GH-511)."""
+    return [f"`{f['location']}`: {f['claim']}" for f in system if f["severity"] == "blocking"]
+
+
 def review_markdown(
-    category: FindingCategory | None, reason: str, text: str, lowered: Sequence[str] = ()
+    category: FindingCategory | None,
+    reason: str,
+    text: str,
+    lowered: Sequence[str] = (),
+    added: Sequence[str] = (),
 ) -> str:
     """A review's section as the document keeps it: the derived verdict first, written by
-    the system, with the blocks it lowered, then what the reviewer wrote. The reviewer
-    never writes the verdict, so the section cannot contradict it (ADR-0016)."""
+    the system, with the blocks it lowered and the blocking rows it added, then what the
+    reviewer wrote. The reviewer never writes the verdict, so the section cannot
+    contradict it (ADR-0016)."""
     verdict = "**approved**" if category is None else f"**returned** (`{category}`)"
     parts = [f"### Verdict\n\n{verdict}: {reason}"]
     if lowered:
         parts.append("Lowered by the system:\n\n" + "\n".join(f"- {line}" for line in lowered))
+    if added:
+        parts.append(
+            "Blocking, added by the system:\n\n" + "\n".join(f"- {line}" for line in added)
+        )
     return "\n\n".join([*parts, text])
 
 
