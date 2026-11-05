@@ -101,3 +101,21 @@ pueda ampliarlo.
    revisión de integración deja un hallazgo `outside` para medir un log verde real de `ci.yml`. Un log
    cortado por el tope no es un fallo; un tiempo agotado (`CI_LOG_TIMEOUT_S`), una salida distinta de
    cero o una lectura imposible es `CiUnreadable`, que no registra nada.
+
+## Adenda (2026-11-04, GH-479)
+
+El lado de CI del bloque (`ci.yml` y `scripts/ci_flakes.py`) y la forma `rerun_checks` de este repo
+fijaron tres puntos que el texto original dejaba abiertos:
+
+1. **La forma es la caché de pytest, no ids.** El sistema no sustituye ningún token `{ids}` (`rerun_command`
+   devuelve `command` tal cual y solo rellena `{base}` y `{workers}`), así que la forma de `tests` es
+   `uv run pytest -m "not llm" --last-failed --last-failed-no-failures none`. Con la caché vacía no corre
+   nada y sale distinto de cero, de modo que nunca reintenta la suite entera; `rerun_resolved` cae
+   entonces al comando completo, como antes.
+2. **El junit es `xunit1`.** Su atributo `file` reconstruye el id de nodo que la puerta lee de las líneas
+   `FAILED`. El script cuenta solo `<failure>`, nunca `<error>` (el patrón `FAILED` no ve las líneas
+   `ERROR`), y un id ausente del segundo archivo, o un archivo ilegible, es falta de evidencia: no es un
+   flake.
+3. **Un id con ` - ` se corta.** `test_id` termina en ` - ` o en el fin de línea, y un id parametrizado que
+   contenga ` - ` queda truncado; el reintento por forma no encuentra ese test y la puerta cae al comando
+   completo (residuo acotado por el umbral).
