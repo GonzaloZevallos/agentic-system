@@ -35,7 +35,7 @@ classDiagram
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
     class task__PendingCloseDocs["PendingCloseDocs"]
-    class task__PlanSettledRow["PlanSettledRow"]
+    class task__PlanRoute["PlanRoute"]
 ```
 
 ## Relaciones con otras páginas
@@ -43,3 +43,4 @@ classDiagram
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`
+  - `task.TaskState` se asocia con `task.PlanRoute`
