@@ -152,6 +152,11 @@ class Configuration(BaseModel):
     # skipped. `False` is today's path; the ephemeral-arm subtask is the only other
     # reader.
     skip_ephemeral: bool = False
+    # The plan-shape arm (GH-471): `free` is today's path, the Tech Lead plans as many
+    # subtasks as the work needs; `single` makes the plan exactly one subtask, with no
+    # integration (`schemas.plan_check_for`, `rules.plan_shape_text`). Omitted from
+    # `experiment_snapshot` and from `metrics.arm_label` at `free`.
+    plan_shape: Literal["free", "single"] = "free"
     # Runs alive at once across every product on this machine (GH-137, the poller's
     # first piece): the human's own call is one at a time, default **1** -- two in
     # parallel already hit the account's own session limit (one 429 for the whole
@@ -343,36 +348,49 @@ class Configuration(BaseModel):
         }
 
 
-# The two `Configuration` switches an experiment arm may set, in the order every writer
+# The `Configuration` switches an experiment arm may set, in the order every writer
 # uses: the single source (GH-470). `EXPERIMENT_KEYS`, `experiment_snapshot`, the
 # experiment validator (`process.domain.experiment`) and `metrics.ARM_KEYS`/`arm_label`
-# all derive from it. `reviewer_model` is not one: free text, not an enum (ADR-0030).
-ARM_SWITCHES = ("review_mode", "skip_ephemeral")
+# all derive from it; a new switch is appended, so the old keys keep their places.
+# `reviewer_model` is not one: free text, not an enum (ADR-0030).
+ARM_SWITCHES = ("review_mode", "skip_ephemeral", "plan_shape")
 
-# The three keys `experiment_snapshot` writes, in the order every writer uses
+# The keys `experiment_snapshot` writes, in the order every writer uses
 # (`document.render`'s frontmatter, `evaluation.baseline_id`'s digest): the switches
-# above, plus the model resolved for whichever reviewer actually ran.
+# above, plus the model resolved for whichever reviewer actually ran. `plan_shape` is
+# the last and is written only when it is not `free`.
 EXPERIMENT_KEYS = (*ARM_SWITCHES, "reviewer_model")
+
+
+def arm_input(cfg: Configuration) -> dict[str, str]:
+    """The input of `metrics.arm_label` for `cfg`: every `ARM_SWITCHES` value as the
+    document holds it (`review_mode` verbatim, `skip_ephemeral` as `str(bool)`). The one
+    place a caller builds it, so a new switch cannot be left out of a label."""
+    return {key: str(getattr(cfg, key)) for key in ARM_SWITCHES}
 
 
 def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, str]:
     """The `experiment` state/frontmatter value (`TaskState.experiment`,
     `document.render`): `{}` when every `ARM_SWITCHES` switch is at its default, so a
     document produced on the default path stays byte-identical to one written before
-    this task (the plan's omit-at-default pattern). Otherwise all three
-    `EXPERIMENT_KEYS`, verbatim and in that order -- `reviewer_model` travels even
-    when it happens to equal the default model, so an operator who sets
+    this task (the plan's omit-at-default pattern). Otherwise `review_mode`,
+    `skip_ephemeral` and `reviewer_model`, verbatim and in that order -- `reviewer_model`
+    travels even when it happens to equal the default model, so an operator who sets
     `AGENTIC_REVIEW_MODE=light` without a matching `model_overrides` entry can be
     caught reading this key after the run, never prevented (out of this subtask's
-    scope; said in the pull request body)."""
+    scope; said in the pull request body) -- and `plan_shape` after them only when it
+    is not `free` (GH-471), so a document of the older arms is unchanged."""
     defaults = Configuration.model_fields
     if all(getattr(cfg, key) == defaults[key].default for key in ARM_SWITCHES):
         return {}
-    return {
+    snapshot = {
         "review_mode": cfg.review_mode,
         "skip_ephemeral": str(cfg.skip_ephemeral),
         "reviewer_model": reviewer_model,
     }
+    if cfg.plan_shape != defaults["plan_shape"].default:
+        snapshot["plan_shape"] = cfg.plan_shape
+    return snapshot
 
 
 def state_file_for(task_id: str) -> Path:

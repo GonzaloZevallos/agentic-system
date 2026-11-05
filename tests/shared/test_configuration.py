@@ -7,6 +7,7 @@ from agentic.shared.configuration import (
     EXPERIMENT_KEYS,
     Configuration,
     MissingProductDir,
+    arm_input,
     experiment_snapshot,
     state_file_for,
 )
@@ -318,8 +319,41 @@ def test_experiment_snapshot_is_non_empty_when_only_skip_ephemeral_moves():
 def test_the_switches_have_one_source():
     # `ARM_SWITCHES` is the single source: `EXPERIMENT_KEYS` is derived from it and adds
     # only the free-text `reviewer_model` (GH-470).
-    assert ARM_SWITCHES == ("review_mode", "skip_ephemeral")
+    assert ARM_SWITCHES == ("review_mode", "skip_ephemeral", "plan_shape")
     assert EXPERIMENT_KEYS == (*ARM_SWITCHES, "reviewer_model")
+    # The old three keys keep their positions: `plan_shape` is appended, never inserted.
+    assert EXPERIMENT_KEYS[:2] == ("review_mode", "skip_ephemeral")
+
+
+def test_experiment_snapshot_carries_plan_shape_only_when_it_is_not_free():
+    single = Configuration(product_dir="/tmp/p", plan_shape="single")
+    snapshot = experiment_snapshot(single, "m")
+    assert snapshot == {
+        "review_mode": "full",
+        "skip_ephemeral": "False",
+        "reviewer_model": "m",
+        "plan_shape": "single",
+    }
+    assert list(snapshot) == ["review_mode", "skip_ephemeral", "reviewer_model", "plan_shape"]
+    assert experiment_snapshot(Configuration(product_dir="/tmp/p", plan_shape="free"), "m") == {}
+    light = experiment_snapshot(Configuration(product_dir="/tmp/p", review_mode="light"), "m")
+    assert "plan_shape" not in light
+
+
+def test_arm_input_is_every_switch_as_a_string():
+    assert arm_input(Configuration(product_dir="/tmp/p")) == {
+        "review_mode": "full",
+        "skip_ephemeral": "False",
+        "plan_shape": "free",
+    }
+    moved = Configuration(
+        product_dir="/tmp/p", review_mode="light", skip_ephemeral=True, plan_shape="single"
+    )
+    assert arm_input(moved) == {
+        "review_mode": "light",
+        "skip_ephemeral": "True",
+        "plan_shape": "single",
+    }
 
 
 @pytest.mark.parametrize("review_mode", ["full", "light"])

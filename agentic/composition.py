@@ -79,7 +79,7 @@ from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
 from .core.process.domain.ci import CiReport, CiUnreadable
-from .shared.configuration import STATE_FILE, Configuration, state_file_for
+from .shared.configuration import STATE_FILE, Configuration, arm_input, state_file_for
 from .shared.environment import own_configuration_unset
 
 if TYPE_CHECKING:
@@ -398,7 +398,7 @@ def _arm_for(cfg: Configuration) -> str:
     `cli.py` that calls `metrics.arm_label`, so `core.process.adapters.langgraph.graph`
     -- restricted to importing `shared` alone (`tests/test_architecture.py`) -- never
     imports `core.measurement` to get it."""
-    return arm_label({"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)})
+    return arm_label(arm_input(cfg))
 
 
 graph = build_graph(default_ports, telemetry, arm_for=_arm_for, for_task=bind_task)

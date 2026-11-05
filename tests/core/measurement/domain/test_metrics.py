@@ -580,3 +580,45 @@ def test_arm_of_reads_the_assignment_over_the_experiment_and_never_the_arms_name
     assert metrics.arm_of({"assignment": {"experiment": "e", "arm": "a", "switches": {}}}) == (
         "default"
     )
+
+
+def test_arm_label_appends_plan_shape_only_when_it_is_not_free():
+    # GH-471: the label of the older arms is unchanged, the new arm's carries the switch.
+    assert metrics.arm_label({"plan_shape": "free"}) == "default"
+    assert metrics.arm_label({"review_mode": "light"}) == "review_mode=light,skip_ephemeral=False"
+    assert metrics.arm_label({"plan_shape": "single"}) == (
+        "review_mode=full,skip_ephemeral=False,plan_shape=single"
+    )
+    assert metrics.arm_label(
+        {"review_mode": "light", "skip_ephemeral": "True", "plan_shape": "single"}
+    ) == ("review_mode=light,skip_ephemeral=True,plan_shape=single")
+
+
+def test_arm_label_of_the_input_of_a_configuration_matches_the_document_it_wrote():
+    from agentic.shared.configuration import arm_input, experiment_snapshot
+
+    for fields in ({}, {"review_mode": "light"}, {"plan_shape": "single"}):
+        cfg = Configuration(product_dir="/tmp/p", **fields)
+        snapshot = experiment_snapshot(cfg, "m")
+        assert metrics.arm_label(arm_input(cfg)) == metrics.arm_of({"experiment": snapshot})
+    single = Configuration(product_dir="/tmp/p", plan_shape="single")
+    assert metrics.arm_label(arm_input(single)) == (
+        "review_mode=full,skip_ephemeral=False,plan_shape=single"
+    )
+
+
+def test_a_single_arm_document_is_labelled_by_its_assignment_and_by_its_snapshot():
+    by_assignment = {
+        "assignment": {"experiment": "e", "arm": "single", "switches": {"plan_shape": "single"}}
+    }
+    by_snapshot = {
+        "experiment": {
+            "review_mode": "full",
+            "skip_ephemeral": "False",
+            "reviewer_model": "m",
+            "plan_shape": "single",
+        }
+    }
+    expected = "review_mode=full,skip_ephemeral=False,plan_shape=single"
+    assert metrics.arm_of(by_assignment) == expected
+    assert metrics.arm_of(by_snapshot) == expected
