@@ -1244,3 +1244,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-05T03:24:28.930+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, turn each invariant in the brief into a grep or test, and run it. Do not compare or write closed-set literals outside the module the invariant names; call its predicate and record its return.
+  confidence: medium
+  seen_in:
+  - GH-472
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-05T17:59:52.366+00:00'

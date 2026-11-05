@@ -651,3 +651,20 @@ tasks:
     cost_usd: 0.0
   GH-511@review:
     cost_usd: 0.0
+  GH-472@review:
+    cost_usd: 0.1109
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-472
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-472
