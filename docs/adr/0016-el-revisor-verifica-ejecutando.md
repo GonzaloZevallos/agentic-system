@@ -200,3 +200,13 @@ request.
   el camino de antes y escala. Es a propósito: el sistema no lee la prosa.
 - **Hash y esquema.** Cambian el hash de los dos prompts de revisión y el esquema de salida
   estructurada de `Review`: es un cambio observable de la corrida, no un cambio de formato.
+
+## Adenda (2026-11-05): un veredicto sin filas bloqueantes dentro del alcance aprueba, y una devolución dice la verdad sobre su motivo (GH-511)
+
+En #471 la tercera revisión devolvió con la tabla del revisor vacía y un `reason` aprobatorio, la corrida contó la devolución y escaló. La fila que devolvió era del sistema (`required_paths`), pero el motivo que se mostró fue el texto aprobatorio del revisor.
+
+- **El veredicto se deriva.** Una revisión cuyos hallazgos no tienen ninguna fila bloqueante dentro del alcance (solo `outside`, observaciones, `important` o nada) aprueba y no cuenta como devolución. Ya era así: `lower_unbacked_blocks` baja un bloqueante de otro alcance a `important` y uno sin evidencia a observación, y `change_category` solo mira `blocking`. Esta adenda lo deja escrito y probado.
+- **No se rechaza por esquema.** Se descarta esa opción porque `schemas.Review` no tiene un campo de veredicto (`reason`, `findings`, `settled`): el veredicto lo deriva el sistema, y un campo nuevo cambiaría el contrato del revisor para afirmar algo que ya se deriva.
+- **Las filas bloqueantes del sistema devuelven y cuentan** (CI rojo en la cabeza, `required_paths` sin tocar). El revisor puede entregar «sin hallazgos» y la revisión igual devuelve, y es lo correcto. Ahora la sección las lista bajo `Blocking, added by the system:` y la devolución lleva su motivo, `"<claim> (<location>)"`, en la línea de veredicto, en `subtasks[id].reason`, en `change_history` y en el texto de la escalada. Si la primera fila bloqueante es del revisor, el motivo sigue siendo el suyo. La lista del revisor y la del sistema se llevan por separado, nunca por un índice; los escritores del sistema solo agregan al final, lo prueba un test por escritor, y si uno lo rompe la atribución vuelve al motivo del revisor, sin fallar.
+- **Divergencia con el texto del issue.** El pedido dice que un `important` dentro del alcance «sigue devolviendo». No es así por ADR-0016 y ADR-0053: un `important` nunca devuelve, queda abierto para el pase final de importantes (`fix_important`).
+- **Fuera de esta adenda.** El falso bloqueante por directorio de `required_paths_missing` es #510.

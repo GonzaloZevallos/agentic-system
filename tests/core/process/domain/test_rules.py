@@ -571,6 +571,80 @@ def test_the_system_writes_the_verdict_heading_of_a_review():
     )
 
 
+def test_review_markdown_lists_the_blocking_rows_the_system_added_after_the_lowered_ones():
+    # GH-511: the section names the rows the system wrote that block, so a reader sees
+    # why a review with an empty table returned; with none, the output is unchanged.
+    findings = "### Findings\n\nNone."
+    lowered = ["`b.py:2` blocking lowered to observation: no evidence"]
+    added = ["`docs/adr/`: the integrated diff touches none of the plan's required paths"]
+    assert rules.review_markdown(None, "ok", findings, lowered, ()) == rules.review_markdown(
+        None, "ok", findings, lowered
+    )
+    assert rules.review_markdown("spec-scope", "r", findings, lowered, added) == (
+        "### Verdict\n\n**returned** (`spec-scope`): r\n\nLowered by the system:\n\n"
+        f"- {lowered[0]}\n\nBlocking, added by the system:\n\n- {added[0]}\n\n{findings}"
+    )
+    assert "Blocking, added by the system:" in rules.review_markdown(None, "r", findings, (), added)
+
+
+def row(severity="blocking", evidence="$ pytest\nFAILED", scope="subtask", at="x.py:1", claim="c"):
+    return {**finding(severity, evidence, scope, at), "claim": claim}
+
+
+@pytest.mark.parametrize(
+    ("severity", "scope", "evidence", "category"),
+    [
+        ("observation", "subtask", "", None),
+        ("observation", "outside", "$ x", None),
+        ("important", "subtask", "$ x", None),
+        ("important", "outside", "$ x", None),
+        ("blocking", "outside", "$ x", None),
+        ("blocking", "plan", "$ x", None),
+        ("blocking", "subtask", "", None),
+        ("blocking", "subtask", "$ x", "spec-behaviour"),
+    ],
+)
+def test_only_a_backed_blocking_row_in_scope_counts_as_a_return(
+    severity, scope, evidence, category
+):
+    # GH-511: the verdict derives from `change_category` over the lowered rows; `outside`
+    # rows, observations and an `important` never return (ADR-0016, ADR-0053).
+    lowered, _ = rules.lower_unbacked_blocks([row(severity, evidence, scope)])
+    assert rules.change_category(lowered) == category
+
+
+def test_the_reason_of_a_return_is_that_of_the_first_blocking_row_whoever_wrote_it():
+    mine = row(at="a.py:1", claim="reviewer says")
+    theirs = row(at="docs/adr/", claim="system says")
+    note = row("observation", at="n.py:2", claim="note")
+    assert rules.verdict_reason([mine], [theirs], "why") == "why"
+    assert rules.verdict_reason([note], [theirs], "why") == "system says (docs/adr/)"
+    assert rules.verdict_reason([], [theirs], "why") == "system says (docs/adr/)"
+    assert rules.verdict_reason([note], [row("observation")], "why") == "why"
+    assert rules.verdict_reason([], [], "why") == "why"
+
+
+def test_appended_is_the_tail_a_writer_added_and_never_raises():
+    before = [row(at="a.py:1")]
+    added = row(at="b.py:2")
+    assert rules.appended(before, [*before, added]) == [added]
+    assert rules.appended(before, before) == []
+    assert rules.appended([], [added]) == [added]
+    # A writer that broke the append-only contract: attribution falls back, no raise.
+    assert rules.appended(before, [added, *before]) == []
+    assert rules.appended(before, []) == []
+
+
+def test_system_blocking_names_each_blocking_row_by_location_and_claim():
+    rows = [
+        row(at="docs/adr/", claim="touches none"),
+        row("observation", at="CI: e2e", claim="also red on master"),
+        row(at="CI: unit", claim="red"),
+    ]
+    assert rules.system_blocking(rows) == ["`docs/adr/`: touches none", "`CI: unit`: red"]
+    assert rules.system_blocking([]) == []
+
+
 def test_a_return_is_recorded_with_its_category_for_the_history():
     assert rules.change_entry(PAIR, "definition", "no metrics") == {
         "pair": KEY,

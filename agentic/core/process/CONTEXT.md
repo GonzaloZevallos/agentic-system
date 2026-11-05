@@ -370,7 +370,7 @@ _Avoid_: validación, preflight (el nombre en el código, no el concepto)
 _Campo_: preflight check — de aviación, vía CI/CD (Helm y los operadores de Kubernetes lo usan así). El "preflight request" de CORS es otra cosa
 
 **Revisión**:
-Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con hallazgos y un veredicto que se deriva de ellos: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.
+Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con hallazgos y un veredicto que se deriva de ellos: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió. El motivo de una revisión devuelta es el de la fila que la devolvió, sea del revisor o del sistema.
 _Avoid_: review, code review (el nombre de la skill, no del pase)
 _Campo_: code review — estándar
 
