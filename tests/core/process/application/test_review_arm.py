@@ -74,6 +74,7 @@ async def test_a_light_review_stamps_the_three_keys_with_the_resolved_model():
     assert patch["experiment"] == {
         "review_mode": "light",
         "skip_ephemeral": "False",
+        "plan_review": "interview",
         "reviewer_model": "claude-cheap-5",
     }
     assert runner.slugs == ["tech_lead_review_light"]

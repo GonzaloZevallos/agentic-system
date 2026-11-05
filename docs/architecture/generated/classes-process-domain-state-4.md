@@ -13,6 +13,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
@@ -34,7 +35,7 @@ classDiagram
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
     class task__PendingCloseDocs["PendingCloseDocs"]
-    class task__PlanSettledRow["PlanSettledRow"]
+    class task__PlanRoute["PlanRoute"]
 ```
 
 ## Relaciones con otras páginas
@@ -42,3 +43,4 @@ classDiagram
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`
+  - `task.TaskState` se asocia con `task.PlanRoute`

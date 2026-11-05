@@ -29,6 +29,7 @@ from ...application.ports import (
     TrackerTransient,
     TrackerUnreachable,
 )
+from ...domain import ci
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from ...domain.task import (
     PullRequest,
@@ -242,7 +243,22 @@ def _dispatched_job(job: object) -> CiCheck:
         status=_text(job["status"]).upper(),
         conclusion=conclusion.upper() if isinstance(conclusion, str) and conclusion else None,
         link=job.get("url") or "",
+        failed_stage=_failed_stage_of(job.get("steps")),
     )
+
+
+def _failed_stage_of(steps: object) -> ci.FailedStage | None:
+    """The stage of the first step of a job whose conclusion is failure (GH-504), by the step's
+    name through `ci.failed_stage`. `None` when there is no failing step or `steps` cannot be
+    read: the job then reads red as before, and is never made unreadable by its steps."""
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if not isinstance(step, dict) or str(step.get("conclusion", "")).lower() != "failure":
+            continue
+        name = step.get("name")
+        return ci.failed_stage(name) if isinstance(name, str) else None
+    return None
 
 
 def _comment_author(comment: dict) -> str:

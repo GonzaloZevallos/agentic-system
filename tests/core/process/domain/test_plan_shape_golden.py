@@ -1,6 +1,7 @@
 """The default path stays byte for byte what it was before `plan_shape` (GH-471).
 
-Every literal below was captured from the code before the arm existed: the snapshot, the
+Every literal below was captured from the code before the arm existed (master with the
+plan-review switch, GH-472, and without `plan_shape`): the snapshot, the
 label, the baseline id, the rendered documents and the rendered Tech Lead prompts of a task
 with no experiment, of the old `light` arm and of a control arm with `switches: {}`."""
 
@@ -29,14 +30,23 @@ def test_snapshot_label_and_baseline_of_the_light_arm_are_the_pre_arm_literals()
     assert snapshot == {
         "review_mode": "light",
         "skip_ephemeral": "False",
+        "plan_review": "interview",
         "reviewer_model": "claude-sonnet-5",
     }
-    assert metrics.arm_label(snapshot) == "review_mode=light,skip_ephemeral=False"
-    assert metrics.arm_of({"experiment": snapshot}) == "review_mode=light,skip_ephemeral=False"
-    assert evaluation.baseline_id("v1", "decl", snapshot) == "v1+226aa58e"
+    light = "review_mode=light,skip_ephemeral=False,plan_review=interview"
+    assert metrics.arm_label(snapshot) == light
+    assert metrics.arm_of({"experiment": snapshot}) == light
+    assert evaluation.baseline_id("v1", "decl", snapshot) == "v1+941e2927"
     skipped = experiment_snapshot(cfg(skip_ephemeral=True), "m")
-    assert skipped == {"review_mode": "full", "skip_ephemeral": "True", "reviewer_model": "m"}
-    assert metrics.arm_label(skipped) == "review_mode=full,skip_ephemeral=True"
+    assert skipped == {
+        "review_mode": "full",
+        "skip_ephemeral": "True",
+        "plan_review": "interview",
+        "reviewer_model": "m",
+    }
+    assert (
+        metrics.arm_label(skipped) == "review_mode=full,skip_ephemeral=True,plan_review=interview"
+    )
 
 
 GOLDEN_CONTROL = """\

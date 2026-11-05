@@ -15,6 +15,7 @@ graph TD
     m_domain__findings_report["domain.findings_report"]
     m_domain__metrics["domain.metrics"]
     m_domain__parallel_factor["domain.parallel_factor"]
+    m_domain__planning["domain.planning"]
     m_domain__playbook_window["domain.playbook_window"]
     m_domain__role_usage["domain.role_usage"]
     m_domain__scorecard["domain.scorecard"]
@@ -29,12 +30,16 @@ graph TD
     m_domain__metrics --> g_pkg__agentic__core__process
     m_domain__metrics --> g_pkg__agentic__shared
     m_domain__parallel_factor --> g_pkg__agentic__core__process
+    m_domain__planning --> g_pkg__agentic__core__process
+    m_domain__planning --> m_domain__metrics
+    m_domain__planning --> m_domain__parallel_factor
     m_domain__playbook_window --> g_pkg__agentic__core__process
     m_domain__playbook_window --> m_domain__metrics
     m_domain__role_usage --> g_pkg__agentic__core__process
     m_domain__scorecard --> g_pkg__agentic__core__process
     m_domain__scorecard --> m_domain__cycle
     m_domain__scorecard --> m_domain__metrics
+    m_domain__scorecard --> m_domain__planning
     m_domain__task_scores --> g_pkg__agentic__core__process
     m_domain__task_scores --> m_domain__metrics
 ```

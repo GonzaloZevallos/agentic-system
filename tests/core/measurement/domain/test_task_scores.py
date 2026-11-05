@@ -241,7 +241,9 @@ def test_dimensions_come_from_the_document():
         )
     )
     assert got == ts.Dimensions(
-        release="v1.2", baseline="bl-1", arm="review_mode=light,skip_ephemeral=True"
+        release="v1.2",
+        baseline="bl-1",
+        arm="review_mode=light,skip_ephemeral=True,plan_review=interview",
     )
 
 
@@ -551,7 +553,7 @@ def test_assignment_alone_gives_one_arm_to_arm_of_eligibility_and_the_score_labe
         assignment={"experiment": "e", "arm": "fast", "switches": light},
     )
     assert "experiment" not in assigned
-    label = "review_mode=light,skip_ephemeral=False"
+    label = "review_mode=light,skip_ephemeral=False,plan_review=interview"
     assert metrics.arm_of(assigned) == label
     assert ts.dimensions(assigned).arm == label
     assert playbook_window._eligible(assigned, "developer") is False

@@ -36,5 +36,6 @@ graph TD
     m_domain__rules --> m_domain__document
     m_domain__rules --> m_domain__task
     m_domain__task --> g_domain__checks
+    m_domain__task --> g_domain__landing
     m_domain__task --> g_domain__machine
 ```

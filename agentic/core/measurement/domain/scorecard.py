@@ -26,7 +26,7 @@ from typing import Literal
 
 from agentic.core.process.domain.task import RoleRun, TaskState
 
-from . import cycle, metrics
+from . import cycle, metrics, planning
 
 # The three failure reasons a scorecard's "own failures" excludes (ADR-0029, extended
 # by issue #137's own `network`), read here and nowhere else in this diff: every other
@@ -117,6 +117,8 @@ class TaskFigures:
     cycle_class: cycle.CycleClass = "excluded"
     cycle_s: float | None = None
     active_s: float | None = None
+    # What planning cost and returned, for `eval compare`'s planning block (GH-472).
+    planning_facts: planning.TaskPlanning | None = None
 
 
 def task_figures(document: ScorecardDocument) -> TaskFigures:
@@ -152,6 +154,7 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         cycle_class=cycle.cycle_class(document),
         cycle_s=cycle.cycle_seconds(document),
         active_s=cycle.active_seconds(document),
+        planning_facts=planning.task_planning(document),
     )
 
 

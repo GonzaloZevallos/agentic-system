@@ -15,7 +15,7 @@ DECLARATION = {
         {"name": "single", "share": 0.5, "switches": {"plan_shape": "single"}},
     ],
 }
-SINGLE_LABEL = "review_mode=full,skip_ephemeral=False,plan_shape=single"
+SINGLE_LABEL = "review_mode=full,skip_ephemeral=False,plan_review=interview,plan_shape=single"
 
 
 def cfg(**fields):

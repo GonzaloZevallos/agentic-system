@@ -32,6 +32,7 @@ from .roles import (
     PAIR_UI_LEAD,
     PAIR_UX_LEAD,
     PJM,
+    PLAN_SIZER,
     PM,
     PM_CONSOLIDATOR,
     PM_FINAL,
@@ -39,6 +40,7 @@ from .roles import (
     QA_PERFORMANCE,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
+    TECH_LEAD_CRITIC,
     TECH_WRITER,
     TECH_WRITER_REVIEW,
     UI_DESIGNER,
@@ -206,16 +208,53 @@ def landing_gate_text(names: Sequence[str]) -> str:
     return ", ".join(f"`{name}`" for name in names) if names else NO_LANDING_GATE
 
 
+def appended(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What a system writer added to the findings: the tail of `after` when `before` is its
+    prefix, else `[]` (GH-511). The writers only append, a contract their own tests hold;
+    when one ever breaks it the rows are not attributed to the system, and the review
+    keeps the reviewer's reason. Never raises."""
+    if after[: len(before)] != before:
+        return []
+    return after[len(before) :]
+
+
+def verdict_reason(
+    reviewer: list[dict[str, Any]], system: list[dict[str, Any]], reason: str
+) -> str:
+    """The reason a returned review carries (GH-511): the first blocking row's, as
+    `change_category` reads it. When that row is the system's (red CI, `required_paths`) the
+    reviewer's `reason` may be an approval, so the row's own `claim (location)` is the
+    reason; otherwise the reviewer's `reason`, unchanged."""
+    first = next((f for f in [*reviewer, *system] if f["severity"] == "blocking"), None)
+    if first is None or not any(first is row for row in system):
+        return reason
+    return f"{first['claim']} ({first['location']})"
+
+
+def system_blocking(system: list[dict[str, Any]]) -> list[str]:
+    """One line per blocking row the system wrote, for the review's section (GH-511)."""
+    return [f"`{f['location']}`: {f['claim']}" for f in system if f["severity"] == "blocking"]
+
+
 def review_markdown(
-    category: FindingCategory | None, reason: str, text: str, lowered: Sequence[str] = ()
+    category: FindingCategory | None,
+    reason: str,
+    text: str,
+    lowered: Sequence[str] = (),
+    added: Sequence[str] = (),
 ) -> str:
     """A review's section as the document keeps it: the derived verdict first, written by
-    the system, with the blocks it lowered, then what the reviewer wrote. The reviewer
-    never writes the verdict, so the section cannot contradict it (ADR-0016)."""
+    the system, with the blocks it lowered and the blocking rows it added, then what the
+    reviewer wrote. The reviewer never writes the verdict, so the section cannot
+    contradict it (ADR-0016)."""
     verdict = "**approved**" if category is None else f"**returned** (`{category}`)"
     parts = [f"### Verdict\n\n{verdict}: {reason}"]
     if lowered:
         parts.append("Lowered by the system:\n\n" + "\n".join(f"- {line}" for line in lowered))
+    if added:
+        parts.append(
+            "Blocking, added by the system:\n\n" + "\n".join(f"- {line}" for line in added)
+        )
     return "\n\n".join([*parts, text])
 
 
@@ -2219,14 +2258,16 @@ def phase_of(section: str) -> str:
     """The phase a run's section belongs to. PM's consultations during the plan write
     PM's section, so they count as definition. PM's early, UI-only final validation and
     the two leads' own final sections (ADR-0040) map to `review`, same as any other
-    review: it runs after the integration review approves, never before it."""
+    review: it runs after the integration review approves, never before it. The plan critic's
+    section and the sizer's run (no section: the key is the role's name) are `plan`
+    (GH-472)."""
     if section in _FINAL_VALIDATION_SECTIONS:
         return "review"
     if section.startswith(REVIEW_PREFIX):
         return "review"
     if section.startswith(f"{DEVELOPER.name}: "):
         return "development"
-    if section in (TECH_LEAD.name, SOLUTION_INTERVIEW):
+    if section in (TECH_LEAD.name, SOLUTION_INTERVIEW, TECH_LEAD_CRITIC.name, PLAN_SIZER.name):
         return "plan"
     return "definition"
 
@@ -5054,10 +5095,22 @@ def ci_gate_names(declared: tuple[str, ...], plan_required: Sequence[str]) -> Ci
     return CiGate((*names, *plan_only), plan_only)
 
 
+def _required_path_met(entry: str, touched_path: str) -> bool:
+    """An entry ending in `/` (and longer than that one character) names a directory: any
+    touched path that starts with it meets it. Any other entry needs an exact match. No
+    normalisation: the entry and the path are compared as written."""
+    if entry.endswith("/") and len(entry) > 1:
+        return touched_path.startswith(entry)
+    return touched_path == entry
+
+
 def required_paths_missing(required: Sequence[str], touched: Sequence[str]) -> tuple[str, ...]:
     """The plan's `required_paths` when the integrated diff touches none of them, else the
-    empty tuple (also when nothing is required)."""
-    if not required or any(path in touched for path in required):
+    empty tuple (also when nothing is required). An entry ending in `/` names a directory,
+    met by any touched path under it."""
+    if not required or any(
+        _required_path_met(entry, path) for entry in required for path in touched
+    ):
         return ()
     return tuple(required)
 

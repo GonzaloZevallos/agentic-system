@@ -96,6 +96,11 @@ def _parse_arm(raw: object, index: int, source: str) -> Arm:
         if key not in ARM_SWITCHES:
             raise InvalidExperiment(f"{where} switch {key!r} is not one of {list(ARM_SWITCHES)}")
         switches[key] = _switch_value(key, value, where)
+    if switches.get("plan_review") == "critic" and switches.get("skip_ephemeral") == "True":
+        raise InvalidExperiment(
+            f"{where} sets plan_review: critic with skip_ephemeral: true, "
+            "which cannot be combined: skip_ephemeral already plans cold with no review"
+        )
     return Arm(name=name, share=float(share), switches=switches)
 
 
@@ -125,6 +130,13 @@ def parse_experiment(data: object, source: str) -> Experiment:
     names = [arm.name for arm in arms]
     if duplicate := next((n for n in names if names.count(n) > 1), None):
         raise InvalidExperiment(f"{source}: duplicate arm name {duplicate!r}")
+    setting = [arm.name for arm in arms if "plan_review" in arm.switches]
+    if setting and len(setting) != len(arms):
+        silent = [arm.name for arm in arms if arm.name not in setting]
+        raise InvalidExperiment(
+            f"{source}: arms {silent} do not set plan_review while {setting} do; "
+            "the control must say plan_review: interview"
+        )
     total = sum(arm.share for arm in arms)
     if abs(total - 1) > _SHARE_TOLERANCE:
         raise InvalidExperiment(f"{source}: arm shares sum to {total}, not 1")

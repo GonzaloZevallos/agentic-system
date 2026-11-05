@@ -24,11 +24,14 @@ whether it exists at all needs the network this guard refuses to touch.
 """
 
 import copy
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any, get_type_hints
 
+import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack, stack_checks
@@ -71,12 +74,155 @@ def _mypy_files() -> list[str]:
     return data["tool"]["mypy"]["files"]
 
 
+_SHELL_OPERATORS = (";", "&", "|", "`", "$(", "\n")
+
+
+def _declared_command_in_steps(command: str, run_steps: list[str]) -> bool:
+    """Whether `command` is a `run:` step, or the head of one that retries it (GH-464): the
+    stripped first line of the step starts with `command + " "` and what follows it, before the
+    first `||`, is options only (no `;`, `&`, `|`, command substitution or second command)."""
+    if command in run_steps:
+        return True
+    for step in run_steps:
+        lines = step.strip().splitlines()
+        first = lines[0].strip() if lines else ""
+        if not first.startswith(command + " "):
+            continue
+        options = first[len(command) :].split("||", 1)[0]
+        if not any(op in options for op in _SHELL_OPERATORS) and "uv" not in options.split():
+            return True
+    return False
+
+
 def test_every_declared_check_and_setup_command_is_a_run_step_in_ci():
     run_steps = _run_steps()
     for command in _declared_commands():
-        assert command in run_steps, (
+        assert _declared_command_in_steps(command, run_steps), (
             f"{command!r} is declared in {STACK_YAML} but is not a `run:` step in {CI_YML}"
         )
+
+
+PYTEST = 'uv run pytest -m "not llm"'
+
+
+def test_the_declared_command_matcher_accepts_an_exact_step_and_a_retrying_head():
+    assert _declared_command_in_steps(PYTEST, [PYTEST])
+    assert _declared_command_in_steps(PYTEST, [f'{PYTEST} --junitxml="$T/a.xml" || {{\n  x\n}}'])
+
+
+def test_the_declared_command_matcher_rejects_a_step_without_the_command():
+    assert not _declared_command_in_steps(PYTEST, ["uv run ruff check ."])
+
+
+def test_the_declared_command_matcher_rejects_the_command_on_a_later_line():
+    assert not _declared_command_in_steps(PYTEST, [f"echo start\n{PYTEST} --x || exit 1"])
+
+
+def test_the_declared_command_matcher_rejects_a_command_behind_another_one():
+    assert not _declared_command_in_steps(PYTEST, [f"echo x && {PYTEST}"])
+    assert not _declared_command_in_steps(PYTEST, [f"{PYTEST} --x && echo done"])
+    assert not _declared_command_in_steps(PYTEST, [f"{PYTEST} --x | tee log"])
+    assert not _declared_command_in_steps(PYTEST, [f"{PYTEST} --x; uv run other"])
+    assert not _declared_command_in_steps(PYTEST, [f"{PYTEST} uv run other"])
+
+
+def _pytest_step() -> str:
+    steps = [step for step in _run_steps() if step.lstrip().startswith("uv run pytest")]
+    assert len(steps) == 1, f"expected one pytest `run:` step in {CI_YML}, found {len(steps)}"
+    return steps[0]
+
+
+def test_the_pytest_step_keeps_the_retry_shape():
+    """A guard on the shape only; `test_the_pytest_step_exit_is_the_second_runs` is the proof."""
+    lines = [line.strip() for line in _pytest_step().strip().splitlines()]
+    assert lines[0].endswith("|| {")
+    assert lines[-2:] == ["exit $rc", "}"]
+    assert any("--last-failed" in line for line in lines)
+    assert any("scripts/ci_flakes.py --check tests" in line for line in lines)
+
+
+# A stub `uv`: it logs its argv and exits as the case scripts. The first `uv run pytest` is the
+# first run, the second one the retry; `uv run python ...` is `ci_flakes.py`.
+_UV_STUB = """#!/bin/bash
+echo "$*" >> "$STUB_LOG"
+if [ "$2" = pytest ]; then
+  if [ "$(grep -c '^run pytest' "$STUB_LOG")" = 1 ]; then exit "$FIRST_RC"; fi
+  exit "$SECOND_RC"
+fi
+exit "$SCRIPT_RC"
+"""
+
+_BASH_MODES = (["bash", "-e", "-c"], ["bash", "-eo", "pipefail", "-c"])
+# first run, retry, script -> the step's exit, whether the retry ran, whether the script ran.
+_EXIT_CASES = [
+    pytest.param(0, 0, 0, 0, False, False, id="first-green"),
+    pytest.param(1, 0, 0, 0, True, True, id="red-then-green"),
+    pytest.param(1, 1, 0, 1, True, True, id="red-then-red"),
+    pytest.param(1, 0, 3, 0, True, True, id="script-fails-after-green-retry"),
+    pytest.param(1, 1, 3, 1, True, True, id="script-fails-after-red-retry"),
+    pytest.param(1, 5, 0, 5, True, True, id="retry-finds-nothing-cached"),
+]
+
+
+@pytest.mark.parametrize("mode", _BASH_MODES, ids=["bash-e", "bash-e-pipefail"])
+@pytest.mark.parametrize(
+    ("first", "second", "script", "expected", "retried", "reported"), _EXIT_CASES
+)
+def test_the_pytest_step_exit_is_the_second_runs(
+    tmp_path, mode, first, second, script, expected, retried, reported
+):
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    uv = stub_dir / "uv"
+    uv.write_text(_UV_STUB, encoding="utf-8")
+    uv.chmod(0o755)
+    log = tmp_path / "uv.log"
+    env = {
+        **os.environ,
+        "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}",
+        "RUNNER_TEMP": str(tmp_path),
+        "STUB_LOG": str(log),
+        "FIRST_RC": str(first),
+        "SECOND_RC": str(second),
+        "SCRIPT_RC": str(script),
+    }
+    result = subprocess.run(
+        [*mode, _pytest_step()], env=env, capture_output=True, text=True, timeout=30
+    )
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert result.returncode == expected, result.stderr
+    assert sum(call.startswith("run pytest") for call in calls) == (2 if retried else 1)
+    assert any("scripts/ci_flakes.py" in call for call in calls) == reported
+    assert ("ci_flakes: no block" in result.stdout) == (script != 0)
+
+
+# `ruff format --check .` has the same flag with another meaning: only the script's counts.
+_CHECK_FLAG = re.compile(r"ci_flakes\.py\s+--check[ =]+(\S+)")
+
+
+def undeclared_check_names(run_steps: list[str], declared: set[str]) -> list[str]:
+    """The `--check <name>` values in `run_steps` that are not a name under `checks`."""
+    names = [name for step in run_steps for name in _CHECK_FLAG.findall(step)]
+    return sorted({name.strip("\"'") for name in names} - declared)
+
+
+def _stack_data() -> Any:
+    return yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+
+
+def test_every_check_flag_in_ci_and_every_rerun_key_is_a_declared_check():
+    data = _stack_data()
+    declared = set(stack.checks(data, STACK_YAML))
+    assert _CHECK_FLAG.search(_pytest_step())
+    assert undeclared_check_names(_run_steps(), declared) == []
+    assert set(stack.rerun_checks(data, STACK_YAML)) <= declared
+
+
+def test_the_check_flag_guard_rejects_a_name_the_stack_does_not_declare():
+    assert undeclared_check_names(
+        ["ci_flakes.py --check tests a b", "ci_flakes.py --check nope", "ruff --check ."], {"tests"}
+    ) == ["nope"]
+    assert undeclared_check_names(['ci_flakes.py --check "ghost" a b'], {"tests"}) == ["ghost"]
 
 
 def test_setup_uv_has_an_explicit_version():
@@ -102,7 +248,7 @@ MYPY_TEST_ENTRIES = frozenset({"tests/fakes.py", "tests/conformance.py"})
 # duration by concurrency table (GH-361), and the pure renderer and the stale check of the
 # docs generator (GH-400; `generate.py` imports `render` by name and stays out), its phase
 # table, the shared import reader, the process package-graph builder and the class-page model
-# (GH-430). Other scripts are not checked, so none is admitted.
+# (GH-430), the CI flake block writer (GH-479). Other scripts are not checked, so none is admitted.
 MYPY_SCRIPT_ENTRIES = frozenset(
     {
         "scripts/poll_waits.py",
@@ -113,6 +259,7 @@ MYPY_SCRIPT_ENTRIES = frozenset(
         "scripts/docs/imports.py",
         "scripts/docs/packages.py",
         "scripts/docs/classes.py",
+        "scripts/ci_flakes.py",
     }
 )
 

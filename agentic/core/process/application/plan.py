@@ -17,14 +17,17 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import ci_workflow, cost_history, docs, plan_view, rules, schemas
+from ..domain import ci_workflow, cost_history, docs, plan_route, plan_view, rules, schemas
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
+    PLAN_SIZER,
+    TECH_LEAD_CRITIC,
+    TECH_LEAD_CRITIC_PLATFORM,
     TECH_LEAD_REVIEWER,
     Interview,
 )
-from ..domain.task import Subtask, TaskState, apply
+from ..domain.task import PlanRoute, Subtask, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
 from .ports import GitError, Ports
@@ -53,10 +56,43 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(spec.author), ports)
     history = cost_history.build(closed_documents(ports))
+    carried: TaskState = {}
+    pre_estimate: float | None = None
+    files: int | None = None
+    if plan_route.sizes(state.get("assignment"), cfg.plan_review):
+        carried, size = await _size(state, cfg, ports, task.path, history)
+        if carried.get("escalation_class") is not None:
+            return finish(state, carried, ports)
+        pre_estimate = size["estimated_cost_usd"] if size else None
+        files = size["estimated_files"] if size else None
+        route = plan_route.route(cfg.plan_review, pre_estimate, cfg.plan_interview_min_usd)
+        recorded = _route_record(pre_estimate, files, cfg, route)
+        if plan_route.takes_critic(route):
+            return await _plan_with_critic(
+                state, spec, cfg, ports, task.path, history, carried, recorded
+            )
+        carried = apply(carried, {"plan_route": recorded})
     if cfg.skip_ephemeral:
-        return await _plan_cold(state, spec, cfg, ports, task.path, history)
-    transcript, patch = await interview(state, spec, cfg, ports, cwd=task.path)
-    ports.workspace.commit_all(task.path, f"{state['id']}: solution interview")
+        return await _plan_cold(state, spec, cfg, ports, task.path, history, carried)
+    return await _interview_and_plan(state, spec, cfg, ports, task.path, history, carried)
+
+
+async def _interview_and_plan(
+    state: TaskState,
+    spec: Interview,
+    cfg: Configuration,
+    ports: Ports,
+    cwd: Path,
+    history: cost_history.History,
+    carried: TaskState,
+) -> TaskState:
+    """The full solution stage (ADR-0014): the interview, then the Tech Lead from its own
+    session. `carried` is what earlier calls of this node already put in the patch (the
+    sizer, a cold draft); the roles read `state` with it applied and every cap sees its spend."""
+    base = apply(state, carried) if carried else state
+    transcript, patch = await interview(base, spec, cfg, ports, cwd=cwd)
+    ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
+    patch = _joined(carried, patch)
     if transcript is None:
         return finish(state, patch, ports)
     interviewed = apply(state, patch)
@@ -67,7 +103,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         cfg,
         ports,
         check=_estimate_check(cfg, interviewed, history, part_of, ports),
-        cwd=task.path,
+        cwd=cwd,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
@@ -83,6 +119,64 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
     _tell_built_whole(ports, state["id"], part_of, built_whole)
     return finish(state, judged, ports)
+
+
+def _joined(carried: TaskState, patch: TaskState) -> TaskState:
+    """`patch` after what the node carried: the reducers fold both, and with nothing carried
+    the patch is returned untouched, so the default path builds exactly what it always did."""
+    return apply(carried, patch) if carried else patch
+
+
+def _route_record(
+    pre_estimate: float | None,
+    files: int | None,
+    cfg: Configuration,
+    route: plan_route.Route,
+    *,
+    misrouted: bool = False,
+    critic: plan_route.CriticState = "skipped",
+) -> PlanRoute:
+    return {
+        "pre_estimate_usd": pre_estimate,
+        "files": files,
+        "threshold_usd": cfg.plan_interview_min_usd,
+        "route": route,
+        "misrouted": misrouted,
+        "critic": critic,
+    }
+
+
+def _soft(patch: TaskState) -> tuple[TaskState, bool]:
+    """A role's patch when it delivered nothing, as `(what to keep, whether the node stops)`.
+    A role that failed twice is an optional step failing: its failed attempts were paid, so
+    their cost and records are kept and the escalation is not. A cap, or anything that is not
+    a plain failure, stops the node and the patch is the escalation itself."""
+    if patch.get("escalation_class") != "failure":
+        return patch, True
+    kept: TaskState = {"failures": patch["failures"], "cost_usd": patch["cost_usd"]}
+    if "prompts" in patch:
+        kept["prompts"] = patch["prompts"]
+    return kept, False
+
+
+async def _size(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    cwd: Path,
+    history: cost_history.History,
+) -> tuple[TaskState, dict | None]:
+    """The sizer's pre-estimate (GH-472): its patch and its data, `None` when it failed. It
+    writes no section, so the run is the only trace it leaves besides its cost. A stop
+    (cap) comes back as the escalation itself, with `escalation_class` set."""
+    output, patch = await run_role(
+        state, PLAN_SIZER, cfg, ports, cwd=cwd, cost_history=history.text()
+    )
+    if output is None:
+        kept, _ = _soft(patch)
+        return kept, None
+    patch.pop("sections", None)
+    return patch, output.data
 
 
 def _part_of(state: TaskState) -> tuple[str, int] | None:
@@ -192,6 +286,7 @@ async def _plan_cold(
     ports: Ports,
     cwd: Path,
     history: cost_history.History,
+    carried: TaskState | None = None,
 ) -> TaskState:
     """The ephemeral-arm skip path (issue #28): no interviewer, no interviewee, no
     consultation, no transcript -- the Tech Lead's own cold call is the whole solution
@@ -202,17 +297,44 @@ async def _plan_cold(
     `commit_all` still runs, on the checkout `task_checkout` just prepared: the tree is
     clean, so it returns `None` and no branch is needed, the same call the interview
     path makes right before its own Tech Lead call -- kept here for the same reason,
-    not special-cased away."""
+    not special-cased away. `carried` is what the node already put in its patch (the sizer)."""
     ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
     part_of = _part_of(state)
-    output, written = await run_role(
+    base = apply(state, carried) if carried else state
+    output, written = await _cold_draft(base, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL)
+    delivered = _joined(carried or {}, _delivered(cfg, output, written, spec.author.name))
+    judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
+    _tell_built_whole(ports, state["id"], part_of, built_whole)
+    return finish(state, judged, ports)
+
+
+async def _cold_draft(
+    state: TaskState,
+    spec: Interview,
+    cfg: Configuration,
+    ports: Ports,
+    cwd: Path,
+    history: cost_history.History,
+    proposed_invariants: str,
+    *,
+    resume: str | None = None,
+    extra_input: str = "",
+) -> tuple[Output | None, TaskState]:
+    """One Tech Lead call over `state` with no interview behind it: the whole solution stage
+    of the skip arm, the draft of the critic arm and, with `resume` and `extra_input`, its one
+    revision. It delivers nothing and saves nothing: `_delivered` and `finish` are the
+    caller's, once."""
+    part_of = _part_of(state)
+    return await run_role(
         state,
         spec.author,
         cfg,
         ports,
         check=_estimate_check(cfg, state, history, part_of, ports),
         cwd=cwd,
-        proposed_invariants=_SKIPPED_PROPOSAL,
+        resume=resume,
+        extra_input=extra_input,
+        proposed_invariants=proposed_invariants,
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
         split_part=rules.split_part_text(part_of),
@@ -222,10 +344,118 @@ async def _plan_cold(
         parts_field=rules.parts_field_text(part_of),
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
     )
-    delivered = _delivered(cfg, output, written, spec.author.name)
-    judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
+
+
+async def _plan_with_critic(
+    state: TaskState,
+    spec: Interview,
+    cfg: Configuration,
+    ports: Ports,
+    cwd: Path,
+    history: cost_history.History,
+    carried: TaskState,
+    recorded: PlanRoute,
+) -> TaskState:
+    """The critic arm (GH-472, ADR-0086): the Tech Lead plans cold, one critic reviews the
+    draft in a fresh session, the Tech Lead revises once from its own session. A draft whose
+    estimate reaches the threshold was misrouted and gets the full interview instead.
+
+    Every call adds its run and its cost to the one patch the node returns, and the caps of
+    each see the spend before it. Exactly one delivery and one `finish`, over the final plan."""
+    ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
+    part_of = _part_of(state)
+    name = spec.author.name
+    # Recorded from the start, so a node that escalates before it delivers still says its route.
+    carried = apply(carried, {"plan_route": recorded})
+    draft, draft_patch = await _cold_draft(
+        apply(state, carried), spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL
+    )
+    carried = apply(carried, draft_patch)
+    if draft is None:
+        return finish(state, carried, ports)
+    drafted = apply(state, carried)
+    regated = plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
+    if not plan_route.takes_critic(regated):
+        carried = apply(carried, {"plan_route": {**recorded, "route": regated, "misrouted": True}})
+        return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
+    draft_text = drafted["sections"][name]
+    if spec is INTERVIEW_SOLUTION_PLATFORM:
+        critique, critic_patch = await run_role(
+            drafted, TECH_LEAD_CRITIC_PLATFORM, cfg, ports, cwd=cwd, plan_draft=draft_text
+        )
+    else:
+        critique, critic_patch = await run_role(
+            drafted, TECH_LEAD_CRITIC, cfg, ports, cwd=cwd, plan_draft=draft_text
+        )
+    critic_state: plan_route.CriticState = "ran"
+    if critique is None:
+        critic_patch, stopped = _soft(critic_patch)
+        carried = apply(carried, critic_patch)
+        if stopped:
+            return finish(state, carried, ports)
+        final, written, critic_state = (
+            draft,
+            {"sections": {name: drafted["sections"][name]}},
+            "failed",
+        )
+    else:
+        carried = apply(carried, critic_patch)
+        revision, revised = await _cold_draft(
+            apply(state, carried),
+            spec,
+            cfg,
+            ports,
+            cwd,
+            history,
+            _critic_proposed(critique.data["invariants_proposed"]),
+            resume=draft.session_id or None,
+            extra_input=_critique_input(critique.data["findings"]),
+        )
+        if revision is not None:
+            final, written = revision, revised
+        else:
+            # The draft stands; the failed revision's attempts were paid and are kept.
+            revised, stopped = _soft(revised)
+            carried = apply(carried, revised)
+            if stopped:
+                return finish(state, carried, ports)
+            final, written = draft, {"sections": {name: drafted["sections"][name]}}
+    delivered = _delivered(cfg, final, written, name)
+    route_state: TaskState = {"plan_route": {**recorded, "critic": critic_state}}
+    judged, built_whole = _after_delivery(
+        state, apply(apply(carried, delivered), route_state), part_of, final, history
+    )
     _tell_built_whole(ports, state["id"], part_of, built_whole)
     return finish(state, judged, ports)
+
+
+def _critique_input(findings: list[dict]) -> str:
+    """The critic's findings as the Tech Lead reads them on its one revision."""
+    lines = [
+        "## Plan critic: findings",
+        "",
+        "A critic reviewed your draft in a fresh context. Revise the plan once: fix what is "
+        "blocking, take what is important unless you can say why not, and leave an "
+        "observation if it does not change the plan.",
+        "",
+    ]
+    for number, finding in enumerate(findings, 1):
+        lines.append(f"{number}. [{finding['severity']}] {finding['place']}: {finding['claim']}")
+        if finding.get("evidence"):
+            lines.append(f"   Evidence: {finding['evidence']}")
+    if not findings:
+        lines.append("The critic found nothing it could back; deliver the plan as it stands.")
+    return "\n".join(lines)
+
+
+def _critic_proposed(invariants: list[str]) -> str:
+    """What the critic proposed, for the revision's `{{proposed_invariants}}`: the Tech Lead
+    adopts or rejects each one with a reason, as with the ephemeral's."""
+    listed = "\n".join(f"- {line}" for line in invariants) or "- none"
+    return (
+        "The plan critic proposed these invariants after reading your draft. Adopt or reject "
+        f"each one, with a reason, in the plan:\n\n{listed}"
+    )
 
 
 def _delivered(

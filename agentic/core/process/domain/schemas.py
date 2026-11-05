@@ -208,6 +208,57 @@ class TechAnswers(RoleOutput):
     )
 
 
+class PlanSize(RoleOutput):
+    """The plan sizer's pre-estimate (GH-472): what the issue alone says the task will cost,
+    before any plan exists. It decides the route and is recorded beside the plan's own
+    estimate, which is how the threshold is recalibrated."""
+
+    estimated_cost_usd: float = Field(
+        ge=0,
+        description="The TOTAL cost of the task in USD, from its start to its merge, "
+        "calibrated on the history table in your prompt, from the request alone",
+    )
+    estimated_files: int = Field(
+        ge=0,
+        description="The files the pull request will show as changed: code, tests, ADRs, "
+        "the glossary and generated files all count",
+    )
+
+
+class CritiqueFinding(BaseModel):
+    """One objection of the plan critic, with what backs it (GH-472)."""
+
+    place: str = Field(
+        description="Where in the draft or the code it applies: a subtask id, a plan "
+        "section, or `file:line`"
+    )
+    claim: str = Field(description="What is wrong with the plan, one sentence")
+    evidence: str = Field(
+        description="The command you ran and its output, or the line of the code, the "
+        "standard or the ADR you cite. Empty only on an `observation`"
+    )
+    severity: Severity = Field(
+        description="`blocking`: the plan breaks if it is not fixed. `important`: should be "
+        "fixed. `observation`: a remark, or an objection you could not reproduce"
+    )
+
+
+class PlanCritique(RoleOutput):
+    """The plan critic's one pass over a cold draft (GH-472): findings with evidence and
+    the invariants it claims every subtask must honour. The Tech Lead revises once."""
+
+    findings: list[CritiqueFinding] = Field(
+        description="Every objection to the draft, most severe first. Empty when you found "
+        "none you can back"
+    )
+    invariants_proposed: list[str] = Field(
+        default_factory=list,
+        description="Rules you claim every subtask must honour or the plan breaks. One per "
+        "line, each checkable on one subtask's diff alone. The Tech Lead adopts or rejects "
+        "each one; an empty string if none",
+    )
+
+
 class PlatformAnswers(RoleOutput):
     """One round of the Tech Lead as interviewee on the platform path, where there is no
     definition and no PM to consult (issue #46): what only a person can decide goes

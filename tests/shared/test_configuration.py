@@ -293,13 +293,14 @@ def test_experiment_snapshot_is_empty_on_the_default_path():
     assert experiment_snapshot(cfg, "claude-opus-5") == {}
 
 
-def test_experiment_snapshot_carries_all_three_keys_verbatim_and_in_order():
+def test_experiment_snapshot_carries_all_its_keys_verbatim_and_in_order():
     cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_REVIEW_MODE": "light"})
     snapshot = experiment_snapshot(cfg, "claude-sonnet-5")
-    assert list(snapshot) == ["review_mode", "skip_ephemeral", "reviewer_model"]
+    assert list(snapshot) == ["review_mode", "skip_ephemeral", "plan_review", "reviewer_model"]
     assert snapshot == {
         "review_mode": "light",
         "skip_ephemeral": "False",
+        "plan_review": "interview",
         "reviewer_model": "claude-sonnet-5",
     }
 
@@ -312,6 +313,7 @@ def test_experiment_snapshot_is_non_empty_when_only_skip_ephemeral_moves():
     assert snapshot == {
         "review_mode": "full",
         "skip_ephemeral": "True",
+        "plan_review": "interview",
         "reviewer_model": "claude-opus-5",
     }
 
@@ -319,10 +321,16 @@ def test_experiment_snapshot_is_non_empty_when_only_skip_ephemeral_moves():
 def test_the_switches_have_one_source():
     # `ARM_SWITCHES` is the single source: `EXPERIMENT_KEYS` is derived from it and adds
     # only the free-text `reviewer_model` (GH-470).
-    assert ARM_SWITCHES == ("review_mode", "skip_ephemeral", "plan_shape")
-    # The old three keys keep their positions: `plan_shape` is the fourth, after
+    assert ARM_SWITCHES == ("review_mode", "skip_ephemeral", "plan_review", "plan_shape")
+    # The older keys keep their positions: `plan_shape` is the last, after
     # `reviewer_model`, the order `experiment_snapshot` writes.
-    assert EXPERIMENT_KEYS == ("review_mode", "skip_ephemeral", "reviewer_model", "plan_shape")
+    assert EXPERIMENT_KEYS == (
+        "review_mode",
+        "skip_ephemeral",
+        "plan_review",
+        "reviewer_model",
+        "plan_shape",
+    )
     assert set(EXPERIMENT_KEYS) == {*ARM_SWITCHES, "reviewer_model"}
 
 
@@ -332,29 +340,66 @@ def test_experiment_snapshot_carries_plan_shape_only_when_it_is_not_free():
     assert snapshot == {
         "review_mode": "full",
         "skip_ephemeral": "False",
+        "plan_review": "interview",
         "reviewer_model": "m",
         "plan_shape": "single",
     }
-    assert list(snapshot) == ["review_mode", "skip_ephemeral", "reviewer_model", "plan_shape"]
+    assert list(snapshot) == list(EXPERIMENT_KEYS)
     assert experiment_snapshot(Configuration(product_dir="/tmp/p", plan_shape="free"), "m") == {}
     light = experiment_snapshot(Configuration(product_dir="/tmp/p", review_mode="light"), "m")
     assert "plan_shape" not in light
 
 
-def test_arm_input_is_every_switch_as_a_string():
-    assert arm_input(Configuration(product_dir="/tmp/p")) == {
+def test_plan_review_defaults_to_the_interview_and_the_threshold_to_the_p75():
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.plan_review == "interview"
+    assert cfg.plan_interview_min_usd == 55.0
+    assert experiment_snapshot(cfg, "claude-opus-5") == {}
+
+
+def test_plan_review_critic_snapshots_all_four_keys_in_order():
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_PLAN_REVIEW": "critic"})
+    snapshot = experiment_snapshot(cfg, "m")
+    assert list(snapshot) == ["review_mode", "skip_ephemeral", "plan_review", "reviewer_model"]
+    assert snapshot == {
         "review_mode": "full",
         "skip_ephemeral": "False",
+        "plan_review": "critic",
+        "reviewer_model": "m",
+    }
+
+
+def test_plan_review_rejects_a_value_outside_the_closed_set():
+    with pytest.raises(ValueError):
+        Configuration.from_sources(PRODUCT, {"AGENTIC_PLAN_REVIEW": "both"})
+
+
+def test_the_threshold_must_be_positive():
+    with pytest.raises(ValueError):
+        Configuration.from_sources(PRODUCT, {"AGENTIC_PLAN_INTERVIEW_MIN_USD": "0"})
+
+
+def test_critic_with_skip_ephemeral_is_refused():
+    # The critic reviews a cold draft the interview arm would otherwise question; the
+    # skip-ephemeral arm already is a cold plan, so the two cannot be combined.
+    with pytest.raises(ValueError, match="skip_ephemeral"):
+        Configuration(product_dir="/tmp/p", plan_review="critic", skip_ephemeral=True)
+
+
+def test_arm_input_maps_every_switch_to_its_string():
+    default = Configuration(product_dir="/tmp/p")
+    assert arm_input(default) == {
+        "review_mode": "full",
+        "skip_ephemeral": "False",
+        "plan_review": "interview",
         "plan_shape": "free",
     }
-    moved = Configuration(
-        product_dir="/tmp/p", review_mode="light", skip_ephemeral=True, plan_shape="single"
+    critic = Configuration(
+        product_dir="/tmp/p", review_mode="light", plan_review="critic", plan_shape="single"
     )
-    assert arm_input(moved) == {
-        "review_mode": "light",
-        "skip_ephemeral": "True",
-        "plan_shape": "single",
-    }
+    assert list(arm_input(critic)) == list(ARM_SWITCHES)
+    assert arm_input(critic)["plan_review"] == "critic"
+    assert arm_input(critic)["plan_shape"] == "single"
 
 
 @pytest.mark.parametrize("review_mode", ["full", "light"])
@@ -371,6 +416,7 @@ def test_experiment_snapshot_matches_the_literal_it_wrote_before_the_single_sour
         else {
             "review_mode": review_mode,
             "skip_ephemeral": str(skip_ephemeral),
+            "plan_review": "interview",
             "reviewer_model": "m",
         }
     )

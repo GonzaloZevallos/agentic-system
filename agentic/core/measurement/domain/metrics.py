@@ -38,7 +38,7 @@ from agentic.shared.configuration import ARM_SWITCHES, Configuration
 ARM_KEYS = ARM_SWITCHES
 # The switches a non-default label always names, even at their default (ADR-0030); the
 # ones appended later (`plan_shape`, GH-471) appear only when they moved.
-_ALWAYS_SHOWN = ("review_mode", "skip_ephemeral")
+_ALWAYS_SHOWN = ARM_KEYS[:-1]
 
 # Below this, a residual is floating-point noise (an interview's runs summed in a
 # different order), not money nothing accounted for: `has_residual_sample`'s own
@@ -331,16 +331,19 @@ def arm_label(experiment: Mapping[str, str]) -> str:
     """The canonical form of an `experiment` snapshot (`shared.configuration.
     experiment_snapshot`), the single point that turns it into the `arm` label
     (ADR-0030): `default` when every `ARM_KEYS` switch equals its `Configuration`
-    field default, else `review_mode=<v>,skip_ephemeral=<v>` in `ARM_KEYS` order, one
-    key always beside the other so a reader never has to know which switch a bare
-    `review_mode=light` implies for the one not shown, and `,plan_shape=<v>` after them
-    only when `plan_shape` is not `free` (GH-471), so the label of every older arm is the
-    one it always had. A key missing from `experiment`
-    reads as that field's own default, resolved from `Configuration.model_fields`
-    here and nowhere else -- never from a `"full"`/`"False"` literal, so a default
-    that moves someday moves this function's answer with it, never falls out of step
-    with it. `reviewer_model` is not one of `ARM_KEYS`: it is free text, not an enum,
-    and stays out of the label (ADR-0030) so the label's cardinality stays closed."""
+    field default, else every `_ALWAYS_SHOWN` switch as `key=<v>`, comma-joined in
+    `ARM_KEYS` order (`review_mode=<v>,skip_ephemeral=<v>,plan_review=<v>`), none left out
+    so a reader never has to know which switch a bare `review_mode=light` implies for the
+    ones not shown, and `,plan_shape=<v>` after them only when `plan_shape` is not `free`
+    (GH-471), so the label of every older arm is the one it always had. A key missing from
+    `experiment` reads as that field's own default, resolved from
+    `Configuration.model_fields` here and nowhere else -- never from a literal, so a
+    snapshot or assignment written before a switch existed keeps its old meaning and a
+    default that moves someday moves this function's answer with it. Note (GH-472): a
+    non-default label gains `,plan_review=interview` against one written before that
+    switch existed. `reviewer_model` is not one of `ARM_KEYS`: it is free text, not an
+    enum, and stays out of the label (ADR-0030) so the label's cardinality stays the
+    closed product of the switches."""
     defaults = Configuration.model_fields
     resolved = {key: experiment.get(key, str(defaults[key].default)) for key in ARM_KEYS}
     if all(resolved[key] == str(defaults[key].default) for key in ARM_KEYS):

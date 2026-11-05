@@ -1,6 +1,7 @@
 """`ci.ci_findings`: the system's own findings for a declared CI check that is red on
 the head under review (GH-216). The reviewer never writes these; the code does."""
 
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, ci_findings
 
 HEAD_LINK = "https://github.com/o/r/actions/runs/1/job/10"
@@ -103,3 +104,14 @@ def test_a_base_branch_link_the_reviewer_quoted_is_not_repeated_in_the_observati
     [_, added] = ci_findings(head, master, ("e2e",), [quoted(MASTER_LINK)])
     assert added["severity"] == "observation"
     assert HEAD_LINK in added["evidence"] and MASTER_LINK not in added["evidence"]
+
+
+def test_the_writer_only_appends_so_the_system_rows_are_the_tail_it_added():
+    # GH-511: `rules.appended` attributes rows to the system by this prefix contract.
+    head = report(run("e2e", "FAILURE", HEAD_LINK), run("unit", "FAILURE", MASTER_LINK))
+    before = [quoted("https://github.com/o/r/actions/runs/9/job/90")]
+    out = ci_findings(head, report(run("e2e"), run("unit")), ("e2e", "unit"), before)
+    assert out[: len(before)] == before and len(out) == len(before) + 2
+    assert rules.appended(before, out) == out[1:]
+    # A writer that put its row first would break the attribution: appended says nothing.
+    assert rules.appended(before, [out[1], *before]) == []

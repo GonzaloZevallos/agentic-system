@@ -14,7 +14,7 @@ from agentic.shared.errors import CannotStart
 from tests.fakes import memory_ports
 
 LIGHT = {"review_mode": "light", "skip_ephemeral": "False"}
-LIGHT_LABEL = "review_mode=light,skip_ephemeral=False"
+LIGHT_LABEL = "review_mode=light,skip_ephemeral=False,plan_review=interview"
 
 
 def resolve(sha):

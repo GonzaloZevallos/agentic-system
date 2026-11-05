@@ -66,6 +66,17 @@ affected_fallback:
 # all of `checks`. Read at a task's base, like every key here: it governs from the task after
 # the merge.
 delivery_checks: [tests, lint, format, types]
+# `rerun_checks` (ADR-0066, ADR-0085, GH-479): the failed-tests form of `tests`. The system fills in
+# no `{ids}` token (only `{base}` and `{workers}`), so the form uses pytest's own cache: the tests
+# the last run left red, and with an empty cache (`--last-failed-no-failures none`) nothing runs
+# and pytest exits non-zero, so it never reruns the whole suite. `test_id` reads the node id of
+# pytest's `FAILED <nodeid>` summary line, spaces of a parametrized id included, up to ` - ` or
+# the end of the line. Read at a task's base, like every key here: it governs from the task after
+# the merge.
+rerun_checks:
+  tests:
+    command: uv run pytest -m "not llm" --last-failed --last-failed-no-failures none
+    test_id: '(?m)^FAILED (\S[^\n]*?)(?= - |$)'
 # `check_budgets`: the seconds the `docs` check may take on the full run (GH-365 made the key;
 # GH-400, ADR-0076, sets this value). Measured: one `generate.py` run takes about 63 s idle and
 # 154 s with the machine loaded (eleven pyreverse runs, the import of the CLI and the compile of

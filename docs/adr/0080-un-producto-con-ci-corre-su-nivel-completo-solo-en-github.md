@@ -237,3 +237,45 @@ diciendo `UNKNOWN` más de una hora, así que `conflicts` quedaba en `None`, la 
   (un rechazo no escribe nada) vale para todo otro rechazo.
 - **Fuera de alcance.** `integrate.py` y la fusión de `run_checks` siguen tratando todo fallo de
   `Workspace.merge` como conflicto: es la misma clase de defecto y queda como seguimiento.
+
+## Adenda GH-504: se publica la cabeza antes de despacharla y un checkout caído no es una suite roja
+
+**Contexto.** En GH-479 las tres corridas despachadas (GH-462) fallaron en `actions/checkout` con
+`fatal: remote error: upload-pack: not our ref <sha>`: el sistema despachaba el `ci.yml` de master con
+`sha=<cabeza integrada>`, pero esa cabeza no estaba en ningún ref de GitHub. El nivel completo lo leyó
+como un `check` rojo y lo devolvió dos veces al Developer.
+
+**Decisión.**
+
+- **Se publica antes de despachar.** `full_checks._dispatched_full_checks` llama a
+  `Workspace.publish_dispatch_ref(<checkout de la tarea>, <id>)` antes de cada `dispatch_ci`, en cada
+  intento: el mismo orden que el camino de merge (GH-463). La ref es `rules.ci_dispatch_ref(<id>)`,
+  `refs/agentic-ci-dispatch/<id>`, y nunca va bajo `refs/heads/`: un ref `agentic-ci/**` dispara el
+  evento `push` y correría el `ci.yml` de la propia cabeza no confiable, justo lo que el despacho evita.
+  Esto reemplaza la sugerencia del issue de usar `agentic-ci/<id>`.
+- **Si la publicación falla** (`GitError`) no se despacha nada: `publish_failed`, escalado con clase
+  `ci`, sin devolución. El mensaje nombra la ref de despacho y el sha, no el archivo del workflow.
+- **`full_checks` nunca borra esa ref**, ni al leer el veredicto. Sólo la borra el barrido
+  (`ci_ref_sweep`).
+- **`checkout_failed`.** Valor nuevo de `CiCause`. El adaptador `gh` clasifica el primer paso fallido de
+  cada job con `ci.failed_stage`: `Set up job`, exacto, es `setup`; un nombre que empieza con
+  `Run actions/checkout@` es `checkout`; todo lo demás (incluido `Post Run actions/checkout@…`, un paso
+  que sólo menciona checkout o pasos ilegibles) es `suite`, es decir, rojo. `ci.dispatch_verdict` da
+  `unreachable/checkout_failed` cuando todos los jobs declarados que fallaron lo hicieron en `setup` o
+  `checkout`, junto a la regla de `not_started` y antes de `red`. Es la única fuente de la causa: ningún
+  otro módulo la asigna ni la infiere de texto. Escala con clase `ci`, sin fila de devolución y sin
+  contar contra el par; el mensaje (`_DISPATCH_DETAIL`, que ya no hereda de `_CI_DETAIL`) nombra la
+  etapa, la ref de despacho y el sha, todos datos del sistema.
+
+**Límites conocidos.**
+
+1. **Supuesto no probado contra GitHub real.** El diseño supone que `actions/checkout` con `ref: <sha>`
+   alcanza un commit que sólo está en `refs/agentic-ci-dispatch/`; el camino de merge (GH-463) ya
+   depende de lo mismo. Si es falso, el resultado es un `checkout_failed` explicado que escala con clase
+   `ci` y nunca se le cobra al Developer.
+2. **Nombre del paso de checkout.** Un paso de checkout con un `name:` propio sigue leyéndose rojo.
+3. **Ref compartida con el par del merge.** Si un par de merge de la misma cabeza todavía no pasó su
+   checkout y un `full_checks` vuelve a publicar en ese intervalo, el par se lee `no_verdict`, la puerta
+   rechaza `ci_no_verdict` y el aterrizaje escala una vez con clase `ci`; el humano lo libera
+   (`released_no_verdict`). Se acepta sin guarda: retener la publicación dejaría a `full_checks`
+   esperando una corrida cuyo veredicto quizá no decide nada.

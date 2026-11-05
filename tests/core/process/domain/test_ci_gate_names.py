@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from agentic.core.process.domain import ci, rules
+from agentic.core.process.domain import ci, ci_workflow, rules
 from agentic.core.process.domain.ci import CiCheck, CiVerdict
 from agentic.core.process.domain.rules import CiGate, MergeDecision, MergeFacts
 
@@ -143,3 +143,50 @@ def test_required_paths_missing_gives_the_required_paths_when_none_was_touched()
     required = [".agentic/stack.yaml", "web/app.ts"]
     assert rules.required_paths_missing(required, ["x.py"]) == tuple(required)
     assert rules.required_paths_missing(required, []) == tuple(required)
+
+
+@pytest.mark.parametrize("touched", [["docs/adr/0086-x.md"], ["docs/adr/sub/x.md"]])
+def test_required_paths_missing_a_directory_is_met_by_any_path_under_it(touched):
+    assert rules.required_paths_missing(["docs/adr/"], touched) == ()
+
+
+def test_required_paths_missing_a_met_directory_satisfies_the_plan_beside_an_untouched_file():
+    required = ["web/app.ts", "docs/adr/"]
+    assert rules.required_paths_missing(required, ["docs/adr/0086-x.md"]) == ()
+
+
+@pytest.mark.parametrize(
+    "touched",
+    [
+        ["docs/adrs/x.md"],
+        ["docs/adr.md", "docs/adrfoo"],
+        [],
+    ],
+    ids=["sibling-directory", "prefix-only-files", "no-paths"],
+)
+def test_required_paths_missing_a_directory_is_not_met_by_what_is_not_under_it(touched):
+    assert rules.required_paths_missing(["docs/adr/"], touched) == ("docs/adr/",)
+
+
+def test_required_paths_missing_an_entry_without_the_slash_is_a_file_not_a_directory():
+    assert rules.required_paths_missing(["docs/adr"], ["docs/adr/0086-x.md"]) == ("docs/adr",)
+
+
+def test_required_paths_missing_a_directory_is_not_met_by_a_file_of_the_same_name():
+    assert rules.required_paths_missing(["docs/adr/"], ["docs/adr"]) == ("docs/adr/",)
+
+
+def test_required_paths_missing_a_lone_slash_is_not_a_directory():
+    assert rules.required_paths_missing(["/"], ["a.py"]) == ("/",)
+
+
+def test_required_paths_missing_a_doubled_trailing_slash_is_matched_as_written():
+    assert rules.required_paths_missing(["docs/adr//"], ["docs/adr/x.md"]) == ("docs/adr//",)
+
+
+def test_required_paths_missing_does_not_normalise_entries_so_a_dot_slash_prefix_misses():
+    assert rules.required_paths_missing(["./docs/adr/"], ["docs/adr/x.md"]) == ("./docs/adr/",)
+
+
+def test_touched_workflows_ignores_a_directory_entry():
+    assert ci_workflow.touched_workflows([".github/workflows/"]) == frozenset()

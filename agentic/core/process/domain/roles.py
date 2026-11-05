@@ -36,6 +36,8 @@ from .schemas import (
     FinalValidation,
     InterviewTurn,
     LandingDiagnosis,
+    PlanCritique,
+    PlanSize,
     PlatformAnswers,
     Reflection,
     Review,
@@ -597,6 +599,40 @@ TECH_LEAD_PLATFORM = replace(
     TECH_LEAD, slug="tech_lead_platform", reads=(ORIGINAL, PJM.name, SOLUTION_INTERVIEW)
 )
 
+# The plan_review arm (GH-472, ADR-0086). The sizer reads the request alone and says what the
+# task will cost, before any plan exists; the critic reviews the Tech Lead's cold draft once,
+# adversarially. Neither is an interview seat, and neither writes: the sizer has no tools and
+# the critic only reads. The draft reaches the critic through `{{plan_draft}}`, not through a
+# section, so `reads` names the sections that exist before the draft.
+PLAN_SIZER = Role(
+    name="Plan sizer",
+    slug="plan_sizer",
+    kind="actor",
+    schema=PlanSize,
+    reads=(ORIGINAL,),
+    effort="low",
+    max_turns=2,
+)
+
+TECH_LEAD_CRITIC = Role(
+    name="Plan critic",
+    slug="tech_lead_critic",
+    kind="verifier",
+    # The ephemeral's own asymmetry: a model distinct from the planner's (ADR-0014).
+    model_kind=TECH_LEAD_EPHEMERAL.model_kind,
+    schema=PlanCritique,
+    reads=(ORIGINAL, "PM"),
+    criteria=("engineering", "product"),
+    tools=READ_CODE,
+    allowed=READ_CODE_RULES,
+    skills=("codebase-design", "grilling"),
+    max_turns=12,
+)
+
+TECH_LEAD_CRITIC_PLATFORM = replace(
+    TECH_LEAD_CRITIC, slug="tech_lead_critic_platform", reads=(ORIGINAL, PJM.name)
+)
+
 # The stack review path (ADR-0034, issue #40): the Tech Lead in proactive mode, over a
 # product, with no task behind it at all -- no PjM, no issue, no branch. `replace(...)`
 # of the platform variants, never an edit to them: the diff shows added tuples and zero
@@ -810,6 +846,9 @@ ROLES = (
     TECH_LEAD_STACK,
     TECH_LEAD_REVIEWER,
     TECH_LEAD_REVIEWER_LIGHT,
+    PLAN_SIZER,
+    TECH_LEAD_CRITIC,
+    TECH_LEAD_CRITIC_PLATFORM,
     LANDING_DIAGNOSER,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,

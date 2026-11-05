@@ -116,20 +116,26 @@ async def review(
         return finish(state, patch, ports)
 
     subtask = {**subtask, "reviewed_head": head}
-    reason = output.data["reason"]
     # The landing lowering is first (GH-441): a finding that asks for what only the pull
     # request's CI can give is an observation before any other rule reads its severity.
     findings, landed = rules.lower_landing_blocks(output.data["findings"])
     findings, unbacked = rules.lower_unbacked_blocks(findings)
     lowered = [*landed, *unbacked]
+    own = findings
     if evidence is not None and evidence.head is not None:
         # After the lowering, so the system's own blocking finding, which always carries
         # its run link, is never lowered; the verdict below is derived from the whole list.
         findings = ci.ci_findings(evidence.head, evidence.master, names, findings)
     if subtask_id == rules.reviewed_unit_name(state):
         findings = _required_paths_findings(state, base, head, findings, ports)
+    system = rules.appended(own, findings)
     category = rules.change_category(findings)
-    markdown = rules.review_markdown(category, reason, output.text, lowered)
+    # One rebind, after the verdict: the reason is the returning row's, the system's when
+    # that is the one that blocks (GH-511), and nothing below reads the reviewer's own.
+    reason = rules.verdict_reason(own, system, output.data["reason"])
+    markdown = rules.review_markdown(
+        category, reason, output.text, lowered, rules.system_blocking(system)
+    )
     patch = apply(patch, {"sections": {section: markdown}})
     # Appended, never folded: a sister branch is reviewing at the same time and cannot
     # see this. Whoever builds the next prompt resolves the table (issue #42).
