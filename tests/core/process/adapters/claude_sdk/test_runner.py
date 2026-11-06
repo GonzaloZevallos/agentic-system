@@ -28,6 +28,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from agentic.core.process.adapters.claude_sdk import check_run_log
 from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.hooks import DELIVERY_TOOL
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
@@ -2320,3 +2321,106 @@ async def test_an_unreadable_free_space_does_not_replace_the_failure(monkeypatch
     with pytest.raises(AttemptFailed) as info:
         await run_once(runner, tmp_path)
     assert info.value.space is None
+
+
+# -- a Developer's own check runs (GH-467) ----------------------------------------------
+
+DECLARED_CHECKS = {"lint": "uv run ruff check ."}
+
+
+def _bash(event: str, command: str, **extra) -> dict:
+    return {
+        "hook_event_name": event,
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_use_id": "t1",
+        "cwd": "/repo",
+        **extra,
+    }
+
+
+async def _call_all(options, event: str, payload: dict) -> list:
+    out = []
+    for matcher in options.hooks.get(event, []):
+        if matcher.matcher in (None, payload["tool_name"]):
+            for hook in matcher.hooks:
+                out.append(await hook(payload, "t1", {"signal": None}))
+    return out
+
+
+async def _developer_once(tmp_path, **kwargs):
+    return await make_runner().run_once(
+        DEVELOPER,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
+        declared_checks=DECLARED_CHECKS,
+        now=lambda: "2026-11-06T10:00:00Z",
+        **kwargs,
+    )
+
+
+async def test_a_delivering_attempt_carries_its_check_runs_on_the_raw_result(monkeypatch, tmp_path):
+    async def query(prompt, options):
+        await _call_all(options, "PreToolUse", _bash("PreToolUse", "uv run ruff check ."))
+        await _call_all(options, "PostToolUse", _bash("PostToolUse", "x", tool_response={}))
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await _developer_once(tmp_path)
+    (row,) = raw.check_runs.rows
+    assert (row["command"], row["check"], row["started_at"]) == (
+        "uv run ruff check .",
+        "lint",
+        "2026-11-06T10:00:00Z",
+    )
+    assert raw.check_runs.errors == 0
+
+
+async def test_a_failed_attempt_carries_its_check_runs_on_the_attempt_failed(monkeypatch, tmp_path):
+    async def query(prompt, options):
+        await _call_all(options, "PreToolUse", _bash("PreToolUse", "uv run ruff check ."))
+        yield result(is_error=True, subtype="error_during_execution", structured_output=None)
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await _developer_once(tmp_path)
+    (row,) = info.value.check_runs.rows
+    assert (row["duration_s"], row["exit_code"]) == (None, None)  # never closed
+
+
+async def test_a_matcher_that_raises_neither_stops_the_bash_call_nor_the_delivery(
+    monkeypatch, tmp_path
+):
+    def boom(command, declared):
+        raise RuntimeError("matcher bug")
+
+    monkeypatch.setattr(check_run_log.check_runs, "match", boom)
+    answers: list = []
+
+    async def query(prompt, options):
+        answers.extend(await _call_all(options, "PreToolUse", _bash("PreToolUse", "uv run mypy")))
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await _developer_once(tmp_path)
+    assert all(a == {} for a in answers)
+    assert raw.structured_output == DELIVERY
+    assert raw.check_runs.errors == 1 and raw.check_runs.rows == []
+
+
+async def test_without_declared_checks_no_check_run_hook_is_installed(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    await make_runner().run_once(
+        DEVELOPER,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
+    )
+    assert "PostToolUseFailure" not in seen[0][1].hooks

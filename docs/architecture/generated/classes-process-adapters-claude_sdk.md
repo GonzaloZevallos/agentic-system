@@ -10,6 +10,7 @@ Esta página muestra las clases públicas de los módulos del grupo `claude_sdk`
 
 ```mermaid
 classDiagram
+    class claude_sdk__check_run_log__CheckRunLog["CheckRunLog"]
     class claude_sdk__hooks__HookActivity["HookActivity"]
     class claude_sdk__hooks__TurnCount["TurnCount"]
     class claude_sdk__printer__Printer["Printer"]

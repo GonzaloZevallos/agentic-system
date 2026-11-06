@@ -1905,3 +1905,58 @@ async def test_each_failure_carries_the_instants_its_attempt_began_and_was_caugh
     stamped = [entry["at"] for entry in patch["pause_log"]]
     assert stamped == sorted(stamped) and len(stamped) == 3
     assert stamped[0] > second["ended_at"]
+
+
+ROW = {
+    "command": "uv run ruff check .",
+    "check": "lint",
+    "started_at": "2026-11-06T10:00:00Z",
+    "duration_s": 1.5,
+    "exit_code": 1,
+}
+
+
+async def test_a_failed_attempts_check_runs_are_on_its_failure_and_never_on_the_delivery():
+    from agentic.core.process.application.ports import CheckRuns
+
+    cut = AttemptFailed(
+        "run failed (max_turns)", 0.05, check_runs=CheckRuns(rows=[ROW], dropped=2, errors=1)
+    )
+    delivered_runs = CheckRuns(rows=[{**ROW, "exit_code": 0}], dropped=0, errors=1)
+    runner = ScriptedRunner(pjm=[cut, dataclasses.replace(OK, check_runs=delivered_runs)])
+    out = await run_pjm(runner)
+    failure = out.failures[0]
+    assert failure["check_runs"] == [ROW] and failure["check_runs_dropped"] == 2
+    assert "check_runs_errors" not in failure
+    record = run_record({}, PJM, "PjM", out)
+    assert record["check_runs"] == [{**ROW, "exit_code": 0}]
+    assert record["check_runs_errors"] == 1 and "check_runs_dropped" not in record
+
+
+async def test_a_run_with_no_check_runs_writes_none_of_the_keys():
+    cut = AttemptFailed("run failed (max_turns)", 0.05)
+    out = await run_pjm(ScriptedRunner(pjm=[cut, OK]))
+    assert not {"check_runs", "check_runs_dropped"} & set(out.failures[0])
+    assert not {"check_runs", "check_runs_dropped", "check_runs_errors"} & set(
+        run_record({}, PJM, "PjM", out)
+    )
+
+
+async def test_the_declared_checks_and_the_clock_reach_the_runner():
+    runner = ScriptedRunner(pjm=[OK])
+    await run_with_retry(
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        retries=0,
+        vocabulary={},
+        cwd=Path("."),
+        runner=runner,
+        owner_task="GH-1",
+        declared_checks={"lint": "ruff check ."},
+        now=lambda: "2026-11-06T10:00:00Z",
+    )
+    call = runner.calls[0]
+    assert call["declared_checks"] == {"lint": "ruff check ."}
+    assert call["now"]() == "2026-11-06T10:00:00Z"

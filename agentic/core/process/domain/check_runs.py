@@ -19,11 +19,14 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from .presubmit import RerunForm
+
 # Programs that stand for a thousand unrelated commands: never matched without a second token.
 _GENERIC = frozenset({"git", "python", "python3", "uv", "bash", "sh"})
 _PYTHONS = frozenset({"python", "python3"})
 _DETACHERS = frozenset({"nohup", "setsid"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_PROGRAM = re.compile(r"^[A-Za-z0-9_./~-]")
 _PLACEHOLDER = re.compile(r"^\{[a-z_]+\}$")
 # A declared form of a check is passed as `<name>#<form>` (`tests#affected`); the name is what
 # is recorded.
@@ -95,8 +98,8 @@ def _equal(words: list[str], form: list[str]) -> bool:
 def _prefix(form: list[str]) -> list[str] | None:
     """The program plus its first subcommand or module, None when that is a generic program
     alone."""
-    if not form:
-        return None
+    if not form or not _PROGRAM.match(form[0]):
+        return None  # a subshell or a block (`( uv sync )`) is not a program of its own
     rest = form[1:]
     if form[0] in _PYTHONS and len(rest) >= 2 and rest[0] == "-m":
         return form[:3]
@@ -205,3 +208,19 @@ def _is_redirect(command: str, index: int) -> bool:
     before = command[index - 1] if index else ""
     after = command[index + 1] if index + 1 < len(command) else ""
     return before in "<>" or after == ">"
+
+
+def declared_forms(
+    checks: Mapping[str, str], affected: Mapping[str, str], rerun: Mapping[str, RerunForm]
+) -> dict[str, str]:
+    """The commands `match` is given: every declared check under its name, and its affected
+    and failed-only forms under `<name>#affected` and `<name>#rerun`, so a call that equals a
+    form is recorded as that check (a form of an undeclared check is left out)."""
+    forms = dict(checks)
+    for name, command in affected.items():
+        if name in checks:
+            forms[f"{name}{_FORM_SEPARATOR}affected"] = command
+    for name, form in rerun.items():
+        if name in checks:
+            forms[f"{name}{_FORM_SEPARATOR}rerun"] = form.command
+    return forms

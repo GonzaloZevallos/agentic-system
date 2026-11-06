@@ -17,20 +17,25 @@ graph TD
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
+    m_adapters__claude_sdk__check_run_log["adapters.claude_sdk.check_run_log"]
     m_adapters__claude_sdk__check_server["adapters.claude_sdk.check_server"]
     m_adapters__claude_sdk__hooks["adapters.claude_sdk.hooks"]
     m_adapters__claude_sdk__printer["adapters.claude_sdk.printer"]
     m_adapters__claude_sdk__runner["adapters.claude_sdk.runner"]
     m_adapters__claude_sdk__schema["adapters.claude_sdk.schema"]
+    m_adapters__claude_sdk__check_run_log --> g_pkg__application
+    m_adapters__claude_sdk__check_run_log --> g_pkg__domain
     m_adapters__claude_sdk__check_server --> g_pkg__application
     m_adapters__claude_sdk__check_server --> g_pkg__domain
     m_adapters__claude_sdk__check_server --> m_adapters__claude_sdk__hooks
     m_adapters__claude_sdk__hooks --> g_pkg__application
     m_adapters__claude_sdk__hooks --> g_pkg__domain
+    m_adapters__claude_sdk__hooks --> m_adapters__claude_sdk__check_run_log
     m_adapters__claude_sdk__runner --> g_pkg__adapters
     m_adapters__claude_sdk__runner --> g_pkg__agentic__shared
     m_adapters__claude_sdk__runner --> g_pkg__application
     m_adapters__claude_sdk__runner --> g_pkg__domain
+    m_adapters__claude_sdk__runner --> m_adapters__claude_sdk__check_run_log
     m_adapters__claude_sdk__runner --> m_adapters__claude_sdk__check_server
     m_adapters__claude_sdk__runner --> m_adapters__claude_sdk__hooks
     m_adapters__claude_sdk__runner --> m_adapters__claude_sdk__printer

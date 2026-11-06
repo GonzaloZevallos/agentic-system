@@ -15,6 +15,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__CheckScheduler["CheckScheduler"]
     class ports__CheckTool["CheckTool"]
     class ports__Checkout["Checkout"]
     class ports__CiLogs["CiLogs"]
@@ -28,7 +29,6 @@ classDiagram
     class ports__Grant["Grant"]
     class ports__Inbox["Inbox"]
     class ports__IssueComment["IssueComment"]
-    class ports__IssueRow["IssueRow"]
 ```
 
 ## Relaciones con otras páginas
@@ -37,9 +37,10 @@ classDiagram
   - `reflect_run.SystemRepo` se asocia con `ports.Inbox`
 - [application: support (parte 1)](classes-process-application-support-1.md)
   - `ci_push.PushFailed` hereda de `ports.GitError`
-- [application: support (parte 3)](classes-process-application-support-3.md)
+- [application: support (parte 4)](classes-process-application-support-4.md)
+  - `ports.Ports` se asocia con `ports.CheckScheduler`
   - `ports.Ports` se asocia con `ports.Commands`
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
   - `ports.Ports` se asocia con `ports.Inbox`
-- [application: support (parte 5)](classes-process-application-support-5.md)
+- [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.UnstageablePath` hereda de `ports.GitError`

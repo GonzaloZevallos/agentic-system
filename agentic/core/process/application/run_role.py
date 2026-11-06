@@ -54,7 +54,7 @@ cold prompt inherit it through the same seam instead of a second, silently diver
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -97,7 +97,7 @@ from ..domain.task import (
 )
 from .closed import closed_documents
 from .limits import RunLimits
-from .ports import AttemptFailed, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
+from .ports import AttemptFailed, CheckRuns, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
 from .schema_guard import RoleSchemaGuard
 
 Check = Callable[[dict], None]
@@ -260,6 +260,9 @@ class Output:
     # `run_with_retry`; `None` for an output that never went through it, which
     # `run_record` reads as `role.max_turns`.
     max_turns: int | None = None
+    # The Developer's own check runs in the delivering attempt (`RawResult.check_runs`); the
+    # runs of a failed attempt stay on its `Failure`, never here.
+    check_runs: CheckRuns = field(default_factory=CheckRuns)
 
 
 def context_for(
@@ -454,6 +457,7 @@ async def run_with_retry(
     estimate_stop: Callable[[float], EstimateStop | None] | None = None,
     floor_bytes: int = 0,
     now: Callable[[], str] | None = None,
+    declared_checks: Mapping[str, str] | None = None,
 ) -> Output:
     """`now` is the clock the attempts' instants come from (`Ports.now` in a run; this
     module's own when `None`): `RoleRun.started_at`/`ended_at` and each `Failure`'s own.
@@ -576,6 +580,8 @@ async def run_with_retry(
                     forbidden=forbidden,
                     check_tool=check_tool,
                     max_turns=turns,
+                    declared_checks=declared_checks,
+                    now=clock,
                 )
                 ended_at = clock()
         except AttemptFailed as exc:
@@ -608,6 +614,12 @@ async def run_with_retry(
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
                     **({"reaped": exc.reaped} if exc.reaped else {}),
+                    **({"check_runs": exc.check_runs.rows} if exc.check_runs.rows else {}),
+                    **(
+                        {"check_runs_dropped": exc.check_runs.dropped}
+                        if exc.check_runs.dropped
+                        else {}
+                    ),
                     **({"resets_at": resets_at.isoformat()} if resets_at else {}),
                 }
             )
@@ -730,6 +742,8 @@ async def _attempt(
     forbidden: Sequence[Forbidden] | None = None,
     check_tool: CheckTool | None = None,
     max_turns: int | None = None,
+    declared_checks: Mapping[str, str] | None = None,
+    now: Callable[[], str] | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -746,6 +760,8 @@ async def _attempt(
         forbidden=forbidden,
         check_tool=check_tool,
         max_turns=max_turns,
+        declared_checks=declared_checks,
+        now=now,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -761,6 +777,7 @@ async def _attempt(
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
             reaped=result.reaped,
+            check_runs=result.check_runs,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -777,6 +794,7 @@ async def _attempt(
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
             reaped=result.reaped,
+            check_runs=result.check_runs,
         ) from exc
     if check is not None:
         try:
@@ -794,6 +812,7 @@ async def _attempt(
                 presubmit_denials=result.presubmit_denials,
                 main_thread_turns=result.main_thread_turns,
                 reaped=result.reaped,
+                check_runs=result.check_runs,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -809,6 +828,7 @@ async def _attempt(
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
             reaped=result.reaped,
+            check_runs=result.check_runs,
         )
     return Output(
         text=text,
@@ -829,6 +849,7 @@ async def _attempt(
         presubmit_denials=result.presubmit_denials,
         main_thread_turns=result.main_thread_turns,
         reaped=result.reaped,
+        check_runs=result.check_runs,
     )
 
 
@@ -921,6 +942,9 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "presubmit_denials": output.presubmit_denials,
         "main_thread_turns": output.main_thread_turns,
         **({"reaped": output.reaped} if output.reaped else {}),
+        **({"check_runs": output.check_runs.rows} if output.check_runs.rows else {}),
+        **({"check_runs_dropped": output.check_runs.dropped} if output.check_runs.dropped else {}),
+        **({"check_runs_errors": output.check_runs.errors} if output.check_runs.errors else {}),
     }
 
 
@@ -1008,6 +1032,7 @@ async def run_role(
     check_tool: CheckTool | None = None,
     tiers: str = "",
     extra_input: str = "",
+    declared_checks: Mapping[str, str] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -1093,6 +1118,7 @@ async def run_role(
             estimate_stop=lambda total: estimate_stop_for(state, role, total, ports),
             floor_bytes=cfg.scratch_floor_bytes,
             now=ports.now,
+            declared_checks=declared_checks,
         )
     except Escalating as exc:
         # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already
