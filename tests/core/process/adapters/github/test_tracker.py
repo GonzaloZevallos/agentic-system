@@ -1957,3 +1957,51 @@ def test_a_run_id_that_is_not_digits_is_refused_before_any_gh_call(run_id):
     run = Recorder(stdout="")
     assert GhTracker(Path("/p"), run).rerun_ci_run(run_id) == CiUnreadable("dispatch_refused")
     assert run.calls == []
+
+
+# -- the instants of a check run and of a dispatched job (GH-467) --------------------------------
+
+
+def test_the_rollup_asks_for_the_times_of_a_check_run_and_reads_them_when_given():
+    timed = {
+        **_run_node("web", "COMPLETED", "SUCCESS"),
+        "startedAt": "2026-11-06T10:00:20Z",
+        "completedAt": "2026-11-06T10:03:20Z",
+    }
+    status = {"__typename": "StatusContext", "context": "ci/legacy", "state": "SUCCESS"}
+    run = Recorder(stdout=_graphql([timed, _run_node("e2e", "QUEUED", None), status]))
+    report = GhTracker(Path("/p"), run).ci_report(PR)
+    assert isinstance(report, CiReport)
+    web, e2e, legacy = report.checks
+    assert (web.started_at, web.completed_at) == ("2026-11-06T10:00:20Z", "2026-11-06T10:03:20Z")
+    # A node without times, and a commit status, which has none: unknown, never an error.
+    assert (e2e.started_at, e2e.completed_at) == (None, None)
+    assert (legacy.started_at, legacy.completed_at) == (None, None)
+    query = next(arg for arg in run.calls[0] if "statusCheckRollup" in arg)
+    assert "startedAt completedAt" in query
+
+
+def test_a_dispatched_job_carries_its_times_and_gh_s_zero_value_reads_as_unknown():
+    jobs = _dispatched_jobs(
+        {
+            "name": "unit",
+            "status": "completed",
+            "conclusion": "success",
+            "url": "u/unit",
+            "startedAt": "2026-11-06T10:00:20Z",
+            "completedAt": "2026-11-06T10:03:20Z",
+        },
+        {
+            "name": "web",
+            "status": "in_progress",
+            "conclusion": "",
+            "url": "u/web",
+            "startedAt": "2026-11-06T10:00:30Z",
+            "completedAt": "0001-01-01T00:00:00Z",
+        },
+        {"name": "old", "status": "completed", "conclusion": "success", "url": "u/old"},
+    )
+    unit, web, old = jobs
+    assert (unit.started_at, unit.completed_at) == ("2026-11-06T10:00:20Z", "2026-11-06T10:03:20Z")
+    assert (web.started_at, web.completed_at) == ("2026-11-06T10:00:30Z", None)
+    assert (old.started_at, old.completed_at) == (None, None)
