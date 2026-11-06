@@ -128,6 +128,7 @@ class EvaluationWorkspace:
             "branch_head",
             "branches",
             "build_slice",
+            "changed_lines",
             "changed_paths",
             "checkout_names",
             "checkout_path",

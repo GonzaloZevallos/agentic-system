@@ -1031,3 +1031,28 @@ def test_resuming_an_orphan_from_its_document_drops_needs_human(cfg):
     assert not r.interrupted
     resume.announce(r, ports)
     assert ports.tracker.unlabeled == [("GH-12", "needs-human")]
+
+
+def test_the_task_cap_of_a_resume_leaves_the_shadow_reviews_cost_out(cfg):
+    # 106.27 spent, 30 of it by shadow reviews (GH-473): 76.27 against a cap of 100 resumes,
+    # where the gross figure would refuse; without the shadow cost the same task is refused.
+    capped = Configuration(product_dir="/tmp/p", task_max_budget_usd=100.0)
+    shadow = {"subtask": "a", "head": "h", "status": "ran", "cost_usd": 30.0, "findings": []}
+    r = resume.prepare(
+        "GH-12",
+        stopped_at_the_estimate(shadow_reviews=[shadow]),
+        "checkpoint",
+        capped,
+        decided("Go on."),
+        estimate=200.0,
+    )
+    assert r.target is not None
+    with pytest.raises(ValueError, match="task cap in force"):
+        resume.prepare(
+            "GH-12",
+            stopped_at_the_estimate(),
+            "checkpoint",
+            capped,
+            decided("Go on."),
+            estimate=200.0,
+        )

@@ -33,6 +33,8 @@ LOGS_DIR = Path(".agentic/logs")
 
 _BOARD_PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[1-9][0-9]*")
 RoleKind = Literal["actor", "verifier"]
+# The review-arm switch's values (issue #28, GH-473): `full` is today's path.
+ReviewMode = Literal["full", "light", "single"]
 # What `max_parallel_subtasks` resolves to when unset, before the role-slot cap (GH-364).
 DEFAULT_PARALLEL_SUBTASKS = 4
 
@@ -147,7 +149,14 @@ class Configuration(BaseModel):
     # the field and reads it back into `experiment_snapshot` below for the record.
     # Both new fields reproduce today's path at their default; no module but the two
     # arms and `experiment_snapshot` reads either one.
-    review_mode: Literal["full", "light"] = "full"
+    review_mode: ReviewMode = "full"
+    # The `single` arm's shadow (GH-473): how long the integration's review node waits for
+    # the shadow reviews after the single review returns (seconds), and how many shadows run
+    # at once, bounded further by `rules.shadow_slots`. Neither is an arm switch, so neither
+    # enters `experiment_snapshot` nor a prompt hash; no validator relates `shadow_parallel`
+    # to `max_concurrent_roles`.
+    shadow_grace_s: int = Field(default=180, ge=0)
+    shadow_parallel: int = Field(default=2, ge=1)
     # The ephemeral-arm switch (issue #28): whether the solution stage's interview is
     # skipped. `False` is today's path; the ephemeral-arm subtask is the only other
     # reader.

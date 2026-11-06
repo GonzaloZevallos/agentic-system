@@ -1245,6 +1245,12 @@ class Workspace(Protocol):
         pull request changes against the commit it branched from. Raises `GitError`."""
         ...
 
+    def changed_lines(self, base: str, head: str) -> int:
+        """The lines added plus the lines deleted between `base` and `head`
+        (`git diff --numstat --no-renames <base>...<head>`, GH-473): how big a subtask's
+        change is. A binary file counts as 0. Raises `GitError`."""
+        ...
+
     def introduced_paths(
         self, path: Path, base: str, head: str, against: str | None
     ) -> tuple[str, ...]:

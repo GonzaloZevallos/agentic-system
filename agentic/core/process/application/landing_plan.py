@@ -476,7 +476,7 @@ def _owner_release(
         return _unreleased("waiting_on_human")
     if issue.state != "OPEN" or issue.labels is None or NEEDS_HUMAN in issue.labels:
         return _unreleased("waiting_on_human")
-    if rules.task_spent(raw) >= task_cap(cfg):
+    if rules.cost_without_shadow(rules.task_spent(raw), raw) >= task_cap(cfg):
         return _unreleased("task_cap")
     return Release(decision, "released", True)
 

@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
-from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
+from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
 from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
@@ -509,6 +509,42 @@ def settled_on_approval(
                 "version": version,
             }
     return list(rows.values())
+
+
+def system_approves(state: TaskState, subtask_id: str, mode: ReviewMode) -> bool:
+    """Whether the system approves `subtask_id`'s branch without a review (GH-473): the
+    `single` arm, a subtask that is not the integration, and a task with more than one
+    non-integration subtask (a lone subtask is the reviewed unit and is reviewed). The mode
+    is a parameter: the rule never reads the configuration."""
+    if mode != "single" or subtask_id == INTEGRATION:
+        return False
+    return sum(1 for name in state.get("subtasks", {}) if name != INTEGRATION) > 1
+
+
+def approval_patch(
+    state: TaskState,
+    subtask_id: str,
+    subtask: Subtask,
+    version: int,
+    findings: list[dict[str, Any]],
+    head: str,
+) -> dict[str, Any]:
+    """The patch of an approval of `subtask_id` at `version`, the reviewer's and the system's
+    alike (GH-473): the rows it settles, `status: approved` and the head it covers. A subtask
+    that carried an open return from another verifier (`returned_by` set) also drops that
+    return's fields, so no later reader takes it as still returned; every other subtask is
+    written exactly as an approval always was. A plain patch, not a full `TaskState` (see
+    `resumed`)."""
+    approved: Subtask = {**subtask, "reviewed_head": head, "status": "approved"}
+    if subtask.get("returned_by"):
+        approved.pop("returned_by", None)
+        approved.pop("returned_with", None)
+        approved.pop("reason", None)
+        approved.pop("change_category", None)
+    return {
+        "approval_settled": settled_on_approval(state, subtask_id, version, findings),
+        "subtasks": {subtask_id: approved},
+    }
 
 
 def _norm(text: str) -> str:
@@ -2220,6 +2256,21 @@ def task_spent(state: Mapping[str, object]) -> float:
     )
 
 
+def shadow_cost(state: Mapping[str, Any]) -> float:
+    """What the shadow reviews of the task spent (GH-473): the sum of the `cost_usd` of its
+    `shadow_reviews`, `0.0` for a task with none -- every task not under `review_mode`
+    `single`."""
+    return float(sum(r["cost_usd"] for r in state.get("shadow_reviews") or []))
+
+
+def cost_without_shadow(spent_usd: float, state: Mapping[str, Any]) -> float:
+    """`spent_usd` less what the task's shadow reviews cost, never below zero: the figure
+    every cap decision reads (the task cap and the estimate cap), so a shadow, which blocks
+    nothing, can never stop the task. `task_spent`, the board and the scorecard keep the
+    gross cost."""
+    return max(spent_usd - shadow_cost(state), 0.0)
+
+
 def cap_reached(role_name: str, spent_usd: float, cap_usd: float) -> str:
     return f"{role_name} stopped by the task cap: {spent_usd:.2f} of {cap_usd:.2f} USD spent"
 
@@ -2609,12 +2660,82 @@ def _failed_names(record: FullChecksRecord) -> list[str]:
     return names or [record.get("failed_step") or "checks"]
 
 
-def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -> dict[str, Any]:
+def full_checks_pair(target: str, mode: ReviewMode) -> Pair:
+    """The pair a red `full_checks` run of `target` counts its return on (GH-473). Under
+    `single` it is its own, `Tech Lead→Developer:<target>-full_checks`, so the integration's
+    two review rounds (`pair_for(INTEGRATION)`) are not spent by the suite; under `full` and
+    `light` it is `pair_for(target)`, as it always was. The one place that builds the key:
+    the return, the limit text and the resume's reset all read it from here."""
+    if mode == "single":
+        return Pair(by=TECH_LEAD, to=DEVELOPER, subtask=f"{target}-full_checks")
+    return pair_for(target)
+
+
+def shadow_slots(shadow_parallel: int, max_concurrent_roles: int) -> int:
+    """How many shadow reviews may run at once (GH-473): `shadow_parallel`, but always one
+    role slot short of the run's, so a shadow never starves the roles that decide. Zero when
+    the run has one slot or fewer; no combination of the two settings is invalid."""
+    return max(0, min(shadow_parallel, max_concurrent_roles - 1))
+
+
+_LINE_SUFFIX = re.compile(r"(:\d+(-\d+)?|#L\d+(-L?\d+)?)+$")
+
+
+def finding_file(location: str) -> str | None:
+    """The repo-relative file a finding's `location` points at, or `None` (GH-473): the text
+    before a `:<line>[-<line>]` or `#L<line>` suffix, with a leading `./` dropped. A location
+    that names no file -- a prose phrase, an absolute path, a `..` climb, a URL, a name with no
+    extension, a copy row's identifier -- yields `None`, so a shadow finding there is counted
+    `unlocated`, never `missed`. Pure, from the structured field alone."""
+    candidate = _LINE_SUFFIX.sub("", location.strip()).removeprefix("./")
+    if (
+        not candidate
+        or re.search(r"\s", candidate)
+        or candidate.startswith(("/", "~"))
+        or "://" in candidate
+        or ":" in candidate
+        or ".." in candidate.split("/")
+        or copy_location_parts(location) is not None
+    ):
+        return None
+    return candidate if "." in candidate.rsplit("/", 1)[-1].strip(".") else None
+
+
+def category_family(category: str) -> str:
+    """The family of a finding category: what precedes its first dash (`standard`, `spec`,
+    `process`, `plan`, `integration`). Two reviewers rarely pick the same member of a family
+    for one defect, so the match is by family."""
+    return category.partition("-")[0]
+
+
+ShadowMatch = Literal["matched", "missed", "unlocated"]
+
+
+def shadow_match(
+    shadow_finding: Mapping[str, Any], single_findings: Sequence[Mapping[str, Any]]
+) -> ShadowMatch:
+    """Whether the single review raised what a shadow finding did (GH-473), decided from
+    structured fields only: `finding_file` of the `location` and the `category` family. No
+    file on the shadow finding is `unlocated`; a finding of the single review on the same file
+    and in the same family is `matched`; otherwise `missed`. Never reads a claim or evidence."""
+    file = finding_file(shadow_finding["location"])
+    if file is None:
+        return "unlocated"
+    family = category_family(shadow_finding["category"])
+    for found in single_findings:
+        if finding_file(found["location"]) == file and category_family(found["category"]) == family:
+            return "matched"
+    return "missed"
+
+
+def full_checks_return(
+    state: TaskState, record: FullChecksRecord, limit: int, *, mode: ReviewMode = "full"
+) -> dict[str, Any]:
     """The patch of a red `full_checks` run (GH-358), modelled on QA Performance's return:
     the integration (the single subtask when there is none) reopens with `returned_by:
     "full_checks"`, one blocking `plan` row per failed check at `full_checks:<check>` with a
-    fixed claim, and the return counts on `pair_for(target)`; at its limit the same patch
-    escalates as a pair at its limit. The record travels with it, so the state and the
+    fixed claim, and the return counts on `full_checks_pair(target, mode)`; at its limit the
+    same patch escalates as a pair at its limit. The record travels with it, so the state and the
     document hold the run the rows came from. A deferred row (GH-453) is not a failure: a
     record whose only non-passing rows are deferred is a passed one, and its patch holds the
     record alone, with no return, no finding and no change of status."""
@@ -2649,7 +2770,7 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
             for name in names
         ],
     }
-    pair = pair_for(target)
+    pair = full_checks_pair(target, mode)
     if remaining_changes(state, pair, limit) > 0:
         patch["changes_requested"] = record_return(state, pair)
         patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]
@@ -5964,10 +6085,11 @@ def estimate_in_force(state: Mapping[str, Any]) -> float | None:
 
 
 def estimate_cap_reached(spent_usd: float, state: Mapping[str, Any]) -> bool:
-    """Whether what the task spent reached the safety cap of its estimate in force. A task
-    with no estimate (a document from before them) has no such cap: it never stops here."""
+    """Whether what the task spent reached the safety cap of its estimate in force, its
+    shadow reviews' cost left out (`cost_without_shadow`). A task with no estimate (a
+    document from before them) has no such cap: it never stops here."""
     estimate = estimate_in_force(state)
-    return estimate is not None and spent_usd >= estimate_cap(estimate)
+    return estimate is not None and cost_without_shadow(spent_usd, state) >= estimate_cap(estimate)
 
 
 def estimate_to_cover(spent_usd: float) -> float:

@@ -950,6 +950,9 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # GH-473: what `changed_lines` answers, and each call.
+        self.diff_lines = 0
+        self.line_reads: list[tuple[str, str]] = []
         # GH-420: what `introduced_paths` answers (or raises as a `GitError`), each ask as
         # (base, head, against), and the sha `fetched_upstream` reads (None: no upstream).
         self.introduced: tuple[str, ...] = ()
@@ -1358,6 +1361,10 @@ class MemoryWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
+
+    def changed_lines(self, base: str, head: str) -> int:
+        self.line_reads.append((base, head))
+        return self.diff_lines
 
     def introduced_paths(
         self, path: Path, base: str, head: str, against: str | None
