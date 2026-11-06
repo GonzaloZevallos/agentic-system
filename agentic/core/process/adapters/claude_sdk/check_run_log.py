@@ -11,12 +11,13 @@ Nothing recorded here reaches a hook's return value, and nothing raises out of i
 exception is swallowed and counted in `errors`, so a bug in the recording is a number in the
 document and never a Bash call the model could not make.
 
-Exit codes. `PostToolUse` carries the code only when the tool response has one. The payload
-the SDK passes for a Bash call that exited 0 carries none, and a non-zero exit never reaches
-`PostToolUse` (it arrives as `PostToolUseFailure`, with `Exit code N` in `error`); that was
-probed with `EXIT_ZERO_PROBED_WITH`, so a `PostToolUse` without a code reads as 0 only on
-that version and as unknown on any other. A detached call, or one whose status a pipe or a
-later chained segment decides, has no code of its own: `None`, never a guessed 0.
+Exit codes. `PostToolUse` carries the code only when the tool response has one. The SDK's
+types say a failing Bash call arrives as `PostToolUseFailure` (`Exit code N` in `error`), but
+whether a `PostToolUse` without a code means "exited 0" has NOT been probed: the attempt to
+probe it (GH-521) was refused by the CLI in the build environment ("Prompt is too long").
+Until `EXIT_ZERO_PROBED_WITH` names an SDK version that a real probe confirmed, a
+`PostToolUse` without a code is `exit_code: None`, never a guessed 0. A detached call, or one
+whose status a pipe or a later chained segment decides, has no code of its own: `None`.
 """
 
 from __future__ import annotations
@@ -36,9 +37,11 @@ from ...domain.task import CheckRun
 
 __all__ = ["EXIT_ZERO_PROBED_WITH", "KEEP", "CheckRunLog", "CheckRuns"]
 
-# The `claude-agent-sdk` version a `PostToolUse` of a Bash call without an exit code was
-# probed to mean "exited 0" on (the non-zero exits arrive as `PostToolUseFailure`).
-EXIT_ZERO_PROBED_WITH = "0.2.159"
+# The `claude-agent-sdk` version a probe confirmed that a `PostToolUse` of a Bash call without
+# an exit code means "exited 0". `None`: no probe has been run, so no version qualifies. Set it
+# to the probed version, with the probe's command and output in the task, to turn the
+# inference on for that version only.
+EXIT_ZERO_PROBED_WITH: str | None = None
 # The rows kept per attempt; the older ones are counted in `CheckRuns.dropped`.
 KEEP = 50
 # What ADR-0008 allows a command in the document: scrubbed and bounded.
@@ -160,7 +163,8 @@ class CheckRunLog:
                 value = response.get(key)
                 if isinstance(value, int) and not isinstance(value, bool):
                     return value
-        return 0 if self._version == EXIT_ZERO_PROBED_WITH else None
+        probed = EXIT_ZERO_PROBED_WITH
+        return 0 if probed is not None and self._version == probed else None
 
 
 def _call_id(data: HookInput, tool_use_id: str | None) -> str | None:

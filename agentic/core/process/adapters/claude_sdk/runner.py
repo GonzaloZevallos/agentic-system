@@ -60,7 +60,6 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
@@ -354,8 +353,8 @@ class ClaudeSdkRunner:
         token = uuid.uuid4().hex
         hooks = HookActivity(self.clock)
         runs = (
-            CheckRunLog(declared_checks, self.clock, now or _utc_now)
-            if declared_checks and role.executes
+            CheckRunLog(declared_checks, self.clock, now)
+            if declared_checks and role.executes and now is not None
             else None
         )
         # Opened before the session and closed after the reap, so the directory outlives
@@ -779,11 +778,6 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
-
-
-def _utc_now() -> str:
-    """The runner's own stamp for a check run when no `Now` was injected: ISO-8601 UTC."""
-    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def _opened(

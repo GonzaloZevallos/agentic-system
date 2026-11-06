@@ -551,7 +551,16 @@ class Clock:
         return f"2026-11-06T10:00:0{self.stamps}Z"
 
 
-def check_log(version: str = check_run_log.EXIT_ZERO_PROBED_WITH, **kwargs):
+PROBED = "0.2.159"
+
+
+@pytest.fixture
+def probed(monkeypatch):
+    """A probe that confirmed the inferred zero for `PROBED`; the shipped constant has none."""
+    monkeypatch.setattr(check_run_log, "EXIT_ZERO_PROBED_WITH", PROBED)
+
+
+def check_log(version: str = PROBED, **kwargs):
     clock = Clock()
     return check_run_log.CheckRunLog(
         kwargs.pop("declared", DECLARED), clock.monotonic, clock.now, sdk_version=version
@@ -577,7 +586,7 @@ async def run_bash(matchers, command, after="PostToolUse", call_id="t1", **post)
     return outputs
 
 
-async def test_a_declared_check_is_recorded_with_its_duration_and_the_probed_zero():
+async def test_a_declared_check_is_recorded_with_its_duration_and_the_probed_zero(probed):
     log = check_log()
     matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
     outputs = await run_bash(matchers, "FOO=secret uv run ruff check .", tool_response={})
@@ -592,7 +601,7 @@ async def test_a_declared_check_is_recorded_with_its_duration_and_the_probed_zer
     }
 
 
-async def test_an_inferred_zero_is_only_trusted_for_the_probed_sdk_version():
+async def test_an_inferred_zero_is_only_trusted_for_the_probed_sdk_version(probed):
     log = check_log(version="9.9.9")
     matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
     await run_bash(matchers, "uv run ruff check .", tool_response={"stdout": "ok"})
@@ -717,3 +726,12 @@ def test_the_closing_matchers_are_installed_only_with_a_log_for_a_role_that_exec
     installed = hooks.hooks_for(DEVELOPER, CWD, None, runs=check_log())
     assert [m.matcher for m in installed["PostToolUseFailure"]] == ["Bash"]
     assert "Bash" in [m.matcher for m in installed["PostToolUse"]]
+
+
+async def test_with_no_probe_evidence_a_call_without_a_code_never_reads_as_zero():
+    assert check_run_log.EXIT_ZERO_PROBED_WITH is None
+    log = check_run_log.CheckRunLog(DECLARED, Clock().monotonic, Clock().now)  # installed SDK
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(matchers, "uv run ruff check .", tool_response={})
+    (row,) = log.snapshot().rows
+    assert (row["duration_s"], row["exit_code"]) == (2.5, None)

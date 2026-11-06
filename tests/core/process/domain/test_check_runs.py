@@ -101,3 +101,9 @@ def test_declared_forms_names_the_affected_and_rerun_forms_of_a_declared_check_o
         "tests#affected": "uv run python scripts/affected_tests.py {base}",
         "tests#rerun": "uv run pytest --lf",
     }
+
+
+def test_a_subshell_form_is_never_a_prefix_so_it_matches_nothing():
+    subshell = {"docs": "(\nuv run python scripts/docs/generate.py\n)"}
+    assert check_runs.match("( uv sync )", subshell) is None
+    assert check_runs.match("uv sync", subshell) is None

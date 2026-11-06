@@ -26,6 +26,7 @@ _GENERIC = frozenset({"git", "python", "python3", "uv", "bash", "sh"})
 _PYTHONS = frozenset({"python", "python3"})
 _DETACHERS = frozenset({"nohup", "setsid"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_PROGRAM = re.compile(r"^[A-Za-z0-9_./~-]")
 _PLACEHOLDER = re.compile(r"^\{[a-z_]+\}$")
 # A declared form of a check is passed as `<name>#<form>` (`tests#affected`); the name is what
 # is recorded.
@@ -97,8 +98,8 @@ def _equal(words: list[str], form: list[str]) -> bool:
 def _prefix(form: list[str]) -> list[str] | None:
     """The program plus its first subcommand or module, None when that is a generic program
     alone."""
-    if not form:
-        return None
+    if not form or not _PROGRAM.match(form[0]):
+        return None  # a subshell or a block (`( uv sync )`) is not a program of its own
     rest = form[1:]
     if form[0] in _PYTHONS and len(rest) >= 2 and rest[0] == "-m":
         return form[:3]

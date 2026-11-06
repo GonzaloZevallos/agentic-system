@@ -291,7 +291,7 @@ class RoleRunner(Protocol):
     attempt (`rules.retry_turns`, GH-449): `None` is `role.max_turns`. `declared_checks`
     are the product's checks by name (a rerun or affected form under `<name>#<form>`): with
     them, a role that executes has its own Bash calls that run one noted as `check_runs`
-    (GH-467); `now` stamps each one's start (`None` is the runner's own UTC clock).
+    (GH-467); `now` stamps each one's start (without it nothing is recorded).
 
     `owner_task` is the parent task's id, never a subtask's (GH-282, ADR-0052): the mark
     every process of this attempt carries, so its leftovers can be found and stopped when
