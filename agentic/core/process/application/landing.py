@@ -134,7 +134,7 @@ def _land(
         ports, task_id, loaded
     ):
         return _refused(task_id, loaded, run_kind, "recovery", None, log)
-    raw: TaskState = _freed(task_id, loaded, ports, log)
+    raw: TaskState = _freed(task_id, loaded, ports, log, clock)
     reference = raw["pull_request"]
     recovered = _recover(
         task_id, raw, str(reference), ports, log, clock, resume, run_kind, await_resume
@@ -457,7 +457,9 @@ def _refused(
     return LandResult("skipped", "run_kind_mismatch")
 
 
-def _freed(task_id: str, loaded: Any, ports: Ports, log: Callable[[str], None]) -> TaskState:
+def _freed(
+    task_id: str, loaded: Any, ports: Ports, log: Callable[[str], None], clock: Callable[[], str]
+) -> TaskState:
     """A stranded legacy diagnose (`landing_rules.stranded_diagnose`, GH-257) is freed with
     one `record_closure` call and read again; any other document, or one a comment says a
     human was told of, is returned as it is. The comments are read only for a document
@@ -465,7 +467,7 @@ def _freed(task_id: str, loaded: Any, ports: Ports, log: Callable[[str], None]) 
     document: TaskState = loaded
     if not landing_plan.stranded_now(ports, task_id, document):
         return document
-    ports.documents.record_closure(task_id, landing_rules.migration(document))
+    ports.documents.record_closure(task_id, landing_rules.migration(document, clock()))
     log(f"agentic: land: {task_id}: stranded diagnosis freed, retrying on the calendar")
     freed: Any = ports.documents.load(task_id)
     again: TaskState = freed if freed is not None else document

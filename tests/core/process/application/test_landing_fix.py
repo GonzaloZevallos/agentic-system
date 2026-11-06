@@ -1225,7 +1225,7 @@ def _stranded_ports(**over):
 def _window():
     """When the freed diagnosis is due, read off the shared calendar from the fixture's own
     last diagnose `at`; the tests stand a minute either side of it, never on its edge."""
-    freed = {**_REAL, **landing_rules.migration(_REAL)}
+    freed = {**_REAL, **landing_rules.migration(_REAL, LAST_AT.isoformat())}
     reason = freed["landing"][-1]["failure"]
     count = len(landing_rules.diagnose_attempts(freed))
     limit = rules.auto_resume_limit(landing_rules._landing_view(freed), reason)
@@ -1252,7 +1252,9 @@ def test_land_frees_a_stranded_diagnose_in_one_write_and_keeps_the_cost(tmp_path
     doc = _doc(ports)
     assert doc["status"] == "ready_for_review"
     assert not doc["escalated"] and not doc["escalation_class"]
-    assert doc["pause_log"] == [*before["pause_log"], {"kind": "resumed"}]
+    assert doc["pause_log"][:-1] == before["pause_log"]
+    assert doc["pause_log"][-1]["kind"] == "resumed"
+    assert isinstance(doc["pause_log"][-1]["at"], str)  # stamped from the land's own clock
     assert rules.auto_resumable(doc) is None
     assert doc["cost_usd"] == _REAL["cost_usd"]
     assert [e["failure"] for e in _diagnoses(ports)] == ["account_limit"]
@@ -1283,8 +1285,8 @@ def test_a_second_land_does_not_migrate_again(tmp_path):
     _land_at(ports, tmp_path, LAST_AT)
 
     assert ports.documents.closures["GH-5"] == first
-    resumed = _REAL["pause_log"].count({"kind": "resumed"})
-    assert _doc(ports)["pause_log"].count({"kind": "resumed"}) == resumed + 1
+    resumed = [e for e in _REAL["pause_log"] if e["kind"] == "resumed"]
+    assert len([e for e in _doc(ports)["pause_log"] if e["kind"] == "resumed"]) == len(resumed) + 1
 
 
 def test_an_escalated_comment_older_than_the_entry_does_not_keep_it_escalated(tmp_path):
@@ -1615,7 +1617,8 @@ def test_a_human_answer_releases_the_escalated_diagnose_and_the_role_reads_it(tm
     assert "keep this plan" in prompt  # the other sections reach the role too
     assert doc["sections"]["Tech Lead"] == "keep this plan"  # the other sections survive
     assert not doc.get("escalated") and not doc.get("escalation_class")
-    assert doc["pause_log"][-1] == {"kind": "resumed"}
+    assert doc["pause_log"][-1]["kind"] == "resumed"
+    assert doc["pause_log"][-1]["at"] == "2026-10-14T02:00:00+00:00"  # the release's own instant
     assert sum(entry["kind"] == "resumed" for entry in doc["pause_log"]) == 1
     assert [e.get("released_at") for e in _diagnoses(ports)][0] == LATER.isoformat()
     assert any("escalation released by a human decision" in line for line in lines)

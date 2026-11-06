@@ -16,6 +16,7 @@ from .presubmit import FAILED_IDS_MAX
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import CiCause as CiCause
+from .task import CiTiming as CiTiming
 from .task import FallbackCause as FallbackCause
 from .task import FlakeGate, FlakeRecord
 from .task import JobLogCause as JobLogCause

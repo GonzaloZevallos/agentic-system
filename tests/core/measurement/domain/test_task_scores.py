@@ -362,6 +362,17 @@ def test_escalations_count_by_class_from_the_pause_log_only():
     }
 
 
+def test_escalations_score_the_same_with_and_without_at():
+    bare = [
+        {"kind": "escalation", "value": "returns"},
+        {"kind": "failure", "value": "schema", "section": "x"},
+        {"kind": "resumed"},
+        {"kind": "escalation", "value": "cap"},
+    ]
+    stamped = [{**e, "at": "2026-11-06T10:00:00+00:00"} for e in bare]
+    assert ts.task_scores(document(pause_log=stamped)) == ts.task_scores(document(pause_log=bare))
+
+
 def test_cost_by_role_sums_the_runs_of_a_slug():
     doc = document(
         runs=[

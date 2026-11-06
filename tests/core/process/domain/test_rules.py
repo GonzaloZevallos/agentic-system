@@ -4539,3 +4539,63 @@ def test_poll_plan_keeps_a_spent_notice_in_a_held_round():
         held=["scratch"],
     )
     assert plan.actions == [rules.PollAction("retakes_spent", 5)]
+
+
+# The instants of the pause log (GH-467, part A): `at` and `ci` are optional, omitted when
+# unknown, and no reader of the epoch looks at them.
+
+_AT = "2026-11-06T10:00:00+00:00"
+_TIMING = {
+    "pushed_at": "2026-11-06T09:00:00+00:00",
+    "node_started_at": "2026-11-06T09:01:00+00:00",
+    "run_started_at": None,
+    "run_ended_at": None,
+    "verdict": "no_verdict",
+}
+
+
+def test_resumed_entry_carries_at_only_when_given():
+    assert rules.resumed_entry(_AT) == {"kind": "resumed", "at": _AT}
+    assert rules.resumed_entry() == {"kind": "resumed"}
+
+
+def test_resumed_stamps_its_entry_and_never_writes_a_none_at():
+    state = {"status": "waiting_on_human", "escalated": "x"}
+    assert rules.resumed(state, None, at=_AT)["pause_log"] == [{"kind": "resumed", "at": _AT}]
+    assert rules.resumed(state, None)["pause_log"] == [{"kind": "resumed"}]
+
+
+def test_logged_stamps_failures_and_the_escalation_but_never_a_lapse():
+    patch = rules.escalation("failure", "Developer failed")
+    failures = [{"role": "Developer", "attempt": 1, "error": "x", "reason": "sdk", "section": "s"}]
+    got = rules.logged(patch, failures, ["step: Boom"], at=_AT)["pause_log"]
+    assert got == [
+        {"kind": "failure", "value": "sdk", "section": "s", "at": _AT},
+        {"kind": "escalation", "value": "failure", "at": _AT},
+        {"kind": "lapse", "value": "step: Boom"},
+    ]
+    assert rules.logged(patch, failures)["pause_log"][1] == {
+        "kind": "escalation",
+        "value": "failure",
+    }
+
+
+def test_logged_puts_the_ci_timing_on_a_ci_escalation_only():
+    ci_patch = rules.escalation("ci", "CI gave no verdict")
+    got = rules.logged(ci_patch, at=_AT, ci=cast(Any, _TIMING))["pause_log"]
+    assert got == [{"kind": "escalation", "value": "ci", "at": _AT, "ci": _TIMING}]
+    other = rules.logged(rules.escalation("cap", "stopped"), at=_AT, ci=cast(Any, _TIMING))
+    assert other["pause_log"] == [{"kind": "escalation", "value": "cap", "at": _AT}]
+    assert rules.logged(ci_patch, at=_AT)["pause_log"] == [
+        {"kind": "escalation", "value": "ci", "at": _AT}
+    ]
+
+
+def test_auto_resumable_answers_the_same_with_and_without_at():
+    bare = {
+        "pause_log": [_failure_entry("account_limit"), _escalation_entry("failure")],
+    }
+    stamped = {"pause_log": [{**e, "at": _AT} for e in bare["pause_log"]]}
+    assert rules.auto_resumable(bare) == rules.auto_resumable(stamped) == "account_limit"
+    mixed = {"pause_log": [*bare["pause_log"], {"kind": "resumed", "at": _AT}]}
+    assert rules.auto_resumable(mixed) is None

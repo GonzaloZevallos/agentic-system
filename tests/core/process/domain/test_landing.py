@@ -519,6 +519,8 @@ def test_resolve_open_preserves_the_resume_keys_and_the_cost_base():
 # --- GH-257: a failed diagnosis is an attempt on the entry, retried on the shared calendar ----
 
 AT = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
+# The instant a migration or a release stamps on the `resumed` entry it closes an epoch with.
+STAMP = "2026-10-15T12:00:00+00:00"
 
 
 def _attempt(failure=None, at=AT, **more):
@@ -564,12 +566,12 @@ def test_unescalated_is_the_one_patch_that_clears_the_escalation():
         "landing": [_attempt()],
         "cost_usd": 4.0,
     }
-    patch = landing.unescalated(raw)
+    patch = landing.unescalated(raw, STAMP)
     assert patch == {
         "escalated": None,
         "escalation_class": None,
         "status": "ready_for_review",
-        "pause_log": [{"kind": "resumed"}],
+        "pause_log": [{"kind": "resumed", "at": STAMP}],
     }
     assert "cost_usd" not in patch
 
@@ -672,7 +674,7 @@ def _window(migrated):
 
 def _freed():
     raw = _real()
-    return {**raw, **landing.migration(raw)}
+    return {**raw, **landing.migration(raw, STAMP)}
 
 
 def _stranded(**over):
@@ -798,11 +800,11 @@ def test_the_domain_prefix_is_the_one_the_application_posts():
 
 def test_migration_clears_the_escalation_and_stamps_the_failure_in_one_patch():
     raw = _stranded()
-    patch = landing.migration(raw)
+    patch = landing.migration(raw, STAMP)
     assert patch["escalated"] is None and patch["escalation_class"] is None
     assert patch["status"] == "ready_for_review"
     # closure replaces a key whole: the history stays and `resumed` closes the epoch
-    assert patch["pause_log"] == [*raw["pause_log"], {"kind": "resumed"}]
+    assert patch["pause_log"] == [*raw["pause_log"], {"kind": "resumed", "at": STAMP}]
     assert patch["landing"][:-1] == raw["landing"][:-1]
     assert patch["landing"][-1] == {**raw["landing"][-1], "failure": "account_limit"}
     assert "cost_usd" not in patch
@@ -817,14 +819,14 @@ def test_migration_takes_the_failure_from_the_last_failure_of_the_closing_epoch(
             _ESCALATION,
         ]
     )
-    assert landing.migration(raw)["landing"][-1]["failure"] == "upstream"
+    assert landing.migration(raw, STAMP)["landing"][-1]["failure"] == "upstream"
 
 
 def test_migration_leaves_diagnose_retry_due_or_waiting_never_escalate():
     """The window sits a minute either side, never on the boundary: `next_attempt_at` is
     inclusive, and `rules`' own tests own that edge."""
     raw = _stranded()
-    migrated = {**raw, **landing.migration(raw)}
+    migrated = {**raw, **landing.migration(raw, STAMP)}
     window = _window(migrated)
     margin = timedelta(minutes=1)
 
@@ -837,7 +839,7 @@ def test_migration_leaves_diagnose_retry_due_or_waiting_never_escalate():
 def test_migration_stamps_only_the_last_diagnose_entry():
     earlier = _attempt(delivered=True, at=AT - timedelta(days=1))
     raw = _stranded(landing=[earlier, _attempt(at=AT)])
-    stamped = landing.migration(raw)["landing"]
+    stamped = landing.migration(raw, STAMP)["landing"]
     assert stamped[0] == earlier
     assert stamped[1]["failure"] == "account_limit"
 
@@ -851,7 +853,7 @@ def _closing_start(log):
 
 def _stamped(raw):
     """The `failure` the migration stamps on the last diagnose entry, `None` when it stamps none."""
-    return landing.migration(raw)["landing"][-1].get("failure")
+    return landing.migration(raw, STAMP)["landing"][-1].get("failure")
 
 
 def test_a_pause_log_cut_at_its_last_resumed_is_not_stranded_and_stays_stuck():
@@ -860,7 +862,7 @@ def test_a_pause_log_cut_at_its_last_resumed_is_not_stranded_and_stays_stuck():
 
     assert landing.stranded_diagnose(cut, False) is False
     assert _stamped(cut) is None
-    after = {**cut, **landing.migration(cut)}
+    after = {**cut, **landing.migration(cut, STAMP)}
     assert landing.diagnose_retry(after, _window(_freed()) + timedelta(minutes=1)) == "escalate"
 
 
@@ -1322,7 +1324,7 @@ def test_released_is_unescalated_plus_the_stamp_and_the_decision_as_the_human_se
 
     assert patch["escalated"] is None and patch["escalation_class"] is None
     assert patch["status"] == "ready_for_review"
-    assert patch["pause_log"] == [{"kind": "resumed"}]
+    assert patch["pause_log"] == [{"kind": "resumed", "at": "2026-10-23T07:00:00+00:00"}]
     assert "cost_usd" not in patch
     human = patch["sections"][document.HUMAN]
     assert human.startswith("### Decision 1") and "merge master in" in human
@@ -1355,7 +1357,10 @@ def test_two_releases_leave_one_decision_and_one_resumed_marker():
 
     assert twice == once
     assert once["sections"][document.HUMAN].count("### Decision ") == 1
-    assert once["pause_log"] == [{"kind": "escalation", "value": "failure"}, {"kind": "resumed"}]
+    assert once["pause_log"] == [
+        {"kind": "escalation", "value": "failure"},
+        {"kind": "resumed", "at": "T"},
+    ]
     assert not once["escalated"] and not once["escalation_class"]
 
 
@@ -1387,3 +1392,18 @@ def test_diagnose_attempts_ignore_every_entry_up_to_and_including_a_released_one
 def test_a_released_entry_is_still_not_a_taken_step():
     entries = [_attempt("max_turns", released_at="T")]
     assert not landing.already_dispatched(entries, HEAD, "diagnose", None)
+
+
+def test_every_landing_creation_site_stamps_its_resumed_entry_with_the_given_instant():
+    raw = {
+        "id": "GH-5",
+        "status": "waiting_on_human",
+        "escalated": "x",
+        "escalation_class": "failure",
+        "pull_request": "https://example.test/pull/5",
+        "landing": [_attempt()],
+    }
+    entry = {"kind": "resumed", "at": STAMP}
+    assert landing.unescalated(raw, STAMP)["pause_log"] == [entry]
+    assert landing.migration(raw, STAMP)["pause_log"][-1] == entry
+    assert landing.released(raw, "go", STAMP)["pause_log"] == [entry]

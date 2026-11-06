@@ -1127,7 +1127,7 @@ def test_the_real_stranded_text_has_the_shape_the_migration_was_written_for():
 
 
 def test_migration_written_through_record_closure_on_the_real_text_frees_it_and_nothing_else():
-    values = landing_rules.migration(document.parse(GH150_STRANDED))
+    values = landing_rules.migration(document.parse(GH150_STRANDED), "2026-10-15T12:00:00+00:00")
 
     out = document.record_closure(GH150_STRANDED, values)
 
@@ -1184,7 +1184,7 @@ def test_a_record_keys_set_without_the_wrapped_and_block_keys_refuses_the_real_t
     """The pre-GH-257 `RECORD_KEYS` is the rejected input: the real escalation and pause log
     are then not a single scalar line, and the migration cannot be written."""
     monkeypatch.setattr(document, "RECORD_KEYS", frozenset({"landing"}))
-    values = landing_rules.migration(document.parse(GH150_STRANDED))
+    values = landing_rules.migration(document.parse(GH150_STRANDED), "2026-10-15T12:00:00+00:00")
 
     with pytest.raises(ValueError, match="escalated|pause_log"):
         document.record_closure(GH150_STRANDED, values)
@@ -1285,8 +1285,9 @@ _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
 # A `record_closure` whose values are not a dict literal is checked through the keys its
 # producer builds, never skipped: the expression as written -> a sample of what it returns.
 _OPAQUE_PATCHES = {
-    "landing_rules.migration(document)": lambda: landing_rules.migration(
-        {"status": "escalated", "pull_request": "u/pull/1", "pause_log": [], "landing": []}
+    "landing_rules.migration(document, clock())": lambda: landing_rules.migration(
+        {"status": "escalated", "pull_request": "u/pull/1", "pause_log": [], "landing": []},
+        "2026-10-15T12:00:00+00:00",
     ),
 }
 
@@ -1348,7 +1349,8 @@ def test_the_guard_rejects_a_write_whose_values_it_cannot_read():
     }
     assert _unrecorded("ports.documents.record_closure(t, {key: [1]})") == {"<unreadable: key>"}
     assert (
-        _unrecorded("ports.documents.record_closure(t, landing_rules.migration(document))") == set()
+        _unrecorded("ports.documents.record_closure(t, landing_rules.migration(document, clock()))")
+        == set()
     )
 
 
@@ -1614,3 +1616,60 @@ def test_plan_route_keeps_a_sizer_that_failed_as_null():
     failed = {**PLAN_ROUTE, "pre_estimate_usd": None, "files": None, "route": "interview"}
     read = document.parse(document.render(golden_state(plan_route=failed)))["plan_route"]
     assert read["pre_estimate_usd"] is None and read["files"] is None
+
+
+def test_a_document_without_the_new_instant_keys_round_trips_unchanged():
+    state = {
+        "id": "T-1",
+        "title": "Export report",
+        "description": "Users want CSV.",
+        "type": "feature",
+        "status": "waiting_on_human",
+        "pause_log": [
+            {"kind": "failure", "value": "sdk", "section": "Developer: api"},
+            {"kind": "escalation", "value": "failure"},
+            {"kind": "resumed"},
+        ],
+        "failures": [{"role": "Developer", "attempt": 1, "error": "x", "cost_usd": 0.1}],
+    }
+    text = document.render(state)
+    assert document.render(document.parse(text)) == text
+    parsed = document.parse(text)
+    assert parsed["pause_log"] == state["pause_log"]
+    assert "at" not in parsed["pause_log"][0] and "started_at" not in parsed["failures"][0]
+
+
+def test_instants_and_a_ci_entry_without_jobs_round_trip_unchanged():
+    ci = {
+        "pushed_at": "2026-11-06T09:00:00+00:00",
+        "node_started_at": "2026-11-06T09:01:00+00:00",
+        "run_started_at": None,
+        "run_ended_at": None,
+        "verdict": "no_verdict",
+    }
+    state = {
+        "id": "T-1",
+        "title": "Export report",
+        "description": "Users want CSV.",
+        "type": "feature",
+        "status": "waiting_on_human",
+        "pause_log": [
+            {"kind": "escalation", "value": "ci", "at": "2026-11-06T10:00:00+00:00", "ci": ci},
+            {"kind": "resumed", "at": "2026-11-06T11:00:00+00:00"},
+        ],
+        "failures": [
+            {
+                "role": "Developer",
+                "attempt": 1,
+                "error": "x",
+                "cost_usd": 0.1,
+                "started_at": "2026-11-06T09:00:00+00:00",
+                "ended_at": "2026-11-06T09:05:00+00:00",
+            }
+        ],
+    }
+    text = document.render(state)
+    parsed = document.parse(text)
+    assert parsed["pause_log"] == state["pause_log"]
+    assert parsed["failures"] == state["failures"]
+    assert document.render(parsed) == text

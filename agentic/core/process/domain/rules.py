@@ -63,6 +63,7 @@ from .task import (
     ChangeCategory,
     ChangesRequested,
     CiCause,
+    CiTiming,
     CloseDocs,
     DependencyState,
     DesignItemRecord,
@@ -3015,14 +3016,19 @@ def part_over_line(
 
 
 def resumed(
-    state: TaskState, decision: str | None, estimate: float | None = None
+    state: TaskState,
+    decision: str | None,
+    estimate: float | None = None,
+    *,
+    at: str | None = None,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
 
     Nothing about the integration: a resumed task goes through the fan-in, which adds it
     from the merges it just did, and only that one knows what conflicted. Returns a
-    plain patch, not a full `TaskState` (see `escalation`)."""
+    plain patch, not a full `TaskState` (see `escalation`). `at` is the instant the
+    application layer stamped on the `resumed` entry."""
     reason = state.get("escalated")
     patch: dict[str, Any] = {
         "escalated": None,
@@ -3032,7 +3038,7 @@ def resumed(
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
         # after the last one of this kind, so a pause the human just resolved never
         # counts toward what the poller may retry on its own next time.
-        "pause_log": [ResumedPauseEntry(kind="resumed")],
+        "pause_log": [resumed_entry(at)],
     }
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
@@ -3538,19 +3544,51 @@ ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
 
 
-def _failure_entry(failure: Failure) -> FailurePauseEntry:
+def resumed_entry(at: str | None = None) -> ResumedPauseEntry:
+    """The one constructor of the `resumed` entry that closes an epoch (the poller's retake,
+    a human's decision, a landing release). `at` is the instant, ISO-8601 UTC, handed in by the
+    application layer; omitted, never written as `None`, when it is unknown. No other module
+    builds a `ResumedPauseEntry`."""
+    entry = ResumedPauseEntry(kind="resumed")
+    if at is not None:
+        entry["at"] = at
+    return entry
+
+
+def escalation_entry(
+    value: EscalationClass, at: str | None = None, ci: CiTiming | None = None
+) -> EscalationPauseEntry:
+    """The one constructor of the `escalation` entry. `at` and `ci` (the CI timing of a `ci`
+    escalation) are omitted when unknown, never written as `None`; `ci` is kept only on the
+    `ci` class."""
+    entry = EscalationPauseEntry(kind="escalation", value=value)
+    if at is not None:
+        entry["at"] = at
+    if ci is not None and value == "ci":
+        entry["ci"] = ci
+    return entry
+
+
+def _failure_entry(failure: Failure, at: str | None = None) -> FailurePauseEntry:
     """The `pause_log` entry of one failed attempt; `resets_at` is copied only when the
-    failure has one, so an entry without a stated reset has no such key."""
+    failure has one, so an entry without a stated reset has no such key, and `at` likewise."""
     entry = FailurePauseEntry(
         kind="failure", value=failure.get("reason", "other"), section=failure.get("section", "")
     )
     if "resets_at" in failure:
         entry["resets_at"] = failure["resets_at"]
+    if at is not None:
+        entry["at"] = at
     return entry
 
 
 def logged(
-    patch: dict[str, Any], failures: Sequence[Failure] = (), lapses: Sequence[str] = ()
+    patch: dict[str, Any],
+    failures: Sequence[Failure] = (),
+    lapses: Sequence[str] = (),
+    *,
+    at: str | None = None,
+    ci: CiTiming | None = None,
 ) -> dict[str, Any]:
     """Every escalation composes with this (issue #137): the one place a `pause_log`
     entry is appended, so `rules.escalation` and `rules.unmergeable` stay exactly as
@@ -3563,10 +3601,12 @@ def logged(
     A legacy `Failure` with no `reason` logs as `"other"`: a motive this ambiguous
     about its own cause must never read as `account_limit` and ease into an automatic
     retry. `lapses` (GH-342) are bookkeeping steps that failed after the work was done, one
-    `"lapse"` entry each, after the failures: no reader of the epoch counts them."""
-    entries: list[PauseEntry] = [_failure_entry(f) for f in failures]
+    `"lapse"` entry each, after the failures: no reader of the epoch counts them. `at` is
+    the instant the application layer stamped, copied onto the failure and escalation
+    entries (never the lapses); `ci` is the CI timing, kept on a `ci` escalation only."""
+    entries: list[PauseEntry] = [_failure_entry(f, at) for f in failures]
     if (cls := patch.get("escalation_class")) is not None:
-        entries.append(EscalationPauseEntry(kind="escalation", value=cls))
+        entries.append(escalation_entry(cls, at, ci))
     entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)
     return {**patch, "pause_log": entries}
 
