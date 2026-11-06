@@ -36,17 +36,77 @@ from typing import Any
 
 import anyio
 
-from agentic.shared.configuration import Configuration, experiment_snapshot
+from agentic.shared.configuration import Configuration, ReviewMode, experiment_snapshot
 
 from ..domain import ci, docs, presubmit, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
-from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
+from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from . import ci_push
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
-from .ports import GitError, Ports
+from .ports import Checkout, GitError, Ports
 from .presubmit import declared_checks
-from .run_role import finish, run_role
+from .run_role import Output, finish, run_role
+
+SYSTEM_APPROVAL = "approved by the system: review_mode single"
+
+
+async def run_reviewer(
+    state: TaskState,
+    subtask_id: str,
+    cfg: Configuration,
+    ports: Ports,
+    checkout: Checkout,
+    *,
+    base: str,
+    mode: ReviewMode,
+    with_developer: bool,
+    ci_names: tuple[str, ...],
+) -> tuple[Output | None, TaskState]:
+    """One reviewer run over `checkout` (GH-473): the role for `mode`, its sections, the
+    product's checks and affected forms read at `base`, the plan's invariants, the docs
+    review, the landing gate of `ci_names` and the performance table, then `run_role`. The
+    one place that builds that call: `review` makes it for the branch and the integration, the
+    shadow for each approved branch, so no second list of sections or arguments exists.
+
+    `with_developer` puts the Developer's own section in front of the reviewer; the
+    integration's `single` review leaves it out. A non-empty `ci_names` means `state` already
+    holds the system's CI section (`review` read it), which is added. Returns what `run_role`
+    returns: the output (or `None` when the role could not run) and its patch; the verdict,
+    the lowering, the records and the status are the caller's."""
+    subtask = state["subtasks"][subtask_id]
+    checks = declared_checks(state, ports)
+    # The affected-only forms (ADR-0046) are read at the same base as `checks`, and the
+    # `{base}` they carry is the task's start, never the increment under review.
+    forms = ports.stack.affected_checks(base)
+    plan = (
+        presubmit.AffectedPlan(base, forms, ports.stack.affected_fallback(base)) if forms else None
+    )
+    reviewer = reviewer_for(checks, subtask_id, mode=mode, affected=forms or None)
+    return await run_role(
+        state,
+        reviewer,
+        cfg,
+        ports,
+        section=rules.review_section(subtask_id),
+        extra_sections=(
+            *((rules.developer_section(subtask_id),) if with_developer else ()),
+            *rules.return_sections(state, subtask_id),
+            *((CI_SECTION,) if ci_names else ()),
+            *_perf_table(state, subtask_id),
+        ),
+        cwd=checkout.path,
+        subtask=subtask_id,
+        base=subtask.get("reviewed_head") or checkout.base,
+        review="an incremental review" if subtask.get("reviewed_head") else "a first review",
+        remaining_changes=rules.remaining_changes(
+            state, pair_for(subtask_id), cfg.max_changes_requested_per_pair
+        ),
+        invariants=rules.invariants_markdown(state),
+        checks=presubmit.describe_checks(checks, affected=plan),
+        docs_review=docs.review_text(ports.stack.docs(base)),
+        landing_gate=rules.landing_gate_text(ci_names),
+    )
 
 
 async def review(
@@ -58,15 +118,10 @@ async def review(
     subtask_id = state["subtask_id"]
     subtask = state["subtasks"][subtask_id]
     reviewed_before = bool(subtask.get("reviewed_head"))
-    checks = declared_checks(state, ports)
-    # The affected-only forms (ADR-0046) are read at the same base as `checks`, and the
-    # `{base}` they carry is the task's start, never the increment under review.
     base = task_base(state, ports)
-    forms = ports.stack.affected_checks(base)
-    plan = (
-        presubmit.AffectedPlan(base, forms, ports.stack.affected_fallback(base)) if forms else None
-    )
-    reviewer = reviewer_for(checks, subtask_id, mode=cfg.review_mode, affected=forms or None)
+    # Only the role's slug and kind are read from this (the experiment record below); its
+    # tools come from the checks `run_reviewer` reads.
+    reviewer = reviewer_for({}, subtask_id, mode=cfg.review_mode)
     try:
         checkout = await subtask_checkout_in_thread(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
@@ -76,6 +131,15 @@ async def review(
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
+    experiment = experiment_snapshot(cfg, cfg.model_for(reviewer.slug, reviewer.kind))
+    if rules.system_approves(state, subtask_id, cfg.review_mode):
+        # The `single` arm (GH-473): the branch is approved on the head it delivered, with
+        # no role, no push and no finding; the integration review is the one that reads it.
+        patch = apply(
+            {"sections": {section: SYSTEM_APPROVAL}, "experiment": experiment},
+            rules.approval_patch(state, subtask_id, subtask, version, [], head),
+        )
+        return finish(state, patch, ports)
     pushed_at = await _push_speculatively(
         state, subtask_id, base, head, checkout.path, ports, push_sleep
     )
@@ -86,31 +150,18 @@ async def review(
     names = rules.ci_gate_names(ports.stack.ci(base), state.get("ci_required") or []).names
     evidence: CiEvidence | None = read_ci(state, names, head, ports) if names else None
     reading = state
-    extra_ci: tuple[str, ...] = ()
     if evidence is not None:
         reading = {**state, "sections": {**state.get("sections", {}), CI_SECTION: evidence.section}}
-        extra_ci = (CI_SECTION,)
-    output, patch = await run_role(
+    output, patch = await run_reviewer(
         reading,
-        reviewer,
+        subtask_id,
         cfg,
         ports,
-        section=section,
-        extra_sections=(
-            rules.developer_section(subtask_id),
-            *rules.return_sections(state, subtask_id),
-            *extra_ci,
-            *_perf_table(state, subtask_id),
-        ),
-        cwd=checkout.path,
-        subtask=subtask_id,
-        base=subtask.get("reviewed_head") or checkout.base,
-        review="an incremental review" if subtask.get("reviewed_head") else "a first review",
-        remaining_changes=remaining,
-        invariants=rules.invariants_markdown(state),
-        checks=presubmit.describe_checks(checks, affected=plan),
-        docs_review=docs.review_text(ports.stack.docs(base)),
-        landing_gate=rules.landing_gate_text(names),
+        checkout,
+        base=base,
+        mode=cfg.review_mode,
+        with_developer=not (cfg.review_mode == "single" and subtask_id == INTEGRATION),
+        ci_names=names if evidence is not None else (),
     )
     if output is None:
         return finish(state, patch, ports)
@@ -154,7 +205,7 @@ async def review(
             # resolved model travels, not only the two switches, so an operator who ran
             # the light arm on Opus by mistake can be caught reading this key after the
             # run.
-            "experiment": experiment_snapshot(cfg, cfg.model_for(reviewer.slug, reviewer.kind)),
+            "experiment": experiment,
         },
     )
     if category is None:
@@ -162,10 +213,8 @@ async def review(
         # subtask's own earlier blocking rows that this review does not raise again. Written
         # into the patch, never derived from the status at read time (ADR-0015, addendum).
         patch = apply(
-            patch,
-            {"approval_settled": rules.settled_on_approval(state, subtask_id, version, findings)},
+            patch, rules.approval_patch(state, subtask_id, subtask, version, findings, head)
         )
-        patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         if pushed_at is not None and rules.full_commit_id(head):
             patch = apply(patch, {"ci_speculation": {"head": head, "pushed_at": pushed_at}})
         return finish(state, patch, ports)

@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
-from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
+from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
 from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
@@ -509,6 +509,42 @@ def settled_on_approval(
                 "version": version,
             }
     return list(rows.values())
+
+
+def system_approves(state: TaskState, subtask_id: str, mode: ReviewMode) -> bool:
+    """Whether the system approves `subtask_id`'s branch without a review (GH-473): the
+    `single` arm, a subtask that is not the integration, and a task with more than one
+    non-integration subtask (a lone subtask is the reviewed unit and is reviewed). The mode
+    is a parameter: the rule never reads the configuration."""
+    if mode != "single" or subtask_id == INTEGRATION:
+        return False
+    return sum(1 for name in state.get("subtasks", {}) if name != INTEGRATION) > 1
+
+
+def approval_patch(
+    state: TaskState,
+    subtask_id: str,
+    subtask: Subtask,
+    version: int,
+    findings: list[dict[str, Any]],
+    head: str,
+) -> dict[str, Any]:
+    """The patch of an approval of `subtask_id` at `version`, the reviewer's and the system's
+    alike (GH-473): the rows it settles, `status: approved` and the head it covers. A subtask
+    that carried an open return from another verifier (`returned_by` set) also drops that
+    return's fields, so no later reader takes it as still returned; every other subtask is
+    written exactly as an approval always was. A plain patch, not a full `TaskState` (see
+    `resumed`)."""
+    approved: Subtask = {**subtask, "reviewed_head": head, "status": "approved"}
+    if subtask.get("returned_by"):
+        approved.pop("returned_by", None)
+        approved.pop("returned_with", None)
+        approved.pop("reason", None)
+        approved.pop("change_category", None)
+    return {
+        "approval_settled": settled_on_approval(state, subtask_id, version, findings),
+        "subtasks": {subtask_id: approved},
+    }
 
 
 def _norm(text: str) -> str:
@@ -2609,12 +2645,32 @@ def _failed_names(record: FullChecksRecord) -> list[str]:
     return names or [record.get("failed_step") or "checks"]
 
 
-def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -> dict[str, Any]:
+def full_checks_pair(target: str, mode: ReviewMode) -> Pair:
+    """The pair a red `full_checks` run of `target` counts its return on (GH-473). Under
+    `single` it is its own, `Tech Lead→Developer:<target>-full_checks`, so the integration's
+    two review rounds (`pair_for(INTEGRATION)`) are not spent by the suite; under `full` and
+    `light` it is `pair_for(target)`, as it always was. The one place that builds the key:
+    the return, the limit text and the resume's reset all read it from here."""
+    if mode == "single":
+        return Pair(by=TECH_LEAD, to=DEVELOPER, subtask=f"{target}-full_checks")
+    return pair_for(target)
+
+
+def shadow_slots(shadow_parallel: int, max_concurrent_roles: int) -> int:
+    """How many shadow reviews may run at once (GH-473): `shadow_parallel`, but always one
+    role slot short of the run's, so a shadow never starves the roles that decide. Zero when
+    the run has one slot or fewer; no combination of the two settings is invalid."""
+    return max(0, min(shadow_parallel, max_concurrent_roles - 1))
+
+
+def full_checks_return(
+    state: TaskState, record: FullChecksRecord, limit: int, *, mode: ReviewMode = "full"
+) -> dict[str, Any]:
     """The patch of a red `full_checks` run (GH-358), modelled on QA Performance's return:
     the integration (the single subtask when there is none) reopens with `returned_by:
     "full_checks"`, one blocking `plan` row per failed check at `full_checks:<check>` with a
-    fixed claim, and the return counts on `pair_for(target)`; at its limit the same patch
-    escalates as a pair at its limit. The record travels with it, so the state and the
+    fixed claim, and the return counts on `full_checks_pair(target, mode)`; at its limit the
+    same patch escalates as a pair at its limit. The record travels with it, so the state and the
     document hold the run the rows came from. A deferred row (GH-453) is not a failure: a
     record whose only non-passing rows are deferred is a passed one, and its patch holds the
     record alone, with no return, no finding and no change of status."""
@@ -2649,7 +2705,7 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
             for name in names
         ],
     }
-    pair = pair_for(target)
+    pair = full_checks_pair(target, mode)
     if remaining_changes(state, pair, limit) > 0:
         patch["changes_requested"] = record_return(state, pair)
         patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]

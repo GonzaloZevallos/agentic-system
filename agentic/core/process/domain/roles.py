@@ -17,7 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from agentic.shared.configuration import RoleKind
+from agentic.shared.configuration import ReviewMode, RoleKind
 
 from . import presubmit
 from .document import ORIGINAL  # pseudo-section every role may declare: the task as it entered
@@ -784,14 +784,14 @@ def affected_check_rules(commands: Mapping[str, str]) -> tuple[str, ...]:
 def reviewer_for(
     checks: Mapping[str, str],
     subtask_id: str = INTEGRATION,
-    mode: Literal["full", "light"] = "full",
+    mode: ReviewMode = "full",
     *,
     affected: Mapping[str, str] | None = None,
 ) -> Role:
     """The reviewer of a task whose product declares `checks` (ADR-0016, addendum).
 
     `mode` is the review-mode experiment's switch (issue #28, `cfg.review_mode`):
-    `full` is today's only value, and `subtask_id` defaults to `INTEGRATION`, so a
+    `full` is today's value, and `subtask_id` defaults to `INTEGRATION`, so a
     caller that passes neither keyword -- `reviewer_for(checks)` -- returns exactly
     what it returns today, whatever `mode` a caller elsewhere might type. Under
     `light`, every subtask but the integration gets `TECH_LEAD_REVIEWER_LIGHT`; the
@@ -802,7 +802,7 @@ def reviewer_for(
     after the full checks'. `None` is today's reviewer, byte for byte."""
     base = (
         TECH_LEAD_REVIEWER
-        if mode == "full" or subtask_id == INTEGRATION
+        if mode != "light" or subtask_id == INTEGRATION
         else TECH_LEAD_REVIEWER_LIGHT
     )
     rules = check_rules(checks) + (affected_check_rules(affected) if affected else ())
