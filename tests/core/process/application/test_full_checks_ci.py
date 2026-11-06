@@ -185,7 +185,12 @@ def assert_escalated_ci(patch, ports, state=None):
     assert "full_checks" not in patch and "subtasks" not in patch and "findings" not in patch
     assert ports.commands.ran == []
     assert ports.check_scheduler.requests == []
-    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "ci"}]
+    [entry] = unstamped(patch["pause_log"])
+    # A no-verdict wait carries its two instants and no run instants (GH-467); nothing else.
+    # None where nothing was pushed (a failed first publish) or no CI wait ended (planning defect).
+    timing = entry.pop("ci", None)
+    assert entry == {"kind": "escalation", "value": "ci"}
+    assert timing is None or (timing["verdict"] == "no_verdict" and timing["run_ended_at"] is None)
     if state is not None:
         assert rules.auto_resumable(apply(state, patch)) is None
 

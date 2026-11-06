@@ -2811,12 +2811,15 @@ def full_checks_heal(
     return {"task_head": head, "full_checks_healed": head}
 
 
-def ci_unavailable(cause: CiCause, head: str, detail: str, *, at: str) -> dict[str, Any]:
+def ci_unavailable(
+    cause: CiCause, head: str, detail: str, *, at: str, ci: CiTiming | None = None
+) -> dict[str, Any]:
     """The patch of a `full_checks` of a `ci:` product that GitHub could not judge (GH-462):
     the task stops for the human with class `ci`, and the suite is never run on this machine.
     No `full_checks` record and no return: the head has no verdict, and `full_checks_due`
     compares heads, so a resume enters the node again. `cause` is the closed value of the step
-    that failed; `detail` is what was tried, prose for the human only."""
+    that failed; `detail` is what was tried, prose for the human only. `ci` is the timing of the
+    wait (GH-467), kept on the `ci` escalation entry."""
     reason = (
         f"GitHub CI gave no verdict for {head[:7]} ({cause}): {detail}. The suite was not run "
         "on this machine. Fix the CI or the connection and resume; the node runs again on the "
@@ -2829,6 +2832,7 @@ def ci_unavailable(cause: CiCause, head: str, detail: str, *, at: str) -> dict[s
             **escalation("ci", reason),
         },
         at=at,
+        ci=ci,
     )
 
 

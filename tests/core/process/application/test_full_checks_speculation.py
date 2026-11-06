@@ -268,3 +268,41 @@ async def test_a_speculated_run_writes_no_push_keys_and_a_retried_republish_note
     record = patch["full_checks"]
     assert record["push_attempts"] == 2 and record["push_kind"] == "transient"
     assert "speculative" not in record
+
+
+async def test_a_consumed_run_is_timed_from_the_persisted_push_not_from_this_node():
+    # The review pushed at PUSHED; this node (a resume, later) only reads the run (GH-467).
+    timed = CiCheck(
+        "check",
+        "COMPLETED",
+        "SUCCESS",
+        LINK,
+        started_at="2026-11-04T10:00:20Z",
+        completed_at="2026-11-04T10:04:20Z",
+    )
+    ports = ports_of(report(timed))
+    patch = await run(state_of(), ports)
+    timing = patch["full_checks"]["ci_timing"]
+    assert timing["pushed_at"] == PUSHED.isoformat()
+    assert timing["node_started_at"] > timing["pushed_at"]  # stamped from `Ports.now` at the node
+    assert timing["verdict"] == "green"
+    assert (timing["run_started_at"], timing["run_ended_at"]) == (
+        "2026-11-04T10:00:20Z",
+        "2026-11-04T10:04:20Z",
+    )
+    assert timing["jobs"] == [{"name": "check", "duration_s": 240.0}]
+
+
+async def test_a_republished_run_is_timed_from_its_own_push():
+    ports = ports_of(report(job("check"), sha=OTHER), GREEN)
+    patch = await run(state_of(), ports, after_s=40.0)
+    timing = patch["full_checks"]["ci_timing"]
+    assert timing["pushed_at"] > timing["node_started_at"]
+    assert timing["pushed_at"] != PUSHED.isoformat()
+
+
+async def test_a_red_verdict_carries_its_timing_and_the_timing_changes_nothing_else():
+    patch = await run(state_of(), ports_of(RED))
+    assert patch["full_checks"]["ci_timing"]["verdict"] == "red"
+    assert patch["full_checks"]["passed"] is False
+    assert patch["subtasks"][INTEGRATION]["status"] == "returned"
