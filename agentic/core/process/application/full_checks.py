@@ -60,9 +60,9 @@ from ..domain.ci_push import PushKind, push_failure_markdown
 from ..domain.presubmit import CheckResult, CiCover, CiDispatch
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
-    CiTiming,
     WAITING_ON_HUMAN,
     CiCause,
+    CiTiming,
     FallbackCause,
     FullCheckEntry,
     FullChecksRecord,

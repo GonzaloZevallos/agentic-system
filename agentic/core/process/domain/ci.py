@@ -17,10 +17,9 @@ from .presubmit import FAILED_IDS_MAX
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import CiCause as CiCause
-from .task import CiJobTiming
+from .task import CiJobTiming, FlakeGate, FlakeRecord
 from .task import CiTiming as CiTiming
 from .task import FallbackCause as FallbackCause
-from .task import FlakeGate, FlakeRecord
 from .task import JobLogCause as JobLogCause
 
 # How long a pending, missing or unreadable CI is waited for before the merge gate refuses.
@@ -486,6 +485,7 @@ def timing(
     if jobs:
         result["jobs"] = jobs
     return result
+
 
 # How many times a workflow is dispatched for one head when no run of it ever shows up: the
 # first dispatch and one more after a grace period without a run (GH-462).
