@@ -105,3 +105,22 @@ def _prepared(checkout: Checkout, state: TaskState, cfg: Configuration, ports: P
     # Setup passed on this tree: the record a stored pass needs (ADR-0065).
     ports.workspace.record_setup_tree(checkout.path)
     return checkout
+
+
+def detached_checkout(
+    state: TaskState, name: str, sha: str, base: str, cfg: Configuration, ports: Ports
+) -> Checkout:
+    """A throwaway checkout `name`, detached at `sha`, with the product's setup run in it
+    (GH-473, the shadow review): the same preparation a subtask's checkout gets, through the
+    same helper, so a reviewer never reads a tree whose environment is another's. The caller
+    removes it with `Workspace.remove_checkout`. Raises `SetupFailed` (already discarded) and
+    `GitError` (no checkout was made)."""
+    path = ports.workspace.detached_checkout(name, sha)
+    return _prepared(Checkout(name, path, base, created=True), state, cfg, ports)
+
+
+async def detached_checkout_in_thread(
+    state: TaskState, name: str, sha: str, base: str, cfg: Configuration, ports: Ports
+) -> Checkout:
+    """`detached_checkout` off the event loop, for the reason `subtask_checkout_in_thread` has."""
+    return await anyio.to_thread.run_sync(detached_checkout, state, name, sha, base, cfg, ports)

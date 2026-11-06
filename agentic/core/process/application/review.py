@@ -41,7 +41,7 @@ from agentic.shared.configuration import Configuration, ReviewMode, experiment_s
 from ..domain import ci, docs, presubmit, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from . import ci_push
+from . import ci_push, shadow_review
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Checkout, GitError, Ports
@@ -152,19 +152,33 @@ async def review(
     reading = state
     if evidence is not None:
         reading = {**state, "sections": {**state.get("sections", {}), CI_SECTION: evidence.section}}
-    output, patch = await run_reviewer(
-        reading,
-        subtask_id,
-        cfg,
-        ports,
-        checkout,
-        base=base,
-        mode=cfg.review_mode,
-        with_developer=not (cfg.review_mode == "single" and subtask_id == INTEGRATION),
-        ci_names=names if evidence is not None else (),
-    )
+
+    async def reviewed() -> tuple[Output | None, TaskState]:
+        return await run_reviewer(
+            reading,
+            subtask_id,
+            cfg,
+            ports,
+            checkout,
+            base=base,
+            mode=cfg.review_mode,
+            with_developer=not (cfg.review_mode == "single" and subtask_id == INTEGRATION),
+            ci_names=names if evidence is not None else (),
+        )
+
+    shadows = shadow_review.ShadowOutcome()
+    if shadow_review.due(state, subtask_id, cfg):
+        # The `single` arm's first pass over the integration (GH-473): the shadow reviews run
+        # beside the review and add only their own keys to whatever the node returns.
+        (output, patch), shadows = await shadow_review.run_shadows(state, cfg, ports, reviewed)
+    else:
+        output, patch = await reviewed()
+
+    def done(written: TaskState) -> TaskState:
+        return finish(state, apply(written, shadows.patch()), ports)
+
     if output is None:
-        return finish(state, patch, ports)
+        return done(patch)
 
     subtask = {**subtask, "reviewed_head": head}
     # The landing lowering is first (GH-441): a finding that asks for what only the pull
@@ -217,7 +231,7 @@ async def review(
         )
         if pushed_at is not None and rules.full_commit_id(head):
             patch = apply(patch, {"ci_speculation": {"head": head, "pushed_at": pushed_at}})
-        return finish(state, patch, ports)
+        return done(patch)
 
     returned = {
         # A verifier set's `returned_with` goes with the returners this review replaces.
@@ -255,7 +269,7 @@ async def review(
         )
         patch = rules.logged(patch)
         patch["status"] = WAITING_ON_HUMAN
-    return finish(state, patch, ports)
+    return done(patch)
 
 
 async def _push_speculatively(

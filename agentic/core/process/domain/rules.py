@@ -2678,6 +2678,56 @@ def shadow_slots(shadow_parallel: int, max_concurrent_roles: int) -> int:
     return max(0, min(shadow_parallel, max_concurrent_roles - 1))
 
 
+_LINE_SUFFIX = re.compile(r"(:\d+(-\d+)?|#L\d+(-L?\d+)?)+$")
+
+
+def finding_file(location: str) -> str | None:
+    """The repo-relative file a finding's `location` points at, or `None` (GH-473): the text
+    before a `:<line>[-<line>]` or `#L<line>` suffix, with a leading `./` dropped. A location
+    that names no file -- a prose phrase, an absolute path, a `..` climb, a URL, a name with no
+    extension, a copy row's identifier -- yields `None`, so a shadow finding there is counted
+    `unlocated`, never `missed`. Pure, from the structured field alone."""
+    candidate = _LINE_SUFFIX.sub("", location.strip()).removeprefix("./")
+    if (
+        not candidate
+        or re.search(r"\s", candidate)
+        or candidate.startswith(("/", "~"))
+        or "://" in candidate
+        or ":" in candidate
+        or ".." in candidate.split("/")
+        or copy_location_parts(location) is not None
+    ):
+        return None
+    return candidate if "." in candidate.rsplit("/", 1)[-1].strip(".") else None
+
+
+def category_family(category: str) -> str:
+    """The family of a finding category: what precedes its first dash (`standard`, `spec`,
+    `process`, `plan`, `integration`). Two reviewers rarely pick the same member of a family
+    for one defect, so the match is by family."""
+    return category.partition("-")[0]
+
+
+ShadowMatch = Literal["matched", "missed", "unlocated"]
+
+
+def shadow_match(
+    shadow_finding: Mapping[str, Any], single_findings: Sequence[Mapping[str, Any]]
+) -> ShadowMatch:
+    """Whether the single review raised what a shadow finding did (GH-473), decided from
+    structured fields only: `finding_file` of the `location` and the `category` family. No
+    file on the shadow finding is `unlocated`; a finding of the single review on the same file
+    and in the same family is `matched`; otherwise `missed`. Never reads a claim or evidence."""
+    file = finding_file(shadow_finding["location"])
+    if file is None:
+        return "unlocated"
+    family = category_family(shadow_finding["category"])
+    for found in single_findings:
+        if finding_file(found["location"]) == file and category_family(found["category"]) == family:
+            return "matched"
+    return "missed"
+
+
 def full_checks_return(
     state: TaskState, record: FullChecksRecord, limit: int, *, mode: ReviewMode = "full"
 ) -> dict[str, Any]:
