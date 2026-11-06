@@ -19,6 +19,7 @@ FILES = [{"capability": "checks", "content": "# Checks\n"}]
 
 # The order the plan fixes, written out here on purpose: the test does not read it from the
 # code it checks.
+AT = "2026-11-06T12:00:00+00:00"
 ORDER = ("full_checks", "copy_review", "final_validation", "qa_performance")
 PAIRS = {
     "full_checks": "Tech Lead→Developer",
@@ -223,7 +224,9 @@ def patch_of(verifier: str, outcome: str, state: Any) -> Any:
             {"pair": PAIRS[verifier], "category": "spec-behaviour", "reason": reason}
         ]
     else:
-        patch |= rules.logged({**rules.escalation("returns", f"limit of {verifier}: {reason}")})
+        patch |= rules.logged(
+            {**rules.escalation("returns", f"limit of {verifier}: {reason}")}, at=AT
+        )
         patch["status"] = WAITING_ON_HUMAN
     return patch
 
