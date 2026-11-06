@@ -8,6 +8,7 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 # The module, not the name: `rules` imports this one too, and reads it at call time.
@@ -16,6 +17,7 @@ from .presubmit import FAILED_IDS_MAX
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import CiCause as CiCause
+from .task import CiJobTiming
 from .task import CiTiming as CiTiming
 from .task import FallbackCause as FallbackCause
 from .task import FlakeGate, FlakeRecord
@@ -66,6 +68,10 @@ class CiCheck:
     conclusion: str | None
     link: str
     failed_stage: FailedStage | None = None
+    # GitHub's own instants (ISO-8601 UTC) of a check run or a dispatched job; `None` for a
+    # commit status, which carries none, and for a value GitHub did not give (GH-467).
+    started_at: str | None = None
+    completed_at: str | None = None
 
 
 _RUN_SEGMENT = re.compile(r"/actions/runs/(\d+)(?=[/?#]|$)")
@@ -402,6 +408,84 @@ def full_tier_verdict(
 # lower bound (`since`) of the run listing (GH-462). Hygiene only: it narrows what `gh` lists
 # and never decides whether a run exists, which the event, the workflow and the sha do.
 CI_DISPATCH_SKEW_S = 120
+
+
+def _instant(text: str | None) -> datetime | None:
+    """An ISO-8601 instant as an aware UTC datetime, `None` for a missing or unreadable one
+    (an instant with no zone is read as UTC). Parsing only: this module never reads a clock."""
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def waited_seconds(timing: CiTiming, until: str | None = None) -> tuple[float | None, bool]:
+    """The CI wait of `timing` (GH-467), the only place it is derived: `max(0, end - max(
+    pushed_at, node_started_at))`, where `end` is `run_ended_at` or, when that is `None`, `until`.
+    The flag `clamped` is true when the raw difference was negative. `(None, False)` when a bound
+    is missing or unreadable: unknown, never 0.
+
+    Two caveats. The machine's instants (`pushed_at`, `node_started_at`) and GitHub's
+    (`run_ended_at`) are subtracted across two clocks, so a skew between them can show as a
+    clamp. For a `no_verdict` timing, which has no `run_ended_at`, the only sanctioned `until` is
+    the `at` of the `ci` escalation entry that ended the wait."""
+    end = _instant(timing["run_ended_at"] if timing["run_ended_at"] is not None else until)
+    pushed = _instant(timing["pushed_at"])
+    began = _instant(timing["node_started_at"])
+    if end is None or pushed is None or began is None:
+        return None, False
+    raw = (end - max(pushed, began)).total_seconds()
+    return max(0.0, raw), raw < 0
+
+
+def timing(
+    pushed_at: str,
+    node_started_at: str,
+    verdict: Literal["green", "red", "no_verdict"],
+    checks: Iterable[CiCheck],
+    names: Iterable[str],
+) -> CiTiming:
+    """The `CiTiming` of one decided wait (GH-467), pure: built after the verdict is made and
+    read by no verdict. A check enters it only when its name is one of `names` (the declared
+    gate) and its `started_at` is no earlier than `pushed_at - CI_DISPATCH_SKEW_S`, so a run of an
+    older push never counts. `run_started_at` is the earliest start, `run_ended_at` the latest
+    end among the checks that finished, both `None` when none gave one, always for a
+    `no_verdict`. `jobs` lists each finished check's duration, and is omitted when empty. An
+    unreadable `pushed_at` admits no check."""
+    result = CiTiming(
+        pushed_at=pushed_at,
+        node_started_at=node_started_at,
+        run_started_at=None,
+        run_ended_at=None,
+        verdict=verdict,
+    )
+    floor = _instant(pushed_at)
+    if verdict == "no_verdict" or floor is None:
+        return result
+    declared = set(names)
+    cutoff = floor - timedelta(seconds=CI_DISPATCH_SKEW_S)
+    starts: list[tuple[datetime, str]] = []
+    ends: list[tuple[datetime, str]] = []
+    jobs: list[CiJobTiming] = []
+    for check in checks:
+        started = _instant(check.started_at)
+        if check.name not in declared or started is None or started < cutoff:
+            continue
+        starts.append((started, check.started_at or ""))
+        ended = _instant(check.completed_at)
+        if ended is not None:
+            ends.append((ended, check.completed_at or ""))
+            jobs.append({"name": check.name, "duration_s": (ended - started).total_seconds()})
+    if starts:
+        result["run_started_at"] = min(starts)[1]
+    if ends:
+        result["run_ended_at"] = max(ends)[1]
+    if jobs:
+        result["jobs"] = jobs
+    return result
 
 # How many times a workflow is dispatched for one head when no run of it ever shows up: the
 # first dispatch and one more after a grace period without a run (GH-462).
