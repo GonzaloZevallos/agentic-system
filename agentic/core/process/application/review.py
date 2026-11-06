@@ -204,7 +204,7 @@ async def review(
         patch |= rules.escalation(
             "returns", rules.limit_reached(pair, cfg.max_changes_requested_per_pair, reason)
         )
-        patch = rules.logged(patch)
+        patch = rules.logged(patch, at=ports.now())
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
 

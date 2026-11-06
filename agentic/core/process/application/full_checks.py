@@ -215,7 +215,9 @@ async def full_checks(
         head = workspace.full_head(task.path)
         plan_only = rules.ci_gate_names(names, state.get("ci_required") or []).plan_only
         return finish(
-            state, rules.ci_planning_defect(head, _unknown_text(outcome, head, plan_only)), ports
+            state,
+            rules.ci_planning_defect(head, _unknown_text(outcome, head, plan_only), at=ports.now()),
+            ports,
         )
     if isinstance(outcome, _NoVerdict):
         head = workspace.full_head(task.path)
@@ -228,7 +230,9 @@ async def full_checks(
             dispatch_ref=rules.ci_dispatch_ref(state["id"]),
             sha=outcome.head or head,
         )
-        patch = rules.ci_unavailable(outcome.cause, head, detail + _git_said(outcome))
+        patch = rules.ci_unavailable(
+            outcome.cause, head, detail + _git_said(outcome), at=ports.now()
+        )
         if outcome.git_said and outcome.push_attempts and outcome.push_kind:
             # Git's words reach the section only through `push_failure_markdown`, which
             # scrubs them; the older run stays as history under its own free `(vN)` key.
@@ -368,7 +372,9 @@ async def _local_full_checks(
             ]
             text += f" {_over_budget_sentence(record['over_budget'])}"
     else:
-        patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
+        patch = rules.full_checks_return(
+            state, record, cfg.max_changes_requested_per_pair, at=ports.now()
+        )
         text = text or f"Failed on `{head}`: no check output was recorded."
         if lines:
             text += "\n\n" + "\n".join(lines)
@@ -462,7 +468,7 @@ async def _ci_full_checks(
     if verdict.state == "green":
         patch = _ci_green(state, head, gate_names, read, waited)
     else:
-        patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited)
+        patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited, at=ports.now())
     if speculative:
         patch["full_checks"]["speculative"] = True
     else:
@@ -625,7 +631,7 @@ async def _dispatched_full_checks(
     if verdict.state == "green":
         patch = _ci_green(state, head, names, read, waited)
     else:
-        patch = _ci_red(state, cfg, head, names, verdict, read, waited)
+        patch = _ci_red(state, cfg, head, names, verdict, read, waited, at=ports.now())
     return _dispatched_record(patch, run)
 
 
@@ -723,6 +729,8 @@ def _ci_red(
     verdict: FullTierVerdict,
     read: CiReport,
     waited: float,
+    *,
+    at: str,
 ) -> dict[str, Any]:
     """A red job, or a bound that ran out. A job still pending beside a red one is not a
     failure of its own and gets no row; at the bound it does, and the section names it."""
@@ -746,7 +754,7 @@ def _ci_red(
             f"{', '.join(verdict.pending)}."
         )
     lines.append(_REPRODUCE)
-    patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
+    patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair, at=at)
     patch["sections"] = _section(state, record["version"], "\n\n".join(lines))
     return patch
 
@@ -871,7 +879,7 @@ def _section(state: TaskState, version: int, text: str) -> dict[str, str]:
     return sections
 
 
-def dirty_patch(branch: str) -> dict[str, Any]:
+def dirty_patch(branch: str, *, at: str) -> dict[str, Any]:
     """The task checkout holds uncommitted work the suite would be run over: no command
     runs, and nothing is cleaned, which could throw away what a human left there."""
     return rules.logged(
@@ -883,5 +891,6 @@ def dirty_patch(branch: str) -> dict[str, Any]:
                 f"the task checkout of {branch!r} has uncommitted changes, so the full suite "
                 "would not be a run of the integrated head. Commit or discard them and resume.",
             ),
-        }
+        },
+        at=at,
     )

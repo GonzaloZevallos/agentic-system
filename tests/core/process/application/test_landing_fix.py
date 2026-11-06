@@ -1225,7 +1225,7 @@ def _stranded_ports(**over):
 def _window():
     """When the freed diagnosis is due, read off the shared calendar from the fixture's own
     last diagnose `at`; the tests stand a minute either side of it, never on its edge."""
-    freed = {**_REAL, **landing_rules.migration(_REAL, LAST_AT.isoformat())}
+    freed = {**_REAL, **landing_rules.migration(_REAL, at=LAST_AT.isoformat())}
     reason = freed["landing"][-1]["failure"]
     count = len(landing_rules.diagnose_attempts(freed))
     limit = rules.auto_resume_limit(landing_rules._landing_view(freed), reason)

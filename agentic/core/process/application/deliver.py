@@ -63,7 +63,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             and (recorded == tip or ports.workspace.is_ancestor(task.path, recorded, tip))
         )
     except (GitError, ValueError) as failed:
-        return _ended(state, _undelivered(step, failed, state, recorded), ports)
+        return _ended(state, _undelivered(step, failed, state, recorded, at=ports.now()), ports)
     # Exhaustive on purpose, so a new cell of the table cannot reach the push unhandled.
     match plan.kind:
         case "refuse":
@@ -154,7 +154,9 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         )
     except (GitError, ValueError) as failed:
         return _ended(
-            state, {**_undelivered(step, failed, state, replaced), **record, **posted}, ports
+            state,
+            {**_undelivered(step, failed, state, replaced, at=ports.now()), **record, **posted},
+            ports,
         )
     patch: TaskState = {
         "status": "ready_for_review",
@@ -191,7 +193,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     if reaped:
         patch["reaped_at_cleanup"] = list(reaped)
     if lapses:
-        patch = _with_lapses(patch, lapses)
+        patch = _with_lapses(patch, lapses, at=ports.now())
     done = _ended(state, patch, ports)
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})
@@ -227,11 +229,11 @@ def _uncovered(state: TaskState, path: Path, relative: str, ports: Ports) -> Tas
             and ports.workspace.differs_outside(path, recorded["head"], head, relative)
         )
     except (GitError, ValueError) as failed:
-        return _undelivered("full checks cover read failed", failed, state, None)
+        return _undelivered("full checks cover read failed", failed, state, None, at=ports.now())
     verdict = rules.full_checks_cover(recorded, differs)
     if verdict == "ok":
         return None
-    return rules.full_checks_heal(state, head, verdict)
+    return rules.full_checks_heal(state, head, verdict, at=ports.now())
 
 
 def _lapsed(lapses: list[str], step: str, failed: Exception) -> None:
@@ -242,12 +244,12 @@ def _lapsed(lapses: list[str], step: str, failed: Exception) -> None:
     _LOG.warning("delivery: %s failed; delivering anyway", step, exc_info=failed)
 
 
-def _with_lapses(patch: TaskState, lapses: list[str]) -> TaskState:
+def _with_lapses(patch: TaskState, lapses: list[str], *, at: str) -> TaskState:
     """The terminal patch with the lapses in the task document's log, once: one `lapse`
     entry per line in `pause_log` (`rules.logged`). They are neither attempts nor
     escalations, so `failures` -- what the measurement counts -- and the poller's reading of
     the epoch are left alone."""
-    return rules.logged(patch, lapses=lapses)
+    return rules.logged(patch, lapses=lapses, at=at)
 
 
 def _closed_landing(
@@ -381,7 +383,7 @@ def _refused(
     """Nothing is pushed: the reason names the branch, the remote sha and the pull
     requests that decided it."""
     reason = rules.push_refused_reason(plan, prs, branch)
-    patch = _undelivered("push refused", reason, state, None)
+    patch = _undelivered("push refused", reason, state, None, at=ports.now())
     if state.get("replaced_remote_tip"):
         # A refusal clears the record (`replace_record`).
         patch["replaced_remote_tip"] = None
@@ -389,7 +391,7 @@ def _refused(
 
 
 def _undelivered(
-    step: str, failed: Exception | str, state: TaskState, replaced: str | None
+    step: str, failed: Exception | str, state: TaskState, replaced: str | None, *, at: str
 ) -> TaskState:
     reason = f"{step}: {failed}; the branch is integrated, resume to deliver again"
     if replaced:
@@ -399,7 +401,8 @@ def _undelivered(
             "current_role": PJM.name,
             "status": WAITING_ON_HUMAN,
             **rules.escalation("failure", reason),
-        }
+        },
+        at=at,
     )
 
 

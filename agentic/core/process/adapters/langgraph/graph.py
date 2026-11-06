@@ -63,7 +63,7 @@ from ...application.integrate import integrate, integrate_turn
 from ...application.limits import RunLimits
 from ...application.owner_rules import owner_rules
 from ...application.plan import plan
-from ...application.ports import Checkout, Ports, ProductKnowledge, Prompts
+from ...application.ports import Checkout, Ports, ProductKnowledge, Prompts, utc_now
 from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
@@ -268,7 +268,7 @@ async def pause(state: TaskState) -> TaskState:
         }
     )
     answer = answer or {}
-    return rules.resumed(state, answer.get("decision"), answer.get("estimate"))
+    return rules.resumed(state, answer.get("decision"), answer.get("estimate"), at=utc_now())
 
 
 def _route(rule: Rule) -> Callable[[TaskState], str]:

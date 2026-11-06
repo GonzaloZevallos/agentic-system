@@ -122,7 +122,7 @@ async def qa_performance(
     patch["sections"] = rules.sections_for(state, QA_PERFORMANCE.name, text)
     patch["runs"] = [{**patch["runs"][0], "perf_verdict": verdict, "perf_head": head}]
     if verdict == "returned":
-        patch = apply(patch, _return(state, cfg, rows, blocking, preface))
+        patch = apply(patch, _return(state, cfg, rows, blocking, preface, at=ports.now()))
     return finish(state, patch, ports)
 
 
@@ -255,7 +255,13 @@ def _verdict(results: Sequence[Result], rows: Sequence[Row], blocking: Sequence[
 
 
 def _return(
-    state: TaskState, cfg: Configuration, rows: Sequence[Row], blocking: Sequence[str], table: str
+    state: TaskState,
+    cfg: Configuration,
+    rows: Sequence[Row],
+    blocking: Sequence[str],
+    table: str,
+    *,
+    at: str,
 ) -> TaskState:
     subtasks = state.get("subtasks", {})
     target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks))
@@ -294,6 +300,6 @@ def _return(
     else:
         text = f"{rules.limit_reached(pair, limit, reason)}\n\n{table}\n\n{CLOSE_THE_PR}"
         patch |= rules.escalation("returns", text)
-        patch = rules.logged(patch)
+        patch = rules.logged(patch, at=at)
         patch["status"] = WAITING_ON_HUMAN
     return patch

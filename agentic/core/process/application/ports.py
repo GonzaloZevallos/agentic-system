@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -2248,6 +2248,12 @@ class ExperimentFile(Protocol):
         ...
 
 
+def utc_now() -> str:
+    """The instant, ISO-8601 UTC at millisecond precision: the default `Ports.now`, the one
+    clock an application node stamps a `pause_log` `at` from. A test hands its own."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -2294,3 +2300,6 @@ class Ports:
     # The product's experiment declaration (GH-470). `None` declares none and reads nothing,
     # which is how every round ran before it existed.
     experiment: ExperimentFile | None = None
+    # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
+    # test sets it, and passed to the domain as an argument, never read there.
+    now: Callable[[], str] = utc_now

@@ -65,7 +65,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 if after == "clean":
                     continue
                 if after == "unmergeable":
-                    patch = rules.logged(rules.unmergeable(subtask_id, dep, outcome.reason or ""))
+                    patch = rules.logged(
+                        rules.unmergeable(subtask_id, dep, outcome.reason or ""), at=ports.now()
+                    )
                     return finish(state, patch, ports)
                 paths = list(outcome.conflicted_paths)
             else:  # "hand_over": a merge already in progress, from a resume
@@ -289,7 +291,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             if not rules.dependency_delivered(after_state):
                 verified = False
                 reason = rules.dependency_unresolved_reason(after_state)
-                patch = rules.logged({**patch, **rules.unmergeable(subtask_id, dep, reason)})
+                patch = rules.logged(
+                    {**patch, **rules.unmergeable(subtask_id, dep, reason)}, at=ports.now()
+                )
                 break
         else:
             conflicted_paths = []

@@ -8,7 +8,7 @@ import dataclasses
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -2347,6 +2347,21 @@ class FakeBoardSent:
         self.memory = memory
 
 
+def stepping_now(
+    start: str = "2026-11-06T12:00:00+00:00", step_s: float = 1.0
+) -> Callable[[], str]:
+    """A `Ports.now` that advances `step_s` seconds on every read, so the instants a node
+    stamps are ordered and a test can tell which read made which."""
+    moment = datetime.fromisoformat(start).astimezone(UTC)
+
+    def now() -> str:
+        nonlocal moment
+        moment += timedelta(seconds=step_s)
+        return moment.isoformat(timespec="milliseconds")
+
+    return now
+
+
 def memory_ports(
     runner: RoleRunner | None = None,
     *,
@@ -2373,6 +2388,7 @@ def memory_ports(
     ci_logs: CiLogs | None = None,
     load_reader: LoadReader | None = None,
     experiment: ExperimentFile | None = None,
+    now: Callable[[], str] | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -2389,6 +2405,7 @@ def memory_ports(
         reaper=reaper if reaper is not None else FakeReaper(),
         check_scheduler=check_scheduler if check_scheduler is not None else FakeCheckScheduler(),
         **({} if limits is None else {"limits": limits}),
+        now=now if now is not None else stepping_now(),
         perf_runner=perf_runner,
         perf_lock=perf_lock,
         check_results=check_results,
