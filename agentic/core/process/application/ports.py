@@ -39,6 +39,7 @@ from ..domain.scratch import (
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
+    CheckRun,
     DependencyState,
     FailureReason,
     FlakeRecord,
@@ -50,6 +51,19 @@ from ..domain.task import (
     TrackerFailure,
 )
 from .limits import RunLimits
+
+
+@dataclass(frozen=True)
+class CheckRuns:
+    """What the Developer's Bash hooks recorded in one attempt (GH-467): the last rows of its
+    own check runs, how many older ones were dropped past the cap, and how many hook errors
+    were swallowed recording them. Travels on `RawResult` and `AttemptFailed`; `run_role`
+    writes it on the `RoleRun` of the attempt that delivered or on the `Failure` of the one
+    that failed, never both."""
+
+    rows: list[CheckRun] = field(default_factory=list)
+    dropped: int = 0
+    errors: int = 0
 
 
 @dataclass(frozen=True)
@@ -128,6 +142,8 @@ class RawResult:
     # ADR-0052): what a role left running in the background. Empty when there were none,
     # which is nearly every attempt, and a cancelled attempt has no result to carry it.
     reaped: list[ReapedProcess] = field(default_factory=list)
+    # The Developer's own check runs in this attempt (`CheckRuns`); empty for every other role.
+    check_runs: CheckRuns = field(default_factory=CheckRuns)
 
 
 class AttemptFailed(Exception):
@@ -160,6 +176,7 @@ class AttemptFailed(Exception):
         reaped: Sequence[ReapedProcess] = (),
         space: SpaceReading | None = None,
         enospc: bool = False,
+        check_runs: CheckRuns | None = None,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -205,6 +222,9 @@ class AttemptFailed(Exception):
         # during this attempt (a hook, a stream write, the presubmit), caught as the
         # structured error it is and never by reading text.
         self.enospc = enospc
+        # The Developer's own check runs before this attempt broke (`RawResult.check_runs`);
+        # empty at every raise site but the runner's own and `run_role._attempt`'s.
+        self.check_runs = check_runs if check_runs is not None else CheckRuns()
 
 
 class Presubmit(Protocol):
@@ -268,7 +288,10 @@ class RoleRunner(Protocol):
     the same shape `presubmit`/`guard` absent already have. `check_tool`, when given,
     is the `run_check` tool the Developer and its integrator may call (ADR-0065); every
     other role runs with no tool beyond its built-ins. `max_turns` is the cap of this one
-    attempt (`rules.retry_turns`, GH-449): `None` is `role.max_turns`.
+    attempt (`rules.retry_turns`, GH-449): `None` is `role.max_turns`. `declared_checks`
+    are the product's checks by name (a rerun or affected form under `<name>#<form>`): with
+    them, a role that executes has its own Bash calls that run one noted as `check_runs`
+    (GH-467); `now` stamps each one's start (`None` is the runner's own UTC clock).
 
     `owner_task` is the parent task's id, never a subtask's (GH-282, ADR-0052): the mark
     every process of this attempt carries, so its leftovers can be found and stopped when
@@ -291,6 +314,8 @@ class RoleRunner(Protocol):
         forbidden: Sequence[Forbidden] | None = None,
         check_tool: CheckTool | None = None,
         max_turns: int | None = None,
+        declared_checks: Mapping[str, str] | None = None,
+        now: Callable[[], str] | None = None,
     ) -> RawResult: ...
 
 

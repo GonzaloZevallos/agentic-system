@@ -7,7 +7,7 @@ from pathlib import Path
 import anyio
 import pytest
 
-from agentic.core.process.adapters.claude_sdk import hooks
+from agentic.core.process.adapters.claude_sdk import check_run_log, hooks
 from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.domain import turn_notice
 from agentic.core.process.domain.roles import (
@@ -528,3 +528,192 @@ async def test_the_edit_hook_allows_exactly_the_allowance_and_the_store_still_wi
     matchers = hooks.hooks_for(DEVELOPER, layout.cwd, None, store=inside, allowed=layout.allowed)
     reasons = await edit("Write", inside / "k.json")
     assert reasons and all(hooks.STORE_PATH in reason for reason in reasons)
+
+
+# -- the check-run hooks (GH-467): a Developer's own Bash calls that run a declared check ----
+
+DECLARED = {"tests": 'uv run pytest -m "not llm"', "lint": "uv run ruff check ."}
+
+
+class Clock:
+    """A monotonic clock that moves 2.5 s each time it is read, and an ISO `Now` that counts."""
+
+    def __init__(self) -> None:
+        self.ticks = 0
+        self.stamps = 0
+
+    def monotonic(self) -> float:
+        self.ticks += 1
+        return 100.0 + 2.5 * self.ticks
+
+    def now(self) -> str:
+        self.stamps += 1
+        return f"2026-11-06T10:00:0{self.stamps}Z"
+
+
+def check_log(version: str = check_run_log.EXIT_ZERO_PROBED_WITH, **kwargs):
+    clock = Clock()
+    return check_run_log.CheckRunLog(
+        kwargs.pop("declared", DECLARED), clock.monotonic, clock.now, sdk_version=version
+    )
+
+
+def bash_event(event: str, command: str, call_id: str = "t1", **extra):
+    return {
+        "hook_event_name": event,
+        "tool_name": "Bash",
+        "tool_input": {"command": command, **extra.pop("tool_input", {})},
+        "tool_use_id": call_id,
+        "cwd": str(CWD),
+        **extra,
+    }
+
+
+async def run_bash(matchers, command, after="PostToolUse", call_id="t1", **post):
+    """Pre, then the closing event, through the matchers as the CLI would; the outputs."""
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", command, call_id))
+    if after:
+        outputs += await call(matchers, after, bash_event(after, command, call_id, **post))
+    return outputs
+
+
+async def test_a_declared_check_is_recorded_with_its_duration_and_the_probed_zero():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    outputs = await run_bash(matchers, "FOO=secret uv run ruff check .", tool_response={})
+    assert all(output == {} for output in outputs)
+    (row,) = log.snapshot().rows
+    assert row == {
+        "command": "uv run ruff check .",
+        "check": "lint",
+        "started_at": "2026-11-06T10:00:01Z",
+        "duration_s": 2.5,
+        "exit_code": 0,
+    }
+
+
+async def test_an_inferred_zero_is_only_trusted_for_the_probed_sdk_version():
+    log = check_log(version="9.9.9")
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(matchers, "uv run ruff check .", tool_response={"stdout": "ok"})
+    (row,) = log.snapshot().rows
+    assert row["exit_code"] is None and row["duration_s"] == 2.5
+
+
+async def test_a_code_carried_by_the_response_wins_over_the_inference():
+    log = check_log(version="9.9.9")
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(matchers, "uv run ruff check .", tool_response={"exit_code": 0})
+    assert log.snapshot().rows[0]["exit_code"] == 0
+
+
+async def test_a_failed_call_is_closed_with_its_duration_and_the_parsed_code():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(matchers, "uv run ruff check .", "PostToolUseFailure", error="Exit code 3\nboom")
+    (row,) = log.snapshot().rows
+    assert (row["duration_s"], row["exit_code"]) == (2.5, 3)
+
+
+async def test_an_interrupted_call_has_no_exit_code():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(
+        matchers,
+        "uv run ruff check .",
+        "PostToolUseFailure",
+        error="Exit code 130",
+        is_interrupt=True,
+    )
+    (row,) = log.snapshot().rows
+    assert (row["duration_s"], row["exit_code"]) == (2.5, None)
+
+
+async def test_a_background_call_is_written_with_no_duration_and_no_code():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await call(
+        matchers,
+        "PreToolUse",
+        bash_event("PreToolUse", "uv run ruff check .", tool_input={"run_in_background": True}),
+    )
+    await call(matchers, "PostToolUse", bash_event("PostToolUse", "x", tool_response={}))
+    (row,) = log.snapshot().rows
+    assert (row["duration_s"], row["exit_code"]) == (None, None)
+
+
+async def test_a_call_whose_status_a_later_segment_decides_has_a_duration_but_no_code():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(matchers, "uv run ruff check . && echo done", tool_response={})
+    (row,) = log.snapshot().rows
+    assert (row["command"], row["duration_s"], row["exit_code"]) == (
+        "uv run ruff check .",
+        2.5,
+        None,
+    )
+
+
+async def test_a_pending_call_with_no_closing_event_is_written_with_nulls():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(matchers, "uv run ruff check .", after=None)
+    (row,) = log.snapshot().rows
+    assert (row["duration_s"], row["exit_code"]) == (None, None)
+
+
+async def test_a_call_the_cage_denies_leaves_no_row():
+    log = check_log(declared={"push": "git push origin"})
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    outputs = await run_bash(matchers, "git push origin", tool_response={})
+    assert denied(outputs)
+    assert log.snapshot().rows == []
+
+
+async def test_a_sub_agents_call_and_a_call_that_is_no_check_are_ignored():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    await run_bash(matchers, "ls -la", tool_response={})
+    sub = bash_event("PreToolUse", "uv run ruff check .", "t2", agent_id="a1")
+    await call(matchers, "PreToolUse", sub)
+    assert log.snapshot() == check_run_log.CheckRuns()
+
+
+async def test_only_the_last_fifty_rows_are_kept_and_the_rest_are_counted():
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    for index in range(53):
+        await run_bash(matchers, "uv run ruff check .", call_id=f"c{index}", tool_response={})
+    kept = log.snapshot()
+    assert len(kept.rows) == 50 and kept.dropped == 3
+    assert kept.rows[0]["started_at"] == "2026-11-06T10:00:04Z"
+
+
+async def test_a_matcher_that_raises_never_touches_the_call_and_is_counted(monkeypatch):
+    def boom(command, declared):
+        raise RuntimeError("matcher bug")
+
+    monkeypatch.setattr(check_run_log.check_runs, "match", boom)
+    log = check_log()
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=log)
+    outputs = await run_bash(matchers, "uv run ruff check .", tool_response={})
+    assert all(output == {} for output in outputs)
+    assert log.snapshot() == check_run_log.CheckRuns(errors=1)
+
+
+async def test_a_denied_call_still_answers_the_denial_when_the_log_raises(monkeypatch):
+    def boom(command, declared):
+        raise RuntimeError("matcher bug")
+
+    monkeypatch.setattr(check_run_log.check_runs, "match", boom)
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, runs=check_log())
+    outputs = await call(matchers, "PreToolUse", bash_event("PreToolUse", "git push"))
+    assert denied(outputs)
+
+
+def test_the_closing_matchers_are_installed_only_with_a_log_for_a_role_that_executes():
+    assert "PostToolUseFailure" not in hooks.hooks_for(DEVELOPER, CWD, None)
+    assert "PostToolUseFailure" not in hooks.hooks_for(PJM, CWD, None, runs=check_log())
+    installed = hooks.hooks_for(DEVELOPER, CWD, None, runs=check_log())
+    assert [m.matcher for m in installed["PostToolUseFailure"]] == ["Bash"]
+    assert "Bash" in [m.matcher for m in installed["PostToolUse"]]

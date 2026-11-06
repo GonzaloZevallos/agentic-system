@@ -85,3 +85,19 @@ def test_secret_assignment_never_reaches_the_segment() -> None:
 def test_declared_check_made_only_of_a_generic_program_matches_nothing() -> None:
     assert check_runs.match("python x.py", {"odd": "python"}) is None
     assert check_runs.match("git log", {"odd": "git"}) is None
+
+
+def test_declared_forms_names_the_affected_and_rerun_forms_of_a_declared_check_only():
+    from agentic.core.process.domain.presubmit import RerunForm
+
+    forms = check_runs.declared_forms(
+        {"tests": "uv run pytest", "lint": "uv run ruff check ."},
+        {"tests": "uv run python scripts/affected_tests.py {base}", "gone": "x y"},
+        {"tests": RerunForm("uv run pytest --lf", "id"), "gone": RerunForm("x z", "id")},
+    )
+    assert forms == {
+        "tests": "uv run pytest",
+        "lint": "uv run ruff check .",
+        "tests#affected": "uv run python scripts/affected_tests.py {base}",
+        "tests#rerun": "uv run pytest --lf",
+    }

@@ -89,6 +89,7 @@ from ...application.ports import Presubmit, RunStopped, SchemaGuard
 from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
+from .check_run_log import CheckRunLog
 
 # The tool Claude Code gives the model to hand back the structured output.
 DELIVERY_TOOL = "StructuredOutput"
@@ -264,6 +265,7 @@ def hooks_for(
     activity: HookActivity | None = None,
     store: Path | None = None,
     allowed: tuple[Path, ...] = (),
+    runs: CheckRunLog | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
@@ -280,11 +282,16 @@ def hooks_for(
 
     `allowed` are the directories outside the checkout an Edit/Write may reach
     (`path_denial`); the store's own matcher does not read it, so it denies inside them
-    too. With `activity`, every hook also notes an `OSError(ENOSPC)` it raises there."""
+    too. With `activity`, every hook also notes an `OSError(ENOSPC)` it raises there.
+
+    `runs`, for a role that executes, notes the Developer's own Bash calls that run a declared
+    check (GH-467, `check_run_log`): the Bash `PreToolUse` hook opens the row after its denial
+    verdict, and two Bash matchers, `PostToolUse` and `PostToolUseFailure`, close it. They
+    answer `{}` always: recording never decides, never denies, never raises."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
-            HookMatcher(matcher="Bash", hooks=[_bash(cwd, store)], timeout=GUARD_TIMEOUT_S),
+            HookMatcher(matcher="Bash", hooks=[_bash(cwd, store, runs)], timeout=GUARD_TIMEOUT_S),
             HookMatcher(
                 matcher="Edit|Write",
                 hooks=[_edit(cwd, forbidden or (), allowed)],
@@ -319,6 +326,13 @@ def hooks_for(
         hooks["PreToolUse"] = matchers
     if (notice_hook := _turn_notice(role, turns, on_notice)) is not None:
         hooks["PostToolUse"] = [HookMatcher(hooks=[notice_hook], timeout=GUARD_TIMEOUT_S)]
+    if runs is not None and role.executes:
+        hooks.setdefault("PostToolUse", []).append(
+            HookMatcher(matcher="Bash", hooks=[_closing(runs.post)], timeout=GUARD_TIMEOUT_S)
+        )
+        hooks["PostToolUseFailure"] = [
+            HookMatcher(matcher="Bash", hooks=[_closing(runs.failed)], timeout=GUARD_TIMEOUT_S)
+        ]
     if activity is not None:
         for installed in hooks.values():
             for matcher in installed:
@@ -339,7 +353,20 @@ def _store(cwd: Path, store: Path) -> HookCallback:
     return hook
 
 
-def _bash(cwd: Path, store: Path | None = None) -> HookCallback:
+def _closing(close: Callable[[HookInput, str | None], None]) -> HookCallback:
+    """A `PostToolUse`/`PostToolUseFailure` Bash callback that closes a check run's row and
+    answers `{}`: `close` swallows its own exceptions (`CheckRunLog`)."""
+
+    async def hook(
+        data: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        close(data, tool_use_id)
+        return {}
+
+    return hook
+
+
+def _bash(cwd: Path, store: Path | None = None, runs: CheckRunLog | None = None) -> HookCallback:
     # Resolved once, here, for every Bash call this role's run will ever make --
     # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum). `cwd`
     # itself stays unresolved: it is what the git branch keeps comparing against.
@@ -353,7 +380,11 @@ def _bash(cwd: Path, store: Path | None = None) -> HookCallback:
         reason = git_denial(command, cwd, _where(data, cwd), checkout) or store_command_denial(
             command, store
         )
-        return _deny(reason) if reason else {}
+        if reason:
+            return _deny(reason)
+        if runs is not None:
+            runs.pre(data, tool_use_id)  # guarded inside: never changes this answer
+        return {}
 
     return hook
 

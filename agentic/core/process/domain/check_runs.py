@@ -19,6 +19,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from .presubmit import RerunForm
+
 # Programs that stand for a thousand unrelated commands: never matched without a second token.
 _GENERIC = frozenset({"git", "python", "python3", "uv", "bash", "sh"})
 _PYTHONS = frozenset({"python", "python3"})
@@ -205,3 +207,19 @@ def _is_redirect(command: str, index: int) -> bool:
     before = command[index - 1] if index else ""
     after = command[index + 1] if index + 1 < len(command) else ""
     return before in "<>" or after == ">"
+
+
+def declared_forms(
+    checks: Mapping[str, str], affected: Mapping[str, str], rerun: Mapping[str, RerunForm]
+) -> dict[str, str]:
+    """The commands `match` is given: every declared check under its name, and its affected
+    and failed-only forms under `<name>#affected` and `<name>#rerun`, so a call that equals a
+    form is recorded as that check (a form of an undeclared check is left out)."""
+    forms = dict(checks)
+    for name, command in affected.items():
+        if name in checks:
+            forms[f"{name}{_FORM_SEPARATOR}affected"] = command
+    for name, form in rerun.items():
+        if name in checks:
+            forms[f"{name}{_FORM_SEPARATOR}rerun"] = form.command
+    return forms
