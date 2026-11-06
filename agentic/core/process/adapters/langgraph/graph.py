@@ -63,7 +63,7 @@ from ...application.integrate import integrate, integrate_turn
 from ...application.limits import RunLimits
 from ...application.owner_rules import owner_rules
 from ...application.plan import plan
-from ...application.ports import Checkout, Ports, ProductKnowledge, Prompts, utc_now
+from ...application.ports import Checkout, Ports, ProductKnowledge, Prompts
 from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
@@ -256,19 +256,30 @@ def _verify_node(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     return node
 
 
-async def pause(state: TaskState) -> TaskState:
+def _pause_node(ports_of: PortsOf):
     """Wait for the human; resumed with `Command(resume={"decision": text or None})`, plus
     `"estimate": USD` when the human gave `--estimate` (the estimate to put in force when the
-    task paused at the cap of its estimate)."""
-    answer = interrupt(
-        {
-            "reason": state.get("escalated"),
-            "spent_usd": state.get("cost_usd", 0.0),
-            "questions": state.get("questions_for_human", []),
-        }
-    )
-    answer = answer or {}
-    return rules.resumed(state, answer.get("decision"), answer.get("estimate"), at=utc_now())
+    task paused at the cap of its estimate). The `resumed` entry is stamped from the node's
+    own `Ports.now`, read after the interrupt returns, like every other site."""
+
+    async def pause(state: TaskState, config: RunnableConfig) -> TaskState:
+        cfg = configuration_from(config, state)
+        answer = interrupt(
+            {
+                "reason": state.get("escalated"),
+                "spent_usd": state.get("cost_usd", 0.0),
+                "questions": state.get("questions_for_human", []),
+            }
+        )
+        answer = answer or {}
+        return rules.resumed(
+            state,
+            answer.get("decision"),
+            answer.get("estimate"),
+            at=ports_of(cfg, config).now(),
+        )
+
+    return pause
 
 
 def _route(rule: Rule) -> Callable[[TaskState], str]:
@@ -419,7 +430,7 @@ def build_graph(
     # `evaluation` here instead of `deliver`. No role, no model, no tracker write.
     graph.add_node("evaluated", _system_node(evaluated, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
-    graph.add_node(PAUSE, pause)
+    graph.add_node(PAUSE, _pause_node(shared))
 
     graph.add_edge(START, "classify")
     graph.add_conditional_edges(

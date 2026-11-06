@@ -153,6 +153,7 @@ def compiled(
     sample_app=None,
     inbox=None,
     prompts_for=None,
+    now=None,
 ):
     """The graph with the real ports over the temporary product, the scripted runner in
     place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
@@ -183,6 +184,7 @@ def compiled(
             sample_app=sample_app,
             **({"inbox": inbox} if inbox is not None else {}),
             **({"prompts": prompts_for(cfg)} if prompts_for is not None else {}),
+            **({"now": now} if now is not None else {}),
         )
 
     return build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
@@ -1384,6 +1386,17 @@ def small_estimate():
             tech_lead_review=[reviewed("approved")] * 3,
         )
     )
+
+
+async def test_the_pause_node_stamps_the_resumed_entry_from_the_injected_now(config):
+    instant = "2031-02-03T04:05:06.000+00:00"
+    app = compiled(small_estimate(), fakes=Fakes(), now=lambda: instant)
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["escalation_class"] == "estimate"
+    assert {e["at"] for e in paused["pause_log"]} == {instant}
+
+    final = await app.ainvoke(Command(resume={"decision": "Go on."}), config=config)
+    assert final["pause_log"][-1] == {"kind": "resumed", "at": instant}
 
 
 async def test_the_estimate_cap_pauses_and_a_decided_resume_puts_the_proposal_in_force(config):
