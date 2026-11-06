@@ -12,6 +12,7 @@ Esta página muestra los módulos del grupo `checks` de `domain` y los imports q
 graph TD
     g_domain__state["state (grupo)"]
     m_domain__check_results["domain.check_results"]
+    m_domain__check_runs["domain.check_runs"]
     m_domain__check_schedule["domain.check_schedule"]
     m_domain__ci["domain.ci"]
     m_domain__ci_push["domain.ci_push"]

@@ -130,6 +130,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.board": "landing",
     "domain.boot": "machine",
     "domain.check_results": "checks",
+    "domain.check_runs": "checks",
     "domain.check_schedule": "checks",
     "domain.ci": "checks",
     "domain.ci_push": "checks",

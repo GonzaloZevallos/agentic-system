@@ -22,6 +22,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
+    class check_runs__Match["Match"]
     class check_schedule__CheckPriority["CheckPriority"]
     class check_schedule__Decision["Decision"]
     class check_schedule__Entry["Entry"]
@@ -35,7 +36,6 @@ classDiagram
     class ci__DispatchedRun["DispatchedRun"]
     class ci__FullTierVerdict["FullTierVerdict"]
     class ci__JobLog["JobLog"]
-    class ci_workflow__WorkflowNames["WorkflowNames"]
     check_schedule__Entry --> check_schedule__CheckPriority
     check_schedule__Request --> check_schedule__CheckPriority
 ```
