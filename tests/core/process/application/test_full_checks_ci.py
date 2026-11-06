@@ -176,7 +176,7 @@ async def test_a_red_job_sends_the_task_back_with_its_name_and_link_without_slee
     assert apply(state, patch)["subtasks"][INTEGRATION]["status"] == "returned"
 
 
-def assert_escalated_ci(patch, ports, state=None):
+def assert_escalated_ci(patch, ports, state=None, *, timed=True):
     """GH-462: a CI with no verdict is an escalation of class `ci`: no local command, no
     record, no return."""
     assert patch["escalation_class"] == "ci"
@@ -186,11 +186,25 @@ def assert_escalated_ci(patch, ports, state=None):
     assert ports.commands.ran == []
     assert ports.check_scheduler.requests == []
     [entry] = unstamped(patch["pause_log"])
-    # A no-verdict wait carries its two instants and no run instants (GH-467); nothing else.
-    # None where nothing was pushed (a failed first publish) or no CI wait ended (planning defect).
+    # The wait of a pushed head carries its two instants and no run instants (GH-467), nothing
+    # else: `timed=False` is for a call where nothing was pushed (a failed first publish) or no
+    # CI wait ended (a planning defect), which has no wait to measure and so no `ci` key.
     timing = entry.pop("ci", None)
     assert entry == {"kind": "escalation", "value": "ci"}
-    assert timing is None or (timing["verdict"] == "no_verdict" and timing["run_ended_at"] is None)
+    if not timed:
+        assert timing is None
+    else:
+        assert timing is not None, "the no-verdict escalation lost its CiTiming"
+        assert set(timing) == {
+            "pushed_at",
+            "node_started_at",
+            "run_started_at",
+            "run_ended_at",
+            "verdict",
+        }
+        assert timing["verdict"] == "no_verdict"
+        assert timing["run_started_at"] is None and timing["run_ended_at"] is None
+        assert timing["pushed_at"] and timing["node_started_at"]
     if state is not None:
         assert rules.auto_resumable(apply(state, patch)) is None
 
@@ -258,7 +272,7 @@ async def test_a_failed_publish_escalates_as_publish_failed_and_reads_no_ci():
     ports = ports_of(GREEN)
     ports.workspace.ci_ref_error = "push refused"
     patch = await run(state_of(), ports)
-    assert_escalated_ci(patch, ports, state_of())
+    assert_escalated_ci(patch, ports, state_of(), timed=False)
     assert ports.tracker.branch_reads == []
     assert f"push of {REF} failed" in patch["escalated"]
 
@@ -622,7 +636,7 @@ async def test_a_permanent_push_refusal_escalates_after_one_attempt_with_what_gi
     workspace = FlakyPush(stderr)
     ports = ports_of(GREEN, workspace=workspace)
     patch = await run(state_of(), ports)
-    assert_escalated_ci(patch, ports, state_of())
+    assert_escalated_ci(patch, ports, state_of(), timed=False)
     assert workspace.ci_ref_calls == [("publish", REF)]
     assert "permission denied to workflow" in patch["escalated"]
     assert ci_push.scrub(stderr) in patch["escalated"]
@@ -711,7 +725,7 @@ async def test_gh543_a_matrix_job_id_required_escalates_unknown_names_without_a_
     clock = Clock()
     state = state_of(ci_required=["e2e"])
     patch = await run(state, ports, clock)
-    assert_escalated_ci(patch, ports, state)
+    assert_escalated_ci(patch, ports, state, timed=False)
     assert counters(patch) == []
     # Two reads agreed (one poll apart); the check timeout (100 s) was not waited out.
     assert clock.slept == [30]
@@ -814,7 +828,7 @@ async def test_a_failed_publish_escalates_as_ci_and_dispatches_nothing():
     ports = dispatching((run_of(job("unit"), job("web")),))
     ports.workspace.ci_ref_error = "git push failed: scripted"
     patch = await run(state_of(), ports)
-    assert_escalated_ci(patch, ports, state_of())
+    assert_escalated_ci(patch, ports, state_of(), timed=False)
     assert ports.tracker.dispatch_calls == [] and ports.tracker.dispatched_reads == []
     assert "publish_failed" in patch["escalated"]
     assert DISPATCH_REF in patch["escalated"] and FULL[:7] in patch["escalated"]
@@ -859,7 +873,7 @@ async def test_a_permanent_refusal_of_the_dispatch_publish_names_the_ref_and_git
     ports = dispatching((run_of(job("unit"), job("web")),))
     calls = failing_dispatch_publish(ports, stderr)
     patch = await run(state_of(), ports)
-    assert_escalated_ci(patch, ports, state_of())
+    assert_escalated_ci(patch, ports, state_of(), timed=False)
     assert len(calls) == 1 and ports.tracker.dispatch_calls == []
     assert "after 1 attempt(s) (permanent); git said: " in patch["escalated"]
     assert ci_push.scrub(stderr) in patch["escalated"]
