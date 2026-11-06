@@ -2,6 +2,7 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
 
 - Padre: [Clases de application](classes-process-application.md)
 - Hermanas:
+  - [application: build](classes-process-application-build.md)
   - [application: checks](classes-process-application-checks.md)
   - [application: definition](classes-process-application-definition.md)
   - [application: landing](classes-process-application-landing.md)

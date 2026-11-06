@@ -119,6 +119,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.schedule": "lifecycle",
     "application.schema_guard": "checks",
     "application.scratch_sweep": "lifecycle",
+    "application.shadow_review": "build",
     "application.split": "build",
     "application.stack_review": "reflection",
     "application.stop": "lifecycle",
