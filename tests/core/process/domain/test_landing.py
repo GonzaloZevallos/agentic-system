@@ -1407,3 +1407,23 @@ def test_every_landing_creation_site_stamps_its_resumed_entry_with_the_given_ins
     assert landing.unescalated(raw, STAMP)["pause_log"] == [entry]
     assert landing.migration(raw, STAMP)["pause_log"][-1] == entry
     assert landing.released(raw, "go", STAMP)["pause_log"] == [entry]
+
+
+def _escalated_on_ci():
+    escalate = {"head": HEAD, "step": "escalate", "refusal": "ci_no_verdict", "at": AT.isoformat()}
+    return {
+        "id": "GH-5",
+        "status": "waiting_on_human",
+        "escalated": "no verdict",
+        "escalation_class": "questions",
+        "pull_request": "https://example.test/pull/5",
+        "landing": [escalate],
+    }
+
+
+def test_the_no_verdict_and_the_ci_releases_stamp_their_resumed_entry_too():
+    entry = {"kind": "resumed", "at": STAMP}
+    raw = _escalated_on_ci()
+    assert landing.released_no_verdict(raw, "u" * 40, STAMP)["pause_log"] == [entry]
+    assert landing.released_by_ci(raw, "u" * 40, STAMP)["pause_log"] == [entry]
+    assert landing.released_no_verdict(raw, None, STAMP, "go")["pause_log"] == [entry]
