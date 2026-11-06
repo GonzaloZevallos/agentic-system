@@ -176,7 +176,7 @@ async def test_a_red_job_sends_the_task_back_with_its_name_and_link_without_slee
     assert apply(state, patch)["subtasks"][INTEGRATION]["status"] == "returned"
 
 
-def assert_escalated_ci(patch, ports, state=None):
+def assert_escalated_ci(patch, ports, state=None, *, timed=False):
     """GH-462: a CI with no verdict is an escalation of class `ci`: no local command, no
     record, no return."""
     assert patch["escalation_class"] == "ci"
@@ -191,6 +191,8 @@ def assert_escalated_ci(patch, ports, state=None):
     timing = entry.pop("ci", None)
     assert entry == {"kind": "escalation", "value": "ci"}
     assert timing is None or (timing["verdict"] == "no_verdict" and timing["run_ended_at"] is None)
+    # `timed`: a wait that pushed something must carry its timing; dropping the forwarding fails.
+    assert timing is not None or not timed
     if state is not None:
         assert rules.auto_resumable(apply(state, patch)) is None
 
@@ -199,7 +201,7 @@ async def test_a_report_of_another_head_is_never_accepted_and_escalates_as_no_ru
     ports = ports_of(report(job("unit"), job("web"), sha="f" * 40))
     clock = Clock()
     patch = await run(state_of(), ports, clock)
-    assert_escalated_ci(patch, ports, state_of())
+    assert_escalated_ci(patch, ports, state_of(), timed=True)
     # Two grace periods (30 s each), not the 100 s check timeout.
     assert sum(clock.slept) == 60
     assert ports.workspace.ci_ref_calls == [("publish", REF), ("delete_ci", REF), ("publish", REF)]
@@ -501,7 +503,7 @@ async def test_no_dispatched_run_dispatches_twice_within_two_graces_and_escalate
     ports = dispatching()
     clock = Clock()
     patch = await run(state_of(), ports, clock)
-    assert_escalated_ci(patch, ports, state_of())
+    assert_escalated_ci(patch, ports, state_of(), timed=True)
     assert len(ports.tracker.dispatch_calls) == 2
     assert clock.now == 2 * CFG.ci_start_grace_s < CFG.check_timeout_s
     assert "no dispatched run" in patch["escalated"] and "ci.yml" in patch["escalated"]
