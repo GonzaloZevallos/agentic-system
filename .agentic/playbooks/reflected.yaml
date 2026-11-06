@@ -671,3 +671,5 @@ tasks:
   GH-471@review:
     cost_usd: 0.143
     decisions: 2
+  GH-519@review:
+    cost_usd: 0.1191

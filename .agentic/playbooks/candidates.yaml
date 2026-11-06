@@ -1273,3 +1273,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-05T19:38:57.207+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: 'When a plan invariant cannot hold, record it in Decisions: name the invariant, the check command and output that forces the breach, and the version shipped. A bare pointer to assumptions is not a record.'
+  confidence: medium
+  seen_in:
+  - GH-519
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-06T20:05:01.356+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When you change how a shared quantity such as cost or a cap is computed, search every caller that compares, carries or restarts with it, and fix them or list them in your delivery.
+  confidence: medium
+  seen_in:
+  - GH-519
+  sources:
+  - finding
+  added_at: '2026-11-06T20:05:01.356+00:00'
