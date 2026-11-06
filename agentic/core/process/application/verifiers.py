@@ -67,7 +67,7 @@ async def verify(
         role = _ROLE[due[0]] if due else DEVELOPER_INTEGRATOR
         return finish(state, unprepared.patch(role), ports)
     if not ports.workspace.is_clean(checkout.path):
-        return finish(state, dirty_patch(checkout.branch), ports)
+        return finish(state, dirty_patch(checkout.branch, at=ports.now()), ports)
 
     patches: dict[Verifier, TaskState] = {}
     snapshot = state

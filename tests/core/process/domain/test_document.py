@@ -1127,7 +1127,7 @@ def test_the_real_stranded_text_has_the_shape_the_migration_was_written_for():
 
 
 def test_migration_written_through_record_closure_on_the_real_text_frees_it_and_nothing_else():
-    values = landing_rules.migration(document.parse(GH150_STRANDED), "2026-10-15T12:00:00+00:00")
+    values = landing_rules.migration(document.parse(GH150_STRANDED), at="2026-10-15T12:00:00+00:00")
 
     out = document.record_closure(GH150_STRANDED, values)
 
@@ -1184,7 +1184,7 @@ def test_a_record_keys_set_without_the_wrapped_and_block_keys_refuses_the_real_t
     """The pre-GH-257 `RECORD_KEYS` is the rejected input: the real escalation and pause log
     are then not a single scalar line, and the migration cannot be written."""
     monkeypatch.setattr(document, "RECORD_KEYS", frozenset({"landing"}))
-    values = landing_rules.migration(document.parse(GH150_STRANDED), "2026-10-15T12:00:00+00:00")
+    values = landing_rules.migration(document.parse(GH150_STRANDED), at="2026-10-15T12:00:00+00:00")
 
     with pytest.raises(ValueError, match="escalated|pause_log"):
         document.record_closure(GH150_STRANDED, values)
@@ -1285,9 +1285,9 @@ _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
 # A `record_closure` whose values are not a dict literal is checked through the keys its
 # producer builds, never skipped: the expression as written -> a sample of what it returns.
 _OPAQUE_PATCHES = {
-    "landing_rules.migration(document, clock())": lambda: landing_rules.migration(
+    "landing_rules.migration(document, at=clock())": lambda: landing_rules.migration(
         {"status": "escalated", "pull_request": "u/pull/1", "pause_log": [], "landing": []},
-        "2026-10-15T12:00:00+00:00",
+        at="2026-10-15T12:00:00+00:00",
     ),
 }
 
@@ -1349,7 +1349,9 @@ def test_the_guard_rejects_a_write_whose_values_it_cannot_read():
     }
     assert _unrecorded("ports.documents.record_closure(t, {key: [1]})") == {"<unreadable: key>"}
     assert (
-        _unrecorded("ports.documents.record_closure(t, landing_rules.migration(document, clock()))")
+        _unrecorded(
+            "ports.documents.record_closure(t, landing_rules.migration(document, at=clock()))"
+        )
         == set()
     )
 
@@ -1428,11 +1430,15 @@ def test_the_document_of_a_part_over_the_line_round_trips_fit_question_until_it_
     """A part paused by `rules.part_over_line` writes `fit_question`; the resume writes it
     False, so the next document has no key and keeps `fit_waived`."""
     base = {"id": "GH-9", "title": "t", "description": "d", "type": "feature", "sections": {}}
-    paused = task.apply(base, rules.part_over_line("GH-9", ("GH-3", 2), None))
+    paused = task.apply(
+        base, rules.part_over_line("GH-9", ("GH-3", 2), None, at="2026-11-06T12:00:00+00:00")
+    )
     parsed = document.parse(document.render(paused))
     assert parsed["fit_question"] is True and "fit_question" in resume.STATE_FIELDS
     assert "fit_question" not in document.parse(document.render(base))
-    answered = task.apply(paused, rules.resumed(paused, "Build it whole."))
+    answered = task.apply(
+        paused, rules.resumed(paused, "Build it whole.", at="2026-11-06T12:00:00+00:00")
+    )
     text = document.render(answered)
     assert "fit_question" not in text
     assert document.parse(text)["fit_waived"] is True

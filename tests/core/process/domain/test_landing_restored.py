@@ -118,7 +118,7 @@ def test_every_rewriter_keeps_the_order_and_the_length_of_the_entries():
     before = _shape(state["landing"])
     rewritten = {
         "released": landing.released(state, "keep going", "2026-10-28T00:00:00Z")["landing"],
-        "migration": landing.migration(state, "2026-10-28T00:00:00Z")["landing"],
+        "migration": landing.migration(state, at="2026-10-28T00:00:00Z")["landing"],
         "resolve_open": landing.resolve_open(state["landing"], "t", 3.0),
         "close_unsynced": landing.close_unsynced(state["landing"], "t", 3.0, NEW_MASTER),
         "with_cost_base": landing.with_cost_base(state["landing"], "4" * 40, "diagnose", 2.0),

@@ -27,6 +27,7 @@ from tests.fakes import (
     MemoryWorkspace,
     full_checks_in_task_checkout,
     memory_ports,
+    unstamped,
 )
 
 pytestmark = pytest.mark.anyio
@@ -184,7 +185,7 @@ def assert_escalated_ci(patch, ports, state=None):
     assert "full_checks" not in patch and "subtasks" not in patch and "findings" not in patch
     assert ports.commands.ran == []
     assert ports.check_scheduler.requests == []
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "ci"}]
+    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "ci"}]
     if state is not None:
         assert rules.auto_resumable(apply(state, patch)) is None
 

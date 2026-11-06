@@ -2610,7 +2610,9 @@ def _failed_names(record: FullChecksRecord) -> list[str]:
     return names or [record.get("failed_step") or "checks"]
 
 
-def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -> dict[str, Any]:
+def full_checks_return(
+    state: TaskState, record: FullChecksRecord, limit: int, *, at: str
+) -> dict[str, Any]:
     """The patch of a red `full_checks` run (GH-358), modelled on QA Performance's return:
     the integration (the single subtask when there is none) reopens with `returned_by:
     "full_checks"`, one blocking `plan` row per failed check at `full_checks:<check>` with a
@@ -2655,7 +2657,7 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
         patch["changes_requested"] = record_return(state, pair)
         patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]
     else:
-        stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))})
+        stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))}, at=at)
         patch = {**patch, **stopped, "status": WAITING_ON_HUMAN}
     return patch
 
@@ -2792,7 +2794,7 @@ def full_checks_cover(
 
 
 def full_checks_heal(
-    state: TaskState, head: str, verdict: Literal["missing", "stale"]
+    state: TaskState, head: str, verdict: Literal["missing", "stale"], *, at: str
 ) -> dict[str, Any]:
     """The patch of a `deliver` refused for want of a covering record (GH-358): the first
     refusal on `head` stamps it as the task's head and as healed, and the fan-in runs the
@@ -2804,12 +2806,12 @@ def full_checks_heal(
             f"deliver refused twice to push {head[:7]}: its full_checks record is {verdict}, "
             "and running the suite again on that head did not cover it. Nothing was pushed."
         )
-        stopped = logged({**escalation("system_delivery", reason)})
+        stopped = logged({**escalation("system_delivery", reason)}, at=at)
         return {**stopped, "status": WAITING_ON_HUMAN}
     return {"task_head": head, "full_checks_healed": head}
 
 
-def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
+def ci_unavailable(cause: CiCause, head: str, detail: str, *, at: str) -> dict[str, Any]:
     """The patch of a `full_checks` of a `ci:` product that GitHub could not judge (GH-462):
     the task stops for the human with class `ci`, and the suite is never run on this machine.
     No `full_checks` record and no return: the head has no verdict, and `full_checks_due`
@@ -2825,11 +2827,12 @@ def ci_unavailable(cause: CiCause, head: str, detail: str) -> dict[str, Any]:
             "current_role": DEVELOPER.name,
             "status": WAITING_ON_HUMAN,
             **escalation("ci", reason),
-        }
+        },
+        at=at,
     )
 
 
-def ci_planning_defect(head: str, text: str) -> dict[str, Any]:
+def ci_planning_defect(head: str, text: str, *, at: str) -> dict[str, Any]:
     """The patch of a `full_checks` whose required CI names no check run of `head` carries
     (GH-485): a planning defect, never a failed check. The task stops for the human under class
     `ci`; no `full_checks` record, no return and no counter, so the Developer is not charged and
@@ -2841,7 +2844,8 @@ def ci_planning_defect(head: str, text: str) -> dict[str, Any]:
             "current_role": DEVELOPER.name,
             "status": WAITING_ON_HUMAN,
             **escalation("ci", reason),
-        }
+        },
+        at=at,
     )
 
 
@@ -3000,7 +3004,7 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
 
 
 def part_over_line(
-    task_id: str, part_of: tuple[str, int], fit: FitDecision | None
+    task_id: str, part_of: tuple[str, int], fit: FitDecision | None, *, at: str
 ) -> dict[str, Any]:
     """The patch that pauses a part whose plan is over the line: one `estimate` escalation
     asking "build it whole or stop", marked by `fit_question` so only its resume waives the
@@ -3011,7 +3015,8 @@ def part_over_line(
             "status": WAITING_ON_HUMAN,
             **escalation("estimate", fit_question_text(task_id, part_of, fit)),
             "fit_question": True,
-        }
+        },
+        at=at,
     )
 
 
@@ -3020,7 +3025,7 @@ def resumed(
     decision: str | None,
     estimate: float | None = None,
     *,
-    at: str | None = None,
+    at: str,
 ) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
@@ -3038,7 +3043,7 @@ def resumed(
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
         # after the last one of this kind, so a pause the human just resolved never
         # counts toward what the poller may retry on its own next time.
-        "pause_log": [resumed_entry(at)],
+        "pause_log": [resumed_entry(at=at)],
     }
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
@@ -3544,15 +3549,11 @@ ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
 
 
-def resumed_entry(at: str | None = None) -> ResumedPauseEntry:
+def resumed_entry(*, at: str) -> ResumedPauseEntry:
     """The one constructor of the `resumed` entry that closes an epoch (the poller's retake,
     a human's decision, a landing release). `at` is the instant, ISO-8601 UTC, handed in by the
-    application layer; omitted, never written as `None`, when it is unknown. No other module
-    builds a `ResumedPauseEntry`."""
-    entry = ResumedPauseEntry(kind="resumed")
-    if at is not None:
-        entry["at"] = at
-    return entry
+    application layer. No other module builds a `ResumedPauseEntry`."""
+    return ResumedPauseEntry(kind="resumed", at=at)
 
 
 def escalation_entry(
@@ -3587,7 +3588,7 @@ def logged(
     failures: Sequence[Failure] = (),
     lapses: Sequence[str] = (),
     *,
-    at: str | None = None,
+    at: str,
     ci: CiTiming | None = None,
 ) -> dict[str, Any]:
     """Every escalation composes with this (issue #137): the one place a `pause_log`
@@ -4339,7 +4340,7 @@ def account_limit_persisted(r: ResumeCandidate) -> bool:
     )
 
 
-def account_limit_persisted_patch() -> dict[str, Any]:
+def account_limit_persisted_patch(*, at: str) -> dict[str, Any]:
     """The escalation of an account limit that outlasted the hourly week: class
     `failure`, with a failure entry of reason `other` in the log so `auto_resumable`
     (every failure external) no longer finds the pause eligible -- the escalation is
@@ -4352,7 +4353,7 @@ def account_limit_persisted_patch() -> dict[str, Any]:
         session_id="",
         reason="other",
     )
-    return logged({**escalation("failure", ACCOUNT_LIMIT_PERSISTED)}, [failure])
+    return logged({**escalation("failure", ACCOUNT_LIMIT_PERSISTED)}, [failure], at=at)
 
 
 def needs_a_human(state: TaskState) -> bool:

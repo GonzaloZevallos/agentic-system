@@ -334,7 +334,7 @@ async def test_the_resume_of_a_part_over_the_line_builds_it_whole_without_planni
     calls = len(runner.calls)
 
     assert rules.auto_resumable(paused) is None
-    resumed = apply(paused, rules.resumed(paused, "build it whole"))
+    resumed = apply(paused, rules.resumed(paused, "build it whole", at="2026-11-06T12:00:00+00:00"))
 
     assert resumed["fit_waived"] is True and resumed["fit_question"] is False
     assert rules.resume_target(resumed) == "integrate"

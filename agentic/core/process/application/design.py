@@ -113,7 +113,7 @@ async def _lead_walk(
             patch["change_history"] = [rules.change_entry(pair, rules.PRD_RETURN, data["reason"])]
         else:
             patch |= rules.escalation("returns", rules.limit_reached(pair, limit, data["reason"]))
-            patch = rules.logged(patch)
+            patch = rules.logged(patch, at=ports.now())
             patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
 
@@ -162,7 +162,7 @@ async def consolidate(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
                 f"{len(data['questions_for_human'])} point(s) UX marked as impeding it; "
                 "see the questions",
             )
-            patch = rules.logged(patch)
+            patch = rules.logged(patch, at=ports.now())
             patch["status"] = WAITING_ON_HUMAN
     elif remaining > 0:
         patch["changes_requested"] = rules.record_return(state, PAIR_PM_PA)
@@ -170,6 +170,6 @@ async def consolidate(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         patch["status"] = "returned"
     else:
         patch |= rules.escalation("returns", rules.limit_reached(PAIR_PM_PA, limit, data["reason"]))
-        patch = rules.logged(patch)
+        patch = rules.logged(patch, at=ports.now())
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

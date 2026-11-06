@@ -467,7 +467,7 @@ def _freed(
     document: TaskState = loaded
     if not landing_plan.stranded_now(ports, task_id, document):
         return document
-    ports.documents.record_closure(task_id, landing_rules.migration(document, clock()))
+    ports.documents.record_closure(task_id, landing_rules.migration(document, at=clock()))
     log(f"agentic: land: {task_id}: stranded diagnosis freed, retrying on the calendar")
     freed: Any = ports.documents.load(task_id)
     again: TaskState = freed if freed is not None else document

@@ -1011,7 +1011,7 @@ def escalate_persisted_limits(
         raw = ports.documents.load(task_id)
         if raw is None:
             continue
-        state = apply(raw, rules.account_limit_persisted_patch())
+        state = apply(raw, rules.account_limit_persisted_patch(at=ports.now()))
         ports.documents.save(state)
         if rules.needs_a_human(state):
             ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)

@@ -303,7 +303,7 @@ async def interview(
             f"{decider.name} could not decide {len(transcript.questions_for_human)} "
             "question(s) from the request and the product knowledge; see the questions",
         )
-        patch = rules.logged(patch)
+        patch = rules.logged(patch, at=ports.now())
         patch["status"] = WAITING_ON_HUMAN
         return None, patch
     return transcript, patch

@@ -12,6 +12,8 @@ HEAD = "a" * 40
 MOVED = "b" * 40
 LATER = "c" * 40
 
+_STAMP = "2026-11-06T12:00:00+00:00"
+
 
 def entry(name, passed=True):
     if passed:
@@ -67,11 +69,13 @@ def test_with_task_head_and_no_record_the_node_comes_before_everything_after_the
 
 
 def test_ci_unavailable_escalates_with_class_ci_and_writes_no_record_and_no_return():
-    patch = rules.ci_unavailable("no_run", HEAD, "no CI run on agentic-ci/GH-1 after 25 min")
+    patch = rules.ci_unavailable(
+        "no_run", HEAD, "no CI run on agentic-ci/GH-1 after 25 min", at=_STAMP
+    )
     assert patch["escalation_class"] == "ci"
     assert patch["status"] == "waiting_on_human"
     assert patch["current_role"] == roles.DEVELOPER.name
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "ci"}]
+    assert patch["pause_log"] == [{"kind": "escalation", "value": "ci", "at": _STAMP}]
     assert "(no_run)" in patch["escalated"] and HEAD[:7] in patch["escalated"]
     assert HEAD not in patch["escalated"]
     assert "no CI run on agentic-ci/GH-1 after 25 min" in patch["escalated"]
@@ -81,7 +85,7 @@ def test_ci_unavailable_escalates_with_class_ci_and_writes_no_record_and_no_retu
 def test_a_state_escalated_ci_with_no_passed_record_is_due_again_so_a_resume_re_enters():
     stopped = apply(
         state(task_head=HEAD, owner_rules_seen=HEAD),
-        rules.ci_unavailable("publish_failed", HEAD, "push failed"),
+        rules.ci_unavailable("publish_failed", HEAD, "push failed", at=_STAMP),
     )
     assert stopped["escalation_class"] == "ci"
     assert rules.full_checks_due(stopped)
@@ -143,7 +147,7 @@ RED = record(passed=False, version=2, failed=("types",))
 
 
 def test_a_red_run_reopens_the_integration_with_one_blocking_row_per_failed_check():
-    patch = rules.full_checks_return(state(task_head=HEAD), RED, 3)
+    patch = rules.full_checks_return(state(task_head=HEAD), RED, 3, at=_STAMP)
     assert patch["subtasks"]["integration"]["status"] == "returned"
     assert patch["subtasks"]["integration"]["returned_by"] == "full_checks"
     assert "types" in patch["subtasks"]["integration"]["reason"]
@@ -167,7 +171,7 @@ def test_a_red_run_reopens_the_integration_with_one_blocking_row_per_failed_chec
 
 def test_a_red_run_of_a_single_subtask_task_reopens_that_subtask():
     only = state(subtasks={"api": {"status": "approved"}})
-    patch = rules.full_checks_return(only, RED, 3)
+    patch = rules.full_checks_return(only, RED, 3, at=_STAMP)
     assert patch["subtasks"]["api"]["returned_by"] == "full_checks"
     assert patch["findings"][0]["subtask"] == "api"
     assert patch["changes_requested"] == {roles.pair_for("api").key: 1}
@@ -176,13 +180,13 @@ def test_a_red_run_of_a_single_subtask_task_reopens_that_subtask():
 def test_a_run_that_failed_before_any_check_names_the_step_it_stopped_at():
     stopped = record(passed=False, failed_step="setup")
     stopped["results"] = []
-    patch = rules.full_checks_return(state(), stopped, 3)
+    patch = rules.full_checks_return(state(), stopped, 3, at=_STAMP)
     assert [f["location"] for f in patch["findings"]] == ["full_checks:setup"]
 
 
 def test_the_return_counts_on_the_pair_and_escalates_at_its_limit():
     spent = state(changes_requested={roles.pair_for("integration").key: 2})
-    patch = rules.full_checks_return(spent, RED, 2)
+    patch = rules.full_checks_return(spent, RED, 2, at=_STAMP)
     assert patch["escalation_class"] == "returns"
     assert "full_checks" in patch["escalated"]
     assert patch["status"] == "waiting_on_human"
@@ -205,19 +209,22 @@ def statuses(current):
 
 def test_red_then_green_closes_the_rows_and_a_later_red_reopens_them():
     red = state(task_head=HEAD)
-    red = apply(red, rules.full_checks_return(red, RED, 3))
+    red = apply(red, rules.full_checks_return(red, RED, 3, at=_STAMP))
     assert statuses(red) == [(2, "open")]
     green = apply(red, {"full_checks": record(MOVED, version=3)})
     assert rules.full_checks_green_version(green) == 3
     assert statuses(green) == [(2, "fixed")]
-    later = apply(green, rules.full_checks_return(green, record(LATER, False, 4, ("types",)), 3))
+    later = apply(
+        green,
+        rules.full_checks_return(green, record(LATER, False, 4, ("types",)), 3, at=_STAMP),
+    )
     assert rules.full_checks_green_version(later) == 0
     assert statuses(later) == [(2, "open"), (4, "open")]
 
 
 def test_an_approving_review_alone_leaves_the_rows_open():
     red = state(task_head=HEAD)
-    red = apply(red, rules.full_checks_return(red, RED, 3))
+    red = apply(red, rules.full_checks_return(red, RED, 3, at=_STAMP))
     approved = apply(
         red,
         {
@@ -237,7 +244,7 @@ def test_an_approving_review_alone_leaves_the_rows_open():
 
 def test_a_reviewers_settled_list_never_closes_a_full_checks_row():
     red = state(task_head=HEAD)
-    red = apply(red, rules.full_checks_return(red, RED, 3))
+    red = apply(red, rules.full_checks_return(red, RED, 3, at=_STAMP))
     claimed = apply(red, {"settled_findings": ["full_checks:types"]})
     assert statuses(claimed) == [(2, "open")]
     green = apply(claimed, {"full_checks": record(MOVED, version=3)})
@@ -266,7 +273,7 @@ def test_each_cover_verdict():
 
 
 def test_the_first_refusal_on_a_head_heals_and_routes_to_the_fan_in():
-    patch = rules.full_checks_heal(state(task_head=HEAD), MOVED, "stale")
+    patch = rules.full_checks_heal(state(task_head=HEAD), MOVED, "stale", at=_STAMP)
     assert patch["task_head"] == MOVED and patch["full_checks_healed"] == MOVED
     assert "escalated" not in patch
     healed = apply(state(task_head=HEAD, full_checks=record()), patch)
@@ -275,8 +282,11 @@ def test_the_first_refusal_on_a_head_heals_and_routes_to_the_fan_in():
 
 
 def test_a_second_refusal_on_the_same_head_escalates_with_the_system_delivery_class():
-    healed = apply(state(task_head=HEAD), rules.full_checks_heal(state(), MOVED, "missing"))
-    patch = rules.full_checks_heal(healed, MOVED, "stale")
+    healed = apply(
+        state(task_head=HEAD),
+        rules.full_checks_heal(state(), MOVED, "missing", at=_STAMP),
+    )
+    patch = rules.full_checks_heal(healed, MOVED, "stale", at=_STAMP)
     assert patch["escalation_class"] == "system_delivery"
     assert "stale" in patch["escalated"] and MOVED[:7] in patch["escalated"]
     assert patch["status"] == "waiting_on_human"
@@ -285,8 +295,8 @@ def test_a_second_refusal_on_the_same_head_escalates_with_the_system_delivery_cl
 
 
 def test_a_new_head_routes_again():
-    healed = apply(state(), rules.full_checks_heal(state(), MOVED, "missing"))
-    again = rules.full_checks_heal(healed, LATER, "stale")
+    healed = apply(state(), rules.full_checks_heal(state(), MOVED, "missing", at=_STAMP))
+    again = rules.full_checks_heal(healed, LATER, "stale", at=_STAMP)
     assert "escalated" not in again and again["full_checks_healed"] == LATER
 
 
@@ -374,22 +384,25 @@ def deferred_record(version=3, head=HEAD, failed=()):
 
 
 def test_a_record_whose_only_non_passing_row_is_deferred_returns_nothing():
-    patch = rules.full_checks_return(state(task_head=HEAD), deferred_record(), 3)
+    patch = rules.full_checks_return(state(task_head=HEAD), deferred_record(), 3, at=_STAMP)
     assert patch == {"full_checks": deferred_record()}
 
 
 def test_a_deferred_row_next_to_a_red_one_returns_only_the_red_one():
     mixed = deferred_record(failed=("types",))
-    patch = rules.full_checks_return(state(task_head=HEAD), mixed, 3)
+    patch = rules.full_checks_return(state(task_head=HEAD), mixed, 3, at=_STAMP)
     assert [f["location"] for f in patch["findings"]] == ["full_checks:types"]
     assert "web-e2e" not in patch["subtasks"]["integration"]["reason"]
 
 
 def test_an_open_row_stays_open_under_a_record_with_a_deferred_row():
     red = state(task_head=HEAD)
-    red = apply(red, rules.full_checks_return(red, RED, 3))
+    red = apply(red, rules.full_checks_return(red, RED, 3, at=_STAMP))
     assert statuses(red) == [(2, "open")]
-    deferred = apply(red, rules.full_checks_return(red, deferred_record(version=3), 3))
+    deferred = apply(
+        red,
+        rules.full_checks_return(red, deferred_record(version=3), 3, at=_STAMP),
+    )
     assert rules.full_checks_green_version(deferred) == 0
     assert statuses(deferred) == [(2, "open")]
     # The same state under a plain green record does close it: the guard is the deferral.

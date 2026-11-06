@@ -105,6 +105,7 @@ def _stopped(state: TaskState, exc: Exception, ports: Ports) -> TaskState:
                 "failure",
                 f"tracker only: posting the checklist failed ({exc}); resume to post it",
             ),
-        }
+        },
+        at=ports.now(),
     )
     return finish(state, patch, ports)

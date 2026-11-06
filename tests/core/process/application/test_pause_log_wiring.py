@@ -14,7 +14,15 @@ from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain.roles import INTERVIEW_DEFINITION, PAIR_PM_PA
 from agentic.core.process.domain.task import DependencyState
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, answers, classified, memory_ports, questions, reviewed
+from tests.fakes import (
+    ScriptedRunner,
+    answers,
+    classified,
+    memory_ports,
+    questions,
+    reviewed,
+    unstamped,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -53,7 +61,7 @@ async def test_run_role_logs_each_failure_then_the_escalation(cfg):
     )
     patch = await classify(TASK, cfg, ports)
     assert patch["escalation_class"] == "failure"
-    assert patch["pause_log"] == [
+    assert unstamped(patch["pause_log"]) == [
         {"kind": "failure", "value": "upstream", "section": "PjM"},
         {"kind": "failure", "value": "account_limit", "section": "PjM"},
         {"kind": "escalation", "value": "failure"},
@@ -76,7 +84,7 @@ async def test_interview_logs_its_own_questions_escalation_with_no_failure(cfg):
     )
     _, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
     assert patch["escalation_class"] == "questions"
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "questions"}]
+    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "questions"}]
 
 
 async def test_review_logs_its_own_returns_escalation_with_no_failure(cfg):
@@ -90,7 +98,21 @@ async def test_review_logs_its_own_returns_escalation_with_no_failure(cfg):
         state, cfg, memory_ports(ScriptedRunner(tech_lead_review=[reviewed("returned", "still")]))
     )
     assert patch["escalation_class"] == "returns"
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "returns"}]
+    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "returns"}]
+
+
+async def test_a_node_stamps_its_pause_entries_from_the_injected_now(cfg):
+    """The instant on an entry is `Ports.now`'s, read by the node, never a clock of the domain."""
+    from tests.fakes import stepping_now, verdict
+
+    ports = memory_ports(
+        ScriptedRunner(pm=[verdict("returned", "still no metrics")]),
+        now=stepping_now("2030-01-01T00:00:00+00:00"),
+    )
+    state = {**TASK, "type": "feature", "changes_requested": {PAIR_PM_PA.key: 2}}
+    patch = await validate_prd(state, cfg, ports)
+    (entry,) = patch["pause_log"]
+    assert entry["at"].startswith("2030-01-01T00:00:")  # the injected clock's, not the machine's
 
 
 async def test_validate_prd_logs_its_own_returns_escalation_with_no_failure(cfg):
@@ -100,7 +122,7 @@ async def test_validate_prd_logs_its_own_returns_escalation_with_no_failure(cfg)
     state = {**TASK, "type": "feature", "changes_requested": {PAIR_PM_PA.key: 2}}
     patch = await validate_prd(state, cfg, ports)
     assert patch["escalation_class"] == "returns"
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "returns"}]
+    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "returns"}]
 
 
 async def test_develop_logs_unmergeable_when_a_marker_survives_delivery(cfg):
@@ -125,7 +147,7 @@ async def test_develop_logs_unmergeable_when_a_marker_survives_delivery(cfg):
     ]
     patch = await develop(state, cfg, ports)
     assert patch["escalation_class"] == "unmergeable"
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "unmergeable"}]
+    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "unmergeable"}]
 
 
 async def test_develop_logs_unmergeable_at_once_with_nothing_to_resolve(cfg):
@@ -142,4 +164,4 @@ async def test_develop_logs_unmergeable_at_once_with_nothing_to_resolve(cfg):
     ports.workspace.subtask_checkout("T-1", "api")
     patch = await develop(state, cfg, ports)
     assert patch["escalation_class"] == "unmergeable"
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "unmergeable"}]
+    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "unmergeable"}]
