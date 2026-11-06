@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - [domain: state (parte 6)](classes-process-domain-state-6.md)
 
 ```mermaid
 classDiagram
