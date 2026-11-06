@@ -86,30 +86,36 @@ def stopped(**more):
 
 
 def test_resuming_with_a_decision_puts_the_proposal_in_force_and_keeps_the_plans_estimate():
-    patch = rules.resumed(stopped(), "Go on.")
+    patch = rules.resumed(stopped(), "Go on.", at="2026-11-06T12:00:00+00:00")
     assert patch["estimate_revisions"] == [{"cost_usd": 150.0, "source": "proposed"}]
     assert patch["proposed_estimate"] is None
     assert "estimate" not in patch
 
 
 def test_resuming_with_a_flag_puts_the_humans_value_in_force():
-    patch = rules.resumed(stopped(), "Go on.", estimate=120.0)
+    patch = rules.resumed(stopped(), "Go on.", estimate=120.0, at="2026-11-06T12:00:00+00:00")
     assert patch["estimate_revisions"] == [{"cost_usd": 120.0, "source": "human"}]
     assert patch["proposed_estimate"] is None
 
 
 def test_a_revision_is_appended_to_the_earlier_ones():
     earlier = [{"cost_usd": 60.0, "source": "human"}]
-    patch = rules.resumed(stopped(estimate_revisions=earlier), "Go on.")
+    patch = rules.resumed(
+        stopped(estimate_revisions=earlier), "Go on.", at="2026-11-06T12:00:00+00:00"
+    )
     assert [r["cost_usd"] for r in patch["estimate_revisions"]] == [60.0, 150.0]
 
 
 def test_without_a_decision_the_estimate_is_not_revised():
     # Invariant 7: the revisions grow only on a resumption with the human's decision.
-    assert "estimate_revisions" not in rules.resumed(stopped(), None)
-    assert "estimate_revisions" not in rules.resumed(stopped(), "   ")
+    assert "estimate_revisions" not in rules.resumed(
+        stopped(), None, at="2026-11-06T12:00:00+00:00"
+    )
+    assert "estimate_revisions" not in rules.resumed(
+        stopped(), "   ", at="2026-11-06T12:00:00+00:00"
+    )
 
 
 def test_another_escalation_never_revises_the_estimate():
     cap = state(proposed_estimate=150.0, **rules.escalation("cap", "cap"))
-    assert "estimate_revisions" not in rules.resumed(cap, "Go on.")
+    assert "estimate_revisions" not in rules.resumed(cap, "Go on.", at="2026-11-06T12:00:00+00:00")

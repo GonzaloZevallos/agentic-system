@@ -138,7 +138,8 @@ def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports, left: st
                 f"split: {step} failed ({exc}); {done} of "
                 f"{len(state.get('parts', []))} parts are open and {left}, resume to finish",
             ),
-        }
+        },
+        at=ports.now(),
     )
     return finish(state, patch, ports)
 

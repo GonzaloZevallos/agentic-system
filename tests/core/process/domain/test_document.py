@@ -1430,11 +1430,15 @@ def test_the_document_of_a_part_over_the_line_round_trips_fit_question_until_it_
     """A part paused by `rules.part_over_line` writes `fit_question`; the resume writes it
     False, so the next document has no key and keeps `fit_waived`."""
     base = {"id": "GH-9", "title": "t", "description": "d", "type": "feature", "sections": {}}
-    paused = task.apply(base, rules.part_over_line("GH-9", ("GH-3", 2), None))
+    paused = task.apply(
+        base, rules.part_over_line("GH-9", ("GH-3", 2), None, at="2026-11-06T12:00:00+00:00")
+    )
     parsed = document.parse(document.render(paused))
     assert parsed["fit_question"] is True and "fit_question" in resume.STATE_FIELDS
     assert "fit_question" not in document.parse(document.render(base))
-    answered = task.apply(paused, rules.resumed(paused, "Build it whole."))
+    answered = task.apply(
+        paused, rules.resumed(paused, "Build it whole.", at="2026-11-06T12:00:00+00:00")
+    )
     text = document.render(answered)
     assert "fit_question" not in text
     assert document.parse(text)["fit_waived"] is True

@@ -37,7 +37,7 @@ from tests.core.process.application.test_poll_merge import (
     _pr,
 )
 from tests.core.process.domain.test_landing import _facts
-from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryStack, ScriptedRunner
+from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryStack, ScriptedRunner, unstamped
 from tests.gh150_stranded import GH150_STRANDED
 
 NOW = "2026-10-14T00:00:00+00:00"
@@ -1077,7 +1077,7 @@ def test_a_sdk_failure_escalates_at_once_labelled_and_commented(tmp_path):
     assert "1 attempt" in doc["escalated"]
     assert ports.tracker.labels == [("GH-5", "needs-human")]
     assert len(ports.tracker.comments) == 1
-    assert doc["pause_log"] == [{"kind": "escalation", "value": "failure"}]
+    assert unstamped(doc["pause_log"]) == [{"kind": "escalation", "value": "failure"}]
     assert rules.auto_resumable(doc) is None
 
 

@@ -69,6 +69,7 @@ from tests.fakes import (
     questions,
     reviewed,
     ruled,
+    unstamped,
     verdict,
 )
 
@@ -270,7 +271,7 @@ async def test_definition_stage_then_delivery(config, tmp_path):
         "Owner rules",  # the step notes that no owner login is configured
     ]
     assert final["flags"] == {"touches_ui": False, "touches_copy": False}  # PM replaces PA's set
-    assert final["failures"] == []
+    assert unstamped(final["failures"]) == []
     assert final["branch"] == "agentic/GH-1" and final["pull_request"].endswith("/pull/7")
     # A single subtask builds on the task branch itself (ADR-0011).
     assert final["subtasks"]["api"]["branch"] == "agentic/GH-1"
@@ -1005,7 +1006,7 @@ async def test_the_gh_373_session_limit_pauses_once_with_its_reset_and_no_label(
     escalated = [text for _, text in fakes.tracker.comments if text.startswith("Escalated:")]
     assert len(escalated) == 1
     doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
-    assert doc["pause_log"][-2:] == [
+    assert unstamped(doc["pause_log"][-2:]) == [
         {
             "kind": "failure",
             "value": "account_limit",
@@ -1122,7 +1123,7 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
     script = script_for(product_analyst=[AttemptFailed("invalid", 0.02), defined()], **technical())
     final = await run_graph(script, config)
     assert final["status"] == "ready_for_review"
-    assert final["failures"] == [
+    assert unstamped(final["failures"]) == [
         {
             "role": "Product Analyst",
             "attempt": 1,
@@ -1794,6 +1795,7 @@ def test_the_first_returning_final_validation_writes_no_settlement(config):
         state,
         configuration_from(config),
         {"verdict": "returned", "reason": "wide", "blocking": ["a"]},
+        at="2026-11-06T12:00:00+00:00",
     )
     assert "plan_settled" not in patch
     assert [f["claim"] for f in patch["findings"]] == ["a"]

@@ -2347,6 +2347,20 @@ class FakeBoardSent:
         self.memory = memory
 
 
+_INSTANTS = ("at", "started_at", "ended_at")
+
+
+def unstamped(value: Any) -> Any:
+    """`value` without the instants a node stamps (`at`, `started_at`, `ended_at`), at any depth:
+    what a test compares when the stamp is not what it is about (`test_pause_stamps` and the
+    run_role instants tests are)."""
+    if isinstance(value, dict):
+        return {k: unstamped(v) for k, v in value.items() if k not in _INSTANTS}
+    if isinstance(value, list):
+        return [unstamped(v) for v in value]
+    return value
+
+
 def stepping_now(
     start: str = "2026-11-06T12:00:00+00:00", step_s: float = 1.0
 ) -> Callable[[], str]:

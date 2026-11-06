@@ -124,7 +124,7 @@ async def test_a_failed_comment_escalates_failure_and_the_resume_ends_with_one_c
     assert ports.tracker.comments == []
     paused = apply(STATE, stopped)
     assert paused["tracker_checklist"] == ITEMS  # the plan stays in the state
-    resumed = apply(paused, rules.resumed(paused, None))
+    resumed = apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00"))
     assert rules.resume_target(resumed) == "tracker_only"
 
     done = await tracker_only(resumed, cfg(tmp_path), ports)
@@ -140,7 +140,7 @@ async def test_a_reconstructed_paused_document_resumes_into_the_node_and_a_recor
     paused = apply(STATE, stopped)
     rebuilt = state_from(document.parse(document.render(paused)))
     assert rebuilt["tracker_checklist"] == ITEMS
-    resumed = apply(rebuilt, rules.resumed(rebuilt, None))
+    resumed = apply(rebuilt, rules.resumed(rebuilt, None, at="2026-11-06T12:00:00+00:00"))
     assert rules.resume_target(resumed) == "tracker_only"
 
     recorded = {"at": "2026-10-24T10:00:00+00:00", "hash": rules.tracker_hash(ITEMS)}
