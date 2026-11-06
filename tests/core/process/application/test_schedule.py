@@ -21,6 +21,7 @@ from agentic.core.process.domain.task import (
     add_flakes,
     add_merge_ci,
     add_restorations,
+    add_shadow_reviews,
     add_tracker_failures,
     apply,
     first,
@@ -416,6 +417,20 @@ def value_for(key: str, branch: str, n: int):
                 "landing_cut": n % 3,
             }
         ]
+    if reducer is add_shadow_reviews:
+        # One row per subtask, a function of the subtask alone: the first row seen wins, so a
+        # row that differed by branch would depend on which branch landed first.
+        return [
+            {
+                "subtask": f"s{n % 3}",
+                "head": "h",
+                "status": "ran",
+                "cause": None,
+                "findings": [],
+                "cost_usd": 0.5,
+                "changed_lines": n % 3,
+            }
+        ]
     if reducer is add_merge_ci:
         # One row per (head, master) pair, a function of the pair alone: the known pair is
         # replaced whole, so a row that differed by branch would depend on the order.
@@ -447,6 +462,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             add_flakes,
             add_merge_ci,
             add_restorations,
+            add_shadow_reviews,
             add_tracker_failures,
             last,
         ), key

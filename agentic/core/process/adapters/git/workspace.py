@@ -679,6 +679,18 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def changed_lines(self, base: str, head: str) -> int:
+        # `--no-renames`: a rename is a delete plus an add whatever `diff.renames` says. A
+        # binary file's counts are `-`, which is no line at all.
+        out = self._git(*_PLAIN, "diff", "--numstat", "--no-renames", f"{base}...{head}")
+        total = 0
+        for row in out.splitlines():
+            added, _, rest = row.partition("\t")
+            deleted = rest.partition("\t")[0]
+            total += int(added) if added.isdigit() else 0
+            total += int(deleted) if deleted.isdigit() else 0
+        return total
+
     def introduced_paths(
         self, path: Path, base: str, head: str, against: str | None
     ) -> tuple[str, ...]:
