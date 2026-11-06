@@ -2256,6 +2256,21 @@ def task_spent(state: Mapping[str, object]) -> float:
     )
 
 
+def shadow_cost(state: Mapping[str, Any]) -> float:
+    """What the shadow reviews of the task spent (GH-473): the sum of the `cost_usd` of its
+    `shadow_reviews`, `0.0` for a task with none -- every task not under `review_mode`
+    `single`."""
+    return float(sum(r["cost_usd"] for r in state.get("shadow_reviews") or []))
+
+
+def cost_without_shadow(spent_usd: float, state: Mapping[str, Any]) -> float:
+    """`spent_usd` less what the task's shadow reviews cost, never below zero: the figure
+    every cap decision reads (the task cap and the estimate cap), so a shadow, which blocks
+    nothing, can never stop the task. `task_spent`, the board and the scorecard keep the
+    gross cost."""
+    return max(spent_usd - shadow_cost(state), 0.0)
+
+
 def cap_reached(role_name: str, spent_usd: float, cap_usd: float) -> str:
     return f"{role_name} stopped by the task cap: {spent_usd:.2f} of {cap_usd:.2f} USD spent"
 
@@ -6020,10 +6035,11 @@ def estimate_in_force(state: Mapping[str, Any]) -> float | None:
 
 
 def estimate_cap_reached(spent_usd: float, state: Mapping[str, Any]) -> bool:
-    """Whether what the task spent reached the safety cap of its estimate in force. A task
-    with no estimate (a document from before them) has no such cap: it never stops here."""
+    """Whether what the task spent reached the safety cap of its estimate in force, its
+    shadow reviews' cost left out (`cost_without_shadow`). A task with no estimate (a
+    document from before them) has no such cap: it never stops here."""
     estimate = estimate_in_force(state)
-    return estimate is not None and spent_usd >= estimate_cap(estimate)
+    return estimate is not None and cost_without_shadow(spent_usd, state) >= estimate_cap(estimate)
 
 
 def estimate_to_cover(spent_usd: float) -> float:
