@@ -64,7 +64,11 @@ sequenceDiagram
    Developer trabaja en un worktree propio
    (`agentic/core/process/adapters/git/workspace.py:WORKTREES`) y su par es Tech Lead. El
    orden en que arrancan las subtareas lo decide
-   `agentic/core/process/application/schedule.py:run_subtasks`.
+   `agentic/core/process/application/schedule.py:run_subtasks`. Bajo `review_mode: single`
+   (ADR-0088) el sistema aprueba cada rama sin correr un rol (`rules.system_approves`,
+   `rules.approval_patch`): la única revisión del Tech Lead es la de la integración, con como
+   mucho 2 rondas de arreglo, y la revisión de hoy corre en paralelo como sombra que no
+   decide nada (`agentic/core/process/application/shadow_review.py`).
 6. **Integración y entrega.** `integrate` une las ramas de las subtareas; `owner_rules` y el pase
    de `fix_important` corren en serie y mueven la cabeza; después `verify` corre juntos, sobre
    esa cabeza, los verificadores que el plan convoca (`final_validation`, `copy_review`,
