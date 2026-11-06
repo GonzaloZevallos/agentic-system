@@ -48,7 +48,7 @@ ALLOWLIST: dict[str, str] = {
     "final_validation.py:_ui_lead_final:widened": (
         f"{ENTRY_POINTS}.test_final_validation_widened_renders_prompt"
     ),
-    "review.py:review:reviewer": f"{ENTRY_POINTS}.test_review_renders_prompt",
+    "review.py:run_reviewer:reviewer": f"{ENTRY_POINTS}.test_review_renders_prompt",
     "develop.py:develop:role": f"{ENTRY_POINTS}.test_develop_renders_prompt",
     "diagnose.py:diagnose:diagnoser_for(checks)": f"{ENTRY_POINTS}.test_diagnose_renders_prompt",
     "validate_prd.py:validate_prd:role": f"{ENTRY_POINTS}.test_validate_prd_renders_prompt",
