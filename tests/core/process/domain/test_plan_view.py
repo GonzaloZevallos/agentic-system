@@ -319,3 +319,16 @@ def test_with_tracker_block_keeps_a_section_with_its_own_heading_and_ignores_fen
     assert plan_view.with_tracker_block(own, CHECKLIST) == own
     fenced = "### Solution\n\n```\n### Tracker work for the human\n```\n"
     assert "- Close the follow-ups" in plan_view.with_tracker_block(fenced, CHECKLIST)
+
+
+def test_the_raised_estimate_line_says_the_two_figures_and_the_cause():
+    spent = plan_view.raised_estimate_line(6.0, 16.01, "spent", 10.01, None)
+    assert spent == (
+        "The system raised the estimate from 6.00 to 16.01 USD: "
+        "below what the task already spent 10.01."
+    )
+    median = plan_view.raised_estimate_line(7.5, 17.1, "median", 0.0, 17.1)
+    assert median == (
+        "The system raised the estimate from 7.50 to 17.10 USD: "
+        "below half the median 17.10 of closed tasks with this many subtasks."
+    )

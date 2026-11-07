@@ -106,9 +106,11 @@ def test_a_control_arm_document_renders_as_it_did():
 
 
 # sha256 of the prompt text rendered with the gate's own placeholders and a fixed date.
+# GH-529 rewrote the two sentences about the estimate floors in both Tech Lead prompts, so
+# these two moved once; everything else about the default path is unchanged.
 PROMPT_GOLDENS = {
-    "tech_lead": "798280358ef5d22d836bd640c903a51e3935dc02a0a0f3b36104ea37cc18e527",
-    "tech_lead_platform": "037676d249c349beedb1f59758f2c22282157dbaa99cdcad1d4da190f280e399",
+    "tech_lead": "2eb245f82a1f31ce061399a70e7836882b5df8bc27fdf5488306c302a1b969cc",
+    "tech_lead_platform": "f559ca64e0de741441f53e8c1c7069a9aeab6e851866b1cd5cf0d852313597ea",
 }
 
 
