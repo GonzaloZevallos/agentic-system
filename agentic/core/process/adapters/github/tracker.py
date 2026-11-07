@@ -124,7 +124,7 @@ statusCheckRollup {
 _SUITES = """
 checkSuites(first: 50) {
   pageInfo { hasNextPage }
-  nodes { status workflowRun { databaseId } }
+  nodes { status conclusion workflowRun { databaseId } }
 }
 """
 
@@ -204,6 +204,30 @@ def _runs_completed(commit: object) -> bool | None:
     if not actions:
         return None
     return True if all(node.get("status") == "COMPLETED" for node in actions) else None
+
+
+def _suite_run_ids(commit: object) -> tuple[frozenset[str], frozenset[str]]:
+    """`(cancelled_runs, running_runs)` of a commit's check suites (GH-539): the Actions run ids
+    whose suite concluded `CANCELLED`, and those whose suite is not `COMPLETED`. Best effort: a
+    missing or mistyped field, a suite with no readable run id included, adds nothing and is never
+    an unreadable CI, so the verdict stays what it was without the information."""
+    suites = commit.get("checkSuites") if isinstance(commit, dict) else None
+    nodes = suites.get("nodes") if isinstance(suites, dict) else None
+    if not isinstance(nodes, list):
+        return frozenset(), frozenset()
+    cancelled: set[str] = set()
+    running: set[str] = set()
+    for node in nodes:
+        workflow_run = node.get("workflowRun") if isinstance(node, dict) else None
+        run_id = workflow_run.get("databaseId") if isinstance(workflow_run, dict) else None
+        if not isinstance(run_id, int) or isinstance(run_id, bool):
+            continue
+        if node.get("conclusion") == "CANCELLED":
+            cancelled.add(str(run_id))
+        status = node.get("status")
+        if isinstance(status, str) and status != "COMPLETED":
+            running.add(str(run_id))
+    return frozenset(cancelled), frozenset(running)
 
 
 def _ci_check(node: dict) -> CiCheck | None:
@@ -692,6 +716,7 @@ class GhTracker:
             pull_request = answer["data"]["repository"]["pullRequest"]
             commit = pull_request["commits"]["nodes"][0]["commit"]
             head_sha, checks = _commit_ci(commit)
+            cancelled_runs, running_runs = _suite_run_ids(commit)
             return CiReport(
                 head_sha=head_sha,
                 base_ref=_text(pull_request["baseRefName"]),
@@ -699,6 +724,8 @@ class GhTracker:
                 opened_at=_text(pull_request["createdAt"]),
                 checks=checks,
                 runs_completed=_runs_completed(commit),
+                cancelled_runs=cancelled_runs,
+                running_runs=running_runs,
             )
         except (_Unreadable, KeyError, IndexError, TypeError):
             return CiUnreadable("gh_unreadable")
@@ -716,6 +743,7 @@ class GhTracker:
             head_sha, checks = _commit_ci(target)
         except (_Unreadable, KeyError, TypeError):
             return CiUnreadable("gh_unreadable")
+        cancelled_runs, running_runs = _suite_run_ids(target)
         return CiReport(
             head_sha=head_sha,
             base_ref=None,
@@ -723,6 +751,8 @@ class GhTracker:
             opened_at=None,
             checks=checks,
             runs_completed=_runs_completed(target),
+            cancelled_runs=cancelled_runs,
+            running_runs=running_runs,
         )
 
     def dispatch_ci(

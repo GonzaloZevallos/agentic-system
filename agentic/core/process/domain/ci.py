@@ -91,7 +91,9 @@ class CiReport:
     UTC string) are None for a branch's report, which has no pull request. `runs_completed` is
     True only when the source says every workflow run of the commit is completed (the tracker
     adapter's check-suite read, the dispatched-run builder from `run.status`); None is "not
-    known", and is always a wait (GH-485)."""
+    known", and is always a wait (GH-485). `cancelled_runs` holds the run ids whose check suite
+    concluded `CANCELLED` and `running_runs` those whose suite is not `COMPLETED` (GH-539); both
+    empty when the source does not say, which keeps every verdict as it was."""
 
     head_sha: str
     base_ref: str | None
@@ -99,6 +101,8 @@ class CiReport:
     opened_at: str | None
     checks: tuple[CiCheck, ...]
     runs_completed: bool | None = None
+    cancelled_runs: frozenset[str] = frozenset()
+    running_runs: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -130,11 +134,14 @@ class JobLog:
 @dataclass(frozen=True)
 class CiVerdict:
     """`failing` is the red runs of the declared checks, in declared order; `missing` the
-    declared names the report never mentions."""
+    declared names the report never mentions; `cancelled` the red runs of a superseded or
+    cancelled workflow run (`superseded_or_cancelled`) of the declared names that have nothing
+    else to say: those names are pending, never failing (GH-539)."""
 
     state: Literal["green", "red", "pending"]
     failing: tuple[CiCheck, ...]
     missing: tuple[str, ...]
+    cancelled: tuple[CiCheck, ...] = ()
 
 
 def _pending(check: CiCheck) -> bool:
@@ -145,6 +152,34 @@ def _green(check: CiCheck) -> bool:
     return check.conclusion in _GREEN
 
 
+def _red(check: CiCheck) -> bool:
+    return not _pending(check) and not _green(check)
+
+
+def superseded_or_cancelled(report: CiReport, check: CiCheck) -> bool:
+    """Whether `check`, a red one, belongs to a workflow run that was superseded or cancelled and
+    so says nothing about the code (GH-539): the one place that is decided, from the run id in
+    its link (`run_id_of_link`), the `CANCELLED` conclusions of the report's checks,
+    `report.cancelled_runs` and nothing else, never a log or a prose. True when (a) its run has a
+    `CANCELLED` check and the report holds a check of the same name in a run with a greater id
+    (compared as integers), or (b) its run id is in `report.cancelled_runs`. A check that is
+    green or pending, or whose run id cannot be read, is never discarded."""
+    if not _red(check):
+        return False
+    run_id = run_id_of_link(check.link)
+    if run_id is None:
+        return False
+    if run_id in report.cancelled_runs:
+        return True
+    ids = [(run_id_of_link(other.link), other) for other in report.checks]
+    if not any(found == run_id and other.conclusion == "CANCELLED" for found, other in ids):
+        return False
+    return any(
+        found is not None and other.name == check.name and int(found) > int(run_id)
+        for found, other in ids
+    )
+
+
 def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     """The verdict of `report` over the `declared` check names, matched exactly: a matrix
     job `check (3.12)` is not `check`, and a check nobody declared is ignored. Every run
@@ -152,9 +187,12 @@ def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     pending, else it is green. Red is every conclusion that is not green and not pending,
     an unknown one included, so a value GitHub adds later is never read as green. A
     declared name with no run is pending and listed in `missing`. The aggregate is red if
-    any name is red, else pending if any is, else green."""
+    any name is red, else pending if any is, else green. A red run that
+    `superseded_or_cancelled` discards is not red: a name left with nothing else is pending and
+    its discarded runs are in `cancelled` (GH-539)."""
     failing: list[CiCheck] = []
     missing: list[str] = []
+    cancelled: list[CiCheck] = []
     waiting = False
     for name in dict.fromkeys(declared):
         runs = [check for check in report.checks if check.name == name]
@@ -162,9 +200,15 @@ def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
             missing.append(name)
             waiting = True
             continue
-        red = [check for check in runs if not _pending(check) and not _green(check)]
+        dropped = [check for check in runs if superseded_or_cancelled(report, check)]
+        red = [check for check in runs if _red(check) and check not in dropped]
         failing.extend(red)
-        if not red and any(_pending(check) for check in runs):
+        if red:
+            continue
+        if any(_pending(check) for check in runs):
+            waiting = True
+        elif dropped and not any(_green(check) for check in runs):
+            cancelled.extend(dropped)
             waiting = True
     if failing:
         state: Literal["green", "red", "pending"] = "red"
@@ -172,7 +216,7 @@ def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
         state = "pending"
     else:
         state = "green"
-    return CiVerdict(state, tuple(failing), tuple(missing))
+    return CiVerdict(state, tuple(failing), tuple(missing), tuple(cancelled))
 
 
 CoveringState = Literal["covered", "red", "pending", "uncovered"]
@@ -201,8 +245,13 @@ def covering_state(read: CiReport | CiUnreadable | None, job: str, head: str) ->
 
 def red_checks(report: CiReport) -> tuple[CiCheck, ...]:
     """Every run of `report` that is red whatever its name, in report order: decided and not
-    green, with the reading of red `ci_state` has. What a log is fetched for (GH-449)."""
-    return tuple(check for check in report.checks if not _pending(check) and not _green(check))
+    green, with the reading of red `ci_state` has, a superseded or cancelled run (GH-539) left
+    out. What a log is fetched for (GH-449)."""
+    return tuple(
+        check
+        for check in report.checks
+        if _red(check) and not superseded_or_cancelled(report, check)
+    )
 
 
 def pending_names(report: CiReport, declared: tuple[str, ...]) -> tuple[str, ...]:
@@ -345,13 +394,17 @@ _BEFORE_SUITE: frozenset[FailedStage | None] = frozenset({"setup", "checkout"})
 class FullTierVerdict:
     """What the full tier concludes from the CI of the integrated head. `failing` is the
     red runs of the declared jobs in declared order, `pending` the declared names with no
-    decided run, `cause` is set only for `unreachable`."""
+    decided run, `cause` is set only for `unreachable`. `cancelled` is the state of a head whose
+    every declared name is decided or left only by superseded or cancelled runs, with the runs
+    completed (GH-539): never red, and `cancelled` holds those runs' checks (also carried by the
+    verdicts that still wait or time out on a cancellation)."""
 
-    state: Literal["green", "red", "waiting", "timed_out", "unreachable"]
+    state: Literal["green", "red", "waiting", "timed_out", "unreachable", "cancelled"]
     failing: tuple[CiCheck, ...]
     pending: tuple[str, ...]
     cause: CiCause | None
     unknown: tuple[str, ...] = ()
+    cancelled: tuple[CiCheck, ...] = ()
 
 
 def push_got_no_run(verdict: FullTierVerdict) -> bool:
@@ -387,7 +440,10 @@ def full_tier_verdict(
     the CI is unusable, not that the suite failed; nothing is inferred from a skip (`SKIPPED`
     is red, as in `ci_state`). Red still wins; then a declared name that `unreported` finds (with
     `confirmed` by the caller) is `unreachable/unknown_names` at once, before either bound: a
-    planning defect, not a slow CI (GH-485)."""
+    planning defect, not a slow CI (GH-485). The classification of `superseded_or_cancelled`
+    runs comes before `_NOT_STARTED` (GH-539): a declared name left only by such runs, with
+    nothing pending and `runs_completed is True`, is `cancelled`; before that, `waiting`.
+    `_NOT_STARTED` stays for `STARTUP_FAILURE` and a `CANCELLED` of a run that is neither."""
     at_bound = elapsed_s >= timeout_s
     if isinstance(read, CiUnreadable):
         if at_bound:
@@ -400,21 +456,24 @@ def full_tier_verdict(
     verdict = ci_state(read, names)
     waiting_on = set(verdict.missing) | set(pending_names(read, names))
     pending = tuple(name for name in dict.fromkeys(names) if name in waiting_on)
+    cancelled = verdict.cancelled
     if verdict.failing:
         if all(check.conclusion in _NOT_STARTED for check in verdict.failing):
             return FullTierVerdict("unreachable", verdict.failing, pending, "not_started")
         return FullTierVerdict("red", verdict.failing, pending, None)
     if verdict.state == "green":
         return FullTierVerdict("green", (), (), None)
+    if cancelled and not waiting_on and read.runs_completed is True:
+        return FullTierVerdict("cancelled", (), (), None, (), cancelled)
     unknown = unreported(read, names, confirmed)
     if unknown:
-        return FullTierVerdict("unreachable", (), pending, "unknown_names", unknown)
+        return FullTierVerdict("unreachable", (), pending, "unknown_names", unknown, cancelled)
     no_run = len(verdict.missing) == len(set(names))
     if no_run and (elapsed_s >= grace_s or at_bound):
-        return FullTierVerdict("unreachable", (), pending, "no_run")
+        return FullTierVerdict("unreachable", (), pending, "no_run", (), cancelled)
     if not at_bound:
-        return FullTierVerdict("waiting", (), pending, None)
-    return FullTierVerdict("timed_out", (), pending, None)
+        return FullTierVerdict("waiting", (), pending, None, (), cancelled)
+    return FullTierVerdict("timed_out", (), pending, None, (), cancelled)
 
 
 # The margin subtracted from the local instant a workflow was dispatched to form the loose
@@ -596,7 +655,7 @@ def dispatch_verdict(
 
 def _first_red(report: CiReport, name: str) -> CiCheck | None:
     for check in report.checks:
-        if check.name == name and not _pending(check) and not _green(check):
+        if check.name == name and _red(check) and not superseded_or_cancelled(report, check):
             return check
     return None
 
