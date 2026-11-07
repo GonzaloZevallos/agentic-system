@@ -5,6 +5,7 @@ and any way the CI cannot be used runs the local tier with the cause written dow
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import get_args
 
 import pytest
@@ -1030,3 +1031,138 @@ def test_every_ci_cause_has_its_own_dispatch_message_and_none_speaks_of_a_push()
         )
         assert "push of ci.yml" not in rendered
     assert set(_DISPATCH_DETAIL) == set(get_args(CiCause))
+
+
+# GH-539: a declared job red only because its run was cancelled is never a return.
+T0 = datetime(2026, 11, 7, 17, 0, tzinfo=UTC)
+CANCEL_CFG = Configuration(
+    product_dir=MemoryWorkspace.ROOT, check_timeout_s=1000.0, ci_start_grace_s=100.0
+)
+
+
+def cancelled_report(sha: str = HEAD, run: str = "7") -> CiReport:
+    """`web` red with CANCELLED in a run whose check suite concluded CANCELLED."""
+    checks = (job("unit"), job("web", "CANCELLED"))
+    return CiReport(sha, None, None, None, checks, True, frozenset({run}), frozenset())
+
+
+def running_report() -> CiReport:
+    """The rerun started: the suite of run 7 is not COMPLETED any more."""
+    checks = (job("unit"), job("web", None, "IN_PROGRESS"))
+    return CiReport(HEAD, None, None, None, checks, False, frozenset(), frozenset({"7"}))
+
+
+def timed_ports(*reads, clock: Clock, **more):
+    ports = ports_of(*reads, now=lambda: (T0 + timedelta(seconds=clock.now)).isoformat(), **more)
+    return ports
+
+
+async def run_cancel(state, ports, clock: Clock):
+    return await full_checks_in_task_checkout(
+        state,
+        CANCEL_CFG,
+        ports,
+        sleep=clock.sleep,
+        clock=clock,
+        now=lambda: T0 + timedelta(seconds=clock.now),
+        push_sleep=lambda _s: None,
+    )
+
+
+def assert_no_return(patch):
+    assert "subtasks" not in patch and "findings" not in patch
+    assert not patch.get("full_checks") or patch["full_checks"]["passed"] is True
+
+
+async def test_a_cancelled_run_is_rerun_once_and_the_fact_is_written_without_a_return():
+    clock = Clock()
+    ports = timed_ports(cancelled_report(), running_report(), GREEN, clock=clock)
+    patch = await run_cancel(state_of(), ports, clock)
+    assert ports.tracker.run_reruns == ["7"]
+    assert patch["ci_cancel_rerun"]["head"] == HEAD and patch["ci_cancel_rerun"]["run_id"] == "7"
+    assert patch["full_checks"]["passed"] is True
+    assert_no_return(patch)
+    assert ports.documents.saved[0]["ci_cancel_rerun"]["run_id"] == "7"
+
+
+async def test_a_stale_read_after_the_rerun_waits_instead_of_escalating():
+    clock = Clock()
+    ports = timed_ports(cancelled_report(), cancelled_report(), cancelled_report(), GREEN, clock=clock)
+    patch = await run_cancel(state_of(), ports, clock)
+    assert patch["full_checks"]["passed"] is True
+    assert ports.tracker.run_reruns == ["7"]
+    assert clock.slept == [30, 30, 30]
+
+
+async def test_a_run_seen_running_and_cancelled_again_escalates_as_not_started():
+    clock = Clock()
+    ports = timed_ports(cancelled_report(), running_report(), cancelled_report(), clock=clock)
+    patch = await run_cancel(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "did not start" in patch["escalated"]
+    assert patch["ci_cancel_rerun"]["run_id"] == "7"
+    assert ports.tracker.run_reruns == ["7"]
+
+
+async def test_a_rerun_never_seen_running_escalates_once_the_grace_has_passed():
+    clock = Clock()
+    ports = timed_ports(cancelled_report(), clock=clock)
+    patch = await run_cancel(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert ports.tracker.run_reruns == ["7"]
+    assert 100 <= sum(clock.slept) < 130
+
+
+def fact(head: str = HEAD, rerun_s: float = 0.0, run: str = "7") -> dict:
+    return {
+        "ci_cancel_rerun": {
+            "head": head,
+            "run_id": run,
+            "rerun_at": (T0 + timedelta(seconds=rerun_s)).isoformat(),
+        }
+    }
+
+
+async def test_a_resumed_node_with_the_fact_and_the_floor_open_waits_without_rerunning():
+    clock = Clock()
+    ports = timed_ports(cancelled_report(), running_report(), GREEN, clock=clock)
+    patch = await run_cancel(state_of(**fact()), ports, clock)
+    assert patch["full_checks"]["passed"] is True
+    assert ports.tracker.run_reruns == []
+
+
+async def test_a_resumed_node_with_the_fact_and_the_floor_passed_escalates():
+    clock = Clock()
+    clock.now = 500.0
+    ports = timed_ports(cancelled_report(), clock=clock)
+    patch = await run_cancel(state_of(**fact()), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert ports.tracker.run_reruns == []
+
+
+async def test_two_cancelled_run_ids_of_one_head_spend_a_single_rerun():
+    clock = Clock()
+    second = cancelled_report(run="8")
+    ports = timed_ports(cancelled_report(), running_report(), second, clock=clock)
+    patch = await run_cancel(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert ports.tracker.run_reruns == ["7"]
+
+
+async def test_a_rejected_rerun_escalates_as_not_started_with_no_return():
+    clock = Clock()
+    ports = timed_ports(cancelled_report(), clock=clock)
+    ports.tracker.rerun_run_error = CiUnreadable("dispatch_refused")
+    patch = await run_cancel(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "did not start" in patch["escalated"]
+    assert "ci_cancel_rerun" not in patch
+
+
+async def test_the_fact_of_another_head_is_ignored():
+    clock = Clock()
+    ports = timed_ports(cancelled_report(), running_report(), GREEN, clock=clock)
+    patch = await run_cancel(state_of(**fact(head="a" * 40, rerun_s=-10)), ports, clock)
+    assert ports.tracker.run_reruns == ["7"]
+    assert patch["ci_cancel_rerun"]["head"] == HEAD
+    assert patch["full_checks"]["passed"] is True

@@ -1248,6 +1248,18 @@ class CiSpeculation(TypedDict):
     pushed_at: str
 
 
+class CiCancelRerun(TypedDict):
+    """The one rerun `full_checks` spent on a head whose declared jobs were left only by a
+    superseded or cancelled workflow run (GH-539): `head` the whole sha judged, `run_id` the run
+    asked to rerun and `rerun_at` the ISO instant. One fact, never a list: a second cancelled
+    verdict on that head escalates instead of rerunning again. Carries no verdict and does not
+    count for the merge gate's pair."""
+
+    head: str
+    run_id: str
+    rerun_at: str
+
+
 OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
 """Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
 `owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
@@ -1528,6 +1540,10 @@ class TaskState(TaskInput, total=False):
     # fact, never a verdict. Written only by that review (its approval with a whole sha, `None`
     # on its return), written to the document only when set, read with `.get`.
     ci_speculation: NotRequired[CiSpeculation | None]
+    # The single rerun of a cancelled CI run of one head (GH-539): written by `full_checks` when
+    # it reruns, read only for that same head (`rules.same_commit`), written to the document only
+    # when set, read with `.get`.
+    ci_cancel_rerun: NotRequired[CiCancelRerun | None]
     # The processes a role left running that the release stopped when the task closed
     # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
     # and it is read with `.get`.
