@@ -289,6 +289,9 @@ async def test_a_shadow_review_that_carries_a_revision_writes_none():
     )
     ports = memory_ports(runner)
     patch = await review(task, cfg(), ports)
+    # the shadows did run, so the absence below is not a vacuous pass
+    assert {r["subtask"] for r in patch["shadow_reviews"]} == {"api", "domain", "ui"}
+    assert {r["status"] for r in patch["shadow_reviews"]} == {"ran"}
     assert "required_paths_revisions" not in patch
 
 
