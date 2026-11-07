@@ -671,3 +671,17 @@ tasks:
   GH-471@review:
     cost_usd: 0.143
     decisions: 2
+  GH-519@review:
+    cost_usd: 0.1191
+  GH-520@review:
+    cost_usd: 0.0668
+  GH-521@review:
+    cost_usd: 0.0939
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-521
