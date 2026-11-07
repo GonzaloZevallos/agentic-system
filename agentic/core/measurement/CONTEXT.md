@@ -63,6 +63,7 @@ externos (`account_limit`, el límite de la cuenta del proveedor; `upstream`, su
 adentro los nuestros, el tope por intento (`limit`) incluido, que es una configuración
 nuestra y no de nadie más. Los fallos anteriores al commit que separó esos motivos llevan
 `sdk` y no se reescriben, así que esta cuenta no se compara de un lado al otro de ese commit.
+Las cifras de tiempo (`cycle_h`, `active_h` y las horas de espera, pausa, fallo y sin atribuir) son informativas: `agentic eval compare` las imprime con su `n/m` y ninguna entra en el veredicto.
 _Avoid_: KPI, north star, índice
 _Campo_: scorecard — Kaplan y Norton; la lectura como orden lexicográfico es propia
 
@@ -70,6 +71,26 @@ _Campo_: scorecard — Kaplan y Norton; la lectura como orden lexicográfico es 
 El tiempo de Developer de una tarea (las corridas del Developer y del integrador, cada una de su `started_at` a su `ended_at`) sobre el largo de la unión de esos intervalos y los de las revisiones de subtarea. 1.0 es todo en serie; 2.0, de a dos todo el tiempo. Los huecos sin ninguna corrida, las pausas entre invocaciones y la espera de cupo quedan fuera de todo intervalo. Sobre varias tareas es la suma de numeradores sobre la suma de denominadores. Es una lectura de los documentos (`agentic eval compare` la imprime), no un atributo, métrica ni etiqueta; y no es comparable 1:1 con la cifra de las transcripciones de sesión del issue #364 (1.26), que mide otra cosa.
 _Avoid_: paralelismo, speedup
 _Campo_: parallelism / speedup — la definición es la de la ley de Amdahl sobre tiempo ocupado, sin el tiempo de la corrida en serie
+
+**Tiempo de espera**:
+Los segundos que una tarea esperó al CI, y sólo al CI: la unión de `[max(pushed_at, node_started_at), run_ended_at]` de `full_checks`, `merge_ci` y la escalación `ci` (para esta última, el fin es el `at` de la entrada). Se deriva únicamente con `ci.waited_seconds`, que lleva a 0 una diferencia negativa; esa diferencia puede venir del desfase entre el reloj de la máquina y el de GitHub. Un registro sin `ci_timing` no suma, y uno cuya espera no se puede leer deja la cifra desconocida (`n/a`, la tarea cuenta como excluida), nunca 0.
+_Avoid_: espera (a secas: la espera de cupo y la de un humano son otras), latencia
+_Campo_: wait time / queue time — el vecino más cercano es el tiempo en cola de un pipeline de CI
+
+**Tiempo en pausa**:
+Los segundos entre que una tarea se pausa y la siguiente reanudación (`resumed`), nunca cerrada por una corrida. Empieza en el `ended_at` del último fallo que abrió la pausa, o en el `at` de la primera entrada de la pausa si no hay tal fallo. Es *externa* si todos los fallos de la pausa son de motivo externo (los de `scorecard.EXTERNAL_FAILURE_REASONS`) y ninguna escalación es de otra clase; *humana* en cualquier otro caso (la espera de un `ci` que escaló cuenta como humana). Una pausa abierta, sin reanudación, deja la cifra de la tarea fuera de la mediana.
+_Avoid_: espera humana, bloqueo, tiempo muerto
+_Campo_: sin término de arte — el vecino más cercano es el tiempo bloqueado (blocked time) del flujo Kanban
+
+**Tiempo fallido**:
+La unión de los intervalos `[started_at, ended_at]` de los fallos de una tarea: el tiempo de los intentos que no llegaron a nada. Es 0 sólo en una tarea sin fallos; un fallo sin sus dos instantes deja la cifra desconocida.
+_Avoid_: tiempo perdido, retrabajo (el retrabajo se mide en costo)
+_Campo_: sin término de arte — el vecino más cercano es el failed time del tiempo de ciclo de un pipeline
+
+**Tiempo sin atribuir**:
+El ciclo menos el tiempo activo recortado al ciclo, el fallido, el de espera y el de pausa, restados en ese orden (cada clase pierde lo que ya cubren las anteriores), de modo que cada segundo cuenta una vez y el resto nunca es negativo. Usa el activo recortado al ciclo, a diferencia de `active_h`, que no se recorta; y las medianas de cada fila no suman la mediana de `cycle_h`: cada una es su propia mediana, sobre las tareas donde la cifra se conoce.
+_Avoid_: tiempo muerto, resto, tiempo perdido
+_Campo_: sin término de arte — es el residuo de una partición del tiempo de ciclo
 
 **Brazo**:
 La configuración de experimento bajo la que corrió una tarea: el valor de cada interruptor

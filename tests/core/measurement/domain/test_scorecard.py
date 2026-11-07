@@ -521,3 +521,109 @@ def test_a_tracker_only_document_does_not_crash_the_scorecard_and_counts_as_excl
     card = scorecard.build([ended, *judged("merged", 1)])
     assert card.cost_per_delivery.denominator == 1 and card.cost_per_delivery.excluded == 1
     assert card.own_failures_per_task.excluded == 1
+
+
+# --- the cycle split (GH-467): `cycle.time_split` computes, the scorecard only medians ---
+
+
+def _at(clock: str) -> str:
+    return f"2026-10-20T{clock}.000Z"
+
+
+def _timed_document(*, pause_log=None, full_checks=None):
+    """A 10:00-14:00 cycle: 1 h of run, a 30 min failure, 30 min of CI wait (12:00-12:30) and a
+    1 h external pause that starts at the failure's end and closes at 12:30."""
+    run = {
+        "role": "Developer",
+        "slug": "developer",
+        "section": "Developer: a",
+        "version": 1,
+        "cost_usd": 1.0,
+        "started_at": _at("10:00:00"),
+        "ended_at": _at("11:00:00"),
+    }
+    failure = {
+        "role": "Developer",
+        "attempt": 1,
+        "error": "e",
+        "cost_usd": 0.0,
+        "session_id": "",
+        "reason": "account_limit",
+        "section": "Developer: a",
+        "started_at": _at("11:00:00"),
+        "ended_at": _at("11:30:00"),
+    }
+    timing = {
+        "pushed_at": _at("12:00:00"),
+        "node_started_at": _at("12:00:00"),
+        "run_started_at": _at("12:00:00"),
+        "run_ended_at": _at("12:30:00"),
+        "verdict": "green",
+    }
+    default_pause_log = [
+        {
+            "kind": "failure",
+            "value": "account_limit",
+            "section": "Developer: a",
+            "at": _at("11:30:00"),
+        },
+        {"kind": "resumed", "value": "resumed", "section": "Developer: a", "at": _at("12:30:00")},
+    ]
+    return doc(
+        closed_at=_at("14:00:00"),
+        runs=[run],
+        failures=[failure],
+        full_checks={"ci_timing": timing} if full_checks is None else full_checks,
+        pause_log=default_pause_log if pause_log is None else pause_log,
+    )
+
+
+def test_task_figures_carries_the_split_and_paused_is_external_plus_human():
+    figures = scorecard.task_figures(_timed_document())
+
+    assert figures.failed_s == pytest.approx(1800)
+    # The CI wait sits inside the pause, and waiting is subtracted before paused: it counts once.
+    assert figures.waiting_s == pytest.approx(1800)
+    assert figures.paused_external_s == pytest.approx(1800)
+    assert figures.paused_human_s == 0
+    assert figures.paused_s == figures.paused_external_s
+    cycle_s = figures.cycle_s or 0.0
+    parts = [figures.active_s, figures.failed_s, figures.waiting_s, figures.paused_s]
+    assert figures.unattributed_s == pytest.approx(cycle_s - sum(p or 0.0 for p in parts))
+    assert figures.unattributed_s == pytest.approx(5400)
+
+
+def test_build_medians_each_split_figure_in_hours_over_the_tasks_where_it_is_known():
+    known = scorecard.task_figures(_timed_document())
+    open_pause = scorecard.task_figures(
+        _timed_document(
+            pause_log=[{"kind": "failure", "value": "other", "section": "s", "at": _at("11:30:00")}]
+        )
+    )
+    unreadable = scorecard.task_figures(doc())  # no run: no cycle, nothing known
+    card = scorecard.build([known, open_pause, unreadable])
+
+    assert (card.failed_h.value, card.failed_h.denominator, card.failed_h.excluded) == (0.5, 2, 1)
+    assert (card.paused_h.denominator, card.paused_h.excluded) == (
+        1,
+        2,
+    )  # the open pause leaves it out
+    assert card.paused_external_h.value == pytest.approx((known.paused_external_s or 0) / 3600)
+    assert (card.unattributed_h.denominator, card.unattributed_h.excluded) == (1, 2)
+    assert card.waiting_h.denominator == 2
+
+
+def test_the_split_figures_never_move_the_verdict():
+    base = judged("merged", 5)
+    with_split = scorecard.build([*base, scorecard.task_figures(_timed_document())])
+    # The same task with only the split's own fields removed: the figures differ, the verdict not.
+    stripped = scorecard.build(
+        [
+            *base,
+            scorecard.task_figures(_timed_document(pause_log=[{"kind": "lapse", "value": "x"}])),
+        ]
+    )
+    assert with_split.paused_h != stripped.paused_h or with_split.waiting_h != stripped.waiting_h
+    for frm, to in ((with_split, stripped), (stripped, with_split), (with_split, with_split)):
+        got = scorecard.verdict(frm, "a", to, "b")
+        assert (got.outcome, got.reason) == ("ties", "no figure moved enough to decide")

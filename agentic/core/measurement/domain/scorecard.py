@@ -117,6 +117,14 @@ class TaskFigures:
     cycle_class: cycle.CycleClass = "excluded"
     cycle_s: float | None = None
     active_s: float | None = None
+    # The cycle split by class (GH-467), each `None` when unknown, never a zero:
+    # `cycle.time_split` computes every interval, this module only carries the seconds.
+    failed_s: float | None = None
+    waiting_s: float | None = None
+    paused_external_s: float | None = None
+    paused_human_s: float | None = None
+    paused_s: float | None = None
+    unattributed_s: float | None = None
     # What planning cost and returned, for `eval compare`'s planning block (GH-472).
     planning_facts: planning.TaskPlanning | None = None
 
@@ -131,6 +139,8 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
     plan = document.get("estimate")
     actual_files = document.get("actual_files")
     assignment = document.get("assignment")
+    split = cycle.time_split(document)
+    paused_parts = (split.paused_external_s, split.paused_human_s)
     return TaskFigures(
         cost_usd=document.get("cost_usd", 0.0),
         rework_usd=metrics.rework_cost_usd(document),
@@ -154,6 +164,12 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         cycle_class=cycle.cycle_class(document),
         cycle_s=cycle.cycle_seconds(document),
         active_s=cycle.active_seconds(document),
+        failed_s=split.failed_s,
+        waiting_s=split.waiting_s,
+        paused_external_s=split.paused_external_s,
+        paused_human_s=split.paused_human_s,
+        paused_s=None if None in paused_parts else sum(p or 0.0 for p in paused_parts),
+        unattributed_s=split.unattributed_s,
         planning_facts=planning.task_planning(document),
     )
 
@@ -267,10 +283,29 @@ class Scorecard:
     # `cycle_closed`/`cycle_open` split the cycle's `n` by how its end was found.
     cycle_h: Figure = Figure(None, 0, 0)
     active_h: Figure = Figure(None, 0, 0)
+    # Informative only (GH-467), enter no verdict: the medians, in hours, of the failed, waiting,
+    # paused (and its external and human parts) and unattributed time, over the tasks whose
+    # figure is known. They are not a partition: the medians of the rows do not add up to
+    # `cycle_h`.
+    failed_h: Figure = Figure(None, 0, 0)
+    waiting_h: Figure = Figure(None, 0, 0)
+    paused_h: Figure = Figure(None, 0, 0)
+    paused_external_h: Figure = Figure(None, 0, 0)
+    paused_human_h: Figure = Figure(None, 0, 0)
+    unattributed_h: Figure = Figure(None, 0, 0)
     cycle_closed: int = 0
     cycle_open: int = 0
     active_closed: int = 0
     active_open: int = 0
+
+
+def _hours(
+    figures: Sequence[TaskFigures], seconds: Callable[[TaskFigures], float | None]
+) -> Figure:
+    """The median, in hours, of one time figure over the tasks where it is known; a task with
+    `None` is counted in `excluded`, never as a zero."""
+    known = [s / 3600 for f in figures if (s := seconds(f)) is not None]
+    return _median(known, excluded=len(figures) - len(known))
 
 
 def build(figures: Sequence[TaskFigures]) -> Scorecard:
@@ -334,6 +369,12 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
         files_over_estimate=files_over_estimate,
         cycle_h=cycle_h,
         active_h=active_h,
+        failed_h=_hours(figures, lambda f: f.failed_s),
+        waiting_h=_hours(figures, lambda f: f.waiting_s),
+        paused_h=_hours(figures, lambda f: f.paused_s),
+        paused_external_h=_hours(figures, lambda f: f.paused_external_s),
+        paused_human_h=_hours(figures, lambda f: f.paused_human_s),
+        unattributed_h=_hours(figures, lambda f: f.unattributed_s),
         cycle_closed=sum(1 for f in cycled if f.cycle_class == "closed"),
         cycle_open=sum(1 for f in cycled if f.cycle_class == "open"),
         active_closed=sum(1 for f in actives if f.cycle_class == "closed"),
