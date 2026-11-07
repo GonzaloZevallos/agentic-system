@@ -627,3 +627,25 @@ def test_the_split_figures_never_move_the_verdict():
     for frm, to in ((with_split, stripped), (stripped, with_split), (with_split, with_split)):
         got = scorecard.verdict(frm, "a", to, "b")
         assert (got.outcome, got.reason) == ("ties", "no figure moved enough to decide")
+
+
+def test_a_document_without_the_split_keys_reads_the_same_as_one_with_no_events():
+    """The system writes `failures`, `pause_log` and `ci_timing` only when they hold something, so
+    a document from before GH-467 and a task with no failure, wait or pause are the same shape:
+    both read as zero failed, waiting and paused time, never as unknown. `n/a` is for a figure
+    whose own instants are missing or whose pause is open."""
+    old = _timed_document(pause_log=[{"kind": "lapse", "value": "x"}], full_checks={})
+    old.pop("failures")
+    quiet = {**old, "failures": []}
+    for key in ("pause_log", "full_checks"):
+        old.pop(key), quiet.pop(key)
+    a, b = scorecard.task_figures(old), scorecard.task_figures(quiet)
+
+    assert (a.failed_s, a.waiting_s, a.paused_s) == (0.0, 0.0, 0.0)
+    assert (a.failed_s, a.waiting_s, a.paused_s, a.unattributed_s) == (
+        b.failed_s,
+        b.waiting_s,
+        b.paused_s,
+        b.unattributed_s,
+    )
+    assert a.unattributed_s == pytest.approx(10800)
