@@ -691,3 +691,5 @@ tasks:
     cost_usd: 0.0654
   GH-531@review:
     cost_usd: 0.07
+  GH-530@review:
+    cost_usd: 0.0458
