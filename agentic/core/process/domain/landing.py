@@ -399,10 +399,13 @@ def _red_on_base_only(facts: rules.MergeFacts) -> bool:
     if not facts.ci_red_on_base or facts.ci_verdict is None or not facts.ci_verdict.failing:
         return False
     verdict = facts.ci_verdict
-    # A verdict built without `red` (it predates GH-535) names its checks by the runs' own
-    # names, which for an exact declared name are the same strings.
-    names = verdict.red_names or tuple(check.name for check in verdict.failing)
-    return set(names) <= set(facts.ci_red_on_base)
+    names = verdict.red_names
+    if not names:
+        # A verdict built by hand without `red` (every production one carries it, GH-535):
+        # the matcher names the declared checks its failing runs belong to.
+        claimed = ci.runs_of(verdict.failing, facts.ci_required)
+        names = tuple(name for name, runs in claimed.items() if runs)
+    return bool(names) and set(names) <= set(facts.ci_red_on_base)
 
 
 def _sync(
