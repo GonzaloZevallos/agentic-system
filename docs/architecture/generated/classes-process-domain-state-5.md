@@ -27,6 +27,7 @@ classDiagram
     class task__MergeRefusalRecord["MergeRefusalRecord"]
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
+    class task__PathRevision["PathRevision"]
     class task__PendingCloseDocs["PendingCloseDocs"]
     class task__PlanRoute["PlanRoute"]
     class task__PlanSettledRow["PlanSettledRow"]
@@ -35,7 +36,6 @@ classDiagram
     class task__ReleasePatch["ReleasePatch"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
-    class task__RoleRun["RoleRun"]
 ```
 
 ## Relaciones con otras páginas

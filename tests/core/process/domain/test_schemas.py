@@ -1166,3 +1166,27 @@ def test_forbidden_paths_keeps_the_refused_entries_in_input_order():
     )
     assert rules.forbidden_paths([]) == ()
     assert rules.forbidden_paths(GH_538["touched"]) == ()
+
+
+def _review(**revision) -> dict:
+    return {"markdown": "m", "reason": "r", "findings": [], "settled": [], **revision}
+
+
+def test_a_review_without_a_revision_validates_and_a_cited_one_needs_a_one_line_quote():
+    assert schemas.Review.model_validate(_review()).revision_decision == 0
+    ok = schemas.Review.model_validate(
+        _review(revised_required_paths=["a/"], revision_decision=1, revision_reason="moved it")
+    )
+    assert ok.revised_required_paths == ["a/"]
+    for bad in (
+        {"revision_decision": 1},
+        {"revision_decision": 1, "revision_reason": "a\nb"},
+        {"revision_decision": -1},
+        {
+            "revision_decision": 1,
+            "revision_reason": "q",
+            "revised_required_paths": [".agentic/tasks/x"],
+        },
+    ):
+        with pytest.raises(ValueError):
+            schemas.Review.model_validate(_review(**bad))

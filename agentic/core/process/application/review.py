@@ -386,8 +386,7 @@ def _required_paths_findings(
             "evidence": (
                 f"git diff --name-only {base}...{head} lists: "
                 f"{', '.join(touched) if touched else '(no paths)'}; "
-                f"the plan requires one of: {', '.join(missing)}"
-                + (f". {hint}" if hint else "")
+                f"the plan requires one of: {', '.join(missing)}" + (f". {hint}" if hint else "")
             ),
             "severity": "blocking",
             "scope": "subtask",

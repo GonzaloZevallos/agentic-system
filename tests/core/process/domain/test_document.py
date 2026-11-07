@@ -1686,3 +1686,11 @@ def test_declared_usd_round_trips_and_is_absent_when_the_estimate_was_not_raised
     assert document.parse(document.render(golden_state(estimate=raised)))["estimate"] == raised
     plain = document.parse(document.render(golden_state(estimate={"cost_usd": 6.0, "files": 3})))
     assert "declared_usd" not in plain["estimate"]
+
+
+def test_required_paths_revisions_round_trip_and_are_omitted_when_absent():
+    revision = {"revises": ["a"], "paths": ["b"], "decision": 1, "reason": "q", "at": "t"}
+    state = {"id": "T-1", "title": "t", "description": "d", "required_paths": ["a"]}
+    assert "required_paths_revisions" not in document.render(state)
+    with_revision = {**state, "required_paths_revisions": [revision]}
+    assert document.parse(document.render(with_revision))["required_paths_revisions"] == [revision]

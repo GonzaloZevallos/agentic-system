@@ -266,11 +266,7 @@ def render(
         **({"ci_required": c} if (c := state.get("ci_required")) else {}),
         **({"required_paths": r} if (r := state.get("required_paths")) else {}),
         # The revisions of that list after a human decision (GH-538), only when there are some.
-        **(
-            {"required_paths_revisions": v}
-            if (v := state.get("required_paths_revisions"))
-            else {}
-        ),
+        **({"required_paths_revisions": v} if (v := state.get("required_paths_revisions")) else {}),
         # Every finding of every review, raw: the `Tech Lead: findings` section below is
         # the folded, open half of this, which is what the next role reads (issue #42).
         "findings": state.get("findings", []),
