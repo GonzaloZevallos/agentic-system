@@ -1686,3 +1686,11 @@ def test_declared_usd_round_trips_and_is_absent_when_the_estimate_was_not_raised
     assert document.parse(document.render(golden_state(estimate=raised)))["estimate"] == raised
     plain = document.parse(document.render(golden_state(estimate={"cost_usd": 6.0, "files": 3})))
     assert "declared_usd" not in plain["estimate"]
+
+
+def test_ci_cancel_rerun_roundtrips_through_the_frontmatter_and_is_absent_when_unset():
+    # GH-539: `MemoryDocuments` never renders, so only this seam shows the key is serialised.
+    rerun = {"head": "a" * 40, "run_id": "7", "rerun_at": "2026-11-07T17:00:00+00:00"}
+    text = document.render(_speculative_state(ci_cancel_rerun=rerun))
+    assert document.parse(text)["ci_cancel_rerun"] == rerun
+    assert "ci_cancel_rerun" not in document.render(_speculative_state())
