@@ -245,3 +245,27 @@ def _fenced_ranges(text: str) -> list[tuple[int, int]]:
 
 def _in_fenced(offset: int, fenced: list[tuple[int, int]]) -> bool:
     return any(start <= offset < end for start, end in fenced)
+
+
+def raise_cause(cause: str, spent_usd: float, median_usd: float | None) -> str:
+    """Why the system raised an estimate, in the words the retry and the section share:
+    `spent` (the figure was below what the task already spent) or `median` (below half the
+    median of closed tasks with this many subtasks)."""
+    if cause == "spent":
+        return f"below what the task already spent {spent_usd:.2f}"
+    return f"below half the median {median_usd or 0.0:.2f} of closed tasks with this many subtasks"
+
+
+def raised_estimate_line(
+    declared_usd: float,
+    raised_usd: float,
+    cause: str,
+    spent_usd: float,
+    median_usd: float | None,
+) -> str:
+    """The one line the Tech Lead section carries when the system raised the estimate, so
+    the plan's reader knows the figure in force is not the one the Tech Lead wrote."""
+    return (
+        f"The system raised the estimate from {declared_usd:.2f} to {raised_usd:.2f} USD: "
+        f"{raise_cause(cause, spent_usd, median_usd)}."
+    )

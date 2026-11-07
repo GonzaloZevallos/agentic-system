@@ -27,9 +27,9 @@ from pydantic import BaseModel, Field, model_validator
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 
-from . import ci_workflow
+from . import ci_workflow, plan_view
 from .ci_workflow import WorkflowNames
-from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
+from .cost_history import History, Raise, bucket_median, raised_estimate, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
 from .task import (
@@ -905,22 +905,38 @@ def parts_check(parts: list[dict[str, Any]]) -> None:
                 )
 
 
-def _tracker_only_check(data: dict[str, Any], spent_usd: float) -> None:
+def _tracker_only_check(data: dict[str, Any]) -> None:
     """Shape (C): the plan's only work is on the issue tracker. It changes no file, so a
-    positive `estimated_files` contradicts the checklist; the cost keeps the same floor as
-    every other shape."""
+    positive `estimated_files` contradicts the checklist. Its cost has no fit to judge; a
+    figure below what the task spent is raised by the plan stage, never refused (GH-529)."""
     if data["estimated_files"] != 0:
         raise ValueError(
             f"a plan whose only work is on the tracker changes no file: estimated_files must "
             f"be 0, this one says {data['estimated_files']}. If the task changes files, write "
             "subtasks and keep the checklist next to them"
         )
-    cost = data["estimated_cost_usd"]
-    if cost < spent_usd:
-        raise ValueError(
-            f"estimated_cost_usd {cost:.2f} is below what the task already spent "
-            f"{spent_usd:.2f}: the estimate is the TOTAL cost, spent included"
-        )
+
+
+def floor_size(data: dict[str, Any]) -> int | None:
+    """The subtask count a plan's estimate floor is read at: its subtasks, `None` for a
+    plan with none (parts, tracker-only), which has the spent floor only. The check and the
+    plan stage both ask here, so the figure a plan is judged on is the one it is stored as."""
+    return len(data.get("subtasks") or []) or None
+
+
+def _words(
+    declared: float, raised: Raise | None, files: int, words: tuple[float, float | None]
+) -> str:
+    """How a refusal names the estimate: its own figure, or the system's raised one with the
+    cause, so the retry can read a figure the Tech Lead never wrote. `words` are the spent
+    and median figures the cause quotes."""
+    if raised is None:
+        return f"the estimate ({declared:.2f} USD, {files} files)"
+    cause = plan_view.raise_cause(raised.cause, *words)
+    return (
+        f"the estimate (raised by the system from {declared:.2f} to {raised.cost_usd:.2f} USD: "
+        f"{cause}, {files} files)"
+    )
 
 
 @dataclass(frozen=True)
@@ -1088,23 +1104,25 @@ def plan_check_for(
                 f"parts carry the work). {TRACKER_WITH_PARTS}"
             )
         if data.get("tracker_checklist") and not subtasks and not parts:
-            _tracker_only_check(data, spent_usd)
+            _tracker_only_check(data)
             return
         if parts:
             parts_check(parts)
         else:
             plan_check(data)
-        files, cost = data["estimated_files"], data["estimated_cost_usd"]
+        files, declared = data["estimated_files"], data["estimated_cost_usd"]
         if files < 1:
             raise ValueError("estimated_files must be at least one file: every task changes one")
-        if cost < spent_usd:
-            raise ValueError(
-                f"estimated_cost_usd {cost:.2f} is below what the task already spent "
-                f"{spent_usd:.2f}: the estimate is the TOTAL cost, spent included"
-            )
+        # A floor never refuses a plan: the system raises the figure and fit is judged once,
+        # on it (GH-529).
+        size = floor_size(data)
+        raised = raised_estimate(declared, spent_usd, history, size)
+        judged = data if raised is None else {**data, "estimated_cost_usd": raised.cost_usd}
+        median = None if size is None else bucket_median(history, size)
+        words = _words(declared, raised, files, (spent_usd, median))
         if subtasks:
             bucket.observe(len(subtasks))
-        fits = plan_fits(data, history, bucket).fits
+        fits = plan_fits(judged, history, bucket).fits
         if parts:
             if fit_waived:
                 raise ValueError(
@@ -1113,24 +1131,17 @@ def plan_check_for(
                 )
             if fits:
                 raise ValueError(
-                    f"the estimate ({cost:.2f} USD, {files} files) fits: write subtasks "
+                    f"{words} fits: write subtasks "
                     "and no parts; a task is split only when it does not fit"
                 )
             return
         if not fits and not fit_waived and part_of is None:
             raise ValueError(
-                f"the estimate ({cost:.2f} USD, {files} files) does not fit one task "
+                f"{words} does not fit one task "
                 "(or the history's reference for this size does not): write parts, "
                 f"at least two chained tasks, and no subtasks. {SPLIT_NOT_WAIVED}"
             )
         if plan_shape != DEFAULT_PLAN_SHAPE:
             _single_check(subtasks, data.get("integration") or "")
-        median = bucket_median(history, len(data["subtasks"]))
-        if median is not None and cost < 0.5 * median:
-            raise ValueError(
-                f"estimated_cost_usd {cost:.2f} is below half the median {median:.2f} of "
-                f"closed tasks with this many subtasks (at least {MIN_BUCKET} of them): "
-                "estimate from the history table or explain the gap in the plan"
-            )
 
     return check
