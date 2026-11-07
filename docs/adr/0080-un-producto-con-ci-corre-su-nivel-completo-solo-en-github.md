@@ -279,3 +279,32 @@ como un `check` rojo y lo devolvió dos veces al Developer.
    rechaza `ci_no_verdict` y el aterrizaje escala una vez con clase `ci`; el humano lo libera
    (`released_no_verdict`). Se acepta sin guarda: retener la publicación dejaría a `full_checks`
    esperando una corrida cuyo veredicto quizá no decide nada.
+
+## Adenda GH-531: una cabeza empujada sin corrida se juzga con el workflow despachado
+
+Una rama anterior al cambio que agregó `agentic-ci/**` a los disparadores lleva su propio `ci.yml`
+viejo: GitHub usa el de la cabeza empujada y no arranca ninguna corrida. El nodo terminaba en `no_run`
+y escalaba con clase `ci`, y reanudar repetía lo mismo con la misma cabeza.
+
+- **El respaldo.** Cuando el camino del push termina en `no_run` (después del republish, tanto en el
+  camino directo como en el especulativo) y el upstream declara `ci_dispatch`, la misma cabeza se juzga
+  con `_dispatched_full_checks`. La decisión la toma sólo `ci.dispatch_after_no_run`. No hay clase ni
+  causa de escalado nuevas.
+- **Por qué esperar el `no_run`.** Se podría leer el YAML de la rama para saber si dispara, pero eso
+  duplicaría la lógica de GitHub. Esperar el `no_run` ya acotado por dos períodos de gracia es el
+  único juicio que no puede equivocarse. Costo: hasta ≈3 min más y un `git fetch`, sólo para cabezas
+  sin corrida.
+- **Lectura en el upstream, excepción a la adenda del ADR-0016.** El stack se lee en la base de la
+  tarea, pero el workflow que `dispatch_ci(workflow, "", …)` corre es el de la rama por defecto. Por eso
+  `_fallback_dispatch` lee `ci_dispatch` y `ci` en una sola revisión, el sha del upstream traído, y la
+  corrida despachada se juzga con esos nombres. El camino de cabeza no confiable (GH-462) y
+  `full_checks_mode` siguen leyendo en la base.
+- **El registro.** Lleva `ran_on: ci_dispatch`, `run_id`, `dispatch_cause: "no_run"` y `stack_at` (el sha
+  completo del upstream). Nada decide con esos dos campos: `rules.ci_untrusted` sigue derivándose de las
+  rutas. La puerta de merge no cambia: `_full_checks_stands` ya acepta `ci_dispatch` si las filas cubren
+  los nombres que la puerta pide.
+- **Cuando no puede correr.** Se escala `ci`/`no_run` como hoy, con un sufijo de un conjunto cerrado:
+  `no_upstream`, `stack_unreadable` o, sin sufijo y con el texto idéntico al de hoy, `undeclared`
+  (más «(the upstream was not fetched)» si el fetch falló). Nunca entra texto de git.
+- **Supuesto.** El upstream del checkout del producto es la rama por defecto, como en el poller de
+  apostrophe sobre `master`.

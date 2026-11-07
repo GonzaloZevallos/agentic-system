@@ -545,10 +545,11 @@ class ProductStack(Protocol):
         ...
 
     def ci_dispatch(self, revision: str) -> CiDispatch | None:
-        """The workflow of the base branch to dispatch for a head that touches `.github/`, and
-        the input that carries the head sha (`core.knowledge`, GH-462), as the commit
-        `revision` declares them. `None` when the product declares none: such a head runs
-        the local suite. Raises `ValueError` when the key is malformed or declared without
+        """The workflow of the base branch to dispatch for a head its own workflow cannot judge
+        (it touches `.github/`, GH-462, or its pushes get no run, GH-531), and the input that
+        carries the head sha (`core.knowledge`), as the commit `revision` declares them.
+        `None` when the product declares none: a head that touches `.github/` runs the local
+        suite and a head with no run escalates. Raises `ValueError` when the key is malformed or declared without
         `ci`."""
         ...
 
