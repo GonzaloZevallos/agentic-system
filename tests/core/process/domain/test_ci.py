@@ -238,3 +238,165 @@ def test_a_details_url_with_a_run_segment_gives_its_run_id(link: str, run_id: st
 )
 def test_a_link_with_no_parsable_run_segment_gives_none(link: str) -> None:
     assert ci.run_id_of_link(link) is None
+
+
+# GH-539: a run superseded or cancelled is not red. Links carry the Actions run id, which is
+# what the classification reads.
+def job(name: str, conclusion: str | None, run_id: int, status: str = "COMPLETED") -> CiCheck:
+    link = f"https://github.com/o/r/actions/runs/{run_id}/job/{name}"
+    return CiCheck(name, status, conclusion, link)
+
+
+OLD, NEW = 42393982482, 42394295598
+DECLARED = ("docs", "pytest", "e2e", "ci-ok")
+
+
+def old_run_cancelled_by_a_newer_push() -> tuple[CiCheck, ...]:
+    """The GH-548 shape: three jobs cancelled, the jobs that need them (and `ci-ok`) failed."""
+    return (
+        job("docs", "CANCELLED", OLD),
+        job("pytest", "CANCELLED", OLD),
+        job("e2e", "FAILURE", OLD),
+        job("ci-ok", "FAILURE", OLD),
+    )
+
+
+def newer_run(conclusion: str | None, status: str = "COMPLETED") -> tuple[CiCheck, ...]:
+    return tuple(job(name, conclusion, NEW, status) for name in DECLARED)
+
+
+def test_gh_548_old_run_with_a_newer_green_run_of_the_head_is_green() -> None:
+    checks = old_run_cancelled_by_a_newer_push() + newer_run("SUCCESS")
+    assert ci.ci_state(report(*checks), DECLARED) == CiVerdict("green", (), ())
+
+
+def test_gh_548_old_run_with_a_newer_run_still_going_is_pending_not_red() -> None:
+    checks = old_run_cancelled_by_a_newer_push() + newer_run(None, "IN_PROGRESS")
+    verdict = ci.ci_state(report(*checks), DECLARED)
+    assert (verdict.state, verdict.failing, verdict.cancelled) == ("pending", (), ())
+
+
+def test_gh_548_old_run_with_a_newer_really_red_run_is_red_with_the_new_run_only() -> None:
+    new_red = job("e2e", "FAILURE", NEW)
+    checks = old_run_cancelled_by_a_newer_push() + (new_red,)
+    verdict = ci.ci_state(report(*checks), ("e2e",))
+    assert verdict.state == "red"
+    assert verdict.failing == (new_red,)
+
+
+def test_an_old_run_alone_with_its_suite_cancelled_is_pending_and_names_its_checks() -> None:
+    checks = old_run_cancelled_by_a_newer_push()
+    read = CiReport(FULL, None, None, None, checks, True, frozenset({str(OLD)}))
+    verdict = ci.ci_state(read, ("e2e", "ci-ok"))
+    assert verdict.state == "pending"
+    assert verdict.failing == ()
+    assert [check.name for check in verdict.cancelled] == ["e2e", "ci-ok"]
+
+
+def test_an_old_run_alone_with_its_suite_failed_stays_red() -> None:
+    """The suite conclusion is what says the cancellation: without a newer run or it, red."""
+    verdict = ci.ci_state(report(*old_run_cancelled_by_a_newer_push()), ("e2e", "ci-ok"))
+    assert verdict.state == "red"
+    assert verdict.cancelled == ()
+
+
+def test_a_real_red_with_fail_fast_cancelled_siblings_and_a_newer_green_run_is_green() -> None:
+    old = (job("docs", "CANCELLED", OLD), job("pytest", "FAILURE", OLD))
+    checks = old + (job("docs", "SUCCESS", NEW), job("pytest", "SUCCESS", NEW))
+    assert ci.ci_state(report(*checks), ("docs", "pytest")).state == "green"
+
+
+def test_a_real_red_with_cancelled_siblings_alone_and_the_suite_failed_is_red() -> None:
+    old = (job("docs", "CANCELLED", OLD), job("pytest", "FAILURE", OLD))
+    assert ci.ci_state(report(*old), ("docs", "pytest")).state == "red"
+
+
+def test_a_red_run_without_any_cancelled_check_stays_red_beside_a_newer_green_one() -> None:
+    old = (job("pytest", "FAILURE", OLD), job("docs", "SUCCESS", OLD))
+    checks = old + (job("pytest", "SUCCESS", NEW), job("docs", "SUCCESS", NEW))
+    verdict = ci.ci_state(report(*checks), ("pytest", "docs"))
+    assert verdict.state == "red"
+    assert [check.name for check in verdict.failing] == ["pytest"]
+
+
+def test_the_newer_run_is_compared_as_an_integer_not_as_text() -> None:
+    old, newer = 99, 100  # "99" > "100" as text
+    checks = (job("ci-ok", "CANCELLED", old), job("ci-ok", "SUCCESS", newer))
+    assert ci.ci_state(report(*checks), ("ci-ok",)).state == "green"
+    reversed_ids = (job("ci-ok", "CANCELLED", newer), job("ci-ok", "SUCCESS", old))
+    assert ci.ci_state(report(*reversed_ids), ("ci-ok",)).state == "red"
+
+
+def test_a_check_with_no_readable_run_id_keeps_todays_verdict() -> None:
+    cancelled = CiCheck("ci-ok", "COMPLETED", "CANCELLED", "https://github.com/o/r/runs/ci-ok")
+    green = job("ci-ok", "SUCCESS", NEW)
+    read = CiReport(FULL, None, None, None, (cancelled, green), True, frozenset({str(NEW)}))
+    assert ci.ci_state(read, ("ci-ok",)).state == "red"
+
+
+def test_a_green_check_of_a_cancelled_suite_is_still_green() -> None:
+    read = CiReport(
+        FULL, None, None, None, (job("unit", "SUCCESS", OLD),), True, frozenset({str(OLD)})
+    )
+    assert ci.ci_state(read, ("unit",)) == CiVerdict("green", (), ())
+
+
+def test_red_on_base_and_base_green_read_a_cancelled_base_as_not_red_and_not_green() -> None:
+    base = CiReport(
+        FULL, None, None, None, old_run_cancelled_by_a_newer_push(), True, frozenset({str(OLD)})
+    )
+    head = report(job("ci-ok", "FAILURE", NEW), job("e2e", "FAILURE", NEW))
+    assert ci.red_on_base(head, base, ("ci-ok", "e2e")) == ()
+    assert ci.base_green(base, ("ci-ok", "e2e")) is False
+    real_base = report(job("ci-ok", "FAILURE", OLD))
+    assert ci.red_on_base(head, real_base, ("ci-ok",)) == ("ci-ok",)
+
+
+def test_red_checks_and_run_link_leave_a_cancelled_run_out() -> None:
+    read = CiReport(
+        FULL, None, None, None, old_run_cancelled_by_a_newer_push(), True, frozenset({str(OLD)})
+    )
+    assert ci.red_checks(read) == ()
+    assert ci.run_link(read, "ci-ok") is None
+    assert ci.red_checks(report(*old_run_cancelled_by_a_newer_push())) != ()
+
+
+def test_a_rerun_is_restarted_only_when_a_read_shows_its_run_outside_completed() -> None:
+    running = CiReport(
+        FULL, "master", OTHER, "2026-10-07T10:00:00Z", (), running_runs=frozenset({"77"})
+    )
+    assert ci.rerun_restarted(running, "77") is True
+    # Rejected: another run, a report with none running, and a read that is not a report.
+    assert ci.rerun_restarted(running, "78") is False
+    assert ci.rerun_restarted(report(), "77") is False
+    assert ci.rerun_restarted(ci.CiUnreadable("gh_unavailable"), "77") is False
+
+
+def _shards(run_id: int, first: str, second: str, status: str = "COMPLETED") -> tuple[CiCheck, ...]:
+    return (
+        job("e2e-shard (1)", first, run_id, status),
+        job("e2e-shard (2)", second, run_id, status),
+    )
+
+
+def test_a_cancelled_matrix_shard_with_a_newer_run_of_the_same_shards_is_green() -> None:
+    """GH-539 with GH-535: the declared id `e2e-shard` claims the expansions; the old run's
+    cancelled shard and its sibling that failed for it are matched by name in the newer run."""
+    checks = _shards(OLD, "CANCELLED", "FAILURE") + _shards(NEW, "SUCCESS", "SUCCESS")
+    read = CiReport(FULL, None, None, None, checks, True)  # a matrix id waits for the runs
+    assert ci.ci_state(read, ("e2e-shard",)) == CiVerdict("green", (), ())
+
+
+def test_a_cancelled_matrix_shard_with_a_newer_run_still_going_is_pending() -> None:
+    checks = _shards(OLD, "CANCELLED", "FAILURE") + _shards(NEW, None, None, "IN_PROGRESS")
+    verdict = ci.ci_state(report(*checks), ("e2e-shard",))
+    assert (verdict.state, verdict.failing, verdict.red) == ("pending", (), ())
+
+
+def test_a_cancelled_matrix_shard_without_a_newer_run_stays_red_and_names_the_id() -> None:
+    """The input it must reject: nothing says the old run was superseded, so it is red, and
+    `red` keeps the declared id."""
+    verdict = ci.ci_state(report(*_shards(OLD, "CANCELLED", "FAILURE")), ("e2e-shard",))
+    assert verdict.state == "red"
+    assert verdict.red_names == ("e2e-shard",)
+    assert verdict.cancelled == ()

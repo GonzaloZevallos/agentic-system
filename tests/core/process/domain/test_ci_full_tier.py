@@ -324,3 +324,89 @@ def test_only_a_push_with_no_run_is_worth_reading_the_upstream_for(
     expected: bool,
 ) -> None:
     assert ci.push_got_no_run(FullTierVerdict(state, (), (), cause)) is expected
+
+
+# GH-539: a run superseded or cancelled is never red.
+OLD, NEW = 42393982482, 42394295598
+
+
+def job(name: str, conclusion: str | None, run_id: int, status: str = "COMPLETED") -> CiCheck:
+    return CiCheck(name, status, conclusion, f"https://github.com/o/r/actions/runs/{run_id}/job/x")
+
+
+def cancelled_read(*checks: CiCheck, completed: bool | None = True, suites: tuple[int, ...] = ()):
+    return CiReport(
+        HEAD, None, None, None, tuple(checks), completed, frozenset(str(i) for i in suites)
+    )
+
+
+def test_a_declared_job_failing_only_because_its_needs_were_cancelled_is_cancelled_not_red() -> (
+    None
+):
+    """The issue's case: `web` needs `unit`; `unit` was cancelled and `web` failed with it."""
+    old = (job("unit", "CANCELLED", OLD), job("web", "FAILURE", OLD))
+    got = verdict(cancelled_read(*old, suites=(OLD,)))
+    assert got.state == "cancelled"
+    assert got.failing == ()
+    assert [check.name for check in got.cancelled] == ["unit", "web"]
+    assert got.cause is None
+
+
+def test_cancelled_waits_until_every_workflow_run_is_known_completed() -> None:
+    old = (job("unit", "CANCELLED", OLD), job("web", "FAILURE", OLD))
+    for completed in (None, False):
+        got = verdict(cancelled_read(*old, completed=completed, suites=(OLD,)))
+        assert got.state == "waiting"
+        assert got.failing == ()
+        assert got.cancelled != ()
+
+
+def test_a_cancelled_ci_ok_with_a_newer_pending_run_waits_it_is_not_unreachable() -> None:
+    old = (job("unit", "CANCELLED", OLD), job("web", "CANCELLED", OLD))
+    newer = (job("unit", None, NEW, "IN_PROGRESS"), job("web", None, NEW, "QUEUED"))
+    got = verdict(cancelled_read(*old, *newer, completed=None))
+    assert got.state == "waiting"
+    assert got.cause is None
+
+
+def test_a_cancelled_job_of_a_cancelled_suite_without_a_newer_run_is_cancelled() -> None:
+    old = (job("unit", "SUCCESS", OLD), job("web", "CANCELLED", OLD))
+    got = verdict(cancelled_read(*old, suites=(OLD,)))
+    assert got.state == "cancelled"
+    assert [check.name for check in got.cancelled] == ["web"]
+
+
+def test_a_newer_green_run_of_the_same_head_makes_the_old_cancelled_one_green() -> None:
+    old = (job("unit", "CANCELLED", OLD), job("web", "FAILURE", OLD))
+    newer = (job("unit", "SUCCESS", NEW), job("web", "SUCCESS", NEW))
+    assert verdict(cancelled_read(*old, *newer)) == FullTierVerdict("green", (), (), None)
+
+
+def test_a_cancellation_beside_a_really_red_name_is_red() -> None:
+    old = (job("unit", "CANCELLED", OLD), job("web", "FAILURE", OLD))
+    newer = (job("unit", "FAILURE", NEW), job("web", "SUCCESS", NEW))
+    got = verdict(cancelled_read(*old, *newer))
+    assert got.state == "red"
+    assert [check.name for check in got.failing] == ["unit"]
+
+
+def test_a_cancelled_name_beside_a_missing_one_is_not_cancelled_yet() -> None:
+    old = (job("unit", "CANCELLED", OLD),)
+    got = verdict(cancelled_read(*old, suites=(OLD,)))
+    assert got.state == "waiting"
+    assert got.pending == ("web",)
+    assert [check.name for check in got.cancelled] == ["unit"]
+
+
+def test_a_cancelled_run_the_classification_does_not_know_is_still_not_started() -> None:
+    """No run id in the link, a run that is neither superseded nor cancelled: as before."""
+    got = verdict(report(run("unit", "SUCCESS"), run("web", "CANCELLED")))
+    assert got.state == "unreachable"
+    assert got.cause == "not_started"
+    alone = verdict(cancelled_read(job("unit", "SUCCESS", NEW), job("web", "CANCELLED", NEW)))
+    assert (alone.state, alone.cause) == ("unreachable", "not_started")
+
+
+def test_startup_failure_without_a_cancellation_signal_is_still_not_started() -> None:
+    plain = verdict(cancelled_read(job("unit", "SUCCESS", OLD), job("web", "STARTUP_FAILURE", OLD)))
+    assert (plain.state, plain.cause) == ("unreachable", "not_started")

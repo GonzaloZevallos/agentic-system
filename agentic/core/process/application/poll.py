@@ -378,7 +378,7 @@ def with_recorded_red(facts: rules.MergeFacts) -> rules.MergeFacts:
         facts,
         ci_subject="tested",
         ci_head=pair["tested"],
-        ci_verdict=ci.CiVerdict("red", failing, (), red),
+        ci_verdict=ci.CiVerdict("red", failing, (), red=red),
         ci_unreadable=None,
         ci_fresh=True,
     )

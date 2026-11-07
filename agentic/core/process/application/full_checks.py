@@ -44,7 +44,7 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
 
 import anyio
 from pydantic import TypeAdapter
@@ -66,12 +66,14 @@ from ..domain.presubmit import CheckResult, CiCover, CiDispatch
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
     WAITING_ON_HUMAN,
+    CiCancelRerun,
     CiCause,
     CiTiming,
     FallbackCause,
     FullCheckEntry,
     FullChecksRecord,
     TaskState,
+    apply,
 )
 from . import ci_flakes, ci_push
 from .checkouts import Checkout, task_base
@@ -133,6 +135,24 @@ _NOT_TRIED_DETAIL: dict[NotTriedWhy, str] = {
 _UNFETCHED_DETAIL = " (the upstream was not fetched)"
 
 
+@dataclass
+class _Restart:
+    """What the wait saw of the single rerun of a cancelled head (GH-539), held in memory: the
+    rerun's run id, handed on to `ci.rerun_restarted` and never compared here, and whether a read
+    showed that run outside `COMPLETED`."""
+
+    run_id: str | None = None
+    seen: bool = False
+
+    def watch(self, read: CiReport | CiUnreadable) -> None:
+        if self.run_id is not None and ci.rerun_restarted(read, self.run_id):
+            self.seen = True
+
+    def rearm(self, run_id: str) -> None:
+        self.run_id = run_id
+        self.seen = False
+
+
 @dataclass(frozen=True)
 class _Fallback:
     """The declaration that makes a `no_run` push dispatchable (GH-531), read at one revision of
@@ -178,6 +198,9 @@ class _NoVerdict:
     # A push that got no run and whose dispatch fallback was not tried (GH-531): why, for the
     # closed suffix of the escalation. `None` for every other way of giving no verdict.
     not_tried: _NotTried | None = None
+    # The single rerun of a cancelled run of the head (GH-539), kept on the escalation's patch so
+    # the fact survives the document write; `None` when the node reran nothing.
+    cancel_rerun: CiCancelRerun | None = None
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -280,6 +303,8 @@ async def full_checks(
             at=ports.now(),
             ci=outcome.timing,
         )
+        if outcome.cancel_rerun is not None:
+            patch["ci_cancel_rerun"] = outcome.cancel_rerun
         if outcome.git_said and outcome.push_attempts and outcome.push_kind:
             # Git's words reach the section only through `push_failure_markdown`, which
             # scrubs them; the older run stays as history under its own free `(vN)` key.
@@ -484,6 +509,12 @@ async def _ci_full_checks(
     speculative = False
     pushes: list[Pushed] = []
     pushed = state.get("ci_speculation")
+    # Whether a read showed the rerun's run outside `COMPLETED` while this node waited (GH-539),
+    # in memory only; the rerun fact of an earlier node, when it is for this head, starts it.
+    recorded = state.get("ci_cancel_rerun")
+    running = _Restart(
+        recorded["run_id"] if recorded and rules.same_commit(recorded["head"], head) else None
+    )
     # The instants of the CI wait (GH-467), stamped by the application from `ports.now`: this
     # node's start, and the push the wait is for (the review's persisted one when its run is
     # consumed, this node's own otherwise).
@@ -494,7 +525,7 @@ async def _ci_full_checks(
         # pushed again. A run that never came, or was cancelled, is today's path from the
         # republish on, and only the wait that follows it may escalate.
         decided, read, waited = await _speculated_wait(
-            pushed["pushed_at"], cfg, ports, ref, head, gate_names, sleep, clock, now
+            pushed["pushed_at"], cfg, ports, ref, head, gate_names, sleep, clock, now, running
         )
         speculative = decided is not None
         if decided is None:
@@ -509,7 +540,9 @@ async def _ci_full_checks(
                     exc, waited, timing=_no_verdict_timing(pushed_at, node_started_at)
                 )
             pushed_at = ports.now()
-            verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+            verdict, read, again = await _wait_ci(
+                ports, ref, head, gate_names, cfg, sleep, clock, running=running
+            )
             waited += again
         else:
             verdict = decided
@@ -519,7 +552,9 @@ async def _ci_full_checks(
         except GitError as exc:
             return _publish_failed(exc, 0.0)
         pushed_at = ports.now()
-        verdict, read, waited = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+        verdict, read, waited = await _wait_ci(
+            ports, ref, head, gate_names, cfg, sleep, clock, running=running
+        )
         if verdict.state == "unreachable" and verdict.cause == "no_run":
             # Once per call: a CI that never started on the first push is told that it may have
             # missed the event, and the second wait is bounded by the grace period again.
@@ -534,8 +569,13 @@ async def _ci_full_checks(
                     exc, waited, timing=_no_verdict_timing(pushed_at, node_started_at)
                 )
             pushed_at = ports.now()
-            verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
+            verdict, read, again = await _wait_ci(
+                ports, ref, head, gate_names, cfg, sleep, clock, running=running
+            )
             waited += again
+    verdict, read, waited, rerun = await _rescued(
+        state, cfg, ports, ref, head, gate_names, verdict, read, waited, sleep, clock, now, running
+    )
     not_tried: _NotTried | None = None
     if verdict.state == "unreachable":
         # A push that got no run is a candidate for the dispatch of the upstream's workflow
@@ -571,10 +611,25 @@ async def _ci_full_checks(
             not_tried=not_tried,
         )
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
-    if verdict.state == "green":
-        patch = _ci_green(state, head, gate_names, read, waited)
-    else:
-        patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited, at=ports.now())
+    match verdict.state:
+        case "green":
+            patch = _ci_green(state, head, gate_names, read, waited)
+        case "red" | "timed_out":
+            patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited, at=ports.now())
+        case "cancelled":
+            # A second cancellation: never a return, the escalation of a CI that did not run.
+            return _NoVerdict(
+                "not_started",
+                waited,
+                timing=_no_verdict_timing(pushed_at, node_started_at),
+                cancel_rerun=rerun,
+            )
+        case "waiting" | "unreachable":
+            raise AssertionError(f"`{verdict.state}` is settled before a record is written")
+        case _ as unreachable:
+            assert_never(unreachable)
+    if rerun is not None:
+        patch["ci_cancel_rerun"] = rerun
     _with_timing(patch, pushed_at, node_started_at, verdict, read, gate_names)
     if speculative:
         patch["full_checks"]["speculative"] = True
@@ -588,6 +643,54 @@ async def _ci_full_checks(
     if flakes:
         patch["flakes"] = flakes
     return patch
+
+
+async def _rescued(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    ref: str,
+    head: str,
+    names: tuple[str, ...],
+    verdict: FullTierVerdict,
+    read: CiReport | CiUnreadable,
+    waited: float,
+    sleep: Sleep,
+    clock: Clock,
+    now: Now,
+    running: _Restart,
+) -> tuple[FullTierVerdict, CiReport | CiUnreadable, float, CiCancelRerun | None]:
+    """The rescue of a `cancelled` verdict (GH-539), which is never red: the run is rerun once per
+    head (`ci_cancel_rerun`, written to the document at once) and the wait goes on. A `cancelled`
+    verdict still standing is returned as it is, for the caller to escalate, once the rerun was
+    refused or could not be asked (no run id), or is a second cancellation
+    (`speculation.second_cancel`); a stale read of the run the rerun has yet to restart waits. Any
+    other verdict is returned untouched, with the fact when one was written or already stood."""
+    recorded = state.get("ci_cancel_rerun")
+    rerun = recorded if recorded and rules.same_commit(recorded["head"], head) else None
+    while verdict.state == "cancelled":
+        if rerun is None:
+            run_id = next(
+                (found for c in verdict.cancelled if (found := ci.run_id_of_link(c.link))), None
+            )
+            if run_id is None:
+                break
+            refused = await anyio.to_thread.run_sync(ports.tracker.rerun_ci_run, run_id)
+            if refused is not None:
+                break
+            rerun = {"head": head, "run_id": run_id, "rerun_at": ports.now()}
+            ports.documents.save(apply(state, {"ci_cancel_rerun": rerun}))
+            running.rearm(run_id)
+        elif speculation.second_cancel(
+            rerun["rerun_at"], running.seen, now(), cfg.ci_start_grace_s
+        ):
+            break
+        await sleep(ci.CI_POLL_S)
+        verdict, read, again = await _wait_ci(
+            ports, ref, head, names, cfg, sleep, clock, running=running
+        )
+        waited += again
+    return verdict, read, waited, rerun
 
 
 def _fallback_dispatch(ports: Ports, state: TaskState) -> _Fallback | _NotTried:
@@ -666,6 +769,7 @@ async def _speculated_wait(
     sleep: Sleep,
     clock: Clock,
     now: Now,
+    running: _Restart | None = None,
 ) -> tuple[FullTierVerdict | None, CiReport | CiUnreadable, float]:
     """The wait on the run a review pushed for `head` (GH-465), from one read of the ref. The
     verdict is `None` when that run cannot be counted on and the caller publishes again: the
@@ -680,7 +784,9 @@ async def _speculated_wait(
     )
     if speculation.event_lost(pushed_at, now(), cfg.ci_start_grace_s, has_run):
         return None, first, 0.0
-    verdict, read, waited = await _wait_ci(ports, ref, head, names, cfg, sleep, clock, first)
+    verdict, read, waited = await _wait_ci(
+        ports, ref, head, names, cfg, sleep, clock, first, running
+    )
     if verdict.state == "unreachable" and verdict.cause in ("no_run", "not_started"):
         return None, read, waited
     return verdict, read, waited
@@ -695,11 +801,13 @@ async def _wait_ci(
     sleep: Sleep,
     clock: Clock,
     first: CiReport | CiUnreadable | None = None,
+    running: _Restart | None = None,
 ) -> tuple[FullTierVerdict, CiReport | CiUnreadable, float]:
     """Read the CI of `ref` every `CI_POLL_S` until a verdict that is not `waiting`, counted
     from the first read: bounded by `cfg.ci_start_grace_s` while no run exists on `head` and by
     `cfg.check_timeout_s` once one does (`ci.full_tier_verdict`). `first` is a read already
-    taken, used for the first round instead of asking again."""
+    taken, used for the first round instead of asking again. `running` notes whether a read
+    showed the rerun's run outside `COMPLETED` (GH-539), for the rescue of a cancelled run."""
     started = clock()
     previous: CiReport | CiUnreadable | None = None
     while True:
@@ -710,6 +818,8 @@ async def _wait_ci(
         )
         first = None
         waited = clock() - started
+        if running is not None:
+            running.watch(read)
         verdict = ci.full_tier_verdict(
             read,
             head,
@@ -821,10 +931,25 @@ async def _dispatched_full_checks(
     run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
     assert run is not None  # a verdict other than `unreachable` came from a chosen run
     read = CiReport(head, None, None, None, run.jobs, run.status == "completed")
-    if verdict.state == "green":
-        patch = _ci_green(state, head, names, read, waited)
-    else:
-        patch = _ci_red(state, cfg, head, names, verdict, read, waited, at=ports.now())
+    match verdict.state:
+        case "green":
+            patch = _ci_green(state, head, names, read, waited)
+        case "red" | "timed_out":
+            patch = _ci_red(state, cfg, head, names, verdict, read, waited, at=ports.now())
+        case "cancelled":
+            # A dispatched run is judged from one run, so this is not reached today; it still is
+            # never read as red (GH-539).
+            return _NoVerdict(
+                "not_started",
+                waited,
+                dispatch.workflow,
+                head=head,
+                timing=_no_verdict_timing(pushed_at, node_started_at),
+            )
+        case "waiting" | "unreachable":
+            raise AssertionError(f"`{verdict.state}` is settled before a record is written")
+        case _ as unreachable:
+            assert_never(unreachable)
     _with_timing(patch, pushed_at, node_started_at, verdict, read, names)
     return _dispatched_record(patch, run)
 
@@ -851,11 +976,16 @@ def _with_timing(
     instant is known."""
     if pushed_at is None:
         return
-    label: Literal["green", "red", "no_verdict"] = "no_verdict"
-    if verdict.state == "green":
-        label = "green"
-    elif verdict.state == "red":
-        label = "red"
+    label: Literal["green", "red", "no_verdict"]
+    match verdict.state:
+        case "green":
+            label = "green"
+        case "red":
+            label = "red"
+        case "timed_out" | "waiting" | "unreachable" | "cancelled":
+            label = "no_verdict"
+        case _ as unreachable:
+            assert_never(unreachable)
     patch["full_checks"]["ci_timing"] = ci.timing(
         pushed_at, node_started_at, label, read.checks, names
     )

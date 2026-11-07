@@ -8,7 +8,7 @@ from typing import Any, get_args
 import pytest
 
 from agentic.core.process.application import landing_plan
-from agentic.core.process.domain import landing, rules
+from agentic.core.process.domain import ci, landing, rules
 from agentic.core.process.domain.adr_numbers import Ambiguous
 from agentic.core.process.domain.landing import (
     LandingSpent,
@@ -546,3 +546,17 @@ def test_the_slice_close_patch_names_the_pull_requests_and_the_time():
         "closed_by_slices": ["https://github.com/o/r/pull/350"],
     }
     assert "delivery_outcome" not in patch
+
+
+def test_a_head_whose_ci_run_was_cancelled_is_pending_not_failed_and_spends_no_model_pass():
+    # GH-539: the declared job is red only because its run was cancelled; the landing's facts
+    # carry the pending verdict, so the refusal is never `ci_failed` (which `fix` would act on).
+    link = "https://github.com/o/r/actions/runs/7/job/1"
+    check = ci.CiCheck("web", "COMPLETED", "CANCELLED", link)
+    report = ci.CiReport(SLICE_HEAD, "master", MASTER, None, (check,), True, frozenset({"7"}))
+    verdict = ci.ci_state(report, ("web",))
+    assert verdict.state == "pending" and not verdict.failing
+    facts = _slice_facts(ci_verdict=verdict, ci_head=SLICE_HEAD)
+    assert facts.ci_verdict is not None and facts.ci_verdict.failing == ()
+    assert rules.auto_merge_decision(facts).reason != "ci_failed"
+    assert landing._red_on_base_only(replace(facts, ci_red_on_base=("web",))) is False

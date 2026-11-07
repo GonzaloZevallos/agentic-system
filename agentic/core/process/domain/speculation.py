@@ -69,3 +69,21 @@ def event_lost(pushed_at: str, now: datetime, grace_s: float, read_has_run: bool
     if pushed.tzinfo is None or now.tzinfo is None:
         return False
     return (now - pushed).total_seconds() >= grace_s
+
+
+def second_cancel(rerun_at: str, restarted: bool, now: datetime, grace_s: float) -> bool:
+    """Whether a `cancelled` verdict read after the single rerun of a head (GH-539) is a second
+    cancellation that escalates, and not the stale read of the cancelled run the rerun has yet to
+    restart: the rerun's run was seen outside `COMPLETED` (`restarted`, what the wait made of the
+    reads after the rerun with `ci.rerun_restarted`, held in memory) or `grace_s` seconds passed
+    since `rerun_at`. `now` is handed in. A `rerun_at` that cannot be measured counts as passed, so
+    the wait ends instead of going on."""
+    if restarted:
+        return True
+    try:
+        rerun = datetime.fromisoformat(rerun_at)
+    except ValueError:
+        return True
+    if rerun.tzinfo is None or now.tzinfo is None:
+        return True
+    return (now - rerun).total_seconds() >= grace_s

@@ -16,7 +16,7 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, assert_never
 
 from agentic.shared.configuration import Configuration
 
@@ -664,8 +664,15 @@ def _read_pair(
             if chosen is not None and verdict.state in ("green", "red"):
                 report = ci.CiReport(tested, None, None, None, chosen.jobs)
                 run_id = str(chosen.run_id)
-    if verdict.state == "waiting":
-        return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
+    match verdict.state:
+        case "waiting":
+            return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
+        case "cancelled":
+            return _cancelled_pair(task_id, pairs, pair, verdict, waited, cfg, ports, clock)
+        case "green" | "red" | "timed_out" | "unreachable":
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
     if report is not None:
         row: MergeCiRecord = {**pair, "outcome": "green" if verdict.state == "green" else "red"}
         row["ci_timing"] = ci.timing(
@@ -704,6 +711,45 @@ def _read_pair(
         undecided["cause"] = verdict.cause
     _write_pairs(ports, task_id, pairs, undecided)
     return _Fresh(cause=verdict.cause)
+
+
+def _cancelled_pair(
+    task_id: str,
+    pairs: list[MergeCiRecord],
+    pair: MergeCiRecord,
+    verdict: ci.FullTierVerdict,
+    waited: float,
+    cfg: Configuration,
+    ports: Ports,
+    clock: Callable[[], str],
+) -> _Fresh:
+    """A fresh run left only by a superseded or cancelled workflow run (GH-539): never a red pair.
+    A pair with no `rerun_at` reruns the run once and keeps waiting; one that was rerun waits out
+    `ci_start_grace_s` from `rerun_at` (`waited` counts from it) for the run to restart, and after
+    that its cancellation is `no_verdict` with the cause `not_started`, the way a run that never
+    started ends. A rerun the platform refuses, or a run id that cannot be read, is the same end."""
+    if "rerun_at" not in pair:
+        run_id = next(
+            (found for c in verdict.cancelled if (found := ci.run_id_of_link(c.link))), None
+        )
+        if run_id is not None and ports.tracker.rerun_ci_run(run_id) is None:
+            _write_pairs(
+                ports, task_id, pairs, merge_ci.reopened({**pair, "run_id": run_id}, clock())
+            )
+            return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
+    elif waited < cfg.ci_start_grace_s:
+        return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
+    undecided: MergeCiRecord = {
+        **pair,
+        "republished": True,
+        "outcome": "no_verdict",
+        "cause": "not_started",
+    }
+    undecided["ci_timing"] = ci.timing(
+        pair["published_at"], _wait_began(pair), "no_verdict", (), ()
+    )
+    _write_pairs(ports, task_id, pairs, undecided)
+    return _Fresh(cause="not_started")
 
 
 def _wait_began(pair: MergeCiRecord) -> str:

@@ -308,3 +308,41 @@ y escalaba con clase `ci`, y reanudar repetía lo mismo con la misma cabeza.
   (más «(the upstream was not fetched)» si el fetch falló). Nunca entra texto de git.
 - **Supuesto.** El upstream del checkout del producto es la rama por defecto, como en el poller de
   apostrophe sobre `master`.
+
+## Adenda GH-539: una corrida cancelada no es un rojo
+
+Un `ci-ok` con `needs:` falla cuando los jobs de los que depende se cancelan, y
+`cancel-in-progress` de apostrophe cancela la corrida vieja cuando llega un empuje nuevo a
+`agentic-ci/<id>`. Eso no es una suite roja y no gasta una devolución.
+
+- **Regla a/b, antes de `_NOT_STARTED`.** Una única función pura de `domain/ci.py`
+  (`superseded_or_cancelled`) decide si un check rojo es de una corrida superada o cancelada:
+  (a) su corrida tiene un check `CANCELLED` y existe otra corrida de la misma cabeza, con run id
+  mayor y el mismo nombre declarado; o (b) el run id está en `CiReport.cancelled_runs`, la suite
+  que concluyó `CANCELLED`. Esa clasificación corre antes de `_NOT_STARTED`, que queda para
+  `STARTUP_FAILURE`, un `CANCELLED` de una corrida que no es superada ni cancelada, y lo que
+  sobrevive al reintento.
+- **Reintento único por cabeza.** `full_checks` consume `FullTierVerdict.state == "cancelled"`
+  con un `match` exhaustivo. Sin hecho `ci_cancel_rerun` para esa cabeza llama a `rerun_ci_run`,
+  escribe `{head, run_id, rerun_at}` (un solo hecho, no una lista, que no cuenta para el par) y
+  vuelve a esperar. Un segundo `cancelled` escala `ci`/`not_started` solo si después del reintento
+  se vio la suite fuera de `COMPLETED` o venció `ci_start_grace_s` desde `rerun_at`
+  (`speculation.second_cancel`); antes, espera. Si `rerun_ci_run` rechaza, escala. Nunca hay una
+  devolución, un hallazgo ni un registro `full_checks` fallido. En el empuje especulativo un
+  `cancelled` no se convierte en republish: otro empuje volvería a cancelar la corrida.
+- **Puerta de merge.** `_fresh` mapea `cancelled` sobre el reintento por par: sin `rerun_at`,
+  `rerun_ci_run` y `stopped ci_wait`; con `rerun_at`, espera hasta `ci_start_grace_s` y después es
+  `no_verdict` con causa `not_started`. Nunca `outcome: red`.
+- **Cambio deliberado.** Una corrida con un rojo real y hermanos cancelados por `fail-fast`, seguida
+  de otra más nueva del mismo sha, se juzga por la nueva: con datos estructurados no se separa ese
+  caso de una cancelación por concurrencia. Una corrida roja sin ningún `CANCELLED` sigue roja.
+- **`red_on_base`/`ci_escalation`.** Una base cuya corrida se canceló ya no cuenta como roja; lee
+  `pending`, igual que `landing_slice`, `ci_review` y `poll`.
+- **Límite conocido.** Si la suite no concluye `CANCELLED` y la corrida cancelada no tiene sucesora
+  con el mismo nombre declarado, sigue roja como hoy. Tampoco se midió con qué conclusión terminó la
+  suite del incidente de GH-548.
+- **Seguimiento fuera de esta tarea.** Es probable que el sistema cancele sus propias corridas:
+  `has_run` en `_speculated_wait` y `no_run` en `full_tier_verdict` cuentan solo los nombres
+  declarados, y un `ci-ok` con `needs:` no tiene check-run mientras corren sus dependencias, así que
+  se republica la misma cabeza y `cancel-in-progress` cancela la corrida en vuelo. Es una inferencia
+  del código, sin log que la confirme.

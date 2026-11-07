@@ -1924,6 +1924,78 @@ def test_runs_completed_is_true_only_for_a_whole_list_of_completed_actions_suite
     assert report.runs_completed is expected
 
 
+def _suite(run_id, status, conclusion=None, actions=True):
+    workflow_run = {"databaseId": run_id} if actions else None
+    return {"status": status, "conclusion": conclusion, "workflowRun": workflow_run}
+
+
+def _read_ci(read, suites):
+    page = {"pageInfo": {"hasNextPage": False}, "nodes": suites}
+    if read == "ci_report":
+        return GhTracker(Path("/p"), Recorder(stdout=_graphql(_DONE, suites=page))).ci_report(PR)
+    stdout = _branch_graphql(_DONE, suites=page)
+    return GhTracker(Path("/p"), Recorder(stdout=stdout)).branch_ci("master")
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_a_cancelled_suite_fills_cancelled_runs_and_a_running_one_running_runs(read):
+    """GH-539: a payload written by hand to the GraphQL schema (no `gh` to read a real one)."""
+    suites = [
+        _suite(42393982482, "COMPLETED", "CANCELLED"),
+        _suite(42394295598, "IN_PROGRESS"),
+        _suite(7, "QUEUED"),
+        _suite(8, "COMPLETED", "SUCCESS"),
+        _suite(9, "COMPLETED", "CANCELLED", actions=False),  # another app's suite
+    ]
+    report = _read_ci(read, suites)
+    assert isinstance(report, CiReport)
+    assert report.cancelled_runs == frozenset({"42393982482"})
+    assert report.running_runs == frozenset({"42394295598", "7"})
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+@pytest.mark.parametrize(
+    "suites",
+    [
+        None,
+        {"pageInfo": {"hasNextPage": False}},
+        {"pageInfo": {"hasNextPage": False}, "nodes": "x"},
+        {"pageInfo": {"hasNextPage": False}, "nodes": [{"status": "COMPLETED"}, "x", None]},
+        {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [{"status": "COMPLETED", "conclusion": "CANCELLED", "workflowRun": {}}],
+        },
+        {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {"status": 3, "conclusion": "CANCELLED", "workflowRun": {"databaseId": "12"}}
+            ],
+        },
+    ],
+    ids=["no-field", "no-nodes", "mistyped", "no-workflow-run", "no-id", "mistyped-id"],
+)
+def test_an_absent_or_mistyped_suite_field_leaves_both_sets_empty_and_is_not_unreadable(
+    read, suites
+):
+    stdout = (
+        _graphql(_DONE, suites=suites)
+        if read == "ci_report"
+        else _branch_graphql(_DONE, suites=suites)
+    )
+    tracker = GhTracker(Path("/p"), Recorder(stdout=stdout))
+    report = tracker.ci_report(PR) if read == "ci_report" else tracker.branch_ci("master")
+    assert isinstance(report, CiReport)
+    assert report.cancelled_runs == frozenset()
+    assert report.running_runs == frozenset()
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_the_ci_query_asks_for_the_conclusion_of_each_check_suite(read):
+    run = Recorder(stdout=_graphql([]) if read == "ci_report" else _branch_graphql([]))
+    getattr(GhTracker(Path("/p"), run), read)(PR if read == "ci_report" else "master")
+    assert any("nodes { status conclusion workflowRun" in arg for arg in run.calls[0])
+
+
 @pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
 def test_the_ci_query_asks_for_the_check_suites_of_the_same_commit(read):
     run = Recorder(stdout=_graphql([]) if read == "ci_report" else _branch_graphql([]))

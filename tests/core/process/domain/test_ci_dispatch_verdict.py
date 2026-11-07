@@ -182,6 +182,17 @@ def test_a_run_still_in_progress_is_not_judged_even_with_a_red_job() -> None:
     assert _verdict([running], elapsed_s=TIMEOUT).state == "timed_out"
 
 
+def test_a_dispatched_run_is_never_cancelled_whatever_its_jobs_conclude() -> None:
+    """GH-539: the dispatched report has no cancelled suites: a cancelled job is `not_started`."""
+    for conclusion in ("CANCELLED", "FAILURE", "SUCCESS", None):
+        status = "completed" if conclusion else "in_progress"
+        got = _verdict([_run(jobs=(_job(conclusion=conclusion),), status=status)])
+        assert got.state != "cancelled"
+        assert got.cancelled == ()
+    cancelled = _verdict([_run(jobs=(_job(conclusion="CANCELLED"),))])
+    assert (cancelled.state, cancelled.cause) == ("unreachable", "not_started")
+
+
 # -- GH-535: a declared name that is a matrix job id --------------------------------------
 
 PY = ("pytest (areas-1, tests/x)", "pytest (always, y)")
