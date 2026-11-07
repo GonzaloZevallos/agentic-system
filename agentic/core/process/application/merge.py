@@ -888,10 +888,9 @@ def _ci_links(
     """The declared checks the merge relied on, each with the run link it was read at."""
     if not isinstance(report, ci.CiReport):
         return []
+    claimed = {id(run) for runs in ci.runs_of(report.checks, declared).values() for run in runs}
     return [
-        {"name": check.name, "link": check.link}
-        for check in report.checks
-        if check.name in declared
+        {"name": check.name, "link": check.link} for check in report.checks if id(check) in claimed
     ]
 
 
@@ -1258,7 +1257,10 @@ def _ci_evidence(
 def _deferral_evidence(facts: rules.MergeFacts, report: ci.CiReport) -> str:
     """What a refusal on a deferral says (GH-453): the covering jobs of the deferred checks
     that are not green, name, conclusion and link, from the report alone."""
-    runs = [check for check in report.checks if check.name in facts.deferral_jobs]
+    claimed = {
+        id(run) for runs in ci.runs_of(report.checks, facts.deferral_jobs).values() for run in runs
+    }
+    runs = [check for check in report.checks if id(check) in claimed]
     lines = [
         f"- {check.name} {check.conclusion or check.status} {check.link}"
         for check in runs

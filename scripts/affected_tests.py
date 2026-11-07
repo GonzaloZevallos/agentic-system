@@ -186,6 +186,14 @@ TABLE: tuple[Row, ...] = (
         "apostrophe#484's frontmatter as a kill left it: the landing pass rules read it",
     ),
     Row(
+        "tests/core/process/domain/fixtures/GH-538.yaml",
+        (
+            "tests/core/process/domain/test_schemas.py",
+            "tests/core/process/application/test_review_plan_ci.py",
+        ),
+        "the facts of apostrophe#538 as the issue quotes them: plan and review tests read them",
+    ),
+    Row(
         "tests/core/process/domain/fixtures/playwright_list_failure.txt",
         ("tests/core/process/domain/test_presubmit.py",),
         "a Playwright list-reporter tail with one failure: the `{failed_ids}` expansion test "

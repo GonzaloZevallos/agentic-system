@@ -351,9 +351,9 @@ def test_the_declared_delivery_checks_are_this_repos_four_checks_and_docs_in_ord
 
 def unknown_ci_names(declared: tuple[str, ...], workflow: dict[str, Any]) -> list[str]:
     """What is wrong with the `ci` names a stack declares, against the jobs of a workflow
-    (GH-216): a name must be exactly a job's `name:` (its id when it has none), and a job
-    with `strategy.matrix` reports one check run per expansion, `name (value, ...)`, so a
-    bare name of it never matches a run. Empty when every name is a real check run."""
+    (GH-216): a name must be exactly a job's `name:` (its id when it has none), or one
+    expansion `name (value, ...)` of a matrix job; a bare matrix name stands for all its
+    expansions (GH-535, `ci.matches`). Empty when every name is a real check run."""
     jobs = workflow.get("jobs", {})
     reported: dict[str, bool] = {}
     for job_id, job in jobs.items():
@@ -365,11 +365,6 @@ def unknown_ci_names(declared: tuple[str, ...], workflow: dict[str, Any]) -> lis
             continue  # one expansion of a matrix job, as GitHub reports it
         if name not in reported:
             violations.append(f"`ci` declares {name!r}, which is no job `name:` or id")
-        elif reported[name]:
-            violations.append(
-                f"`ci` declares the matrix job {name!r} bare; GitHub reports its runs as "
-                f"`{name} (...)`, one per expansion: declare each expanded name"
-            )
     return violations
 
 
@@ -431,12 +426,13 @@ def test_unknown_ci_names_rejects_a_name_that_is_no_job_and_a_prefix_of_one():
     assert "'chec'" in violation
 
 
-def test_unknown_ci_names_rejects_a_matrix_job_declared_bare_and_names_the_expanded_form():
+def test_unknown_ci_names_accepts_a_matrix_job_bare_or_expanded_and_rejects_a_stray_one():
     workflow = {"jobs": {"web": {"strategy": {"matrix": {"node": [20, 22]}}, "steps": []}}}
-    [violation] = unknown_ci_names(("web",), workflow)
-    assert "matrix" in violation and "web (...)" in violation
+    assert unknown_ci_names(("web",), workflow) == []  # the id stands for all expansions
     assert unknown_ci_names(("web (20)", "web (22)"), workflow) == []
     assert unknown_ci_names(("web (", "webs (20)"), workflow) != []
+    [violation] = unknown_ci_names(("api",), workflow)
+    assert "'api'" in violation
 
 
 def _mypy_option_names() -> list[str]:

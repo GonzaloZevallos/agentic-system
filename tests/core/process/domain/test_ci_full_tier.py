@@ -140,7 +140,9 @@ def covering(read, job="e2e", head=HEAD):
         ([run("e2e", "SUCCESS"), run("e2e", "SKIPPED")], "uncovered"),
         ([run("unit", "SUCCESS")], "uncovered"),
         ([], "uncovered"),
-        ([run("e2e (3.12)", "SUCCESS")], "uncovered"),
+        # GH-535: a matrix expansion is the declared id's run, and on a report not known to be
+        # complete an expansion-only job is still waiting, never covered.
+        ([run("e2e (3.12)", "SUCCESS")], "pending"),
     ],
 )
 def test_covering_state_of_the_job_on_the_head(checks, state):
@@ -228,12 +230,14 @@ def complete(*checks: CiCheck, completed: bool | None = True) -> CiReport:
 
 def test_unreported_lists_the_names_no_check_run_carries_in_declared_order_once() -> None:
     read = complete(*MATRIX, run("lint", "SUCCESS"))
-    assert ci.unreported(read, ("lint", "pytest", "e2e", "pytest"), True) == ("pytest", "e2e")
+    # GH-535: `e2e` is carried by its expansions `e2e (n)`.
+    assert ci.unreported(read, ("lint", "pytest", "e2e", "pytest"), True) == ("pytest",)
 
 
 def test_unreported_matches_exactly_never_by_prefix() -> None:
-    assert ci.unreported(complete(*MATRIX), ("e2e",), True) == ("e2e",)
+    assert ci.unreported(complete(run("e2e-shard (1)", "SUCCESS")), ("e2e",), True) == ("e2e",)
     assert ci.unreported(complete(run("e2e", "SUCCESS")), ("e2e",), True) == ()
+    assert ci.unreported(complete(*MATRIX), ("e2e",), True) == ()
 
 
 @pytest.mark.parametrize(
@@ -247,12 +251,13 @@ def test_unreported_decides_nothing_without_a_confirmed_completed_run(completed,
 
 
 def gh543(read: CiReport, confirmed: bool = True, elapsed_s: float = 0.0) -> FullTierVerdict:
-    return ci.full_tier_verdict(read, HEAD, ("e2e",), elapsed_s, BOUND, GRACE, confirmed)
+    return ci.full_tier_verdict(read, HEAD, ("integration",), elapsed_s, BOUND, GRACE, confirmed)
 
 
 def test_gh543_matrix_runs_green_with_the_job_id_required_is_unknown_not_a_timeout() -> None:
+    # GH-535: the name is one no run nor expansion carries (a matrix id is now carried).
     assert gh543(complete(*MATRIX)) == FullTierVerdict(
-        "unreachable", (), ("e2e",), "unknown_names", ("e2e",)
+        "unreachable", (), ("integration",), "unknown_names", ("integration",)
     )
     # Before either bound: the wait is not run out first.
     assert gh543(complete(*MATRIX), elapsed_s=BOUND * 5).cause == "unknown_names"
@@ -266,7 +271,7 @@ def test_the_same_report_with_the_run_status_not_known_is_a_wait() -> None:
 
 def test_the_first_read_alone_is_a_wait_so_a_name_that_appears_next_is_not_unknown() -> None:
     assert gh543(complete(*MATRIX), confirmed=False).state == "waiting"
-    assert gh543(complete(*MATRIX, run("e2e", "SUCCESS")), confirmed=True).state == "green"
+    assert gh543(complete(*MATRIX, run("integration", "SUCCESS")), confirmed=True).state == "green"
 
 
 def test_red_wins_over_an_unknown_name() -> None:

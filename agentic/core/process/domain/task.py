@@ -1152,6 +1152,18 @@ class EstimateRevision(TypedDict):
     source: Literal["human", "proposed"]
 
 
+class PathRevision(TypedDict):
+    """One revision of the plan's `required_paths` after a human decision (GH-538): `revises`
+    is the plan's list at that moment, `paths` the list the review put in its place,
+    `decision` the `### Decision N` it cites, `reason` the quote, `at` the ISO instant."""
+
+    revises: list[str]
+    paths: list[str]
+    decision: int
+    reason: str
+    at: str
+
+
 class TrackerPosted(TypedDict):
     """The record that the tracker checklist was posted (GH-336): `at` the ISO time and the
     `hash` of the items (`rules.tracker_hash`)."""
@@ -1429,6 +1441,9 @@ class TaskState(TaskInput, total=False):
     # The estimates a human decided on after the task stopped at its cap, in order; the last
     # one is in force. Grows only on a resumption with a decision.
     estimate_revisions: Annotated[list[EstimateRevision], last]
+    # The revisions of the plan's `required_paths` (GH-538), in order, each bound to the list
+    # it revised; `rules.required_paths_in_force` reads them, the plan's own list never moves.
+    required_paths_revisions: Annotated[list[PathRevision], operator.add]
     # The new estimate a stopped task proposed (the human decides on it, never the task).
     proposed_estimate: Annotated[float | None, last]
     # The parts of a plan that did not fit (ADR-0054), in order; `rules.after_plan` routes a

@@ -236,6 +236,20 @@ def flake_lines(
     return adapter.flake_block(PR, head, jobs)
 
 
+def test_a_matrix_expansion_of_a_declared_job_is_read_and_a_bare_prefix_is_not() -> None:
+    """GH-535: the declared `check` claims `check (3.12)`; `checks` and `check-fast (1)` are other
+    names and are never read."""
+    checks = [
+        check("check (3.12)", "SUCCESS", job=11),
+        check("check (3.13)", "SUCCESS", job=12),
+        check("checks", "SUCCESS", job=13),
+        check("check-fast (1)", "SUCCESS", job=14),
+    ]
+    found = flake_lines(flake_fake("flake_block_green.log", checks=checks))
+    assert isinstance(found, list)
+    assert [name for name, _ in found] == ["check (3.12)", "check (3.13)"]
+
+
 def test_a_green_log_gives_the_prefixed_line_without_gh_columns_or_timestamp() -> None:
     fake = flake_fake("flake_block_green.log")
     assert flake_lines(fake) == [

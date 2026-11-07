@@ -382,6 +382,16 @@ async def test_a_run_that_started_before_the_grace_is_never_republished():
     assert ports.workspace.ci_ref_calls == [("publish", REF)]
 
 
+async def test_gh535_a_started_matrix_expansion_of_a_declared_id_is_never_republished():
+    started = report(job("pytest (a1)", None, "IN_PROGRESS"))
+    done = complete_report(job("pytest (a1)"))
+    ports = ports_of(*[started] * 3, done, ci=("pytest",))
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert patch["full_checks"]["passed"] is True
+    assert ports.workspace.ci_ref_calls == [("publish", REF)]
+
+
 async def test_a_run_that_started_after_the_republish_is_bounded_by_the_check_timeout():
     nothing = report(sha="f" * 40)
     pending = report(job("unit"), job("web", None, "IN_PROGRESS"))
@@ -834,7 +844,9 @@ def complete_report(*checks: CiCheck) -> CiReport:
     return CiReport(HEAD, None, None, None, tuple(checks), True)
 
 
-MATRIX = tuple(job(f"e2e ({n})") for n in range(1, 5))
+# GH-535: `e2e (n)` would now be the expansions of the declared id `e2e`; a shard job of another
+# name is a report that carries no run of `e2e`.
+MATRIX = tuple(job(f"e2e-shard ({n})") for n in range(1, 5))
 
 
 def counters(patch: dict) -> list[str]:
@@ -852,11 +864,50 @@ async def test_gh543_a_matrix_job_id_required_escalates_unknown_names_without_a_
     assert clock.slept == [30]
     text = patch["escalated"]
     assert "Planning defect" in text and "no check run named `e2e`" in text
-    assert HEAD in text and "`e2e (1)`" in text and "`e2e (4)`" in text
+    assert HEAD in text and "`e2e-shard (1)`" in text and "`e2e-shard (4)`" in text
     assert "`ci_required`" in text and "task document" in text and "agentic resume" in text
     after = apply(state, patch)
     assert after["subtasks"][INTEGRATION]["status"] == "approved"
     assert "full_checks" not in after
+
+
+def expansions(*conclusions: str) -> tuple[CiCheck, ...]:
+    return tuple(job(f"pytest (a{n})", c) for n, c in enumerate(conclusions, 1))
+
+
+async def test_gh535_a_matrix_job_id_required_is_green_when_every_expansion_is_green():
+    ports = ports_of(complete_report(job("unit"), *expansions("SUCCESS", "SUCCESS")), ci=("unit",))
+    patch = await run(state_of(ci_required=["pytest"]), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is True and "escalated" not in patch
+    assert [r["name"] for r in record["results"]] == ["unit", "pytest"]
+    assert "`pytest (a1)`" not in patch["sections"]["Full checks"].split("Runs:")[0]
+
+
+async def test_gh535_a_red_expansion_records_the_declared_name_and_fails_the_step():
+    ports = ports_of(complete_report(job("unit"), *expansions("FAILURE", "SUCCESS")), ci=("unit",))
+    state = state_of(ci_required=["pytest"])
+    patch = await run(state, ports)
+    record = patch["full_checks"]
+    assert record["passed"] is False and record["failed_step"] == "pytest"
+    assert {r["name"]: r["passed"] for r in record["results"]} == {"unit": True, "pytest": False}
+    row = next(r for r in record["results"] if r["name"] == "pytest")
+    assert row["link"] == f"{LINK}/pytest (a1)"
+    assert [f["location"] for f in patch["findings"]] == ["full_checks:pytest"]
+    assert "`pytest (a1)`: FAILURE" in patch["sections"]["Full checks"]
+
+
+async def test_gh535_a_matrix_id_is_not_green_while_the_report_is_incomplete():
+    partial = CiReport(HEAD, None, None, None, (job("unit"), *expansions("SUCCESS")), None)
+    patch = await run(state_of(ci_required=["pytest"]), ports_of(partial, ci=("unit",)))
+    assert patch["full_checks"]["passed"] is False
+    assert patch["full_checks"]["failed_step"] == "timeout"
+
+
+async def test_gh535_a_matrix_id_run_by_a_dispatched_green_run_is_judged_green():
+    ports = dispatching((run_of(job("unit"), *expansions("SUCCESS", "SUCCESS")),), ci=("unit",))
+    patch = await run(state_of(ci_required=["pytest"]), ports)
+    assert patch["full_checks"]["passed"] is True and "escalated" not in patch
 
 
 async def test_an_unknown_stack_ci_name_points_at_the_stack_on_master_not_the_document():
@@ -894,7 +945,7 @@ async def test_correcting_the_name_in_the_document_and_resuming_goes_green_with_
     stopped = apply(state, await run(state, ports_of(*reads, ci=("unit",))))
     before = stopped["subtasks"][INTEGRATION]
     assert stopped["escalation_class"] == "ci"
-    resumed = {**stopped, "ci_required": ["e2e (1)"]}
+    resumed = {**stopped, "ci_required": ["e2e-shard (1)"]}
     resumed.pop("escalated")
     patch = await run(resumed, ports_of(*reads, ci=("unit",)))
     assert patch["full_checks"]["passed"] is True

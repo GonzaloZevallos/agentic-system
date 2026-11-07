@@ -191,3 +191,57 @@ def test_a_dispatched_run_is_never_cancelled_whatever_its_jobs_conclude() -> Non
         assert got.cancelled == ()
     cancelled = _verdict([_run(jobs=(_job(conclusion="CANCELLED"),))])
     assert (cancelled.state, cancelled.cause) == ("unreachable", "not_started")
+
+
+# -- GH-535: a declared name that is a matrix job id --------------------------------------
+
+PY = ("pytest (areas-1, tests/x)", "pytest (always, y)")
+
+
+def _matrix(*conclusions: str | None, names: tuple[str, ...] = PY, **over):
+    jobs = tuple(
+        _job(name, conclusion) for name, conclusion in zip(names, conclusions, strict=True)
+    )
+    return _run(jobs=jobs, **over)
+
+
+def test_a_green_matrix_run_with_the_id_declared_is_green() -> None:
+    verdict = _verdict([_matrix("SUCCESS", "SUCCESS")], names=("pytest",))
+    assert (verdict.state, verdict.cause, verdict.red) == ("green", None, ())
+
+
+def test_one_red_expansion_is_red_and_names_the_declared_id() -> None:
+    verdict = _verdict([_matrix("SUCCESS", "FAILURE")], names=("pytest",))
+    assert verdict.state == "red"
+    assert verdict.red_names == ("pytest",)
+    assert [check.name for check in verdict.failing] == [PY[1]]
+
+
+def test_one_skipped_expansion_is_jobs_missing() -> None:
+    verdict = _verdict([_matrix("SUCCESS", "SKIPPED")], names=("pytest",))
+    assert (verdict.state, verdict.cause) == ("unreachable", "jobs_missing")
+
+
+def test_a_matrix_id_with_no_expansion_is_jobs_missing_and_a_prefix_is_not_one() -> None:
+    gone = _verdict([_run(jobs=(_job("docs"),))], names=("pytest",))
+    assert (gone.state, gone.cause, gone.pending) == ("unreachable", "jobs_missing", ("pytest",))
+    shard = _run(jobs=(_job("e2e-shard (1)"),))
+    assert _verdict([shard], names=("e2e",)).cause == "jobs_missing"
+
+
+def test_red_beside_a_pending_expansion_is_red() -> None:
+    run = _run(status="in_progress", jobs=(_job(PY[0], "FAILURE"), _job(PY[1], None, "QUEUED")))
+    verdict = _verdict([run], names=("pytest",))
+    assert verdict.state == "waiting"  # the run is not completed yet: nothing is decided
+    done = _run(jobs=(_job(PY[0], "FAILURE"), _job(PY[1], None, "QUEUED")))
+    assert _verdict([done], names=("pytest",)).state == "red"
+
+
+def test_the_failing_returns_carry_the_declared_names() -> None:
+    cancelled = _verdict([_matrix("CANCELLED", "SUCCESS")], names=("pytest",))
+    assert (cancelled.cause, cancelled.red_names) == ("not_started", ("pytest",))
+    job = CiCheck(PY[0], "COMPLETED", "FAILURE", "l", failed_stage="checkout")
+    checkout = _verdict([_run(jobs=(job, _job(PY[1])))], names=("pytest",))
+    assert (checkout.cause, checkout.red_names) == ("checkout_failed", ("pytest",))
+    assert _verdict([_matrix("SUCCESS", "SUCCESS")], names=("pytest",)).red == ()
+    assert _verdict([], elapsed_s=GRACE).red == ()

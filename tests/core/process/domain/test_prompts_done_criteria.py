@@ -38,3 +38,17 @@ def test_the_review_prompt_makes_an_unmet_done_criterion_blocking(name):
     text = " ".join(rendered(name).split())
     assert "done criterion of the issue that the diff does not meet is `blocking`" in text
     assert "never an `observation`" in text
+
+
+@pytest.mark.parametrize("name", REVIEW)
+def test_the_review_prompts_carry_the_required_paths_block_and_the_revision_fields(name):
+    raw = (PROMPTS_DIR / name).read_text()
+    assert "{{required_paths}}" in raw
+    text = " ".join(rendered(name).split())
+    for term in (
+        "revised_required_paths",
+        "revision_decision",
+        "revision_reason",
+        "never use them to add",
+    ):
+        assert term in text

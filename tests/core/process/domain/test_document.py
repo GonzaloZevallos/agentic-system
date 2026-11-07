@@ -1694,3 +1694,11 @@ def test_ci_cancel_rerun_roundtrips_through_the_frontmatter_and_is_absent_when_u
     text = document.render(_speculative_state(ci_cancel_rerun=rerun))
     assert document.parse(text)["ci_cancel_rerun"] == rerun
     assert "ci_cancel_rerun" not in document.render(_speculative_state())
+
+
+def test_required_paths_revisions_round_trip_and_are_omitted_when_absent():
+    revision = {"revises": ["a"], "paths": ["b"], "decision": 1, "reason": "q", "at": "t"}
+    state = {"id": "T-1", "title": "t", "description": "d", "required_paths": ["a"]}
+    assert "required_paths_revisions" not in document.render(state)
+    with_revision = {**state, "required_paths_revisions": [revision]}
+    assert document.parse(document.render(with_revision))["required_paths_revisions"] == [revision]

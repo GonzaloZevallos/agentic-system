@@ -366,11 +366,19 @@ def with_recorded_red(facts: rules.MergeFacts) -> rules.MergeFacts:
     failing = tuple(
         ci.CiCheck(name, "COMPLETED", "FAILURE", "") for name in pair.get("failing", [])
     )
+    claimed = ci.runs_of(failing, facts.ci_required)
+    taken = {id(run) for runs in claimed.values() for run in runs}
+    # The recorded names are the runs' own (`pytest (a)`): the declared name (`pytest`) is what
+    # a record that names a check by its identity uses (GH-535). A recorded name no declared
+    # name claims any more stays its own.
+    red = tuple((name, runs) for name, runs in claimed.items() if runs) + tuple(
+        (run.name, (run,)) for run in failing if id(run) not in taken
+    )
     return replace(
         facts,
         ci_subject="tested",
         ci_head=pair["tested"],
-        ci_verdict=ci.CiVerdict("red", failing, ()),
+        ci_verdict=ci.CiVerdict("red", failing, (), red=red),
         ci_unreadable=None,
         ci_fresh=True,
     )

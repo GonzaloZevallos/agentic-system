@@ -577,8 +577,9 @@ class TechPlan(RoleOutput):
 
     ci_required: list[str] = Field(
         description="The job/check names the issue's done criteria need green on the pull "
-        "request head: the check-run names CI reports (a matrix job's id is not one); empty "
-        "when the issue requires no external check (then `ci_none_reason` says why)"
+        "request head: the check-run names CI reports (a matrix job's id stands for all its "
+        "expansions); empty when the issue requires no external check (then `ci_none_reason` "
+        "says why)"
     )
     ci_none_reason: str = Field(
         description="When `ci_required` is empty: one line saying why the issue requires no "
@@ -597,6 +598,15 @@ class TechPlan(RoleOutput):
             _one_line(name, "a required CI check name")
         for path in self.required_paths:
             _one_line(path, "a required path")
+        # At call time: `rules` imports this module, so a module-level import is a cycle.
+        from .rules import forbidden_paths
+
+        if forbidden := forbidden_paths(self.required_paths):
+            raise ValueError(
+                f"required_paths names {', '.join(f'`{p}`' for p in forbidden)}: the system "
+                "never versions them on a delivery branch, because the presubmit refuses them, "
+                "so no diff could touch them. Require a path outside those directories instead"
+            )
         if self.ci_required and self.ci_none_reason.strip():
             raise ValueError("ci_none_reason must be empty when ci_required names checks")
         if not self.ci_required:
@@ -708,6 +718,38 @@ class Review(RoleOutput):
         "an empty string when none. A row you simply do not repeat stays open, because "
         "an incremental review not mentioning something usually means it did not look",
     )
+    revised_required_paths: list[str] = Field(
+        default_factory=list,
+        description="Only when a human decision moves or drops one of the plan's required "
+        "paths: the list that replaces them, never longer than the plan's. Empty when you do "
+        "not revise (with `revision_decision` 0) or to drop every path",
+    )
+    revision_decision: int = Field(
+        default=0,
+        description="The number of the latest `### Decision N` in `## Human` that no revision "
+        "cites yet, when you revise the required paths. 0 when you do not revise",
+    )
+    revision_reason: str = Field(
+        default="",
+        description="One line quoting the human decision that moves or drops the path. "
+        "Required when `revision_decision` is above 0, empty otherwise",
+    )
+
+    @model_validator(mode="after")
+    def _revision_is_cited_and_versionable(self) -> Review:
+        if self.revision_decision < 0:
+            raise ValueError("revision_decision must be 0 (no revision) or a decision number")
+        if self.revision_decision > 0:
+            _one_line(self.revision_reason, "revision_reason, which quotes the decision,")
+        # At call time: `rules` imports this module, so a module-level import is a cycle.
+        from .rules import forbidden_paths
+
+        if forbidden := forbidden_paths(self.revised_required_paths):
+            raise ValueError(
+                f"revised_required_paths names {', '.join(f'`{p}`' for p in forbidden)}: the "
+                "system never versions them on a delivery branch, so no diff could touch them"
+            )
+        return self
 
 
 class LandingDiagnosis(RoleOutput):

@@ -43,7 +43,7 @@ async def test_the_required_checks_and_paths_land_in_the_state_and_survive_the_d
 
 async def test_a_plan_that_requires_no_check_writes_neither_key(tmp_path):
     patch = await _plan(tmp_path)
-    assert "ci_required" not in patch and "required_paths" not in patch
+    assert "ci_required" not in patch and patch["required_paths"] == []  # GH-538: always written
     rendered = document.render({**TASK, **patch})
     assert "ci_required" not in rendered and "required_paths" not in rendered
     assert "ci_required" not in document.parse(rendered)
@@ -51,10 +51,10 @@ async def test_a_plan_that_requires_no_check_writes_neither_key(tmp_path):
 
 # GH-485: the wiring the two domain seams cannot show -- `plan.plan` reads the task base's
 # workflows and the stack's `ci:` names and hands them to the plan check.
-_MATRIX_WORKFLOW = "jobs:\n  e2e:\n    strategy:\n      matrix:\n        n: [1, 2]\n    steps: []\n"
+_NAMED_WORKFLOW = "jobs:\n  e2e:\n    name: End to end\n    steps: []\n"
 
 
-async def test_a_matrix_job_id_in_the_bases_workflow_is_refused_and_a_stack_name_is_kept(
+async def test_a_job_id_with_another_name_in_the_bases_workflow_is_refused_and_a_stack_name_is_kept(
     tmp_path,
 ):
     first, second = planned(), planned()
@@ -63,10 +63,20 @@ async def test_a_matrix_job_id_in_the_bases_workflow_is_refused_and_a_stack_name
     runner = ScriptedRunner(tech_lead=[first, second])
     ports = memory_ports(runner)
     ports.workspace.master_trees["HEAD"] = (".github/workflows/ci.yml",)
-    ports.workspace.files[("HEAD", ".github/workflows/ci.yml")] = _MATRIX_WORKFLOW
+    ports.workspace.files[("HEAD", ".github/workflows/ci.yml")] = _NAMED_WORKFLOW
     ports.stack.declared_ci_all = ("merge-gate",)
     cfg = Configuration(product_dir=tmp_path, skip_ephemeral=True)
     patch = await plan(TASK, cfg, ports)
     assert patch["ci_required"] == ["merge-gate"]
     retry = runner.prompts("tech_lead")[-1]
-    assert "ci_required `e2e` is a matrix job" in retry and "`merge-gate`" in retry
+    assert "ci_required `e2e` is the id of a job" in retry and "`End to end`" in retry
+
+
+async def test_a_replan_that_requires_no_path_replaces_the_list_it_found(tmp_path):
+    """GH-538: the list a re-plan does not repeat is gone, not left in force."""
+    result = planned()
+    cfg = Configuration(product_dir=tmp_path, skip_ephemeral=True)
+    state = {**TASK, "required_paths": [".agentic/stack.yaml"]}
+    patch = await plan(state, cfg, memory_ports(ScriptedRunner(tech_lead=[result])))
+    assert patch["required_paths"] == []
+    assert "required_paths" not in document.render({**state, **patch})
