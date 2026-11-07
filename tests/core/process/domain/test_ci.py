@@ -72,10 +72,13 @@ def test_a_pending_status_with_a_stale_success_conclusion_is_pending_not_green()
     )
 
 
-def test_a_matrix_name_does_not_match_a_declared_prefix() -> None:
+def test_a_matrix_expansion_matches_the_declared_id() -> None:
     matrix = run("check (3.12)", "SUCCESS")
-    verdict = ci.ci_state(report(matrix), ("check",))
-    assert verdict == CiVerdict("pending", (), ("check",))
+    assert ci.matches("check", matrix.name)
+    complete = CiReport(FULL, "master", OTHER, "2026-10-07T10:00:00Z", (matrix,), True)
+    assert ci.ci_state(complete, ("check",)) == CiVerdict("green", (), ())
+    # Not known to be complete: an expansion-only name is never green (GH-535).
+    assert ci.ci_state(report(matrix), ("check",)).state == "pending"
 
 
 def test_a_declared_name_is_case_sensitive() -> None:

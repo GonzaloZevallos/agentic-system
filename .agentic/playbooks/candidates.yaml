@@ -1350,3 +1350,33 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-07T16:21:18.487+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you edit or delete an existing test the brief does not name, run its base version on your head. If it passes, keep it. If it fails, record the invariant, the failing output and what you shipped under Decisions.
+  confidence: medium
+  seen_in:
+  - GH-535
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T19:37:08.638+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When a shared value gains a field that readers now depend on, find every production site that builds it and fill the field there. Add a test that drives each of those paths to its final outcome.
+  confidence: medium
+  seen_in:
+  - GH-535
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T19:37:08.638+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before you change an existing test that no brief names, run its base version against the integrated head. Restore it if it passes. Otherwise record the invariant, the failing output and the shipped version under Integration.
+  confidence: low
+  seen_in:
+  - GH-535
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T19:37:08.638+00:00'

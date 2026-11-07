@@ -179,6 +179,47 @@ def test_a_red_ci_is_refused_naming_the_job_and_its_link_and_is_commented_once(t
     assert "```" not in comment
 
 
+def _matrix_report(*checks: CiCheck, completed: bool | None):
+    return dataclasses.replace(_report(*checks), runs_completed=completed)
+
+
+def test_a_green_matrix_on_a_complete_report_merges_where_a_plain_name_would(tmp_path):
+    shards = (_check("pytest (a)", run=1), _check("pytest (b)", run=2))
+    ports = _world(_matrix_report(*shards, completed=True), declared=("pytest",))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged" and ports.commands.ran == []
+    assert _doc(ports)["auto_merge_ci"] == [
+        {"name": "pytest (a)", "link": RUN.format(1)},
+        {"name": "pytest (b)", "link": RUN.format(2)},
+    ]
+
+
+@pytest.mark.parametrize("completed", [None, False])
+def test_a_green_matrix_waits_while_the_report_is_not_complete(tmp_path, completed):
+    shards = (_check("pytest (a)", run=1), _check("pytest (b)", run=2))
+    ports = _world(_matrix_report(*shards, completed=completed), declared=("pytest",))
+    before = dict(_doc(ports))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result == merge.MergeResult("stopped", "ci_wait")
+    assert _doc(ports) == before and ports.tracker.merge_calls == []
+
+
+def test_the_merge_rows_leave_out_runs_no_declared_name_claims(tmp_path):
+    report = _matrix_report(
+        _check("pytest (a)", run=1), _check("lint", run=2), _check("pytest", run=3), completed=True
+    )
+    ports = _world(report, declared=("pytest",))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged"
+    assert _doc(ports)["auto_merge_ci"] == [{"name": "pytest", "link": RUN.format(3)}]
+
+
 def test_a_pending_ci_waits_with_no_write_no_comment_and_no_counter(tmp_path):
     ports = _world(_report(_check("web", None)))
     before = dict(_doc(ports))
@@ -402,6 +443,33 @@ def test_a_deferral_whose_job_is_red_is_a_red_ci_check_and_no_merge(tmp_path):
     [(_, comment)] = ports.tracker.comments
     assert "e2e FAILURE " + RUN.format(2) in comment
     assert ports.commands.ran == []
+
+
+def test_a_deferral_covered_by_a_matrix_job_names_the_red_expansion(tmp_path):
+    report = _matrix_report(
+        _check(),
+        _check("e2e (1)", run=2),
+        _check("e2e (2)", "FAILURE", run=3),
+        completed=True,
+    )
+    ports = _deferring(report)
+
+    result, _ = _run(ports, tmp_path)
+
+    assert (result.kind, result.reason) == ("refused", "ci_failed")
+    [(_, comment)] = ports.tracker.comments
+    assert "e2e (2) FAILURE " + RUN.format(3) in comment
+    assert "e2e (1)" not in comment
+
+
+def test_a_deferral_covered_by_a_green_complete_matrix_merges_on_the_ci(tmp_path):
+    report = _matrix_report(
+        _check(), _check("e2e (1)", run=2), _check("e2e (2)", run=3), completed=True
+    )
+
+    result, _ = _run(_deferring(report), tmp_path)
+
+    assert result.kind == "merged"
 
 
 def test_a_deferral_whose_job_is_pending_waits_and_runs_nothing_locally(tmp_path):

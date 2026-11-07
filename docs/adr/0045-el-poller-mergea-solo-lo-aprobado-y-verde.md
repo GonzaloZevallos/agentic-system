@@ -771,6 +771,17 @@ El 2026-11-04, entre las 15:10 y las 16:45 (-03), el PR #493 de agentic-system (
 - **Supuesto sin verificar:** el intervalo del poller (el timer de systemd, fuera del repo) es de uno o dos minutos.
 - **§7.** Sin métrica, atributo de span ni etiqueta nueva: sólo líneas del poller con campos cerrados y el valor cerrado `backoff` de `Deferred`. **§8.** Una lectura de archivo pequeña por raíz y por candidato y ronda; ninguna llamada nueva a GitHub.
 
+## Adenda (2026-11-07): un id de matriz nombra todas sus expansiones (GH-535)
+
+El 2026-11-07 las corridas despachadas de apostrophe GH-407 (cabeza `17696ed`, corrida 42387276980) y GH-399 (cabeza `9cbd333`, corrida 42387272918) terminaron `success` con todos los jobs en verde, y las dos tareas escalaron como `unreachable/jobs_missing`: sus planes exigían `pytest`, un job de matriz cuyas corridas se llaman `pytest (areas-1, …)`, y ninguna se llama `pytest`. El límite de GraphQL no fue la causa. **Esto reemplaza la lectura de GH-485 para los ids de matriz:** allí un id de matriz era el defecto del plan; ahora es un nombre válido que vale por todas sus expansiones.
+
+- **Un solo comparador, `domain/ci.py` (`matches`, `runs_of`).** Un nombre declarado (`ci:` del stack, `ci_required` del plan, el job de `ci_covers`) coincide primero de forma exacta; las coincidencias exactas salen del conjunto de corridas y sólo después, para el nombre sin corrida exacta, se busca la expansión `<id> (<valores>)`. Nunca hay coincidencia por prefijo pelado, y una corrida pertenece a lo sumo a un nombre.
+- **Veredicto por nombre:** rojo gana a pendiente y pendiente a verde; si cualquier corrida del nombre está saltada, el nombre queda saltado (como un job simple saltado). Un nombre que sólo coincidió por expansión nunca está en verde mientras `report.runs_completed` no sea `True`, porque una matriz dinámica puede seguir creando jobs.
+- **Atribución por nombre declarado.** Lo que identifica un chequeo (la ubicación del hallazgo de CI, las filas de `full_checks` y su `failed_step`, `landing.checks`, `ci_red_on_base`) usa el nombre declarado, tomado de `CiVerdict.red` / `red_names` y `FullTierVerdict.red`; el nombre expandido sólo aparece en textos, evidencia y enlaces. Para un nombre que coincide exacto, los dos vocabularios son el mismo texto y no hay migración.
+- **El plan.** `ci_workflow.check_run_names` acepta el id de un job de matriz; sigue rechazando el id de un job con otro `name:` literal y el nombre que ningún job lleva. `ci_unknown_names` queda sólo para un nombre que no es ni una corrida ni una matriz.
+- **Riesgo conocido.** Una matriz con un `if:` por expansión se juzgaría saltada; hoy ningún producto la tiene (en apostrophe, `pytest` y el job de shards de e2e sólo tienen `if:` a nivel de job) y cambiar la regla es otra decisión.
+- **§7.** No cambia ningún conjunto cerrado de valores, señal ni etiqueta. **§8.** Sin lecturas nuevas: se cruzan las mismas corridas de un reporte con los nombres declarados.
+
 ## Adenda (2026-11-07): la ruta exigida por el plan se puede revisar tras una decisión del humano (GH-538)
 
 apostrophe GH-538 exigió cuatro archivos bajo `.agentic/tasks/GH-491-evidence/`, que el presubmit rechaza. El humano decidió commitear la evidencia en `scripts/design/evidence/GH-491/`, pero la decisión no llegó a `required_paths`: el chequeo de integración siguió leyendo la lista original y rechazó cada diff durante 53 USD.
