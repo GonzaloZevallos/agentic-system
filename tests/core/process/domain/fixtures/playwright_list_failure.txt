@@ -1,0 +1,22 @@
+  ✓  175 [secure-origin] › e2e/ventasTelefono.spec.ts:137:5 › phone sales sweep › Nueva venta, Ventas and a sale detail fit and are thumb-sized at 320 at 130 % page zoom (1.5s)
+  ✓  176 [secure-origin] › e2e/ventasTelefono.spec.ts:137:5 › phone sales sweep › Nueva venta, Ventas and a sale detail fit and are thumb-sized at 430 at 130 % page zoom (1.8s)
+  ✓  172 [secure-origin] › e2e/withdrawalSheet.spec.ts:46:1 › a direct address to the edit opens the sheet over the withdrawal, on the tallest form the action is at the bottom (8.8s)
+  ✓  177 [secure-origin] › e2e/ventasTelefono.spec.ts:172:5 › phone sales sweep › the measurement rejects what it must › a screen that is still loading (713ms)
+  ✓  178 [secure-origin] › e2e/ventasTelefono.spec.ts:180:5 › phone sales sweep › the measurement rejects what it must › an element the scaling did not reach (584ms)
+  ✓  179 [secure-origin] › e2e/ventasTelefono.spec.ts:202:5 › phone sales sweep › the measurement rejects what it must › an element wider than the screen (605ms)
+  ✘  180 [secure-origin] › e2e/ventasTelefono.spec.ts:209:5 › phone sales sweep › the measurement rejects what it must › a control under 44 px (618ms)
+  ✓  181 [secure-origin] › e2e/ventasTelefono.spec.ts:216:5 › phone sales sweep › the measurement rejects what it must › an input under 16 px, and one under 16 px × the scale (1.2s)
+  ✓  170 [insecure-origin] › e2e/catalogInsecureOrigin.spec.ts:57:1 › Copiar still works through the execCommand fallback on a plain-http, non-localhost origin (8.0s)
+  ✓  182 [secure-origin] › e2e/ventasTelefono.spec.ts:222:5 › phone sales sweep › the measurement rejects what it must › a page without a coarse pointer (550ms)
+  ✓  183 [mobile] › e2e/mobile.spec.ts:38:5 › phone standard at 320x568, oscuro (7.0m)
+  ✓  185 [mobile] › e2e/mobile.spec.ts:38:5 › phone standard at 375x812, claro (7.2m)
+  ✓  184 [mobile] › e2e/mobile.spec.ts:38:5 › phone standard at 320x568, claro (7.2m)
+
+
+  1) [secure-origin] › e2e/ventasTelefono.spec.ts:209:5 › phone sales sweep › the measurement rejects what it must › a control under 44 px ──────────
+
+    Error: expect(received).toBe(expected)
+
+  1 failed
+    [secure-origin] › e2e/ventasTelefono.spec.ts:209:5 › phone sales sweep › the measurement rejects what it must › a control under 44 px
+  12 passed (1.9m)

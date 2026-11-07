@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 # The module, not the name: `rules` imports this one too, and reads it at call time.
 from . import rules
-from .presubmit import FAILED_IDS_MAX
+from .presubmit import FAILED_IDS_MAX, ID_FORBIDDEN
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import CiCause as CiCause
@@ -655,8 +655,8 @@ def ci_findings(
 FLAKE_BLOCK_PREFIX = "agentic-flakes: "
 FLAKE_BLOCK_VERSION = 1
 FLAKE_ID_MAX_CHARS = 200
-# An id lands in a tracker comment and a marker: nothing that could break out of either.
-_FLAKE_ID_FORBIDDEN = ("\n", "\r", "`", "<!--", "-->", "{{")
+# An id lands in a tracker comment and a marker: nothing in `ID_FORBIDDEN` (the list shared with
+# `presubmit.expandable`) could break out of either.
 
 
 @dataclass(frozen=True)
@@ -676,7 +676,7 @@ def clean_flake_ids(ids: Iterable[str]) -> list[str]:
     clean = [
         item
         for item in ids
-        if len(item) <= FLAKE_ID_MAX_CHARS and not any(bad in item for bad in _FLAKE_ID_FORBIDDEN)
+        if len(item) <= FLAKE_ID_MAX_CHARS and not any(bad in item for bad in ID_FORBIDDEN)
     ]
     return list(dict.fromkeys(clean))[:FAILED_IDS_MAX]
 
