@@ -7,6 +7,7 @@ import yaml
 from agentic.core.knowledge.domain import stack
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
+from agentic.core.process.domain.presubmit import FAILED_IDS_TOKEN
 from agentic.core.process.domain.suppressions import Forbidden
 
 
@@ -644,6 +645,103 @@ def test_a_form_without_delivery_checks_is_refused():
     data = rerun_data()
     del data["delivery_checks"]
     reject(data, r"`rerun_checks`.*requires `delivery_checks`")
+
+
+# --- the `{failed_ids}` token (GH-530) ------------------------------------------------------
+
+TOKEN = FAILED_IDS_TOKEN
+
+
+@pytest.mark.parametrize(
+    "command", [f"npx playwright test {TOKEN}", f"{TOKEN}", f"run {TOKEN} --reporter=list"]
+)
+def test_a_bare_failed_ids_token_is_accepted(command):
+    found = stack.rerun_checks(rerun_data(command=command), "x")
+    assert found["tests"].command == command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"run '{TOKEN}'",
+        f'run "{TOKEN}"',
+        f"run x{TOKEN}",
+        f"run {TOKEN}x",
+        f"run --ids={TOKEN}",
+        f"run {TOKEN}; echo",
+        f"run {TOKEN} {TOKEN}",
+        f"run {TOKEN}{TOKEN}",
+    ],
+)
+def test_a_quoted_glued_or_repeated_token_is_refused_naming_the_key(command):
+    reject(rerun_data(command=command), r"'tests' under `rerun_checks`.*\{failed_ids\}")
+
+
+def test_the_token_in_checks_is_refused_naming_the_key():
+    data = {"checks": {"tests": f"pytest {TOKEN}"}}
+    with pytest.raises(ValueError, match=r"'tests' under `checks`.*\{failed_ids\}"):
+        stack.checks(data, "stack.yaml")
+
+
+@pytest.mark.parametrize(
+    ("key", "call", "data"),
+    [
+        ("setup", stack.setup, {"setup": {"deps": f"npm ci {TOKEN}"}}),
+        (
+            "affected_checks",
+            stack.affected_checks,
+            {
+                "checks": {"tests": "pytest"},
+                "affected_checks": {"tests": f"pytest --since {{base}} {TOKEN}"},
+            },
+        ),
+        ("witness", stack.witness, {"witness": f"pwd {TOKEN}"}),
+        (
+            "verifications",
+            stack.verifications,
+            {
+                "checks": {"tests": "pytest"},
+                "verifications": {"e2e": {"command": f"npm run e2e {TOKEN}", "wall_s": 900}},
+            },
+        ),
+        (
+            "docs",
+            stack.docs,
+            {"docs": {"generate": f"python gen.py {TOKEN}", "paths": ["docs/architecture/g/**"]}},
+        ),
+        (
+            "performance",
+            stack.performance,
+            {
+                "performance": {
+                    "list": {
+                        "seed": "make seed",
+                        "measure": f"make measure {TOKEN}",
+                        "volume": 10,
+                        "volume_unit": "rows",
+                        "limits": {"latency_ms": {"limit": 5, "unit": "ms"}},
+                    }
+                }
+            },
+        ),
+    ],
+)
+def test_the_token_in_any_other_command_key_is_refused_naming_the_key(key, call, data):
+    with pytest.raises(ValueError, match=rf"`{key}`.*\{{failed_ids\}}"):
+        call(data, "stack.yaml")
+
+
+def test_the_playwright_example_of_the_reference_is_a_form_the_loader_accepts():
+    from tests.core.process.domain.test_presubmit import PLAYWRIGHT_ID
+
+    form = rerun_data(command=f"npx playwright test {TOKEN}", test_id=PLAYWRIGHT_ID)
+    assert stack.rerun_checks(form, "x")["tests"].test_id == PLAYWRIGHT_ID
+
+
+def test_the_reference_of_rerun_checks_names_the_token_and_its_format():
+    reference = next(k for k in stack.KEY_REFERENCE if k.name == "rerun_checks")
+    assert TOKEN in (stack.__doc__ or "") and TOKEN in reference.description
+    assert "shell-quoted" in (stack.__doc__ or "")
 
 
 # --- check_budgets (GH-365) ----------------------------------------------------------------

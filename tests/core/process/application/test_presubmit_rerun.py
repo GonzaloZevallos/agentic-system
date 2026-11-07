@@ -394,9 +394,7 @@ def test_a_stop_that_is_not_raised_still_leaves_the_red_check_as_a_refusal():
 
 # --- the `{failed_ids}` token (GH-530) ---------------------------------------------------
 
-TOKEN_FORM = RerunForm(
-    command="pytest {failed_ids} -n {workers}", test_id=r"(?m)^FAILED (.+)$"
-)
+TOKEN_FORM = RerunForm(command="pytest {failed_ids} -n {workers}", test_id=r"(?m)^FAILED (.+)$")
 
 
 def test_the_executed_rerun_is_the_expanded_form_with_its_workers_sized():

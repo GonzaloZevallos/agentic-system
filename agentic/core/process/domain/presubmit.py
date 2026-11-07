@@ -33,8 +33,9 @@ TAIL_LINES = 30
 STACK_FILE = ".agentic/stack.yaml"
 BASE_TOKEN = "{base}"
 WORKERS_TOKEN = "{workers}"
-# Where a `rerun_checks` form takes the test ids `failed_ids` read from the red run (GH-530). Defined
-# here and imported by the stack loader; `rerun_form_command` is the only place that expands it.
+# Where a `rerun_checks` form takes the test ids `failed_ids` read from the red run (GH-530).
+# Defined here and imported by the stack loader; `rerun_form_command` is the only place that
+# expands it.
 FAILED_IDS_TOKEN = "{failed_ids}"
 # What `merge_checks` keeps of one failing command's output (GH-212): the last
 # `TAIL_LINES` lines, then the last `MERGE_TAIL_CHARS` characters of those. The comment the

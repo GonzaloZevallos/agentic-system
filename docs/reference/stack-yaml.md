@@ -106,7 +106,7 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Se lee como**: `dict[str, RerunForm]`
 - **Si falta**: mapa vacío (`{}`)
 - **Subclaves**: `command`, `test_id`
-- **Qué es**: mapping of check name to a mapping of `command` and `test_id`: the failed-tests-only form of the check
+- **Qué es**: mapping of check name to a mapping of `command` and `test_id`: the failed-tests-only form of the check. `command` may carry `{failed_ids}` once, as a bare word: the system fills it with the ids `test_id` found in the red run, shell-quoted, space-joined, in order, at most 50, no regex escaping; an id it cannot insert safely, or over 32768 bytes of ids, reruns the whole command. E.g. a `test_id` that captures `file:line` of Playwright's `›` line and `npx playwright test {failed_ids}`
 - **Lector**: `agentic.core.knowledge.domain.stack.rerun_checks`
 
 ## `ci_covers`

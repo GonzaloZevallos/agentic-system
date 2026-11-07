@@ -66,9 +66,9 @@ affected_fallback:
 # all of `checks`. Read at a task's base, like every key here: it governs from the task after
 # the merge.
 delivery_checks: [tests, lint, format, types]
-# `rerun_checks` (ADR-0066, ADR-0085, GH-479): the failed-tests form of `tests`. The system fills in
-# no `{ids}` token (only `{base}` and `{workers}`), so the form uses pytest's own cache: the tests
-# the last run left red, and with an empty cache (`--last-failed-no-failures none`) nothing runs
+# `rerun_checks` (ADR-0066, ADR-0085, GH-479): the failed-tests form of `tests`. A form may carry the
+# `{failed_ids}` token (GH-530), which the system fills with the ids `test_id` read; this one does
+# not, and uses pytest's own cache: the tests the last run left red, and with an empty cache (`--last-failed-no-failures none`) nothing runs
 # and pytest exits non-zero, so it never reruns the whole suite. `test_id` reads the node id of
 # pytest's `FAILED <nodeid>` summary line, spaces of a parametrized id included, up to ` - ` or
 # the end of the line. Read at a task's base, like every key here: it governs from the task after

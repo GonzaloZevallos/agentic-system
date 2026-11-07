@@ -843,9 +843,7 @@ def test_a_deferred_row_is_not_a_failure_but_any_other_red_row_still_is():
 FIXTURES = Path(__file__).parent / "fixtures"
 # The `test_id` the `rerun_checks` docstring gives for Playwright's list reporter: the
 # `file:line` of a `›` line, without the `:col`, from the `✘` line and the numbered summary.
-PLAYWRIGHT_ID = (
-    r"(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›"
-)
+PLAYWRIGHT_ID = r"(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›"
 PLAYWRIGHT_FORM = presubmit.RerunForm(
     command="npx playwright test {failed_ids}", test_id=PLAYWRIGHT_ID
 )
@@ -871,9 +869,9 @@ def test_the_token_expands_to_the_failed_ids_of_a_recorded_playwright_report():
         presubmit.rerun_form_command(PLAYWRIGHT_FORM, ids)
         == "npx playwright test e2e/ventasTelefono.spec.ts:209"
     )
-    assert presubmit.rerun_command("npx playwright test", red(output), PLAYWRIGHT_FORM, "merge") == (
-        PLAYWRIGHT_FORM.command
-    )
+    assert presubmit.rerun_command(
+        "npx playwright test", red(output), PLAYWRIGHT_FORM, "merge"
+    ) == (PLAYWRIGHT_FORM.command)
 
 
 def test_a_vitest_example_expands_each_file_and_name():
