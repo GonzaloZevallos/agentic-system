@@ -278,9 +278,7 @@ def _land(
         # What the escalation was about, so its release reads the same names and pair
         # (`landing.escalation_checks`): the failing checks and the master they were seen at.
         verdict = facts.ci_verdict
-        entry["checks"] = list(
-            dict.fromkeys(check.name for check in (verdict.failing if verdict else ()))
-        )
+        entry["checks"] = list(dict.fromkeys(verdict.red_names if verdict else ()))
         if step.names:
             entry["names"] = list(step.names)
         if upstream.sha is not None:

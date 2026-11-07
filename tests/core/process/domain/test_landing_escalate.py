@@ -54,6 +54,33 @@ def test_a_red_on_the_base_without_a_verdict_to_cover_goes_the_old_way():
     assert landing.landing_step("ci_failed", facts, _spent(), ()).kind == "rerun"
 
 
+def _matrix_verdict(expansion: str, declared: str) -> ci.CiVerdict:
+    run = _red(expansion)
+    return ci.CiVerdict("red", (run,), (), ((declared, (run,)),))
+
+
+def test_a_matrix_red_on_the_head_and_its_id_red_on_the_base_escalates():
+    facts = _facts(
+        ci_required=("pytest",),
+        ci_verdict=_matrix_verdict("pytest (a)", "pytest"),
+        ci_red_on_base=("pytest",),
+    )
+
+    step = landing.landing_step("ci_failed", facts, _spent(), ("api",))
+
+    assert step.kind == "escalate"
+
+
+def test_an_expanded_run_name_on_the_base_list_is_not_the_declared_name():
+    facts = _facts(
+        ci_required=("pytest",),
+        ci_verdict=_matrix_verdict("pytest (a)", "pytest"),
+        ci_red_on_base=("pytest (a)",),
+    )
+
+    assert landing.landing_step("ci_failed", facts, _spent(), ("api",)).kind == "rerun"
+
+
 def test_the_escalation_spends_no_model_and_its_child_is_a_checks_one():
     assert "escalate" in landing.LandingStepKind.__args__  # type: ignore[attr-defined]
     assert landing.run_kind_of("escalate", "ci_failed") == "land_checks"
