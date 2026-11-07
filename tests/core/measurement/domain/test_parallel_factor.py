@@ -108,3 +108,46 @@ def test_the_aggregate_skips_a_task_with_no_time_and_is_none_for_none():
     assert pf.aggregate([doc(), doc(dev(0, 10))]) == pytest.approx(1.0)
     assert pf.aggregate([doc()]) is None
     assert pf.aggregate([]) is None
+
+
+def at(minutes):
+    return _ORIGIN + timedelta(minutes=minutes)
+
+
+def span(start, end):
+    return at(start), at(end)
+
+
+def test_clip_cuts_each_interval_to_the_bounds_and_drops_the_empty_ones():
+    clipped = pf.clip(
+        [span(-5, 5), span(3, 7), span(8, 20), span(-9, -1), span(12, 15), span(10, 10)],
+        at(0),
+        at(10),
+    )
+    assert clipped == [span(0, 5), span(3, 7), span(8, 10)]
+
+
+def test_clip_drops_an_inverted_interval():
+    assert pf.clip([span(7, 3)], at(0), at(10)) == []
+
+
+def test_difference_keeps_what_the_other_intervals_do_not_cover():
+    parts = pf.difference([span(0, 10)], [span(2, 4), span(3, 6), span(9, 12)])
+    assert parts == [span(0, 2), span(6, 9)]
+
+
+def test_difference_of_a_fully_covered_or_untouched_interval():
+    assert pf.difference([span(2, 4)], [span(0, 10)]) == []
+    assert pf.difference([span(2, 4)], [span(5, 6)]) == [span(2, 4)]
+    assert pf.difference([span(2, 4)], []) == [span(2, 4)]
+
+
+def test_the_union_of_a_difference_goes_through_union_seconds():
+    parts = pf.difference([span(0, 10), span(5, 15)], [span(4, 6)])
+    assert pf.union_seconds(parts) == pytest.approx((4 + 9) * 60)
+
+
+def test_clip_and_difference_refuse_a_naive_instant_through_the_order_comparison():
+    naive = (datetime(2026, 10, 20, 10, 0), datetime(2026, 10, 20, 11, 0))
+    with pytest.raises(TypeError):
+        pf.clip([naive], at(0), at(10))

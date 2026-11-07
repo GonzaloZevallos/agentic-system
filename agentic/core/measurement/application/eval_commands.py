@@ -498,6 +498,20 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
             f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}; "
             f"closed {closed}, open {opened})"
         )
+    # Informative only, outside the verdict (GH-467): the cycle's failed, waiting, paused and
+    # unattributed hours; a task whose figure is unknown is excluded, never a zero.
+    for label, figure in (
+        ("failed_h:", sc.failed_h),
+        ("waiting_h:", sc.waiting_h),
+        ("paused_h:", sc.paused_h),
+        ("paused_external_h:", sc.paused_external_h),
+        ("paused_human_h:", sc.paused_human_h),
+        ("unattributed_h:", sc.unattributed_h),
+    ):
+        print(
+            f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}, "
+            f"{figure.excluded} excluded)"
+        )
 
 
 def _print_role_usage(

@@ -100,22 +100,46 @@ TODAYS_SCORECARDS = (
     "actual/estimate files: n/a (median, n=0, 1 excluded)\n"
 )
 
+# The GH-467 rows, in print order. The fixtures hold no `failures`, `ci_timing` or `pause_log`,
+# which `cycle.time_split` reads as none: zero failed, waiting and paused hours, and the cycle
+# left over (3 h for bl-a's closed 4 h cycle with 1 h of runs, none for bl-b's open one).
+NEW_ROWS_A = (
+    "failed_h:              0.0000 (median, n=1, 0 excluded)",
+    "waiting_h:             0.0000 (median, n=1, 0 excluded)",
+    "paused_h:              0.0000 (median, n=1, 0 excluded)",
+    "paused_external_h:     0.0000 (median, n=1, 0 excluded)",
+    "paused_human_h:        0.0000 (median, n=1, 0 excluded)",
+    "unattributed_h:        3.0000 (median, n=1, 0 excluded)",
+)
+NEW_ROWS_B = tuple(row.replace("3.0000", "0.0000") for row in NEW_ROWS_A)
+
 TIME_ROWS = (
     "cycle_h:               4.0000 (median, n=1; closed 1, open 0)",
     "active_h:              1.0000 (median, n=1; closed 1, open 0)",
+    *NEW_ROWS_A,
     "cycle_h:               1.0000 (median, n=1; closed 0, open 1)",
     "active_h:              1.0000 (median, n=1; closed 0, open 1)",
+    *NEW_ROWS_B,
 )
 
 
 @pytest.mark.anyio
-async def test_an_all_default_baseline_prints_todays_scorecard_plus_the_two_time_rows(root, capsys):
+async def test_an_all_default_baseline_prints_todays_scorecard_plus_the_time_rows(root, capsys):
     write(root, "GH-1", "bl-a", closed_at="2026-10-20T14:00:00.000Z")
     write(root, "GH-2", "bl-b")
     out = await compare(root, "bl-a", "bl-b", capsys)
 
     lines = out.split("verdict:")[0].splitlines(keepends=True)
-    timed = ("cycle_h", "active_h")
+    timed = (
+        "cycle_h",
+        "active_h",
+        "failed_h",
+        "waiting_h",
+        "paused_h",
+        "paused_external_h",
+        "paused_human_h",
+        "unattributed_h",
+    )
     assert tuple(ln.rstrip("\n") for ln in lines if ln.startswith(timed)) == TIME_ROWS
     assert "".join(ln for ln in lines if not ln.startswith(timed)) == TODAYS_SCORECARDS
     assert "/ arm" not in out
@@ -157,6 +181,9 @@ async def test_a_task_missing_a_bound_is_left_out_of_the_time_rows_not_shown_as_
 
     first = out.split("-- product / bl-b --")[0]
     assert "cycle_h:               1.0000 (median, n=1; closed 0, open 1)" in first
+    # The new rows leave the same task out and count it, never as a zero.
+    assert "failed_h:              0.0000 (median, n=1, 1 excluded)" in first
+    assert "unattributed_h:        0.0000 (median, n=1, 1 excluded)" in first
 
 
 def write_experiment(root, per_arm: int, *, baselines=("bl-a", "bl-a")):

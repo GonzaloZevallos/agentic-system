@@ -199,6 +199,7 @@ CLASS_GROUPING: Mapping[str, str] = {
 # (`domain.<module>`): the layer has 26 public classes, more than a diagram holds. One entry per
 # line, sorted; a module with a class and no entry fails the generator by name.
 MEASUREMENT_CLUSTERS: Mapping[str, str] = {
+    "domain.cycle": "scorecard",
     "domain.dashboards": "langfuse",
     "domain.evaluation": "scorecard",
     "domain.findings_report": "reports",
