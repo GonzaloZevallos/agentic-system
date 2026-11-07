@@ -717,6 +717,38 @@ class Review(RoleOutput):
         "an empty string when none. A row you simply do not repeat stays open, because "
         "an incremental review not mentioning something usually means it did not look",
     )
+    revised_required_paths: list[str] = Field(
+        default_factory=list,
+        description="Only when a human decision moves or drops one of the plan's required "
+        "paths: the list that replaces them, never longer than the plan's. Empty when you do "
+        "not revise (with `revision_decision` 0) or to drop every path",
+    )
+    revision_decision: int = Field(
+        default=0,
+        description="The number of the latest `### Decision N` in `## Human` that no revision "
+        "cites yet, when you revise the required paths. 0 when you do not revise",
+    )
+    revision_reason: str = Field(
+        default="",
+        description="One line quoting the human decision that moves or drops the path. "
+        "Required when `revision_decision` is above 0, empty otherwise",
+    )
+
+    @model_validator(mode="after")
+    def _revision_is_cited_and_versionable(self) -> Review:
+        if self.revision_decision < 0:
+            raise ValueError("revision_decision must be 0 (no revision) or a decision number")
+        if self.revision_decision > 0:
+            _one_line(self.revision_reason, "revision_reason, which quotes the decision,")
+        # At call time: `rules` imports this module, so a module-level import is a cycle.
+        from .rules import forbidden_paths
+
+        if forbidden := forbidden_paths(self.revised_required_paths):
+            raise ValueError(
+                f"revised_required_paths names {', '.join(f'`{p}`' for p in forbidden)}: the "
+                "system never versions them on a delivery branch, so no diff could touch them"
+            )
+        return self
 
 
 class LandingDiagnosis(RoleOutput):

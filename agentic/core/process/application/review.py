@@ -103,6 +103,11 @@ async def run_reviewer(
             state, pair_for(subtask_id), cfg.max_changes_requested_per_pair
         ),
         invariants=rules.invariants_markdown(state),
+        required_paths=(
+            rules.required_paths_markdown(state)
+            if subtask_id == rules.reviewed_unit_name(state)
+            else ""
+        ),
         checks=presubmit.describe_checks(checks, affected=plan),
         docs_review=docs.review_text(ports.stack.docs(base)),
         landing_gate=rules.landing_gate_text(ci_names),
@@ -191,8 +196,16 @@ async def review(
         # After the lowering, so the system's own blocking finding, which always carries
         # its run link, is never lowered; the verdict below is derived from the whole list.
         findings = ci.ci_findings(evidence.head, evidence.master, names, findings)
+    revised, refusal = _revised(state, subtask_id, output.data, ports)
     if subtask_id == rules.reviewed_unit_name(state):
-        findings = _required_paths_findings(state, base, head, findings, ports)
+        applied = {
+            **state,
+            "required_paths_revisions": [
+                *state.get("required_paths_revisions", []),
+                *revised.get("required_paths_revisions", []),
+            ],
+        }
+        findings = _required_paths_findings(applied, base, head, findings, ports)
     system = rules.appended(own, findings)
     category = rules.change_category(findings)
     # One rebind, after the verdict: the reason is the returning row's, the system's when
@@ -201,7 +214,9 @@ async def review(
     markdown = rules.review_markdown(
         category, reason, output.text, lowered, rules.system_blocking(system)
     )
-    patch = apply(patch, {"sections": {section: markdown}})
+    if refusal:
+        markdown += f"\n\nPath revision refused by the system: `{refusal}`."
+    patch = apply(patch, {"sections": {section: markdown}, **revised})
     # Appended, never folded: a sister branch is reviewing at the same time and cannot
     # see this. Whoever builds the next prompt resolves the table (issue #42).
     patch = apply(
@@ -322,6 +337,28 @@ async def _push_speculatively(
     return datetime.now(UTC).isoformat()
 
 
+def _revised(
+    state: TaskState, subtask_id: str, data: dict[str, Any], ports: Ports
+) -> tuple[TaskState, str]:
+    """The patch for a revision of the plan's `required_paths` the deciding review asked for
+    (GH-538), and the closed reason `rules.path_revision` refused it with. Only the deciding
+    review's `data` comes here, never a shadow's. Nothing asked is `({}, "")`; a refusal leaves
+    the list in force where it was."""
+    if not (decision := data.get("revision_decision", 0)) > 0:
+        return {}, ""
+    revision = rules.path_revision(
+        state,
+        subtask_id,
+        data.get("revised_required_paths", []),
+        decision,
+        data.get("revision_reason", ""),
+        ports.now(),
+    )
+    if isinstance(revision, str):
+        return {}, revision
+    return {"required_paths_revisions": [revision]}, ""
+
+
 def _required_paths_findings(
     state: TaskState, base: str, head: str, findings: list[dict[str, Any]], ports: Ports
 ) -> list[dict[str, Any]]:
@@ -330,7 +367,7 @@ def _required_paths_findings(
     Written after the lowering, like the CI findings, so an approval cannot sit over it.
     Nothing is required, or a diff git cannot read, adds nothing: reading never fails the
     review, and a finding that claims a diff it did not see would be false."""
-    required: list[str] = state.get("required_paths") or []
+    required = rules.required_paths_in_force(state)
     if not required:
         return findings
     try:
@@ -340,6 +377,7 @@ def _required_paths_findings(
     missing = rules.required_paths_missing(required, touched)
     if not missing:
         return findings
+    hint = rules.revision_hint(state)
     return [
         *findings,
         {
@@ -349,6 +387,7 @@ def _required_paths_findings(
                 f"git diff --name-only {base}...{head} lists: "
                 f"{', '.join(touched) if touched else '(no paths)'}; "
                 f"the plan requires one of: {', '.join(missing)}"
+                + (f". {hint}" if hint else "")
             ),
             "severity": "blocking",
             "scope": "subtask",

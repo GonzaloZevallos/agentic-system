@@ -17,6 +17,10 @@ The plan's invariants, which every subtask must honour:
 
 {{invariants}}
 
+{{required_paths}}
+
+When the block above is not empty and a human decision in `## Human` moves or drops one of those required paths, fill `revised_required_paths` (the new list, never longer), `revision_decision` (the latest decision number no revision cites) and `revision_reason` (one line quoting that decision). Otherwise leave them empty and 0; never use them to add a path.
+
 <Task>
 Review with the `code-review` skill, from the commit `{{base}}` to the head of the
 branch, along its two axes: Standards (the engineering standards and

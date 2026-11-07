@@ -83,6 +83,7 @@ from .task import (
     MergeOutcome,
     OwnerRuleElsewhere,
     PartRecord,
+    PathRevision,
     PauseEntry,
     PullRequest,
     Restoration,
@@ -5239,6 +5240,113 @@ def required_paths_missing(required: Sequence[str], touched: Sequence[str]) -> t
     ):
         return ()
     return tuple(required)
+
+
+_DECISION_NUMBER = re.compile(r"^### Decision (\d+)", re.M)
+
+
+def required_paths_in_force(state: TaskState) -> list[str]:
+    """The plan's `required_paths` as the integrate check reads them (GH-538): the `paths` of
+    the last revision whose `revises` equals the plan's list exactly and in order, else the
+    plan's own list (`[]` when it has none). A revision left over from before a re-plan stops
+    matching on its own, so nothing ever has to clear it."""
+    plan = list(state.get("required_paths") or [])
+    for revision in reversed(state.get("required_paths_revisions") or []):
+        if list(revision["revises"]) == plan:
+            return list(revision["paths"])
+    return plan
+
+
+def latest_decision(state: TaskState) -> int | None:
+    """The highest `### Decision N` in the `Human` section, numbered as `human_section`
+    numbers them; `None` when no decision is on record."""
+    found = _DECISION_NUMBER.findall(state.get("sections", {}).get(HUMAN, ""))
+    return max(map(int, found)) if found else None
+
+
+def path_revision(
+    state: TaskState,
+    unit: str,
+    paths: Sequence[str],
+    decision: int,
+    reason: str,
+    at: str,
+) -> PathRevision | str:
+    """The record of a revision of the plan's `required_paths` (GH-538), or the one closed
+    reason it is refused, in this order: `not_reviewed_unit`, `nothing_to_revise` (the plan
+    requires no paths), `no_decision`, `not_latest`, `decision_used` (an earlier revision cites
+    it), `unchanged` (the list in force), `adds_paths` (longer than the plan's), and
+    `forbidden_path` (an entry `forbidden_paths` refuses). `revises` is the plan's own list,
+    never the one in force, so the record stays bound to the list it revised."""
+    plan = list(state.get("required_paths") or [])
+    latest = latest_decision(state)
+    refusal = (
+        "not_reviewed_unit"
+        if unit != reviewed_unit_name(state)
+        else "nothing_to_revise"
+        if not plan
+        else "no_decision"
+        if latest is None
+        else "not_latest"
+        if decision != latest
+        else "decision_used"
+        if any(r["decision"] == decision for r in state.get("required_paths_revisions") or [])
+        else "unchanged"
+        if list(paths) == required_paths_in_force(state)
+        else "adds_paths"
+        if len(paths) > len(plan)
+        else "forbidden_path"
+        if forbidden_paths(paths)
+        else None
+    )
+    if refusal is not None:
+        return refusal
+    return {
+        "revises": plan,
+        "paths": list(paths),
+        "decision": decision,
+        "reason": reason,
+        "at": at,
+    }
+
+
+def revision_hint(state: TaskState) -> str:
+    """What the system's required-paths row adds to its evidence (GH-538): the latest human
+    decision when no revision cites it, `""` otherwise. The row's claim text never changes."""
+    latest = latest_decision(state)
+    if latest is None or any(
+        r["decision"] == latest for r in state.get("required_paths_revisions") or []
+    ):
+        return ""
+    return (
+        f"a human decision ({latest}) is on record and no revision cites it; if it moves or "
+        f"drops one of these paths, revise with `revision_decision: {latest}` and quote it in "
+        "`revision_reason`"
+    )
+
+
+def required_paths_markdown(state: TaskState) -> str:
+    """What the review prompt's `{{required_paths}}` shows for the reviewed unit (GH-538): the
+    list in force, the latest decision and the one rule, in three lines. `""` when the plan
+    requires no paths, because then there is nothing a decision could move."""
+    if not state.get("required_paths"):
+        return ""
+    latest = latest_decision(state)
+    in_force = ", ".join(f"`{p}`" for p in required_paths_in_force(state)) or "(none)"
+    cited = latest is not None and any(
+        r["decision"] == latest for r in state.get("required_paths_revisions") or []
+    )
+    decision = (
+        "no human decision is on record"
+        if latest is None
+        else f"the latest human decision is {latest}, " + ("already cited" if cited else "uncited")
+    )
+    return (
+        f"The plan's required paths in force (the diff must touch at least one): {in_force}.\n"
+        f"{decision.capitalize()}.\n"
+        "Revise them only to move or drop a path, never to add one, citing the latest uncited "
+        "decision in `revision_decision` and quoting it in `revision_reason`."
+    )
 
 
 @dataclass(frozen=True)
