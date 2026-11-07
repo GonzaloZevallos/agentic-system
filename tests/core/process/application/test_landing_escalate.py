@@ -82,6 +82,43 @@ def test_a_check_red_on_the_head_and_the_base_escalates_without_running_anything
     assert not [e for e in landing_plan.entries(document) if e["step"] == "diagnose"]
 
 
+def _matrix_world():
+    """`pytest` is a matrix id: `pytest (a)` is red on the head and `pytest (b)` on the base,
+    each at its own run link, with nothing patched: the facts come from the real wiring."""
+    ports = dataclasses.replace(
+        _ports(5, checks=False), stack=MemoryStack(checks={"tests": "t"}, ci=("pytest",))
+    )
+    ports.tracker.failed_runs = [HEAD_RUN]
+    ports.tracker.ci_reports = [
+        _report(
+            dataclasses.replace(
+                _check("pytest (a)", conclusion="FAILURE"), link=HEAD_RUN + "/job/1"
+            ),
+            _check("pytest (z)"),
+        )
+    ]
+    ports.tracker.branch_reports["master"] = _report(
+        dataclasses.replace(_check("pytest (b)", conclusion="FAILURE"), link=BASE_RUN)
+    )
+    return ports
+
+
+def test_a_red_matrix_expansion_escalates_naming_the_declared_id_with_both_links(tmp_path):
+    ports = _matrix_world()
+
+    result, _ = _land(ports, tmp_path)
+
+    assert result.kind == "dispatched" and result.step == "escalate"
+    document = _doc(ports)
+    assert document["escalation_class"] == "questions"
+    reason = document["escalated"]
+    assert "also red on the base branch" in reason
+    assert "`pytest`" in reason and "pytest (a)" not in reason
+    assert HEAD_RUN + "/job/1" in reason and BASE_RUN in reason
+    [entry] = landing_plan.entries(document)
+    assert entry["step"] == "escalate" and entry["checks"] == ["pytest"]
+
+
 def test_the_escalation_is_taken_once_per_head(tmp_path, monkeypatch):
     ports = _world(monkeypatch, on_base=("web",))
     _land(ports, tmp_path)

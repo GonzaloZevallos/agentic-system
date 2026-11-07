@@ -398,7 +398,11 @@ def _red_on_base_only(facts: rules.MergeFacts) -> bool:
     the base."""
     if not facts.ci_red_on_base or facts.ci_verdict is None or not facts.ci_verdict.failing:
         return False
-    return {check.name for check in facts.ci_verdict.failing} <= set(facts.ci_red_on_base)
+    verdict = facts.ci_verdict
+    # A verdict built without `red` (it predates GH-535) names its checks by the runs' own
+    # names, which for an exact declared name are the same strings.
+    names = verdict.red_names or tuple(check.name for check in verdict.failing)
+    return set(names) <= set(facts.ci_red_on_base)
 
 
 def _sync(
