@@ -325,10 +325,15 @@ def time_split(document: Mapping[str, Any]) -> TimeSplit:
         return _UNKNOWN
     failed_s = None if failed is None else _length(failed, bounds, earlier)
     waiting_before = earlier + failed_c
-    waiting_s = None if waiting is None else _length(waiting, bounds, waiting_before)
+    # A class is only known when every class subtracted before it is: an unknown one cannot be
+    # stood in for by an empty set, or the later classes would count seconds it covers.
+    waiting_s = (
+        None if waiting is None or failed is None else _length(waiting, bounds, waiting_before)
+    )
     paused_before = waiting_before + waiting_c
-    external_s = _length(external, bounds, paused_before) if pauses.complete else None
-    human_s = _length(human, bounds, paused_before + external_c) if pauses.complete else None
+    paused_known = pauses.complete and failed is not None and waiting is not None
+    external_s = _length(external, bounds, paused_before) if paused_known else None
+    human_s = _length(human, bounds, paused_before + external_c) if paused_known else None
     covered = paused_before + external_c + human_c
     known = bool(active) and None not in (failed_s, waiting_s, external_s, human_s)
     unattributed = _length([bounds], bounds, covered) if known else None

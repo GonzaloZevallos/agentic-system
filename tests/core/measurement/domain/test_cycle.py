@@ -481,7 +481,8 @@ def test_a_document_with_old_records_reads_unknown_never_zero():
         failures=[failure(None, None)],
         pause_log=[{"kind": "escalation", "value": "ci"}],
     )
-    assert split(document) == cycle.TimeSplit(None, 0.0, None, None, None)
+    # waiting is known on its own, but it is subtracted after failed, which is unknown here.
+    assert split(document) == cycle.TimeSplit(None, None, None, None, None)
     assert (
         split(closed(timed_run(0, 5), close_at=100, failures=[failure(None, 30)])).failed_s is None
     )
@@ -522,6 +523,19 @@ def test_a_figure_whose_instants_cannot_be_ordered_is_none(monkeypatch):
     assert got == cycle.TimeSplit(None, None, None, None, None)
 
 
+def test_an_unknown_failed_class_leaves_the_later_classes_unknown():
+    """A failure missing a bound cannot be stood in for by an empty set: a wait the failure
+    overlaps would otherwise count seconds the failure covers."""
+    document = closed(
+        timed_run(0, 5),
+        close_at=100,
+        failures=[failure(10, None)],
+        full_checks={"ci_timing": timing(20, 20, 40)},
+        pause_log=[escalation(50, "returns"), resumed(60)],
+    )
+    assert split(document) == cycle.TimeSplit(None, None, None, None, None)
+
+
 def test_the_time_split_modules_import_nothing_from_process_rules():
     from pathlib import Path
 
@@ -536,6 +550,14 @@ def test_the_time_split_modules_import_nothing_from_process_rules():
         ]
         if name == "cycle":
             assert not [i for i in imported if i.endswith("rules") or ".rules" in i]
+        else:
+            # parallel_factor keeps its older `rules` import; the new helpers must not use it.
+            for fn in ("clip", "difference"):
+                body = next(
+                    n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == fn
+                )
+                used = {n.id for n in ast.walk(body) if isinstance(n, ast.Name)}
+                assert "rules" not in used
 
 
 def _random_document(rng):
