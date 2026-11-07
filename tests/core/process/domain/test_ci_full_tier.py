@@ -2,10 +2,13 @@
 integrated head. Pure; one row per input and the answer it must give, with the inputs it
 must reject beside the ones it accepts (ADR-0023)."""
 
+from typing import Literal
+
 import pytest
 
 from agentic.core.process.domain import ci
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, FullTierVerdict
+from agentic.core.process.domain.task import CiCause
 
 HEAD = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
 OTHER = "9f3e1a2b4c5d6e7f8091a2b3c4d5e6f708192a3b"
@@ -270,3 +273,31 @@ def test_red_wins_over_an_unknown_name() -> None:
     bad = run("unit", "FAILURE")
     got = ci.full_tier_verdict(complete(bad), HEAD, ("unit", "e2e"), 0.0, BOUND, GRACE, True)
     assert got.state == "red" and got.failing == (bad,) and got.unknown == ()
+
+
+# --- `dispatch_after_no_run` (GH-531): the one place that says a no-run push is dispatched ----
+
+
+@pytest.mark.parametrize(
+    ("state", "cause", "available", "expected"),
+    [
+        ("unreachable", "no_run", True, True),
+        ("unreachable", "no_run", False, False),
+        ("unreachable", "publish_failed", True, False),
+        ("unreachable", "not_started", True, False),
+        ("unreachable", "gh_unavailable", True, False),
+        ("unreachable", "unknown_names", True, False),
+        ("timed_out", None, True, False),
+        ("red", None, True, False),
+        ("green", None, True, False),
+        ("waiting", None, True, False),
+    ],
+)
+def test_only_a_no_run_push_is_dispatched_and_only_when_the_fallback_is_available(
+    state: Literal["green", "red", "waiting", "timed_out", "unreachable"],
+    cause: CiCause | None,
+    available: bool,
+    expected: bool,
+) -> None:
+    verdict = FullTierVerdict(state, (), (), cause)
+    assert ci.dispatch_after_no_run(verdict, available) is expected

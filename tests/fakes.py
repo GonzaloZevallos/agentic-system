@@ -484,6 +484,11 @@ class MemoryStack:
         # None is a product with no `ci_dispatch` (GH-462): an untrusted head runs locally. A
         # test sets it.
         self.declared_ci_dispatch: CiDispatch | None = None
+        # GH-531: the declaration at one revision wins over the one above, and a revision in
+        # `stack_error_at` makes `ci` and `ci_dispatch` raise `ValueError` with that text, the
+        # way a malformed key at that commit does. The names per revision are `declared_ci`.
+        self.declared_ci_dispatch_at: dict[str, CiDispatch] = {}
+        self.stack_error_at: dict[str, str] = {}
         # Empty is a product with no check budget (GH-365): every verdict of today.
         self.declared_check_budgets = {} if check_budgets is None else check_budgets
         # Empty is a product that declares no verification, wall or not-ready exit code
@@ -544,7 +549,9 @@ class MemoryStack:
 
     def ci_dispatch(self, revision: str) -> CiDispatch | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
-        return self.declared_ci_dispatch
+        if revision in self.stack_error_at:
+            raise ValueError(self.stack_error_at[revision])
+        return self.declared_ci_dispatch_at.get(revision, self.declared_ci_dispatch)
 
     def check_budgets(self, revision: str) -> dict[str, float]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -575,6 +582,8 @@ class MemoryStack:
     def ci(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         self.ci_revisions.append(revision)
+        if revision in self.stack_error_at:
+            raise ValueError(self.stack_error_at[revision])
         if self.ci_error is not None:
             raise ValueError(self.ci_error)
         return self.declared_ci.get(revision, self.declared_ci_all)

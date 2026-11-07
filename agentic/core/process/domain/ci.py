@@ -354,6 +354,14 @@ class FullTierVerdict:
     unknown: tuple[str, ...] = ()
 
 
+def dispatch_after_no_run(verdict: FullTierVerdict, dispatch_available: bool) -> bool:
+    """Whether the head whose push ended in `verdict` is judged by the dispatched workflow
+    instead of escalating (GH-531): only a push that got no run at all (`no_run`, after the
+    republish) and only when the product's upstream declares what a dispatch needs. Any other
+    end of the push path is a verdict, or a failure a dispatch does not mend."""
+    return dispatch_available and verdict.state == "unreachable" and verdict.cause == "no_run"
+
+
 def full_tier_verdict(
     read: CiReport | CiUnreadable,
     head: str,

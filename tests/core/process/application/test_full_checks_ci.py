@@ -11,7 +11,7 @@ import pytest
 
 from agentic.core.process.application.checkouts import task_base
 from agentic.core.process.application.full_checks import _DISPATCH_DETAIL
-from agentic.core.process.application.ports import CommandResult, GitError
+from agentic.core.process.application.ports import CommandResult, GitError, Upstream
 from agentic.core.process.domain import ci_push, rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_UNKNOWN_ATTEMPTS
@@ -578,6 +578,126 @@ async def test_without_the_key_the_untrusted_head_still_runs_local():
     patch = await run(state_of(), ports)
     assert patch["full_checks"]["ran_on"] == "local"
     assert ports.tracker.dispatch_calls == [] and ports.tracker.dispatched_reads == []
+
+
+# --- a pushed head that gets no run is judged by the upstream's dispatched workflow (GH-531) ---
+
+UPSTREAM = "d" * 40
+NO_RUN = report(sha="f" * 40)
+
+
+def falling_back(*listings, declared=DISPATCH, names=None, **more):
+    """A trusted head whose pushes start no run (its own `ci.yml` does not trigger on the CI
+    ref); the base declares no `ci_dispatch`, the upstream `declared` one, and the dispatched
+    listings are `listings`."""
+    ports = ports_of(NO_RUN, workspace=FullHead(), **more)
+    ports.workspace.upstream_answer = Upstream("origin/master", UPSTREAM, None)
+    if declared is not None:
+        ports.stack.declared_ci_dispatch_at[UPSTREAM] = declared
+    if names is not None:
+        ports.stack.declared_ci[UPSTREAM] = names
+    ports.tracker.dispatched = list(listings)
+    return ports
+
+
+async def test_a_head_that_gets_no_run_is_judged_by_the_upstreams_dispatched_workflow():
+    ports = falling_back((run_of(job("unit"), job("web")),))
+    patch = await run(state_of(), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is True and record["ran_on"] == "ci_dispatch"
+    assert record["run_id"] == 99 and record["head"] == FULL
+    assert record["dispatch_cause"] == "no_run" and record["stack_at"] == UPSTREAM
+    assert [(r["name"], r["passed"]) for r in record["results"]] == [("unit", True), ("web", True)]
+    [(workflow, ref, inputs)] = ports.tracker.dispatch_calls
+    assert (workflow, ref, inputs) == ("ci.yml", "", {"sha": FULL})
+    assert ports.commands.ran == [] and ports.check_scheduler.requests == []
+    assert ports.workspace.ci_ref_calls == [
+        ("publish", REF),
+        ("delete_ci", REF),
+        ("publish", REF),
+        ("publish_dispatch", "GH-1"),
+    ]
+
+
+async def test_a_red_dispatched_run_of_a_head_without_a_run_returns_the_integration():
+    ports = falling_back((run_of(job("unit"), job("web", "FAILURE")),))
+    patch = await run(state_of(), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is False and record["failed_step"] == "web"
+    assert record["ran_on"] == "ci_dispatch" and record["dispatch_cause"] == "no_run"
+    assert record["stack_at"] == UPSTREAM
+    assert patch["subtasks"][INTEGRATION]["returned_by"] == "full_checks"
+
+
+async def test_the_dispatched_verdict_is_judged_by_the_names_at_the_upstream():
+    ports = falling_back(
+        (run_of(job("fast"), job("web")),), names=("fast", "web")
+    )  # the base declares unit, web
+    patch = await run(state_of(), ports)
+    record = patch["full_checks"]
+    assert record["passed"] is True
+    assert [r["name"] for r in record["results"]] == ["fast", "web"]
+    assert UPSTREAM in ports.stack.ci_revisions
+
+
+async def test_a_dispatched_run_of_the_base_names_does_not_cover_the_upstreams_names():
+    ports = falling_back((run_of(job("unit"), job("web")),), names=("fast", "web"))
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "without a declared job" in patch["escalated"]
+    assert "no CI run on" not in patch["escalated"]
+
+
+async def test_a_product_that_declares_no_dispatch_anywhere_escalates_no_run_as_today():
+    ports = falling_back(declared=None)
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert (
+        f"(no_run): no CI run on {REF} for that head after 1 min, though the ref was pushed twice. "
+        "The suite was not run"
+    ) in patch["escalated"]
+    assert ports.tracker.dispatch_calls == []
+    assert "no dispatch was tried" not in patch["escalated"]
+    assert "not fetched" not in patch["escalated"]
+
+
+async def test_an_unreadable_upstream_escalates_no_run_without_a_dispatch_and_says_so():
+    ports = falling_back((run_of(job("unit"), job("web")),))
+    ports.workspace.upstream_answer = Upstream("HEAD", None, "HEAD is unborn")
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "though the ref was pushed twice" in patch["escalated"]
+    assert "the product's upstream could not be read" in patch["escalated"]
+    assert ports.tracker.dispatch_calls == [] and "unborn" not in patch["escalated"]
+
+
+async def test_a_stack_that_does_not_load_at_the_upstream_escalates_without_raising():
+    ports = falling_back((run_of(job("unit"), job("web")),))
+    ports.stack.stack_error_at[UPSTREAM] = "ci: expected a list; fatal: secret git words"
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "the stack at the upstream did not load" in patch["escalated"]
+    assert "secret git words" not in patch["escalated"]
+    assert ports.tracker.dispatch_calls == []
+
+
+async def test_an_undeclared_upstream_that_was_not_fetched_says_so_in_one_clause():
+    ports = falling_back(declared=None)
+    ports.workspace.upstream_answer = Upstream("HEAD", UPSTREAM, "fetch failed: secret")
+    patch = await run(state_of(), ports)
+    assert_escalated_ci(patch, ports, state_of())
+    assert patch["escalated"].count("(the upstream was not fetched)") == 1
+    assert "secret" not in patch["escalated"] and ports.tracker.dispatch_calls == []
+
+
+async def test_a_dispatch_of_the_fallback_that_also_gets_no_run_escalates_with_the_dispatch_text():
+    ports = falling_back()
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert_escalated_ci(patch, ports, state_of())
+    assert "no dispatched run of ci.yml" in patch["escalated"]
+    assert len(ports.tracker.dispatch_calls) == 2
+    assert clock.now == 4 * CFG.ci_start_grace_s
 
 
 class FlakyPush(MemoryWorkspace):
