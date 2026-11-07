@@ -536,28 +536,89 @@ def test_an_unknown_failed_class_leaves_the_later_classes_unknown():
     assert split(document) == cycle.TimeSplit(None, None, None, None, None)
 
 
+def _rules_names(tree):
+    """The local names bound by an import of `core.process.domain.rules` or of something in it."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                if module.endswith("rules") or f"{module}.{alias.name}".endswith(".rules"):
+                    names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.endswith("rules"):
+                    names.add(alias.asname or alias.name.split(".")[0])
+    return names
+
+
+def rules_violations(source, helpers=None):
+    """Where `source` reaches `core.process.domain.rules`. With `helpers` None, any import of it
+    counts; with helper names, only an import inside one of those functions, or a use of a name
+    any import bound (at module level too) inside one, counts: the module's older imports stay."""
+    tree = ast.parse(source)
+    bound = _rules_names(tree)
+    if helpers is None:
+        return [f"line {n.lineno}" for n in ast.walk(tree) if _imports_rules(n)]
+    found = []
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, ast.FunctionDef) and fn.name in helpers):
+            continue
+        for node in ast.walk(fn):
+            if _imports_rules(node):
+                found.append(f"{fn.name}: import at line {node.lineno}")
+            elif isinstance(node, ast.Name) and node.id in bound:
+                found.append(f"{fn.name}: uses {node.id} at line {node.lineno}")
+    return found
+
+
+def _imports_rules(node):
+    if isinstance(node, ast.ImportFrom):
+        module = node.module or ""
+        return module.endswith("rules") or any(
+            f"{module}.{a.name}".endswith(".rules") for a in node.names
+        )
+    return isinstance(node, ast.Import) and any(a.name.endswith("rules") for a in node.names)
+
+
 def test_the_time_split_modules_import_nothing_from_process_rules():
     from pathlib import Path
 
-    for name in ("cycle", "parallel_factor"):
-        source = Path(cycle.__file__).with_name(f"{name}.py").read_text()
-        tree = ast.parse(source)
-        imported = [
-            f"{node.module}.{alias.name}" if isinstance(node, ast.ImportFrom) else alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import | ast.ImportFrom)
-            for alias in node.names
-        ]
-        if name == "cycle":
-            assert not [i for i in imported if i.endswith("rules") or ".rules" in i]
-        else:
-            # parallel_factor keeps its older `rules` import; the new helpers must not use it.
-            for fn in ("clip", "difference"):
-                body = next(
-                    n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == fn
-                )
-                used = {n.id for n in ast.walk(body) if isinstance(n, ast.Name)}
-                assert "rules" not in used
+    def source(name):
+        return Path(cycle.__file__).with_name(f"{name}.py").read_text()
+
+    assert rules_violations(source("cycle")) == []
+    # parallel_factor keeps its older `rules` import; only the new helpers must not reach it.
+    assert rules_violations(source("parallel_factor"), {"clip", "difference"}) == []
+
+
+MODULE_IMPORT = "from agentic.core.process.domain.rules import REVIEW_PREFIX as X\n"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # the existing `rules.X` attribute use
+        "from agentic.core.process.domain import rules\ndef clip(a):\n    return rules.X\n",
+        # a name bound by a module-level from-import and used in the helper
+        MODULE_IMPORT + "def difference(a):\n    return X\n",
+        # a from-import inside the helper
+        "def clip(a):\n    from agentic.core.process.domain.rules import X\n    return X\n",
+        "def difference(a):\n    import agentic.core.process.domain.rules\n    return 1\n",
+    ],
+)
+def test_the_rules_guard_rejects_every_way_a_helper_reaches_rules(source):
+    assert rules_violations(source, {"clip", "difference"}) != []
+
+
+def test_the_rules_guard_accepts_an_older_import_the_helpers_do_not_use():
+    source = MODULE_IMPORT + "def other():\n    return X\ndef clip(a):\n    return a\n"
+    assert rules_violations(source, {"clip", "difference"}) == []
+
+
+def test_the_rules_guard_rejects_any_import_of_rules_in_a_module_that_takes_none():
+    assert rules_violations(MODULE_IMPORT) != []
+    assert rules_violations("import os\nfrom a import b\n") == []
 
 
 def _random_document(rng):

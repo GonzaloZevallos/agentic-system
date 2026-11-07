@@ -83,7 +83,7 @@ _Avoid_: espera humana, bloqueo, tiempo muerto
 _Campo_: sin término de arte — el vecino más cercano es el tiempo bloqueado (blocked time) del flujo Kanban
 
 **Tiempo fallido**:
-La unión de los intervalos `[started_at, ended_at]` de los fallos de una tarea: el tiempo de los intentos que no llegaron a nada. Es 0 sólo en una tarea sin fallos; un fallo sin sus dos instantes deja la cifra desconocida.
+La unión de los intervalos `[started_at, ended_at]` de los fallos de una tarea: el tiempo de los intentos que no llegaron a nada. Es 0 sólo en una tarea sin fallos; un fallo sin sus dos instantes deja la cifra desconocida, y con ella las de espera, pausa y sin atribuir, que se restan después de esta (una clase sólo se conoce si se conocen las anteriores).
 _Avoid_: tiempo perdido, retrabajo (el retrabajo se mide en costo)
 _Campo_: sin término de arte — el vecino más cercano es el failed time del tiempo de ciclo de un pipeline
 
