@@ -147,7 +147,8 @@ class CiCover:
 class CiDispatch:
     """The workflow of the default branch the system dispatches to judge a head its own workflow
     cannot judge (it touches `.github/`, GH-462, or its pushes got no run, GH-531), and the
-    `workflow_dispatch` input that carries the head sha (`ci_dispatch`). Validated when the stack is parsed."""
+    `workflow_dispatch` input that carries the head sha (`ci_dispatch`). Validated when the
+    stack is parsed."""
 
     workflow: str
     sha_input: str
