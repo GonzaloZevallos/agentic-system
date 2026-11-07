@@ -56,7 +56,7 @@ def test_a_red_on_the_base_without_a_verdict_to_cover_goes_the_old_way():
 
 def _matrix_verdict(expansion: str, declared: str) -> ci.CiVerdict:
     run = _red(expansion)
-    return ci.CiVerdict("red", (run,), (), ((declared, (run,)),))
+    return ci.CiVerdict("red", (run,), (), red=((declared, (run,)),))
 
 
 def test_a_matrix_red_on_the_head_and_its_id_red_on_the_base_escalates():

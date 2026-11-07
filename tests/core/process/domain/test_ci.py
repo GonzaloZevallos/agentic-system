@@ -370,3 +370,33 @@ def test_a_rerun_is_restarted_only_when_a_read_shows_its_run_outside_completed()
     assert ci.rerun_restarted(running, "78") is False
     assert ci.rerun_restarted(report(), "77") is False
     assert ci.rerun_restarted(ci.CiUnreadable("gh_unavailable"), "77") is False
+
+
+def _shards(run_id: int, first: str, second: str, status: str = "COMPLETED") -> tuple[CiCheck, ...]:
+    return (
+        job("e2e-shard (1)", first, run_id, status),
+        job("e2e-shard (2)", second, run_id, status),
+    )
+
+
+def test_a_cancelled_matrix_shard_with_a_newer_run_of_the_same_shards_is_green() -> None:
+    """GH-539 with GH-535: the declared id `e2e-shard` claims the expansions; the old run's
+    cancelled shard and its sibling that failed for it are matched by name in the newer run."""
+    checks = _shards(OLD, "CANCELLED", "FAILURE") + _shards(NEW, "SUCCESS", "SUCCESS")
+    read = CiReport(FULL, None, None, None, checks, True)  # a matrix id waits for the runs
+    assert ci.ci_state(read, ("e2e-shard",)) == CiVerdict("green", (), ())
+
+
+def test_a_cancelled_matrix_shard_with_a_newer_run_still_going_is_pending() -> None:
+    checks = _shards(OLD, "CANCELLED", "FAILURE") + _shards(NEW, None, None, "IN_PROGRESS")
+    verdict = ci.ci_state(report(*checks), ("e2e-shard",))
+    assert (verdict.state, verdict.failing, verdict.red) == ("pending", (), ())
+
+
+def test_a_cancelled_matrix_shard_without_a_newer_run_stays_red_and_names_the_id() -> None:
+    """The input it must reject: nothing says the old run was superseded, so it is red, and
+    `red` keeps the declared id."""
+    verdict = ci.ci_state(report(*_shards(OLD, "CANCELLED", "FAILURE")), ("e2e-shard",))
+    assert verdict.state == "red"
+    assert verdict.red_names == ("e2e-shard",)
+    assert verdict.cancelled == ()
