@@ -187,8 +187,11 @@ TABLE: tuple[Row, ...] = (
     ),
     Row(
         "tests/core/process/domain/fixtures/GH-538.yaml",
-        ("tests/core/process/domain/test_schemas.py",),
-        "the facts of apostrophe#538 as the issue quotes them: the plan check tests read them",
+        (
+            "tests/core/process/domain/test_schemas.py",
+            "tests/core/process/application/test_review_plan_ci.py",
+        ),
+        "the facts of apostrophe#538 as the issue quotes them: plan and review tests read them",
     ),
     Row(
         "tests/core/process/domain/fixtures/playwright_list_failure.txt",
