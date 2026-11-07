@@ -43,6 +43,7 @@ def test_reducers_are_read_from_the_annotations():
         "cost_usd",
         "subtasks",
         "findings",
+        "required_paths_revisions",
         "settled_findings",
         "approval_settled",
         "plan_settled",

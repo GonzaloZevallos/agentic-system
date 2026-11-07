@@ -86,6 +86,7 @@ async def test_review_under_full_passes_run_role_exactly_what_it_always_did(monk
         "review": "a first review",
         "remaining_changes": 2,
         "invariants": rules.invariants_markdown(two_delivered()),
+        "required_paths": "",
         "checks": call["checks"],
         "docs_review": call["docs_review"],
         "landing_gate": rules.NO_LANDING_GATE,

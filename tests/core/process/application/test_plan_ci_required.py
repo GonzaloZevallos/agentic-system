@@ -43,7 +43,7 @@ async def test_the_required_checks_and_paths_land_in_the_state_and_survive_the_d
 
 async def test_a_plan_that_requires_no_check_writes_neither_key(tmp_path):
     patch = await _plan(tmp_path)
-    assert "ci_required" not in patch and "required_paths" not in patch
+    assert "ci_required" not in patch and patch["required_paths"] == []  # GH-538: always written
     rendered = document.render({**TASK, **patch})
     assert "ci_required" not in rendered and "required_paths" not in rendered
     assert "ci_required" not in document.parse(rendered)
@@ -70,3 +70,13 @@ async def test_a_job_id_with_another_name_in_the_bases_workflow_is_refused_and_a
     assert patch["ci_required"] == ["merge-gate"]
     retry = runner.prompts("tech_lead")[-1]
     assert "ci_required `e2e` is the id of a job" in retry and "`End to end`" in retry
+
+
+async def test_a_replan_that_requires_no_path_replaces_the_list_it_found(tmp_path):
+    """GH-538: the list a re-plan does not repeat is gone, not left in force."""
+    result = planned()
+    cfg = Configuration(product_dir=tmp_path, skip_ephemeral=True)
+    state = {**TASK, "required_paths": [".agentic/stack.yaml"]}
+    patch = await plan(state, cfg, memory_ports(ScriptedRunner(tech_lead=[result])))
+    assert patch["required_paths"] == []
+    assert "required_paths" not in document.render({**state, **patch})
