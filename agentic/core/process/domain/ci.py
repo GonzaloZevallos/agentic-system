@@ -180,6 +180,12 @@ def superseded_or_cancelled(report: CiReport, check: CiCheck) -> bool:
     )
 
 
+def rerun_restarted(read: CiReport | CiUnreadable, run_id: str) -> bool:
+    """Whether `read` shows the run `run_id`, the one rerun for a cancelled head (GH-539), outside
+    `COMPLETED`: the rerun took hold. Only a `CiReport` can show it, from `running_runs`."""
+    return isinstance(read, CiReport) and run_id in read.running_runs
+
+
 def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     """The verdict of `report` over the `declared` check names, matched exactly: a matrix
     job `check (3.12)` is not `check`, and a check nobody declared is ignored. Every run

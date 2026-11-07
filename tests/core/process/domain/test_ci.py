@@ -356,3 +356,14 @@ def test_red_checks_and_run_link_leave_a_cancelled_run_out() -> None:
     assert ci.red_checks(read) == ()
     assert ci.run_link(read, "ci-ok") is None
     assert ci.red_checks(report(*old_run_cancelled_by_a_newer_push())) != ()
+
+
+def test_a_rerun_is_restarted_only_when_a_read_shows_its_run_outside_completed() -> None:
+    running = CiReport(
+        FULL, "master", OTHER, "2026-10-07T10:00:00Z", (), running_runs=frozenset({"77"})
+    )
+    assert ci.rerun_restarted(running, "77") is True
+    # Rejected: another run, a report with none running, and a read that is not a report.
+    assert ci.rerun_restarted(running, "78") is False
+    assert ci.rerun_restarted(report(), "77") is False
+    assert ci.rerun_restarted(ci.CiUnreadable("gh_unavailable"), "77") is False

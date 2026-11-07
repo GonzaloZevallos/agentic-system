@@ -135,6 +135,24 @@ _NOT_TRIED_DETAIL: dict[NotTriedWhy, str] = {
 _UNFETCHED_DETAIL = " (the upstream was not fetched)"
 
 
+@dataclass
+class _Restart:
+    """What the wait saw of the single rerun of a cancelled head (GH-539), held in memory: the
+    rerun's run id, handed on to `ci.rerun_restarted` and never compared here, and whether a read
+    showed that run outside `COMPLETED`."""
+
+    run_id: str | None = None
+    seen: bool = False
+
+    def watch(self, read: CiReport | CiUnreadable) -> None:
+        if self.run_id is not None and ci.rerun_restarted(read, self.run_id):
+            self.seen = True
+
+    def rearm(self, run_id: str) -> None:
+        self.run_id = run_id
+        self.seen = False
+
+
 @dataclass(frozen=True)
 class _Fallback:
     """The declaration that makes a `no_run` push dispatchable (GH-531), read at one revision of
@@ -491,8 +509,12 @@ async def _ci_full_checks(
     speculative = False
     pushes: list[Pushed] = []
     pushed = state.get("ci_speculation")
-    # The runs a read showed outside `COMPLETED` while this node waited (GH-539), in memory only.
-    running: set[str] = set()
+    # Whether a read showed the rerun's run outside `COMPLETED` while this node waited (GH-539),
+    # in memory only; the rerun fact of an earlier node, when it is for this head, starts it.
+    recorded = state.get("ci_cancel_rerun")
+    running = _Restart(
+        recorded["run_id"] if recorded and rules.same_commit(recorded["head"], head) else None
+    )
     # The instants of the CI wait (GH-467), stamped by the application from `ports.now`: this
     # node's start, and the push the wait is for (the review's persisted one when its run is
     # consumed, this node's own otherwise).
@@ -636,7 +658,7 @@ async def _rescued(
     sleep: Sleep,
     clock: Clock,
     now: Now,
-    running: set[str],
+    running: _Restart,
 ) -> tuple[FullTierVerdict, CiReport | CiUnreadable, float, CiCancelRerun | None]:
     """The rescue of a `cancelled` verdict (GH-539), which is never red: the run is rerun once per
     head (`ci_cancel_rerun`, written to the document at once) and the wait goes on. A `cancelled`
@@ -658,9 +680,9 @@ async def _rescued(
                 break
             rerun = {"head": head, "run_id": run_id, "rerun_at": ports.now()}
             ports.documents.save(apply(state, {"ci_cancel_rerun": rerun}))
-            running.clear()
+            running.rearm(run_id)
         elif speculation.second_cancel(
-            rerun["rerun_at"], running, rerun["run_id"], now(), cfg.ci_start_grace_s
+            rerun["rerun_at"], running.seen, now(), cfg.ci_start_grace_s
         ):
             break
         await sleep(ci.CI_POLL_S)
@@ -747,7 +769,7 @@ async def _speculated_wait(
     sleep: Sleep,
     clock: Clock,
     now: Now,
-    running: set[str] | None = None,
+    running: _Restart | None = None,
 ) -> tuple[FullTierVerdict | None, CiReport | CiUnreadable, float]:
     """The wait on the run a review pushed for `head` (GH-465), from one read of the ref. The
     verdict is `None` when that run cannot be counted on and the caller publishes again: the
@@ -779,13 +801,13 @@ async def _wait_ci(
     sleep: Sleep,
     clock: Clock,
     first: CiReport | CiUnreadable | None = None,
-    running: set[str] | None = None,
+    running: _Restart | None = None,
 ) -> tuple[FullTierVerdict, CiReport | CiUnreadable, float]:
     """Read the CI of `ref` every `CI_POLL_S` until a verdict that is not `waiting`, counted
     from the first read: bounded by `cfg.ci_start_grace_s` while no run exists on `head` and by
     `cfg.check_timeout_s` once one does (`ci.full_tier_verdict`). `first` is a read already
-    taken, used for the first round instead of asking again. `running` collects the runs each
-    read showed outside `COMPLETED` (GH-539), for the rescue of a cancelled run."""
+    taken, used for the first round instead of asking again. `running` notes whether a read
+    showed the rerun's run outside `COMPLETED` (GH-539), for the rescue of a cancelled run."""
     started = clock()
     previous: CiReport | CiUnreadable | None = None
     while True:
@@ -796,8 +818,8 @@ async def _wait_ci(
         )
         first = None
         waited = clock() - started
-        if running is not None and isinstance(read, CiReport):
-            running.update(read.running_runs)
+        if running is not None:
+            running.watch(read)
         verdict = ci.full_tier_verdict(
             read,
             head,

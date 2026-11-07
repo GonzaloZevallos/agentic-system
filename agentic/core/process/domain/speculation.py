@@ -13,7 +13,7 @@ whether GitHub never started a run for it (`event_lost`).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 
 from agentic.core.process.domain import rules
@@ -71,15 +71,14 @@ def event_lost(pushed_at: str, now: datetime, grace_s: float, read_has_run: bool
     return (now - pushed).total_seconds() >= grace_s
 
 
-def second_cancel(
-    rerun_at: str, running_seen: Collection[str], run_id: str, now: datetime, grace_s: float
-) -> bool:
+def second_cancel(rerun_at: str, restarted: bool, now: datetime, grace_s: float) -> bool:
     """Whether a `cancelled` verdict read after the single rerun of a head (GH-539) is a second
     cancellation that escalates, and not the stale read of the cancelled run the rerun has yet to
-    restart: the rerun's run was seen outside `COMPLETED` (`running_seen`, what the wait read after
-    the rerun, held in memory) or `grace_s` seconds passed since `rerun_at`. `now` is handed in. A
-    `rerun_at` that cannot be measured counts as passed, so the wait ends instead of going on."""
-    if run_id in running_seen:
+    restart: the rerun's run was seen outside `COMPLETED` (`restarted`, what the wait made of the
+    reads after the rerun with `ci.rerun_restarted`, held in memory) or `grace_s` seconds passed
+    since `rerun_at`. `now` is handed in. A `rerun_at` that cannot be measured counts as passed, so
+    the wait ends instead of going on."""
+    if restarted:
         return True
     try:
         rerun = datetime.fromisoformat(rerun_at)
