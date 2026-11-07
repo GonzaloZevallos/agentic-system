@@ -570,7 +570,9 @@ def _dispatch(context: LandingContext) -> None:
             landing_fix.escalate_ledger(context)
         case "escalate_adr":
             landing_fix.escalate_adr(context)
-        case "wait" | "none":
+        case "wait" | "none" | "apply_adr_decision":
+            # `apply_adr_decision` is carried out by the executor subtask of GH-544; until it
+            # lands here the step is recorded and does nothing.
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:
             assert_never(kind)

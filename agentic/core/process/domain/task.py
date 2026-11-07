@@ -1056,6 +1056,17 @@ class PlanSettledRow(TypedDict):
     by: Literal["approved", "superseded"]
 
 
+AdrDecisionOutcome = Literal[
+    "applied", "stale_moves", "out_of_bounds", "role_failed", "checks_red", "still_colliding"
+]
+"""How an `apply_adr_decision` entry ended (GH-544), closed; `landing` re-exports it:
+`applied` (a new head was pushed),
+`stale_moves` (master moved and the rule now picks other numbers than the question named),
+`out_of_bounds` (the pass edited a line that is not a spot), `role_failed` (the Developer pass
+failed), `checks_red` (the product's checks failed on the result) and `still_colliding` (the
+result still holds a number master took). Every one but `applied` asks again."""
+
+
 class LandingEntry(TypedDict, total=False):
     """One landing step of the task document's `landing` list (GH-239): the idempotency
     key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
@@ -1121,6 +1132,14 @@ class LandingEntry(TypedDict, total=False):
     # GH-449, `diagnose` entries: what reading each red job's CI log gave, `{job, bytes, cause}`
     # with `cause` from the closed `ci.JobLogCause`. Never the text of the log.
     ci_logs: list[CiLogRecord]
+    # GH-544, `apply_adr_decision` entries, all optional (an entry written before reads as it
+    # did): the `decision_at` (the `released_at` of the `escalate_adr` it answers), the closed
+    # `landing.AdrDecisionOutcome`, the `[old, new]` path pairs the rule recomputed and the head
+    # pushed. `escalate_adr` entries never carry them.
+    decision_at: str
+    outcome: AdrDecisionOutcome
+    moves: list[list[str]]
+    head_after: str
 
 
 JobLogCause = Literal["read", "unreadable", "empty", "other_head", "timed_out"]

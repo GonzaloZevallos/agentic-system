@@ -4,9 +4,11 @@ and `ci.red_on_base`."""
 
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
 
-from agentic.core.process.domain import ci, landing
+from agentic.core.process.domain import adr_numbers, ci, landing
 from tests.core.process.domain.test_landing import _facts, _spent
 
 
@@ -110,3 +112,219 @@ def test_red_on_base_ignores_a_pending_base_run_and_an_undeclared_name():
     pending = ci.CiCheck("web", "IN_PROGRESS", None, "u")
     assert ci.red_on_base(_report(_red("web")), _report(pending), ("web",)) == ()
     assert ci.red_on_base(_report(_red("web")), _report(_red("web")), ("e2e",)) == ()
+
+
+# -- GH-544: an owner's decision on an `escalate_adr` escalation ------------------------------
+
+H1, H2 = "a" * 40, "c" * 40
+T0, T1, T2, T3 = (f"2026-11-07T0{n}:00:00+00:00" for n in range(4))
+REFUSAL = "adr_number_taken"
+MOVES = (("docs/adr/0070-x.md", "docs/adr/0074-x.md"),)
+AMBIGUOUS = adr_numbers.Ambiguous("unclassified_token", "app/main.py:228: (docs/adr/0070)", MOVES)
+NO_MOVES = adr_numbers.Ambiguous("duplicate_own_number", "0070 twice")
+
+
+def _asked(head=H1, **over) -> dict:
+    return {"head": head, "step": "escalate_adr", "refusal": REFUSAL, "at": T0, **over}
+
+
+def _asked_resolved(head=H1, **over) -> dict:
+    return _asked(head, resolved_at=T1, **over)
+
+
+def _released(head=H1, at=T2, **over) -> dict:
+    return _asked_resolved(head, released_at=at, **over)
+
+
+def _applied(outcome="applied", head=H1, decision_at=T2, **over) -> dict:
+    return {
+        "head": head,
+        "step": "apply_adr_decision",
+        "refusal": REFUSAL,
+        "at": T3,
+        "decision_at": decision_at,
+        "outcome": outcome,
+        "moves": [list(m) for m in MOVES],
+        **over,
+    }
+
+
+def _adr_step(collision=AMBIGUOUS, spent=None, **keywords):
+    facts = _facts(adr_collision=collision)
+    return landing.landing_step(REFUSAL, facts, spent or _spent(), (), **keywords)
+
+
+def test_the_step_is_a_model_step_that_a_checks_child_does_not_admit():
+    assert "apply_adr_decision" in get_args(landing.LandingStepKind)
+    assert landing.run_kind_of("apply_adr_decision", REFUSAL) == "land_model"
+    assert not landing.run_kind_admits("land_checks", "apply_adr_decision", REFUSAL)
+    assert landing.run_kind_admits("land_model", "apply_adr_decision", REFUSAL)
+
+
+def test_without_a_decision_an_ambiguous_collision_is_asked_once_then_none():
+    assert landing.adr_decision_due([_asked_resolved()], H1, AMBIGUOUS, _spent()) is False
+    assert _adr_step(adr_decision_due=False).kind == "escalate_adr"
+    assert _adr_step(adr_decision_due=False, adr_escalated=True).kind == "none"
+
+
+def test_a_released_escalation_gives_the_apply_step_never_a_pass_or_a_restart():
+    step = _adr_step(adr_decision_due=True, adr_escalated=True)
+    assert step == landing.LandingStep("apply_adr_decision", REFUSAL)
+    spent = _spent(passes=landing.LANDING_PASSES_MAX, syncs=landing.LANDING_SYNCS_MAX)
+    assert _adr_step(spent=spent, adr_decision_due=True).kind == "apply_adr_decision"
+
+
+def test_a_clean_renaming_under_its_cap_is_still_a_renumber_before_a_decision():
+    renaming = adr_numbers.Renaming(MOVES, {})
+    assert _adr_step(renaming, adr_decision_due=True).kind == "renumber"
+    capped = _spent(renumbers=landing.LANDING_RENUMBERS_MAX)
+    assert _adr_step(renaming, capped, adr_decision_due=True).kind == "apply_adr_decision"
+
+
+def test_a_legacy_released_entry_without_moves_is_a_decision_due():
+    legacy = _released()  # a GH-412 entry: no moves, no outcome, no decision_at
+    assert "moves" not in legacy
+    assert landing.adr_decision_due([legacy], H1, AMBIGUOUS, _spent()) is True
+
+
+@pytest.mark.parametrize(
+    ("entries", "collision", "spent"),
+    [
+        ([_asked_resolved()], AMBIGUOUS, _spent()),
+        ([_released()], NO_MOVES, _spent()),
+        ([_released()], adr_numbers.Renaming(MOVES, {}), _spent()),
+        ([_released()], None, _spent()),
+        ([_released(), _applied()], AMBIGUOUS, _spent()),
+        ([_released(head=H2)], AMBIGUOUS, _spent()),
+        ([_released()], AMBIGUOUS, _spent(adr_decisions=landing.LANDING_ADR_DECISIONS_MAX)),
+    ],
+    ids=[
+        "not-released",
+        "no-moves",
+        "clean-renaming",
+        "no-collision",
+        "already-applied",
+        "other-head",
+        "cap-spent",
+    ],
+)
+def test_no_decision_is_due_without_a_release_moves_or_a_free_slot(entries, collision, spent):
+    assert landing.adr_decision_due(entries, H1, collision, spent) is False
+
+
+def test_adr_asked_is_true_only_for_a_resolved_question_after_the_last_decision():
+    assert not landing.adr_asked([], H1, REFUSAL)
+    assert not landing.adr_asked([_asked()], H1, REFUSAL)
+    assert landing.adr_asked([_asked_resolved()], H1, REFUSAL)
+    assert not landing.adr_asked([_asked_resolved()], H2, REFUSAL)
+    assert not landing.adr_asked([_asked_resolved()], H1, "merge_conflict")
+    after = [_released(), _applied("role_failed")]
+    assert not landing.adr_asked(after, H1, REFUSAL)
+    assert not landing.adr_asked([*after, _asked()], H1, REFUSAL)
+    assert landing.adr_asked([*after, _asked_resolved(at=T3)], H1, REFUSAL)
+
+
+def test_a_decision_on_another_head_does_not_unask_this_one():
+    assert landing.adr_asked([_applied(head=H2), _asked_resolved()], H1, REFUSAL)
+
+
+def test_a_failed_decision_then_its_new_question_resolved_is_none_again():
+    entries = [_released(), _applied("out_of_bounds"), _asked_resolved()]
+    asked = landing.adr_asked(entries, H1, REFUSAL)
+    assert _adr_step(adr_decision_due=False, adr_escalated=asked).kind == "none"
+    unresolved = [*entries[:-1], _asked()]
+    asked = landing.adr_asked(unresolved, H1, REFUSAL)
+    assert _adr_step(adr_decision_due=False, adr_escalated=asked).kind == "escalate_adr"
+
+
+@pytest.mark.parametrize(
+    "outcome", ["out_of_bounds", "role_failed", "checks_red", "still_colliding", "stale_moves"]
+)
+def test_each_failed_outcome_followed_by_its_question_asks_again(outcome):
+    entries = [_released(), _applied(outcome)]
+    due = landing.adr_decision_due(entries, H1, AMBIGUOUS, _spent())
+    asked = landing.adr_asked(entries, H1, REFUSAL)
+    assert due is False and asked is False
+    assert _adr_step(adr_decision_due=due, adr_escalated=asked).kind == "escalate_adr"
+
+
+def test_an_applied_decision_with_a_still_ambiguous_new_head_asks_then_waits():
+    entries = [_released(), _applied(head_after=H2)]
+    asked = landing.adr_asked(entries, H2, REFUSAL)
+    assert _adr_step(adr_decision_due=False, adr_escalated=asked).kind == "escalate_adr"
+    entries.append(_asked_resolved(H2))
+    asked = landing.adr_asked(entries, H2, REFUSAL)
+    assert _adr_step(adr_decision_due=False, adr_escalated=asked).kind == "none"
+
+
+def test_the_escalate_adr_case_of_already_dispatched_reads_adr_asked():
+    assert not landing.already_dispatched([_asked()], H1, "escalate_adr", None)
+    assert landing.already_dispatched([_asked_resolved()], H1, "escalate_adr", None)
+    after = [_released(), _applied("checks_red")]
+    assert not landing.already_dispatched(after, H1, "escalate_adr", None)
+    assert landing.already_dispatched([*after, _asked_resolved()], H1, "escalate_adr", None)
+
+
+def test_the_apply_step_is_taken_only_by_the_same_head_and_decision():
+    entries = [_released(), _applied(decision_at=T2)]
+    taken = landing.already_dispatched
+    assert taken(entries, H1, "apply_adr_decision", None, decision_at=T2)
+    assert not taken(entries, H1, "apply_adr_decision", None, decision_at=T3)
+    assert not taken(entries, H2, "apply_adr_decision", None, decision_at=T2)
+    assert not taken(entries, H1, "apply_adr_decision", None)
+    legacy = [{"head": H1, "step": "apply_adr_decision"}]
+    assert not taken(legacy, H1, "apply_adr_decision", None, decision_at=T2)
+
+
+def test_a_new_decision_on_the_same_head_is_due_again_after_a_stale_one():
+    asked_again = _released(at="2026-11-07T05:00:00+00:00")
+    entries = [_released(at=T2), _applied("stale_moves", decision_at=T2), asked_again]
+    assert landing.adr_decision_due(entries, H1, AMBIGUOUS, _spent()) is True
+
+
+def _escalated_doc(*entries, escalated="adr_number_taken") -> dict:
+    return {"escalated": escalated, "status": "waiting_on_human", "landing": list(entries)}
+
+
+def test_the_escalation_entry_is_the_last_live_resolved_escalate_adr_of_an_escalated_task():
+    entry = _asked_resolved()
+    assert landing.adr_escalation_entry(_escalated_doc(entry)) == entry
+    assert landing.adr_escalation_entry(_escalated_doc(entry, escalated=None)) is None
+    assert landing.adr_escalation_entry(_escalated_doc(_asked())) is None
+    assert landing.adr_escalation_entry(_escalated_doc(entry, _applied())) is None
+    assert landing.adr_escalation_entry(_escalated_doc()) is None
+    legacy = {"head": H1, "step": "escalate_adr", "resolved_at": T1}
+    assert landing.adr_escalation_entry(_escalated_doc(legacy)) == legacy
+
+
+def test_the_release_baseline_is_the_resolution_of_the_question_else_the_last_diagnose():
+    from datetime import datetime
+
+    asked = _escalated_doc(_asked_resolved())
+    assert landing.release_baseline(asked) == datetime.fromisoformat(T1)
+    diagnosed = _escalated_doc({"head": H1, "step": "diagnose", "at": T0}, escalated="failure")
+    assert landing.release_baseline(diagnosed) == datetime.fromisoformat(T0)
+    assert landing.release_baseline(_escalated_doc(escalated="failure")) is None
+
+
+def test_released_stamps_the_escalate_adr_entry_and_leaves_an_older_diagnose_alone():
+    diagnose = {"head": H1, "step": "diagnose", "at": T0, "delivered": True}
+    raw = _escalated_doc(diagnose, _asked_resolved())
+    patch = landing.released(raw, "renumber to the next free number", T2)
+    assert patch["landing"][0] == diagnose
+    assert patch["landing"][1]["released_at"] == T2
+    assert patch["escalated"] is None
+    assert "renumber to the next free number" in patch["sections"]["Human"]
+
+
+def test_released_keeps_the_apply_keys_of_every_other_entry():
+    applied = _applied(head_after=H2)
+    raw = _escalated_doc(_released(at=T1), applied, _asked_resolved(H2))
+    written = landing.released(raw, "ok", T3)["landing"]
+    assert written[1] == applied
+    assert written[2]["released_at"] == T3
+
+
+def test_a_released_escalation_that_is_not_the_adr_one_still_stamps_the_diagnose():
+    raw = _escalated_doc({"head": H1, "step": "diagnose", "at": T0}, escalated="failure")
+    assert landing.released(raw, "retry", T2)["landing"][0]["released_at"] == T2
