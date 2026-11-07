@@ -649,3 +649,14 @@ def test_a_document_without_the_split_keys_reads_the_same_as_one_with_no_events(
         b.unattributed_s,
     )
     assert a.unattributed_s == pytest.approx(10800)
+
+
+def test_the_ratio_reads_the_declared_figure_when_the_system_raised_the_estimate():
+    raised = _closed(
+        cost_usd=20.0,
+        estimate={"cost_usd": 40.0, "declared_usd": 10.0, "files": 5},
+        actual_files=5,
+    )
+    assert raised.estimate_cost_usd == 10.0
+    assert scorecard.build([raised]).cost_over_estimate.value == 2.0
+    assert _closed(estimate=_plan(40.0, 5)).estimate_cost_usd == 40.0

@@ -24,6 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from agentic.core.process.domain import cost_history
 from agentic.core.process.domain.task import RoleRun, TaskState
 
 from . import cycle, metrics, planning
@@ -156,7 +157,7 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         system_commit=document.get("system_commit"),
         system_baseline=document.get("system_baseline"),
         runs=document.get("runs", []),
-        estimate_cost_usd=float(plan["cost_usd"]) if plan else None,
+        estimate_cost_usd=cost_history.declared_estimate(plan) if plan else None,
         estimate_files=int(plan["files"]) if plan else None,
         actual_files=int(actual_files) if actual_files is not None else None,
         arm=metrics.arm_of(document),

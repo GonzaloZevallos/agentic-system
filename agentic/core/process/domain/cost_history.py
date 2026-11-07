@@ -10,7 +10,7 @@ import math
 import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 
@@ -35,6 +35,25 @@ class Bucket:
     n: int
     median: float
     p90: float
+
+
+@dataclass(frozen=True)
+class Floor:
+    """The least a plan's estimate may be: `usd`, and which floor it is (`spent`: what the
+    task already spent; `median`: half the median of closed tasks with as many subtasks)."""
+
+    usd: float
+    cause: Literal["spent", "median"]
+
+
+@dataclass(frozen=True)
+class Raise:
+    """An estimate the system lifted: the Tech Lead's own figure, the one the task runs
+    under, and the floor that forced it."""
+
+    declared_usd: float
+    cost_usd: float
+    cause: Literal["spent", "median"]
 
 
 @dataclass(frozen=True)
@@ -80,7 +99,7 @@ def build(documents: Sequence[Mapping[str, Any]]) -> History:
             files = document.get("actual_files")
             pairs.append(
                 Pair(
-                    float(estimate["cost_usd"]),
+                    declared_estimate(estimate),
                     cost,
                     int(estimate["files"]),
                     None if files is None else int(files),
@@ -104,6 +123,41 @@ def bucket_median(history: History, n_subtasks: int) -> float | None:
     """The median cost of the bucket, under the same `MIN_BUCKET` rule as the reference."""
     bucket = history.buckets.get(_bucket_of(n_subtasks))
     return bucket.median if bucket and bucket.n >= MIN_BUCKET else None
+
+
+def estimate_floor(history: History, spent_usd: float, n_subtasks: int | None) -> Floor | None:
+    """The larger of the spent floor and half the bucket median, with the one that sets it
+    (`spent` on a tie); `None` when no floor binds. `n_subtasks=None` is a tracker-only plan:
+    the spent floor only."""
+    median = None if n_subtasks is None else bucket_median(history, n_subtasks)
+    half = 0.0 if median is None else 0.5 * median
+    if max(spent_usd, half) <= 0:
+        return None
+    return Floor(spent_usd, "spent") if spent_usd >= half else Floor(half, "median")
+
+
+def raised_estimate(
+    declared_usd: float, spent_usd: float, history: History, n_subtasks: int | None
+) -> Raise | None:
+    """The estimate a plan runs under when its declared figure is below a floor, `None` when
+    it clears both. Below what was spent the figure cannot be a total (it is the remaining
+    work priced alone), so it becomes `spent + declared`, and never less than the bucket
+    median; below half the median it becomes the median. Raising to a prediction and not to
+    the bare floor keeps the task from hitting the estimate cap (twice the estimate) at once."""
+    floor = estimate_floor(history, spent_usd, n_subtasks)
+    if floor is None or declared_usd >= floor.usd:
+        return None
+    median = None if n_subtasks is None else bucket_median(history, n_subtasks)
+    if declared_usd < spent_usd:
+        return Raise(declared_usd, max(spent_usd + declared_usd, median or 0.0), "spent")
+    return Raise(declared_usd, median or floor.usd, "median")
+
+
+def declared_estimate(estimate: Mapping[str, Any]) -> float:
+    """The figure the Tech Lead wrote, for every calibration reader: `declared_usd` when the
+    system raised the estimate, else `cost_usd`."""
+    declared = estimate.get("declared_usd")
+    return float(estimate["cost_usd"] if declared is None else declared)
 
 
 def render(history: History) -> str:

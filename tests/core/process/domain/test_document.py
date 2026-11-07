@@ -1679,3 +1679,10 @@ def test_instants_and_a_ci_entry_without_jobs_round_trip_unchanged():
     assert parsed["pause_log"] == state["pause_log"]
     assert parsed["failures"] == state["failures"]
     assert document.render(parsed) == text
+
+
+def test_declared_usd_round_trips_and_is_absent_when_the_estimate_was_not_raised():
+    raised = {"cost_usd": 16.0, "declared_usd": 6.0, "files": 3}
+    assert document.parse(document.render(golden_state(estimate=raised)))["estimate"] == raised
+    plain = document.parse(document.render(golden_state(estimate={"cost_usd": 6.0, "files": 3})))
+    assert "declared_usd" not in plain["estimate"]
