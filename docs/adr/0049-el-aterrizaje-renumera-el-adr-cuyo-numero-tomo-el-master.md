@@ -136,3 +136,38 @@ ahora va a `escalate_adr`.
   ramas llenas de tablas y rangos ahora preguntan en vez de reiniciar; ampliar la gramática a
   celdas de tabla es un seguimiento. (4) La guarda de `escalate_ledger` cuenta entradas sin
   mirar `resolved_at`; este cambio no lo corrige y queda como seguimiento.
+
+## Adenda (GH-544)
+
+Enmienda «una respuesta sin cabeza nueva no vuelve a preguntar»: una decisión del dueño en el
+issue sobre una pregunta `escalate_adr` ahora se aplica (apostrophe GH-407, PR #618).
+
+- **Decisión → `apply_adr_decision`.** Una colisión `Ambiguous` con `moves`, cuya pregunta
+  `escalate_adr` el dueño liberó (`released_at` sobre esa entrada), da el paso nuevo
+  `apply_adr_decision` (`land_model`). Una colisión `duplicate_own_number` (sin `moves`) sigue
+  siendo a mano. Entradas de GH-412 sin `moves` son elegibles.
+- **La regla elige los números; ningún Developer elige uno.** El ejecutor recalcula la colisión
+  contra el sha del master de la ronda y `adr_numbers.renumber_decided` aplica todo lo que la
+  gramática decide y lista cada línea propia que no (`unclassified_token`, `range`,
+  `cites_master_after_sync`): los puntos (_spots_).
+- **El Developer edita sólo los puntos.** El sistema verifica los límites y que no quede
+  colisión antes de empujar con lease; la cabeza nueva vuelve a la tabla.
+- **Tope.** `LANDING_ADR_DECISIONS_MAX = 2`, contado sobre todas las entradas con un `outcome` cerrado
+  (`applied | out_of_bounds | role_failed | checks_red | still_colliding`); `stale_moves` no usa
+  cupo y es ilimitado a propósito, y una restauración no devuelve cupo. El paso no gasta
+  `LANDING_PASSES_MAX` ni llega a `exhausted()`. Todo `outcome` que no sea `applied` vuelve a
+  preguntar con `escalate_adr`. `adr_asked` es el único lector de «pregunta pendiente»: cuenta
+  sólo las `escalate_adr` resueltas después del último `apply_adr_decision` de la cabeza.
+- **La primera revisión tras una decisión aplicada se exime del presupuesto una vez**, incluso
+  con un `sync_master` en medio (`adr_review_owed`: la última decisión `applied` no tiene
+  `re_review` posterior, en ninguna cabeza). Cuenta como pase; las siguientes pueden terminar
+  en `exhausted()`.
+- **§7.** Valor cerrado nuevo `apply_adr_decision` (`LandingStepKind`, que ya lleva el atributo
+  `agentic.landing.*`) y el `outcome` cerrado. Claves opcionales nuevas de la entrada, leídas con
+  `.get`: `moves`, `decision_at`, `outcome`, `head_after`. Ninguna métrica, etiqueta ni clase de
+  escalado nuevo: volver a preguntar usa `questions`.
+- **§8.** Un comentario del dueño tras un `Escalated:` deja que un Developer edite como mucho
+  los puntos (líneas propias de la rama que citan un número movido), verificado antes de un push
+  con lease, a lo sumo dos veces por tarea.
+- **Riesgos conocidos.** La corrección de la referencia reescrita la juzga sólo la
+  `re_review` pendiente; `stale_moves` puede repetirse mientras el master siga moviéndose.
