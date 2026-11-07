@@ -1322,3 +1322,22 @@ candidates:
   - finding
   - return
   added_at: '2026-11-07T03:28:35.300+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan says one function or policy owns a decision, pass it the real inputs; never hard-code a literal argument or repeat part of the condition inline. Grep the call sites before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-531
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T15:35:08.338+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters behaviour that the architecture docs describe, update those docs in the same change. Grep docs/architecture for the behaviour you changed before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-531
+  sources:
+  - finding
+  added_at: '2026-11-07T15:35:08.338+00:00'

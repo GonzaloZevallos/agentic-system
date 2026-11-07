@@ -687,3 +687,7 @@ tasks:
       - GH-521
   GH-522@review:
     cost_usd: 0.1122
+  GH-529@review:
+    cost_usd: 0.0654
+  GH-531@review:
+    cost_usd: 0.07
