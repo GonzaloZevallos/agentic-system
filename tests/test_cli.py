@@ -5740,6 +5740,7 @@ COMMAND_PATHS = [
     ("eval", "score"),
     ("eval", "compare"),
     ("eval", "findings"),
+    ("eval", "shadow"),
     ("stack",),
     ("stack", "review"),
     ("scores",),
