@@ -1,7 +1,7 @@
 """The plan check refuses a `ci_required` name the base's workflows prove no check run
-carries (GH-485): the apostrophe GH-543 plan asked for the matrix jobs `pytest` and `e2e`
-and the full tier waited out its timeout on a green CI. The refusal names the job and the
-names to use instead; it never drops the name, and it refuses only what it can prove."""
+carries (GH-485): a job id whose literal `name:` is another, or a name no job has. A matrix
+job's id is a name (GH-535): it stands for all its expansions. The refusal names the job and
+the name to use instead; it never drops the name, and it refuses only what it can prove."""
 
 import pytest
 
@@ -58,20 +58,9 @@ def _check(text: str | None, stack_ci=()):
     return schemas.plan_check_for(history, 0.0, workflow=workflow, stack_ci=tuple(stack_ci))
 
 
-def test_a_matrix_job_id_is_refused_naming_the_job_and_the_names_to_use():
-    with pytest.raises(ValueError) as refusal:
-        _check(CI, stack_ci=("pytest-ok",))(_plan(["e2e"]))
-    text = str(refusal.value)
-    assert "`e2e`" in text and "matrix" in text and "e2e (<matrix values>)" in text
-    assert "`ci-ok`" in text and "`pytest-ok`" in text
-    assert "does not know whether any of them covers the criterion" in text
-
-
-def test_a_matrix_job_nobody_needs_says_there_is_no_candidate_and_to_add_an_aggregator():
-    with pytest.raises(ValueError) as refusal:
-        _check(NO_AGGREGATOR)(_plan(["e2e"]))
-    text = str(refusal.value)
-    assert "No job `needs: e2e`" in text and "aggregator" in text and "required_paths" in text
+def test_a_matrix_job_id_passes_and_so_does_its_aggregator():
+    _check(CI)(_plan(["e2e", "ci-ok"]))
+    _check(NO_AGGREGATOR)(_plan(["e2e"]))
 
 
 def test_a_job_required_by_its_id_when_a_name_differs_points_to_the_name():
@@ -81,9 +70,10 @@ def test_a_job_required_by_its_id_when_a_name_differs_points_to_the_name():
 
 def test_every_wrong_name_is_listed_in_one_refusal():
     with pytest.raises(ValueError) as refusal:
-        _check(CI)(_plan(["checks", "e2e", "lint"]))
+        _check(CI)(_plan(["checks", "e2e", "lint", "nope"]))
     text = str(refusal.value)
-    assert "`e2e`" in text and "`lint`" in text and "ci_required `checks`" not in text
+    assert "`nope`" in text and "`lint`" in text
+    assert "ci_required `checks`" not in text and "ci_required `e2e`" not in text
 
 
 def test_a_name_no_job_of_the_workflows_can_carry_is_refused_with_the_names_that_can():
@@ -101,18 +91,18 @@ def test_a_stack_ci_name_passes_even_when_no_workflow_job_shows_it():
     _check(CI, stack_ci=("merge-gate",))(_plan(["merge-gate"]))
 
 
-@pytest.mark.parametrize("required", [["e2e"], ["ci-ok-new"], ["e2e", "ci-new"]])
+@pytest.mark.parametrize("required", [["lint"], ["ci-ok-new"], ["lint", "ci-new"]])
 def test_a_plan_that_declares_the_workflow_may_require_the_job_it_changes(required):
     _check(CI)(_plan(required, paths=[WORKFLOW]))
 
 
 def test_a_subtask_that_names_the_workflow_file_counts_as_touching_it():
-    _check(CI)(_plan(["e2e"], brief=f"Add the aggregator job to {WORKFLOW}."))
+    _check(CI)(_plan(["lint"], brief=f"Add the aggregator job to {WORKFLOW}."))
 
 
-def test_a_workflow_other_than_the_one_with_the_job_does_not_excuse_a_matrix_id():
-    with pytest.raises(ValueError, match="matrix"):
-        _check(CI)(_plan(["e2e"], paths=[".github/workflows/release.yml"]))
+def test_a_workflow_other_than_the_one_with_the_job_does_not_excuse_a_named_id():
+    with pytest.raises(ValueError, match="named `Lint`"):
+        _check(CI)(_plan(["lint"], paths=[".github/workflows/release.yml"]))
 
 
 def test_a_reusable_workflow_or_a_name_expression_lets_an_unknown_name_pass():
@@ -123,8 +113,8 @@ def test_a_reusable_workflow_or_a_name_expression_lets_an_unknown_name_pass():
 
 
 def test_unreadable_yaml_or_no_workflow_read_passes():
-    _check("jobs: [unclosed")(_plan(["e2e"]))
-    _check(None)(_plan(["e2e"]))
+    _check("jobs: [unclosed")(_plan(["lint"]))
+    _check(None)(_plan(["lint"]))
 
 
 def test_a_plan_with_no_ci_required_is_untouched_by_the_names():

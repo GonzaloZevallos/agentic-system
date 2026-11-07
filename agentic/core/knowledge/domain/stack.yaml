@@ -115,7 +115,8 @@ checks:
 # (ADR-0045). With it, `agentic merge` decides from those checks on the reviewed head and
 # reruns nothing locally unless master moved since the run. A name is matched whole, never
 # by prefix: write it as GitHub reports it. Never list a conditional job, which a skipped
-# run reads as red; list a matrix job by each of its expanded names, `name (value)`.
+# run reads as red; a matrix job may be listed by its id (all its expansions, green only
+# when every one is) or by an expanded name, `name (value)`.
 #
 # ci: [check]
 #
