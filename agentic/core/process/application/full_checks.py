@@ -24,8 +24,12 @@ and the section say so, unless the product declares `ci_dispatch`: then the base
 is dispatched with the head sha as its input, its run is found by event, workflow and the sha in
 its title, and its verdict is recorded with `ran_on: ci_dispatch` and the `run_id`. A refused
 dispatch escalates at once with no wait and no retry; no run after the grace period is dispatched
-once more. The head is published to `rules.ci_dispatch_ref` before every dispatch and the ref is
-never deleted here (GH-504); a dispatched job that failed at `Set up job` or the checkout is
+once more. A trusted head whose pushes got no run even after the republish (an old branch whose own
+workflow lacks the CI ref trigger) is judged the same way when the product's fetched upstream
+declares `ci_dispatch` (GH-531, `_fallback_dispatch`): the record adds `dispatch_cause: no_run` and
+`stack_at`, the upstream revision whose `ci:` names judge it. The head is published to
+`rules.ci_dispatch_ref` before every dispatch and the ref is never deleted here (GH-504); a
+dispatched job that failed at `Set up job` or the checkout is
 `checkout_failed`, CI not usable, never a red check.
 
 In that run a check that timed out and that the stack maps to a CI job (`ci_covers`, GH-453)
@@ -34,6 +38,7 @@ failure and no pass, and the merge asks that job for the verdict."""
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping
@@ -114,6 +119,38 @@ _DISPATCH_DETAIL: dict[CiCause, str] = {
     "{sha} had been published to {dispatch_ref}",
 }
 
+_LOG = logging.getLogger(__name__)
+
+# Why the dispatch of the no-run fallback (GH-531) was not even tried: a closed value chosen by
+# the node, never text read back from git. `undeclared` is the product that declares no
+# `ci_dispatch` (or no `ci`) at its upstream, whose escalation reads exactly as it always did.
+NotTriedWhy = Literal["no_upstream", "stack_unreadable", "undeclared"]
+_NOT_TRIED_DETAIL: dict[NotTriedWhy, str] = {
+    "no_upstream": "; no dispatch was tried: the product's upstream could not be read",
+    "stack_unreadable": "; no dispatch was tried: the stack at the upstream did not load",
+    "undeclared": "",
+}
+_UNFETCHED_DETAIL = " (the upstream was not fetched)"
+
+
+@dataclass(frozen=True)
+class _Fallback:
+    """The declaration that makes a `no_run` push dispatchable (GH-531), read at one revision of
+    the upstream: the revision, the `ci_dispatch` and the gate names of its `ci:`."""
+
+    sha: str
+    dispatch: CiDispatch
+    gate_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _NotTried:
+    """The no-run fallback could not be tried: `why`, and for `undeclared` whether the upstream
+    was not fetched (it is then the last known one, which only the escalation says)."""
+
+    why: NotTriedWhy
+    unfetched: bool = False
+
 
 @dataclass(frozen=True)
 class _NoVerdict:
@@ -138,6 +175,9 @@ class _NoVerdict:
     stage: FailedStage | None = None
     # The instants of the wait that gave no verdict (GH-467); `None` when nothing was pushed.
     timing: CiTiming | None = None
+    # A push that got no run and whose dispatch fallback was not tried (GH-531): why, for the
+    # closed suffix of the escalation. `None` for every other way of giving no verdict.
+    not_tried: _NotTried | None = None
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -234,7 +274,11 @@ async def full_checks(
             sha=outcome.head or head,
         )
         patch = rules.ci_unavailable(
-            outcome.cause, head, detail + _git_said(outcome), at=ports.now(), ci=outcome.timing
+            outcome.cause,
+            head,
+            detail + _not_tried_text(outcome) + _git_said(outcome),
+            at=ports.now(),
+            ci=outcome.timing,
         )
         if outcome.git_said and outcome.push_attempts and outcome.push_kind:
             # Git's words reach the section only through `push_failure_markdown`, which
@@ -254,6 +298,15 @@ async def full_checks(
             )
         return finish(state, patch, ports)
     return finish(state, outcome, ports)
+
+
+def _not_tried_text(outcome: _NoVerdict) -> str:
+    """The closed suffix of a `no_run` whose dispatch fallback was not tried (GH-531): empty
+    for a product that declares no `ci_dispatch` at its upstream, so its text is today's."""
+    if outcome.not_tried is None:
+        return ""
+    unfetched = _UNFETCHED_DETAIL if outcome.not_tried.unfetched else ""
+    return _NOT_TRIED_DETAIL[outcome.not_tried.why] + unfetched
 
 
 def _git_said(outcome: _NoVerdict) -> str:
@@ -483,7 +536,31 @@ async def _ci_full_checks(
             pushed_at = ports.now()
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
+    not_tried: _NotTried | None = None
     if verdict.state == "unreachable":
+        # A push that got no run is a candidate for the dispatch of the upstream's workflow
+        # (GH-531): only then is the upstream read. `ci.dispatch_after_no_run` decides, with
+        # the availability that declaration gave.
+        fallback: _Fallback | _NotTried | None = None
+        if ci.push_got_no_run(verdict):
+            fallback = await anyio.to_thread.run_sync(_fallback_dispatch, ports, state)
+        if ci.dispatch_after_no_run(verdict, isinstance(fallback, _Fallback)):
+            assert isinstance(fallback, _Fallback)  # available only when the declaration was read
+            return await _dispatched_after_no_run(
+                state,
+                cfg,
+                ports,
+                task,
+                head,
+                fallback,
+                pushes,
+                node_started_at,
+                waited,
+                sleep,
+                clock,
+                push_sleep,
+            )
+        not_tried = fallback if isinstance(fallback, _NotTried) else None
         reported = ci.reported_names(read) if isinstance(read, CiReport) else ()
         return _NoVerdict(
             verdict.cause or "no_run",
@@ -491,6 +568,7 @@ async def _ci_full_checks(
             unknown=verdict.unknown,
             reported=reported,
             timing=_no_verdict_timing(pushed_at, node_started_at),
+            not_tried=not_tried,
         )
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
     if verdict.state == "green":
@@ -510,6 +588,72 @@ async def _ci_full_checks(
     if flakes:
         patch["flakes"] = flakes
     return patch
+
+
+def _fallback_dispatch(ports: Ports, state: TaskState) -> _Fallback | _NotTried:
+    """What a push that got no run may be dispatched with (GH-531), read at the fetched upstream
+    of the product checkout: the `ci_dispatch` and the `ci:` names at that one revision. This is
+    the only place the no-run fallback reads the declaration, and the exception to the ADR-0016
+    addendum (the stack is otherwise read at the task base): the workflow a dispatch runs is
+    the default branch's own, so its declaration and the job names it reports come from the
+    commit that workflow is. It assumes the upstream of the product checkout is the default
+    branch, the one `dispatch_ci(workflow, "", ...)` runs. `upstream()` fetches and never
+    raises; a stack that does not load there is a `_NotTried`, never an exception."""
+    upstream = ports.workspace.upstream()
+    if upstream.sha is None:
+        return _NotTried("no_upstream")
+    try:
+        names = ports.stack.ci(upstream.sha)
+        dispatch = ports.stack.ci_dispatch(upstream.sha)
+    except ValueError:
+        _LOG.warning("full_checks: the stack at the upstream %s did not load", upstream.sha)
+        return _NotTried("stack_unreadable")
+    if dispatch is None or not names:
+        return _NotTried("undeclared", unfetched=upstream.note is not None)
+    gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
+    return _Fallback(upstream.sha, dispatch, gate_names)
+
+
+async def _dispatched_after_no_run(
+    state: TaskState,
+    cfg: Configuration,
+    ports: Ports,
+    task: Checkout,
+    head: str,
+    fallback: _Fallback,
+    pushes: list[Pushed],
+    node_started_at: str,
+    waited: float,
+    sleep: Sleep,
+    clock: Clock,
+    push_sleep: PushSleep,
+) -> dict[str, Any] | _NoVerdict:
+    """The head whose pushes got no run, judged by the upstream's dispatched workflow against
+    the names read at that same revision (GH-531). The wait is the whole node's (`node_started_at`
+    and `waited` carry the pushes'), the push rows stay on the record, and the record says why it
+    was dispatched and at which revision the declaration was read. Neither decides anything:
+    `rules.ci_untrusted` still comes from the paths."""
+    outcome = await _dispatched_full_checks(
+        state,
+        cfg,
+        ports,
+        task,
+        head,
+        fallback.gate_names,
+        fallback.dispatch,
+        sleep,
+        clock,
+        push_sleep,
+        node_started_at=node_started_at,
+        waited=waited,
+    )
+    if isinstance(outcome, _NoVerdict):
+        return outcome
+    _with_pushes(outcome, pushes)
+    record = outcome["full_checks"]
+    record["dispatch_cause"] = "no_run"
+    record["stack_at"] = fallback.sha
+    return outcome
 
 
 async def _speculated_wait(
@@ -609,6 +753,9 @@ async def _dispatched_full_checks(
     sleep: Sleep,
     clock: Clock,
     push_sleep: PushSleep,
+    *,
+    node_started_at: str | None = None,
+    waited: float = 0.0,
 ) -> dict[str, Any] | _NoVerdict:
     """An untrusted head judged by the base branch's own workflow (GH-462): dispatched on the
     repository's default branch, the one the pull request targets, with the head sha as its
@@ -618,9 +765,11 @@ async def _dispatched_full_checks(
     Before every dispatch (GH-504) the head is published to `rules.ci_dispatch_ref`, the ref
     GitHub serves the checkout from, retried like every push of the CI path (GH-487); a push that
     still fails ends the call with no dispatch. That ref is never deleted here: the sweep is the
-    only thing that does."""
-    waited = 0.0
-    node_started_at = ports.now()
+    only thing that does.
+
+    `node_started_at` and `waited` are those of a node that already waited on the push of the
+    task's own CI ref (GH-531), so the timing and `waited_s` cover the whole wait."""
+    node_started_at = node_started_at or ports.now()
     pushed_at: str | None = None
     for attempt in range(1, ci.CI_DISPATCH_ATTEMPTS + 1):
         # A loose lower bound for the listing only: the run is found by its event, workflow

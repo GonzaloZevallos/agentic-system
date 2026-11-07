@@ -145,9 +145,10 @@ class CiCover:
 
 @dataclass(frozen=True)
 class CiDispatch:
-    """The workflow of the task's base branch the system dispatches to judge a head that touches
-    `.github/`, and the `workflow_dispatch` input that carries the head sha (`ci_dispatch`,
-    GH-462). Validated when the stack is parsed."""
+    """The workflow of the default branch the system dispatches to judge a head its own workflow
+    cannot judge (it touches `.github/`, GH-462, or its pushes got no run, GH-531), and the
+    `workflow_dispatch` input that carries the head sha (`ci_dispatch`). Validated when the
+    stack is parsed."""
 
     workflow: str
     sha_input: str

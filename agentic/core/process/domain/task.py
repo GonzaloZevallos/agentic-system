@@ -1291,6 +1291,12 @@ class FullChecksRecord(TypedDict):
     # The id of the dispatched run that gave the verdict (GH-462); written only with
     # `ran_on: "ci_dispatch"`.
     run_id: NotRequired[int]
+    # Why a trusted head was dispatched (GH-531): its pushes got no run, so the upstream's
+    # workflow judged it; and the upstream revision whose `ci_dispatch` and `ci:` names that
+    # verdict was read against. Only the no-run fallback writes them, with `ran_on:
+    # "ci_dispatch"`, and nothing decides on them (`rules.ci_untrusted` stays from the paths).
+    dispatch_cause: NotRequired[Literal["no_run"]]
+    stack_at: NotRequired[str]
     # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
     ci_fallback: NotRequired[FallbackCause]
     # The checks deferred to CI (GH-453), a declared name each; written only when there is one,

@@ -9,8 +9,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agentic.core.process.application.ports import GitError
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
+from agentic.core.process.application.ports import GitError, Upstream
+from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.presubmit import CiDispatch
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
@@ -200,6 +201,39 @@ async def test_a_stale_push_with_no_run_republishes_without_sleeping():
     assert clock.slept == []
     assert patch["full_checks"]["passed"] is True
     assert "speculative" not in patch["full_checks"]
+
+
+async def test_a_speculated_head_that_gets_no_run_after_the_republish_is_dispatched():
+    # GH-531: the review's push and the republish both started nothing (the branch's own
+    # workflow does not trigger on the CI ref); the upstream's workflow judges the head.
+    UPSTREAM = "d" * 40
+    ports = ports_of(report(sha=OTHER))
+    ports.workspace.upstream_answer = Upstream("origin/master", UPSTREAM, None)
+    ports.stack.declared_ci_dispatch_at[UPSTREAM] = CiDispatch(workflow="ci.yml", sha_input="sha")
+    ports.tracker.dispatched = [
+        (
+            DispatchedRun(
+                run_id=99,
+                display_title=f"CI {HEAD}",
+                link=f"{LINK}/99",
+                jobs=(job("check"),),
+                event="workflow_dispatch",
+                status="completed",
+                created_at="2026-11-04T10:01:00Z",
+            ),
+        )
+    ]
+    patch = await run(state_of(), ports, after_s=40.0)
+    record = patch["full_checks"]
+    assert record["passed"] is True and record["ran_on"] == "ci_dispatch"
+    assert record["dispatch_cause"] == "no_run" and record["stack_at"] == UPSTREAM
+    assert "speculative" not in record
+    assert ports.tracker.dispatch_calls == [("ci.yml", "", {"sha": HEAD})]
+    assert ports.workspace.ci_ref_calls == [
+        ("delete_ci", REF),
+        ("publish", REF),
+        ("publish_dispatch", "GH-1"),
+    ]
 
 
 async def test_a_fresh_push_with_no_run_yet_is_waited_for():

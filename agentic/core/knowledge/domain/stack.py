@@ -77,7 +77,9 @@ capturing group. Absent it reads as an empty mapping: nothing is deferred.
 or `.yaml`, no `/`) of a workflow under `.github/workflows/` on the task's base branch, and
 `sha_input`, the name of the `workflow_dispatch` input that carries the head sha. It requires `ci`.
 With it, a head that touches `.github/` -- which its own workflow cannot judge -- is judged by a
-dispatched run of the base's workflow at that sha; without it such a head runs the local suite. The
+dispatched run of the base's workflow at that sha, and so is a head whose pushes to the CI ref get
+no run (GH-531: an old branch whose own workflow lacks the trigger); without it the first runs the
+local suite and the second escalates. The
 accessor returns a `CiDispatch` or, absent, `None`. Both values are validated here, and the workflow
 name is later handed to `gh workflow run`, so it can never be a path.
 
@@ -625,9 +627,9 @@ def _ci_cover(name: str, body: object, source: object) -> CiCover:
 
 
 def ci_dispatch(data: object, source: object) -> CiDispatch | None:
-    """The workflow the system dispatches on the base branch to judge a head that touches
-    `.github/`, and the input that carries the head sha (GH-462). Absent is `None`: such a head
-    keeps today's local run.
+    """The workflow the system dispatches on the default branch to judge a head that touches
+    `.github/` (GH-462) or whose pushes get no run (GH-531), and the input that carries the head
+    sha. Absent is `None`: the first keeps today's local run, the second escalates.
 
     Present, a mapping of exactly `workflow` and `sha_input`, both non-empty strings, `workflow`
     a bare `.yml`/`.yaml` file name (no `/`), and the product declares `ci`: a dispatch with no

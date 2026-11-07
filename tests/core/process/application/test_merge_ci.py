@@ -549,3 +549,39 @@ def test_a_head_the_landing_moved_is_trusted_only_once_its_own_dispatched_record
             ci_fresh=True,
         )
     )
+
+
+# --- a trusted head dispatched because its pushes got no run (GH-531) -----------------------
+
+
+def _no_run_dispatched(*rows: str) -> dict:
+    """The `full_checks` record of the no-run fallback: the dispatch of the upstream's workflow
+    judged a trusted head, the rows are named by the `ci:` read at that same revision."""
+    return _dispatched(
+        declared={"name": "ci"},
+        results=[{"name": name, "passed": True} for name in rows],
+        dispatch_cause="no_run",
+        stack_at="d" * 40,
+    )
+
+
+def test_a_trusted_head_dispatched_after_no_run_merges_on_the_ci_without_a_fresh_run(tmp_path):
+    ports = _world(_report(_check(), base="c" * 40), full_checks=_no_run_dispatched("web"))
+    ports.workspace.merge_bases[(HEAD, MASTER)] = MASTER
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged"
+    assert ports.workspace.ci_ref_calls == [] and ports.tracker.dispatch_calls == []
+    assert ports.workspace.detached == [] and ports.commands.ran == []
+    assert _doc(ports).get("merge_ci") is None
+
+
+def test_a_record_whose_rows_are_not_the_gates_names_covers_nothing_and_asks_a_fresh_run(tmp_path):
+    ports = _world(_report(_check(), base="c" * 40), full_checks=_no_run_dispatched("pytest-fast"))
+    ports.workspace.merge_bases[(HEAD, MASTER)] = MASTER
+    ports.workspace.contains_answer = "no"
+
+    result, _ = _run(ports, tmp_path)
+
+    _asks_a_fresh_run_and_runs_nothing_here(ports, result)
