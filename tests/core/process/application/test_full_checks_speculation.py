@@ -340,3 +340,16 @@ async def test_a_red_verdict_carries_its_timing_and_the_timing_changes_nothing_e
     assert patch["full_checks"]["ci_timing"]["verdict"] == "red"
     assert patch["full_checks"]["passed"] is False
     assert patch["subtasks"][INTEGRATION]["status"] == "returned"
+
+
+async def test_a_cancelled_speculative_run_is_rescued_and_never_republishes():
+    # GH-539: another push would cancel the run again, so the cancelled run is rerun instead.
+    cancelled = CiReport(
+        HEAD, None, None, None, (job("check", "CANCELLED"),), True, frozenset({"7"}), frozenset()
+    )
+    ports = ports_of(cancelled)
+    patch = await run(state_of(), ports)
+    assert ports.workspace.ci_ref_calls == []
+    assert ports.tracker.run_reruns == ["7"]
+    assert patch["ci_cancel_rerun"]["run_id"] == "7"
+    assert "subtasks" not in patch and "findings" not in patch

@@ -1087,7 +1087,9 @@ async def test_a_cancelled_run_is_rerun_once_and_the_fact_is_written_without_a_r
 
 async def test_a_stale_read_after_the_rerun_waits_instead_of_escalating():
     clock = Clock()
-    ports = timed_ports(cancelled_report(), cancelled_report(), cancelled_report(), GREEN, clock=clock)
+    ports = timed_ports(
+        cancelled_report(), cancelled_report(), cancelled_report(), GREEN, clock=clock
+    )
     patch = await run_cancel(state_of(), ports, clock)
     assert patch["full_checks"]["passed"] is True
     assert ports.tracker.run_reruns == ["7"]

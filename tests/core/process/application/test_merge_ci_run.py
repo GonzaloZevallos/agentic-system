@@ -602,3 +602,58 @@ def test_a_red_pair_and_a_no_verdict_pair_say_which_they_were(tmp_path):
     assert pair["outcome"] == "no_verdict"
     assert pair["ci_timing"]["verdict"] == "no_verdict"
     assert pair["ci_timing"]["run_started_at"] is None
+
+
+# GH-539: a fresh run cancelled by a newer push is never a red pair.
+def _cancelled(tested: str, run: int = 42) -> CiReport:
+    check = _check(conclusion="CANCELLED", run=run)
+    return CiReport(tested, None, None, None, (check,), True, frozenset({str(run)}))
+
+
+def test_a_cancelled_fresh_run_is_rerun_once_and_the_gate_keeps_waiting(tmp_path):
+    ports, clock = _world(), _Clock()
+    _call(ports, tmp_path, clock)
+    ports.tracker.branch_reports[REF] = _cancelled(TESTED[0])
+    clock.advance(60)
+
+    result = _call(ports, tmp_path, clock)
+
+    assert (result.kind, result.reason) == ("stopped", "ci_wait")
+    assert ports.tracker.run_reruns == ["42"]
+    [pair] = _pairs(ports)
+    assert pair["rerun_at"] == clock() and "outcome" not in pair and "failing" not in pair
+
+    clock.advance(10)  # the stale read of the cancelled run: the rerun has not restarted it yet
+    assert _call(ports, tmp_path, clock).reason == "ci_wait"
+    assert ports.tracker.run_reruns == ["42"]
+
+
+def test_a_cancelled_fresh_run_after_the_rerun_and_its_grace_is_no_verdict_never_red(tmp_path):
+    ports, clock = _world(), _Clock()
+    _call(ports, tmp_path, clock)
+    ports.tracker.branch_reports[REF] = _cancelled(TESTED[0])
+    clock.advance(60)
+    _call(ports, tmp_path, clock)
+    clock.advance(_cfg(tmp_path).ci_start_grace_s + 1)
+
+    result = _call(ports, tmp_path, clock)
+
+    assert (result.kind, result.reason) == ("refused", "ci_no_verdict")
+    assert ports.tracker.run_reruns == ["42"]
+    assert all(pair.get("outcome") != "red" for pair in _pairs(ports))
+    [pair] = _pairs(ports)
+    assert (pair["outcome"], pair["cause"]) == ("no_verdict", "not_started")
+
+
+def test_a_rerun_the_platform_refuses_is_no_verdict_never_red(tmp_path):
+    ports, clock = _world(), _Clock()
+    _call(ports, tmp_path, clock)
+    ports.tracker.branch_reports[REF] = _cancelled(TESTED[0])
+    ports.tracker.rerun_run_error = CiUnreadable("dispatch_refused")
+    clock.advance(60)
+
+    result = _call(ports, tmp_path, clock)
+
+    assert (result.kind, result.reason) == ("refused", "ci_no_verdict")
+    [pair] = _pairs(ports)
+    assert pair["outcome"] == "no_verdict" and "rerun_at" not in pair

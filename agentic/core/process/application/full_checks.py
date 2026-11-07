@@ -66,8 +66,8 @@ from ..domain.presubmit import CheckResult, CiCover, CiDispatch
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
     WAITING_ON_HUMAN,
-    CiCause,
     CiCancelRerun,
+    CiCause,
     CiTiming,
     FallbackCause,
     FullCheckEntry,
