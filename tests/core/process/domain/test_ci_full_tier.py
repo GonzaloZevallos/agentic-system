@@ -301,3 +301,21 @@ def test_only_a_no_run_push_is_dispatched_and_only_when_the_fallback_is_availabl
 ) -> None:
     verdict = FullTierVerdict(state, (), (), cause)
     assert ci.dispatch_after_no_run(verdict, available) is expected
+
+
+@pytest.mark.parametrize(
+    ("state", "cause", "expected"),
+    [
+        ("unreachable", "no_run", True),
+        ("unreachable", "not_started", False),
+        ("unreachable", "publish_failed", False),
+        ("timed_out", None, False),
+        ("green", None, False),
+    ],
+)
+def test_only_a_push_with_no_run_is_worth_reading_the_upstream_for(
+    state: Literal["green", "red", "waiting", "timed_out", "unreachable"],
+    cause: CiCause | None,
+    expected: bool,
+) -> None:
+    assert ci.push_got_no_run(FullTierVerdict(state, (), (), cause)) is expected

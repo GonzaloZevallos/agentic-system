@@ -539,12 +539,13 @@ async def _ci_full_checks(
     not_tried: _NotTried | None = None
     if verdict.state == "unreachable":
         # A push that got no run is a candidate for the dispatch of the upstream's workflow
-        # (GH-531); `ci.dispatch_after_no_run` decides, and only the declaration read at the
-        # upstream makes the dispatch available.
+        # (GH-531): only then is the upstream read. `ci.dispatch_after_no_run` decides, with
+        # the availability that declaration gave.
         fallback: _Fallback | _NotTried | None = None
-        if ci.dispatch_after_no_run(verdict, True):
+        if ci.push_got_no_run(verdict):
             fallback = await anyio.to_thread.run_sync(_fallback_dispatch, ports, state)
-        if isinstance(fallback, _Fallback) and ci.dispatch_after_no_run(verdict, True):
+        if ci.dispatch_after_no_run(verdict, isinstance(fallback, _Fallback)):
+            assert isinstance(fallback, _Fallback)  # available only when the declaration was read
             return await _dispatched_after_no_run(
                 state,
                 cfg,
