@@ -82,6 +82,99 @@ def test_a_check_red_on_the_head_and_the_base_escalates_without_running_anything
     assert not [e for e in landing_plan.entries(document) if e["step"] == "diagnose"]
 
 
+def _matrix_world():
+    """`pytest` is a matrix id: `pytest (a)` is red on the head and `pytest (b)` on the base,
+    each at its own run link, with nothing patched: the facts come from the real wiring."""
+    ports = dataclasses.replace(
+        _ports(5, checks=False), stack=MemoryStack(checks={"tests": "t"}, ci=("pytest",))
+    )
+    ports.tracker.failed_runs = [HEAD_RUN]
+    ports.tracker.ci_reports = [
+        _report(
+            dataclasses.replace(
+                _check("pytest (a)", conclusion="FAILURE"), link=HEAD_RUN + "/job/1"
+            ),
+            _check("pytest (z)"),
+        )
+    ]
+    ports.tracker.branch_reports["master"] = _report(
+        dataclasses.replace(_check("pytest (b)", conclusion="FAILURE"), link=BASE_RUN)
+    )
+    return ports
+
+
+def test_a_red_matrix_expansion_escalates_naming_the_declared_id_with_both_links(tmp_path):
+    ports = _matrix_world()
+
+    result, _ = _land(ports, tmp_path)
+
+    assert result.kind == "dispatched" and result.step == "escalate"
+    document = _doc(ports)
+    assert document["escalation_class"] == "questions"
+    reason = document["escalated"]
+    assert "also red on the base branch" in reason
+    assert "`pytest`" in reason and "pytest (a)" not in reason
+    assert HEAD_RUN + "/job/1" in reason and BASE_RUN in reason
+    [entry] = landing_plan.entries(document)
+    assert entry["step"] == "escalate" and entry["checks"] == ["pytest"]
+
+
+def _recorded_world(monkeypatch, declared: str, recorded: str, on_base: tuple[str, ...]):
+    """The gate's red fresh run is recorded on the document's `merge_ci` pair under the run name
+    `recorded`; the facts the landing reads are the ones `poll.with_recorded_red` builds from
+    it (the production function, called on the assessed facts), with `on_base` as the names
+    also red on the base branch, whose report holds the run link."""
+    ports = dataclasses.replace(
+        _ports(5, checks=False), stack=MemoryStack(checks={"tests": "t"}, ci=(declared,))
+    )
+    ports.tracker.failed_runs = [HEAD_RUN]
+    ports.tracker.ci_reports = [
+        _report(dataclasses.replace(_check(recorded, conclusion="FAILURE"), link=HEAD_RUN))
+    ]
+    ports.tracker.branch_reports["master"] = _report(
+        dataclasses.replace(_check(declared, conclusion="FAILURE"), link=BASE_RUN)
+    )
+    pair = {
+        "head": HEAD,
+        "master": MERGE_MASTER,
+        "tested": "d" * 40,
+        "mode": "push",
+        "published_at": "2026-10-13T23:00:00+00:00",
+        "republished": False,
+        "superseded": [],
+        "outcome": "red",
+        "failing": [recorded],
+    }
+    ports.documents.record_closure("GH-5", {"merge_ci": [pair]})
+
+    def assessed(*args, **kwargs):
+        result = assess_merge(*args, **kwargs)
+        facts = dataclasses.replace(result.facts, merge_ci=[pair], ci_red_on_base=on_base)
+        recorded_facts = poll.with_recorded_red(facts)
+        assert recorded_facts.ci_subject == "tested"  # the recorded pair was read
+        return dataclasses.replace(result, facts=recorded_facts)
+
+    monkeypatch.setattr(landing, "assess_merge", assessed)
+    return ports
+
+
+@pytest.mark.parametrize(("declared", "recorded"), [("web", "web"), ("pytest", "pytest (a)")])
+def test_an_escalation_on_a_recorded_red_fresh_run_names_the_declared_check(
+    tmp_path, monkeypatch, declared, recorded
+):
+    ports = _recorded_world(monkeypatch, declared, recorded, on_base=(declared,))
+
+    result, _ = _land(ports, tmp_path)
+
+    assert result.kind == "dispatched" and result.step == "escalate"
+    document = _doc(ports)
+    [entry] = landing_plan.entries(document)
+    assert entry["step"] == "escalate" and entry["checks"] == [declared]
+    reason = document["escalated"]
+    assert "also red on the base branch" in reason and f"`{declared}`" in reason
+    assert BASE_RUN in reason
+
+
 def test_the_escalation_is_taken_once_per_head(tmp_path, monkeypatch):
     ports = _world(monkeypatch, on_base=("web",))
     _land(ports, tmp_path)

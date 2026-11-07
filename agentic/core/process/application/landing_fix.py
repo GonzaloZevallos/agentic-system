@@ -548,10 +548,10 @@ def escalate_red_on_base(context: LandingContext) -> None:
         _escalate(context, f"Planning defect, not a CI failure ({head[:7]}): {text}", "ci")
         return
     verdict = context.facts.ci_verdict
-    failing = verdict.failing if verdict is not None else ()
-    names = tuple(dict.fromkeys(check.name for check in failing))
+    red = verdict.red if verdict is not None else ()
+    names = tuple(dict.fromkeys(name for name, _ in red))
     loaded = context.ports.documents.load(context.task_id) or {}
-    head_links = {check.name: check.link for check in reversed(failing)}
+    head_links = {name: runs[0].link for name, runs in red if runs}
     reason = red_on_base_reason(names, head_links, _base_links(context, loaded, names))
     _escalate(context, reason, "questions")
 

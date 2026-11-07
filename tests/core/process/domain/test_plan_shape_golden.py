@@ -106,11 +106,12 @@ def test_a_control_arm_document_renders_as_it_did():
 
 
 # sha256 of the prompt text rendered with the gate's own placeholders and a fixed date.
-# GH-529 rewrote the two sentences about the estimate floors in both Tech Lead prompts, so
-# these two moved once; everything else about the default path is unchanged.
+# GH-529 rewrote the two sentences about the estimate floors in both Tech Lead prompts, and
+# GH-535 the sentence about a matrix job's id in `ci_required`, so these two moved twice;
+# everything else about the default path is unchanged.
 PROMPT_GOLDENS = {
-    "tech_lead": "2eb245f82a1f31ce061399a70e7836882b5df8bc27fdf5488306c302a1b969cc",
-    "tech_lead_platform": "f559ca64e0de741441f53e8c1c7069a9aeab6e851866b1cd5cf0d852313597ea",
+    "tech_lead": "398c517eabdedc1ae234e1ccaf877d083a7a9192bc2b538b3f0c1627bab7b842",
+    "tech_lead_platform": "9ee8527f278beb50fcc3f4423c677c0281b8a8e96b6920b9989bf27721b6915b",
 }
 
 

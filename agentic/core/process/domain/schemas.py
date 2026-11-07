@@ -577,8 +577,9 @@ class TechPlan(RoleOutput):
 
     ci_required: list[str] = Field(
         description="The job/check names the issue's done criteria need green on the pull "
-        "request head: the check-run names CI reports (a matrix job's id is not one); empty "
-        "when the issue requires no external check (then `ci_none_reason` says why)"
+        "request head: the check-run names CI reports (a matrix job's id stands for all its "
+        "expansions); empty when the issue requires no external check (then `ci_none_reason` "
+        "says why)"
     )
     ci_none_reason: str = Field(
         description="When `ci_required` is empty: one line saying why the issue requires no "
