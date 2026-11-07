@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import pytest
+import yaml
 
 from agentic.core.process.domain import rules, schemas
 from agentic.core.process.domain.schemas import (
@@ -1097,3 +1100,69 @@ def test_a_plan_critique_rejects_an_unknown_severity_and_a_finding_without_a_cla
                 {"markdown": "m", "findings": [bad], "invariants_proposed": ""},
                 {},
             )
+
+
+# GH-538: a plan never requires a path the system does not version on a delivery branch.
+GH_538 = yaml.safe_load(
+    (Path(__file__).parent / "fixtures" / "GH-538.yaml").read_text(encoding="utf-8")
+)
+
+
+def _requiring(*paths: str) -> dict:
+    return {
+        "markdown": "m",
+        "estimated_cost_usd": 1,
+        "estimated_files": 0,
+        "ci_required": [],
+        "ci_none_reason": "The work is on the tracker.",
+        "tracker_checklist": ["Post the verdict"],
+        "required_paths": list(paths),
+    }
+
+
+def test_a_plan_requiring_the_gh_538_paths_is_refused_naming_them():
+    with pytest.raises(ValueError) as refused:
+        TechPlan.model_validate(_requiring(*GH_538["plan_required_paths"]))
+    reason = str(refused.value)
+    for path in GH_538["plan_required_paths"]:
+        assert path in reason
+    assert "never versions" in reason and "outside" in reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".agentic/tasks/",
+        ".agentic/tasks",
+        "./.agentic/tasks/x.md",
+        ".agentic/runs/x",
+        ".agentic/logs/x",
+        ".agentic/worktrees/x",
+    ],
+)
+def test_a_plan_requiring_an_unstageable_path_is_refused(path):
+    with pytest.raises(ValueError, match="never versions"):
+        TechPlan.model_validate(_requiring(path))
+
+
+def test_a_plan_requiring_a_versioned_path_is_accepted():
+    paths = [".agentic/stack.yaml", ".agentic/index/x.md", "docs/adr/x.md"]
+    assert TechPlan.model_validate(_requiring(*paths)).required_paths == paths
+
+
+def test_forbidden_paths_keeps_the_refused_entries_in_input_order():
+    entries = [
+        "docs/a.md",
+        ".agentic/worktrees/",
+        ".agentic/stack.yaml",
+        ".agentic/tasks",
+        "scripts/design/evidence/GH-491/x.json",
+        ".agentic/logs/y",
+    ]
+    assert rules.forbidden_paths(entries) == (
+        ".agentic/worktrees/",
+        ".agentic/tasks",
+        ".agentic/logs/y",
+    )
+    assert rules.forbidden_paths([]) == ()
+    assert rules.forbidden_paths(GH_538["touched"]) == ()

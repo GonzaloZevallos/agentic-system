@@ -116,6 +116,13 @@ def unstageable(relative: str) -> bool:
     return any(path.startswith(prefix) or path == prefix.rstrip("/") for prefix in UNSTAGEABLE)
 
 
+def forbidden_paths(paths: Sequence[str]) -> tuple[str, ...]:
+    """The entries of `paths` the system never versions on a delivery branch (GH-538), in
+    input order: those `unstageable` refuses, as written or with a trailing `/` stripped. The
+    one question a plan's required paths are asked; there is no second list of prefixes."""
+    return tuple(p for p in paths if unstageable(p) or unstageable(p.rstrip("/")))
+
+
 def archivable_document(relative: str, task_id: str) -> bool:
     """Whether `relative` is exactly the task's own document, `.agentic/tasks/<id>.md`: the one
     path under `UNSTAGEABLE` that archiving may commit, onto an archived ref and nowhere else."""

@@ -597,6 +597,15 @@ class TechPlan(RoleOutput):
             _one_line(name, "a required CI check name")
         for path in self.required_paths:
             _one_line(path, "a required path")
+        # At call time: `rules` imports this module, so a module-level import is a cycle.
+        from .rules import forbidden_paths
+
+        if forbidden := forbidden_paths(self.required_paths):
+            raise ValueError(
+                f"required_paths names {', '.join(f'`{p}`' for p in forbidden)}: the system "
+                "never versions them on a delivery branch, because the presubmit refuses them, "
+                "so no diff could touch them. Require a path outside those directories instead"
+            )
         if self.ci_required and self.ci_none_reason.strip():
             raise ValueError("ci_none_reason must be empty when ci_required names checks")
         if not self.ci_required:

@@ -1,0 +1,15 @@
+# The facts of apostrophe GH-538 as the agentic-system issue about required_paths quotes them
+# (2026-11-07). Not apostrophe's own document: only what the issue states.
+id: GH-538
+plan_required_paths:
+- .agentic/tasks/GH-491-evidence/master-1.index.json
+- .agentic/tasks/GH-491-evidence/master-2.index.json
+- .agentic/tasks/GH-491-evidence/master-3.index.json
+- .agentic/tasks/GH-491-evidence/master-4.index.json
+decision: commit the evidence under `scripts/design/evidence/GH-491/`
+touched:
+- scripts/design/evidence/GH-491/master-1.index.json
+- scripts/design/evidence/GH-491/master-2.index.json
+- scripts/design/evidence/GH-491/master-3.index.json
+- scripts/design/evidence/GH-491/master-4.index.json
+escalation: the integrated diff touches none of the plan's required paths (.agentic/tasks/GH-491-evidence/master-1.index.json)
