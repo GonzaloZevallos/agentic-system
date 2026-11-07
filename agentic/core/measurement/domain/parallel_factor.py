@@ -60,6 +60,35 @@ def union_seconds(intervals: Iterable[Interval]) -> float:
     return total
 
 
+def clip(intervals: Iterable[Interval], start: datetime, end: datetime) -> list[Interval]:
+    """Each interval cut to `[start, end]`, the empty or inverted ones dropped. Aware datetimes
+    only: a naive instant against an aware bound raises `TypeError`, as `union_seconds` does."""
+    cut = ((max(first, start), min(last, end)) for first, last in intervals)
+    return [(first, last) for first, last in cut if first < last]
+
+
+def difference(intervals: Iterable[Interval], minus: Iterable[Interval]) -> list[Interval]:
+    """The parts of `intervals` that no interval of `minus` covers, in order. Aware datetimes
+    only. Its length goes through `union_seconds`, so a second is counted once."""
+    holes = sorted(minus)
+    remaining: list[Interval] = []
+    for first, last in intervals:
+        cursor = first
+        for hole_start, hole_end in holes:
+            if hole_end <= cursor:
+                continue
+            if hole_start >= last:
+                break
+            if hole_start > cursor:
+                remaining.append((cursor, hole_start))
+            cursor = max(cursor, hole_end)
+            if cursor >= last:
+                break
+        if cursor < last:
+            remaining.append((cursor, last))
+    return remaining
+
+
 def busy_seconds(document: Mapping[str, Any]) -> tuple[float, float]:
     """`(numerator, denominator)` of the task's factor, in seconds.
 

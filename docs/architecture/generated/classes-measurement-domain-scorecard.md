@@ -7,6 +7,9 @@ Esta página muestra las clases públicas de los módulos del grupo `scorecard` 
 
 ```mermaid
 classDiagram
+    class cycle__Pause["Pause"]
+    class cycle__Pauses["Pauses"]
+    class cycle__TimeSplit["TimeSplit"]
     class evaluation__EvalEntry["EvalEntry"]
     class evaluation__EvalSet["EvalSet"]
     class evaluation__EvalTaskId["EvalTaskId"]
