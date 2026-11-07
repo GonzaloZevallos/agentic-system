@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 # The module, not the name: `rules` imports this one too, and reads it at call time.
 from . import rules
-from .presubmit import FAILED_IDS_MAX
+from .presubmit import FAILED_IDS_MAX, ID_FORBIDDEN
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import CiCause as CiCause
@@ -669,8 +669,6 @@ def ci_findings(
 FLAKE_BLOCK_PREFIX = "agentic-flakes: "
 FLAKE_BLOCK_VERSION = 1
 FLAKE_ID_MAX_CHARS = 200
-# An id lands in a tracker comment and a marker: nothing that could break out of either.
-_FLAKE_ID_FORBIDDEN = ("\n", "\r", "`", "<!--", "-->", "{{")
 
 
 @dataclass(frozen=True)
@@ -685,12 +683,13 @@ class CiFlakeBlock:
 
 def clean_flake_ids(ids: Iterable[str]) -> list[str]:
     """The ids that may go in a flake block: at most `FLAKE_ID_MAX_CHARS` characters and none of
-    the forbidden substrings, without duplicates (in order), at most `FAILED_IDS_MAX`. The one
+    `ID_FORBIDDEN` (shared with `presubmit.expandable`: an id lands in a tracker comment and a
+    marker), without duplicates (in order), at most `FAILED_IDS_MAX`. The one
     copy of the rule: the parser reads blocks with it and `scripts/ci_flakes.py` writes them."""
     clean = [
         item
         for item in ids
-        if len(item) <= FLAKE_ID_MAX_CHARS and not any(bad in item for bad in _FLAKE_ID_FORBIDDEN)
+        if len(item) <= FLAKE_ID_MAX_CHARS and not any(bad in item for bad in ID_FORBIDDEN)
     ]
     return list(dict.fromkeys(clean))[:FAILED_IDS_MAX]
 

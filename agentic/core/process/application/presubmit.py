@@ -486,11 +486,16 @@ class CheckoutPresubmit:
         rerun_as = presubmit.rerun_command(command, last, form, self.flake_gate)
         if rerun_as is None:
             return rows
-        again = self._execute(name, rerun_as, last.get("mode"))
-        again["rerun"] = True
         if form is None or rerun_as != form.command:
+            again = self._execute(name, rerun_as, last.get("mode"))
+            again["rerun"] = True
             return [*rows, again]
+        # The form branch compares the unexpanded text above. The ids are read once and serve
+        # both the expansion and the verdict. Substitution order: `{failed_ids}` here, then
+        # `{workers}` in `_execute` (via `_sized`); `{base}` never applies to a form.
         ids = presubmit.failed_ids(last["output"], form.test_id)
+        again = self._execute(name, presubmit.rerun_form_command(form, ids), last.get("mode"))
+        again["rerun"] = True
         if presubmit.rerun_resolved(again, ids, form):
             return [*rows, again]
         # The form went red without rerunning what it was asked to: once more, the whole

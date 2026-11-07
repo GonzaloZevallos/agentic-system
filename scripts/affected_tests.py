@@ -185,6 +185,12 @@ TABLE: tuple[Row, ...] = (
         ),
         "apostrophe#484's frontmatter as a kill left it: the landing pass rules read it",
     ),
+    Row(
+        "tests/core/process/domain/fixtures/playwright_list_failure.txt",
+        ("tests/core/process/domain/test_presubmit.py",),
+        "a Playwright list-reporter tail with one failure: the `{failed_ids}` expansion test "
+        "reads it",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (

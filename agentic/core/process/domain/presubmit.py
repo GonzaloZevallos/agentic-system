@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -32,6 +33,10 @@ TAIL_LINES = 30
 STACK_FILE = ".agentic/stack.yaml"
 BASE_TOKEN = "{base}"
 WORKERS_TOKEN = "{workers}"
+# Where a `rerun_checks` form takes the test ids `failed_ids` read from the red run (GH-530).
+# Defined here and imported by the stack loader; `rerun_form_command` is the only place that
+# expands it.
+FAILED_IDS_TOKEN = "{failed_ids}"
 # What `merge_checks` keeps of one failing command's output (GH-212): the last
 # `TAIL_LINES` lines, then the last `MERGE_TAIL_CHARS` characters of those. The comment the
 # poller posts about it never grows past `MERGE_COMMENT_MAX` (GitHub's own limit is 65536).
@@ -122,6 +127,16 @@ FlakeGate = Literal["delivery", "merge", "full_checks"]
 # cost of a product-declared pattern.
 FAILED_IDS_TAIL_BYTES = 65536
 FAILED_IDS_MAX = 50
+# The most UTF-8 bytes the quoted, space-joined ids of an expanded form may take: far below the
+# kernel's argument limit, so a form never fails to start. Above it the whole command reruns.
+FAILED_IDS_ARG_BYTES = 32768
+# Substrings an id may never hold where it is written into a document or a command: a line break,
+# a backtick, an HTML comment mark and a template brace pair. Two readers share this one list:
+# `expandable` (an id that reaches a rerun command) and `ci.clean_flake_ids` (an id that reaches a
+# tracker comment and a marker), so the two cannot drift apart.
+ID_FORBIDDEN = ("\n", "\r", "`", "<!--", "-->", "{{", "}}")
+_SYSTEM_TOKENS = (BASE_TOKEN, WORKERS_TOKEN, FAILED_IDS_TOKEN)
+_CONTROL_ID = re.compile("[\x00-\x1f\x7f]")
 
 
 @dataclass(frozen=True)
@@ -259,6 +274,31 @@ def ids_complete(output: str, ids: Sequence[str]) -> bool:
     )
 
 
+def expandable(ids: Sequence[str]) -> bool:
+    """Whether every id may be written into a rerun command: none holds a token the system
+    fills in (`{base}`, `{workers}`, `{failed_ids}`: a later substitution would rewrite it), a
+    substring of `ID_FORBIDDEN` or a control character. The one predicate; the id still goes
+    through `shlex.quote`, which is what keeps it one word."""
+    return not any(
+        any(token in item for token in _SYSTEM_TOKENS)
+        or any(bad in item for bad in ID_FORBIDDEN)
+        or _CONTROL_ID.search(item)
+        for item in ids
+    )
+
+
+def _quoted_ids(ids: Sequence[str]) -> str:
+    return " ".join(shlex.quote(item) for item in ids)
+
+
+def rerun_form_command(form: RerunForm, ids: Sequence[str]) -> str:
+    """The form's command with `{failed_ids}` replaced by the ids, each `shlex.quote`d, in the
+    given order, space-joined. The only expansion of the token. `replace`, never `format`, like
+    `affected_command`: the command is shell text. A command without the token is unchanged.
+    The caller decides, with `rerun_command`, whether the ids may be inserted at all."""
+    return form.command.replace(FAILED_IDS_TOKEN, _quoted_ids(ids))
+
+
 def rerun_command(
     full_command: str, first: CheckResult, form: RerunForm | None, gate: FlakeGate
 ) -> str | None:
@@ -266,7 +306,11 @@ def rerun_command(
     row, a `timed_out` one, a `not_ready` one and a rerun row never are. The product's form
     runs at every gate, only when it exists, `failed_ids` found at least one id in the
     failure and `ids_complete` holds for them; every other case reruns the full command
-    (ADR-0066). `gate` is kept for the callers' signature: no gate is treated apart."""
+    (ADR-0066). A form that carries `FAILED_IDS_TOKEN` also needs ids that are `expandable` and
+    whose quoted join fits `FAILED_IDS_ARG_BYTES`; otherwise the full command reruns, never a
+    truncated list (GH-530). The form is returned unexpanded, so the caller can tell it from the
+    full command; `rerun_form_command` expands it. `gate` is kept for the callers' signature:
+    no gate is treated apart."""
     if first["passed"] or first.get("timed_out", False) or first.get("rerun", False):
         return None
     # A machine too loaded to say is not a red a rerun may turn into a flake (GH-451).
@@ -274,9 +318,17 @@ def rerun_command(
         return None
     if form is not None:
         ids = failed_ids(first["output"], form.test_id)
-        if ids and ids_complete(first["output"], ids):
+        if ids and ids_complete(first["output"], ids) and _form_usable(form, ids):
             return form.command
     return full_command
+
+
+def _form_usable(form: RerunForm, ids: Sequence[str]) -> bool:
+    if FAILED_IDS_TOKEN not in form.command:
+        return True
+    return expandable(ids) and len(_quoted_ids(ids).encode("utf-8", "replace")) <= (
+        FAILED_IDS_ARG_BYTES
+    )
 
 
 def rerun_resolved(form_row: CheckResult, ids: Sequence[str], form: RerunForm) -> bool:
