@@ -27,8 +27,9 @@ dispatch escalates at once with no wait and no retry; no run after the grace per
 once more. A trusted head whose pushes got no run even after the republish (an old branch whose own
 workflow lacks the CI ref trigger) is judged the same way when the product's fetched upstream
 declares `ci_dispatch` (GH-531, `_fallback_dispatch`): the record adds `dispatch_cause: no_run` and
-`stack_at`, the upstream revision whose `ci:` names judge it. The head is published to `rules.ci_dispatch_ref` before every dispatch and the
-ref is never deleted here (GH-504); a dispatched job that failed at `Set up job` or the checkout is
+`stack_at`, the upstream revision whose `ci:` names judge it. The head is published to
+`rules.ci_dispatch_ref` before every dispatch and the ref is never deleted here (GH-504); a
+dispatched job that failed at `Set up job` or the checkout is
 `checkout_failed`, CI not usable, never a red check.
 
 In that run a check that timed out and that the stack maps to a CI job (`ci_covers`, GH-453)
