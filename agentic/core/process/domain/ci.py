@@ -154,6 +154,10 @@ def _green(check: CiCheck) -> bool:
     return check.conclusion in _GREEN
 
 
+def _is_exact(name: str, check_name: str) -> bool:
+    return check_name == name
+
+
 def _is_expansion(name: str, check_name: str) -> bool:
     return re.fullmatch(re.escape(name) + r" \(.+\)", check_name) is not None
 
@@ -165,7 +169,7 @@ def matches(name: str, check_name: str) -> bool:
     closing parenthesis, nothing after it). Never a bare prefix (`e2e` is not `e2e-shard (1)`),
     never case-folded, the name never a pattern. A pairwise answer: when several declared names
     compete for the same runs, `runs_of` decides."""
-    return check_name == name or _is_expansion(name, check_name)
+    return _is_exact(name, check_name) or _is_expansion(name, check_name)
 
 
 def _claims(checks: Sequence[CiCheck], declared: Iterable[str]) -> dict[str, list[int]]:
@@ -174,7 +178,7 @@ def _claims(checks: Sequence[CiCheck], declared: Iterable[str]) -> dict[str, lis
     taken: set[int] = set()
     for name in names:
         for index, check in enumerate(checks):
-            if check.name == name:
+            if _is_exact(name, check.name):
                 claimed[name].append(index)
                 taken.add(index)
     for name in names:
@@ -201,8 +205,10 @@ def runs_of(checks: Iterable[CiCheck], declared: Iterable[str]) -> dict[str, tup
       no exact `checks` run exists and `checks (fast)` is not itself declared; declared beside
       `checks`, it is that name's own exact run and `checks` is left with nothing;
     - a matrix with an `if:` per expansion would read as skipped as soon as one shard is
-      skipped (`dispatch_verdict`); no product has one today (apostrophe's workflow has a
-      job-level `if:` only), and changing that rule is a separate decision."""
+      skipped (`dispatch_verdict`); no product has one today (apostrophe's
+      `.github/workflows/ci.yml` has only a job-level `if: needs.changes.outputs.pytest ==
+      'true'` at l.108 and `... e2e == 'true'` at l.199, and `matrix.*` appears only in steps
+      and artifacts, l.124-129 and 224-229), and changing that rule is a separate decision."""
     pool = tuple(checks)
     return {
         name: tuple(pool[index] for index in indexes)
@@ -212,7 +218,7 @@ def runs_of(checks: Iterable[CiCheck], declared: Iterable[str]) -> dict[str, tup
 
 def _expanded_only(name: str, runs: Sequence[CiCheck]) -> bool:
     """Whether `runs` reached `name` only through matrix expansion: none of them is exact."""
-    return bool(runs) and all(check.name != name for check in runs)
+    return bool(runs) and not any(_is_exact(name, check.name) for check in runs)
 
 
 def _incomplete(report: CiReport, name: str, runs: Sequence[CiCheck]) -> bool:
