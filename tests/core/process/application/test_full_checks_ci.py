@@ -833,7 +833,9 @@ def complete_report(*checks: CiCheck) -> CiReport:
     return CiReport(HEAD, None, None, None, tuple(checks), True)
 
 
-MATRIX = tuple(job(f"e2e ({n})") for n in range(1, 5))
+# GH-535: `e2e (n)` would now be the expansions of the declared id `e2e`; a shard job of another
+# name is a report that carries no run of `e2e`.
+MATRIX = tuple(job(f"e2e-shard ({n})") for n in range(1, 5))
 
 
 def counters(patch: dict) -> list[str]:
@@ -851,7 +853,7 @@ async def test_gh543_a_matrix_job_id_required_escalates_unknown_names_without_a_
     assert clock.slept == [30]
     text = patch["escalated"]
     assert "Planning defect" in text and "no check run named `e2e`" in text
-    assert HEAD in text and "`e2e (1)`" in text and "`e2e (4)`" in text
+    assert HEAD in text and "`e2e-shard (1)`" in text and "`e2e-shard (4)`" in text
     assert "`ci_required`" in text and "task document" in text and "agentic resume" in text
     after = apply(state, patch)
     assert after["subtasks"][INTEGRATION]["status"] == "approved"
@@ -893,7 +895,7 @@ async def test_correcting_the_name_in_the_document_and_resuming_goes_green_with_
     stopped = apply(state, await run(state, ports_of(*reads, ci=("unit",))))
     before = stopped["subtasks"][INTEGRATION]
     assert stopped["escalation_class"] == "ci"
-    resumed = {**stopped, "ci_required": ["e2e (1)"]}
+    resumed = {**stopped, "ci_required": ["e2e-shard (1)"]}
     resumed.pop("escalated")
     patch = await run(resumed, ports_of(*reads, ci=("unit",)))
     assert patch["full_checks"]["passed"] is True

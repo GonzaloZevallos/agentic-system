@@ -1,4 +1,6 @@
-"""GH-485: the CI section of a review never says `pending` for a name no check run carries."""
+"""GH-485: the CI section of a review never says `pending` for a name no check run carries.
+GH-535: a matrix id is carried by its expansions `<id> (<values>)`; a shard job of another
+name (`e2e-shard (1)`) carries nothing for `e2e`."""
 
 from agentic.core.process.application import ci_review
 from agentic.core.process.domain import ci
@@ -8,7 +10,7 @@ HEAD = "a" * 40
 
 def _report(completed: bool | None) -> ci.CiReport:
     checks = tuple(
-        ci.CiCheck(f"e2e ({n})", "COMPLETED", "SUCCESS", f"https://ci/{n}") for n in (1, 2)
+        ci.CiCheck(f"e2e-shard ({n})", "COMPLETED", "SUCCESS", f"https://ci/{n}") for n in (1, 2)
     )
     return ci.CiReport(HEAD, "main", "b" * 40, None, checks, runs_completed=completed)
 
