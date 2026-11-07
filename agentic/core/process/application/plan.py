@@ -13,6 +13,8 @@ measurable (issue #28)."""
 
 from __future__ import annotations
 
+import dataclasses
+from dataclasses import dataclass
 from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
@@ -115,7 +117,9 @@ async def _interview_and_plan(
         parts_field=rules.parts_field_text(part_of),
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
     )
-    delivered = apply(patch, _delivered(cfg, output, written, spec.author.name))
+    output, floored = _floored(output, interviewed, history)
+    delivered = apply(patch, _delivered(cfg, output, written, spec.author.name, floored))
+    delivered = _covered(state, delivered, floored)
     judged, built_whole = _after_delivery(
         state, delivered, part_of, output, history, at=ports.now()
     )
@@ -197,17 +201,66 @@ def _estimate_check(
     which read the history, what the task has spent so far and whether the task is a part
     (ADR-0054). It also holds the names the base's workflows can report, so a `ci_required`
     name no check run carries is refused while the plan is written (GH-485)."""
-    spent = state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0)
     base = task_base(state, ports)
     return schemas.plan_check_for(
         history,
-        spent,
+        _spent(state),
         fit_waived=bool(state.get("fit_waived")),
         part_of=part_of,
         workflow=ci_workflow.check_run_names(_workflow_texts(ports, base)),
         stack_ci=_stack_ci(ports, base),
         plan_shape=cfg.plan_shape,
     )
+
+
+def _spent(state: TaskState) -> float:
+    """What the task has spent before the call that `state` is read for: the one figure the
+    plan check and the raise of the estimate share (GH-529)."""
+    return state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0)
+
+
+@dataclass(frozen=True)
+class _Floored:
+    """An estimate the system raised, with the line the plan's section carries about it."""
+
+    raised: cost_history.Raise
+    line: str
+
+
+def _floored(
+    output: Output | None, state: TaskState, history: cost_history.History
+) -> tuple[Output | None, _Floored | None]:
+    """The delivered output with its estimate raised, when the Tech Lead's figure is below a
+    floor. `state` is the one the plan check was built from, so the spent figure and the
+    subtask count are the ones the check judged fit with, and `cost_history.raised_estimate`
+    is the only place that computes the figure (GH-529). Everything downstream reads the
+    returned output: the regate, the fit for parts and the estimate write."""
+    if output is None:
+        return None, None
+    data = output.data
+    spent = _spent(state)
+    size = schemas.floor_size(data)
+    raised = cost_history.raised_estimate(data["estimated_cost_usd"], spent, history, size)
+    if raised is None:
+        return output, None
+    median = None if size is None else cost_history.bucket_median(history, size)
+    line = plan_view.raised_estimate_line(
+        raised.declared_usd, raised.cost_usd, raised.cause, spent, median
+    )
+    floored = dataclasses.replace(output, data={**data, "estimated_cost_usd": raised.cost_usd})
+    return floored, _Floored(raised, line)
+
+
+def _covered(state: TaskState, patch: TaskState, floored: _Floored | None) -> TaskState:
+    """A raised estimate never stays below what the task has spent once the plan node's own
+    calls are paid: its stored figure is lifted to the cost after the node. A plan the
+    system did not raise is left as the Tech Lead wrote it."""
+    if floored is None:
+        return patch
+    after = state.get("cost_usd", 0.0) + patch.get("cost_usd", 0.0)
+    after += state.get("landing_cost_carried", 0.0)
+    estimate = patch["estimate"]
+    return {**patch, "estimate": {**estimate, "cost_usd": max(estimate["cost_usd"], after)}}
 
 
 def _workflow_texts(ports: Ports, base: str) -> dict[str, str]:
@@ -306,7 +359,9 @@ async def _plan_cold(
     part_of = _part_of(state)
     base = apply(state, carried) if carried else state
     output, written = await _cold_draft(base, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL)
-    delivered = _joined(carried or {}, _delivered(cfg, output, written, spec.author.name))
+    output, floored = _floored(output, base, history)
+    delivered = _joined(carried or {}, _delivered(cfg, output, written, spec.author.name, floored))
+    delivered = _covered(state, delivered, floored)
     judged, built_whole = _after_delivery(
         state, delivered, part_of, output, history, at=ports.now()
     )
@@ -373,12 +428,14 @@ async def _plan_with_critic(
     name = spec.author.name
     # Recorded from the start, so a node that escalates before it delivers still says its route.
     carried = apply(carried, {"plan_route": recorded})
+    drafting = apply(state, carried)
     draft, draft_patch = await _cold_draft(
-        apply(state, carried), spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL
+        drafting, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL
     )
     carried = apply(carried, draft_patch)
     if draft is None:
         return finish(state, carried, ports)
+    draft, draft_floored = _floored(draft, drafting, history)
     drafted = apply(state, carried)
     regated = plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
     if not plan_route.takes_critic(regated):
@@ -394,20 +451,18 @@ async def _plan_with_critic(
             drafted, TECH_LEAD_CRITIC, cfg, ports, cwd=cwd, plan_draft=draft_text
         )
     critic_state: plan_route.CriticState = "ran"
+    final, floored = draft, draft_floored
     if critique is None:
         critic_patch, stopped = _soft(critic_patch)
         carried = apply(carried, critic_patch)
         if stopped:
             return finish(state, carried, ports)
-        final, written, critic_state = (
-            draft,
-            {"sections": {name: drafted["sections"][name]}},
-            "failed",
-        )
+        written, critic_state = {"sections": {name: drafted["sections"][name]}}, "failed"
     else:
         carried = apply(carried, critic_patch)
+        revising = apply(state, carried)
         revision, revised = await _cold_draft(
-            apply(state, carried),
+            revising,
             spec,
             cfg,
             ports,
@@ -418,19 +473,20 @@ async def _plan_with_critic(
             extra_input=_critique_input(critique.data["findings"]),
         )
         if revision is not None:
-            final, written = revision, revised
+            final, floored = _floored(revision, revising, history)
+            written = revised
         else:
             # The draft stands; the failed revision's attempts were paid and are kept.
             revised, stopped = _soft(revised)
             carried = apply(carried, revised)
             if stopped:
                 return finish(state, carried, ports)
-            final, written = draft, {"sections": {name: drafted["sections"][name]}}
-    delivered = _delivered(cfg, final, written, name)
+            written = {"sections": {name: drafted["sections"][name]}}
+    delivered = _delivered(cfg, final, written, name, floored)
     route_state: TaskState = {"plan_route": {**recorded, "critic": critic_state}}
     judged, built_whole = _after_delivery(
         state,
-        apply(apply(carried, delivered), route_state),
+        _covered(state, apply(apply(carried, delivered), route_state), floored),
         part_of,
         final,
         history,
@@ -470,7 +526,11 @@ def _critic_proposed(invariants: list[str]) -> str:
 
 
 def _delivered(
-    cfg: Configuration, output: Output | None, written: TaskState, section: str
+    cfg: Configuration,
+    output: Output | None,
+    written: TaskState,
+    section: str,
+    floored: _Floored | None = None,
 ) -> TaskState:
     """What a successful plan call adds to its own patch, on either path: the subtasks,
     the invariants, the integration brief, the estimate (ADR-0054), the status -- or, for a
@@ -484,7 +544,11 @@ def _delivered(
     place to carry a complete `### Subtasks` block (issue #152, `plan_view.with_
     subtasks_block`), never touching `Tech Lead (vN)` or any other section -- the text
     being written here is never versioned (`rules.sections_for` versions only the
-    earlier delivery)."""
+    earlier delivery).
+
+    `floored` is set when the system raised the estimate (GH-529): the Tech Lead's own figure
+    is kept as `declared_usd` and its section says so; it is `None`, and the document
+    unchanged, for a plan that cleared both floors."""
     if output is not None:
         written["invariants"] = output.data["invariants"]
         written["integration_brief"] = output.data["integration"].strip()
@@ -500,6 +564,11 @@ def _delivered(
             "cost_usd": output.data["estimated_cost_usd"],
             "files": output.data["estimated_files"],
         }
+        if floored is not None:
+            written["estimate"]["declared_usd"] = floored.raised.declared_usd
+            written["sections"][section] = (
+                f"{written['sections'][section].rstrip()}\n\n{floored.line}"
+            )
         written["status"] = "planned"
         if output.data.get("tracker_checklist"):
             # What the human must do on the tracker (GH-336); it may sit next to subtasks.

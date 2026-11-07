@@ -91,8 +91,10 @@ Write, in Markdown, using `###` headings and nothing above `###`:
 
 {{cost_history}}
 
-   An estimate below half the median of a bucket with at least five tasks is refused,
-   and so is one below what the task already spent. A plan whose estimate is over the size
+   The estimate is the TOTAL, what the task already spent included. The system raises an
+   estimate below what the task already spent, or below half the median of a bucket with at
+   least five tasks, and records the figure you wrote next to the one the task runs under.
+   A plan whose estimate is over the size
    limit the system sets, or over the p90 of its bucket, is not built
    {{parts_remedy}}
    A task changes at least one file unless its only work is on the tracker (the issue tracker: post a

@@ -373,17 +373,42 @@ def test_plan_check_for_rejects_less_than_one_file():
         check(_estimated(20.0, 0))
 
 
-def test_plan_check_for_rejects_an_estimate_below_what_was_already_spent():
+def test_plan_check_for_accepts_an_estimate_below_what_was_already_spent():
+    # The system raises it (GH-529): the check no longer refuses the floor.
     check = schemas.plan_check_for(_history(1, []), 30.0)
-    with pytest.raises(ValueError, match="already spent 30.00"):
-        check(_estimated(20.0, 3))
+    check(_estimated(20.0, 3))  # does not raise
 
 
-def test_plan_check_for_rejects_half_the_median_of_a_bucket_of_five():
+def test_plan_check_for_accepts_an_estimate_below_half_the_median_of_a_bucket_of_five():
     check = schemas.plan_check_for(_history(1, [40, 40, 40, 40, 40]), 0.0)
-    with pytest.raises(ValueError, match="median"):
-        check(_estimated(19.0, 3))
-    check(_estimated(20.0, 3))  # exactly half: allowed
+    check(_estimated(19.0, 3))  # does not raise
+    check(_estimated(20.0, 3))
+
+
+def test_a_raised_estimate_is_judged_for_fit_and_a_declared_one_that_fits_is_not_refused():
+    # Declared 20 fits; raised to spent + declared = 140 it still fits under 150 USD.
+    schemas.plan_check_for(_history(1, []), 120.0)(_estimated(20.0, 3))  # does not raise
+
+
+def test_a_raise_across_the_line_is_refused_as_not_fitting_with_the_raised_figure_and_cause():
+    check = schemas.plan_check_for(_history(1, []), 140.0)
+    with pytest.raises(ValueError) as refused:
+        check(_estimated(20.0, 3))  # 20 declared fits; 140 + 20 = 160 does not
+    message = str(refused.value)
+    assert "raised by the system from 20.00 to 160.00 USD" in message
+    assert "below what the task already spent 140.00" in message
+    assert "does not fit one task" in message
+
+
+def test_a_raise_to_the_median_across_the_line_is_refused_with_its_cause():
+    check = schemas.plan_check_for(_history(1, [400] * 5), 0.0)
+    with pytest.raises(
+        ValueError, match="raised by the system from 20.00 to 400.00 USD"
+    ) as refused:
+        check(_estimated(20.0, 3))  # 20 declared fits; the median 400 does not
+    assert "below half the median 400.00 of closed tasks with this many subtasks" in str(
+        refused.value
+    )
 
 
 def test_plan_check_for_does_not_apply_the_floor_to_a_bucket_below_five():
@@ -392,10 +417,18 @@ def test_plan_check_for_does_not_apply_the_floor_to_a_bucket_below_five():
 
 
 def test_plan_check_for_looks_at_the_bucket_of_the_plans_own_subtask_count():
-    check = schemas.plan_check_for(_history(2, [40] * 5), 0.0)
+    from agentic.core.process.domain import cost_history
+
+    history = _history(2, [40] * 5)
+    assert not cost_history.raised_estimate(
+        1.0, 0.0, history, schemas.floor_size(_estimated(1.0, 3))
+    )
+    assert cost_history.raised_estimate(
+        1.0, 0.0, history, schemas.floor_size(_estimated(1.0, 3, "a", "b"))
+    )
+    check = schemas.plan_check_for(history, 0.0)
     check(_estimated(1.0, 3, "a"))  # a different bucket: no floor
-    with pytest.raises(ValueError, match="median"):
-        check(_estimated(1.0, 3, "a", "b"))
+    check(_estimated(1.0, 3, "a", "b"))  # the floor raises it; the raised 40 fits
 
 
 # The two shapes of a plan (ADR-0054): (A) subtasks and a fitting estimate, (B) parts and an
@@ -503,11 +536,10 @@ def test_every_violation_of_a_split_has_its_own_reason(parts, reason):
         check(_split(400.0, 90, parts))
 
 
-def test_a_split_still_answers_for_the_files_and_the_spend():
+def test_a_split_still_answers_for_the_files_and_not_for_the_spend():
     with pytest.raises(ValueError, match="at least one file"):
         schemas.plan_check_for(_history(1, []), 0.0)(_split(400.0, 0))
-    with pytest.raises(ValueError, match="already spent"):
-        schemas.plan_check_for(_history(1, []), 500.0)(_split(400.0, 90))
+    schemas.plan_check_for(_history(1, []), 500.0)(_split(400.0, 90))  # raised, never refused
 
 
 def test_the_plan_schema_leaves_subtasks_and_parts_optional_for_the_model():
@@ -548,9 +580,10 @@ def test_the_tracker_shape_refuses_a_positive_file_count():
         check(_tracker_only(files=2))
 
 
-def test_the_tracker_shape_still_answers_for_what_the_task_already_spent():
-    with pytest.raises(ValueError, match="already spent"):
-        schemas.plan_check_for(_history(1, []), 5.0)(_tracker_only(cost=2.0))
+def test_the_tracker_shape_no_longer_refuses_a_cost_below_what_the_task_spent():
+    schemas.plan_check_for(_history(1, []), 5.0)(_tracker_only(cost=2.0))  # raised, not refused
+    with pytest.raises(ValueError, match="estimated_files must be 0"):
+        schemas.plan_check_for(_history(1, []), 5.0)(_tracker_only(files=2, cost=2.0))
 
 
 def test_a_checklist_next_to_parts_is_accepted_as_a_split_with_tracker_work():
@@ -565,10 +598,9 @@ def test_parts_with_a_checklist_still_answer_to_the_cost_and_file_rules():
         check(_split(400.0, 0, tracker_checklist=CHECKLIST))
     with pytest.raises(ValueError, match="at least two parts"):
         check(_split(400.0, 90, parts=[_part()], tracker_checklist=CHECKLIST))
-    with pytest.raises(ValueError, match="already spent"):
-        schemas.plan_check_for(_history(1, []), 500.0)(
-            _split(400.0, 90, tracker_checklist=CHECKLIST)
-        )
+    schemas.plan_check_for(_history(1, []), 500.0)(  # raised, never refused
+        _split(400.0, 90, tracker_checklist=CHECKLIST)
+    )
 
 
 def test_a_bad_checklist_item_next_to_parts_is_refused():
@@ -820,11 +852,8 @@ def test_a_part_with_subtasks_over_the_line_by_the_reference_alone_passes_the_ch
 
 
 def test_a_part_keeps_every_other_refusal():
-    check = schemas.plan_check_for(_history(1, HIGH_REFERENCE), 30.0, part_of=PART_OF)
-    with pytest.raises(ValueError, match="already spent"):
-        check(_estimated(20.0, 4))
-    with pytest.raises(ValueError, match="median"):
-        schemas.plan_check_for(_history(1, [400] * 5), 0.0, part_of=PART_OF)(_estimated(20.0, 4))
+    schemas.plan_check_for(_history(1, HIGH_REFERENCE), 30.0, part_of=PART_OF)(_estimated(20.0, 4))
+    schemas.plan_check_for(_history(1, [400] * 5), 0.0, part_of=PART_OF)(_estimated(20.0, 4))
     with pytest.raises(ValueError, match="at least one file"):
         schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_OF)(_estimated(20.0, 0))
 

@@ -1140,6 +1140,8 @@ class EstimateRecord(TypedDict):
 
     cost_usd: float
     files: int
+    # The Tech Lead's own figure, written only when the system raised `cost_usd` above it.
+    declared_usd: NotRequired[float]
 
 
 class EstimateRevision(TypedDict):

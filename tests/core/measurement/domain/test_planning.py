@@ -222,3 +222,16 @@ def test_the_lines_print_every_figure_per_bucket_and_the_pairs():
     assert old_lines[1].split()[0] == "unsized"
     assert "pairs" not in "\n".join(old_lines)
     assert planning.lines({}) == []
+
+
+def test_the_pre_estimate_pair_reads_the_declared_figure_when_present():
+    raised = doc(plan_route=route(30.0, "interview"), plan=16.0)
+    raised["estimate"]["declared_usd"] = 6.0
+    plain = doc(plan_route=route(30.0, "interview"), plan=16.0)
+    assert planning.table([raised])["default"]
+    pairs = [
+        figures.pairs
+        for arm in planning.table([raised, plain]).values()
+        for figures in arm.values()
+    ]
+    assert sorted(pair for group in pairs for pair in group) == [(30.0, 6.0), (30.0, 16.0)]

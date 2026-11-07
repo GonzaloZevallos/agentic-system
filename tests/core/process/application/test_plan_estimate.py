@@ -98,32 +98,30 @@ async def test_the_history_is_also_given_on_the_interview_arm(tmp_path):
 
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_an_estimate_below_what_was_spent_is_refused_and_retried_on_both_arms(arm, tmp_path):
+async def test_an_estimate_below_what_was_spent_is_raised_in_one_attempt_on_both_arms(
+    arm, tmp_path
+):
     spent = {**TASK, "cost_usd": 50.0}
-    scripted = [planned(estimated_cost_usd=20.0), planned(estimated_cost_usd=60.0)]
+    scripted = [planned(estimated_cost_usd=20.0)]
     if arm == "cold":
         runner, cfg = ScriptedRunner(tech_lead=scripted), cold(tmp_path)
     else:
         runner, cfg = interview_runner(*scripted), interviewed(tmp_path)
     patch = await plan(spent, cfg, memory_ports(runner))
 
-    assert runner.slugs.count("tech_lead") == 2
+    assert runner.slugs.count("tech_lead") == 1
     assert patch["status"] == "planned"
-    assert patch["estimate"] == {"cost_usd": 60.0, "files": 5}
-    assert [f["reason"] for f in patch["failures"]] == ["check"]
-    assert "already spent" in patch["failures"][0]["error"]
+    assert patch["estimate"]["declared_usd"] == 20.0
+    assert patch["estimate"]["cost_usd"] >= 70.0
+    assert not patch.get("failures")
 
 
-async def test_an_estimate_below_half_the_bucket_median_is_refused(tmp_path):
-    ports = memory_ports(
-        ScriptedRunner(
-            tech_lead=[planned(estimated_cost_usd=10.0), planned(estimated_cost_usd=45.0)]
-        )
-    )
+async def test_an_estimate_below_half_the_bucket_median_is_raised_to_the_median(tmp_path):
+    ports = memory_ports(ScriptedRunner(tech_lead=[planned(estimated_cost_usd=10.0)]))
     ports.documents.saved.extend(closed(f"OLD-{i}", 80.0) for i in range(5))
     patch = await plan(TASK, cold(tmp_path), ports)
-    assert patch["estimate"]["cost_usd"] == 45.0
-    assert "median" in patch["failures"][0]["error"]
+    assert patch["estimate"] == {"cost_usd": 80.0, "files": 5, "declared_usd": 10.0}
+    assert not patch.get("failures")
 
 
 # The two shapes of a plan at the `plan.plan` seam (ADR-0054): a plan that does not fit is

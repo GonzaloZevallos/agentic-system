@@ -17,7 +17,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from agentic.core.process.domain import returns
+from agentic.core.process.domain import cost_history, returns
 from agentic.core.process.domain.task import RoleRun
 
 from . import metrics, parallel_factor
@@ -68,7 +68,7 @@ class PlanningFigures:
     sizing_cost_usd: float = 0.0
     misrouted: int = 0
     critic_failed: int = 0
-    # `(pre_estimate_usd, estimate.cost_usd)` of the tasks that have both, in document order.
+    # `(pre_estimate_usd, declared estimate)` of the tasks that have both, in document order.
     pairs: tuple[tuple[float, float], ...] = ()
 
     def _per_task(self, total: float) -> float | None:
@@ -116,7 +116,7 @@ def _pair(plan_route: Mapping[str, Any], document: Mapping[str, Any]) -> tuple[f
     pre, estimate = plan_route.get("pre_estimate_usd"), document.get("estimate")
     if pre is None or not estimate or estimate.get("cost_usd") is None:
         return None
-    return float(pre), float(estimate["cost_usd"])
+    return float(pre), cost_history.declared_estimate(estimate)
 
 
 def task_planning(document: Mapping[str, Any]) -> TaskPlanning:

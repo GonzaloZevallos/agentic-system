@@ -147,3 +147,58 @@ rechazos se contradecían y la tarea escalaba en bucle.
 - **Texto al Tech Lead.** El paso de `### Parts` dice que el trabajo que cae después del
   merge (un workflow posterior, un commit de un bot) sigue siendo una subtarea de esta tarea,
   nunca una parte.
+
+## Adenda (2026-11-07): la estimación bajo el piso se sube, no se rechaza (GH-529)
+
+El chequeo del plan rechazaba una estimación por debajo de lo que la tarea ya gastó y otra por
+debajo de la mitad de la mediana del cubo (con al menos cinco tareas). Dos rechazos seguidos
+escalan como `failure`, que una persona no puede contestar: la tarea se queda parada. El
+2026-11-07 paró cuatro tareas de apostrophe:
+
+| Tarea | Mensaje |
+|---|---|
+| #486 | `estimated_cost_usd 6.00 is below what the task already spent 10.01` |
+| #583 | `estimated_cost_usd 3.00 is below what the task already spent 9.91` |
+| #584 | `estimated_cost_usd 3.00 is below what the task already spent 3.61` |
+| #596 | `estimated_cost_usd 7.50 is below half the median 17.10 of closed tasks with this many subtasks` |
+
+Los dos números (lo gastado y la mediana del cubo) los conoce el sistema antes de que el Tech
+Lead escriba. Por eso el sistema sube la estimación él mismo y deja constancia, en lugar de
+rechazar.
+
+- **La subida.** Una sola función pura, `cost_history.raised_estimate`. Si la cifra declarada
+  supera los dos pisos no cambia (identidad). Por debajo de lo gastado pasa a
+  `max(gastado + declarada, mediana del cubo si se conoce)`; por debajo de la mitad de la
+  mediana pasa a la mediana. Una cifra menor que lo gastado no puede ser un total: en los tres
+  casos es el trabajo restante valuado solo, así que `gastado + declarada` corrige la unidad.
+- **Por qué a una predicción y no al piso desnudo.** El tope por estimación es el doble de la
+  estimación. Subida solo hasta el piso, la tarea toparía en pleno desarrollo y escalaría ahí.
+- **El escalón en el borde es deliberado.** Una cifra apenas sobre lo gastado se acepta como
+  total, como hoy; una apenas debajo recibe una cifra mayor, que solo mueve el tope hacia el
+  lado seguro. El ajuste se juzga sobre la cifra subida y la calibración lee la declarada, así
+  que el escalón no sirve para torcer ninguna de las dos.
+- **El ajuste se juzga una vez, sobre la cifra subida.** `plan_check_for` la calcula con lo
+  gastado antes del intento y corre `plan_fits` sobre ella. Si la subida cruza la línea de
+  150 USD / 40 archivos o el p90 de referencia, el rechazo "no cabe" cita la cifra subida y su
+  causa, para que el reintento entienda una cifra que el Tech Lead no escribió. Después de la
+  entrega, `plan._floored` llama a la misma función con el mismo gastado; su resultado es la
+  única cifra que leen `plan_route.regate`, el ajuste de las partes y la escritura de la
+  estimación. Nada vuelve a juzgar el ajuste.
+- **`estimate.declared_usd`.** Cuando el sistema subió la estimación, el documento guarda la
+  cifra del Tech Lead como `declared_usd`; sin subida la clave no existe y el documento no
+  cambia. La calibración lee la declarada por `cost_history.declared_estimate` (pares del
+  historial, razón estimado/real del scorecard y el par del pre-estimador). La estimación en
+  vigor y el tope siguen leyendo `cost_usd`. La sección del Tech Lead recibe una línea: "The
+  system raised the estimate from X to Y USD: <causa>".
+- **Lo que sigue rechazándose.** Partes, ajuste, forma del plan, nombres de CI,
+  `estimated_files` al menos 1 y `estimated_files` igual a 0 en un plan solo de bandeja.
+- **Margen en la línea.** El `cost_usd` guardado se sube además a lo gastado después del nodo
+  del plan, pero el ajuste se juzga con lo gastado antes: un plan a menos del costo de un nodo
+  del plan de la línea se juzga apenas por debajo de la estimación que guarda.
+- **Texto al Tech Lead.** Los dos prompts dicen que la estimación es el total, lo gastado
+  incluido, y que el sistema sube la que queda bajo cualquiera de los dos pisos. Se quita
+  "explicar la brecha": el pedido decía "subida o explicada", pero ningún código puede leer
+  una explicación, así que se acepta el recorte a "subida". La huella de los prompts se mueve
+  una vez.
+- **Riesgo conocido.** Una tarea cuyo costo real supera el doble de la cifra subida sigue
+  parando en el tope por estimación (`estimate`): es ADR-0054 funcionando como se diseñó.
