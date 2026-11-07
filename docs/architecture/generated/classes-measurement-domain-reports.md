@@ -7,7 +7,7 @@ Esta página muestra las clases públicas de los módulos del grupo `reports` de
 
 ```mermaid
 classDiagram
-    class findings_report__Figures["Figures"]
+    class findings_report__Figures["findings_report.Figures"]
     class findings_report__FindingLine["FindingLine"]
     class findings_report__FindingsDocument["FindingsDocument"]
     class findings_report__FindingsReport["FindingsReport"]
@@ -17,5 +17,12 @@ classDiagram
     class playbook_window__Comparison["Comparison"]
     class playbook_window__Segment["Segment"]
     class role_usage__RoleUsage["RoleUsage"]
+    class shadow_report__Buckets["Buckets"]
+    class shadow_report__Figures["shadow_report.Figures"]
+    class shadow_report__ShadowReport["ShadowReport"]
+    class shadow_report__TaskShadow["TaskShadow"]
     findings_report__FindingsReport --> findings_report__Figures
+    shadow_report__Figures --> shadow_report__Buckets
+    shadow_report__ShadowReport --> shadow_report__Figures
+    shadow_report__TaskShadow --> shadow_report__Figures
 ```

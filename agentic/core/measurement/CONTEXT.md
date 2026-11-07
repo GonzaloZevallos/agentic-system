@@ -79,6 +79,11 @@ Si la tarea tiene una asignación de brazo (ADR-0081), el brazo sale de los inte
 _Avoid_: experimento (es el conjunto de brazos que se comparan), variante, configuración
 _Campo_: arm — de los ensayos controlados y del A/B testing
 
+**Hallazgo perdido** (`missed`):
+Un hallazgo de la revisión sombra del brazo `single` (ADR-0088) para el que la revisión única, la de la unidad revisada, no tiene ninguna fila con el mismo archivo y la misma familia de categoría (`shadow_report.build`, con `finding_file` y `category_family` como únicas entradas). La cifra es una cota inferior: la familia es ancha, así que una fila de la misma familia en el mismo archivo oculta un defecto distinto, y las cabezas de las dos revisiones difieren. Un hallazgo cuya ubicación no nombra un archivo es `unlocated` y nunca cuenta como perdido; solo cuentan los registros de sombra `ran`, y los `late`, `unavailable` y `skipped` se informan aparte.
+_Avoid_: falso negativo (no hay verdad de referencia: la sombra es otra revisión, no un oráculo), hallazgo omitido
+_Campo_: missed finding / false negative — de la evaluación de revisores y de detectores; aquí no hay etiqueta humana, solo una segunda revisión como control
+
 **Set de evaluación**:
 Las tareas fijas que se re-corren idénticas contra cada versión de prompts, declaradas en
 `.agentic/eval-set.yaml` como `entries: [{issue, base, title, body}]`: el número del issue, el sha

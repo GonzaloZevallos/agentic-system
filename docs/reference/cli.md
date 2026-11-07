@@ -169,10 +169,10 @@ options:
 ## `agentic eval`
 
 ```text
-usage: agentic eval [-h] {run,score,compare,findings} ...
+usage: agentic eval [-h] {run,score,compare,findings,shadow} ...
 
 positional arguments:
-  {run,score,compare,findings}
+  {run,score,compare,findings,shadow}
     run                 run every entry of the evaluation set from its pinned base, once per arm,
                         each in its own root and one at a time
     score               write one JSONL line per evaluation-set task, read off its own document
@@ -180,6 +180,8 @@ positional arguments:
                         alone
     findings            where important findings and returns come from, over the task documents
                         closed in a window (GH-354); reads documents only
+    shadow              what the single review missed that its shadow found, over the task documents
+                        with shadow reviews (GH-473); reads documents only
 
 options:
   -h, --help            show this help message and exit
@@ -246,6 +248,17 @@ options:
   -h, --help            show this help message and exit
   --since DATE          first day, ISO
   --until DATE          last day, ISO
+  --product-dir, --product PRODUCT_DIR
+                        root of the product repo (AGENTIC_PRODUCT_DIR)
+```
+
+## `agentic eval shadow`
+
+```text
+usage: agentic eval shadow [-h] [--product-dir PRODUCT_DIR]
+
+options:
+  -h, --help            show this help message and exit
   --product-dir, --product PRODUCT_DIR
                         root of the product repo (AGENTIC_PRODUCT_DIR)
 ```

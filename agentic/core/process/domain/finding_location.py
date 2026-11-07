@@ -45,9 +45,10 @@ def finding_file(location: str) -> str | None:
     The text is stripped, cut at the first `::` (a pytest id), cut at the first `:` (a line
     suffix), freed of a trailing `#L<n>[-L<n>]` and of a leading `./`. It is `None` when
     nothing is left, when it holds whitespace, starts with `/` or `~`, or has `..` as a segment
-    (a URL never gets here: its `:` cut it to a bare scheme); otherwise it is the path only when it contains `/` or ends in one of
-    `KNOWN_EXTENSIONS`. So `full_checks:<check>`, `copy:<n>.<i>:<loc>`, plan or brief references
-    and prose give `None`, and the shadow finding there is `unlocated`.
+    (a URL never gets here: its `:` cut it to a bare scheme); otherwise it is the path only when
+    it contains `/` or ends in one of `KNOWN_EXTENSIONS`. So `full_checks:<check>`,
+    `copy:<n>.<i>:<loc>`, plan or brief references and prose give `None`, and the shadow
+    finding there is `unlocated`.
 
     The extension list is closed on purpose: anything it does not know falls to `unlocated`,
     the safe direction. A one-token prose with a slash, like `input/output`, localizes: the

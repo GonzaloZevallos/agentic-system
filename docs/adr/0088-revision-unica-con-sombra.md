@@ -120,3 +120,18 @@ Ambas diferencias son parte del brazo; no se corrigen para parecerse al control.
   un revisor completo; el costo escala con la cantidad de subtareas y termina al vencer
   `shadow_grace_s`.
 - Adoptar `single` por defecto es otra tarea, que se decide con la ventana de arriba.
+
+## Adenda: dónde se decide la comparación (GH-473, parte 2)
+
+Solo se mudaron nombres; la decisión no cambia.
+
+- La comparación se decide únicamente en `measurement/domain/shadow_report.build`, con
+  `process/domain/finding_location.finding_file` y `category_family` como entradas. `rules.shadow_match`
+  ya no existe.
+- `finding_file` corta el `location` en el primer `::` y luego en el primer `:`, quita un sufijo
+  `#L<n>[-L<n>]` y un `./` inicial, descarta lo vacío, con espacios, absoluto, con `..` como segmento,
+  y acepta lo que contiene `/` o termina en una extensión de la lista cerrada `KNOWN_EXTENSIONS`; lo
+  demás (`full_checks:<check>`, `copy:...`, prosa) es `unlocated`. Una prosa de un solo token con barra,
+  como `input/output`, se ubica: es un residuo conocido. Los archivos renombrados no se siguen.
+- La cifra de hallazgos perdidos es una cota inferior, por familia.
+- El informe lo imprime `agentic eval shadow`, hermano de `agentic eval findings`.

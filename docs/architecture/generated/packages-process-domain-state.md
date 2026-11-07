@@ -17,6 +17,7 @@ graph TD
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_domain__document["domain.document"]
     m_domain__experiment["domain.experiment"]
+    m_domain__finding_location["domain.finding_location"]
     m_domain__legacy_names["domain.legacy_names"]
     m_domain__returns["domain.returns"]
     m_domain__rules["domain.rules"]

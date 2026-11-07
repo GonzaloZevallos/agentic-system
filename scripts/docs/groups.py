@@ -144,6 +144,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.document": "state",
     "domain.exempt_queue": "machine",
     "domain.experiment": "state",
+    "domain.finding_location": "state",
     "domain.landing": "landing",
     "domain.legacy_names": "state",
     "domain.master_gain": "checks",
@@ -204,5 +205,6 @@ MEASUREMENT_CLUSTERS: Mapping[str, str] = {
     "domain.playbook_window": "reports",
     "domain.role_usage": "reports",
     "domain.scorecard": "scorecard",
+    "domain.shadow_report": "reports",
     "domain.task_scores": "langfuse",
 }

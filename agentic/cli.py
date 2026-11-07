@@ -56,6 +56,7 @@ from .core.measurement.domain import (
     evaluation,
     findings_report,
     playbook_window,
+    shadow_report,
     task_scores,
 )
 from .core.measurement.domain import metrics as delivery_metrics
@@ -491,6 +492,19 @@ def build_parser() -> CommandTree:
         dest="product_dir",
         help="root of the product repo (AGENTIC_PRODUCT_DIR)",
     )
+    eval_shadow = add(
+        ("eval", "shadow"),
+        eval_sub,
+        "shadow",
+        help="what the single review missed that its shadow found, over the task documents "
+        "with shadow reviews (GH-473); reads documents only",
+    )
+    eval_shadow.add_argument(
+        "--product-dir",
+        "--product",
+        dest="product_dir",
+        help="root of the product repo (AGENTIC_PRODUCT_DIR)",
+    )
     stack = add(("stack",), sub, "stack", help="the product's own stack (ADR-0034)")
     stack_sub = stack.add_subparsers(dest="stack_command", required=True)
     stack_review = add(
@@ -855,6 +869,8 @@ def main() -> None:
                     date.fromisoformat(args.since),
                     date.fromisoformat(args.until),
                 )
+            elif args.eval_command == "shadow":
+                work = partial(_eval_shadow, cfg, ports)
             else:
                 if args.experiment is None and (args.frm is None or args.to is None):
                     parser.error("eval compare: give <from> <to>, or --experiment ID")
@@ -2972,6 +2988,24 @@ async def _eval_compare(
     await eval_commands._eval_compare(cfg, ports, frm, to, resolve)
 
 
+def _task_documents(cfg: Configuration) -> list[TaskState]:
+    """The product's task documents, each with its `id` from the file name, in file order.
+    A document that cannot be read is counted and named in one line, and left out."""
+    tasks_dir = cfg.product_dir / task_document.TASKS_SUBDIR
+    documents: list[TaskState] = []
+    unreadable = 0
+    for path in sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []:
+        try:
+            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
+        except (ValueError, OSError, yaml.YAMLError):
+            unreadable += 1
+            continue
+        documents.append(cast(TaskState, {"id": path.stem, **raw}))
+    if unreadable:
+        print(f"agentic: {unreadable} document(s) could not be read; excluded")
+    return documents
+
+
 async def _eval_findings(cfg: Configuration, ports: Ports, since: date, until: date) -> None:
     """`agentic eval findings --since --until`: `findings_report` over the product's task
     documents closed in the window, as Markdown. Reads documents only: no lock, no `gh`, no
@@ -2980,23 +3014,18 @@ async def _eval_findings(cfg: Configuration, ports: Ports, since: date, until: d
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
         raise CannotStart(str(exc)) from exc
-    tasks_dir = cfg.product_dir / task_document.TASKS_SUBDIR
-    documents: list[findings_report.FindingsDocument] = []
-    unreadable = 0
-    for path in sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []:
-        try:
-            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
-        except (ValueError, OSError, yaml.YAMLError):
-            unreadable += 1
-            continue
-        documents.append(cast(findings_report.FindingsDocument, {"id": path.stem, **raw}))
-    if unreadable:
-        print(f"agentic: {unreadable} document(s) could not be read; excluded")
+    documents = cast(list[findings_report.FindingsDocument], _task_documents(cfg))
     print(
         findings_report.render(
             findings_report.build(documents, since, until), product, since, until
         )
     )
+
+
+async def _eval_shadow(cfg: Configuration, ports: Ports) -> None:
+    """`agentic eval shadow`: `shadow_report` over every task document with shadow reviews,
+    as text. Reads documents only: no lock, no `gh`, no network."""
+    print(shadow_report.render(shadow_report.build(_task_documents(cfg))))
 
 
 async def _invoke(
