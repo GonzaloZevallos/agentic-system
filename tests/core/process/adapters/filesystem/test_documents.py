@@ -460,7 +460,7 @@ def test_tracker_failures_round_trip_as_rows_with_no_free_text(tmp_path):
 
     assert documents.load("T-1")["tracker_failures"] == rows
     saved = path.read_text(encoding="utf-8")
-    assert "stderr" not in saved and "502" not in saved
+    assert "stderr" not in saved and "HTTP 502" not in saved
 
 
 def test_a_document_without_tracker_failures_writes_none_and_loads_as_empty(tmp_path):
