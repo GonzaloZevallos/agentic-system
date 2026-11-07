@@ -44,7 +44,7 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     task_id = state["id"]
     if (part_of := rules.split_part_of(state.get("description", ""))) is not None:
         # Defensive: the plan stage asks the human before a part reaches here.
-        return finish(state, rules.part_over_line(task_id, part_of, None), ports)
+        return finish(state, rules.part_over_line(task_id, part_of, None, at=ports.now()), ports)
     parts = state.get("parts", [])
     current = state
     # What the node returns besides the end: the graph's channels take the checklist and its
@@ -138,7 +138,8 @@ def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports, left: st
                 f"split: {step} failed ({exc}); {done} of "
                 f"{len(state.get('parts', []))} parts are open and {left}, resume to finish",
             ),
-        }
+        },
+        at=ports.now(),
     )
     return finish(state, patch, ports)
 

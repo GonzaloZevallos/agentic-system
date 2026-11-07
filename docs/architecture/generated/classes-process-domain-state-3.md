@@ -22,10 +22,11 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__Carried["Carried"]
-    class task__ChangesRequested["ChangesRequested"]
+    class task__CheckRun["CheckRun"]
+    class task__CiJobTiming["CiJobTiming"]
     class task__CiLogRecord["CiLogRecord"]
     class task__CiSpeculation["CiSpeculation"]
+    class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
     class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]

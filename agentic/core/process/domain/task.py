@@ -598,6 +598,49 @@ class Failure(TypedDict):
     # Written only when something was reaped, so a document with no leak renders as it
     # always did; read with `.get("reaped", [])`.
     reaped: NotRequired[list[ReapedProcess]]
+    # When this attempt began and when its `AttemptFailed` was caught, ISO-8601 UTC, stamped
+    # by `run_role` from its injected clock. Absent on a failure recorded before these fields
+    # existed, which reads as unknown (`None`), never as 0.
+    started_at: NotRequired[str]
+    ended_at: NotRequired[str]
+    # The Developer's own check runs this attempt launched before it failed (`CheckRun`), the
+    # last 50 only, and how many older ones were dropped. Absent when none was recorded.
+    check_runs: NotRequired[list[CheckRun]]
+    check_runs_dropped: NotRequired[int]
+
+
+class CheckRun(TypedDict):
+    """One Bash call of a Developer that ran a declared check (`domain/check_runs.py`).
+    `command` is the matched segment only, scrubbed, at most 200 characters, never with a
+    leading `NAME=value` assignment. `check` is the declared name on an exact match and `None`
+    otherwise. `started_at` is ISO-8601 UTC. `duration_s: None` means the call never finished
+    or was detached; a set `duration_s` with `exit_code: None` means the code is unknown (a
+    pipe or a later chained segment decided it), never success."""
+
+    command: str
+    check: str | None
+    started_at: str
+    duration_s: float | None
+    exit_code: int | None
+
+
+class CiJobTiming(TypedDict):
+    name: str
+    duration_s: float
+
+
+class CiTiming(TypedDict):
+    """The instants a CI wait is derived from (`ci.waited_seconds`, the only place the wait is
+    computed): when the head was `pushed_at`, when the node `node_started_at` waiting for it,
+    and when the run that judged it started and ended (`None` when unknown). `verdict` is the
+    one the gate decided; recording it changes no verdict. All instants ISO-8601 UTC."""
+
+    pushed_at: str
+    node_started_at: str
+    run_started_at: str | None
+    run_ended_at: str | None
+    verdict: Literal["green", "red", "no_verdict"]
+    jobs: NotRequired[list[CiJobTiming]]
 
 
 class GateRecord(TypedDict, total=False):
@@ -669,6 +712,12 @@ class RoleRun(TypedDict):
     # `tool_use` blocks of this run, by tool name; a name outside the known set counts
     # as `other`. Absent on a run recorded before this field existed.
     tool_calls: NotRequired[dict[str, int]]
+    # The Developer's own check runs in the delivering attempt (`CheckRun`), the last 50 only,
+    # how many older ones were dropped, and how many hook errors were swallowed recording
+    # them. Each count is written only when above 0; absent on a run recorded before them.
+    check_runs: NotRequired[list[CheckRun]]
+    check_runs_dropped: NotRequired[int]
+    check_runs_errors: NotRequired[int]
     # What of `cost_by_model` a sub-agent spent: every model but this run's own
     # (ADR-0013). Not additive with `cost_usd`, which already counts that dollar once.
     # Absent on a run recorded before this field existed.
@@ -941,19 +990,31 @@ class Subtask(TypedDict, total=False):
 # there is none.
 
 
+#
+# Each of the three entries that mark a pause carries `at`, the ISO-8601 UTC instant it was
+# written, passed in by the application layer and built only by the constructors in `rules`.
+# Absent on an entry written before it existed, which reads as unknown; no reader of the
+# epoch looks at it. A `lapse` carries none.
+
+
 class ResumedPauseEntry(TypedDict):
     kind: Literal["resumed"]
+    at: NotRequired[str]
 
 
 class EscalationPauseEntry(TypedDict):
     kind: Literal["escalation"]
     value: EscalationClass
+    at: NotRequired[str]
+    # The CI timing of a `ci` escalation that wrote no `FullChecksRecord` (a `no_verdict` one).
+    ci: NotRequired[CiTiming]
 
 
 class FailurePauseEntry(TypedDict):
     kind: Literal["failure"]
     value: FailureReason
     section: str
+    at: NotRequired[str]
     # The failure's `resets_at`, copied by `rules.logged` only when it has one; absent on an
     # entry written before this field existed (`rules.auto_resumable` never requires it).
     resets_at: NotRequired[str]
@@ -1241,6 +1302,8 @@ class FullChecksRecord(TypedDict):
     # review's speculative push was consumed. A number and a closed word, no git text.
     push_attempts: NotRequired[int]
     push_kind: NotRequired[PushKind]
+    # The instants the CI wait is derived from (`CiTiming`); absent on a record written before it.
+    ci_timing: NotRequired[CiTiming]
 
 
 class MergeCiRecord(TypedDict):
@@ -1272,6 +1335,8 @@ class MergeCiRecord(TypedDict):
     failing: NotRequired[list[str]]
     cause: NotRequired[CiCause]
     rerun_at: NotRequired[str]
+    # The instants the CI wait is derived from (`CiTiming`); absent on a record written before it.
+    ci_timing: NotRequired[CiTiming]
 
 
 class MergeConflictRecord(TypedDict):

@@ -30,6 +30,8 @@ PAIR = PAIR_PM_PA
 KEY = PAIR.key
 DEF = {"pair": KEY, "category": "definition", "reason": "gap"}
 
+_STAMP = "2026-11-06T12:00:00+00:00"
+
 
 def test_remaining_changes_counts_down_from_the_limit():
     assert rules.remaining_changes({}, PAIR, 2) == 2
@@ -369,7 +371,7 @@ def test_resume_target_sends_a_ui_feature_back_to_ux_designer_after_a_lead_hits_
         "changes_requested": {PAIR_UX_LEAD.key: 2},
         **rules.escalation("returns", rules.limit_reached(PAIR_UX_LEAD, 2, "dead end")),
     }
-    resumed = task.apply(state, rules.resumed(state, None))
+    resumed = task.apply(state, rules.resumed(state, None, at=_STAMP))
     assert resumed["changes_requested"][PAIR_UX_LEAD.key] == 0
     assert rules.resume_target(resumed) == "ux_flow"
 
@@ -394,7 +396,7 @@ def test_resume_target_lands_on_ui_screens_after_an_unrelated_failure_there():
         "change_history": [rules.change_entry(PAIR_UX_LEAD, rules.PRD_RETURN, "dead end")],
         **rules.escalation("failure", "UI Designer failed twice: boom"),
     }
-    resumed = task.apply(state, rules.resumed(state, "fixed"))
+    resumed = task.apply(state, rules.resumed(state, "fixed", at=_STAMP))
     assert rules.resume_target(resumed) == "ui_screens"
 
 
@@ -457,7 +459,7 @@ def test_a_task_escalated_in_deliver_after_final_validation_resumes_with_no_reru
         "runs": [run("Tech Lead", review), run(roles.PM_FINAL.name)],
         **rules.escalation("failure", "deliver's own checkout failed"),
     }
-    resumed = task.apply(state, rules.resumed(state, "fixed"))
+    resumed = task.apply(state, rules.resumed(state, "fixed", at=_STAMP))
     assert rules.resume_target(resumed) == "integrate"
     assert rules.after_integrate(resumed) == "deliver"
 
@@ -727,7 +729,7 @@ def test_the_status_before_the_escalation_is_derived_from_the_definition_runs():
     # definition ready to plan.
     discarded = {**approved, "status": "discarded", "type": "bug"}
     assert rules.resumed_status(discarded) == "discarded"
-    assert rules.resume_target({**discarded, **rules.resumed(discarded, None)}) is None
+    assert rules.resume_target({**discarded, **rules.resumed(discarded, None, at=_STAMP)}) is None
 
 
 def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision():
@@ -738,7 +740,7 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
         "questions_for_human": ["Which currency?"],
         "subtasks": {"api": {"id": "api", "status": "returned"}},
     }
-    patch = rules.resumed(state, "  Keep USD.\n\n## Why\n\nAudits.  ")
+    patch = rules.resumed(state, "  Keep USD.\n\n## Why\n\nAudits.  ", at=_STAMP)
     assert patch["escalated"] is None and patch["status"] == "developing"
     assert patch["escalation_class"] is None
     assert patch["questions_for_human"] == []
@@ -753,9 +755,9 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
         "### Decision 2\n\nEscalated: x\n\nGo"
     )
     assert "changes_requested" not in rules.resumed(
-        {"escalated": "PjM stopped by the task cap: 1 of 1"}, None
+        {"escalated": "PjM stopped by the task cap: 1 of 1"}, None, at=_STAMP
     )
-    assert "sections" not in rules.resumed({}, "   ")
+    assert "sections" not in rules.resumed({}, "   ", at=_STAMP)
 
 
 def test_human_section_with_no_questions_is_byte_identical_to_today():
@@ -854,14 +856,16 @@ def test_resuming_leaves_the_proposed_invariants_untouched():
     # A resume is not a fresh interview: what the ephemeral proposed across the whole
     # interview (issue #42) survives a resume exactly as it was, for the next retake to
     # seed from; `resumed` never mentions the key, so `apply` keeps it as is.
-    assert "proposed_invariants" not in rules.resumed({"proposed_invariants": ["Do X."]}, None)
+    assert "proposed_invariants" not in rules.resumed(
+        {"proposed_invariants": ["Do X."]}, None, at=_STAMP
+    )
 
 
 def test_resuming_leaves_the_integration_to_the_fan_in():
     """Only the fan-in knows what its merges could not settle, so only it may add the
     integration; a resume just points the task at it."""
     state = {"subtasks": {"api": {"status": "approved"}, "domain": {"status": "approved"}}}
-    patch = rules.resumed(state, None)
+    patch = rules.resumed(state, None, at=_STAMP)
     assert "subtasks" not in patch
     assert rules.resume_target(task.apply(state, patch)) == "integrate"
 
@@ -1628,8 +1632,8 @@ def test_next_archive_run_does_not_confuse_gh_1_with_gh_12():
 
 def test_logged_appends_one_escalation_entry_reading_the_patchs_own_class():
     patch = {"status": "waiting_on_human"} | rules.escalation("cap", "PjM stopped: 1 of 1")
-    logged = rules.logged(patch)
-    assert logged["pause_log"] == [{"kind": "escalation", "value": "cap"}]
+    logged = rules.logged(patch, at=_STAMP)
+    assert logged["pause_log"] == [{"kind": "escalation", "value": "cap", "at": _STAMP}]
     # Everything else in the patch travels untouched.
     assert logged["escalated"] == "PjM stopped: 1 of 1" and logged["status"] == "waiting_on_human"
 
@@ -1656,24 +1660,33 @@ def test_logged_folds_failures_before_the_escalation_entry_in_order():
             "section": "Developer: api",
         },
     ]
-    logged = rules.logged(patch, failures)
+    logged = rules.logged(patch, failures, at=_STAMP)
     assert logged["pause_log"] == [
-        {"kind": "failure", "value": "network", "section": "Developer: api"},
-        {"kind": "failure", "value": "account_limit", "section": "Developer: api"},
-        {"kind": "escalation", "value": "failure"},
+        {"kind": "failure", "value": "network", "section": "Developer: api", "at": _STAMP},
+        {"kind": "failure", "value": "account_limit", "section": "Developer: api", "at": _STAMP},
+        {"kind": "escalation", "value": "failure", "at": _STAMP},
     ]
 
 
 def test_logged_defaults_a_legacy_failure_with_no_reason_to_other():
     failures = [{"role": "PM", "attempt": 1, "error": "x", "cost_usd": 0.0, "session_id": ""}]
-    logged = rules.logged(rules.escalation("failure", "PM failed 2 times: x"), failures)
-    assert logged["pause_log"][0] == {"kind": "failure", "value": "other", "section": ""}
+    logged = rules.logged(
+        rules.escalation("failure", "PM failed 2 times: x"),
+        failures,
+        at=_STAMP,
+    )
+    assert logged["pause_log"][0] == {
+        "kind": "failure",
+        "value": "other",
+        "section": "",
+        "at": _STAMP,
+    }
 
 
 def test_logged_with_unmergeable_has_no_failures_since_no_role_ran():
     patch = rules.unmergeable("api", "domain", "CONFLICT (content): x.py")
-    logged = rules.logged(patch)
-    assert logged["pause_log"] == [{"kind": "escalation", "value": "unmergeable"}]
+    logged = rules.logged(patch, at=_STAMP)
+    assert logged["pause_log"] == [{"kind": "escalation", "value": "unmergeable", "at": _STAMP}]
 
 
 def _failure_entry(reason: str, section: str = "Developer: api") -> dict:
@@ -1945,7 +1958,7 @@ def test_only_an_account_limit_that_spent_the_hourly_calendar_persisted():
 
 
 def test_the_persisted_escalation_is_a_failure_class_pause_auto_resumable_does_not_retake():
-    patch = rules.account_limit_persisted_patch()
+    patch = rules.account_limit_persisted_patch(at=_STAMP)
     assert patch["escalated"] == "account limit persisted 7 days"
     assert patch["escalation_class"] == "failure"
     state = {
@@ -1990,7 +2003,7 @@ def test_a_persisted_account_limit_needs_a_human():
     assert rules.needs_a_human(cast(Any, state))
     patched = task.apply(
         _paused_by(_failure_entry("account_limit"), _escalation_entry("failure")),
-        rules.account_limit_persisted_patch(),
+        rules.account_limit_persisted_patch(at=_STAMP),
     )
     assert rules.needs_a_human(patched)
 
@@ -3304,7 +3317,7 @@ def test_tracker_with_parts_states_where_the_work_goes():
 def test_split_is_an_end_with_nothing_to_resume():
     done = {"status": "split", "type": "feature", "parts": PARTS}
     assert rules.resumed_status(done) == "split"
-    assert rules.resume_target({**done, **rules.resumed(done, None)}) is None
+    assert rules.resume_target({**done, **rules.resumed(done, None, at=_STAMP)}) is None
 
 
 def test_a_task_paused_while_splitting_resumes_at_split_without_planning_again():
@@ -3315,7 +3328,7 @@ def test_a_task_paused_while_splitting_resumes_at_split_without_planning_again()
         "split_issues": {"1": "https://github.com/o/r/issues/5"},
         **rules.escalation("failure", "gh failed"),
     }
-    resumed = task.apply(paused, rules.resumed(paused, None))
+    resumed = task.apply(paused, rules.resumed(paused, None, at=_STAMP))
     assert rules.resume_target(resumed) == "split"
 
 
@@ -3327,7 +3340,7 @@ def test_resuming_an_estimate_escalation_of_a_part_waives_the_fit_and_replans():
         "estimate": {"cost_usd": 400.0, "files": 90},
         **rules.escalation("estimate", "a part of a split does not fit"),
     }
-    patch = rules.resumed(paused, "Build it as one.")
+    patch = rules.resumed(paused, "Build it as one.", at=_STAMP)
     assert patch["fit_waived"] is True
     assert patch["parts"] == []
     resumed = task.apply(paused, patch)
@@ -3338,7 +3351,7 @@ def test_resuming_an_estimate_escalation_of_a_part_waives_the_fit_and_replans():
 
 def test_resuming_any_other_escalation_leaves_the_fit_alone():
     paused = {"status": "waiting_on_human", "parts": PARTS, **rules.escalation("failure", "x")}
-    patch = rules.resumed(paused, None)
+    patch = rules.resumed(paused, None, at=_STAMP)
     assert "fit_waived" not in patch and "parts" not in patch
 
 
@@ -3684,7 +3697,7 @@ def test_after_plan_routes_a_plan_of_only_a_checklist_to_tracker_only():
 def test_tracker_only_is_an_end_with_nothing_to_resume():
     done = {"status": "tracker_only", "type": "feature", "tracker_checklist": CHECKLIST}
     assert rules.resumed_status(done) == "tracker_only"
-    assert rules.resume_target({**done, **rules.resumed(done, None)}) is None
+    assert rules.resume_target({**done, **rules.resumed(done, None, at=_STAMP)}) is None
     assert rules.finished("tracker_only", "2026-10-24T10:00:00+00:00") == {
         "status": "tracker_only",
         "finished_at": "2026-10-24T10:00:00+00:00",
@@ -3700,7 +3713,7 @@ def test_a_tracker_only_task_paused_after_the_plan_or_on_a_failed_comment_resume
         "tracker_checklist": CHECKLIST,
         **rules.escalation("failure", "tracker only: commenting failed"),
     }
-    resumed = task.apply(paused, rules.resumed(paused, None))
+    resumed = task.apply(paused, rules.resumed(paused, None, at=_STAMP))
     assert rules.resume_target(resumed) == "tracker_only"
     # Paused right after the plan (no failed comment): the same road, never `plan`.
     after_plan = {**TRACKER_PLAN, "status": "planned"}
@@ -3791,17 +3804,17 @@ def test_a_resume_of_a_part_that_never_asked_does_not_write_fit_waived():
         "subtasks": {"S1": {"status": "pending"}},
         **rules.escalation("estimate", "the task passed twice its estimate"),
     }
-    patch = rules.resumed(state, "go on")
+    patch = rules.resumed(state, "go on", at=_STAMP)
     assert "fit_waived" not in patch and "fit_question" not in patch
 
 
 def test_part_over_line_is_one_estimate_escalation_marked_fit_question_with_no_proposal():
-    patch = rules.part_over_line("GH-338", PART_OF, GH_338_FIT)
+    patch = rules.part_over_line("GH-338", PART_OF, GH_338_FIT, at=_STAMP)
     assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
     assert patch["escalated"] == rules.fit_question_text("GH-338", PART_OF, GH_338_FIT)
     assert patch["status"] == "waiting_on_human" and patch["current_role"] == "PjM"
     assert "proposed_estimate" not in patch
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "estimate"}]
+    assert patch["pause_log"] == [{"kind": "escalation", "value": "estimate", "at": _STAMP}]
 
 
 def test_a_part_paused_over_the_line_and_resumed_with_a_comment_waives_the_fit():
@@ -3811,10 +3824,10 @@ def test_a_part_paused_over_the_line_and_resumed_with_a_comment_waives_the_fit()
         "type": "feature",
         "subtasks": subtasks,
         "estimate": {"cost_usd": 20.0, "files": 4},
-        **rules.part_over_line("GH-338", PART_OF, GH_338_FIT),
+        **rules.part_over_line("GH-338", PART_OF, GH_338_FIT, at=_STAMP),
     }
     paused = task.apply({}, paused)
-    patch = rules.resumed(paused, "Build it whole.")
+    patch = rules.resumed(paused, "Build it whole.", at=_STAMP)
     assert patch["fit_waived"] is True and patch["fit_question"] is False
     # The plan is kept: nothing plans again.
     assert patch["status"] == "planned"
@@ -3831,7 +3844,7 @@ def test_a_part_paused_by_the_cap_at_twice_the_estimate_is_not_waived_by_a_resum
         "proposed_estimate": 60.0,
         **rules.escalation("estimate", "the task passed twice its estimate"),
     }
-    patch = rules.resumed(paused, "Go on.")
+    patch = rules.resumed(paused, "Go on.", at=_STAMP)
     assert "fit_waived" not in patch and "fit_question" not in patch
     assert patch["estimate_revisions"] == [{"cost_usd": 60.0, "source": "proposed"}]
 
@@ -3904,14 +3917,15 @@ def test_a_lapse_entry_is_logged_but_never_changes_whether_a_pause_is_retaken():
                 "section": "Developer: api",
             }
         ],
+        at=_STAMP,
     )
     state = {"pause_log": failed["pause_log"]}
     assert rules.auto_resumable(state) == "network"
-    lapsed = rules.logged({}, lapses=["ready comment: OSError"])
+    lapsed = rules.logged({}, lapses=["ready comment: OSError"], at=_STAMP)
     assert lapsed["pause_log"] == [{"kind": "lapse", "value": "ready comment: OSError"}]
     with_lapse = {"pause_log": [*failed["pause_log"], *lapsed["pause_log"]]}
     assert rules.auto_resumable(with_lapse) == "network"
-    assert rules.logged({"a": 1}) == {"a": 1, "pause_log": []}
+    assert rules.logged({"a": 1}, at=_STAMP) == {"a": 1, "pause_log": []}
 
 
 # GH-344 blocker-resolution: a blocker settled by slices, and the queue-blocked line.
@@ -4539,3 +4553,57 @@ def test_poll_plan_keeps_a_spent_notice_in_a_held_round():
         held=["scratch"],
     )
     assert plan.actions == [rules.PollAction("retakes_spent", 5)]
+
+
+# The instants of the pause log (GH-467, part A): `at` and `ci` are optional, omitted when
+# unknown, and no reader of the epoch looks at them.
+
+_AT = "2026-11-06T10:00:00+00:00"
+_TIMING = {
+    "pushed_at": "2026-11-06T09:00:00+00:00",
+    "node_started_at": "2026-11-06T09:01:00+00:00",
+    "run_started_at": None,
+    "run_ended_at": None,
+    "verdict": "no_verdict",
+}
+
+
+def test_resumed_entry_carries_the_instant_it_is_given():
+    assert rules.resumed_entry(at=_AT) == {"kind": "resumed", "at": _AT}
+
+
+def test_resumed_stamps_its_entry():
+    state = {"status": "waiting_on_human", "escalated": "x"}
+    assert rules.resumed(state, None, at=_AT)["pause_log"] == [{"kind": "resumed", "at": _AT}]
+
+
+def test_logged_stamps_failures_and_the_escalation_but_never_a_lapse():
+    patch = rules.escalation("failure", "Developer failed")
+    failures = [{"role": "Developer", "attempt": 1, "error": "x", "reason": "sdk", "section": "s"}]
+    got = rules.logged(patch, failures, ["step: Boom"], at=_AT)["pause_log"]
+    assert got == [
+        {"kind": "failure", "value": "sdk", "section": "s", "at": _AT},
+        {"kind": "escalation", "value": "failure", "at": _AT},
+        {"kind": "lapse", "value": "step: Boom"},
+    ]
+
+
+def test_logged_puts_the_ci_timing_on_a_ci_escalation_only():
+    ci_patch = rules.escalation("ci", "CI gave no verdict")
+    got = rules.logged(ci_patch, at=_AT, ci=cast(Any, _TIMING))["pause_log"]
+    assert got == [{"kind": "escalation", "value": "ci", "at": _AT, "ci": _TIMING}]
+    other = rules.logged(rules.escalation("cap", "stopped"), at=_AT, ci=cast(Any, _TIMING))
+    assert other["pause_log"] == [{"kind": "escalation", "value": "cap", "at": _AT}]
+    assert rules.logged(ci_patch, at=_AT)["pause_log"] == [
+        {"kind": "escalation", "value": "ci", "at": _AT}
+    ]
+
+
+def test_auto_resumable_answers_the_same_with_and_without_at():
+    bare = {
+        "pause_log": [_failure_entry("account_limit"), _escalation_entry("failure")],
+    }
+    stamped = {"pause_log": [{**e, "at": _AT} for e in bare["pause_log"]]}
+    assert rules.auto_resumable(bare) == rules.auto_resumable(stamped) == "account_limit"
+    mixed = {"pause_log": [*bare["pause_log"], {"kind": "resumed", "at": _AT}]}
+    assert rules.auto_resumable(mixed) is None

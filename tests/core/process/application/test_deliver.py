@@ -12,7 +12,7 @@ from agentic.core.process.application.ports import BranchPullRequest, GitError
 from agentic.core.process.domain import document, rules
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
-from tests.fakes import FakeReaper, MemoryStack, memory_ports
+from tests.fakes import FakeReaper, MemoryStack, memory_ports, unstamped
 
 pytestmark = pytest.mark.anyio
 
@@ -165,7 +165,7 @@ async def test_a_failing_open_pull_request_escalates_with_the_error_text(cfg):
     assert ports.workspace.cleaned == []
     assert ports.tracker.comments == []
     assert rules.auto_resumable({**_big_state(), **patch}) is None
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "failure"}]
+    assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "failure"}]
     assert ports.documents.last["escalated"] == patch["escalated"]
 
 
@@ -204,7 +204,11 @@ async def test_a_failed_push_then_a_second_delivery_commits_a_document_with_no_e
     assert "push failed" in first["escalated"]
 
     # What the graph hands the node after a resume: the escalation cleared.
-    resumed = {**state, **first, **rules.resumed({**state, **first}, None)}
+    resumed = {
+        **state,
+        **first,
+        **rules.resumed({**state, **first}, None, at="2026-11-06T12:00:00+00:00"),
+    }
     resumed.pop("pause_log")
     second = await deliver(resumed, cfg, ports)
 
@@ -288,7 +292,11 @@ async def test_a_lease_the_remote_rejected_escalates_naming_the_sha_that_was_obs
 
     # The resume re-observes the moved tip and leases that one, never pushing blind.
     ports.tracker.on_lookup = None
-    resumed = {**TASK, **first, **rules.resumed({**TASK, **first}, None)}
+    resumed = {
+        **TASK,
+        **first,
+        **rules.resumed({**TASK, **first}, None, at="2026-11-06T12:00:00+00:00"),
+    }
     second = await deliver(resumed, cfg, ports)
 
     assert ports.workspace.leases == [OLD, THIRD]
@@ -399,7 +407,11 @@ async def test_a_replace_whose_pull_request_fails_keeps_the_sha_and_a_resume_nam
 
     # The resume: the remote is now our pushed head, which fast-forwards and does not
     # hold the old sha, so the plan is a plain push and the record is kept.
-    resumed = {**TASK, **first, **rules.resumed({**TASK, **first}, None)}
+    resumed = {
+        **TASK,
+        **first,
+        **rules.resumed({**TASK, **first}, None, at="2026-11-06T12:00:00+00:00"),
+    }
     ports.workspace.remote_tips[BRANCH] = NEW
     ports.workspace.ancestors = {NEW}
     second = await deliver(resumed, cfg, ports)
@@ -418,7 +430,11 @@ async def test_a_lost_lease_followed_by_a_plain_push_clears_the_record(cfg):
     assert first["replaced_remote_tip"] == OLD
 
     # The remote is still the old sha, but now HEAD contains it: nothing was replaced.
-    resumed = {**TASK, **first, **rules.resumed({**TASK, **first}, None)}
+    resumed = {
+        **TASK,
+        **first,
+        **rules.resumed({**TASK, **first}, None, at="2026-11-06T12:00:00+00:00"),
+    }
     ports.workspace.ancestors = {OLD}
     second = await deliver(resumed, cfg, ports)
 
@@ -816,7 +832,7 @@ WITH_CHECKLIST = {**TASK, "tracker_checklist": CHECKLIST}
 def _resumed(state, patch):
     """What the graph hands the node after a resume: the escalation cleared."""
     merged = {**state, **patch}
-    resumed = {**merged, **rules.resumed(merged, None)}
+    resumed = {**merged, **rules.resumed(merged, None, at="2026-11-06T12:00:00+00:00")}
     resumed.pop("pause_log", None)
     return resumed
 

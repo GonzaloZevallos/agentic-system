@@ -559,3 +559,46 @@ def test_a_republish_retries_its_create_without_repeating_its_delete(tmp_path):
     assert (result.kind, result.reason) == ("stopped", "ci_wait")
     assert _publishes(ports) == ["publish", "delete_ci", "publish", "publish"]
     assert sleeps == [PUSH_BACKOFF_S[0]]
+
+
+def test_a_decided_pair_carries_the_instants_of_its_wait_and_a_green_one_still_merges(tmp_path):
+    # GH-467: the pair is timed from its own `published_at`; recording it decides nothing.
+    ports, clock = _world(), _Clock()
+    _call(ports, tmp_path, clock)
+    timed = CiCheck(
+        "web",
+        "COMPLETED",
+        "SUCCESS",
+        RUN.format(42),
+        started_at=(NOW + timedelta(seconds=30)).isoformat(),
+        completed_at=(NOW + timedelta(seconds=150)).isoformat(),
+    )
+    ports.tracker.branch_reports[REF] = CiReport(TESTED[0], None, None, None, (timed,))
+    clock.advance(200)
+
+    assert _call(ports, tmp_path, clock).kind == "merged"
+
+    [pair] = _pairs(ports)
+    assert pair["ci_timing"]["pushed_at"] == pair["published_at"]
+    assert pair["ci_timing"]["node_started_at"] == pair["published_at"]
+    assert pair["ci_timing"]["verdict"] == "green"
+    assert ci.waited_seconds(pair["ci_timing"]) == (150.0, False)
+
+
+def test_a_red_pair_and_a_no_verdict_pair_say_which_they_were(tmp_path):
+    red, clock = _world(), _Clock()
+    _call(red, tmp_path, clock)
+    red.tracker.branch_reports[REF] = _branch(TESTED[0], conclusion="FAILURE")
+    _call(red, tmp_path, clock)
+    [pair] = _pairs(red)
+    assert pair["ci_timing"]["verdict"] == "red" and pair["ci_timing"]["run_ended_at"] is None
+
+    stuck, clock = _world(), _Clock()
+    _call(stuck, tmp_path, clock)
+    stuck.tracker.branch_reports[REF] = _branch(TESTED[0], conclusion=None)
+    clock.advance(_cfg(tmp_path).check_timeout_s + 1)
+    _call(stuck, tmp_path, clock)
+    [pair] = _pairs(stuck)
+    assert pair["outcome"] == "no_verdict"
+    assert pair["ci_timing"]["verdict"] == "no_verdict"
+    assert pair["ci_timing"]["run_started_at"] is None

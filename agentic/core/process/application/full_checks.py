@@ -62,6 +62,7 @@ from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import (
     WAITING_ON_HUMAN,
     CiCause,
+    CiTiming,
     FallbackCause,
     FullCheckEntry,
     FullChecksRecord,
@@ -135,6 +136,8 @@ class _NoVerdict:
     # `checkout_failed`, the stage the failed job(s) stopped at, so the message names them.
     head: str | None = None
     stage: FailedStage | None = None
+    # The instants of the wait that gave no verdict (GH-467); `None` when nothing was pushed.
+    timing: CiTiming | None = None
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -215,7 +218,9 @@ async def full_checks(
         head = workspace.full_head(task.path)
         plan_only = rules.ci_gate_names(names, state.get("ci_required") or []).plan_only
         return finish(
-            state, rules.ci_planning_defect(head, _unknown_text(outcome, head, plan_only)), ports
+            state,
+            rules.ci_planning_defect(head, _unknown_text(outcome, head, plan_only), at=ports.now()),
+            ports,
         )
     if isinstance(outcome, _NoVerdict):
         head = workspace.full_head(task.path)
@@ -228,7 +233,9 @@ async def full_checks(
             dispatch_ref=rules.ci_dispatch_ref(state["id"]),
             sha=outcome.head or head,
         )
-        patch = rules.ci_unavailable(outcome.cause, head, detail + _git_said(outcome))
+        patch = rules.ci_unavailable(
+            outcome.cause, head, detail + _git_said(outcome), at=ports.now(), ci=outcome.timing
+        )
         if outcome.git_said and outcome.push_attempts and outcome.push_kind:
             # Git's words reach the section only through `push_failure_markdown`, which
             # scrubs them; the older run stays as history under its own free `(vN)` key.
@@ -259,7 +266,11 @@ def _git_said(outcome: _NoVerdict) -> str:
 
 
 def _publish_failed(
-    exc: GitError, waited: float, workflow: str | None = None, head: str | None = None
+    exc: GitError,
+    waited: float,
+    workflow: str | None = None,
+    head: str | None = None,
+    timing: CiTiming | None = None,
 ) -> _NoVerdict:
     """The no-verdict of a push that failed. A `PushFailed` brings what git said; a `GitError`
     that is not one is today's bare `publish_failed`. `workflow` and `head` are a dispatched
@@ -273,8 +284,9 @@ def _publish_failed(
             push_attempts=exc.attempts,
             push_kind=exc.kind,
             head=head,
+            timing=timing,
         )
-    return _NoVerdict("publish_failed", waited, workflow, head=head)
+    return _NoVerdict("publish_failed", waited, workflow, head=head, timing=timing)
 
 
 async def _push(op: Callable[[], None], push_sleep: PushSleep) -> Pushed:
@@ -369,7 +381,11 @@ async def _local_full_checks(
             text += f" {_over_budget_sentence(record['over_budget'])}"
     else:
         patch = rules.full_checks_return(
-            state, record, cfg.max_changes_requested_per_pair, mode=cfg.review_mode
+            state,
+            record,
+            cfg.max_changes_requested_per_pair,
+            at=ports.now(),
+            mode=cfg.review_mode,
         )
         text = text or f"Failed on `{head}`: no check output was recorded."
         if lines:
@@ -415,6 +431,11 @@ async def _ci_full_checks(
     speculative = False
     pushes: list[Pushed] = []
     pushed = state.get("ci_speculation")
+    # The instants of the CI wait (GH-467), stamped by the application from `ports.now`: this
+    # node's start, and the push the wait is for (the review's persisted one when its run is
+    # consumed, this node's own otherwise).
+    node_started_at = ports.now()
+    pushed_at: str | None = pushed["pushed_at"] if pushed and _pushed_for(state, head) else None
     if pushed and _pushed_for(state, head):
         # A review already pushed this very commit (GH-465): its run is waited for, not
         # pushed again. A run that never came, or was cancelled, is today's path from the
@@ -431,7 +452,10 @@ async def _ci_full_checks(
                     )
                 )
             except GitError as exc:
-                return _publish_failed(exc, waited)
+                return _publish_failed(
+                    exc, waited, timing=_no_verdict_timing(pushed_at, node_started_at)
+                )
+            pushed_at = ports.now()
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
         else:
@@ -441,6 +465,7 @@ async def _ci_full_checks(
             pushes.append(await _push(lambda: workspace.publish_ci_ref(task.path, ref), push_sleep))
         except GitError as exc:
             return _publish_failed(exc, 0.0)
+        pushed_at = ports.now()
         verdict, read, waited = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
         if verdict.state == "unreachable" and verdict.cause == "no_run":
             # Once per call: a CI that never started on the first push is told that it may have
@@ -452,19 +477,27 @@ async def _ci_full_checks(
                     )
                 )
             except GitError as exc:
-                return _publish_failed(exc, waited)
+                return _publish_failed(
+                    exc, waited, timing=_no_verdict_timing(pushed_at, node_started_at)
+                )
+            pushed_at = ports.now()
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
     if verdict.state == "unreachable":
         reported = ci.reported_names(read) if isinstance(read, CiReport) else ()
         return _NoVerdict(
-            verdict.cause or "no_run", waited, unknown=verdict.unknown, reported=reported
+            verdict.cause or "no_run",
+            waited,
+            unknown=verdict.unknown,
+            reported=reported,
+            timing=_no_verdict_timing(pushed_at, node_started_at),
         )
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
     if verdict.state == "green":
         patch = _ci_green(state, head, gate_names, read, waited)
     else:
-        patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited)
+        patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited, at=ports.now())
+    _with_timing(patch, pushed_at, node_started_at, verdict, read, gate_names)
     if speculative:
         patch["full_checks"]["speculative"] = True
     else:
@@ -587,6 +620,8 @@ async def _dispatched_full_checks(
     still fails ends the call with no dispatch. That ref is never deleted here: the sweep is the
     only thing that does."""
     waited = 0.0
+    node_started_at = ports.now()
+    pushed_at: str | None = None
     for attempt in range(1, ci.CI_DISPATCH_ATTEMPTS + 1):
         # A loose lower bound for the listing only: the run is found by its event, workflow
         # and the sha in its title, never by comparing this instant with GitHub's.
@@ -598,12 +633,24 @@ async def _dispatched_full_checks(
                 lambda: ports.workspace.publish_dispatch_ref(task.path, state["id"]), push_sleep
             )
         except GitError as exc:
-            return _publish_failed(exc, waited, dispatch.workflow, head)
+            return _publish_failed(
+                exc,
+                waited,
+                dispatch.workflow,
+                head,
+                _no_verdict_timing(pushed_at, node_started_at),
+            )
+        pushed_at = ports.now()
         refused = await anyio.to_thread.run_sync(
             ports.tracker.dispatch_ci, dispatch.workflow, "", {dispatch.sha_input: head}
         )
         if refused is not None:
-            return _NoVerdict(refused.cause, waited, dispatch.workflow)
+            return _NoVerdict(
+                refused.cause,
+                waited,
+                dispatch.workflow,
+                timing=_no_verdict_timing(pushed_at, node_started_at),
+            )
         verdict, runs, took = await _wait_dispatched(
             ports, dispatch.workflow, since, head, names, cfg, sleep, clock
         )
@@ -620,6 +667,7 @@ async def _dispatched_full_checks(
             dispatch.workflow,
             head=head,
             stage=_stage_of(verdict),
+            timing=_no_verdict_timing(pushed_at, node_started_at),
         )
     run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
     assert run is not None  # a verdict other than `unreachable` came from a chosen run
@@ -627,8 +675,41 @@ async def _dispatched_full_checks(
     if verdict.state == "green":
         patch = _ci_green(state, head, names, read, waited)
     else:
-        patch = _ci_red(state, cfg, head, names, verdict, read, waited)
+        patch = _ci_red(state, cfg, head, names, verdict, read, waited, at=ports.now())
+    _with_timing(patch, pushed_at, node_started_at, verdict, read, names)
     return _dispatched_record(patch, run)
+
+
+def _no_verdict_timing(pushed_at: str | None, node_started_at: str) -> CiTiming | None:
+    """The timing of a wait that gave no verdict (GH-467): only the two instants, no run
+    instants (`ci.timing`); `None` when nothing was pushed, so there is no wait to measure."""
+    if pushed_at is None:
+        return None
+    return ci.timing(pushed_at, node_started_at, "no_verdict", (), ())
+
+
+def _with_timing(
+    patch: dict[str, Any],
+    pushed_at: str | None,
+    node_started_at: str,
+    verdict: FullTierVerdict,
+    read: CiReport,
+    names: tuple[str, ...],
+) -> None:
+    """Write the instants of the wait onto the decided record, after the verdict is made and
+    read by nothing that decides (GH-467). A bound that ran out (`timed_out`) is no verdict of
+    the CI, so it reads `no_verdict` and carries no run end. Nothing is written when no push
+    instant is known."""
+    if pushed_at is None:
+        return
+    label: Literal["green", "red", "no_verdict"] = "no_verdict"
+    if verdict.state == "green":
+        label = "green"
+    elif verdict.state == "red":
+        label = "red"
+    patch["full_checks"]["ci_timing"] = ci.timing(
+        pushed_at, node_started_at, label, read.checks, names
+    )
 
 
 def _stage_of(verdict: FullTierVerdict) -> FailedStage | None:
@@ -725,6 +806,8 @@ def _ci_red(
     verdict: FullTierVerdict,
     read: CiReport,
     waited: float,
+    *,
+    at: str,
 ) -> dict[str, Any]:
     """A red job, or a bound that ran out. A job still pending beside a red one is not a
     failure of its own and gets no row; at the bound it does, and the section names it."""
@@ -749,7 +832,7 @@ def _ci_red(
         )
     lines.append(_REPRODUCE)
     patch = rules.full_checks_return(
-        state, record, cfg.max_changes_requested_per_pair, mode=cfg.review_mode
+        state, record, cfg.max_changes_requested_per_pair, at=at, mode=cfg.review_mode
     )
     patch["sections"] = _section(state, record["version"], "\n\n".join(lines))
     return patch
@@ -875,7 +958,7 @@ def _section(state: TaskState, version: int, text: str) -> dict[str, str]:
     return sections
 
 
-def dirty_patch(branch: str) -> dict[str, Any]:
+def dirty_patch(branch: str, *, at: str) -> dict[str, Any]:
     """The task checkout holds uncommitted work the suite would be run over: no command
     runs, and nothing is cleaned, which could throw away what a human left there."""
     return rules.logged(
@@ -887,5 +970,6 @@ def dirty_patch(branch: str) -> dict[str, Any]:
                 f"the task checkout of {branch!r} has uncommitted changes, so the full suite "
                 "would not be a run of the integrated head. Commit or discard them and resume.",
             ),
-        }
+        },
+        at=at,
     )

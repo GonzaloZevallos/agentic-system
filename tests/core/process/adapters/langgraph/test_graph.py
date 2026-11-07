@@ -69,6 +69,7 @@ from tests.fakes import (
     questions,
     reviewed,
     ruled,
+    unstamped,
     verdict,
 )
 
@@ -152,6 +153,7 @@ def compiled(
     sample_app=None,
     inbox=None,
     prompts_for=None,
+    now=None,
 ):
     """The graph with the real ports over the temporary product, the scripted runner in
     place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
@@ -182,6 +184,7 @@ def compiled(
             sample_app=sample_app,
             **({"inbox": inbox} if inbox is not None else {}),
             **({"prompts": prompts_for(cfg)} if prompts_for is not None else {}),
+            **({"now": now} if now is not None else {}),
         )
 
     return build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
@@ -270,7 +273,7 @@ async def test_definition_stage_then_delivery(config, tmp_path):
         "Owner rules",  # the step notes that no owner login is configured
     ]
     assert final["flags"] == {"touches_ui": False, "touches_copy": False}  # PM replaces PA's set
-    assert final["failures"] == []
+    assert unstamped(final["failures"]) == []
     assert final["branch"] == "agentic/GH-1" and final["pull_request"].endswith("/pull/7")
     # A single subtask builds on the task branch itself (ADR-0011).
     assert final["subtasks"]["api"]["branch"] == "agentic/GH-1"
@@ -1005,7 +1008,7 @@ async def test_the_gh_373_session_limit_pauses_once_with_its_reset_and_no_label(
     escalated = [text for _, text in fakes.tracker.comments if text.startswith("Escalated:")]
     assert len(escalated) == 1
     doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
-    assert doc["pause_log"][-2:] == [
+    assert unstamped(doc["pause_log"][-2:]) == [
         {
             "kind": "failure",
             "value": "account_limit",
@@ -1122,7 +1125,7 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
     script = script_for(product_analyst=[AttemptFailed("invalid", 0.02), defined()], **technical())
     final = await run_graph(script, config)
     assert final["status"] == "ready_for_review"
-    assert final["failures"] == [
+    assert unstamped(final["failures"]) == [
         {
             "role": "Product Analyst",
             "attempt": 1,
@@ -1383,6 +1386,17 @@ def small_estimate():
             tech_lead_review=[reviewed("approved")] * 3,
         )
     )
+
+
+async def test_the_pause_node_stamps_the_resumed_entry_from_the_injected_now(config):
+    instant = "2031-02-03T04:05:06.000+00:00"
+    app = compiled(small_estimate(), fakes=Fakes(), now=lambda: instant)
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["escalation_class"] == "estimate"
+    assert {e["at"] for e in paused["pause_log"]} == {instant}
+
+    final = await app.ainvoke(Command(resume={"decision": "Go on."}), config=config)
+    assert final["pause_log"][-1] == {"kind": "resumed", "at": instant}
 
 
 async def test_the_estimate_cap_pauses_and_a_decided_resume_puts_the_proposal_in_force(config):
@@ -1794,6 +1808,7 @@ def test_the_first_returning_final_validation_writes_no_settlement(config):
         state,
         configuration_from(config),
         {"verdict": "returned", "reason": "wide", "blocking": ["a"]},
+        at="2026-11-06T12:00:00+00:00",
     )
     assert "plan_settled" not in patch
     assert [f["claim"] for f in patch["findings"]] == ["a"]

@@ -115,6 +115,7 @@ from ...domain.stall import (
 from ...domain.suppressions import Forbidden
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
+from .check_run_log import CheckRunLog
 from .check_server import SERVER, TIMEOUT_ENV, check_server, tool_timeout_ms
 from .hooks import DELIVERY_TOOL, HookActivity, TurnCount, hooks_for
 from .printer import Printer
@@ -167,6 +168,7 @@ def options_for(
     check_results_dir: Path | None = None,
     writable: tuple[Path, ...] = (),
     max_turns: int | None = None,
+    check_runs: CheckRunLog | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -221,6 +223,7 @@ def options_for(
             hook_activity,
             check_results_dir,
             writable,
+            check_runs,
         )
         or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
@@ -339,11 +342,21 @@ class ClaudeSdkRunner:
         forbidden: Sequence[Forbidden] | None = None,
         check_tool: CheckTool | None = None,
         max_turns: int | None = None,
+        declared_checks: Mapping[str, str] | None = None,
+        now: Callable[[], str] | None = None,
     ) -> RawResult:
         """One attempt, marked with `owner_task` (the parent task, never a subtask) and a
-        token of its own, and reaped once its stream is closed, whichever way it ended."""
+        token of its own, and reaped once its stream is closed, whichever way it ended.
+        With `declared_checks`, a role that executes has its own check runs noted by the
+        Bash hooks (`CheckRunLog`, GH-467), timed by this runner's `clock` and stamped by
+        `now`; they leave on the result, or on the `AttemptFailed` of a failed attempt."""
         token = uuid.uuid4().hex
         hooks = HookActivity(self.clock)
+        runs = (
+            CheckRunLog(declared_checks, self.clock, now)
+            if declared_checks and role.executes and now is not None
+            else None
+        )
         # Opened before the session and closed after the reap, so the directory outlives
         # every process of the attempt; its removal, then its record, is the last thing.
         with self._scratch_for(owner_task, role, token) as (scratch_dir, kept):
@@ -366,6 +379,7 @@ class ClaudeSdkRunner:
                     forbidden=forbidden,
                     check_tool=check_tool,
                     hooks=hooks,
+                    runs=runs,
                     scratch_dir=scratch_dir,
                     kept=kept,
                 )
@@ -375,6 +389,8 @@ class ClaudeSdkRunner:
                 # removed: the space the directory held is not the space it left.
                 exc.space = self._read_space(scratch_dir, cwd)
                 exc.enospc = exc.enospc or hooks.enospc or _caused_by_enospc(exc)
+                if runs is not None:
+                    exc.check_runs = runs.snapshot()
                 raise
             except BaseException:
                 # A cancellation, or the process being asked to die: nothing to record, and
@@ -383,6 +399,8 @@ class ClaudeSdkRunner:
                 await self._reap(owner_task, token)
                 raise
             reaped = await self._reap(owner_task, token)
+        if runs is not None:
+            raw = replace(raw, check_runs=runs.snapshot())
         return replace(raw, reaped=list(reaped)) if reaped else raw
 
     def _scratch_for(
@@ -439,6 +457,7 @@ class ClaudeSdkRunner:
         forbidden: Sequence[Forbidden] | None,
         check_tool: CheckTool | None,
         hooks: HookActivity,
+        runs: CheckRunLog | None,
         scratch_dir: Path | None,
         kept: Path | None,
     ) -> RawResult:
@@ -512,6 +531,7 @@ class ClaudeSdkRunner:
             forbidden=forbidden,
             owner_mark=owner_mark,
             hook_activity=hooks,
+            check_runs=runs,
             check_tool=check_tool,
             check_results_dir=self.check_results_dir,
             writable=tuple(p for p in (scratch_dir, kept) if p is not None),

@@ -116,7 +116,9 @@ async def _interview_and_plan(
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
     )
     delivered = apply(patch, _delivered(cfg, output, written, spec.author.name))
-    judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
+    judged, built_whole = _after_delivery(
+        state, delivered, part_of, output, history, at=ports.now()
+    )
     _tell_built_whole(ports, state["id"], part_of, built_whole)
     return finish(state, judged, ports)
 
@@ -237,6 +239,8 @@ def _after_delivery(
     part_of: tuple[str, int] | None,
     output: Output | None,
     history: cost_history.History,
+    *,
+    at: str,
 ) -> tuple[TaskState, schemas.FitDecision | None]:
     """The one place a part's plan is judged over the line (ADR-0054), on both arms. Pure:
     it returns the patch and, when the system builds the part whole by itself, the decision
@@ -253,7 +257,7 @@ def _after_delivery(
         return patch, None
     if rules.part_builds_whole(fit):
         return patch, fit
-    return apply(patch, rules.part_over_line(state["id"], part_of, fit)), None
+    return apply(patch, rules.part_over_line(state["id"], part_of, fit, at=at)), None
 
 
 def _tell_built_whole(
@@ -303,7 +307,9 @@ async def _plan_cold(
     base = apply(state, carried) if carried else state
     output, written = await _cold_draft(base, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL)
     delivered = _joined(carried or {}, _delivered(cfg, output, written, spec.author.name))
-    judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
+    judged, built_whole = _after_delivery(
+        state, delivered, part_of, output, history, at=ports.now()
+    )
     _tell_built_whole(ports, state["id"], part_of, built_whole)
     return finish(state, judged, ports)
 
@@ -423,7 +429,12 @@ async def _plan_with_critic(
     delivered = _delivered(cfg, final, written, name)
     route_state: TaskState = {"plan_route": {**recorded, "critic": critic_state}}
     judged, built_whole = _after_delivery(
-        state, apply(apply(carried, delivered), route_state), part_of, final, history
+        state,
+        apply(apply(carried, delivered), route_state),
+        part_of,
+        final,
+        history,
+        at=ports.now(),
     )
     _tell_built_whole(ports, state["id"], part_of, built_whole)
     return finish(state, judged, ports)

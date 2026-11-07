@@ -145,7 +145,7 @@ def test_a_return_from_a_red_ci_job_is_counted_as_a_full_checks_return():
         "failed_step": "web",
     }
     state: Any = {"id": "T-1", "subtasks": {"a": {"id": "a", "status": "approved"}}}
-    patch = rules.full_checks_return(state, record, 3)
+    patch = rules.full_checks_return(state, record, 3, at="2026-11-06T12:00:00+00:00")
     doc = _doc("T-1", subtasks={"a": {}}, change_history=patch["change_history"])
     report = fr.build([doc], *WINDOW)
     assert report.returns_by_origin == {"full_checks": 1}

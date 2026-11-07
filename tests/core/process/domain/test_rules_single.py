@@ -8,6 +8,8 @@ from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import pair_for
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, apply
 
+_STAMP = "2026-11-06T12:00:00+00:00"
+
 SUITE_PAIR = "Tech Lead→Developer:integration-full_checks"
 
 
@@ -129,7 +131,7 @@ def integration_state(**more):
 
 def test_under_single_the_suite_does_not_spend_the_integrations_review_rounds():
     base = integration_state()
-    returned = apply(base, rules.full_checks_return(base, RED, 2, mode="single"))
+    returned = apply(base, rules.full_checks_return(base, RED, 2, at=_STAMP, mode="single"))
     assert returned["changes_requested"] == {SUITE_PAIR: 1}
     # Then the review returns it once: the unit still has one round left.
     review_return = {"changes_requested": rules.record_return(returned, pair_for(INTEGRATION))}
@@ -139,7 +141,7 @@ def test_under_single_the_suite_does_not_spend_the_integrations_review_rounds():
 
 def test_under_full_the_suite_and_the_review_share_the_integrations_pair():
     base = integration_state()
-    returned = apply(base, rules.full_checks_return(base, RED, 2))
+    returned = apply(base, rules.full_checks_return(base, RED, 2, at=_STAMP))
     assert returned["changes_requested"] == {pair_for(INTEGRATION).key: 1}
     review_return = {"changes_requested": rules.record_return(returned, pair_for(INTEGRATION))}
     again = apply(returned, review_return)
@@ -148,12 +150,12 @@ def test_under_full_the_suite_and_the_review_share_the_integrations_pair():
 
 def test_under_single_the_suite_at_its_limit_escalates_with_returns_and_resumes_its_own_pair():
     spent = integration_state(changes_requested={SUITE_PAIR: 2, pair_for(INTEGRATION).key: 1})
-    patch = rules.full_checks_return(spent, RED, 2, mode="single")
+    patch = rules.full_checks_return(spent, RED, 2, at=_STAMP, mode="single")
     assert patch["escalation_class"] == "returns"
     assert patch["status"] == WAITING_ON_HUMAN
     assert patch["escalated"].startswith(f"{SUITE_PAIR} hit 2 returns: ")
     stopped = apply(spent, patch)
-    resumed = apply(stopped, rules.resumed(stopped, "go on"))
+    resumed = apply(stopped, rules.resumed(stopped, "go on", at=_STAMP))
     assert resumed["changes_requested"] == {SUITE_PAIR: 0, pair_for(INTEGRATION).key: 1}
 
 

@@ -51,7 +51,16 @@ from agentic.core.process.domain.roles import (
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, classified, delivered, memory_ports, questions, tech_answers
+from tests.fakes import (
+    ScriptedRunner,
+    classified,
+    delivered,
+    memory_ports,
+    questions,
+    stepping_now,
+    tech_answers,
+    unstamped,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -141,7 +150,7 @@ async def test_retry_passes_the_error_and_sums_cost():
     runner = ScriptedRunner(pjm=[AttemptFailed("structured output missing", 0.05), OK])
     out = await run_pjm(runner)
     assert out.cost_usd == pytest.approx(0.08)
-    assert out.failures == [
+    assert unstamped(out.failures) == [
         {
             "role": "PjM",
             "attempt": 1,
@@ -601,7 +610,11 @@ async def test_a_full_disk_pauses_the_task_for_the_poller_and_counts_no_own_fail
     )
     assert output is None
     assert patch["escalation_class"] == "failure"
-    assert patch["pause_log"][0] == {"kind": "failure", "value": "disk_full", "section": "PjM"}
+    assert unstamped(patch["pause_log"][0]) == {
+        "kind": "failure",
+        "value": "disk_full",
+        "section": "PjM",
+    }
     assert rules.auto_resumable(cast(Any, patch)) == "disk_full"
     assert rules.needs_a_human(cast(Any, patch))
 
@@ -661,7 +674,7 @@ async def test_the_pause_log_failure_entry_carries_resets_at_only_when_the_failu
         {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
     )
     assert output is None
-    assert patch["pause_log"][0] == {
+    assert unstamped(patch["pause_log"][0]) == {
         "kind": "failure",
         "value": "account_limit",
         "section": "PjM",
@@ -672,7 +685,11 @@ async def test_the_pause_log_failure_entry_carries_resets_at_only_when_the_failu
     _, patch = await run_role(
         {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
     )
-    assert patch["pause_log"][0] == {"kind": "failure", "value": "account_limit", "section": "PjM"}
+    assert unstamped(patch["pause_log"][0]) == {
+        "kind": "failure",
+        "value": "account_limit",
+        "section": "PjM",
+    }
 
 
 async def test_the_task_cap_stops_a_role_before_its_first_attempt():
@@ -1868,3 +1885,78 @@ async def test_no_extra_input_leaves_every_roles_prompt_and_hash_as_they_were(ro
         told.append((runner.calls[0]["system_prompt"], runner.calls[0]["prompt"]))
         assert told[-1][0] == expected.text
     assert told[0] == told[1]
+
+
+async def test_each_failure_carries_the_instants_its_attempt_began_and_was_caught(tmp_path):
+    """`Failure.started_at`/`ended_at` come from the injected `Now`: the first failure ends before
+    the second begins, and the escalation's `pause_log` entries carry later instants."""
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(pjm=[AttemptFailed("a", 0.05), AttemptFailed("b", 0.04)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        PJM,
+        cfg,
+        memory_ports(runner, now=stepping_now()),
+        product="x",
+    )
+    first, second = patch["failures"]
+    assert output is None
+    assert first["started_at"] < first["ended_at"] <= second["started_at"] < second["ended_at"]
+    stamped = [entry["at"] for entry in patch["pause_log"]]
+    assert stamped == sorted(stamped) and len(stamped) == 3
+    assert stamped[0] > second["ended_at"]
+
+
+ROW = {
+    "command": "uv run ruff check .",
+    "check": "lint",
+    "started_at": "2026-11-06T10:00:00Z",
+    "duration_s": 1.5,
+    "exit_code": 1,
+}
+
+
+async def test_a_failed_attempts_check_runs_are_on_its_failure_and_never_on_the_delivery():
+    from agentic.core.process.application.ports import CheckRuns
+
+    cut = AttemptFailed(
+        "run failed (max_turns)", 0.05, check_runs=CheckRuns(rows=[ROW], dropped=2, errors=1)
+    )
+    delivered_runs = CheckRuns(rows=[{**ROW, "exit_code": 0}], dropped=0, errors=1)
+    runner = ScriptedRunner(pjm=[cut, dataclasses.replace(OK, check_runs=delivered_runs)])
+    out = await run_pjm(runner)
+    failure = out.failures[0]
+    assert failure["check_runs"] == [ROW] and failure["check_runs_dropped"] == 2
+    assert "check_runs_errors" not in failure
+    record = run_record({}, PJM, "PjM", out)
+    assert record["check_runs"] == [{**ROW, "exit_code": 0}]
+    assert record["check_runs_errors"] == 1 and "check_runs_dropped" not in record
+
+
+async def test_a_run_with_no_check_runs_writes_none_of_the_keys():
+    cut = AttemptFailed("run failed (max_turns)", 0.05)
+    out = await run_pjm(ScriptedRunner(pjm=[cut, OK]))
+    assert not {"check_runs", "check_runs_dropped"} & set(out.failures[0])
+    assert not {"check_runs", "check_runs_dropped", "check_runs_errors"} & set(
+        run_record({}, PJM, "PjM", out)
+    )
+
+
+async def test_the_declared_checks_and_the_clock_reach_the_runner():
+    runner = ScriptedRunner(pjm=[OK])
+    await run_with_retry(
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        retries=0,
+        vocabulary={},
+        cwd=Path("."),
+        runner=runner,
+        owner_task="GH-1",
+        declared_checks={"lint": "ruff check ."},
+        now=lambda: "2026-11-06T10:00:00Z",
+    )
+    call = runner.calls[0]
+    assert call["declared_checks"] == {"lint": "ruff check ."}
+    assert call["now"]() == "2026-11-06T10:00:00Z"

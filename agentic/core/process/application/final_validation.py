@@ -92,7 +92,7 @@ async def final_validation(
         patch = apply(patch, pm_patch)
         if output is None:
             return finish(state, patch, ports)
-        patch = apply(patch, _verdict_patch(state, cfg, output.data))
+        patch = apply(patch, _verdict_patch(state, cfg, output.data, at=ports.now()))
         patch = apply(patch, _pending_close_docs_patch(output.data, reviewed))
         return finish(state, patch, ports)
     finally:
@@ -258,7 +258,9 @@ def commit_close_docs(state: TaskState, ports: Ports, root: Path) -> TaskState:
     return {**committed, "pending_close_docs": None}
 
 
-def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -> TaskState:
+def _verdict_patch(
+    state: TaskState, cfg: Configuration, data: dict[str, Any], *, at: str
+) -> TaskState:
     version = rules.next_version(state, PM_FINAL.name)
     if data["verdict"] == "approved":
         settled = plan_settlement.on_approval(state, version)
@@ -298,6 +300,6 @@ def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -
         patch |= rules.escalation(
             "returns", rules.limit_reached(PAIR_PM_TECH_LEAD, limit, data["reason"])
         )
-        patch = rules.logged(patch)
+        patch = rules.logged(patch, at=at)
         patch["status"] = WAITING_ON_HUMAN
     return patch

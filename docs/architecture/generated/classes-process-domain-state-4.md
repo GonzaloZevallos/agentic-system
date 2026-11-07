@@ -35,6 +35,7 @@ classDiagram
     class task__LandedSliceRef["LandedSliceRef"]
     class task__LandingEntry["LandingEntry"]
     class task__LapsePauseEntry["LapsePauseEntry"]
+    class task__MergeCiRecord["MergeCiRecord"]
 ```
 
 ## Relaciones con otras páginas

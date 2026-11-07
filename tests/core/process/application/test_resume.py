@@ -544,7 +544,7 @@ def test_an_all_approved_task_paused_at_delivery_still_resumes_through_integrate
         "sections": {"PM": "p", "Tech Lead": "t"},
         **rules.escalation("failure", "gh pr create failed: Body is too long"),
     }
-    resumed = {**paused, **rules.resumed(paused, None)}
+    resumed = {**paused, **rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00")}
     assert resumed["escalated"] is None
     assert rules.resume_target(resumed) == "integrate"
 
@@ -698,7 +698,7 @@ def asked_to_build_whole():
         "cost_usd": 3.0,
         "estimate": {"cost_usd": 20.0, "files": 5},
         "subtasks": {"api": sub("api", "pending", None, None)},
-        **rules.part_over_line("GH-338", ("GH-316", 2), figures),
+        **rules.part_over_line("GH-338", ("GH-316", 2), figures, at="2026-11-06T12:00:00+00:00"),
     }
 
 

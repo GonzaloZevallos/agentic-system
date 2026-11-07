@@ -579,3 +579,28 @@ def test_a_restarted_task_whose_live_document_lost_the_old_flakes_contributes_no
     documents.save({**base, "flakes": [_flake()]})
     documents.save(base)  # the restart rewrote the document without the old run's flakes
     assert documents.flakes_since(datetime(2000, 1, 1, tzinfo=UTC)) == {}
+
+
+def test_a_ci_escalation_entry_with_its_timing_and_jobs_round_trips_unchanged(tmp_path):
+    """GH-467: the CI timing of a `no_verdict` escalation (jobs included) survives a save and a
+    load, and a record carrying one writes back exactly what it was given."""
+    timing = {
+        "pushed_at": "2026-11-06T10:00:00+00:00",
+        "node_started_at": "2026-11-06T09:59:00+00:00",
+        "run_started_at": None,
+        "run_ended_at": None,
+        "verdict": "no_verdict",
+        "jobs": [{"name": "check", "duration_s": 12.5}],
+    }
+    log = [
+        {"kind": "escalation", "value": "ci", "at": "2026-11-06T10:30:00+00:00", "ci": timing},
+        {"kind": "escalation", "value": "cap"},
+    ]
+    documents = FilesystemTaskDocuments(tmp_path)
+    state = {"id": "T-1", "title": "t", "description": "d", "pause_log": log}
+    documents.save(state)
+
+    loaded = documents.load("T-1")
+    assert loaded["pause_log"] == log
+    documents.save(loaded)
+    assert documents.load("T-1")["pause_log"] == log

@@ -31,6 +31,7 @@ from tests.fakes import (
     MemoryRunRegistry,
     MemoryTracker,
     memory_ports,
+    unstamped,
 )
 
 ESCALATED_AT = datetime(2026, 10, 2, 19, 30, tzinfo=UTC)
@@ -993,7 +994,7 @@ def test_a_spent_hourly_week_escalates_the_pause_as_a_failure_once(tmp_path):
     saved = ports.documents.load("GH-19")
     assert saved["escalated"] == "account limit persisted 7 days"
     assert saved["escalation_class"] == "failure"
-    assert saved["pause_log"][-2:] == [
+    assert unstamped(saved["pause_log"][-2:]) == [
         {"kind": "failure", "value": "other", "section": ""},
         {"kind": "escalation", "value": "failure"},
     ]

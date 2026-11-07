@@ -50,6 +50,7 @@ WALKERS = (
     "tests/test_architecture.py",
     "tests/test_language.py",
     "tests/test_arm_input_single_source.py",
+    "tests/test_pause_stamps.py",
     "tests/core/measurement/adapters/otel/test_semconv.py",
     "tests/core/process/application/test_pause_log_guard.py",
     "tests/core/process/domain/test_reaping.py",

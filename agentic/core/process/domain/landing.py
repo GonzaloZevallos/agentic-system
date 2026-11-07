@@ -1057,15 +1057,16 @@ def diagnose_retry(
     return "due" if due is not None else "waiting"
 
 
-def unescalated(raw: Mapping[str, object]) -> dict[str, Any]:
+def unescalated(raw: Mapping[str, object], *, at: str) -> dict[str, Any]:
     """The one patch that clears a landing step's escalation: the task is back at the status
-    it had before it (`rules.resumed_status`) and the epoch is closed with a `resumed` entry.
-    Never writes `cost_usd`. No other module builds it."""
+    it had before it (`rules.resumed_status`) and the epoch is closed with a `resumed` entry
+    made by `rules.resumed_entry` and stamped `at`, the instant the application layer read from
+    its clock. Never writes `cost_usd`. No other module builds it."""
     return {
         "escalated": None,
         "escalation_class": None,
         "status": rules.resumed_status(_landing_view(raw)),
-        "pause_log": [{"kind": "resumed"}],
+        "pause_log": [rules.resumed_entry(at=at)],
     }
 
 
@@ -1081,7 +1082,7 @@ def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
     reason = raw.get("escalated")
     if not reason:
         return {}
-    cleared = unescalated(raw)
+    cleared = unescalated(raw, at=at)
     entries = raw.get("landing")
     written = (
         [entry_of(e) for e in entries if isinstance(e, Mapping)]
@@ -1199,7 +1200,7 @@ def released_no_verdict(
     if decision is not None:
         patch = released(raw, decision, at)
     else:
-        cleared = unescalated(raw)
+        cleared = unescalated(raw, at=at)
         patch = {
             "escalated": cleared["escalated"],
             "escalation_class": cleared["escalation_class"],
@@ -1250,7 +1251,7 @@ def released_by_ci(raw: Mapping[str, object], upstream: str, at: str) -> Release
         return {}
     index, entry = found
     written[index] = {**entry_of(entry), "ci_released": upstream, "released_at": at}
-    cleared = unescalated(raw)
+    cleared = unescalated(raw, at=at)
     return {
         "escalated": cleared["escalated"],
         "escalation_class": cleared["escalation_class"],
@@ -1399,12 +1400,13 @@ def escalated_after(comments: Iterable[Commented], at: object, prefix: str) -> b
     return False
 
 
-def migration(raw: Mapping[str, object]) -> dict[str, Any]:
+def migration(raw: Mapping[str, object], *, at: str) -> dict[str, Any]:
     """The one write that frees a stranded document (`stranded_diagnose`): `unescalated`,
     plus the failure of the epoch it closes stamped on the last diagnose entry, so the
     ordinary retry takes it from there. `record_closure` replaces a key whole, so the
-    `pause_log` is the history with the `resumed` marker appended. Never writes `cost_usd`."""
-    patch = unescalated(raw)
+    `pause_log` is the history with the `resumed` marker, stamped `at`, appended. Never writes
+    `cost_usd`."""
+    patch = unescalated(raw, at=at)
     reason = _stranded_failure(raw)
     entries = raw.get("landing")
     written = (

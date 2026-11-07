@@ -81,7 +81,7 @@ async def test_a_retry_after_a_cut_at_part_two_opens_only_what_is_missing(tmp_pa
         f"Blocked by: #101\n\nbody\n\n{rules.split_marker('GH-53', 2)}",
     )
     second.inbox._open_issues = [part_two]
-    resumed = apply(paused, rules.resumed(paused, None))
+    resumed = apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00"))
     assert rules.resume_target(resumed) == "split"
     done = await split(resumed, cfg, second)
 
@@ -110,7 +110,7 @@ async def test_a_part_of_a_partition_never_splits_again_and_escalates_estimate(t
     assert "proposed_estimate" not in patch
     # A human decision waives the fit and the plan is made again, whole.
     paused = apply(part, patch)
-    resumption = rules.resumed(paused, "Build it whole.")
+    resumption = rules.resumed(paused, "Build it whole.", at="2026-11-06T12:00:00+00:00")
     assert resumption["fit_waived"] is True and resumption["parts"] == []
     assert rules.resume_target(apply(paused, resumption)) == "plan"
 
@@ -135,7 +135,9 @@ async def test_a_gh_failure_outside_the_creation_escalates_failure_and_resumes_c
     assert paused.get("status") != "split"
 
     again = ports_with_numbered_issues()
-    done = await split(apply(paused, rules.resumed(paused, None)), cfg, again)
+    done = await split(
+        apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00")), cfg, again
+    )
     assert done["status"] == "split"
     assert len(again.tracker.comments) == 1
     created = len(ports.tracker.opened_issues) + len(again.tracker.opened_issues)
@@ -239,7 +241,9 @@ async def test_a_failed_checklist_post_resumes_with_one_checklist_and_one_split_
 
     again = ports_with_a_blocked_issue()
     again.tracker.issue_numbers_from = 201  # a recomposition would show: it must not happen
-    done = await split(apply(paused, rules.resumed(paused, None)), cfg, again)
+    done = await split(
+        apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00")), cfg, again
+    )
 
     assert done["status"] == "split" and again.tracker.opened_issues == []
     assert len(checklist_comments(again)) == 1 and len(split_comments(again)) == 1
@@ -270,7 +274,9 @@ async def test_a_failed_split_comment_after_the_checklist_resumes_without_postin
 
     again = ports_with_a_blocked_issue()
     again.tracker.earlier = [checklist_comments(first)[0]]  # what the issue already holds
-    done = await split(apply(paused, rules.resumed(paused, None)), cfg, again)
+    done = await split(
+        apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00")), cfg, again
+    )
 
     assert done["status"] == "split"
     assert checklist_comments(again) == [] and len(split_comments(again)) == 1
@@ -295,7 +301,9 @@ async def test_a_resume_that_lost_the_posted_record_finds_the_marker_and_posts_n
 
     again = ports_with_a_blocked_issue()
     again.tracker.earlier = [checklist_comments(first)[0]]
-    done = await split(apply(lost, rules.resumed(lost, None)), cfg, again)
+    done = await split(
+        apply(lost, rules.resumed(lost, None, at="2026-11-06T12:00:00+00:00")), cfg, again
+    )
 
     assert done["status"] == "split"
     assert checklist_comments(again) == [] and len(split_comments(again)) == 1

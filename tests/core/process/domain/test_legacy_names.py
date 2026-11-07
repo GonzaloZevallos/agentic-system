@@ -212,3 +212,20 @@ def test_rename_legacy_roles_rejects_a_changes_requested_collision():
         assert "GH-9" in message
         assert "changes_requested" in message
         assert "Design Lead→UI Designer" in message and "UI Lead→UI Designer" in message
+
+
+def test_rename_legacy_roles_keeps_at_and_ci_on_a_rewritten_pause_entry():
+    ci = {"pushed_at": "a", "node_started_at": "b", "run_started_at": None, "run_ended_at": None}
+    old = {
+        "pause_log": [
+            {"kind": "failure", "value": "schema", "section": "Design Lead", "at": "T"},
+            {"kind": "escalation", "value": "ci", "at": "T", "ci": ci},
+            {"kind": "resumed", "at": "T"},
+        ]
+    }
+    renamed = legacy_names.rename_legacy_roles(old)["pause_log"]
+    assert renamed == [
+        {"kind": "failure", "value": "schema", "section": "UI Lead", "at": "T"},
+        {"kind": "escalation", "value": "ci", "at": "T", "ci": ci},
+        {"kind": "resumed", "at": "T"},
+    ]

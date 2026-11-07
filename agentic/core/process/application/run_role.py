@@ -54,7 +54,7 @@ cold prompt inherit it through the same seam instead of a second, silently diver
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -97,7 +97,7 @@ from ..domain.task import (
 )
 from .closed import closed_documents
 from .limits import RunLimits
-from .ports import AttemptFailed, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
+from .ports import AttemptFailed, CheckRuns, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
 from .schema_guard import RoleSchemaGuard
 
 Check = Callable[[dict], None]
@@ -260,6 +260,9 @@ class Output:
     # `run_with_retry`; `None` for an output that never went through it, which
     # `run_record` reads as `role.max_turns`.
     max_turns: int | None = None
+    # The Developer's own check runs in the delivering attempt (`RawResult.check_runs`); the
+    # runs of a failed attempt stay on its `Failure`, never here.
+    check_runs: CheckRuns = field(default_factory=CheckRuns)
 
 
 def context_for(
@@ -453,8 +456,12 @@ async def run_with_retry(
     before_attempt: Callable[[], None] | None = None,
     estimate_stop: Callable[[float], EstimateStop | None] | None = None,
     floor_bytes: int = 0,
+    now: Callable[[], str] | None = None,
+    declared_checks: Mapping[str, str] | None = None,
 ) -> Output:
-    """`floor_bytes` is the free space under which a failed attempt is a full disk and not
+    """`now` is the clock the attempts' instants come from (`Ports.now` in a run; this
+    module's own when `None`): `RoleRun.started_at`/`ended_at` and each `Failure`'s own.
+    `floor_bytes` is the free space under which a failed attempt is a full disk and not
     its own failure (`rules.space_narrowed`, GH-391): the product's scratch floor, read
     against the reading the runner stamped on the failure, never a fresh one. `0` keeps
     free bytes out of the decision.
@@ -527,6 +534,7 @@ async def run_with_retry(
         RoleSchemaGuard(role.schema, vocabulary) if role.executes else None
     )
     guard = _chain(schema_guard, delivery_check)
+    clock = now or _now_iso
     for attempt in range(1, max(retries, 0) + 2):
         if before_attempt is not None:
             before_attempt()
@@ -554,7 +562,7 @@ async def run_with_retry(
         try:
             async with limits.slot():
                 queue_wait_s = time.monotonic() - waited_from
-                started_at = _now_iso()
+                started_at = clock()
                 output = await _attempt(
                     role,
                     text,
@@ -572,9 +580,12 @@ async def run_with_retry(
                     forbidden=forbidden,
                     check_tool=check_tool,
                     max_turns=turns,
+                    declared_checks=declared_checks,
+                    now=clock,
                 )
-                ended_at = _now_iso()
+                ended_at = clock()
         except AttemptFailed as exc:
+            failed_at = clock()
             limits.record(exc.cost_usd)
             # Narrowed once, from the facts the runner stamped when the attempt broke: a
             # reading taken now would measure the disk after its scratch was removed.
@@ -590,6 +601,8 @@ async def run_with_retry(
                     "cost_usd": exc.cost_usd,
                     "session_id": exc.session_id,
                     "reason": reason,
+                    "started_at": started_at,
+                    "ended_at": failed_at,
                     "max_turns": turns,
                     "slug": role.slug,
                     "section": written_as,
@@ -601,6 +614,12 @@ async def run_with_retry(
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
                     **({"reaped": exc.reaped} if exc.reaped else {}),
+                    **({"check_runs": exc.check_runs.rows} if exc.check_runs.rows else {}),
+                    **(
+                        {"check_runs_dropped": exc.check_runs.dropped}
+                        if exc.check_runs.dropped
+                        else {}
+                    ),
                     **({"resets_at": resets_at.isoformat()} if resets_at else {}),
                 }
             )
@@ -723,6 +742,8 @@ async def _attempt(
     forbidden: Sequence[Forbidden] | None = None,
     check_tool: CheckTool | None = None,
     max_turns: int | None = None,
+    declared_checks: Mapping[str, str] | None = None,
+    now: Callable[[], str] | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -739,6 +760,8 @@ async def _attempt(
         forbidden=forbidden,
         check_tool=check_tool,
         max_turns=max_turns,
+        declared_checks=declared_checks,
+        now=now,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -754,6 +777,7 @@ async def _attempt(
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
             reaped=result.reaped,
+            check_runs=result.check_runs,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -770,6 +794,7 @@ async def _attempt(
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
             reaped=result.reaped,
+            check_runs=result.check_runs,
         ) from exc
     if check is not None:
         try:
@@ -787,6 +812,7 @@ async def _attempt(
                 presubmit_denials=result.presubmit_denials,
                 main_thread_turns=result.main_thread_turns,
                 reaped=result.reaped,
+                check_runs=result.check_runs,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -802,6 +828,7 @@ async def _attempt(
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
             reaped=result.reaped,
+            check_runs=result.check_runs,
         )
     return Output(
         text=text,
@@ -822,6 +849,7 @@ async def _attempt(
         presubmit_denials=result.presubmit_denials,
         main_thread_turns=result.main_thread_turns,
         reaped=result.reaped,
+        check_runs=result.check_runs,
     )
 
 
@@ -862,7 +890,7 @@ def estimate_stop_for(
     return EstimateStop(reason, proposed)
 
 
-def escalation(exc: Escalating) -> TaskState:
+def escalation(exc: Escalating, *, at: str) -> TaskState:
     """The patch of a role that failed twice, or that the task cap stopped: the human
     sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
     the task cap, `failure` for a role `run_with_retry` gave up on.
@@ -883,7 +911,7 @@ def escalation(exc: Escalating) -> TaskState:
     }
     if isinstance(exc, EstimateCapReached):
         patch["proposed_estimate"] = exc.proposed_usd
-    return rules.logged(patch, exc.failures)
+    return rules.logged(patch, exc.failures, at=at)
 
 
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
@@ -915,6 +943,9 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "presubmit_denials": output.presubmit_denials,
         "main_thread_turns": output.main_thread_turns,
         **({"reaped": output.reaped} if output.reaped else {}),
+        **({"check_runs": output.check_runs.rows} if output.check_runs.rows else {}),
+        **({"check_runs_dropped": output.check_runs.dropped} if output.check_runs.dropped else {}),
+        **({"check_runs_errors": output.check_runs.errors} if output.check_runs.errors else {}),
     }
 
 
@@ -1002,6 +1033,7 @@ async def run_role(
     check_tool: CheckTool | None = None,
     tiers: str = "",
     extra_input: str = "",
+    declared_checks: Mapping[str, str] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -1032,7 +1064,10 @@ async def run_role(
     except (ValueError, OSError) as exc:
         # Only the prompt's own text: `render`'s ValueError and the read error the snapshot
         # kept (`raw()` re-raises it). The playbook, the flags and the tiers stay outside.
-        return None, {"current_role": role.name, **escalation(PromptFailure(role, exc, section))}
+        return None, {
+            "current_role": role.name,
+            **escalation(PromptFailure(role, exc, section), at=ports.now()),
+        }
     loaded = with_playbook(raw, rendered, role, ports, tiers)
     patch: TaskState = {
         "current_role": role.name,
@@ -1089,6 +1124,8 @@ async def run_role(
                 state, role, total + rules.shadow_cost(state), ports
             ),
             floor_bytes=cfg.scratch_floor_bytes,
+            now=ports.now,
+            declared_checks=declared_checks,
         )
     except Escalating as exc:
         # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already
@@ -1097,7 +1134,7 @@ async def run_role(
         # `pause_log`'s own reducer expects appended -- `patch` itself never has one
         # at this point, but the guard that checks this is structural and does not
         # know that, by design (`tests/core/process/application/test_pause_log_guard.py`).
-        return None, {**patch, **escalation(exc)}
+        return None, {**patch, **escalation(exc, at=ports.now())}
 
     patch |= {
         "sections": rules.sections_for(state, section, _section_text(role, output)),

@@ -16,6 +16,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__Ports["Ports"]
     class ports__Presubmit["Presubmit"]
     class ports__ProcessReaper["ProcessReaper"]
     class ports__ProductKnowledge["ProductKnowledge"]
@@ -29,15 +30,30 @@ classDiagram
     class ports__RunRegistry["RunRegistry"]
     class ports__RunStopped["RunStopped"]
     class ports__SampleApp["SampleApp"]
-    class ports__SampleAppHandle["SampleAppHandle"]
+    ports__Ports --> ports__ProcessReaper
+    ports__Ports --> ports__ProductKnowledge
+    ports__Ports --> ports__ProductStack
+    ports__Ports --> ports__Prompts
+    ports__Ports --> ports__RoleRunner
+    ports__Ports --> ports__SampleApp
 ```
 
 ## Relaciones con otras páginas
 
-- [application: support (parte 3)](classes-process-application-support-3.md)
-  - `ports.Ports` se asocia con `ports.ProcessReaper`
-  - `ports.Ports` se asocia con `ports.ProductKnowledge`
-  - `ports.Ports` se asocia con `ports.ProductStack`
-  - `ports.Ports` se asocia con `ports.Prompts`
-  - `ports.Ports` se asocia con `ports.RoleRunner`
-  - `ports.Ports` se asocia con `ports.SampleApp`
+- [application: checks](classes-process-application-checks.md)
+  - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`
+- [application: landing](classes-process-application-landing.md)
+  - `landing_plan.LandingContext` se asocia con `ports.Ports`
+- [application: support (parte 1)](classes-process-application-support-1.md)
+  - `ports.Ports` se asocia con `limits.RunLimits`
+  - `ports.RawResult` se asocia con `ports.CheckRuns`
+- [application: support (parte 2)](classes-process-application-support-2.md)
+  - `ports.Ports` se asocia con `ports.CheckScheduler`
+  - `ports.Ports` se asocia con `ports.Commands`
+  - `ports.Ports` se asocia con `ports.FlagVocabulary`
+  - `ports.Ports` se asocia con `ports.Inbox`
+- [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.TaskDocuments`
+  - `ports.Ports` se asocia con `ports.Tracker`
+- [application: support (parte 6)](classes-process-application-support-6.md)
+  - `ports.Ports` se asocia con `ports.Workspace`

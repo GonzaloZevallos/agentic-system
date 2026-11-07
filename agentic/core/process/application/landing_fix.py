@@ -360,7 +360,7 @@ def _escalate(
     patch: dict[str, object] = dict(rules.escalation(cls, reason))
     if questions:
         patch["questions_for_human"] = list(questions)
-    escalated = apply(current, state_from(rules.logged(patch)))
+    escalated = apply(current, state_from(rules.logged(patch, at=context.ports.now())))
     context.ports.documents.save(escalated)
     if rules.needs_a_human(escalated):
         context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)

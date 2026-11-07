@@ -668,6 +668,13 @@ def _read_pair(
         return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
     if report is not None:
         row: MergeCiRecord = {**pair, "outcome": "green" if verdict.state == "green" else "red"}
+        row["ci_timing"] = ci.timing(
+            pair["published_at"],
+            _wait_began(pair),
+            "green" if verdict.state == "green" else "red",
+            report.checks,
+            names,
+        )
         if run_id is not None:
             row["run_id"] = run_id
         if verdict.state == "red":
@@ -690,10 +697,19 @@ def _read_pair(
             sleep,
         )
     undecided: MergeCiRecord = {**pair, "republished": True, "outcome": "no_verdict"}
+    undecided["ci_timing"] = ci.timing(
+        pair["published_at"], _wait_began(pair), "no_verdict", (), ()
+    )
     if verdict.cause is not None:
         undecided["cause"] = verdict.cause
     _write_pairs(ports, task_id, pairs, undecided)
     return _Fresh(cause=verdict.cause)
+
+
+def _wait_began(pair: MergeCiRecord) -> str:
+    """The instant the gate's wait for `pair` began, as text (GH-467): the last time GitHub was
+    asked for a run, the rerun's when there was one, the publish otherwise."""
+    return pair["rerun_at"] if "rerun_at" in pair else pair["published_at"]
 
 
 def _run_id_of(link: str | None) -> str | None:

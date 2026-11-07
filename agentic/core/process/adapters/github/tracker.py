@@ -112,7 +112,7 @@ statusCheckRollup {
     pageInfo { hasNextPage }
     nodes {
       __typename
-      ... on CheckRun { name status conclusion detailsUrl }
+      ... on CheckRun { name status conclusion detailsUrl startedAt completedAt }
       ... on StatusContext { context state targetUrl }
     }
   }
@@ -214,6 +214,8 @@ def _ci_check(node: dict) -> CiCheck | None:
             status=_text(node["status"]),
             conclusion=node.get("conclusion"),
             link=node.get("detailsUrl") or "",
+            started_at=_instant(node.get("startedAt")),
+            completed_at=_instant(node.get("completedAt")),
         )
     if kind == "StatusContext":
         state = _text(node["state"])
@@ -224,6 +226,15 @@ def _ci_check(node: dict) -> CiCheck | None:
             link=node.get("targetUrl") or "",
         )
     return None
+
+
+def _instant(value: object) -> str | None:
+    """A time GitHub gave (GH-467), as it gave it; `None` when it gave none: absent, null, not a
+    string, or `gh run view`'s zero value (`0001-01-01...`) for a job that has not finished.
+    Never an error: a missing time only leaves the CI wait unknown."""
+    if not isinstance(value, str) or not value or value.startswith("0001-"):
+        return None
+    return value
 
 
 def _text(value: object) -> str:
@@ -244,6 +255,8 @@ def _dispatched_job(job: object) -> CiCheck:
         conclusion=conclusion.upper() if isinstance(conclusion, str) and conclusion else None,
         link=job.get("url") or "",
         failed_stage=_failed_stage_of(job.get("steps")),
+        started_at=_instant(job.get("startedAt")),
+        completed_at=_instant(job.get("completedAt")),
     )
 
 

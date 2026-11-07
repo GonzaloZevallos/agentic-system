@@ -35,4 +35,5 @@ classDiagram
     class rules__LandCandidate["LandCandidate"]
     class rules__LandWait["LandWait"]
     class rules__LaunchCandidate["LaunchCandidate"]
+    class rules__LockFacts["LockFacts"]
 ```

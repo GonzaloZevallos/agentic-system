@@ -543,7 +543,7 @@ def prepare(
             )
         owed = _owed_publication(task_id, paused, source, cfg, ports)
         paused = apply(paused, {"publish_owed": owed})
-        resumed = apply(paused, rules.resumed(paused, decision, estimate))
+        resumed = apply(paused, rules.resumed(paused, decision, estimate, at=ports.now()))
         if paused.get("escalation_class") == "estimate":
             _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))
         next_node = rules.resume_target(resumed)
