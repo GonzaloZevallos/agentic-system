@@ -30,7 +30,7 @@ sequenceDiagram
     else file_followups_and_land
         Land->>GitHub: open follow-up issues, merge
     else adr_number_taken
-        Land->>GitHub: renumber when the rule can decide, else escalate_adr asks the human once, then none
+        Land->>GitHub: renumber when the rule can decide, else escalate_adr asks the human once; the owner's decision gives apply_adr_decision, otherwise none
     else ci_unknown_names
         Land->>GitHub: escalate once per (head, names) as a planning defect, no budget spent, then none
     else budget spent, ledger only
@@ -59,13 +59,14 @@ sequenceDiagram
    hacer en vez de* mergear. El paso queda en la lista `landing` del documento antes de
    ejecutarse, y cada tipo de paso tiene su brazo en
    `agentic/core/process/application/landing.py:_dispatch`.
-4. **Los pasos.** `LandingStepKind` tiene 15 tipos
+4. **Los pasos.** `LandingStepKind` tiene 16 tipos
    (`agentic/core/process/domain/landing.py:LandingStepKind`), cada uno con su brazo en
    `_dispatch`. Con modelo o con el upstream: traer el upstream (`sync_master`), volver a
    revisar (`re_review`), corregir (`fix`), el pase final sobre los importantes propios
    (`fix_important`), repetir el CI o los chequeos (`rerun`), archivar el seguimiento de lo
    que quedó fuera de alcance y mergear (`file_followups_and_land`), renumerar el ADR cuyo
-   número ya tomó master (`renumber`), aterrizar por tramos (`land_slice`) y diagnosticar
+   número ya tomó master (`renumber`), aplicar la decisión del dueño sobre una colisión que la
+   regla no decide (`apply_adr_decision`, `land_model`), aterrizar por tramos (`land_slice`) y diagnosticar
    (`diagnose`). Sin gastar modelo: esperar (`wait`), escribir lo que la aprobación vigente de
    PM cubre (`settle`), preguntarle una vez al humano por lo que no cubre (`escalate_ledger`) o por una colisión de
    números de ADR que la regla no puede decidir (`escalate_adr`),
@@ -87,9 +88,14 @@ sequenceDiagram
    `agentic/core/process/domain/landing.py:after_diagnosis` lo convierte en una sincronización
    más (`sync_master`), un reinicio (`restart`) o un escalado (`escalate`). El reinicio es el
    último recurso: avisa en el issue con el motivo y el costo hasta ese momento.
-   El rechazo `adr_number_taken` no pasa por `exhausted()`: es `renumber` cuando la regla decide
-   la colisión y quedan renumeraciones (`LANDING_RENUMBERS_MAX`); si no, una sola `escalate_adr`
-   por (cabeza, rechazo), y después `none`. Nunca `diagnose` ni `restart` (ADR-0049, adenda GH-412).
+   El rechazo `adr_number_taken` no pasa por `exhausted()`: es, en este orden:
+   `renumber` cuando la regla decide la colisión y quedan renumeraciones
+   (`LANDING_RENUMBERS_MAX`); `apply_adr_decision` cuando el dueño liberó la pregunta
+   `escalate_adr` y queda cupo (`adr_decision_due`, `LANDING_ADR_DECISIONS_MAX`); `none` cuando
+   la pregunta sigue pendiente (`adr_asked`); si no, una sola `escalate_adr` por (cabeza,
+   rechazo). Nunca `diagnose` ni `restart` (ADR-0049, adendas GH-412 y GH-544). La decisión no
+   gasta `LANDING_PASSES_MAX`, pero la primera `re_review` tras una decisión aplicada se exime
+   del tope una vez (`LandingSpent.adr_review_owed`), aunque cuenta como pase.
    El rechazo `ci_unknown_names` (GH-485) tampoco pasa por `exhausted()`: un nombre exigido que
    ninguna corrida de chequeo de la cabeza lleva, con todas las corridas de workflow completadas,
    es un defecto de planificación y no un CI lento. `landing_step` lo manda a un solo `escalate`
