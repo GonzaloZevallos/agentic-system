@@ -266,7 +266,11 @@ def _git_said(outcome: _NoVerdict) -> str:
 
 
 def _publish_failed(
-    exc: GitError, waited: float, workflow: str | None = None, head: str | None = None
+    exc: GitError,
+    waited: float,
+    workflow: str | None = None,
+    head: str | None = None,
+    timing: CiTiming | None = None,
 ) -> _NoVerdict:
     """The no-verdict of a push that failed. A `PushFailed` brings what git said; a `GitError`
     that is not one is today's bare `publish_failed`. `workflow` and `head` are a dispatched
@@ -280,8 +284,9 @@ def _publish_failed(
             push_attempts=exc.attempts,
             push_kind=exc.kind,
             head=head,
+            timing=timing,
         )
-    return _NoVerdict("publish_failed", waited, workflow, head=head)
+    return _NoVerdict("publish_failed", waited, workflow, head=head, timing=timing)
 
 
 async def _push(op: Callable[[], None], push_sleep: PushSleep) -> Pushed:
@@ -443,7 +448,9 @@ async def _ci_full_checks(
                     )
                 )
             except GitError as exc:
-                return _publish_failed(exc, waited)
+                return _publish_failed(
+                    exc, waited, timing=_no_verdict_timing(pushed_at, node_started_at)
+                )
             pushed_at = ports.now()
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
@@ -466,7 +473,9 @@ async def _ci_full_checks(
                     )
                 )
             except GitError as exc:
-                return _publish_failed(exc, waited)
+                return _publish_failed(
+                    exc, waited, timing=_no_verdict_timing(pushed_at, node_started_at)
+                )
             pushed_at = ports.now()
             verdict, read, again = await _wait_ci(ports, ref, head, gate_names, cfg, sleep, clock)
             waited += again
@@ -620,7 +629,13 @@ async def _dispatched_full_checks(
                 lambda: ports.workspace.publish_dispatch_ref(task.path, state["id"]), push_sleep
             )
         except GitError as exc:
-            return _publish_failed(exc, waited, dispatch.workflow, head)
+            return _publish_failed(
+                exc,
+                waited,
+                dispatch.workflow,
+                head,
+                _no_verdict_timing(pushed_at, node_started_at),
+            )
         pushed_at = ports.now()
         refused = await anyio.to_thread.run_sync(
             ports.tracker.dispatch_ci, dispatch.workflow, "", {dispatch.sha_input: head}
