@@ -22,6 +22,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__RoleRun["RoleRun"]
     class task__SettledRow["SettledRow"]
     class task__ShadowRecord["ShadowRecord"]
     class task__SlicesClosedPatch["SlicesClosedPatch"]
@@ -38,9 +39,8 @@ classDiagram
 
 - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - `task.TaskState` se asocia con `task.ArmAssignment`
-- [domain: state (parte 3)](classes-process-domain-state-3.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
+  - `task.TaskState` se asocia con `task.EvaluationRef`
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
