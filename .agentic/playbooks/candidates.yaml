@@ -1312,3 +1312,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-07T01:51:11.308+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: When you add or rewrite a guard test (import, invariant or lint check), also run it on a sample input it must reject, and assert it fails, so you know it is not dead code.
+  confidence: medium
+  seen_in:
+  - GH-522
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T03:28:35.300+00:00'
