@@ -1389,3 +1389,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-07T21:08:33.719+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before you deliver, check each invariant in the brief against the diff, with a grep where it can be searched. If the brief seems to contradict an invariant, look for a layer where both hold before calling it impossible.
+  confidence: medium
+  seen_in:
+  - GH-539
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T23:58:46.051+00:00'
+- slug: tech_lead_platform
+  category: integration-crosscut
+  lesson: When a merge adds or reorders fields of a type built by position, search every constructor call, tests included, and switch them to keyword arguments, not only the one the first failure shows.
+  confidence: low
+  seen_in:
+  - GH-539
+  sources:
+  - finding
+  added_at: '2026-11-07T23:58:46.051+00:00'
