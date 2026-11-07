@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.knowledge.domain.stack import PLAYWRIGHT_TEST_ID
 from agentic.core.process.domain import presubmit
 
 CHECKOUT = Path("/work/checkouts/GH-41.api")
@@ -836,3 +837,129 @@ def test_a_deferred_row_is_not_a_failure_but_any_other_red_row_still_is():
     assert presubmit.record_passed([{"name": "tests", "passed": False}, deferred]) is False
     assert presubmit.record_passed([deferred]) is True
     assert presubmit.record_passed([{"name": "x", "passed": False, "deferred": False}]) is False
+
+
+# --- the `{failed_ids}` token of a rerun form (GH-530) -----------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+# The `test_id` the `rerun_checks` docstring gives for Playwright's list reporter: the
+# `file:line` of a `›` line, without the `:col`, from the `✘` line and the numbered summary.
+PLAYWRIGHT_ID = PLAYWRIGHT_TEST_ID
+PLAYWRIGHT_FORM = presubmit.RerunForm(
+    command="npx playwright test {failed_ids}", test_id=PLAYWRIGHT_ID
+)
+
+
+def red(output, **extra):
+    return {**result("web-e2e", "npx playwright test", False, output), **extra}
+
+
+def test_the_token_is_defined_once_in_the_process_domain():
+    assert presubmit.FAILED_IDS_TOKEN == "{failed_ids}"
+
+
+def test_the_token_expands_to_the_failed_ids_of_a_recorded_playwright_report():
+    # `fixtures/playwright_list_failure.txt` is lines 2952-2964 of apostrophe's
+    # `.agentic/tasks/GH-528.md` (the real web-e2e tail of its full-checks run). That tail has no
+    # `✘` block, so the one row for line 2958 was edited from `✓` to `✘`, and the numbered
+    # summary Playwright prints after the list was added in its shape.
+    output = (FIXTURES / "playwright_list_failure.txt").read_text(encoding="utf-8")
+    ids = presubmit.failed_ids(output, PLAYWRIGHT_ID)
+    assert ids == ("e2e/ventasTelefono.spec.ts:209",)
+    assert (
+        presubmit.rerun_form_command(PLAYWRIGHT_FORM, ids)
+        == "npx playwright test e2e/ventasTelefono.spec.ts:209"
+    )
+    assert presubmit.rerun_command(
+        "npx playwright test", red(output), PLAYWRIGHT_FORM, "merge"
+    ) == (PLAYWRIGHT_FORM.command)
+
+
+def test_a_vitest_example_expands_each_file_and_name():
+    # An example in the default reporter's shape, not a recording.
+    output = "\n".join(
+        [
+            " FAIL  src/a.test.ts > math > adds",
+            " FAIL  src/b.test.ts > io > reads a file",
+            " FAIL  src/a.test.ts > math > adds",
+        ]
+    )
+    form = presubmit.RerunForm(
+        command="npx vitest run -t {failed_ids}", test_id=r"(?m)^ FAIL  (\S+ > .+)$"
+    )
+    ids = presubmit.failed_ids(output, form.test_id)
+    assert presubmit.rerun_form_command(form, ids) == (
+        "npx vitest run -t 'src/a.test.ts > math > adds' 'src/b.test.ts > io > reads a file'"
+    )
+
+
+def test_every_id_is_shell_quoted_so_a_space_or_a_quote_stays_one_word():
+    form = presubmit.RerunForm(command="run {failed_ids} --x", test_id="(x)")
+    assert presubmit.rerun_form_command(form, ["plain", "a b", "it's"]) == (
+        "run plain 'a b' 'it'\"'\"'s' --x"
+    )
+
+
+def test_the_expansion_is_a_replace_so_braces_of_the_command_stay():
+    form = presubmit.RerunForm(command="sh -c 'echo ${HOME} {failed_ids}'", test_id="(x)")
+    assert presubmit.rerun_form_command(form, ["a"]) == "sh -c 'echo ${HOME} a'"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "a{workers}b",
+        "{base}",
+        "x{failed_ids}",
+        "a`b",
+        "a}}b",
+        "a{{b",
+        "a<!--b",
+        "a-->b",
+        "a\rb",
+        "a\x00b",
+        "a\x1bb",
+        "a\x7fb",
+    ],
+)
+def test_an_id_the_system_cannot_insert_safely_makes_the_whole_command_rerun(bad):
+    output = f"FAILED {bad}\n"
+    form = presubmit.RerunForm(command="pytest {failed_ids}", test_id=r"(?m)^FAILED (.+)$")
+    assert not presubmit.expandable([bad])
+    assert presubmit.rerun_command("pytest", red(output), form, "delivery") == "pytest"
+
+
+def test_ordinary_ids_are_expandable_and_an_empty_list_is_too():
+    assert presubmit.expandable(["tests/a.py::t[1-2]", "a b", "é"])
+    assert presubmit.expandable([])
+
+
+def test_the_document_facing_list_is_the_one_clean_flake_ids_reads():
+    assert "}}" in presubmit.ID_FORBIDDEN and "{{" in presubmit.ID_FORBIDDEN
+    assert all(not presubmit.expandable([bad]) for bad in presubmit.ID_FORBIDDEN)
+
+
+def test_ids_over_the_argument_cap_rerun_the_whole_command_never_a_truncation():
+    form = presubmit.RerunForm(command="pytest {failed_ids}", test_id=r"(?m)^FAILED (.+)$")
+    width = presubmit.FAILED_IDS_ARG_BYTES // 40
+    over = "".join(f"FAILED {'x' * width}{n:02d}\n" for n in range(45))
+    assert len(over) < presubmit.FAILED_IDS_TAIL_BYTES
+    assert presubmit.rerun_command("pytest", red(over), form, "delivery") == "pytest"
+    ids = presubmit.failed_ids(over, form.test_id)
+    assert len(" ".join(ids).encode()) > presubmit.FAILED_IDS_ARG_BYTES
+    fits = "".join(f"FAILED {'x' * (width // 4)}{n:02d}\n" for n in range(45))
+    assert presubmit.rerun_command("pytest", red(fits), form, "delivery") == form.command
+
+
+def test_the_cap_counts_utf8_bytes_not_characters():
+    form = presubmit.RerunForm(command="pytest {failed_ids}", test_id=r"(?m)^FAILED (.+)$")
+    wide = "é" * (presubmit.FAILED_IDS_ARG_BYTES // 2 + 1)
+    assert len(wide) + 2 < presubmit.FAILED_IDS_ARG_BYTES < len(wide.encode()) + 2
+    assert presubmit.rerun_command("pytest", red(f"FAILED {wide}\n"), form, "delivery") == "pytest"
+
+
+def test_a_tokenless_form_returns_its_command_whatever_the_ids_hold():
+    form = presubmit.RerunForm(command="pytest --lf", test_id=r"(?m)^FAILED (.+)$")
+    assert presubmit.rerun_command("pytest", red("FAILED a`b\n"), form, "merge") == "pytest --lf"
+    huge = "".join(f"FAILED {'x' * 600}{n:02d}\n" for n in range(45))
+    assert presubmit.rerun_command("pytest", red(huge), form, "merge") == "pytest --lf"

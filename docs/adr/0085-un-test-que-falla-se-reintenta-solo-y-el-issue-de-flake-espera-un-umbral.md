@@ -119,3 +119,23 @@ fijaron tres puntos que el texto original dejaba abiertos:
 3. **Un id con ` - ` se corta.** `test_id` termina en ` - ` o en el fin de línea, y un id parametrizado que
    contenga ` - ` queda truncado; el reintento por forma no encuentra ese test y la puerta cae al comando
    completo (residuo acotado por el umbral).
+
+## Adenda (2026-11-07, GH-530)
+
+La forma `rerun_checks` puede llevar un token `{failed_ids}`, para que un producto sin caché de
+ejecutor (apostrophe prohíbe esas cachés) reintente solo lo que falló:
+
+1. **El token se rellena con el informe de la propia corrida roja.** `rerun_form_command`, en
+   `domain/presubmit.py`, es el único que lo expande: los ids que `failed_ids` leyó de la salida del
+   chequeo, en ese orden, sin duplicados y como mucho 50, cada uno pasado por `shlex.quote` y unidos por
+   un espacio. No hay caché del ejecutor de por medio. Primero se sustituyen los ids y después
+   `{workers}`; `{base}` nunca se aplica a una forma.
+2. **Ante la duda, el comando entero; nunca se recorta.** `rerun_command` sigue devolviendo `command` sin
+   expandir, así que la comparación de `_with_rerun` conserva su sentido. Si un id no es `expandable`
+   (contiene `{base}`, `{workers}`, `{failed_ids}`, algo de `ID_FORBIDDEN` o un carácter de control) o los
+   ids citados pasan de 32768 bytes, la puerta reintenta el comando entero.
+3. **Sin escape de expresiones regulares.** Lo que captura `test_id` es el id; el producto decide su forma.
+4. **`clean_flake_ids` también descarta `}}`.** `ID_FORBIDDEN` es ahora la lista pública que comparten
+   `expandable` y `clean_flake_ids`, y se le agregó `}}`.
+5. **Carga.** El token debe aparecer una sola vez como palabra suelta en `rerun_checks.command`, y se rechaza
+   en cualquier otra clave con comando. Una forma sin token se comporta exactamente como antes.

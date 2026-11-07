@@ -1,4 +1,4 @@
-"""The product's stack: how its code is prepared and verified, as the product declares it.
+r"""The product's stack: how its code is prepared and verified, as the product declares it.
 
 The system imposes the practices (hexagonal, DDD, SOLID, tests at agreed seams, strict
 typing); which tools meet them is the product's to say, and may change over the
@@ -55,14 +55,28 @@ so it is validated here: it compiles, has exactly one group, is at most 200 char
 quantified group that contains a quantifier and no alternation inside a quantified group (the
 shapes that backtrack catastrophically). Absent it reads as `{}`: the gate of today.
 
+*The `{failed_ids}` token* (GH-530): a form's `command` may carry it, once, as a bare word (not
+quoted, not glued to other text). When the form reruns, the system replaces it with the ids
+`test_id` read from the red run's own output, so no runner cache is involved: each id
+shell-quoted, joined by one space, in the order the output named them, deduplicated, at most 50, and
+no regex escaping (what `test_id` captures is the id). Fallbacks, never a truncation: an id holding
+a `{base}`, `{workers}` or `{failed_ids}` token, a backtick, `{{`, `}}`, `<!--`, `-->` or a control
+character, or ids whose quoted join passes 32768 bytes, make the whole check command rerun. The
+token is refused at load in every other command key. A form without it runs as written. For
+Playwright's list reporter, `test_id` captures the `file:line` of a `›` line, without the `:col`
+(from the `✘` line and the numbered summary, deduplicated):
+`(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›`, with the command
+`npx playwright test {failed_ids}`.
+
 *The CI flake block* (GH-464, ADR-0085): a job named under `ci` may print, for the tests its own
 rerun found flaky, one line `agentic-flakes: {"v":1,"check":"<name>","tests":["<id>",...]}` per
 check, where `<name>` is a name under `checks`. The `full_checks` CI path and the merge gate read it
 (`GhCiLogs.flake_block`, from `gh run view --job --log`) only when the CI report is the judged
 head's, and record it as flakes: the last block per job and check wins, a check not under `checks`
 at the task's base commit is dropped, ids are capped at 50 and 200 characters each and an id with a
-newline, backtick, `<!--`, `-->` or `{{` is dropped, and a malformed line is dropped whole. It is
-evidence from the head under test: it can add flake records, never change a verdict or a merge.
+newline, backtick, `<!--`, `-->`, `{{` or `}}` is dropped, and a malformed line is dropped whole.
+It is evidence from the head under test: it can add flake records, never change a verdict or a
+merge.
 
 **`ci_covers`**: optional (GH-453). A mapping of a check's name, which must also be under `checks`,
 to `{job, failed}`: the name of the CI job that runs the same suite as a merge gate and the regex
@@ -149,7 +163,12 @@ from agentic.core.process.domain import master_gain
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
-from agentic.core.process.domain.presubmit import CiCover, CiDispatch, RerunForm
+from agentic.core.process.domain.presubmit import (
+    FAILED_IDS_TOKEN,
+    CiCover,
+    CiDispatch,
+    RerunForm,
+)
 from agentic.core.process.domain.presubmit import FlakeGate as FlakeGate
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.suppressions import Forbidden
@@ -210,6 +229,9 @@ LIMIT_KEYS = ("limit", "unit")
 VOLUME_UNITS = ("rows", "days", "months", "years")
 # Every sub-key one `rerun_checks` entry declares, and the longest `test_id` it accepts (ADR-0066).
 RERUN_KEYS = ("command", "test_id")
+# The `test_id` the `rerun_checks` documentation gives for Playwright's list reporter (GH-530):
+# the `file:line` of a `›` line, without the `:col`, from the `✘` line and the numbered summary.
+PLAYWRIGHT_TEST_ID = r"(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›"
 TEST_ID_MAX_LENGTH = 200
 # Every sub-key one `ci_covers` entry declares (GH-453).
 COVER_KEYS = ("job", "failed")
@@ -288,6 +310,7 @@ def docs(data: object, source: object) -> Docs | None:
         raise ValueError(
             f"{source}: expected `generate` under `docs`, a non-blank one-line command"
         )
+    _misplaced_failed_ids(generate, "docs", source)
     entries = found.get("paths")
     if not isinstance(entries, list) or not entries:
         raise ValueError(f"{source}: expected `paths` under `docs`, a non-empty list of globs")
@@ -420,6 +443,7 @@ def witness(data: object, source: object) -> str | None:
     value = declared["witness"]
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{source}: expected a command for `witness`, a non-empty string")
+    _misplaced_failed_ids(value, "witness", source)
     return value.strip()
 
 
@@ -684,7 +708,10 @@ def verifications(data: object, source: object) -> dict[str, Verification]:
     if "verifications" not in declared:
         return {}
     found = _declared_nonempty(declared, source, "verifications")
-    return stack_checks.parse_verifications(found, source, _known_checks(data, source))
+    parsed = stack_checks.parse_verifications(found, source, _known_checks(data, source))
+    for name, verification in parsed.items():
+        _misplaced_failed_ids(verification.command, "verifications", source, name)
+    return parsed
 
 
 def check_timeouts(data: object, source: object) -> dict[str, float]:
@@ -710,6 +737,20 @@ def not_ready_exit(data: object, source: object) -> dict[str, int]:
     return stack_checks.parse_not_ready_exit(found, source, known)
 
 
+def _bare_token(command: str) -> bool:
+    """Whether `{failed_ids}` is in `command` exactly once, as a bare word: whitespace or the ends
+    around it, and a word of its own once the shell has unquoted the command (so `'{failed_ids}'`
+    and `'a {failed_ids} b'` are not). A command the shell could not split is not bare."""
+    if command.count(FAILED_IDS_TOKEN) != 1:
+        return False
+    if not re.search(rf"(?:^|\s){re.escape(FAILED_IDS_TOKEN)}(?:\s|$)", command):
+        return False
+    try:
+        return FAILED_IDS_TOKEN in shlex.split(command)
+    except ValueError:
+        return False
+
+
 def _rerun_form(name: str, body: object, source: object) -> RerunForm:
     where = f"{source}: {name!r} under `rerun_checks`"
     if not isinstance(body, dict):
@@ -726,7 +767,13 @@ def _rerun_form(name: str, body: object, source: object) -> RerunForm:
     pattern = body["test_id"]
     if reason := _test_id_refusal(pattern):
         raise ValueError(f"{where}: `test_id` {reason}")
-    return RerunForm(command=body["command"].strip(), test_id=pattern)
+    command = body["command"].strip()
+    if FAILED_IDS_TOKEN in command and not _bare_token(command):
+        raise ValueError(
+            f"{where}: {FAILED_IDS_TOKEN} must appear once in `command`, as its own word: "
+            "not quoted, not glued to other text, not repeated"
+        )
+    return RerunForm(command=command, test_id=pattern)
 
 
 # The opcodes of `re._parser` that repeat what they hold, and the one that picks between
@@ -922,6 +969,7 @@ def _scenario(name: str, body: object, source: object) -> perf.Scenario:
             raise ValueError(f"{where}: expected a command for `{key}`, a one-line string")
         if reason := perf.command_refusal(command):
             raise ValueError(f"{where}: `{key}` is refused: {reason}")
+        _misplaced_failed_ids(command, f"performance` `{key}", source, name)
         commands[key] = command.strip()
     volume = _positive(body["volume"])
     if volume is None:
@@ -1034,11 +1082,26 @@ def _declared_nonempty(declared: dict[str, Any], source: object, key: str) -> ob
     return value
 
 
+def _misplaced_failed_ids(
+    command: str, key: str, source: object, name: object | None = None
+) -> None:
+    """Refuse `{failed_ids}` in a command that is not a `rerun_checks` form (GH-530): only a
+    form is expanded, so anywhere else the token would reach the shell as literal text. Names the
+    key, and the entry under it when there is one."""
+    if FAILED_IDS_TOKEN in command:
+        entry = f"{name!r} under " if name is not None else ""
+        raise ValueError(
+            f"{source}: {entry}`{key}` holds {FAILED_IDS_TOKEN}, which only a `rerun_checks` "
+            "`command` takes"
+        )
+
+
 def _commands(declared: dict[str, Any], source: object, key: str) -> dict[str, str]:
     found = _mapping(declared.get(key), source, key)
     for name, command in found.items():
         if not isinstance(command, str) or not command.strip():
             raise ValueError(f"{source}: expected a command for {name!r} under `{key}`")
+        _misplaced_failed_ids(command, key, source, name)
     return {str(name): command.strip() for name, command in found.items()}
 
 
@@ -1182,7 +1245,13 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         RERUN_KEYS,
         Computed(),
         "mapping of check name to a mapping of `command` and `test_id`: the failed-tests-only "
-        "form of the check",
+        "form of the check. `command` may carry `{failed_ids}` once, as a bare word: the system "
+        "fills it with the ids `test_id` found in the red run, shell-quoted, space-joined, in "
+        "order, at most 50, no regex escaping; an id it cannot insert safely, or over 32768 "
+        "bytes of ids, reruns the whole command. E.g. for Playwright's list reporter, which "
+        "prints `file:line:col` on a `›` line, a `test_id` of "
+        "`" + PLAYWRIGHT_TEST_ID + "` (`file:line` without the `:col`) and the command "
+        "`npx playwright test {failed_ids}`",
     ),
     KeyReference(
         "ci_covers",

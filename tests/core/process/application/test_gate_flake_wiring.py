@@ -143,6 +143,23 @@ def test_the_merge_gate_adds_to_the_flakes_already_recorded_and_runs_the_form(tm
     assert flakes[1]["tests"] == ["tests/a.py::one", "tests/b.py::two"]
 
 
+def test_the_merge_gate_runs_a_form_with_the_failed_ids_token_expanded(tmp_path):
+    form = RerunForm(command="pytest {failed_ids}", test_id=FORM.test_id)
+    expanded = "pytest tests/a.py::one tests/b.py::two"
+    ports = merge_world(
+        tmp_path,
+        MemoryCommands(**{"run tests": [RED], expanded: [GREEN]}),
+        delivery_checks=("lint",),
+        rerun_checks={"tests": form},
+    )
+    merge_once(ports, tmp_path)
+    ran = [c for _, c in ports.commands.ran]
+    assert expanded in ran and "pytest {failed_ids}" not in ran
+    assert ran.count("run tests") == 1
+    [flake] = (ports.documents.load("GH-5") or {})["flakes"]
+    assert (flake["check"], flake["gate"]) == ("tests", "merge")
+
+
 # `full_checks`.
 
 

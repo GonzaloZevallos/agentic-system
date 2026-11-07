@@ -87,3 +87,7 @@ def test_clean_flake_ids_drops_what_could_break_out_of_a_comment_or_a_marker():
         "ok",
         "x" * FLAKE_ID_MAX_CHARS,
     ]
+
+
+def test_clean_flake_ids_drops_an_id_with_a_closing_brace_pair():
+    assert clean_flake_ids(["ok", "a}}b", "}}"]) == ["ok"]

@@ -390,3 +390,54 @@ def test_a_stop_that_is_not_raised_still_leaves_the_red_check_as_a_refusal():
     commands = MemoryCommands(pytest=[PYTEST_RED, PYTEST_RED])
     g = gate(commands)
     assert g() is not None and g.refusals == 1
+
+
+# --- the `{failed_ids}` token (GH-530) ---------------------------------------------------
+
+TOKEN_FORM = RerunForm(command="pytest {failed_ids} -n {workers}", test_id=r"(?m)^FAILED (.+)$")
+
+
+def test_the_executed_rerun_is_the_expanded_form_with_its_workers_sized():
+    commands = MemoryCommands(
+        pytest=[red("tests/a.py::t[a b]", "tests/a.py::it's")],
+        **{"pytest 'tests/a.py::t[a b]' 'tests/a.py::it'\"'\"'s' -n 4": [CommandResult(0, "ok")]},
+    )
+    g = gate(commands, forms={"tests": TOKEN_FORM})
+    assert g() is None
+    assert ran(commands) == [
+        "pytest",
+        "pytest 'tests/a.py::t[a b]' 'tests/a.py::it'\"'\"'s' -n 4",
+        "ruff check .",
+    ]
+    assert g.results is not None and g.results[1].get("rerun") is True
+    assert outcomes(g.results)["tests"] == "flake"
+
+
+def test_an_id_that_cannot_be_inserted_reruns_the_whole_command_unexpanded():
+    commands = MemoryCommands(
+        pytest=[red("tests/a.py::t{workers}"), CommandResult(0, "ok")],
+    )
+    g = gate(commands, forms={"tests": TOKEN_FORM})
+    assert g() is None
+    assert ran(commands) == ["pytest", "pytest", "ruff check ."]
+
+
+def test_a_red_token_form_naming_none_of_its_ids_falls_back_once_to_the_whole_command():
+    expanded = "pytest tests/a.py::t1 -n 4"
+    commands = MemoryCommands(
+        pytest=[red("tests/a.py::t1"), CommandResult(0, "ok")],
+        **{expanded: [CommandResult(1, "error: no such option\n")]},
+    )
+    g = gate(commands, forms={"tests": TOKEN_FORM})
+    assert g() is None
+    assert ran(commands) == ["pytest", expanded, "pytest", "ruff check ."]
+    assert g.results is not None
+    assert [r["command"] for r in g.results if r["name"] == "tests"] == ["pytest", "pytest"]
+
+
+def test_a_token_form_that_stays_red_on_its_own_id_is_judged_with_those_ids_and_fails():
+    expanded = "pytest tests/a.py::t1 -n 4"
+    commands = MemoryCommands(pytest=[red("tests/a.py::t1")], **{expanded: [red("tests/a.py::t1")]})
+    g = gate(commands, forms={"tests": TOKEN_FORM})
+    assert g() is not None
+    assert ran(commands) == ["pytest", expanded, "ruff check ."]
