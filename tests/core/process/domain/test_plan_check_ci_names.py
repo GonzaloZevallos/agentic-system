@@ -91,13 +91,13 @@ def test_a_stack_ci_name_passes_even_when_no_workflow_job_shows_it():
     _check(CI, stack_ci=("merge-gate",))(_plan(["merge-gate"]))
 
 
-@pytest.mark.parametrize("required", [["lint"], ["ci-ok-new"], ["lint", "ci-new"]])
+@pytest.mark.parametrize("required", [["e2e"], ["ci-ok-new"], ["e2e", "ci-new"]])
 def test_a_plan_that_declares_the_workflow_may_require_the_job_it_changes(required):
     _check(CI)(_plan(required, paths=[WORKFLOW]))
 
 
 def test_a_subtask_that_names_the_workflow_file_counts_as_touching_it():
-    _check(CI)(_plan(["lint"], brief=f"Add the aggregator job to {WORKFLOW}."))
+    _check(CI)(_plan(["e2e"], brief=f"Add the aggregator job to {WORKFLOW}."))
 
 
 def test_a_workflow_other_than_the_one_with_the_job_does_not_excuse_a_named_id():
@@ -113,8 +113,8 @@ def test_a_reusable_workflow_or_a_name_expression_lets_an_unknown_name_pass():
 
 
 def test_unreadable_yaml_or_no_workflow_read_passes():
-    _check("jobs: [unclosed")(_plan(["lint"]))
-    _check(None)(_plan(["lint"]))
+    _check("jobs: [unclosed")(_plan(["e2e"]))
+    _check(None)(_plan(["e2e"]))
 
 
 def test_a_plan_with_no_ci_required_is_untouched_by_the_names():
