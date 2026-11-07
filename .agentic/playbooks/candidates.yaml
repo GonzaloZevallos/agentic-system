@@ -1380,3 +1380,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-07T19:37:08.638+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: When a test asserts that something is absent from an output, also assert that the behaviour under test actually ran, or the test passes vacuously.
+  confidence: low
+  seen_in:
+  - GH-538
+  sources:
+  - finding
+  added_at: '2026-11-07T21:08:33.719+00:00'

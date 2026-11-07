@@ -695,3 +695,13 @@ tasks:
     cost_usd: 0.0458
   GH-535@review:
     cost_usd: 0.1576
+  GH-538@review:
+    cost_usd: 0.0818
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-538
