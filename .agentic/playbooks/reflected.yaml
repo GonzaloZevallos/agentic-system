@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 12
-summarised: 120
+summaries: 13
+summarised: 130
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -647,3 +647,27 @@ tasks:
   GH-479@review:
     cost_usd: 0.1
     decisions: 1
+  GH-510@review:
+    cost_usd: 0.0
+  GH-511@review:
+    cost_usd: 0.0
+  GH-472@review:
+    cost_usd: 0.1109
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-472
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-472
+  GH-471@review:
+    cost_usd: 0.143
+    decisions: 2

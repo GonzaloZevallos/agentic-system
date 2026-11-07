@@ -413,6 +413,11 @@ Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abie
 _Avoid_: backlog, lista de issues, deuda
 _Campo_: sin término de arte; lo más cerca es la lista de alerts de GitHub code scanning, que vive en el repositorio y no muere con el cambio que la abrió
 
+**Revisión sombra**:
+Bajo `review_mode: single`, la revisión que cada rama recibía hasta ahora, corrida en paralelo a la revisión única de la integración, sobre la cabeza ya aprobada de cada rama, para medir qué ve de más. Nunca decide nada: no devuelve, no escala, no toca `findings`, estados ni `changes_requested`; solo deja un `ShadowRecord` en `shadow_reviews` (`ran`, `late`, `unavailable` o `skipped`, con su causa), su propia sección que ningún rol lee y su costo, que los topes no cuentan. No toma el cupo de roles de la corrida: sus plazas son `shadow_slots`, siempre una menos. En el código, `shadow_review` y `ShadowRecord` (ADR-0088).
+_Avoid_: revisión paralela (las ramas del fan-out también corren en paralelo y deciden), segunda revisión, revisión de respaldo
+_Campo_: shadow mode / shadow deployment — se corre el sistema candidato sobre el tráfico real y se compara su salida con la del vigente sin que ninguna llegue al usuario
+
 ### Cómo se rechaza trabajo
 
 **Devolución**:

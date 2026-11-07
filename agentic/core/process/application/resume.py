@@ -562,7 +562,8 @@ def prepare(
             )
         target = next_node
     cap = task_cap(cfg)
-    spent = paused.get("cost_usd", 0.0)
+    # What the cap counts: the shadow reviews' cost left out, as `run_role` reads it (GH-473).
+    spent = rules.cost_without_shadow(paused.get("cost_usd", 0.0), paused)
     if cap <= spent:
         raise ValueError(
             f"the task cap in force is {cap:.2f} USD and {spent:.2f} are already spent: "

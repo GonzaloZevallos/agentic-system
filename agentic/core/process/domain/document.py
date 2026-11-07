@@ -239,6 +239,20 @@ def render(
         # (`rules.live_landing`). Written only when there is one, so every document without
         # a restore is byte-identical to one written before.
         **({"restorations": r} if (r := state.get("restorations")) else {}),
+        # The shadow reviews of the integration review under `review_mode` `single` (GH-473) and
+        # how long the node waited for them: written only when set, so every document under
+        # another mode is byte-identical to one written before them. Parsed back under the
+        # same names by `parse`.
+        **(
+            {"shadow_reviews": [_rounded_shadow(r) for r in shadows]}
+            if (shadows := state.get("shadow_reviews"))
+            else {}
+        ),
+        **(
+            {"shadow_wait_s": round(waited, 4)}
+            if (waited := state.get("shadow_wait_s")) is not None
+            else {}
+        ),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
@@ -339,6 +353,11 @@ def render(
     for name, text in ordered(state.get("sections", {})).items():
         parts.append(f"## {name}\n\n{text.strip()}\n")
     return "\n".join(parts)
+
+
+def _rounded_shadow(record: Mapping[str, Any]) -> dict[str, Any]:
+    """A shadow record with its money to four decimals, like a run's."""
+    return dict(record, cost_usd=round(record["cost_usd"], 4))
 
 
 def _rounded_run(run: RoleRun) -> dict[str, Any]:

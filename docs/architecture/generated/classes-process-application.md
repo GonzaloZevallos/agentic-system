@@ -1,6 +1,7 @@
 Esta página es el índice de los diagramas de clases de `agentic.core.process.application`: una página por grupo de módulos, definido en `scripts/docs/groups.py`, dividida por cantidad cuando el grupo tiene más clases de las que caben en un diagrama.
 
 - Páginas:
+  - [application: build](classes-process-application-build.md)
   - [application: checks](classes-process-application-checks.md)
   - [application: definition](classes-process-application-definition.md)
   - [application: landing](classes-process-application-landing.md)

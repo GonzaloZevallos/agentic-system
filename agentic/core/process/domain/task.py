@@ -389,6 +389,37 @@ def add_restorations(existing: list[Restoration], new: list[Restoration]) -> lis
     return list(joined.values())
 
 
+ShadowStatus = Literal["ran", "late", "unavailable", "skipped"]
+ShadowCause = Literal["failure", "cap", "late", "setup", "no_checkout", "single_unit"]
+
+
+class ShadowRecord(TypedDict):
+    """What one shadow review of a subtask left (GH-473, `review_mode` `single`): `head` the
+    subtask head it read, `status` how it ended, `cause` why it did not run to its end (`None`
+    when it ran), `findings` what it raised, `cost_usd` what it spent (the observed part when
+    it was late) and `changed_lines` the size of the subtask's diff, when known. Never read
+    by a role and never folded into `findings`: the record only measures what the single
+    review misses."""
+
+    subtask: str
+    head: str
+    status: ShadowStatus
+    cause: ShadowCause | None
+    findings: list[FindingRecord]
+    cost_usd: float
+    changed_lines: int | None
+
+
+def add_shadow_reviews(existing: list[ShadowRecord], new: list[ShadowRecord]) -> list[ShadowRecord]:
+    """The shadow records of `existing` and `new` as one list: append-only, one row per
+    `subtask` (a rerun that finds a record adds nothing), the first seen kept whole. The only
+    way `shadow_reviews` is ever written."""
+    joined: dict[str, ShadowRecord] = {}
+    for row in (*existing, *new):
+        joined.setdefault(row["subtask"], row)
+    return list(joined.values())
+
+
 class ArmAssignment(TypedDict):
     """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
 
@@ -1590,6 +1621,12 @@ class TaskState(TaskInput, total=False):
     # `.get("restorations", [])` -- only through `rules.live_landing` and `rules.restored`;
     # a document written before this field has none.
     restorations: Annotated[list[Restoration], add_restorations]
+    # The shadow reviews of the integration review under `review_mode` `single` (GH-473),
+    # `add_shadow_reviews`, and how long the node waited for them past the single review
+    # (`shadow_wait_s`). Read with `.get("shadow_reviews", [])`: absent under every other mode,
+    # and a document written before them has none. Nothing but the shadow use case writes them.
+    shadow_reviews: Annotated[list[ShadowRecord], add_shadow_reviews]
+    shadow_wait_s: float
 
 
 def _reducers() -> dict[str, object]:
@@ -1672,6 +1709,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             prior = {(r["head"], r["master"]): r for r in old}
             if grown := [r for r in value if prior.get((r["head"], r["master"])) != r]:
                 patch[key] = grown
+        elif reducer is add_shadow_reviews:
+            held_shadows = {r["subtask"] for r in old}
+            if fresh_shadows := [r for r in value if r["subtask"] not in held_shadows]:
+                patch[key] = fresh_shadows
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:

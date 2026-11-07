@@ -381,7 +381,11 @@ async def _local_full_checks(
             text += f" {_over_budget_sentence(record['over_budget'])}"
     else:
         patch = rules.full_checks_return(
-            state, record, cfg.max_changes_requested_per_pair, at=ports.now()
+            state,
+            record,
+            cfg.max_changes_requested_per_pair,
+            at=ports.now(),
+            mode=cfg.review_mode,
         )
         text = text or f"Failed on `{head}`: no check output was recorded."
         if lines:
@@ -827,7 +831,9 @@ def _ci_red(
             f"{', '.join(verdict.pending)}."
         )
     lines.append(_REPRODUCE)
-    patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair, at=at)
+    patch = rules.full_checks_return(
+        state, record, cfg.max_changes_requested_per_pair, at=at, mode=cfg.review_mode
+    )
     patch["sections"] = _section(state, record["version"], "\n\n".join(lines))
     return patch
 

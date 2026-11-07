@@ -875,6 +875,7 @@ def estimate_stop_for(
         return None
     estimate = rules.estimate_in_force(state)
     assert estimate is not None  # the cap is only reached over an estimate
+    spent_usd = rules.cost_without_shadow(spent_usd, state)  # what the cap counted
     spent_state: TaskState = {**state, "cost_usd": spent_usd}
     count = len([sid for sid in state.get("subtasks", {}) if sid != INTEGRATION])
     history = cost_history.build(closed_documents(ports))
@@ -1105,7 +1106,10 @@ async def run_role(
             resume=resume,
             max_budget_usd=cfg.max_budget_usd,
             # A landing restart carries the cost of the run it replaces (GH-239): the cap sees both.
-            spent_usd=state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0),
+            # What a shadow review spent is not counted: it blocks nothing (GH-473).
+            spent_usd=rules.cost_without_shadow(
+                state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0), state
+            ),
             task_cap_usd=task_cap(cfg),
             presubmit=presubmit,
             delivery_check=delivery_check,
@@ -1115,7 +1119,10 @@ async def run_role(
             section=section,
             cold_prompt=cold_prompt,
             before_attempt=write_index if reads_by_index(role) else None,
-            estimate_stop=lambda total: estimate_stop_for(state, role, total, ports),
+            # `total` is already without the shadows' cost; `estimate_stop_for` takes it gross.
+            estimate_stop=lambda total: estimate_stop_for(
+                state, role, total + rules.shadow_cost(state), ports
+            ),
             floor_bytes=cfg.scratch_floor_bytes,
             now=ports.now,
             declared_checks=declared_checks,
