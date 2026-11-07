@@ -26,6 +26,8 @@ PLACEHOLDERS = {
     "review": "a first review",
     "branches": "- none",
     "invariants": "- none",
+    # Empty off the reviewed unit and for a plan that requires no paths (GH-538).
+    "required_paths": "",
     "proposed_invariants": "- none",
     "cost_history": "- none",
     "plan_draft": "a draft plan",
