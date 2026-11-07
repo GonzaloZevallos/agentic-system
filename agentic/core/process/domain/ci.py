@@ -655,8 +655,6 @@ def ci_findings(
 FLAKE_BLOCK_PREFIX = "agentic-flakes: "
 FLAKE_BLOCK_VERSION = 1
 FLAKE_ID_MAX_CHARS = 200
-# An id lands in a tracker comment and a marker: nothing in `ID_FORBIDDEN` (the list shared with
-# `presubmit.expandable`) could break out of either.
 
 
 @dataclass(frozen=True)
@@ -671,7 +669,8 @@ class CiFlakeBlock:
 
 def clean_flake_ids(ids: Iterable[str]) -> list[str]:
     """The ids that may go in a flake block: at most `FLAKE_ID_MAX_CHARS` characters and none of
-    the forbidden substrings, without duplicates (in order), at most `FAILED_IDS_MAX`. The one
+    `ID_FORBIDDEN` (shared with `presubmit.expandable`: an id lands in a tracker comment and a
+    marker), without duplicates (in order), at most `FAILED_IDS_MAX`. The one
     copy of the rule: the parser reads blocks with it and `scripts/ci_flakes.py` writes them."""
     clean = [
         item

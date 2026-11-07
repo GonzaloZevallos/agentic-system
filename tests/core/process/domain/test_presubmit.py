@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.knowledge.domain.stack import PLAYWRIGHT_TEST_ID
 from agentic.core.process.domain import presubmit
 
 CHECKOUT = Path("/work/checkouts/GH-41.api")
@@ -843,7 +844,7 @@ def test_a_deferred_row_is_not_a_failure_but_any_other_red_row_still_is():
 FIXTURES = Path(__file__).parent / "fixtures"
 # The `test_id` the `rerun_checks` docstring gives for Playwright's list reporter: the
 # `file:line` of a `›` line, without the `:col`, from the `✘` line and the numbered summary.
-PLAYWRIGHT_ID = r"(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›"
+PLAYWRIGHT_ID = PLAYWRIGHT_TEST_ID
 PLAYWRIGHT_FORM = presubmit.RerunForm(
     command="npx playwright test {failed_ids}", test_id=PLAYWRIGHT_ID
 )

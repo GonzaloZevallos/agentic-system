@@ -1,4 +1,4 @@
-"""The product's stack: how its code is prepared and verified, as the product declares it.
+r"""The product's stack: how its code is prepared and verified, as the product declares it.
 
 The system imposes the practices (hexagonal, DDD, SOLID, tests at agreed seams, strict
 typing); which tools meet them is the product's to say, and may change over the
@@ -64,7 +64,8 @@ a `{base}`, `{workers}` or `{failed_ids}` token, a backtick, `{{`, `}}`, `<!--`,
 character, or ids whose quoted join passes 32768 bytes, make the whole check command rerun. The
 token is refused at load in every other command key. A form without it runs as written. For
 Playwright's list reporter, `test_id` captures the `file:line` of a `›` line, without the `:col`
-(from the `✘` line and the numbered summary, deduplicated), and the command is
+(from the `✘` line and the numbered summary, deduplicated):
+`(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›`, with the command
 `npx playwright test {failed_ids}`.
 
 *The CI flake block* (GH-464, ADR-0085): a job named under `ci` may print, for the tests its own
@@ -226,6 +227,9 @@ LIMIT_KEYS = ("limit", "unit")
 VOLUME_UNITS = ("rows", "days", "months", "years")
 # Every sub-key one `rerun_checks` entry declares, and the longest `test_id` it accepts (ADR-0066).
 RERUN_KEYS = ("command", "test_id")
+# The `test_id` the `rerun_checks` documentation gives for Playwright's list reporter (GH-530):
+# the `file:line` of a `›` line, without the `:col`, from the `✘` line and the numbered summary.
+PLAYWRIGHT_TEST_ID = r"(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+):\d+ ›"
 TEST_ID_MAX_LENGTH = 200
 # Every sub-key one `ci_covers` entry declares (GH-453).
 COVER_KEYS = ("job", "failed")
@@ -1242,8 +1246,10 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         "form of the check. `command` may carry `{failed_ids}` once, as a bare word: the system "
         "fills it with the ids `test_id` found in the red run, shell-quoted, space-joined, in "
         "order, at most 50, no regex escaping; an id it cannot insert safely, or over 32768 "
-        "bytes of ids, reruns the whole command. E.g. a `test_id` that captures `file:line` "
-        "of Playwright's `›` line and `npx playwright test {failed_ids}`",
+        "bytes of ids, reruns the whole command. E.g. for Playwright's list reporter, which "
+        "prints `file:line:col` on a `›` line, a `test_id` of "
+        "`" + PLAYWRIGHT_TEST_ID + "` (`file:line` without the `:col`) and the command "
+        "`npx playwright test {failed_ids}`",
     ),
     KeyReference(
         "ci_covers",

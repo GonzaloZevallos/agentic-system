@@ -741,6 +741,9 @@ def test_the_playwright_example_of_the_reference_is_a_form_the_loader_accepts():
 def test_the_reference_of_rerun_checks_names_the_token_and_its_format():
     reference = next(k for k in stack.KEY_REFERENCE if k.name == "rerun_checks")
     assert TOKEN in (stack.__doc__ or "") and TOKEN in reference.description
+    # The regex the documentation gives is the one the tests expand a Playwright report with.
+    assert stack.PLAYWRIGHT_TEST_ID in (stack.__doc__ or "")
+    assert stack.PLAYWRIGHT_TEST_ID in reference.description
     assert "shell-quoted" in (stack.__doc__ or "")
 
 
