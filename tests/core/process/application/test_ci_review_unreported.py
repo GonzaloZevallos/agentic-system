@@ -22,3 +22,21 @@ def test_a_matrix_job_id_is_not_a_check_run_name_once_the_runs_completed():
 
 def test_an_unknown_run_status_is_still_pending():
     assert ci_review._line(_report(None), "e2e") == "pending"
+
+
+def _matrix(*conclusions: str) -> ci.CiReport:
+    checks = tuple(
+        ci.CiCheck(f"pytest (areas-{n})", "COMPLETED", conclusion, f"https://ci/{n}")
+        for n, conclusion in enumerate(conclusions, 1)
+    )
+    return ci.CiReport(HEAD, "main", "b" * 40, None, checks, runs_completed=True)
+
+
+def test_a_matrix_id_reads_green_when_every_expansion_is_green():
+    line = ci_review._line(_matrix("SUCCESS", "SUCCESS"), "pytest")
+    assert line == "green https://ci/1"
+
+
+def test_a_matrix_id_reads_red_with_the_link_of_the_red_expansion():
+    line = ci_review._line(_matrix("SUCCESS", "FAILURE"), "pytest")
+    assert line == "red https://ci/2"

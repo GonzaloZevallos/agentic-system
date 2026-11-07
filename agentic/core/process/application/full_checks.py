@@ -676,7 +676,7 @@ async def _speculated_wait(
     has_run = (
         isinstance(first, CiReport)
         and rules.same_commit(first.head_sha, head)
-        and any(check.name in names for check in first.checks)
+        and any(ci.runs_of(first.checks, names).values())
     )
     if speculation.event_lost(pushed_at, now(), cfg.ci_start_grace_s, has_run):
         return None, first, 0.0
@@ -928,7 +928,10 @@ def _ci_record(
 
 
 def _link(report: CiReport, name: str) -> str:
-    return next((check.link for check in report.checks if check.name == name and check.link), "")
+    """The link of the first run the declared `name` claims that has one (GH-535)."""
+    return next(
+        (check.link for check in ci.runs_of(report.checks, (name,))[name] if check.link), ""
+    )
 
 
 def _ci_green(
@@ -961,7 +964,7 @@ def _ci_red(
     """A red job, or a bound that ran out. A job still pending beside a red one is not a
     failure of its own and gets no row; at the bound it does, and the section names it."""
     timed_out = verdict.state == "timed_out"
-    red = {check.name: check for check in reversed(verdict.failing)}
+    red = {name: runs[0] for name, runs in reversed(verdict.red)}
     results: list[FullCheckEntry] = []
     for name in names:
         if name in red:
