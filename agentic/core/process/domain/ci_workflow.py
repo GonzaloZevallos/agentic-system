@@ -43,9 +43,10 @@ class WrongId:
 
 @dataclass(frozen=True)
 class WorkflowNames:
-    """What the workflows prove about check-run names. `carriable`: names a job
-    reports (a matrix job's name stands for all its expansions). `wrong_ids`: job ids that are provably not a check-run name. `undecidable`: some
-    job reports under a name the text cannot settle."""
+    """What the workflows prove about check-run names. `carriable`: names a job reports (a
+    matrix job's name stands for all its expansions). `wrong_ids`: job ids that are provably
+    not a check-run name. `undecidable`: some job reports under a name the text cannot
+    settle."""
 
     carriable: frozenset[str]
     wrong_ids: Mapping[str, WrongId]
