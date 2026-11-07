@@ -1292,3 +1292,23 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-06T20:05:01.356+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the brief says a value comes from an injected clock or port, wire every site, including graph nodes and adapters, through it, never a module-level default. Add a test that injects a fixed value and asserts it.
+  confidence: medium
+  seen_in:
+  - GH-521
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T01:51:11.308+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief asks you to probe external behaviour, run the probe and record its command and output. Without one, leave the value unknown (null), and make comments and docstrings claim only what you verified.
+  confidence: medium
+  seen_in:
+  - GH-521
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-07T01:51:11.308+00:00'
