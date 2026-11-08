@@ -373,3 +373,23 @@ declaración (apostrophe GH-396, PR #616).
   `ci_unknown_names` (fijado por un test).
 - **Fuera de esta tarea.** `full_checks._head_trust`, `full_checks_mode` y la especulación siguen
   leyendo en `task_base`; tras un `sync_master` del aterrizaje pueden mostrar el mismo síntoma.
+
+## Adenda (GH-552): un par `no_verdict` del master actual se relee una vez
+
+En apostrophe GH-396 el par de `merge_ci` terminó `no_verdict` (`no_run`) dentro de la gracia, pero
+su corrida terminó verde unos minutos después, y nadie volvió a leerla: la puerta rechazó
+`ci_no_verdict` con un verde disponible.
+
+- **Una relectura por par.** Antes de rechazar `ci_no_verdict`, el último par de la cabeza que
+  terminó `no_verdict` sobre el master actual (`merge_ci.rereadable`: ids completos, sin
+  `reread_at` ni `released_at`, la corrida pertenece a la cabeza, mismo master, sin ganancia inerte)
+  hace que la decisión sea `ci_run`. La puerta escribe `reread_at` en el par **antes** de llamar a
+  GitHub, así que un fallo o una caída no reabren el bucle, y lee la corrida del par una vez.
+- **Verde o rojo decide.** Un veredicto verde o rojo reescribe el par desde el ya marcado (`reread_at`
+  se conserva): un verde queda `green` y se mergea, sin `released_at` (es un hecho del aterrizaje); un
+  rojo es el rechazo de siempre. Cualquier otro estado no escribe nada más ni republica, ni vuelve a
+  correr, ni empuja ni despacha: `ci_no_verdict` sigue siendo el rechazo.
+- **Quién la dispara.** El par que la propia llamada acaba de cerrar `no_verdict` se rechaza en esa
+  misma llamada, como siempre; su relectura la hace una llamada posterior, que el poller lanza porque
+  la decisión sobre el documento (también el de una tarea escalada) es `ci_run`.
+- **Costo.** A lo sumo una llamada más a `gh` por par `no_verdict`; sin gasto de modelo.

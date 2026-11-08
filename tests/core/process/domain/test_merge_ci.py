@@ -5,7 +5,7 @@ bounds. No I/O: every case is a record and the answer."""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -268,3 +268,68 @@ def test_decided_red_is_the_newest_red_pair_on_the_current_master_only():
     assert merge_ci.decided_red([_pair(outcome="green")], HEAD, MASTER) is None
     assert merge_ci.decided_red([red, _pair(master=NEWER)], HEAD, MASTER) is None  # not newest
     assert merge_ci.decided_red([red], HEAD[:7], MASTER) is None  # a short head names nothing
+
+
+# --- GH-552: the one reread of a no_verdict pair of the current master ------------------------
+
+
+def _unread(**over: Any) -> MergeCiRecord:
+    return cast(MergeCiRecord, {**_pair(outcome="no_verdict", republished=True), **over})
+
+
+def test_a_no_verdict_pair_of_the_current_master_is_rereadable():
+    pair = _unread()
+    assert merge_ci.rereadable([_pair(head="e" * 40), pair], HEAD, MASTER) == pair
+
+
+@pytest.mark.parametrize(
+    ("pr_head", "master"),
+    [(None, MASTER), (HEAD, None), (HEAD[:7], MASTER), (HEAD, MASTER[:7]), ("", MASTER)],
+)
+def test_a_missing_or_short_id_rereads_nothing(pr_head, master):
+    assert merge_ci.rereadable([_unread()], pr_head, master) is None
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        _unread(reread_at="2026-11-03T10:00:00+00:00"),
+        _unread(released_at="2026-11-03T10:00:00+00:00"),
+        _pair(outcome="green", republished=True),
+        _pair(outcome="red", republished=True),
+        _pair(outcome="stale", republished=True),
+        _pair(republished=True),
+        _unread(superseded=[TESTED]),
+        _unread(master=NEWER),
+        _unread(master=MASTER[:7]),
+        _unread(tested=TESTED[:7]),
+        _unread(head="e" * 40),
+    ],
+    ids=[
+        "reread",
+        "released",
+        "green",
+        "red",
+        "stale",
+        "undecided",
+        "tested_superseded",
+        "other_master",
+        "short_master",
+        "short_tested",
+        "other_head",
+    ],
+)
+def test_a_pair_that_does_not_qualify_is_not_rereadable(pair):
+    assert merge_ci.rereadable([pair], HEAD, MASTER) is None
+
+
+def test_only_the_latest_pair_of_the_head_can_be_reread():
+    older = _unread()
+    newer = _pair(master=NEWER, outcome="green")
+    assert merge_ci.rereadable([older, newer], HEAD, MASTER) is None
+
+
+def test_reopened_keeps_reread_at():
+    reopened = merge_ci.reopened(_unread(reread_at="t"), "later")
+    assert reopened["reread_at"] == "t" and reopened["rerun_at"] == "later"
+    assert "reread_at" not in merge_ci.reopened(_unread(), "later")

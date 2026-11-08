@@ -271,12 +271,44 @@ def test_the_stale_bound_spent_refuses_ci_stale_exhausted():
 
 
 def test_the_no_verdict_bound_spent_refuses_ci_no_verdict_and_not_before_the_republish():
-    spent = (_pair(outcome="no_verdict", republished=True),)
+    # GH-552: a pair of the current master is reread once first; this one already was.
+    spent = ({**_pair(outcome="no_verdict", republished=True), "reread_at": "t"},)
     assert rules.auto_merge_decision(_facts(merge_ci=spent)) == MergeDecision(
         "refuse", "ci_no_verdict"
     )
     waiting = (_pair(outcome="no_verdict", republished=False),)
     assert rules.auto_merge_decision(_facts(merge_ci=waiting)) == CI_RUN
+
+
+def _no_verdict_facts(record: MergeCiRecord, subject: str) -> MergeFacts:
+    if subject == "tested":
+        return _fresh(record, _verdict("green"))
+    return _facts(merge_ci=(record,))
+
+
+@pytest.mark.parametrize("subject", ["pr_head", "tested"])
+def test_a_no_verdict_pair_of_the_current_master_is_reread_before_ci_no_verdict(subject):
+    """GH-552: a run that finished after the grace is read once; only then the bound applies."""
+    unread = _pair(outcome="no_verdict", republished=True)
+    assert rules.auto_merge_decision(_no_verdict_facts(unread, subject)) == CI_RUN
+    reread = {**unread, "reread_at": "2026-11-03T10:30:00.000Z"}
+    assert rules.auto_merge_decision(_no_verdict_facts(reread, subject)) == MergeDecision(
+        "refuse", "ci_no_verdict"
+    )
+
+
+def test_a_no_verdict_pair_of_an_older_master_is_not_reread():
+    older = _pair(master=NEWER, outcome="no_verdict", republished=True)
+    assert rules.auto_merge_decision(_facts(merge_ci=(older,))) == MergeDecision(
+        "refuse", "ci_no_verdict"
+    )
+
+
+def test_a_green_pair_covering_the_head_still_merges_whatever_earlier_pairs_say():
+    spent = _pair(master=NEWER, outcome="no_verdict", republished=True)
+    green = _pair(outcome="green", run_id="1")
+    facts = _facts(merge_ci=(spent, green), ci_covered=True)
+    assert rules.auto_merge_decision(facts) == MERGE
 
 
 def test_the_two_bounds_are_counted_apart():

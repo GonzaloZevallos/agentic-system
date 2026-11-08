@@ -120,7 +120,31 @@ def reopened(record: MergeCiRecord, at: str) -> MergeCiRecord:
         row["released_at"] = record["released_at"]
     if "cause" in record:
         row["cause"] = record["cause"]
+    if "reread_at" in record:
+        row["reread_at"] = record["reread_at"]
     return row
+
+
+def rereadable(
+    records: Sequence[MergeCiRecord], pr_head: str | None, current_master: str | None
+) -> MergeCiRecord | None:
+    """The head's newest pair when the gate may reread its run once: it ended `no_verdict`
+    (GitHub gave none inside the grace, but the run may have finished after), it was neither
+    reread (`reread_at`) nor released (`released_at`), its run belongs to `pr_head`
+    (`run_belongs`) and the master it merged is the current one, whole ids and no inert gain.
+    The only place that decides a pair is rereadable."""
+    if not (rules.full_commit_id(pr_head) and rules.full_commit_id(current_master)):
+        return None
+    pair = latest(records, pr_head)
+    if pair is None or pair.get("outcome") != "no_verdict":
+        return None
+    if "reread_at" in pair or "released_at" in pair:
+        return None
+    if not run_belongs(pair, pr_head):
+        return None
+    if not rules.full_commit_id(pair["master"]):
+        return None
+    return pair if rules.same_commit(pair["master"], current_master) else None
 
 
 def masters_covered_ci(
