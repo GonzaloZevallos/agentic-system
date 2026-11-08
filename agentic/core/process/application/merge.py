@@ -45,7 +45,6 @@ from .poll import (
     _merge_facts,
     ci_gate,
     read_conflicts,
-    read_criteria,
     with_ci,
     with_red_on_base,
 )
@@ -60,7 +59,7 @@ from .ports import (
     TrackerUnreachable,
     Upstream,
 )
-from .preflight import product_name
+from .preflight import criteria_regressed, product_name
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .release import release_checkout
 
@@ -142,9 +141,14 @@ def merge_task(
     head = pull_request.head_oid if pull_request is not None else None
     base = task_base(raw, ports)
     touched: tuple[str, ...] | None = None
+    range_base: str | None = None
     if head is not None and ports.workspace.fetch_commit(head):
+        # GH-547: what the merge brings in is `merge-base(head, master)...head`, read once per
+        # call; a base the task merged master past would count master's own commits as the
+        # task's. An unreadable merge base stops the merge: it never falls back to the task base.
         try:
-            touched = ports.workspace.changed_paths(base, head)
+            range_base = ports.workspace.merge_base(head, master)
+            touched = ports.workspace.changed_paths(range_base, head)
         except GitError as exc:
             return MergeResult("stopped", f"diff_unreadable: {exc}")
     elif head is not None:
@@ -159,7 +163,7 @@ def merge_task(
             return MergeResult("stopped", f"adr_unreadable: {exc}")
     declared = ports.stack.ci(base)
     names = ci_gate(raw, declared).names
-    dispatch = _dispatch(ports, base)
+    dispatch = _dispatch(ports, master)
     # GH-463: the decided fresh run, once there is one: it replaces the pull request's own report.
     fresh_runs: list[ci.CiReport] = []
     report: ci.CiReport | ci.CiUnreadable | None = None
@@ -211,13 +215,16 @@ def merge_task(
         # ahead of them has already ruled the pull request out.
         if head is not None and (criteria or rules.criteria_probe_wanted(facts)):
             if not criteria:
-                criteria.append(read_criteria(ports, head, master))
+                criteria.append(_criteria(ports, head, range_base))
             facts = replace(facts, criteria_regressed=criteria[0])
         # GH-353: what master gained since the rows' masters, read once and only when no
         # refusal ahead of the checks has ruled the pull request out and the answer would
         # change the decision.
         if head is not None and rules.declares_ci(facts):
-            facts = _with_ci_gain(ports, facts, document, head, master, base, touched, globs, gains)
+            assert range_base is not None  # a fetched head has its merge base
+            facts = _with_ci_gain(
+                ports, facts, document, head, master, base, range_base, touched, globs, gains
+            )
         elif head is not None and rules.gain_probe_wanted(facts):
             covered = _masters_covered(ports, document, head, master, base, touched, globs, gains)
             facts = replace(facts, masters_covered=covered)
@@ -364,11 +371,23 @@ def with_ci_run(
     )
 
 
-def _dispatch(ports: Ports, base: str) -> CiDispatch | None:
-    """The workflow the stack names for an untrusted head; an unreadable stack names none."""
+def _dispatch(ports: Ports, master: str) -> CiDispatch | None:
+    """The workflow the stack names for an untrusted head, read at master because the dispatch
+    runs the default branch's workflow (GH-547); an unreadable stack names none."""
     try:
-        return ports.stack.ci_dispatch(base)
+        return ports.stack.ci_dispatch(master)
     except ValueError:
+        return None
+
+
+def _criteria(ports: Ports, head: str, range_base: str | None) -> tuple[str, ...] | None:
+    """`poll.read_criteria` on the verb's one merge base (GH-547): the same verdict, without a
+    second `merge_base` ask; a `GitError` is None, unreadable, which the decision refuses."""
+    if range_base is None:
+        return None
+    try:
+        return tuple(criteria_regressed(ports, range_base, head))
+    except GitError:
         return None
 
 
@@ -379,6 +398,7 @@ def _with_ci_gain(
     head: str,
     master: str,
     base: str,
+    range_base: str,
     touched: tuple[str, ...] | None,
     globs: list[tuple[str, ...]],
     gains: dict[str, tuple[str, ...] | None],
@@ -391,12 +411,7 @@ def _with_ci_gain(
     behind = pair is not None and not rules.same_commit(pair["master"], master)
     if not wanted and not behind:
         return facts
-    base_of: str | None = None
-    if wanted:
-        try:
-            base_of = ports.workspace.merge_base(head, master)
-        except GitError:
-            base_of = None
+    base_of = range_base if wanted else None
     older = [
         m for m in (base_of, pair["master"] if pair is not None else None) if m and m != master
     ]

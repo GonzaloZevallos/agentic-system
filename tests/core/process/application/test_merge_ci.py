@@ -14,7 +14,7 @@ from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, CiVe
 from agentic.core.process.domain.presubmit import CiCover
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _merges, _ports
-from tests.fakes import MemoryStack
+from tests.fakes import MERGE_BASE, MemoryStack
 
 
 @pytest.fixture(autouse=True)
@@ -578,6 +578,8 @@ def test_an_untrusted_head_without_a_dispatched_verdict_of_this_head_is_refused_
     assert ports.workspace.detached == [] and ports.commands.ran == []
     assert ports.workspace.ci_ref_calls == [] and ports.tracker.dispatch_calls == []
     assert "auto_merge_ci" not in _doc(ports) and "merge_ci" not in _doc(ports)
+    assert ports.workspace.diff_reads == [(MERGE_BASE, HEAD)]  # GH-547: the merge's own range
+    assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
 
 
 def test_a_head_the_landing_moved_is_trusted_only_once_its_own_dispatched_record_is_written(

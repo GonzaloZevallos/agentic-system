@@ -21,7 +21,7 @@ from agentic.core.process.domain.presubmit import CiDispatch
 from agentic.core.process.domain.task import MergeCiRecord
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _ports
-from tests.fakes import MemoryStack, MemoryWorkspace
+from tests.fakes import MERGE_BASE, MemoryStack, MemoryWorkspace
 
 TESTED = ("1" * 40, "2" * 40, "3" * 40)
 OLD_MASTER = "9" * 40
@@ -205,9 +205,10 @@ def test_a_red_fresh_run_is_refused_with_its_run_id_and_no_local_check(tmp_path)
 def test_an_untrusted_head_is_judged_by_one_dispatched_run_and_never_pushed_to_a_branch(tmp_path):
     ports, clock = _world(), _Clock()
     ports.workspace.diff_paths = (".github/workflows/ci.yml",)
-    ports.stack.declared_ci_dispatch = CiDispatch("ci.yml", "sha")
+    ports.stack.declared_ci_dispatch_at[MASTER] = CiDispatch("ci.yml", "sha")
 
     first = _call(ports, tmp_path, clock)
+    assert ports.workspace.diff_reads == [(MERGE_BASE, HEAD)]  # GH-547: the merge's own range
 
     assert (first.kind, first.reason) == ("stopped", "ci_wait")
     assert ports.workspace.ci_ref_calls == [("publish_dispatch", "GH-5")]
@@ -237,6 +238,8 @@ def test_an_untrusted_head_without_a_declared_dispatch_is_refused_at_once(tmp_pa
     assert (result.kind, result.reason) == ("refused", "ci_untrusted_no_dispatch")
     assert ports.workspace.ci_ref_calls == [] and ports.tracker.dispatch_calls == []
     assert ports.workspace.detached == [] and _pairs(ports) == []
+    assert ports.workspace.diff_reads == [(MERGE_BASE, HEAD)]
+    assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
     [comment] = _refusals(ports)
     assert "ci_untrusted_no_dispatch" in comment and "ci_dispatch" in comment
 

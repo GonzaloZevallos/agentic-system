@@ -346,3 +346,30 @@ Un `ci-ok` con `needs:` falla cuando los jobs de los que depende se cancelan, y
   declarados, y un `ci-ok` con `needs:` no tiene check-run mientras corren sus dependencias, así que
   se republica la misma cabeza y `cancel-in-progress` cancela la corrida en vuelo. Es una inferencia
   del código, sin log que la confirme.
+
+## Adenda (GH-547, 2026-11-07): la puerta de merge juzga lo que el merge trae
+
+Una tarea larga que integró master después de empezar se rechazaba con `ci_untrusted_no_dispatch`
+aunque su rama no tocara el CI: la puerta leía los caminos de `task_base...head`, que incluyen los
+commits propios de master (entre ellos `.github/`), y `ci_dispatch` en un `task_base` anterior a la
+declaración (apostrophe GH-396, PR #616).
+
+- **Rango.** Los caminos tocados son `merge-base(head, master)...head`. El merge base se lee una
+  sola vez por llamada del verbo y es a la vez el inicio de ese rango y la base de la lectura de
+  `gain`; no hay segunda lectura (tampoco la de `criteria`). Un merge base ilegible detiene el merge
+  como `diff_unreadable`; nunca vuelve a `task_base`.
+- **`ci_dispatch` se lee en master.** Es una excepción nueva a la adenda de ADR-0016, con la razón
+  de GH-531: el dispatch corre el workflow de la rama por defecto. Los nombres `ci:`, los checks y
+  el `setup` siguen leyéndose en `task_base`. El `stack.yaml` de la cabeza nunca aporta `ci_dispatch`
+  ni `ci` a una decisión de confianza.
+- **Lectores de `touched`.** `ci_untrusted` mira solo lo que la rama cambia; `touches_adrs` decide
+  la sonda de colisión de ADR sobre lo mismo; `masters_covered` ya no cuenta como de la tarea un
+  cambio de `.agentic/stack.yaml` que vino de master; la lista `guarded` del intent ya no muestra
+  los caminos de `.github/` y `.agentic/` que trajo master.
+- **Tarea corta.** Si `merge-base(head, master) == task_base`, el rango y la decisión son los de
+  antes.
+- **Límite conocido.** Los nombres `ci:` se leen en `task_base` y el workflow que corre es el de
+  master: si master renombra un job después de empezar la tarea, la tarea larga se rechaza con
+  `ci_unknown_names` (fijado por un test).
+- **Fuera de esta tarea.** `full_checks._head_trust`, `full_checks_mode` y la especulación siguen
+  leyendo en `task_base`; tras un `sync_master` del aterrizaje pueden mostrar el mismo síntoma.

@@ -17,6 +17,7 @@ from agentic.core.process.domain import exempt_queue, rules
 from tests.core.process.application.test_merge_ci_run import _world
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _Locks
+from tests.fakes import MERGE_BASE
 
 NOW = datetime(2026, 11, 4, 12, 20, tzinfo=UTC)
 MOVED = "e" * 40
@@ -73,6 +74,8 @@ def test_the_refusal_is_written_with_the_pair_it_decided_with_and_read_back_from
     result = _refuse(ports, tmp_path)
 
     assert (result.kind, result.reason) == ("refused", "ci_untrusted_no_dispatch")
+    assert ports.workspace.diff_reads == [(MERGE_BASE, HEAD)]  # GH-547: the merge's own range
+    assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
     assert _reloaded(tmp_path)["merge_refusal"] == {
         "reason": "ci_untrusted_no_dispatch",
         "head": HEAD,
