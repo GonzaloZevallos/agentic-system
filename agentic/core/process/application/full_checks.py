@@ -101,6 +101,8 @@ _CI_DETAIL: dict[CiCause, str] = {
     "dispatch_refused": "`gh` refused to dispatch the workflow for that head",
     "jobs_missing": "the run completed without a declared job",
     "unknown_names": "no check run carries a declared job name",
+    "run_unfinished": "a workflow run of that head was still going after {min:g} min and had "
+    "reported no declared job",
 }
 # Every cause when the verdict was asked of a dispatched run (GH-504), none inherited from the CI
 # branch ref's table: `{ref}` is the workflow file, `{dispatch_ref}` the ref the head was
@@ -119,6 +121,8 @@ _DISPATCH_DETAIL: dict[CiCause, str] = {
     "dispatched",
     "checkout_failed": "the dispatched {ref} failed at its {stage} step before the suite ran; head "
     "{sha} had been published to {dispatch_ref}",
+    "run_unfinished": "the dispatched {ref} was still going after {min:g} min and had reported no "
+    "declared job",
 }
 
 _LOG = logging.getLogger(__name__)
@@ -611,6 +615,19 @@ async def _ci_full_checks(
             not_tried=not_tried,
         )
     assert isinstance(read, CiReport)  # a verdict other than `unreachable` came from a report
+    if (
+        verdict.state == "timed_out"
+        and read.running_runs
+        and set(ci.ci_state(read, gate_names).missing) == set(gate_names)
+    ):
+        # GH-564: a live run that reported no declared job by the bound says nothing about the
+        # suite: the CI is unusable for this head, not red. Never a return, a dispatch or a
+        # republish (the run is alive); the human decides.
+        return _NoVerdict(
+            "run_unfinished",
+            waited,
+            timing=_no_verdict_timing(pushed_at, node_started_at),
+        )
     match verdict.state:
         case "green":
             patch = _ci_green(state, head, gate_names, read, waited)

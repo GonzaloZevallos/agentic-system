@@ -376,6 +376,9 @@ declaración (apostrophe GH-396, PR #616).
 
 ## Adenda (GH-552): un par `no_verdict` del master actual se relee una vez
 
+> Nota (GH-564): la relectura ya no se gasta al escribirse `reread_at` antes de leer, sino solo con
+> una lectura terminal sin veredicto; ver la adenda GH-564 al final de este documento.
+
 En apostrophe GH-396 el par de `merge_ci` terminó `no_verdict` (`no_run`) dentro de la gracia, pero
 su corrida terminó verde unos minutos después, y nadie volvió a leerla: la puerta rechazó
 `ci_no_verdict` con un verde disponible.
@@ -393,3 +396,42 @@ su corrida terminó verde unos minutos después, y nadie volvió a leerla: la pu
   misma llamada, como siempre; su relectura la hace una llamada posterior, que el poller lanza porque
   la decisión sobre el documento (también el de una tarea escalada) es `ci_run`.
 - **Costo.** A lo sumo una llamada más a `gh` por par `no_verdict`; sin gasto de modelo.
+
+## Adenda (GH-564): una corrida viva no es `no_run` y la relectura se gasta solo con una lectura terminal
+
+En apostrophe GH-540 un par quedó `no_verdict/no_run` mientras su corrida de Actions estaba viva
+(7:48 a 8:01), y su única relectura (GH-552) se gastó a los 689 s, con la corrida todavía en curso:
+un verde posterior para exactamente ese par nunca se mergeó. Dos defectos, un mismo cierre.
+
+- **Una corrida viva sobre la cabeza nunca es `no_run`.** El job agregador (`ci-ok`) depende por
+  `needs:` de los demás, así que su check no existe hasta el final de la corrida y todos los
+  nombres declarados faltan mientras corre. `ci.full_tier_verdict` exige además
+  `not read.running_runs` para emitir `no_run`: con una corrida viva el resultado es `waiting` hasta
+  `check_timeout_s` y `timed_out` en el tope. Por eso no se republica (borrar la rama cancelaría la
+  corrida) ni se despacha el respaldo de GH-531 sobre una suite que ya corre. Vale igual para
+  `full_checks` y para la puerta de merge, que comparten la función. `dispatch_verdict` no cambia.
+- **La relectura escribe después de leer y solo si es terminal.** `_reread_pair` ya no marca el par
+  antes de llamar a GitHub. Un `green` o `red` reescribe el par (`reread_at`, `outcome`) como antes.
+  Un `timed_out` o `unreachable` escribe `reread_at` y `reread_state` (`timed_out` o `unreachable`,
+  campo cerrado de `MergeCiRecord`): eso gasta la relectura. Un `waiting` (o un `cancelled`) no
+  escribe nada y la puerta devuelve `stopped ci_wait`; el poller vuelve a leer en la vuelta siguiente,
+  hasta `check_timeout_s` desde el inicio de la espera.
+- **`merge_ci.rereadable` excluye por `reread_state`, no por `reread_at`.** Un par escrito por el
+  código de GH-552 con `reread_at` sin `reread_state` sigue siendo releíble, así que el par de
+  GH-540 se recupera sin migrar el documento. Un par legado que de verdad se releyó en el tope recibe
+  a lo sumo una lectura más, que esta vez estampa `reread_state`.
+- **Un solo reloj.** `merge_ci.wait_began(pair)` (`rerun_at` si existe, `published_at` si no) es la
+  única fuente del inicio de la espera para `_read_pair`, `_reread_pair`, `_cancelled_pair` y
+  `ci.timing`; reemplaza al `_wait_began` privado y a la relectura que contaba desde `published_at`.
+- **`reopened` suelta las marcas de la relectura.** La fila reabierta por un `rerun` del aterrizaje
+  es un par indeciso nuevo: no hereda `reread_at` ni `reread_state`.
+- **Costo aceptado.** `running_runs` es de mejor esfuerzo: una suite sin `databaseId` legible no
+  cuenta y vuelve el comportamiento anterior. Una corrida ajena viva sobre la cabeza con el workflow
+  declarado sin arrancar escala con clase `ci` en el tope en vez de despachar el respaldo de
+  GH-531: falla del lado seguro. En `full_checks` es una escalada de clase `ci` con la causa cerrada
+  `run_unfinished` (una corrida viva que no reportó ningún job declarado al llegar al tope), nunca
+  un registro rojo `timeout`: no reabre la integración ni cobra al Developer, y no despacha ni
+  republica. Una corrida con algún job declarado ya reportado que sigue pendiente en el tope conserva
+  el `timeout` rojo de siempre. Una corrida que termina después de
+  `check_timeout_s` sigue fuera de la espera declarada. Una relectura en espera cuesta una lectura
+  GraphQL por vuelta del poller y por tarea, solo hasta ese tope.

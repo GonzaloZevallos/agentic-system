@@ -968,5 +968,5 @@ def test_an_escalated_task_with_a_rereadable_no_verdict_pair_is_assessed_ci_run(
 
 
 def test_the_same_pair_once_reread_is_assessed_ci_no_verdict():
-    ports = _ci_no_verdict_world(reread_at="2026-11-03T10:30:00+00:00")
+    ports = _ci_no_verdict_world(reread_at="2026-11-03T10:30:00+00:00", reread_state="timed_out")
     assert _assessed(ports) == rules.MergeDecision("refuse", "ci_no_verdict")

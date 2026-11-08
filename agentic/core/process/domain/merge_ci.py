@@ -102,8 +102,9 @@ def decided_red(
 
 def reopened(record: MergeCiRecord, at: str) -> MergeCiRecord:
     """`record` after the landing reran its run (`rerun_at` `at`): the pair is undecided again,
-    so it carries no `outcome` and no `failing`, and the gate reads the run once more. Every
-    other field is kept, the `run_id` included."""
+    so it carries no `outcome` and no `failing`, and the gate reads the run once more. It is a
+    new undecided pair, so it carries no `reread_at` and no `reread_state` either (GH-564);
+    every other field is kept, the `run_id` included."""
     row = MergeCiRecord(
         head=record["head"],
         master=record["master"],
@@ -120,25 +121,31 @@ def reopened(record: MergeCiRecord, at: str) -> MergeCiRecord:
         row["released_at"] = record["released_at"]
     if "cause" in record:
         row["cause"] = record["cause"]
-    if "reread_at" in record:
-        row["reread_at"] = record["reread_at"]
     return row
+
+
+def wait_began(pair: MergeCiRecord) -> str:
+    """The instant the gate's wait for `pair` began, as text (GH-467, GH-564): the last time
+    GitHub was asked for a run, `rerun_at` when there was a rerun, `published_at` otherwise. The
+    only place that instant is derived."""
+    return pair["rerun_at"] if "rerun_at" in pair else pair["published_at"]
 
 
 def rereadable(
     records: Sequence[MergeCiRecord], pr_head: str | None, current_master: str | None
 ) -> MergeCiRecord | None:
-    """The head's newest pair when the gate may reread its run once: it ended `no_verdict`
-    (GitHub gave none inside the grace, but the run may have finished after), it was neither
-    reread (`reread_at`) nor released (`released_at`), its run belongs to `pr_head`
-    (`run_belongs`) and the master it merged is the current one, whole ids and no inert gain.
-    The only place that decides a pair is rereadable."""
+    """The head's newest pair when the gate may reread its run: it ended `no_verdict` (GitHub
+    gave none inside the grace, but the run may have finished after), no reread ended without a
+    verdict (`reread_state`) and the landing did not release it (`released_at`), its run belongs
+    to `pr_head` (`run_belongs`) and the master it merged is the current one, whole ids and no
+    inert gain. A bare `reread_at` (written by GH-552) does not exclude it: only a terminal
+    reread spends the pair (GH-564). The only place that decides a pair is rereadable."""
     if not (rules.full_commit_id(pr_head) and rules.full_commit_id(current_master)):
         return None
     pair = latest(records, pr_head)
     if pair is None or pair.get("outcome") != "no_verdict":
         return None
-    if "reread_at" in pair or "released_at" in pair:
+    if "reread_state" in pair or "released_at" in pair:
         return None
     if not run_belongs(pair, pr_head):
         return None

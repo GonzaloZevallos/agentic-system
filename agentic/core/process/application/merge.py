@@ -653,8 +653,7 @@ def _read_pair(
     tested = pair["tested"]
     published = _instant(pair["published_at"])
     # The wait counts from the last time GitHub was asked for a run: a rerun restarts it.
-    started = max(published, _instant(pair["rerun_at"])) if "rerun_at" in pair else published
-    waited = (_instant(clock()) - started).total_seconds()
+    waited = (_instant(clock()) - _instant(merge_ci.wait_began(pair))).total_seconds()
     report: ci.CiReport | None = None
     run_id: str | None = None
     if pair["mode"] == "push":
@@ -698,7 +697,7 @@ def _read_pair(
         row: MergeCiRecord = {**pair, "outcome": "green" if verdict.state == "green" else "red"}
         row["ci_timing"] = ci.timing(
             pair["published_at"],
-            _wait_began(pair),
+            merge_ci.wait_began(pair),
             "green" if verdict.state == "green" else "red",
             report.checks,
             names,
@@ -726,7 +725,7 @@ def _read_pair(
         )
     undecided: MergeCiRecord = {**pair, "republished": True, "outcome": "no_verdict"}
     undecided["ci_timing"] = ci.timing(
-        pair["published_at"], _wait_began(pair), "no_verdict", (), ()
+        pair["published_at"], merge_ci.wait_began(pair), "no_verdict", (), ()
     )
     if verdict.cause is not None:
         undecided["cause"] = verdict.cause
@@ -744,15 +743,15 @@ def _reread_pair(
     ports: Ports,
     clock: Callable[[], str],
 ) -> _Fresh:
-    """Reads once more the run of a `no_verdict` pair of the current master (GH-552): the run may
-    have finished after the grace the pair spent. `reread_at` is written before GitHub is asked,
-    so a crash or a failing port never reopens the loop. A `green` or `red` verdict rewrites the
-    pair from the stamped one; any other state writes nothing more and triggers nothing: no
-    republish, rerun, push or dispatch."""
-    stamped: MergeCiRecord = {**pair, "reread_at": clock()}
-    _write_pairs(ports, task_id, pairs, stamped)
+    """Reads once more the run of a `no_verdict` pair of the current master (GH-552, GH-564): the
+    run may have finished after the grace the pair spent. The wait counts from
+    `merge_ci.wait_began`. Nothing is written before the read. `green` or `red` rewrites the pair
+    with `reread_at` and the outcome; `timed_out` or `unreachable` (the bound is spent) writes
+    `reread_at` and `reread_state`, which spends the reread; `waiting` or `cancelled` (the run
+    lives on) writes nothing and the gate stops `ci_wait`. Nothing is republished, rerun, pushed
+    or dispatched from a reread."""
     tested = pair["tested"]
-    waited = (_instant(clock()) - _instant(pair["published_at"])).total_seconds()
+    waited = (_instant(clock()) - _instant(merge_ci.wait_began(pair))).total_seconds()
     report: ci.CiReport | None = None
     run_id: str | None = None
     if pair["mode"] == "push":
@@ -783,13 +782,17 @@ def _reread_pair(
             if chosen is not None and verdict.state in ("green", "red"):
                 report = ci.CiReport(tested, None, None, None, chosen.jobs)
                 run_id = str(chosen.run_id)
-    if report is None or verdict.state not in ("green", "red"):
+    if verdict.state in ("timed_out", "unreachable"):
+        spent: MergeCiRecord = {**pair, "reread_at": clock(), "reread_state": verdict.state}
+        _write_pairs(ports, task_id, pairs, spent)
         return _Fresh(cause=pair.get("cause"))
+    if report is None or verdict.state not in ("green", "red"):
+        return _Fresh(stopped=MergeResult("stopped", "ci_wait"))
     outcome: Literal["green", "red"] = "green" if verdict.state == "green" else "red"
-    row: MergeCiRecord = {**stamped, "outcome": outcome}
+    row: MergeCiRecord = {**pair, "reread_at": clock(), "outcome": outcome}
     row.pop("cause", None)
     row["ci_timing"] = ci.timing(
-        pair["published_at"], _wait_began(pair), outcome, report.checks, names
+        pair["published_at"], merge_ci.wait_began(pair), outcome, report.checks, names
     )
     if run_id is not None:
         row["run_id"] = run_id
@@ -832,16 +835,10 @@ def _cancelled_pair(
         "cause": "not_started",
     }
     undecided["ci_timing"] = ci.timing(
-        pair["published_at"], _wait_began(pair), "no_verdict", (), ()
+        pair["published_at"], merge_ci.wait_began(pair), "no_verdict", (), ()
     )
     _write_pairs(ports, task_id, pairs, undecided)
     return _Fresh(cause="not_started")
-
-
-def _wait_began(pair: MergeCiRecord) -> str:
-    """The instant the gate's wait for `pair` began, as text (GH-467): the last time GitHub was
-    asked for a run, the rerun's when there was one, the publish otherwise."""
-    return pair["rerun_at"] if "rerun_at" in pair else pair["published_at"]
 
 
 def _run_id_of(link: str | None) -> str | None:

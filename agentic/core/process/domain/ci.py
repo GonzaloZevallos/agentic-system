@@ -565,7 +565,10 @@ def full_tier_verdict(
     planning defect, not a slow CI (GH-485). The classification of `superseded_or_cancelled`
     runs comes before `_NOT_STARTED` (GH-539): a declared name left only by such runs, with
     nothing pending and `runs_completed is True`, is `cancelled`; before that, `waiting`.
-    `_NOT_STARTED` stays for `STARTUP_FAILURE` and a `CANCELLED` of a run that is neither."""
+    `_NOT_STARTED` stays for `STARTUP_FAILURE` and a `CANCELLED` of a run that is neither.
+    A report of `head` with a live run (`running_runs` not empty) is never `no_run` (GH-564), at
+    any elapsed time: no declared name yet only means the run has not reported, so it is
+    `waiting` until `timeout_s` and `timed_out` from there."""
     at_bound = elapsed_s >= timeout_s
     if isinstance(read, CiUnreadable):
         if at_bound:
@@ -590,7 +593,9 @@ def full_tier_verdict(
     unknown = unreported(read, names, confirmed)
     if unknown:
         return FullTierVerdict("unreachable", (), pending, "unknown_names", unknown, cancelled)
-    no_run = len(verdict.missing) == len(set(names))
+    # A live run on `head` is never `no_run` (GH-564): the aggregating job reports only when the
+    # run ends, so its names are all missing while it runs. It waits, then `timed_out`.
+    no_run = len(verdict.missing) == len(set(names)) and not read.running_runs
     if no_run and (elapsed_s >= grace_s or at_bound):
         return FullTierVerdict("unreachable", (), pending, "no_run", (), cancelled)
     if not at_bound:
