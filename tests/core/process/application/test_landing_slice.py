@@ -430,7 +430,7 @@ def _matrix_ci(ports, *, pending=(), completed: bool | None = True):
     ports.tracker.ci_reports[SLICE_URL] = CiReport(
         SLICE_HEAD, None, None, "2026-10-22T00:00:00Z", checks, runs_completed=completed
     )
-    green = (CiCheck("pytest (areas-1, a)", "COMPLETED", "SUCCESS", "link"),)
+    green = tuple(CiCheck(name, "COMPLETED", "SUCCESS", "link") for name in names)
     ports.tracker.ci_reports[URL.format(5)] = CiReport(HEAD, "master", MASTER, NOW, green)
 
 

@@ -12,7 +12,7 @@ from agentic.core.process.domain import ci, rules
 from agentic.core.process.domain.landing import LandingStep
 from tests.core.process.application.test_poll_unreported import HEAD, _facts
 
-SHARDS = ("pytest (areas-1, a)", "pytest (areas-2, b)")
+SHARDS = ("pytest (areas-1, a)", "pytest (areas-2, b)", "pytest (areas-3, c)")
 
 
 def _report(names, *, completed: bool | None) -> ci.CiReport:
@@ -54,7 +54,7 @@ def test_every_expansion_reported_and_completed_names_nothing_to_escalate():
 
 
 def test_a_part_of_the_shards_with_the_runs_not_known_complete_waits_and_escalates_nothing():
-    facts = _read(_report((SHARDS[0], "docs"), completed=None))
+    facts = _read(_report((*SHARDS[:2], "docs"), completed=None))
 
     decision, step = _answer(facts)
 
