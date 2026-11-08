@@ -460,12 +460,14 @@ def adr_collision_reason(found: Renaming | Ambiguous, cap: int, failed: str | No
     if isinstance(found, Ambiguous) and not found.moves:
         return (
             f"{what}\nNo model was run and the task was not restarted. To go on, {WAY_OUT_ADR}. "
-            "A new head goes through the landing table again."
+            "A new head goes through the landing table again; a reply without a new head does "
+            "not ask again."
         )
     return (
         f"{what}\nTo go on, {WAY_OUT_ADR}, or decide on this issue. A new head goes through "
-        "the landing table again; a decision on the issue is applied by a model pass that "
-        "edits only the lines named above."
+        "the landing table again; a reply without a new head does not ask again, except a "
+        "decision on the issue, which is applied by a model pass that edits only the lines "
+        "named above."
     )
 
 

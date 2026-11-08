@@ -1,0 +1,229 @@
+"""GH-544, the chain: an `escalate_adr` question, an owner's decision on the issue, then a `land`
+that dispatches `apply_adr_decision` and runs it (`landing_adr`) on the memory ports, with a
+stub Developer that records its brief and commits a one-line edit. The collision is a real
+one (`adr_collision` over the memory workspace): the branch's `0049-mine` against master's
+`0049-theirs`, and a line of code that cites it in a way the grammar cannot rewrite."""
+
+from __future__ import annotations
+
+import dataclasses
+from typing import Any
+
+import pytest
+
+from agentic.core.process.application import landing
+from agentic.core.process.application.landing_plan import entries as plan_entries
+from agentic.core.process.application.ports import IssueComment, IssueState, RawResult, Upstream
+from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain import rules
+from tests.core.process.application.test_landing_renumber import (
+    BRANCH,
+    MINE,
+    NOTES,
+    _pushed,
+    _world,
+)
+from tests.core.process.application.test_poll import _cfg
+from tests.core.process.application.test_poll_merge import _HeldLocks
+from tests.fakes import ScriptedRunner
+
+CODE = "app/main.py"
+CITES_CODE = 'MSG = "see (docs/adr/0049)"'
+LIVE = frozenset({"escalate_adr", "apply_adr_decision", "re_review"})
+ASKED = "2026-10-14T00:00:00+00:00"
+ESCALATED_COMMENT = "2026-10-14T00:00:10+00:00"
+DECIDED = "2026-10-14T01:00:00+00:00"
+DECISION = "renumber to the next free number and point app/main.py to it"
+
+
+class StubDeveloper(ScriptedRunner):
+    """The Developer of the landing: records the prompt it was given, then runs `edit` in the
+    checkout (a write and a commit), as the model would, and delivers."""
+
+    def __init__(self, ports, edit) -> None:
+        super().__init__()
+        self.ports, self.edit = ports, edit
+
+    async def run_once(self, role, prompt: str, **kwargs: Any) -> RawResult:
+        self.calls.append({"slug": role.slug, "prompt": prompt, "role": role, **kwargs})
+        self.edit(self.ports, kwargs["cwd"])
+        presubmit = kwargs.get("presubmit")
+        if presubmit is not None:
+            presubmit()
+        return RawResult(
+            {"markdown": "### Done", "summary": "s", "assumptions": [], "coverage": []},
+            0.5,
+            3,
+            "session",
+        )
+
+
+def _point_at_the_new_number(ports, cwd):
+    (cwd / CODE).write_text('MSG = "see (docs/adr/0050)"\n', encoding="utf-8")
+    ports.workspace.commit_paths(cwd, [CODE], "Point the reference at the new number")
+    ports.workspace.diff_paths = (CODE,)  # what the Developer's commit changes
+
+
+def _edit_elsewhere(ports, cwd):
+    (cwd / NOTES).write_text("something else entirely\n", encoding="utf-8")
+    ports.workspace.commit_paths(cwd, [NOTES], "Edit outside the spots")
+    ports.workspace.diff_paths = (NOTES,)
+
+
+def _boom(ports, cwd):
+    raise RuntimeError("the harness broke")
+
+
+def _round(tmp_path, ports, live=LIVE):
+    lines: list[str] = []
+    ports.workspace.diff_paths = (MINE, NOTES, CODE)  # the pull request's own paths
+    result = landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", ports.workspace.master_sha, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: ASKED,
+        live=live,
+    )
+    return result, lines
+
+
+def _asked(tmp_path, edit=_point_at_the_new_number, *, comments=None):
+    """The question asked on the collision, then the owner's decision on the issue."""
+    ports, head = _world(tmp_path, extra=((CODE, CITES_CODE),))
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
+    ports.workspace.diff_paths = (MINE, NOTES, CODE)
+    (tmp_path / "GH-5" / "app").mkdir(parents=True)
+    first, _ = _round(tmp_path, ports)
+    assert (first.kind, first.step) == ("dispatched", "escalate_adr"), first
+    ports.tracker.timestamped["GH-5"] = [
+        IssueComment(body, at)
+        for body, at in (
+            comments or [("Escalated: ADR collision", ESCALATED_COMMENT), (DECISION, DECIDED)]
+        )
+    ]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, ())
+    ports.documents.record_closure(
+        "GH-5",
+        {"title": "t", "description": "d", "sections": {"Human": f"### Decision\n\n{DECISION}"}},
+    )
+    return ports, head
+
+
+def _entries(ports):
+    return plan_entries(ports.documents.load("GH-5"))
+
+
+def test_a_decision_on_an_escalated_adr_collision_is_applied_pushed_and_reviewed_again(tmp_path):
+    ports, head = _asked(tmp_path)
+    [asked] = _entries(ports)
+    assert asked["moves"] == [[MINE, "docs/adr/0050-mine.md"]]
+
+    result, lines = _round(tmp_path, ports)
+
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    assert result.reason != "not_live"
+    assert ports.workspace.pushes == [(BRANCH, head)]
+    applied = _entries(ports)[-1]
+    assert applied["step"] == "apply_adr_decision" and applied["outcome"] == "applied"
+    new = ports.workspace.branch_commits[-1].sha
+    assert applied["head_after"] == new != head
+    [prompt] = ports.runner.prompts("developer")
+    assert DECISION in prompt and f"{CODE}:1: {CITES_CODE}" in prompt
+    assert "Never choose an ADR number" in prompt
+    assert ports.workspace.show(new, CODE) == 'MSG = "see (docs/adr/0050)"\n'
+    assert ports.workspace.show(new, "docs/adr/0050-mine.md") == "# ADR-0050: mine\n"
+    unit = ports.documents.load("GH-5")["subtasks"]["only"]
+    assert unit["reviewed_head"] == head  # a code edit is not carried
+
+    # The next round: the new head goes through the table, and the review it owes is next.
+    _pushed(ports)
+    again, _ = _round(tmp_path, ports)
+    assert again.step == "re_review"
+
+
+def test_the_review_after_an_applied_decision_is_taken_when_the_passes_are_spent(tmp_path):
+    ports, _ = _asked(tmp_path)
+    _round(tmp_path, ports)
+    _pushed(ports)
+    document = ports.documents.load("GH-5")
+    spent = [
+        {"head": f"old{n}", "step": "fix", "refusal": "checks_failed", "resolved_at": ASKED}
+        for n in range(landing_rules.LANDING_PASSES_MAX)
+    ]
+    ports.documents.record_closure("GH-5", {"landing": [*spent, *document["landing"]]})
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "re_review"
+
+
+def test_a_legacy_question_without_moves_is_still_applied(tmp_path):
+    ports, head = _asked(tmp_path)
+    legacy = [{k: v for k, v in e.items() if k != "moves"} for e in _entries(ports)]
+    ports.documents.record_closure("GH-5", {"landing": legacy})
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == [(BRANCH, head)]
+
+
+def test_an_edit_outside_the_spots_pushes_nothing_and_asks_again(tmp_path):
+    ports, head = _asked(tmp_path, _edit_elsewhere)
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == []
+    assert ports.workspace.branch_commits[-1].sha == head  # the checkout was put back
+    steps = [(e["step"], e.get("outcome")) for e in _entries(ports)]
+    assert steps == [
+        ("escalate_adr", None),
+        ("apply_adr_decision", "out_of_bounds"),
+        ("escalate_adr", None),
+    ]
+    document = ports.documents.load("GH-5")
+    assert document["escalated"] and document["escalation_class"] == "questions"
+    assert ("GH-5", "needs-human") in ports.tracker.labels
+    assert "out_of_bounds" in document["questions_for_human"][0]
+    assert _entries(ports)[-1]["resolved_at"]
+
+
+def test_moves_that_differ_from_the_recorded_ones_are_stale_and_push_nothing(tmp_path):
+    ports, _ = _asked(tmp_path)
+    ports.workspace.advance_master("docs/adr/0050-busy.md")  # the rule would now choose 0051
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == []
+    assert ports.runner.calls == []
+    assert _entries(ports)[1]["outcome"] == "stale_moves"
+
+
+def test_an_exception_in_the_role_runner_leaves_the_checkout_at_the_head(tmp_path):
+    ports, head = _asked(tmp_path, _boom)
+
+    with pytest.raises(RuntimeError):
+        _round(tmp_path, ports)
+
+    assert ports.workspace.pushes == []
+    assert ports.workspace.branch_commits[-1].sha == head
+    assert ports.workspace.resets and ports.workspace.resets[-1][1] == head
+
+
+def test_a_comment_posted_before_the_escalation_does_not_release(tmp_path):
+    ports, _ = _asked(
+        tmp_path,
+        comments=[(DECISION, "2026-10-13T23:00:00+00:00"), ("Escalated: ADR", ESCALATED_COMMENT)],
+    )
+
+    result, _ = _round(tmp_path, ports)
+
+    assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_human")
+    assert ports.runner.calls == []
+    assert rules.task_branch("GH-5") == BRANCH
