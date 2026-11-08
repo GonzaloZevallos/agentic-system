@@ -529,7 +529,9 @@ def test_land_waits_and_writes_nothing_when_ancestry_cannot_be_read(tmp_path, mo
 
 
 def test_land_refuses_a_released_step_the_registered_run_kind_does_not_admit(tmp_path, monkeypatch):
-    ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=True)
+    # GH-544: the run kind is judged on the step the release gives (one block in `land`), so the
+    # released step must be one a model kind owns: a head without the upstream is a sync_master.
+    ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=False)
     before = _doc(ports)
     lines: list[str] = []
 

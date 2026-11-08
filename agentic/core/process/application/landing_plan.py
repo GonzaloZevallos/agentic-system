@@ -16,6 +16,7 @@ from typing import Literal, Protocol
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, landing, plan_settlement, rules
+from ..domain.adr_numbers import Ambiguous
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
 from ..domain.task import (
@@ -49,11 +50,12 @@ LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
         "settle",
         "escalate_ledger",
         "escalate_adr",
+        "apply_adr_decision",
     }
 )
 """Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`, `renumber`),
 `landing_fix`'s (`fix`, `fix_important`, `rerun`, `file_followups_and_land`, `diagnose`,
-`settle`, `escalate_ledger`, `escalate_adr`) and
+`settle`, `escalate_ledger`, `escalate_adr`), `landing_adr`'s (`apply_adr_decision`, GH-544) and
 `landing_slice`'s (`land_slice`, GH-297). A
 step outside the set is neither recorded nor spawned, so a refusal whose step is inert logs
 as it always did."""
@@ -216,6 +218,8 @@ def spent(
         head_has_upstream=ancestry() if release_due and ancestry is not None else None,
         no_verdict_released=head is not None
         and landing.no_verdict_released(live, _merge_ci_records(raw), head),
+        adr_decisions=landing.adr_decisions_spent(done),
+        adr_review_owed=landing.adr_review_owed(done),
     )
 
 
@@ -272,24 +276,40 @@ def step_for(
     `slicing` is what `landing_step` decides a slice from at the exhaustion (`slice_inputs`,
     read lazily), `None` as before GH-297. `ancestry` (GH-442) is read only for a document whose
     CI release is waiting for its step."""
+    budgets = spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master, ancestry)
+    head = facts.pr_head
     return landing.landing_step(
         refusal,
         facts,
-        spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master, ancestry),
+        budgets,
         landing.blocking_owners(raw),
         important_units=landing.important_owners(raw),
         slicing=slicing,
         ledger_only=plan_settlement.ledger_only(refusal, facts, raw),
         pending=plan_settlement.pending(raw),
         escalated=escalation_recorded(raw, facts.pr_head, refusal, "escalate_ledger"),
-        adr_escalated=escalation_recorded(
-            raw, facts.pr_head, refusal, "escalate_adr", resolved_only=True
-        ),
+        # GH-544: `landing.adr_asked` is the one reader of "the question is still pending", over
+        # the live entries; the cap reads all of them (`spent.adr_decisions`) and the
+        # idempotency the live ones, as GH-406 says.
+        adr_escalated=head is not None and landing.adr_asked(live_entries(raw), head, refusal),
         names_escalated=refusal == "ci_unknown_names"
         and escalation_recorded(
             raw, facts.pr_head, refusal, "escalate", names=sorted(facts.ci_unreported)
         ),
+        adr_decision_due=head is not None
+        and landing.adr_decision_due(live_entries(raw), head, facts.adr_collision, budgets),
     )
+
+
+def adr_decision_at(entries: Sequence[Mapping[str, object]], head: str) -> str | None:
+    """The owner's decision an `apply_adr_decision` on `head` answers (GH-544): the `released_at`
+    of the last `escalate_adr` entry of that head that carries one. The key `land` stamps as
+    `decision_at` and `already_dispatched` reads."""
+    for entry in reversed(entries):
+        released = entry.get("released_at")
+        if entry.get("step") == "escalate_adr" and entry.get("head") == head and released:
+            return str(released)
+    return None
 
 
 def escalation_recorded(
@@ -465,7 +485,12 @@ def _owner_release(
         comments = ports.tracker.timestamped_comments(task_id)
     except (ValueError, OSError):
         return _unreleased("waiting_on_human")
-    if not landing.escalated_after(comments, landing.diagnose_at(raw), ESCALATED):
+    baseline = landing.release_baseline(raw)
+    # `escalated_after` reads the instant as the ISO text the document stores; `None` (unreadable)
+    # stays what it was, so the comment counts.
+    if not landing.escalated_after(
+        comments, baseline.isoformat() if baseline is not None else None, ESCALATED
+    ):
         return _unreleased("waiting_on_human")
     decision = decision_since([comment.body for comment in comments], ESCALATED)
     if decision is None:
@@ -507,17 +532,46 @@ def _base_is_green(
         return False
 
 
-def release_asked(raw: Mapping[str, object], kind: LandingStepKind) -> bool:
+def release_asked(
+    raw: Mapping[str, object],
+    kind: LandingStepKind,
+    *,
+    refusal: str | None = None,
+    facts: rules.MergeFacts | None = None,
+) -> bool:
     """Whether the escalated document `raw` is held back by its escalation at the table's step
     `kind`: only a `diagnose` is (GH-328), every other step is dispatched as if the document
     were not escalated. The one condition `land`, the poller and `resume` ask before they ask
-    `release`, so none holds a copy of it."""
+    `release`, so none holds a copy of it.
+
+    GH-544: with `refusal` `adr_number_taken` and the `facts`, an `escalate_adr` question
+    (`landing.adr_escalation_entry`, of the head `facts` holds) on a collision the owner's
+    decision can still apply (an `Ambiguous` with moves, a slot left in
+    `LANDING_ADR_DECISIONS_MAX`) is held back whatever `kind` the escalated table gives (`none`).
+    Without both, that branch is false."""
     if not raw.get("escalated"):
         return False
+    if refusal == "adr_number_taken" and facts is not None and _adr_release_asked(raw, facts):
+        return True
     if kind == "escalate":
         # GH-463: the `ci_no_verdict` escalation is released on a new upstream sha or a comment.
         return landing.ci_no_verdict_entry(raw, _escalated_head(raw)) is not None
     return kind == "diagnose"
+
+
+def _adr_release_asked(raw: Mapping[str, object], facts: rules.MergeFacts) -> bool:
+    """The `escalate_adr` shape of `release_asked`: the question's entry is on `facts.pr_head`,
+    the collision is an `Ambiguous` with moves to apply and the decision cap is not spent."""
+    entry = landing.adr_escalation_entry(raw)
+    collision = facts.adr_collision
+    return (
+        entry is not None
+        and facts.pr_head is not None
+        and entry.get("head") == facts.pr_head
+        and isinstance(collision, Ambiguous)
+        and bool(collision.moves)
+        and landing.adr_decisions_spent(all_entries(raw)) < landing.LANDING_ADR_DECISIONS_MAX
+    )
 
 
 def release(
@@ -539,6 +593,9 @@ def release(
     (`MergeFacts.pr_head`, `current_master`); without them the pull request's report and the
     workspace's upstream are read. A tracker that cannot answer is a wait.
 
+    An `escalate_adr` question (`landing.adr_escalation_entry`, GH-544) is released by an owner's
+    comment after it, through the same route, whatever its class.
+
     Any other escalation keeps its answer (GH-328): only class `failure` with undelivered
     diagnose attempts is releasable, by a human's answer (`_owner_release`); every other one, the
     depth-1 escalation after a delivered diagnosis included, is the human's restart, and the
@@ -548,6 +605,10 @@ def release(
         return _ci_release(ports, cfg, task_id, raw, number, shape, upstream)
     if shape is not None and head in (None, shape) and landing.ci_no_verdict_entry(raw, shape):
         return _no_verdict_release(ports, cfg, task_id, raw, number, shape, upstream)
+    adr = landing.adr_escalation_entry(raw)
+    if adr is not None and head in (None, adr.get("head")):
+        # GH-544: an `escalate_adr` question is answered on the issue, whatever its class.
+        return _owner_release(ports, cfg, task_id, raw, number)
     if raw.get("escalation_class") != "failure" or not landing.diagnose_attempts(raw):
         return _unreleased("needs_restart")
     return _owner_release(ports, cfg, task_id, raw, number)

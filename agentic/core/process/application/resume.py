@@ -378,7 +378,7 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
         # The escalation itself, taken on this head: `land` answers "already taken" and moves
         # nothing until the base's CI is green and the table gives another step.
         return f"{owns}, and it waits for the base branch CI to turn green."
-    asked = landing_plan.release_asked(state, step.kind)
+    asked = landing_plan.release_asked(state, step.kind, refusal=refusal, facts=facts)
     if not asked and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
         return land
     # Either `land` holds the step back for the release, or it answers `not_live` and writes

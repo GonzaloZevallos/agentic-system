@@ -22,7 +22,7 @@ from ..domain import merge_ci
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
-from . import landing_fix, landing_plan, landing_slice, landing_sync
+from . import landing_adr, landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .escalate import NEEDS_HUMAN
 from .landing_plan import LandingContext
@@ -179,23 +179,21 @@ def _land(
             slice_inputs,
             landing_plan.head_ancestry(ports, cfg, head, master),
         )
-    if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
-        return _refused(task_id, raw, run_kind, step.kind, head, log)
-    if not landing_plan.takes_action(step.kind, live):
-        log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
-        return LandResult("skipped", "not_live", step.kind)
     try:
         now: datetime | None = datetime.fromisoformat(clock())
     except ValueError:
         now = None
     released: ReleasePatch = {}
-    if landing_plan.release_asked(raw, step.kind):
+    outcome: landing_plan.Release | None = None
+    if landing_plan.release_asked(raw, step.kind, refusal=decision.reason, facts=facts):
         outcome = landing_plan.release(ports, cfg, task_id, raw, number, head=head, upstream=master)
         if not outcome.released:
+            if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
+                return _refused(task_id, raw, run_kind, step.kind, head, log)
             return _waiting_on_human(task_id, head, outcome.why, log, step.kind)
         # The step after the release is the table's on the document as the release leaves it
-        # (a sync, a rerun, a wait), never the diagnose the escalated view gave; it must be
-        # one this run may take before anything is written.
+        # (a sync, a rerun, a wait, an `apply_adr_decision`), never the diagnose the escalated
+        # view gave; it must be one this run may take before anything is written.
         at = clock()
         released = landing_plan.release_patch(raw, outcome, master, at)
         step = landing_plan.released_step(
@@ -207,8 +205,9 @@ def _land(
             slicing=slice_inputs,
             ancestry=landing_plan.head_ancestry(ports, cfg, head, master),
         )
-        if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
-            return _refused(task_id, raw, run_kind, step.kind, head, log)
+    if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
+        return _refused(task_id, raw, run_kind, step.kind, head, log)
+    if outcome is not None:
         if step.kind == "wait" and released and step.refusal == "ci_no_verdict":
             # GH-463: the release of a `ci_no_verdict` escalation has no step of its own; the
             # gate decides again next round. Persisting it is what grants the pair.
@@ -217,9 +216,9 @@ def _land(
                 ports.tracker.drop_label(task_id, NEEDS_HUMAN)
             log(f"agentic: land: {task_id}: {head} ci_no_verdict: released, one more pair")
             return LandResult("dispatched", step=step.kind)
-        if not landing_plan.takes_action(step.kind, live):
-            log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
-            return LandResult("skipped", "not_live", step.kind)
+    if not landing_plan.takes_action(step.kind, live):
+        log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
+        return LandResult("skipped", "not_live", step.kind)
     # What the restart comment calls "(integration work)": the integrator's paths are what kept
     # every slice from landing (stamped on the diagnose entry, read by landing_fix).
     integration_work = (
@@ -241,6 +240,12 @@ def _land(
         )
         landing_fix.escalate_failed_diagnosis(context)
         return LandResult("dispatched", step=step.kind)
+    # GH-544: the owner's decision an `apply_adr_decision` answers, the key of its idempotency.
+    decision_at = (
+        landing_plan.adr_decision_at(landing_plan.live_entries(current), head)
+        if step.kind == "apply_adr_decision"
+        else None
+    )
     if resumed is None and landing_rules.already_dispatched(
         landing_plan.live_entries(current),
         head,
@@ -248,6 +253,7 @@ def _land(
         master,
         unstarted=landing_rules.landing_pass(current) == "unstarted",
         names=step.names,
+        decision_at=decision_at,
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -289,13 +295,15 @@ def _land(
             pair = merge_ci.latest(raw.get("merge_ci", []), head)
             if pair is not None and "cause" in pair:
                 entry["cause"] = pair["cause"]
+    if decision_at is not None:
+        entry["decision_at"] = decision_at
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:
         entry["restart_why"] = step.restart_why
         if integration_work:
             entry["integration_work"] = True
-    if released:
+    if released and outcome is not None:
         # One write holds the release (the unescalation, `ci_released` on the `escalate`
         # entry) and the next step's entry, so no crash leaves a release with no next step
         # (the head and the merge were checked above).
@@ -570,9 +578,9 @@ def _dispatch(context: LandingContext) -> None:
             landing_fix.escalate_ledger(context)
         case "escalate_adr":
             landing_fix.escalate_adr(context)
-        case "wait" | "none" | "apply_adr_decision":
-            # `apply_adr_decision` is carried out by the executor subtask of GH-544; until it
-            # lands here the step is recorded and does nothing.
+        case "apply_adr_decision":
+            landing_adr.apply_adr_decision(context)
+        case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:
             assert_never(kind)
