@@ -142,6 +142,8 @@ def rereadable(
         return None
     if not run_belongs(pair, pr_head):
         return None
+    if not rules.full_commit_id(pair["master"]):
+        return None
     return pair if rules.same_commit(pair["master"], current_master) else None
 
 

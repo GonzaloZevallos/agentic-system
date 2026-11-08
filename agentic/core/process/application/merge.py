@@ -256,6 +256,10 @@ def merge_task(
         raw = ports.documents.load(task_id) or raw
         facts = decide(raw)
         decision = rules.auto_merge_decision(facts)
+        if decision.kind == "ci_run" and step.report is None:
+            # GH-552: a pair this very look ended `no_verdict` was read a moment ago; its one
+            # reread belongs to a later invocation, so the refusal stands as it always did.
+            decision = rules.MergeDecision("refuse", "ci_no_verdict")
         if decision.kind in ("wait", "ci_run"):
             return MergeResult("stopped", "ci_wait")
     if decision.kind == "refuse":

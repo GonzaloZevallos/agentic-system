@@ -2283,7 +2283,10 @@ def test_a_red_fresh_run_that_master_overtook_is_not_rerun_by_the_landing(tmp_pa
 
 def test_the_ci_no_verdict_escalation_carries_the_cause_the_pair_recorded(tmp_path):
     ports = _ci_world(_report(_check()))
-    pair = _red_pair(outcome="no_verdict", republished=True, cause="no_run")
+    # GH-552: the pair was reread once already (`reread_at`): nothing left to read.
+    pair = _red_pair(
+        outcome="no_verdict", republished=True, cause="no_run", reread_at="2026-10-13T23:30:00+00:00"
+    )
     del pair["failing"]
     ports.documents.record_closure("GH-5", {"merge_ci": [pair]})
 
