@@ -17,6 +17,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 ```mermaid
 classDiagram
     class ci_review__CiEvidence["CiEvidence"]
+    class ci_trust__TrustRead["TrustRead"]
     class coverage_guard__InvariantCoverageGuard["InvariantCoverageGuard"]
     class perf__PerfExit["PerfExit"]
     class perf__PerfInterrupted["PerfInterrupted"]
