@@ -1221,6 +1221,7 @@ CiCause = Literal[
     "jobs_missing",
     "unknown_names",
     "checkout_failed",
+    "run_unfinished",
 ]
 
 
@@ -1371,8 +1372,10 @@ class MergeCiRecord(TypedDict):
     both off the document and never from `gh`'s text. `rerun_at` is the instant the landing reran a
     `red` pair's run by its `run_id`, which also clears `outcome` and `failing`: the gate reads
     the run again and the wait for its new verdict counts from that instant. `reread_at` is the
-    instant the merge gate stamped before rereading the run of a `no_verdict` pair, written before
-    the read: at most one reread per pair. No free text in any field."""
+    instant a terminal reread of a `no_verdict` pair's run ended without a verdict, written after
+    the read together with `reread_state` (`timed_out` or `unreachable`), which spends the pair's
+    reread (GH-564). A pair carrying `reread_at` without `reread_state` (written by GH-552's code)
+    is still rereadable. No free text in any field."""
 
     head: str
     master: str
@@ -1388,6 +1391,7 @@ class MergeCiRecord(TypedDict):
     cause: NotRequired[CiCause]
     rerun_at: NotRequired[str]
     reread_at: NotRequired[str]
+    reread_state: NotRequired[Literal["timed_out", "unreachable"]]
     # The instants the CI wait is derived from (`CiTiming`); absent on a record written before it.
     ci_timing: NotRequired[CiTiming]
 

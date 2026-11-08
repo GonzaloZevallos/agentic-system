@@ -141,15 +141,16 @@ sequenceDiagram
    (`landing_plan.release_asked`), y el paso que la tabla da sobre la vista liberada
    (`landing_plan.released_step`) es `apply_adr_decision`, no `sync_master` ni `rerun`.
    **El escalado `ci_no_verdict` (GH-463).** Antes de escalar, un par `merge_ci` de la cabeza que
-   terminó `no_verdict` sobre el master actual se relee una sola vez (GH-552,
+   terminó `no_verdict` sobre el master actual se relee (GH-552, GH-564,
    `agentic/core/process/domain/merge_ci.py:rereadable`): la corrida pudo terminar después de la
    gracia. Hasta esa relectura la decisión de la puerta es `ci_run`, así que `land` ve
    `skipped decision_ci_run` y el poller lanza un hijo de merge, también para una tarea escalada. El
-   hijo escribe `reread_at` en el par antes de leer GitHub
+   hijo lee GitHub y escribe después, solo si la lectura es terminal
    (`agentic/core/process/application/merge.py:_reread_pair`): un veredicto verde o rojo decide
-   (un verde deja el par en `green` y se mergea, sin `released_at`) y cualquier otro estado no
-   escribe nada más ni republica, y el rechazo `ci_no_verdict` sigue. Con `reread_at` el par ya no
-   es releíble y sigue lo de abajo. Cuando GitHub no dio veredicto para una corrida
+   (un verde deja el par en `green` y se mergea, sin `released_at`); un `timed_out` o `unreachable`
+   estampa `reread_at` y `reread_state` y el rechazo `ci_no_verdict` sigue; una corrida todavía en
+   curso no escribe nada y la puerta espera (`ci_wait`), sin republicar ni despachar. Con
+   `reread_state` el par ya no es releíble y sigue lo de abajo. Cuando GitHub no dio veredicto para una corrida
    fresca, la tabla da `escalate` y `landing_plan.release_asked` también se cumple para ese
    paso `escalate`, no solo para `diagnose`, si el documento tiene la forma de
    `agentic/core/process/domain/landing.py:ci_no_verdict_entry`. Ese escalado se libera una vez

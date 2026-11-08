@@ -271,8 +271,15 @@ def test_the_stale_bound_spent_refuses_ci_stale_exhausted():
 
 
 def test_the_no_verdict_bound_spent_refuses_ci_no_verdict_and_not_before_the_republish():
-    # GH-552: a pair of the current master is reread once first; this one already was.
-    spent = ({**_pair(outcome="no_verdict", republished=True), "reread_at": "t"},)
+    # GH-552/GH-564: a pair of the current master is reread first; this one's reread ended
+    # without a verdict.
+    spent = (
+        {
+            **_pair(outcome="no_verdict", republished=True),
+            "reread_at": "t",
+            "reread_state": "timed_out",
+        },
+    )
     assert rules.auto_merge_decision(_facts(merge_ci=spent)) == MergeDecision(
         "refuse", "ci_no_verdict"
     )
@@ -291,7 +298,9 @@ def test_a_no_verdict_pair_of_the_current_master_is_reread_before_ci_no_verdict(
     """GH-552: a run that finished after the grace is read once; only then the bound applies."""
     unread = _pair(outcome="no_verdict", republished=True)
     assert rules.auto_merge_decision(_no_verdict_facts(unread, subject)) == CI_RUN
-    reread = {**unread, "reread_at": "2026-11-03T10:30:00.000Z"}
+    bare = {**unread, "reread_at": "2026-11-03T10:30:00.000Z"}
+    assert rules.auto_merge_decision(_no_verdict_facts(bare, subject)) == CI_RUN
+    reread = {**bare, "reread_state": "timed_out"}
     assert rules.auto_merge_decision(_no_verdict_facts(reread, subject)) == MergeDecision(
         "refuse", "ci_no_verdict"
     )
