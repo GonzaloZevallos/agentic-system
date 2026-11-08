@@ -172,13 +172,18 @@ def test_the_merge_verb_refuses_on_the_same_facts_and_comments_the_files(tmp_pat
     assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
 
 
-def test_the_merge_verb_refuses_unreadable_documents(tmp_path):
+def test_the_merge_verb_stops_on_an_unreadable_merge_base_before_it_reads_the_documents(tmp_path):
+    """GH-547: the verb's one merge base is read first, so a base git cannot give stops the
+    merge as `diff_unreadable`; the poller's own read of it is still `criteria_unreadable`."""
     ports = _ports(5)
     ports.workspace.merge_base_error = "git merge-base failed: not available"
 
     result = _verb(ports, tmp_path)
 
-    assert (result.kind, result.reason) == ("refused", "criteria_unreadable")
+    assert result.kind == "stopped"
+    assert result.reason == "diff_unreadable: git merge-base failed: not available"
+    assert ports.workspace.diff_reads == []
+    assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
 
 
 def test_the_merge_verb_merges_a_head_that_adds_nothing_past_the_cap(tmp_path):
