@@ -9,7 +9,7 @@ import pytest
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.application import landing, landing_plan, merge
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.ports import GitError, Upstream
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
     HEAD,
@@ -183,6 +183,24 @@ def test_the_merge_verb_stops_on_an_unreadable_merge_base_before_it_reads_the_do
     assert result.kind == "stopped"
     assert result.reason == "diff_unreadable: git merge-base failed: not available"
     assert ports.workspace.diff_reads == []
+    assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
+
+
+def test_the_merge_verb_refuses_documents_git_cannot_show_as_unreadable(tmp_path, monkeypatch):
+    """The merge base reads fine (GH-547: one ask, reused), but a criteria document cannot be
+    shown at it: the same `criteria_unreadable` the poller gives, never a merge."""
+    ports = _ports(5)
+    _holding(ports, base=CAP - 5, head=CAP - 5)
+
+    def show(ref: str, relative: str) -> str | None:
+        raise GitError("git show failed: bad object")
+
+    monkeypatch.setattr(ports.workspace, "show", show)
+
+    result = _verb(ports, tmp_path)
+
+    assert (result.kind, result.reason) == ("refused", "criteria_unreadable")
+    assert ports.tracker.merge_calls == []
     assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
 
 
