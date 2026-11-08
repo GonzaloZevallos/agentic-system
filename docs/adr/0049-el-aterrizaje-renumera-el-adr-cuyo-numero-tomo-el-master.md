@@ -171,3 +171,30 @@ issue sobre una pregunta `escalate_adr` ahora se aplica (apostrophe GH-407, PR #
   con lease, a lo sumo dos veces por tarea.
 - **Riesgos conocidos.** La corrección de la referencia reescrita la juzga sólo la
   `re_review` pendiente; `stale_moves` puede repetirse mientras el master siga moviéndose.
+
+## Adenda (GH-570)
+
+Enmienda la viñeta «Tope» de GH-544: el tope era por tarea y una tarea larga puede chocar dos
+veces con el master en cabezas distintas; el segundo choque quedaba sin cupo tras un solo
+intento fallido (apostrophe GH-407, PR #618).
+
+- **Tope por colisión.** `LANDING_ADR_DECISIONS_MAX = 2` (mismo valor) se cuenta por la clave
+  (cabeza, `moves`), no por tarea. Un `apply_adr_decision` pertenece a una clave cuando su
+  `head` es esa cabeza y su `decision_at` es el `released_at` de una `escalate_adr` de la misma
+  cabeza cuyos `moves` registrados, normalizados a tuplas de pares `(old, new)`, igualan los de
+  la clave (así una lista de YAML y un `Renaming` recalculado comparan igual).
+- **Lo que no se puede emparejar cuenta contra todas las claves de su cabeza.** Un apply sin
+  `decision_at`, sin pregunta que lo explique o cuya pregunta no registró `moves` gasta cupo en
+  cada clave de su cabeza; uno sin `head`, en cada clave. Un documento viejo nunca queda más
+  suelto que con el conteo por tarea.
+- **Sin cambios.** `stale_moves` sigue sin usar cupo, y una restauración sigue sin devolverlo
+  (el tope se lee sobre todas las entradas; la idempotencia, sobre las vivas).
+- **Una sola función cuenta.** `landing.adr_decisions_spent(entries, head, moves)` la leen la
+  tabla de pasos (`adr_decision_due`), `landing_plan.release_asked` y la pregunta de
+  `escalate_adr`; `LandingSpent.adr_decisions` desaparece.
+- **Texto con el tope gastado.** Cuando los dos cupos de esa colisión en esa cabeza están
+  gastados, la pregunta deja de ofrecer «decide on this issue»: dice que no se aplicará otra
+  decisión a esa colisión y da la salida a mano (`WAY_OUT_ADR`). Una cabeza nueva vuelve a
+  pasar por la tabla.
+- **§7.** Ninguna métrica, etiqueta, atributo de span ni clase de escalado nuevo: volver a
+  preguntar sigue usando `questions`.

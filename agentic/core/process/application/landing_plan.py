@@ -218,7 +218,6 @@ def spent(
         head_has_upstream=ancestry() if release_due and ancestry is not None else None,
         no_verdict_released=head is not None
         and landing.no_verdict_released(live, _merge_ci_records(raw), head),
-        adr_decisions=landing.adr_decisions_spent(done),
         adr_review_owed=landing.adr_review_owed(done),
     )
 
@@ -289,15 +288,17 @@ def step_for(
         pending=plan_settlement.pending(raw),
         escalated=escalation_recorded(raw, facts.pr_head, refusal, "escalate_ledger"),
         # GH-544: `landing.adr_asked` is the one reader of "the question is still pending", over
-        # the live entries; the cap reads all of them (`spent.adr_decisions`) and the
-        # idempotency the live ones, as GH-406 says.
+        # the live entries; the cap (`landing.adr_decisions_spent`, per (head, moves), GH-570)
+        # reads all of them and the idempotency the live ones, as GH-406 says.
         adr_escalated=head is not None and landing.adr_asked(live_entries(raw), head, refusal),
         names_escalated=refusal == "ci_unknown_names"
         and escalation_recorded(
             raw, facts.pr_head, refusal, "escalate", names=sorted(facts.ci_unreported)
         ),
         adr_decision_due=head is not None
-        and landing.adr_decision_due(live_entries(raw), head, facts.adr_collision, budgets),
+        and landing.adr_decision_due(
+            live_entries(raw), head, facts.adr_collision, all_entries(raw)
+        ),
     )
 
 
@@ -542,7 +543,8 @@ def release_asked(
     GH-544: with `refusal` `adr_number_taken` and the `facts`, an `escalate_adr` question
     (`landing.adr_escalation_entry`, of the head `facts` holds) on a collision the owner's
     decision can still apply (an `Ambiguous` with moves, a slot left in
-    `LANDING_ADR_DECISIONS_MAX`) is held back whatever `kind` the escalated table gives (`none`).
+    `LANDING_ADR_DECISIONS_MAX` for that (head, moves)) is held back whatever `kind` the escalated
+    table gives (`none`).
     Without both, that branch is false."""
     if not raw.get("escalated"):
         return False
@@ -565,7 +567,8 @@ def _adr_release_asked(raw: Mapping[str, object], facts: rules.MergeFacts) -> bo
         and entry.get("head") == facts.pr_head
         and isinstance(collision, Ambiguous)
         and bool(collision.moves)
-        and landing.adr_decisions_spent(all_entries(raw)) < landing.LANDING_ADR_DECISIONS_MAX
+        and landing.adr_decisions_spent(all_entries(raw), facts.pr_head, collision.moves)
+        < landing.LANDING_ADR_DECISIONS_MAX
     )
 
 

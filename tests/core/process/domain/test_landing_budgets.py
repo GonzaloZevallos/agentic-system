@@ -227,38 +227,102 @@ def _review(head=HEAD) -> dict:
     return {"head": head, "step": "re_review", "refusal": "head_not_reviewed"}
 
 
+def _ask(at=T0, head=HEAD, moves=MOVES) -> dict:
+    """The released `escalate_adr` question an apply answers: `released_at` is its `decision_at`."""
+    entry: dict = {
+        "head": head,
+        "step": "escalate_adr",
+        "refusal": "adr_number_taken",
+        "released_at": at,
+    }
+    if moves is not None:
+        entry["moves"] = moves
+    return entry
+
+
+OTHER_MOVES = [["docs/adr/0071-y.md", "docs/adr/0075-y.md"]]
+MOVES_KEY = tuple(tuple(pair) for pair in MOVES)
+
+
 def test_the_decision_cap_is_two_and_only_the_closed_outcomes_but_stale_use_a_slot():
     assert landing.LANDING_ADR_DECISIONS_MAX == 2
     spending = ["applied", "out_of_bounds", "role_failed", "checks_red", "still_colliding"]
     for outcome in spending:
-        assert landing.adr_decisions_spent([_apply(outcome)]) == 1
-    assert landing.adr_decisions_spent([_apply("stale_moves"), _apply("stale_moves")]) == 0
-    assert landing.adr_decisions_spent([_apply("stale_moves"), _apply("applied")]) == 1
+        entries = [_ask(), _apply(outcome)]
+        assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 1
+    stale = [_ask(), _apply("stale_moves"), _apply("stale_moves")]
+    assert landing.adr_decisions_spent(stale, HEAD, MOVES_KEY) == 0
+    mixed = [_ask(), _apply("stale_moves"), _apply("applied")]
+    assert landing.adr_decisions_spent(mixed, HEAD, MOVES_KEY) == 1
+
+
+def test_a_slot_is_spent_per_head_and_per_moves_not_per_task():
+    entries = [_ask(T0), _apply("checks_red", at=T0), _ask(T1, moves=OTHER_MOVES)]
+    entries.append(_apply("applied", at=T1))
+    assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 1
+    assert (
+        landing.adr_decisions_spent(entries, HEAD, (("docs/adr/0071-y.md", "docs/adr/0075-y.md"),))
+        == 1
+    )
+    assert landing.adr_decisions_spent(entries, "d" * 40, MOVES_KEY) == 0
+    assert landing.adr_decisions_spent(entries, HEAD, (("x", "y"),)) == 0
+
+
+def test_yaml_lists_and_a_recomputed_renaming_compare_equal():
+    entries = [_ask(moves=[["a", "b"], ["c", "d"]]), _apply("checks_red")]
+    assert landing.adr_decisions_spent(entries, HEAD, (("a", "b"), ("c", "d"))) == 1
+    assert landing.adr_decisions_spent(entries, HEAD, [["a", "b"], ["c", "d"]]) == 1
+    assert landing.adr_decisions_spent(entries, HEAD, (("a", "b"),)) == 0
+
+
+def test_an_apply_that_cannot_be_matched_counts_against_every_key_of_its_head():
+    no_decision_at = {**_apply("applied"), "decision_at": None}
+    unknown_question = _apply("applied", at=T2)
+    question_without_moves = [_ask(moves=None), _apply("applied")]
+    for entries in (
+        [_ask(), no_decision_at],
+        [_ask(), unknown_question],
+        question_without_moves,
+        [no_decision_at],
+    ):
+        assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 1
+        assert landing.adr_decisions_spent(entries, HEAD, (("x", "y"),)) == 1
+        assert landing.adr_decisions_spent(entries, "d" * 40, MOVES_KEY) == 0
+
+
+def test_an_apply_without_a_head_counts_against_every_key():
+    headless = {"step": "apply_adr_decision", "outcome": "applied"}
+    assert landing.adr_decisions_spent([headless], HEAD, MOVES_KEY) == 1
+    assert landing.adr_decisions_spent([headless], "d" * 40, (("x", "y"),)) == 1
 
 
 def test_an_entry_written_before_the_step_existed_spends_no_slot_and_owes_no_review():
     legacy = [{"head": HEAD, "step": "escalate_adr", "resolved_at": T0}, _review()]
-    assert landing.adr_decisions_spent(legacy) == 0
+    assert landing.adr_decisions_spent(legacy, HEAD, MOVES_KEY) == 0
     assert landing.adr_review_owed(legacy) is False
-    assert landing.adr_decisions_spent([{"step": "apply_adr_decision"}]) == 0
+    assert landing.adr_decisions_spent([{"step": "apply_adr_decision"}], HEAD, MOVES_KEY) == 0
 
 
 def test_the_cap_spent_asks_the_human_again_instead_of_applying():
-    entries = [
-        {"head": HEAD, "step": "escalate_adr", "refusal": "adr_number_taken", "released_at": T1}
-    ]
-    ambiguous = landing.Ambiguous("unclassified_token", "a:1", (("a", "b"),))
-    free = _spent(adr_decisions=landing.LANDING_ADR_DECISIONS_MAX - 1)
-    full = _spent(adr_decisions=landing.LANDING_ADR_DECISIONS_MAX)
-    assert landing.adr_decision_due(entries, HEAD, ambiguous, free)
-    assert not landing.adr_decision_due(entries, HEAD, ambiguous, full)
+    asked = _ask(T2)
+    ambiguous = landing.Ambiguous("unclassified_token", "a:1", MOVES_KEY)
+    one = [_ask(T0), _apply("checks_red", at=T0), asked]
+    two = [_ask(T0), _apply("checks_red", at=T0), _apply("applied", at=T1), asked]
+    assert landing.adr_decision_due([asked], HEAD, ambiguous, one)
+    assert not landing.adr_decision_due([asked], HEAD, ambiguous, two)
+    # Another head's spent slots leave this one free.
+    other = [_ask(T0, head=OLDER), _apply("applied", head=OLDER), _apply("applied", head=OLDER)]
+    assert landing.adr_decision_due([asked], HEAD, ambiguous, [*other, asked])
 
 
 def test_a_restoration_does_not_give_a_slot_back_but_hides_the_idempotency_key():
-    # `adr_decisions_spent` is read over all entries; `adr_decision_due` over the live ones.
-    all_entries = [_apply("applied"), _apply("checks_red", at=T1)]
-    assert landing.adr_decisions_spent(all_entries) == 2
-    assert landing.adr_decisions_spent(all_entries[1:]) == 1
+    # The cap reads all entries; the idempotency only the live ones.
+    asked = _ask(T1)
+    ambiguous = landing.Ambiguous("unclassified_token", "a:1", MOVES_KEY)
+    archived = [_ask(T0), _apply("applied"), _apply("checks_red", at=T1)]
+    assert landing.adr_decisions_spent(archived, HEAD, MOVES_KEY) == 2
+    assert landing.adr_decisions_spent(archived[1:], HEAD, MOVES_KEY) == 2
+    assert not landing.adr_decision_due([asked], HEAD, ambiguous, [*archived, asked])
 
 
 def _review_step(spent) -> LandingStep:

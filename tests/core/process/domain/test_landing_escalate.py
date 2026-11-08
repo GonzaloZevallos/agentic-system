@@ -163,7 +163,9 @@ def test_the_step_is_a_model_step_that_a_checks_child_does_not_admit():
 
 
 def test_without_a_decision_an_ambiguous_collision_is_asked_once_then_none():
-    assert landing.adr_decision_due([_asked_resolved()], H1, AMBIGUOUS, _spent()) is False
+    assert (
+        landing.adr_decision_due([_asked_resolved()], H1, AMBIGUOUS, [_asked_resolved()]) is False
+    )
     assert _adr_step(adr_decision_due=False).kind == "escalate_adr"
     assert _adr_step(adr_decision_due=False, adr_escalated=True).kind == "none"
 
@@ -185,19 +187,18 @@ def test_a_clean_renaming_under_its_cap_is_still_a_renumber_before_a_decision():
 def test_a_legacy_released_entry_without_moves_is_a_decision_due():
     legacy = _released()  # a GH-412 entry: no moves, no outcome, no decision_at
     assert "moves" not in legacy
-    assert landing.adr_decision_due([legacy], H1, AMBIGUOUS, _spent()) is True
+    assert landing.adr_decision_due([legacy], H1, AMBIGUOUS, [legacy]) is True
 
 
 @pytest.mark.parametrize(
-    ("entries", "collision", "spent"),
+    ("entries", "collision"),
     [
-        ([_asked_resolved()], AMBIGUOUS, _spent()),
-        ([_released()], NO_MOVES, _spent()),
-        ([_released()], adr_numbers.Renaming(MOVES, {}), _spent()),
-        ([_released()], None, _spent()),
-        ([_released(), _applied()], AMBIGUOUS, _spent()),
-        ([_released(head=H2)], AMBIGUOUS, _spent()),
-        ([_released()], AMBIGUOUS, _spent(adr_decisions=landing.LANDING_ADR_DECISIONS_MAX)),
+        ([_asked_resolved()], AMBIGUOUS),
+        ([_released()], NO_MOVES),
+        ([_released()], adr_numbers.Renaming(MOVES, {})),
+        ([_released()], None),
+        ([_released(), _applied()], AMBIGUOUS),
+        ([_released(head=H2)], AMBIGUOUS),
     ],
     ids=[
         "not-released",
@@ -206,11 +207,35 @@ def test_a_legacy_released_entry_without_moves_is_a_decision_due():
         "no-collision",
         "already-applied",
         "other-head",
-        "cap-spent",
     ],
 )
-def test_no_decision_is_due_without_a_release_moves_or_a_free_slot(entries, collision, spent):
-    assert landing.adr_decision_due(entries, H1, collision, spent) is False
+def test_no_decision_is_due_without_a_release_or_moves(entries, collision):
+    assert landing.adr_decision_due(entries, H1, collision, entries) is False
+
+
+def _question(head, released_at, moves=MOVES) -> dict:
+    return _released(head, released_at, moves=[list(m) for m in moves])
+
+
+def _archived_spent(head, key_moves, *outcomes) -> list[dict]:
+    """The question of `key_moves` on `head`, then one apply per outcome, all archived."""
+    asked = _question(head, T0, key_moves)
+    return [asked, *(_applied(o, head, decision_at=T0) for o in outcomes)]
+
+
+def test_the_cap_is_spent_per_collision_key_not_per_task():
+    live = [_question(H1, T2)]
+    other = (("docs/adr/0071-y.md", "docs/adr/0075-y.md"),)
+    spent = _archived_spent(H1, MOVES, "checks_red", "applied")
+    one = _archived_spent(H1, MOVES, "checks_red")
+    due = landing.adr_decision_due
+    # The key's own slots: two spent is the cap, one is not.
+    assert due(live, H1, AMBIGUOUS, [*spent, *live]) is False
+    assert due(live, H1, AMBIGUOUS, [*one, *live]) is True
+    # The same two on another head or on other moves leave this key free.
+    assert due(live, H1, AMBIGUOUS, [*_archived_spent(H2, MOVES, "applied", "applied"), *live])
+    elsewhere = _archived_spent(H1, other, "applied", "applied")
+    assert due(live, H1, AMBIGUOUS, [*elsewhere, *live]) is True
 
 
 def test_adr_asked_is_true_only_for_a_resolved_question_after_the_last_decision():
@@ -243,7 +268,7 @@ def test_a_failed_decision_then_its_new_question_resolved_is_none_again():
 )
 def test_each_failed_outcome_followed_by_its_question_asks_again(outcome):
     entries = [_released(), _applied(outcome)]
-    due = landing.adr_decision_due(entries, H1, AMBIGUOUS, _spent())
+    due = landing.adr_decision_due(entries, H1, AMBIGUOUS, entries)
     asked = landing.adr_asked(entries, H1, REFUSAL)
     assert due is False and asked is False
     assert _adr_step(adr_decision_due=due, adr_escalated=asked).kind == "escalate_adr"
@@ -280,7 +305,7 @@ def test_the_apply_step_is_taken_only_by_the_same_head_and_decision():
 def test_a_new_decision_on_the_same_head_is_due_again_after_a_stale_one():
     asked_again = _released(at="2026-11-07T05:00:00+00:00")
     entries = [_released(at=T2), _applied("stale_moves", decision_at=T2), asked_again]
-    assert landing.adr_decision_due(entries, H1, AMBIGUOUS, _spent()) is True
+    assert landing.adr_decision_due(entries, H1, AMBIGUOUS, entries) is True
 
 
 def _escalated_doc(*entries, escalated="adr_number_taken") -> dict:

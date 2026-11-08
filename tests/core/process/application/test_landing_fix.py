@@ -1983,19 +1983,21 @@ def test_a_renaming_past_its_cap_says_how_many_renumbers_were_spent_and_the_move
     assert WAY_OUT in text and "a reply without a new head" in text
 
 
-def _adr_context(ports, tmp_path, found, lines):
-    """The executor's context for a recorded, unresolved `escalate_adr` entry of `HEAD`."""
+def _adr_context(ports, tmp_path, found, lines, before=()):
+    """The executor's context for a recorded, unresolved `escalate_adr` entry of `HEAD`, after
+    the `before` entries."""
     ports.documents.record_closure(
         "GH-5",
         {
             "landing": [
+                *before,
                 {
                     "head": HEAD,
                     "step": "escalate_adr",
                     "refusal": "adr_number_taken",
                     "at": NOW,
                     "cost_base": 0.0,
-                }
+                },
             ]
         },
     )
@@ -2036,6 +2038,67 @@ def test_a_posted_adr_escalation_resolves_its_entry_and_escalates_as_questions(t
     assert landing_rules.already_dispatched(
         landing_plan.live_entries(document), HEAD, "escalate_adr", MASTER
     )
+
+
+def _spent_decisions(count, head=HEAD, moves=(A_MOVE,)) -> list[dict]:
+    """A released question of `head` on `moves`, then `count` applies that answered it and ended
+    `checks_red`."""
+    released = "2026-11-07T01:00:00+00:00"
+    asked = {
+        "head": head,
+        "step": "escalate_adr",
+        "refusal": "adr_number_taken",
+        "at": NOW,
+        "resolved_at": NOW,
+        "released_at": released,
+        "moves": [list(move) for move in moves],
+    }
+    applies = [
+        {
+            "head": head,
+            "step": "apply_adr_decision",
+            "refusal": "adr_number_taken",
+            "decision_at": released,
+            "outcome": "checks_red",
+        }
+        for _ in range(count)
+    ]
+    return [asked, *applies]
+
+
+def _asked_question(tmp_path, spent) -> str:
+    ports = _ports(5)
+    found = Ambiguous("range", "docs/notes.md:2: ADR-0054…ADR-0060", (A_MOVE,))
+    context = _adr_context(ports, tmp_path, found, [], before=spent)
+    landing_fix.escalate_adr(context)
+    return _doc(ports)["questions_for_human"][0]
+
+
+def test_one_spent_slot_on_the_collision_still_offers_the_decision(tmp_path):
+    question = _asked_question(tmp_path, _spent_decisions(1))
+
+    assert "decide on this issue" in question
+    assert "checks_red" in question
+
+
+def test_both_slots_spent_on_the_collision_stop_offering_a_decision(tmp_path):
+    question = _asked_question(tmp_path, _spent_decisions(landing_rules.LANDING_ADR_DECISIONS_MAX))
+
+    assert "decide on this issue" not in question
+    assert "no further decision will be applied" in question
+    assert f"To go on, {WAY_OUT}" in question
+    assert "a new head goes through" in question.lower()
+
+
+def test_slots_spent_on_another_head_or_other_moves_leave_the_decision_offered(tmp_path):
+    other_head = _spent_decisions(landing_rules.LANDING_ADR_DECISIONS_MAX, head="e" * 40)
+    other_moves = _spent_decisions(
+        landing_rules.LANDING_ADR_DECISIONS_MAX,
+        moves=(("docs/adr/0070-z.md", "docs/adr/0071-z.md"),),
+    )
+
+    for spent in (other_head, other_moves):
+        assert "decide on this issue" in _asked_question(tmp_path, spent)
 
 
 def test_a_failed_comment_leaves_the_entry_unresolved_and_the_question_is_asked_again(tmp_path):

@@ -429,7 +429,13 @@ def _moves_lines(moves: Sequence[tuple[str, str]]) -> str:
     return "\n".join(f"- {old} -> {new}" for old, new in moves)
 
 
-def adr_collision_reason(found: Renaming | Ambiguous, cap: int, failed: str | None = None) -> str:
+def adr_collision_reason(
+    found: Renaming | Ambiguous,
+    cap: int,
+    failed: str | None = None,
+    *,
+    slots_left: bool = True,
+) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
     is a number two own ADRs share (nothing was calculated); one with moves names each move
@@ -437,7 +443,9 @@ def adr_collision_reason(found: Renaming | Ambiguous, cap: int, failed: str | No
     here only because `cap` renumbers were spent and master kept taking the numbers they
     chose. Every case ends with the way out. `failed` (GH-544) is the closed outcome of the last
     `apply_adr_decision` on the head, said in one line; with no moves to apply (a duplicate own
-    number) "decide on this issue" is not offered, because no decision could be applied."""
+    number) "decide on this issue" is not offered, because no decision could be applied. Neither
+    is it once `slots_left` is false (GH-570): the decision slots of this collision on this head
+    are spent, so the question says no further decision will be applied."""
     if isinstance(found, Ambiguous) and not found.moves:
         what = (
             f"The branch has ADR files that share a number ({found.reason}): {found.detail}. "
@@ -462,6 +470,12 @@ def adr_collision_reason(found: Renaming | Ambiguous, cap: int, failed: str | No
             f"{what}\nNo model was run and the task was not restarted. To go on, {WAY_OUT_ADR}. "
             "A new head goes through the landing table again; a reply without a new head does "
             "not ask again."
+        )
+    if isinstance(found, Ambiguous) and not slots_left:
+        return (
+            f"{what}\nBoth decision slots for this collision on this head are spent, so no "
+            f"further decision will be applied to it. To go on, {WAY_OUT_ADR}. A new head goes "
+            "through the landing table again; a reply without a new head does not ask again."
         )
     return (
         f"{what}\nTo go on, {WAY_OUT_ADR}, or decide on this issue. A new head goes through "
@@ -489,11 +503,19 @@ def escalate_adr(context: LandingContext) -> None:
     ]
     last = applied[-1].get("outcome") if applied else None
     failed = last if isinstance(last, str) and last != "applied" else None
+    slots_left = (
+        context.head is None
+        or not found.moves
+        or landing_rules.adr_decisions_spent(
+            landing_plan.all_entries(before), context.head, found.moves
+        )
+        < landing_rules.LANDING_ADR_DECISIONS_MAX
+    )
     _escalate(
         context,
         "ADR number collision with master the renumbering cannot settle",
         "questions",
-        [adr_collision_reason(found, cap, failed)],
+        [adr_collision_reason(found, cap, failed, slots_left=slots_left)],
     )
     document = context.ports.documents.load(context.task_id)
     if document is None:
