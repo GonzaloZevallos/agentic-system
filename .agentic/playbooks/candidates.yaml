@@ -1426,3 +1426,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-08T02:06:19.281+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change alters a flow, a persisted record or a gate decision, update the matching docs/architecture page in the same change and check that its diff is not empty before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-552
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-08T05:02:10.740+00:00'
