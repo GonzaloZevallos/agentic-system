@@ -12,7 +12,7 @@ from agentic.core.process.application import landing, landing_fix, landing_plan,
 from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.poll import assess_merge
 from agentic.core.process.application.ports import GitError, IssueComment, IssueState, Upstream
-from agentic.core.process.domain import ci
+from agentic.core.process.domain import adr_numbers, ci, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
@@ -787,3 +787,152 @@ def test_resume_keeps_naming_land_for_a_document_that_is_not_escalated(tmp_path,
     state = {**_doc(ports), "escalated": None}
     line = resume._landing_owns_line("GH-5", ports, landing_fix_cfg(tmp_path), state)
     assert "agentic land --issue 5" in line
+
+
+# --- GH-544: an owner's decision on an `escalate_adr` question makes `land` apply it ---
+
+ASKED_AT = "2026-10-13T20:00:00+00:00"
+ESCALATED_COMMENT_AT = "2026-10-13T20:00:10+00:00"
+DECIDED_AT = "2026-10-13T23:00:00+00:00"
+AMBIGUOUS = adr_numbers.Ambiguous("unclassified_token", "app/main.py:228", (("a", "b"),))
+ADR_COMMENTS = [("Escalated: ADR collision", ESCALATED_COMMENT_AT), ("renumber it", DECIDED_AT)]
+
+
+def _adr_document(*, resolved: bool = True) -> dict:
+    """An escalated landing whose last entry is the resolved `escalate_adr` question on HEAD."""
+    entry = {"head": HEAD, "step": "escalate_adr", "refusal": "adr_number_taken", "at": ASKED_AT}
+    if resolved:
+        entry["resolved_at"] = ASKED_AT
+    return {
+        "escalated": "ADR collision",
+        "escalation_class": "questions",
+        "landing": [entry],
+        "title": "t",
+        "description": "d",
+    }
+
+
+def _adr_world(monkeypatch, *, comments=ADR_COMMENTS, labels=(), document=None):
+    """GH-5 refused with `adr_number_taken` on an `Ambiguous` collision, the owner's `comments`
+    on the issue. The dispatch is recorded, not run."""
+    ports, dispatched = _red_world(
+        monkeypatch, _green_base(), ancestor=True, document=document or _adr_document()
+    )
+    ports.tracker.timestamped["GH-5"] = [IssueComment(b, at) for b, at in comments]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, labels)
+
+    def assessed(*args, **kwargs):
+        result = assess_merge(*args, **kwargs)
+        return dataclasses.replace(
+            result,
+            decision=rules.MergeDecision("refuse", "adr_number_taken"),
+            facts=dataclasses.replace(result.facts, adr_collision=AMBIGUOUS),
+        )
+
+    monkeypatch.setattr(landing, "assess_merge", assessed)
+    monkeypatch.setattr(poll, "assess_merge", assessed)
+    monkeypatch.setattr(resume, "assess_merge", assessed)
+    return ports, dispatched
+
+
+def _land_as(ports, tmp_path, run_kind=None):
+    kwargs = {} if run_kind is None else {"run_kind": run_kind}
+    lines: list[str] = []
+    result = landing.land(
+        "GH-5",
+        landing_fix_cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MERGE_MASTER, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: "2026-10-14T00:00:00+00:00",
+        argv0="agentic",
+        **kwargs,
+    )
+    return result, lines
+
+
+@pytest.mark.parametrize("run_kind", [None, "land_model"], ids=["default", "land_model"])
+def test_an_owner_decision_makes_land_dispatch_apply_adr_decision(tmp_path, monkeypatch, run_kind):
+    ports, dispatched = _adr_world(monkeypatch)
+
+    result, lines = _land_as(ports, tmp_path, run_kind)
+
+    document = _doc(ports)
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    assert [c.step.kind for c in dispatched] == ["apply_adr_decision"]
+    assert not document.get("escalated")
+    asked, applied = landing_plan.entries(document)
+    assert "released_at" in asked and applied["step"] == "apply_adr_decision"
+    assert applied["decision_at"] == asked["released_at"]
+    assert "Human" in document["sections"]
+
+    # The decision is taken once: the next round never applies the same one again.
+    _land_as(ports, tmp_path, run_kind)
+    assert [c.step.kind for c in dispatched].count("apply_adr_decision") == 1
+
+
+def test_a_land_checks_child_is_refused_and_the_document_is_untouched(tmp_path, monkeypatch):
+    ports, dispatched = _adr_world(monkeypatch)
+    before = _doc(ports)
+
+    result, _ = _land_as(ports, tmp_path, "land_checks")
+
+    assert (result.kind, result.reason) == ("skipped", "run_kind_mismatch")
+    assert dispatched == [] and _doc(ports) == before
+
+
+@pytest.mark.parametrize(
+    "world",
+    [
+        {"comments": [ADR_COMMENTS[0]]},
+        {"comments": [("renumber it", "2026-10-13T19:00:00+00:00"), ADR_COMMENTS[0]]},
+        {"labels": ("needs-human",)},
+    ],
+    ids=["no_decision", "comment_before_the_escalation", "needs_human_still_there"],
+)
+def test_without_a_released_decision_land_writes_nothing_and_waits(tmp_path, monkeypatch, world):
+    ports, dispatched = _adr_world(monkeypatch, **world)
+    before = _doc(ports)
+
+    result, _ = _land_as(ports, tmp_path)
+
+    assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_human")
+    assert dispatched == [] and _doc(ports) == before
+
+
+def test_a_legacy_entry_without_moves_is_released_by_the_decision(tmp_path, monkeypatch):
+    document = _adr_document()
+    assert "moves" not in document["landing"][0]
+    ports, dispatched = _adr_world(monkeypatch, document=document)
+
+    result, _ = _land_as(ports, tmp_path)
+
+    assert result.step == "apply_adr_decision" and len(dispatched) == 1
+
+
+def test_the_poller_registers_the_released_adr_decision_under_land_model(tmp_path, monkeypatch):
+    ports, _ = _adr_world(monkeypatch)
+
+    [candidate] = _poll(ports, tmp_path)
+
+    assert candidate.kind == "land_model"
+    assert candidate.kind == landing_rules.run_kind_of("apply_adr_decision", "adr_number_taken")
+
+
+def test_the_poller_offers_nothing_while_the_decision_is_missing(tmp_path, monkeypatch):
+    ports, _ = _adr_world(monkeypatch, comments=[ADR_COMMENTS[0]])
+
+    assert _poll(ports, tmp_path) == []
+
+
+def test_resume_names_land_after_the_owner_decided_and_not_before(tmp_path, monkeypatch):
+    ports, _ = _adr_world(monkeypatch)
+    state = _doc(ports)
+    line = resume._landing_owns_line("GH-5", ports, landing_fix_cfg(tmp_path), state)
+    assert "agentic land --issue 5" in line
+
+    waiting, _ = _adr_world(monkeypatch, comments=[ADR_COMMENTS[0]])
+    held = resume._landing_owns_line("GH-5", waiting, landing_fix_cfg(tmp_path), _doc(waiting))
+    assert "agentic land" not in held.replace("`agentic land` has nothing", "")
