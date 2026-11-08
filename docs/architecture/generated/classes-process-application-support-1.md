@@ -19,6 +19,7 @@ classDiagram
     class checkouts__SetupFailed["SetupFailed"]
     class ci_push__PushFailed["PushFailed"]
     class ci_push__Pushed["Pushed"]
+    class ci_trust__TrustRead["TrustRead"]
     class limits__RunLimits["RunLimits"]
     class ports__AddedAdr["AddedAdr"]
     class ports__AddedLine["AddedLine"]
@@ -37,8 +38,9 @@ classDiagram
 
 - [application: support (parte 2)](classes-process-application-support-2.md)
   - `ci_push.PushFailed` hereda de `ports.GitError`
-- [application: support (parte 4)](classes-process-application-support-4.md)
+- [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `limits.RunLimits`
+- [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.RawResult` se asocia con `ports.CheckRuns`
 - [application: support (parte 6)](classes-process-application-support-6.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`

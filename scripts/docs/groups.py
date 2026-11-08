@@ -72,7 +72,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.ci_push": "support",
     "application.ci_ref_sweep": "checks",
     "application.ci_review": "checks",
-    "application.ci_trust": "checks",
+    "application.ci_trust": "support",
     "application.classify": "definition",
     "application.close_issues": "landing",
     "application.closed": "landing",

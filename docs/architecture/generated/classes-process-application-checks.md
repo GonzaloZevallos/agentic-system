@@ -17,7 +17,6 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 ```mermaid
 classDiagram
     class ci_review__CiEvidence["CiEvidence"]
-    class ci_trust__TrustRead["TrustRead"]
     class coverage_guard__InvariantCoverageGuard["InvariantCoverageGuard"]
     class perf__PerfExit["PerfExit"]
     class perf__PerfInterrupted["PerfInterrupted"]
@@ -34,6 +33,5 @@ classDiagram
 ## Relaciones con otras páginas
 
 - [application: support (parte 3)](classes-process-application-support-3.md)
-  - `presubmit.Readiness` se asocia con `ports.LoadReader`
-- [application: support (parte 4)](classes-process-application-support-4.md)
   - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`
+  - `presubmit.Readiness` se asocia con `ports.LoadReader`
