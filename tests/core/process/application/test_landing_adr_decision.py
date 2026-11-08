@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from agentic.core.process.application import landing
+from agentic.core.process.application.landing_adr import within_spots
 from agentic.core.process.application.landing_plan import entries as plan_entries
 from agentic.core.process.application.ports import IssueComment, IssueState, RawResult, Upstream
 from agentic.core.process.domain import landing as landing_rules
@@ -68,6 +69,21 @@ def _edit_elsewhere(ports, cwd):
     (cwd / NOTES).write_text("something else entirely\n", encoding="utf-8")
     ports.workspace.commit_paths(cwd, [NOTES], "Edit outside the spots")
     ports.workspace.diff_paths = (NOTES,)
+
+
+def _change_a_line_beside_the_spot(ports, cwd):
+    """Points the spot at the new number, and also rewrites a line that is not a spot."""
+    _write_code(ports, cwd, 'MSG = "see (docs/adr/0050)"\nOTHER = 2\n')
+
+
+def _add_a_line_after_the_spot(ports, cwd):
+    _write_code(ports, cwd, 'MSG = "see (docs/adr/0050)"\nOTHER = 1\nEXTRA = 3\n')
+
+
+def _write_code(ports, cwd, text):
+    (cwd / CODE).write_text(text, encoding="utf-8")
+    ports.workspace.commit_paths(cwd, [CODE], "Edit the spot and more")
+    ports.workspace.diff_paths = (CODE,)
 
 
 def _boom(ports, cwd):
@@ -191,6 +207,36 @@ def test_an_edit_outside_the_spots_pushes_nothing_and_asks_again(tmp_path):
     assert ("GH-5", "needs-human") in ports.tracker.labels
     assert "out_of_bounds" in document["questions_for_human"][0]
     assert _entries(ports)[-1]["resolved_at"]
+
+
+@pytest.mark.parametrize("edit", [_change_a_line_beside_the_spot, _add_a_line_after_the_spot])
+def test_an_edit_of_a_spot_file_beyond_its_spot_lines_is_out_of_bounds(tmp_path, edit):
+    """The path is a spot's, so only the line-level guard (`within_spots`) can refuse it: a
+    non-spot line changed, or a line added, in the file that has a spot."""
+    ports, head = _asked(tmp_path, edit)
+    ports.workspace.files[(head, CODE)] = CITES_CODE + "\nOTHER = 1\n"
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == []
+    assert ports.workspace.branch_commits[-1].sha == head
+    assert ports.workspace.resets[-1][1] == head
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)][1] == (
+        "apply_adr_decision",
+        "out_of_bounds",
+    )
+
+
+def test_within_spots_accepts_the_spot_lines_alone_and_refuses_any_other_change():
+    spots = [(CODE, 1, CITES_CODE)]
+    before = {CODE: CITES_CODE + "\nOTHER = 1\n"}
+
+    assert within_spots(before, {CODE: 'MSG = "x"\nOTHER = 1\n'}, spots)
+    assert not within_spots(before, {CODE: 'MSG = "x"\nOTHER = 2\n'}, spots)
+    assert not within_spots(before, {CODE: CITES_CODE + "\n"}, spots)
+    assert not within_spots(before, {CODE: CITES_CODE + "\nOTHER = 1\nMORE = 1\n"}, spots)
+    assert not within_spots(before, {"other.py": "x\n"}, spots)
 
 
 def test_moves_that_differ_from_the_recorded_ones_are_stale_and_push_nothing(tmp_path):

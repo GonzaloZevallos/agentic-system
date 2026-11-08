@@ -72,8 +72,25 @@ sequenceDiagram
    números de ADR que la regla no puede decidir (`escalate_adr`),
    escalar (`escalate`) y no hacer nada (`none`). Los brazos están en
    `agentic/core/process/application/landing_sync.py`,
-   `agentic/core/process/application/landing_fix.py` y
-   `agentic/core/process/application/landing_slice.py`.
+   `agentic/core/process/application/landing_fix.py`,
+   `agentic/core/process/application/landing_slice.py` y
+   `agentic/core/process/application/landing_adr.py` (`apply_adr_decision`).
+   **`apply_adr_decision` (GH-544)** corre al Developer dentro del hijo de `land`
+   (`agentic/core/process/application/run_role.py:run_role`, no una reanudación), en el checkout
+   de la tarea y dentro de `merges_cleared`. Primero recalcula la colisión contra el sha del
+   master de la ronda (`agentic/core/process/application/adr_collision.py:adr_decided`); si ya no
+   es una `Ambiguous` con los mismos `moves` que registró `escalate_adr`, el resultado es
+   `stale_moves` y no se corre ningún modelo. Después escribe y commitea la renumeración
+   mecánica (`Workspace.commit_paths`) y le da al Developer la decisión del dueño, los `moves`
+   aplicados y las líneas exactas donde puede escribir (`landing_adr.brief`): solo esas líneas,
+   una por una, sin elegir nunca un número. Revisa los límites
+   (`landing_adr.within_spots`: mismos archivos, misma cantidad de líneas por archivo y solo
+   cambian los números de línea de los puntos), que los chequeos hayan quedado en verde y que
+   no quede colisión (`adr_collision`). Si todo está bien empuja con `lease=head`
+   (`Workspace.push`) y el resultado es `applied` con `head_after`; en cualquier otro resultado
+   (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`) no empuja,
+   deja el checkout en la cabeza con `Workspace.reset_hard` (en un `finally`, también ante una
+   excepción) y vuelve a preguntar por `escalate_adr`, que nombra el último resultado fallido.
 5. **Cuando el paso reabre el stage técnico.** Un `fix` o un `re_review` que necesita a un
    Developer lanza una reanudación desde el documento
    (`agentic/cli.py:_resume_spawner`: `agentic resume --issue N --from-document --yes --detach`)
@@ -118,7 +135,10 @@ sequenceDiagram
    liberación (el desescalado y el `ci_released` de la entrada `escalate`) y la entrada del
    paso siguiente se guardan en una sola escritura de `documents.save`, así que ningún fallo
    deja una liberación sin su paso siguiente. Un escalado que no es de CI (libro
-   mayor, ADR, diagnóstico de profundidad 1, GH-328) conserva su comportamiento.
+   mayor, diagnóstico de profundidad 1, GH-328) conserva su comportamiento. El de una colisión
+   de ADR (`escalate_adr`) también se libera por un comentario del dueño
+   (`landing_plan.release_asked`), y el paso que la tabla da sobre la vista liberada
+   (`landing_plan.released_step`) es `apply_adr_decision`, no `sync_master` ni `rerun`.
    **El escalado `ci_no_verdict` (GH-463).** Cuando GitHub no dio veredicto para una corrida
    fresca, la tabla da `escalate` y `landing_plan.release_asked` también se cumple para ese
    paso `escalate`, no solo para `diagnose`, si el documento tiene la forma de

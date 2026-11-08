@@ -74,16 +74,23 @@ def brief(decision: str, moves: Sequence[tuple[str, str]], spots: Sequence[Spot]
     )
 
 
-def within_spots(changes: Sequence[landing_rules.LineChange], spots: Sequence[Spot]) -> bool:
-    """Whether every changed line is a line of `spots` rewritten in place: both sides present
-    (no line added or removed) and the old side one of the spot lines of that path."""
-    allowed: dict[str, set[str]] = {}
-    for path, _, text in spots:
-        allowed.setdefault(path, set()).add(text)
-    return all(
-        change.old != "" and change.new != "" and change.old in allowed.get(change.path, set())
-        for change in changes
-    )
+def within_spots(
+    before: Mapping[str, str], after: Mapping[str, str], spots: Sequence[Spot]
+) -> bool:
+    """Whether the Developer changed only the lines of `spots`, in place: per path, the same
+    number of lines (none added or removed) and every line that differs is a spot's line
+    number. `before` and `after` are the texts of each changed path on either side."""
+    allowed = {(path, line) for path, line, _ in spots}
+    for path, new_text in after.items():
+        old, new = before.get(path, "").splitlines(), new_text.splitlines()
+        if len(old) != len(new):
+            return False
+        if any(
+            a != b and (path, number) not in allowed
+            for number, (a, b) in enumerate(zip(old, new), 1)
+        ):
+            return False
+    return True
 
 
 def _recorded_moves(raw: Mapping[str, object], head: str) -> list[list[str]] | None:
@@ -190,16 +197,9 @@ def _write_and_ask(
     changed = workspace.changed_paths(mechanical, new_head)
     if not set(changed) <= spots_by_path:
         return "out_of_bounds"
-    developer = [
-        change
-        for relative in changed
-        for change in landing.line_changes(
-            relative,
-            workspace.show(mechanical, relative) or "",
-            workspace.show(new_head, relative) or "",
-        )
-    ]
-    if not within_spots(developer, found.spots):
+    before = {relative: workspace.show(mechanical, relative) or "" for relative in changed}
+    after = {relative: workspace.show(new_head, relative) or "" for relative in changed}
+    if not within_spots(before, after, found.spots):
         return "out_of_bounds"
     if adr_collision(ports, sha, new_head) is not None:
         return "still_colliding"
