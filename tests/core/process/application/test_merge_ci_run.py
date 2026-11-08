@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+from agentic.core.process.adapters.filesystem import documents as filesystem_documents
 from agentic.core.process.application import landing_plan, merge
 from agentic.core.process.application.merge import MergeResult
 from agentic.core.process.application.ports import GitError, Upstream
@@ -102,12 +104,12 @@ def _world(**document):
     return ports
 
 
-def _call(ports, tmp_path, clock, lines=None, sleeps=None):
+def _call(ports, tmp_path, clock, lines=None, sleeps=None, **cfg):
     """`sleeps` records the waits of a push's retry: a wait costs no real time here."""
     return merge.merge_task(
         "GH-5",
         5,
-        _cfg(tmp_path),
+        _cfg(tmp_path, **cfg),
         ports,
         Upstream("origin/master", MASTER, None),
         frozenset(),
@@ -825,3 +827,126 @@ def test_an_escalated_ci_no_verdict_task_merges_on_the_reread_of_a_green_run(tmp
 
     assert result.kind == "merged"
     assert _pairs(ports)[-1]["outcome"] == "green"
+
+
+# --- GH-564: a live run is never no_run, and only a terminal reread spends the pair ----------
+
+
+def _live(tested: str) -> CiReport:
+    """The tested head with no declared check yet (the aggregating job reports at the end) and a
+    workflow run still going."""
+    return CiReport(tested, None, None, None, (), False, frozenset(), frozenset({"42"}))
+
+
+def _on_disk(ports, tmp_path, monkeypatch):
+    """`ports` over the real file-backed documents the poller uses: the document is written as
+    YAML frontmatter and every read parses it back."""
+    monkeypatch.setattr(filesystem_documents, "system_commit", lambda: None)
+    files = FilesystemTaskDocuments(tmp_path)
+    files.save({"title": "t", "description": "d", **(ports.documents.load("GH-5") or {})})
+    return dataclasses.replace(ports, documents=files)
+
+
+def _gh540_pair() -> dict:
+    """The last `merge_ci` entry of apostrophe GH-540: a push pair that ended `no_verdict/no_run`
+    and was reread 689 s after its publish, while the run was still in progress."""
+    return {
+        "head": HEAD,
+        "master": MASTER,
+        "tested": TESTED[0],
+        "mode": "push",
+        "published_at": NOW.isoformat(),
+        "republished": True,
+        "superseded": [TESTED[1]],
+        "outcome": "no_verdict",
+        "cause": "no_run",
+        "reread_at": (NOW + timedelta(seconds=689)).isoformat(),
+    }
+
+
+@pytest.mark.parametrize("escalated", [False, True], ids=["plain", "escalated_ci_no_verdict"])
+def test_gh540_a_run_in_progress_at_the_reread_is_awaited_and_its_green_merges(
+    tmp_path, monkeypatch, escalated
+):
+    more = {}
+    if escalated:
+        entry = {"step": "escalate", "refusal": "ci_no_verdict", "head": HEAD, "cause": "no_run"}
+        more = {"landing": [entry], "escalated": True}
+    ports = _on_disk(_world(merge_ci=[_gh540_pair()], **more), tmp_path, monkeypatch)
+    clock = _Clock()
+    clock.advance(700)
+    before = _pairs(ports)
+    long = {"check_timeout_s": 1800.0}
+
+    ports.tracker.branch_reports[REF] = _live(TESTED[0])
+    waiting = _call(ports, tmp_path, clock, **long)
+
+    assert (waiting.kind, waiting.reason) == ("stopped", "ci_wait")
+    assert _pairs(ports) == before and before[0]["reread_at"]
+    _quiet(ports)
+
+    ports.tracker.branch_reports[REF] = _branch(TESTED[0])
+    clock.advance(60)
+    done = _call(ports, tmp_path, clock, **long)
+
+    assert done.kind == "merged"
+    _quiet(ports)
+    [pair] = _pairs(ports)
+    assert (pair["outcome"], pair["run_id"]) == ("green", "42")
+
+
+def test_a_fresh_pair_with_a_live_run_waits_past_the_grace_and_ends_no_verdict_at_the_bound(
+    tmp_path,
+):
+    ports, clock = _world(), _Clock()
+    _call(ports, tmp_path, clock)
+    ports.tracker.branch_reports[REF] = _live(TESTED[0])
+    clock.advance(_cfg(tmp_path).ci_start_grace_s + 60)
+
+    assert _call(ports, tmp_path, clock).reason == "ci_wait"
+    assert "outcome" not in _pairs(ports)[-1]
+    assert ports.workspace.ci_ref_calls == [("publish", REF)]
+
+    clock.advance(_cfg(tmp_path).check_timeout_s)
+    result = _call(ports, tmp_path, clock)
+
+    assert (result.kind, result.reason) == ("refused", "ci_no_verdict")
+    pair = _pairs(ports)[-1]
+    assert pair["outcome"] == "no_verdict" and pair.get("cause") != "no_run"
+    assert ports.workspace.ci_ref_calls == [("publish", REF)] and ports.tracker.dispatch_calls == []
+
+
+def test_a_reread_counts_its_wait_from_the_rerun_and_keeps_waiting_for_a_live_run(tmp_path):
+    rerun = NOW + timedelta(seconds=500)
+    ports, clock = _world(merge_ci=[_no_verdict_pair(rerun_at=rerun.isoformat())]), _Clock()
+    clock.advance(700)  # past published_at + 600, before rerun_at + 600
+    ports.tracker.branch_reports[REF] = _live(TESTED[0])
+    before = _pairs(ports)
+
+    result = _call(ports, tmp_path, clock)
+
+    assert (result.kind, result.reason) == ("stopped", "ci_wait")
+    assert _pairs(ports) == before
+    _quiet(ports)
+
+
+def test_a_failing_port_stamps_the_pair_only_at_the_bound_and_then_refuses(tmp_path):
+    ports, clock = _world(merge_ci=[_no_verdict_pair()]), _Clock()
+    before = _pairs(ports)
+    ports.tracker.branch_reports[REF] = CiUnreadable("gh_unavailable")
+    clock.advance(10)
+
+    assert _call(ports, tmp_path, clock).reason == "ci_wait"
+    assert _pairs(ports) == before
+    _quiet(ports)
+
+    clock.advance(_cfg(tmp_path).check_timeout_s)
+    result = _call(ports, tmp_path, clock)
+
+    assert (result.kind, result.reason) == ("refused", "ci_no_verdict")
+    pair = _pairs(ports)[-1]
+    assert (pair["reread_at"], pair["reread_state"]) == (clock(), "unreachable")
+    _quiet(ports)
+    reads = len(ports.tracker.branch_reads)
+    assert _call(ports, tmp_path, clock).reason == "ci_no_verdict"
+    assert len(ports.tracker.branch_reads) == reads
