@@ -6,6 +6,8 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import pytest
+
 from agentic.core.process.application import landing
 from agentic.core.process.application.ports import RawResult, Upstream
 from agentic.core.process.domain import ci
@@ -408,3 +410,67 @@ def test_a_flake_record_that_cannot_be_written_never_refuses_the_slice():
     assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]
     assert any("flake not recorded: disk full" in line for line in lines)
     assert "flakes" not in _doc(ports)
+
+
+def _matrix_ci(ports, *, pending=(), completed: bool | None = True):
+    """GH-546: the slice's `pytest` is a matrix job id, so its runs are two expansions of it and
+    a check nobody required (`docs`); `completed` is the report's `runs_completed`."""
+    ports.stack.declared_ci_all = ("pytest",)
+    _stale_pairs(ports)
+    names = ("pytest (areas-1, a)", "pytest (areas-2, b)", "docs")
+    checks = tuple(
+        CiCheck(
+            name,
+            "IN_PROGRESS" if name in pending else "COMPLETED",
+            None if name in pending else "SUCCESS",
+            "link",
+        )
+        for name in names
+    )
+    ports.tracker.ci_reports[SLICE_URL] = CiReport(
+        SLICE_HEAD, None, None, "2026-10-22T00:00:00Z", checks, runs_completed=completed
+    )
+    green = tuple(CiCheck(name, "COMPLETED", "SUCCESS", "link") for name in names)
+    ports.tracker.ci_reports[URL.format(5)] = CiReport(HEAD, "master", MASTER, NOW, green)
+
+
+def test_a_slice_whose_required_matrix_id_has_all_its_expansions_green_merges():
+    ports = _world(frozenset({"integration.py"}))
+    _matrix_ci(ports, pending=("pytest (areas-2, b)",), completed=False)
+    _land(ports)
+    assert ports.tracker.merge_calls == []
+
+    _matrix_ci(ports)
+    _land(ports)
+
+    assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]
+    assert [s["units"] for s in _doc(ports)["landed_slices"]] == [["a", "b"]]
+
+
+@pytest.mark.parametrize("completed", [None, False, True])
+def test_a_slice_with_a_pending_matrix_shard_stays_open_and_escalates_no_unknown_names(completed):
+    # `True` is a report that says its workflow runs are done while a shard still reads pending:
+    # the one answer where only the matcher keeps `pytest` from being an unreported name.
+    ports = _world(frozenset({"integration.py"}))
+    _matrix_ci(ports, pending=("pytest (areas-2, b)",), completed=completed)
+
+    _land(ports)
+    # the slice has waited past the confirmation of an unreported name (`2 * ci.CI_POLL_S`)
+    document = _doc(ports)
+    ports.documents.save(
+        {
+            **document,
+            "landing": [
+                *document["landing"][:-1],
+                {**document["landing"][-1], "at": "2026-10-21T23:58:00+00:00"},
+            ],
+        }
+    )
+    _land(ports)
+
+    entry = _doc(ports)["landing"][-1]
+    assert entry["slice_pull_request"] == SLICE_URL
+    assert "resolved_at" not in entry and "closed_at" not in entry
+    assert ports.tracker.merge_calls == [] and ports.tracker.closed_pull_requests == []
+    assert all(e.get("refusal") != "ci_unknown_names" for e in _doc(ports)["landing"])
+    assert all(e["step"] != "escalate" for e in _doc(ports)["landing"])

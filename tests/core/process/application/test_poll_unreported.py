@@ -66,3 +66,37 @@ def test_step_for_escalates_once_per_head_and_names():
     assert landing_plan.step_for(done, "ci_unknown_names", facts).kind == "none"
     other = _facts(ci_unreported=("e2e", "pytest"))
     assert landing_plan.step_for(done, "ci_unknown_names", other).kind == "escalate"
+
+
+def _matrix_report(*, shards=("pytest (areas-1, a)", "pytest (areas-2, b)"), pending=(), done=True):
+    """GH-546: a head whose plan-required `pytest` is a matrix job id, so no run carries that
+    exact name: its expansions, and a check nobody asked for (`docs`), are what reported."""
+    checks = tuple(
+        ci.CiCheck(
+            name,
+            "IN_PROGRESS" if name in pending else "COMPLETED",
+            None if name in pending else "SUCCESS",
+            f"link-{index}",
+        )
+        for index, name in enumerate((*shards, "docs"))
+    )
+    return ci.CiReport(HEAD, "master", "b" * 40, None, checks, runs_completed=done)
+
+
+def test_matrix_expansions_all_green_are_facts_with_nothing_unreported_and_a_green_verdict():
+    facts = poll.with_ci(_facts(), {"ci_required": ["pytest"]}, (), _matrix_report())
+
+    assert facts.ci_required == ("pytest",)
+    assert facts.ci_unreported == ()
+    assert facts.ci_verdict is not None and facts.ci_verdict.state == "green"
+
+
+def test_a_pending_matrix_shard_is_a_pending_line_not_an_unreported_name():
+    report = _matrix_report(pending=("pytest (areas-2, b)",), done=False)
+    facts = poll.with_ci(_facts(), {"ci_required": ["pytest"]}, (), report)
+
+    line = poll.ci_wait_line(7, facts, report)
+
+    assert "pending pytest" in line
+    assert "unreported" not in line and "not a check-run name" not in line
+    assert "missing" not in line
