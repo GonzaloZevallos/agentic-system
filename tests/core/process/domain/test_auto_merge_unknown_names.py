@@ -4,9 +4,11 @@ apostrophe GH-543 shape through the merge gate. Pure: each case is a `MergeFacts
 from dataclasses import replace
 
 from agentic.core.process.domain import ci, rules
-from agentic.core.process.domain.ci import CiCheck, CiVerdict
+from agentic.core.process.domain.ci import CiCheck, CiReport, CiVerdict
 from agentic.core.process.domain.rules import MergeDecision, MergeFacts
+from tests.core.process.ci_truncated_names import TRUNCATED_PYTEST
 
+SHARDS = TRUNCATED_PYTEST
 HEAD = "a" * 40
 MASTER = "b" * 40
 FLOOR = 2 * ci.CI_POLL_S
@@ -46,6 +48,21 @@ def _facts(**over) -> MergeFacts:
 
 def test_a_name_no_check_run_carries_is_refused_once_the_wait_is_confirmed():
     assert rules.auto_merge_decision(_facts()) == MergeDecision("refuse", "ci_unknown_names")
+
+
+def test_truncated_matrix_shards_all_green_do_not_make_the_required_name_unknown():
+    """GH-556: GitHub truncates long matrix names (no closing parenthesis); `pytest` still has
+    its runs, so `ci.unreported` is empty and the gate never reads `ci_unknown_names`."""
+    report = CiReport(
+        HEAD, None, None, None, tuple(CiCheck(n, "COMPLETED", "SUCCESS", "") for n in SHARDS), True
+    )
+    facts = _facts(
+        ci_required=("pytest",),
+        ci_verdict=ci.ci_state(report, ("pytest",)),
+        ci_unreported=ci.unreported(report, ("pytest",), True),
+        ci_reported=SHARDS,
+    )
+    assert rules.auto_merge_decision(facts) != MergeDecision("refuse", "ci_unknown_names")
 
 
 def test_below_the_confirmation_floor_or_without_an_anchor_it_still_waits():
