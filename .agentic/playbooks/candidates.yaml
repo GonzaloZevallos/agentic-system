@@ -1408,3 +1408,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-07T23:58:46.051+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before you write in a brief that a test will catch a regression, check that the test fails when the guarded code is broken. Mentally mutate that code, and drop or reword any prediction that would still pass.
+  confidence: medium
+  seen_in:
+  - GH-546
+  sources:
+  - finding
+  added_at: '2026-11-08T00:03:33.891+00:00'
