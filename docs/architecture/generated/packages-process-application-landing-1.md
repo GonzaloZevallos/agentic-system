@@ -28,6 +28,7 @@ graph TD
     m_application__close_issues["application.close_issues"]
     m_application__closed["application.closed"]
     m_application__landing["application.landing"]
+    m_application__landing_adr["application.landing_adr"]
     m_application__landing_fix["application.landing_fix"]
     m_application__adr_collision --> g_application__support
     m_application__adr_collision --> g_domain__landing
@@ -42,7 +43,9 @@ graph TD
     m_application__landing --> g_domain__landing
     m_application__landing --> g_domain__state
     m_application__landing --> g_pkg__agentic__shared
+    m_application__landing --> m_application__landing_adr
     m_application__landing --> m_application__landing_fix
+    m_application__landing_adr --> g_application__landing__2
     m_application__landing_fix --> g_application__build
     m_application__landing_fix --> g_application__landing__2
     m_application__landing_fix --> g_application__lifecycle
