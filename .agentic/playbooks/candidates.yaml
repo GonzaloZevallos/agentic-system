@@ -1436,3 +1436,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-08T05:02:10.740+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief names an exact outcome (such as escalate with a class), assert that outcome in the test; if the code can only reach a nearby one, stop and flag the gap instead of encoding the nearest behaviour.
+  confidence: medium
+  seen_in:
+  - GH-564
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-08T12:45:48.952+00:00'
