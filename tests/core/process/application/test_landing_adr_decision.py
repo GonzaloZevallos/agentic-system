@@ -107,21 +107,26 @@ def _round(tmp_path, ports, live=LIVE):
     return result, lines
 
 
-def _asked(tmp_path, edit=_point_at_the_new_number, *, comments=None):
-    """The question asked on the collision, then the owner's decision on the issue."""
+def _asked(tmp_path, edit=_point_at_the_new_number, *, comments=None, stamps=None, labels=()):
+    """The question asked on the collision, then the owner's decision on the issue. `stamps` is
+    the `(at, resolved_at)` the question's entry carries, when a test pins them."""
     ports, head = _world(tmp_path, extra=((CODE, CITES_CODE),))
     ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
     ports.workspace.diff_paths = (MINE, NOTES, CODE)
     (tmp_path / "GH-5" / "app").mkdir(parents=True)
     first, _ = _round(tmp_path, ports)
     assert (first.kind, first.step) == ("dispatched", "escalate_adr"), first
+    if stamps is not None:
+        at, resolved_at = stamps
+        stamped = [{**e, "at": at, "resolved_at": resolved_at} for e in _entries(ports)]
+        ports.documents.record_closure("GH-5", {"landing": stamped})
     ports.tracker.timestamped["GH-5"] = [
         IssueComment(body, at)
         for body, at in (
             comments or [("Escalated: ADR collision", ESCALATED_COMMENT), (DECISION, DECIDED)]
         )
     ]
-    ports.tracker.states[5] = IssueState("OPEN", "", (), None, ())
+    ports.tracker.states[5] = IssueState("OPEN", "", labels, None, ())
     ports.documents.record_closure(
         "GH-5",
         {"title": "t", "description": "d", "sections": {"Human": f"### Decision\n\n{DECISION}"}},
@@ -273,3 +278,64 @@ def test_a_comment_posted_before_the_escalation_does_not_release(tmp_path):
     assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_human")
     assert ports.runner.calls == []
     assert rules.task_branch("GH-5") == BRANCH
+
+
+# -- GH-561: the `Escalated:` comment is posted while the step runs, before `resolved_at` ------
+
+# (at, resolved_at, the `Escalated:` comment's creation) of the two real documents, and the case
+# where the comment shares its second with the entry's `at`.
+GH_407 = ("2026-11-06T21:42:07+00:00", "2026-11-06T21:42:12+00:00", "2026-11-06T21:42:11+00:00")
+GH_601 = ("2026-11-07T06:06:26+00:00", "2026-11-07T06:06:29+00:00", "2026-11-07T06:06:29+00:00")
+EQUAL_SECOND = ("2026-11-07T08:00:00+00:00", "2026-11-07T08:00:04+00:00", "2026-11-07T08:00:00+00:00")
+OWNER_ANSWERED = "2026-11-08T09:00:00+00:00"
+
+
+def _answered(tmp_path, stamps, created, *, decision=True, labels=()):
+    comments = [("Escalated: ADR collision", created)]
+    if decision:
+        comments.append((DECISION, OWNER_ANSWERED))
+    return _asked(tmp_path, comments=comments, stamps=stamps, labels=labels)
+
+
+@pytest.mark.parametrize(
+    ("at", "resolved_at", "created"),
+    [GH_407, GH_601, EQUAL_SECOND],
+    ids=["gh-407", "gh-601", "equal-second"],
+)
+def test_the_decision_after_the_comment_the_step_posted_releases_the_escalation(
+    tmp_path, at, resolved_at, created
+):
+    ports, _ = _answered(tmp_path, (at, resolved_at), created)
+
+    result, lines = _round(tmp_path, ports)
+
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    assert result.reason != "escalated_waiting_on_human"
+
+
+def test_without_a_decision_comment_the_escalation_still_waits(tmp_path):
+    ports, _ = _answered(tmp_path, GH_407[:2], GH_407[2], decision=False)
+
+    result, _ = _round(tmp_path, ports)
+
+    assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_human")
+    assert ports.runner.calls == []
+
+
+def test_with_needs_human_still_on_the_issue_the_escalation_still_waits(tmp_path):
+    ports, _ = _answered(tmp_path, GH_407[:2], GH_407[2], labels=("needs-human",))
+
+    result, _ = _round(tmp_path, ports)
+
+    assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_human")
+    assert ports.runner.calls == []
+
+
+def test_an_escalated_comment_a_minute_before_the_step_started_does_not_release(tmp_path):
+    at, resolved_at, _ = GH_407
+    ports, _ = _answered(tmp_path, (at, resolved_at), "2026-11-06T21:41:07+00:00")
+
+    result, _ = _round(tmp_path, ports)
+
+    assert (result.kind, result.reason) == ("skipped", "escalated_waiting_on_human")
+    assert ports.runner.calls == []
