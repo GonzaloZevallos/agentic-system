@@ -393,3 +393,31 @@ su corrida terminó verde unos minutos después, y nadie volvió a leerla: la pu
   misma llamada, como siempre; su relectura la hace una llamada posterior, que el poller lanza porque
   la decisión sobre el documento (también el de una tarea escalada) es `ci_run`.
 - **Costo.** A lo sumo una llamada más a `gh` por par `no_verdict`; sin gasto de modelo.
+
+## Adenda (GH-565): una sola regla de confianza para el nodo, el modo, la especulación y el merge
+
+El nodo `full_checks` juzgaba la confianza desde `task_base`: una tarea larga que había integrado los
+cambios de `.github/` de master corría su suite local como `untrusted` (apostrophe GH-407 y GH-396),
+y su web-e2e local fallaba bajo carga. GH-547 lo había arreglado solo en el merge.
+
+- **Una sola regla.** `application/ci_trust.py` es el único lugar que decide si el CI del producto
+  puede juzgar una cabeza. `read_range` lee `merge-base(cabeza, master)...cabeza` y el `ci_dispatch`
+  de master; `read` es la lectura perezosa que usan el nodo, `full_checks_mode` y
+  `review._push_speculatively`. El merge llama a `read_range` con el master de su verbo, así que ya
+  no pueden divergir. `rules.py` no recibe nada nuevo.
+- **Perezosa, solo de no confiable a confiable.** `read` pregunta primero `task_base...cabeza`: una
+  cabeza que esa diferencia confía no cuesta `upstream()` ni `merge_base`. Solo una cabeza que
+  esa diferencia desconfía resuelve el master (a lo sumo un fetch, acotado por `FETCH_TIMEOUT_S`) y
+  relee el rango. Sin master real (`upstream` en `HEAD` o sin sha) o con un merge base ilegible, el
+  veredicto nunca es mejor que el de `task_base`.
+- **`ci_dispatch` se lee en master**, porque el despacho corre el workflow de la rama por defecto
+  (como en GH-547). Un `ValueError` es "sin despacho", nunca una excepción. Una cabeza que la lectura
+  de `task_base` ya confiaba lee el despacho en `task_base`, como siempre.
+- **La línea `CI not used (untrusted)`** aparece menos veces. Lleva `(the upstream was not fetched)`
+  solo cuando el master no se pudo resolver o traer, nunca cuando falló la lectura del merge base.
+- **Desacuerdo posible.** En el caso de un revert (la diferencia de `task_base` es confiable y la del
+  merge base es más ancha) el nodo conserva la respuesta de hoy y el merge juzga como en GH-547: pueden
+  discrepar, y decide la puerta de merge.
+- **Un job renombrado** en master ahora escala con clase `ci` y causa `unknown_names` en lugar de
+  correr local, porque los nombres `ci:` se siguen leyendo en `task_base`.
+- **Cierra** la viñeta «Fuera de esta tarea» de GH-547, cuyo texto no se edita.

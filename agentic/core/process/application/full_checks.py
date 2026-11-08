@@ -75,7 +75,7 @@ from ..domain.task import (
     TaskState,
     apply,
 )
-from . import ci_flakes, ci_push
+from . import ci_flakes, ci_push, ci_trust
 from .checkouts import Checkout, task_base
 from .ci_push import Pushed, PushFailed
 from .ports import GitError, Ports
@@ -173,6 +173,15 @@ class _NotTried:
 
 
 @dataclass(frozen=True)
+class _LocalUntrusted:
+    """A head the product's own CI cannot judge and no `ci_dispatch` can: the local tier runs.
+    `detail` is the closed suffix of the section's line, `_UNFETCHED_DETAIL` only when the master
+    could not be resolved or fetched, never when the merge-base read failed."""
+
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class _NoVerdict:
     """GitHub gave no verdict: the closed `cause` and how long the node waited on it."""
 
@@ -213,17 +222,17 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _head_trust(ports: Ports, checkout: Checkout, base: str) -> tuple[str, bool]:
-    """The integrated head and whether the product's own CI may judge it: `False` when the
-    change touches the CI definition or the diff cannot be read (fail closed,
-    `rules.ci_untrusted`). The one place the two are read, for the node and for
-    `full_checks_mode`."""
+def _head_trust(ports: Ports, checkout: Checkout, base: str) -> tuple[str, ci_trust.TrustRead]:
+    """The integrated head and how the product's own CI may judge it (`ci_trust.read`, GH-565):
+    the task base's diff first, and the master's merge base only for a head that diff distrusts.
+    Not trusted when the change touches the CI definition or the diff cannot be read (fail
+    closed, `rules.ci_untrusted`). The one place the two are read, for the node and for
+    `full_checks_mode`; the master may be fetched, so the node runs it in a worker thread."""
     head = ports.workspace.full_head(checkout.path)
-    try:
-        paths: tuple[str, ...] | None = ports.workspace.changed_paths(base, head)
-    except GitError:
-        paths = None
-    return head, rules.ci_untrusted(paths) is False
+    read = ci_trust.read(
+        ports, head, task_base=base, resolve_master=lambda: ports.workspace.upstream()
+    )
+    return head, read
 
 
 def _pushed_for(state: TaskState, head: str) -> bool:
@@ -240,13 +249,14 @@ def full_checks_mode(
     `ci:`, or a head the product's workflow cannot judge and no `ci_dispatch`), `consumable`
     when the run a review pushed for this very commit only has to be read, `wait` when a CI
     verdict has to be waited for (a push, or a dispatched run). Only `wait` is slow enough to
-    be worth running beside the roles."""
+    be worth running beside the roles. At most one fetch, only for a head the task base does not
+    trust; writes nothing."""
     base = task_base(state, ports)
     if not ports.stack.ci(base):
         return "local"
-    head, trusted = _head_trust(ports, checkout, base)
-    if not trusted:
-        return "wait" if ports.stack.ci_dispatch(base) is not None else "local"
+    head, trust = _head_trust(ports, checkout, base)
+    if not trust.trusted:
+        return "wait" if trust.dispatch is not None else "local"
     return "consumable" if _pushed_for(state, head) else "wait"
 
 
@@ -275,8 +285,8 @@ async def full_checks(
     outcome = await _ci_full_checks(
         state, cfg, ports, task, base, names, sleep, clock, now, push_sleep
     )
-    if outcome == "untrusted":
-        return await _local_full_checks(state, cfg, ports, task, base, outcome)
+    if isinstance(outcome, _LocalUntrusted):
+        return await _local_full_checks(state, cfg, ports, task, base, "untrusted", outcome.detail)
     if isinstance(outcome, _NoVerdict) and outcome.cause == "unknown_names":
         head = workspace.full_head(task.path)
         plan_only = rules.ci_gate_names(names, state.get("ci_required") or []).plan_only
@@ -395,10 +405,12 @@ async def _local_full_checks(
     task: Checkout,
     base: str,
     fallback: FallbackCause | None,
+    detail: str = "",
 ) -> TaskState:
     """The suite run on this machine. `fallback` is why a `ci:` product ended up here: the
-    record and the section carry it. `None` for a product without `ci:`, whose record gets
-    no new key."""
+    record and the section carry it, the section with `detail` after it (empty, or the closed
+    `_UNFETCHED_DETAIL` of a head whose master could not be used). `None` for a product without
+    `ci:`, whose record gets no new key."""
     workspace = ports.workspace
     declared = ports.stack.checks(base)
     gate = CheckoutPresubmit(
@@ -471,7 +483,7 @@ async def _local_full_checks(
     if fallback is not None:
         record["ran_on"] = "local"
         record["ci_fallback"] = fallback
-        text = f"CI not used ({fallback}): ran locally.\n\n{text}"
+        text = f"CI not used ({fallback}){detail}: ran locally.\n\n{text}"
     patch["sections"] = _section(state, record["version"], text)
     if flakes := gate.flakes():
         patch["flakes"] = ci_flakes.dated(flakes, ci_flakes.now())
@@ -489,21 +501,22 @@ async def _ci_full_checks(
     clock: Clock,
     now: Now,
     push_sleep: PushSleep,
-) -> dict[str, Any] | _NoVerdict | Literal["untrusted"]:
-    """The patch of a run decided on GitHub, `untrusted` for running the local tier, or the
+) -> dict[str, Any] | _NoVerdict | _LocalUntrusted:
+    """The patch of a run decided on GitHub, `_LocalUntrusted` for running the local tier, or the
     `_NoVerdict` GitHub gave no verdict for. When no run starts within the grace period the
     ref is published once more (GH-462). The
     paths are read from the workspace only and the head is published to the task's own CI
     ref; the wait takes no check slot and runs no command (ADR-0070). Each push is retried
     by what git said (GH-487); the one that needed it is noted on the record."""
     workspace = ports.workspace
-    head, trusted = _head_trust(ports, task, base)
+    head, trust = await anyio.to_thread.run_sync(lambda: _head_trust(ports, task, base))
     gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
-    if not trusted:
-        if (dispatch := ports.stack.ci_dispatch(base)) is None:
-            return "untrusted"
+    if not trust.trusted:
+        if trust.dispatch is None:
+            unfetched = trust.fallback in ("no_master", "unfetched")
+            return _LocalUntrusted(_UNFETCHED_DETAIL if unfetched else "")
         return await _dispatched_full_checks(
-            state, cfg, ports, task, head, gate_names, dispatch, sleep, clock, push_sleep
+            state, cfg, ports, task, head, gate_names, trust.dispatch, sleep, clock, push_sleep
         )
     ref = rules.ci_ref(state["id"])
     speculative = False
