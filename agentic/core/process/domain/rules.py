@@ -5076,8 +5076,10 @@ MergeRefusal = Literal[
   landing escalates it once per head and names, spending no budget.
 - `ci_no_verdict` (GH-463): a product that declares `ci:` asked GitHub for a fresh run of the
   head on the current master and got no verdict, after the one republish (or second dispatch)
-  of the pair: `ci.CI_NO_VERDICT_PAIRS_MAX` pairs since the last release. The landing escalates
-  it with the cause, and releases it once per (head, upstream) pair.
+  of the pair: `ci.CI_NO_VERDICT_PAIRS_MAX` pairs since the last release. A `no_verdict` pair of
+  the current master is reread once first (`merge_ci.rereadable`, GH-552): the decision is
+  `ci_run` until its `reread_at` is stamped. The landing escalates it with the cause, and
+  releases it once per (head, upstream) pair.
 - `ci_stale_exhausted` (GH-463): master overtook `ci.CI_STALE_PAIRS_MAX` fresh runs of the
   head, each with a gain that is not inert; the landing syncs master, a new head.
 - `ci_untrusted_no_dispatch` (GH-463): the head touches the CI's own definition and the stack
@@ -5545,7 +5547,9 @@ def _ci_run_decision(facts: MergeFacts) -> MergeDecision:
     `merge` when a GitHub pass covers the head on the current master (#353,
     `merge_ci.masters_covered_ci`) and is trusted; `ci_untrusted_no_dispatch` at once for a head
     that touches the CI's definition when the stack has no `ci_dispatch`; `ci_stale_exhausted`
-    and `ci_no_verdict` once their own bound is spent; else `ci_run`, one fresh GitHub run."""
+    once its bound is spent; `ci_run` while the head's `no_verdict` pair of the current master
+    can still be reread once (`merge_ci.rereadable`); `ci_no_verdict` once its bound is spent;
+    else `ci_run`, one fresh GitHub run."""
     if facts.ci_covered is True and _covered_trusted(facts):
         return MergeDecision("merge", None)
     if facts.ci_untrusted is True and not facts.ci_dispatch_declared:
@@ -5553,6 +5557,8 @@ def _ci_run_decision(facts: MergeFacts) -> MergeDecision:
     counts = merge_ci.pair_counts(facts.merge_ci, facts.pr_head)
     if counts.stale >= ci.CI_STALE_PAIRS_MAX:
         return MergeDecision("refuse", "ci_stale_exhausted")
+    if merge_ci.rereadable(facts.merge_ci, facts.pr_head, facts.current_master) is not None:
+        return MergeDecision("ci_run", None)
     if counts.no_verdict >= ci.CI_NO_VERDICT_PAIRS_MAX:
         return MergeDecision("refuse", "ci_no_verdict")
     return MergeDecision("ci_run", None)

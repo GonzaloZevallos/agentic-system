@@ -1370,8 +1370,9 @@ class MergeCiRecord(TypedDict):
     pair failed and `cause` the closed `CiCause` of a `no_verdict` one, so the landing reads
     both off the document and never from `gh`'s text. `rerun_at` is the instant the landing reran a
     `red` pair's run by its `run_id`, which also clears `outcome` and `failing`: the gate reads
-    the run again and the wait for its new verdict counts from that instant. No free text in any
-    field."""
+    the run again and the wait for its new verdict counts from that instant. `reread_at` is the
+    instant the merge gate stamped before rereading the run of a `no_verdict` pair, written before
+    the read: at most one reread per pair. No free text in any field."""
 
     head: str
     master: str
@@ -1386,6 +1387,7 @@ class MergeCiRecord(TypedDict):
     failing: NotRequired[list[str]]
     cause: NotRequired[CiCause]
     rerun_at: NotRequired[str]
+    reread_at: NotRequired[str]
     # The instants the CI wait is derived from (`CiTiming`); absent on a record written before it.
     ci_timing: NotRequired[CiTiming]
 

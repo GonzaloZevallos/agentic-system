@@ -491,6 +491,8 @@ def _fresh_run(
     is recorded and then published. Nothing here runs a command in a checkout."""
     pairs: list[MergeCiRecord] = list(raw.get("merge_ci", []))
     pair = merge_ci.latest(pairs, head)
+    if (unread := merge_ci.rereadable(pairs, head, master)) is not None:
+        return _reread_pair(task_id, pairs, unread, names, dispatch, cfg, ports, clock)
     if pair is not None and merge_ci.run_stands(
         pair, head, master, facts.ci_run_inert, ran=pair["tested"]
     ):
@@ -726,6 +728,71 @@ def _read_pair(
         undecided["cause"] = verdict.cause
     _write_pairs(ports, task_id, pairs, undecided)
     return _Fresh(cause=verdict.cause)
+
+
+def _reread_pair(
+    task_id: str,
+    pairs: list[MergeCiRecord],
+    pair: MergeCiRecord,
+    names: tuple[str, ...],
+    dispatch: CiDispatch | None,
+    cfg: Configuration,
+    ports: Ports,
+    clock: Callable[[], str],
+) -> _Fresh:
+    """Reads once more the run of a `no_verdict` pair of the current master (GH-552): the run may
+    have finished after the grace the pair spent. `reread_at` is written before GitHub is asked,
+    so a crash or a failing port never reopens the loop. A `green` or `red` verdict rewrites the
+    pair from the stamped one; any other state writes nothing more and triggers nothing: no
+    republish, rerun, push or dispatch."""
+    stamped: MergeCiRecord = {**pair, "reread_at": clock()}
+    _write_pairs(ports, task_id, pairs, stamped)
+    tested = pair["tested"]
+    waited = (_instant(clock()) - _instant(pair["published_at"])).total_seconds()
+    report: ci.CiReport | None = None
+    run_id: str | None = None
+    if pair["mode"] == "push":
+        read = ports.tracker.branch_ci(rules.ci_ref(task_id))
+        verdict = ci.full_tier_verdict(
+            read, tested, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
+        )
+        if isinstance(read, ci.CiReport) and verdict.state in ("green", "red"):
+            report = read
+            link = next((c.link for c in (*verdict.failing, *read.checks) if c.link), None)
+            run_id = _run_id_of(link)
+    else:
+        if dispatch is None:
+            return _Fresh(stopped=MergeResult("stopped", "ci_dispatch_undeclared"))
+        since = (
+            _instant(pair["published_at"]) - timedelta(seconds=ci.CI_DISPATCH_SKEW_S)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        runs = ports.tracker.dispatched_ci(dispatch.workflow, since)
+        if isinstance(runs, ci.CiUnreadable):
+            verdict = ci.full_tier_verdict(
+                runs, tested, names, waited, cfg.check_timeout_s, cfg.ci_start_grace_s
+            )
+        else:
+            verdict = ci.dispatch_verdict(
+                runs, tested, names, waited, cfg.ci_start_grace_s, cfg.check_timeout_s
+            )
+            chosen = ci.chosen_run(runs, tested)
+            if chosen is not None and verdict.state in ("green", "red"):
+                report = ci.CiReport(tested, None, None, None, chosen.jobs)
+                run_id = str(chosen.run_id)
+    if report is None or verdict.state not in ("green", "red"):
+        return _Fresh(cause=pair.get("cause"))
+    outcome: Literal["green", "red"] = "green" if verdict.state == "green" else "red"
+    row: MergeCiRecord = {**stamped, "outcome": outcome}
+    row.pop("cause", None)
+    row["ci_timing"] = ci.timing(
+        pair["published_at"], _wait_began(pair), outcome, report.checks, names
+    )
+    if run_id is not None:
+        row["run_id"] = run_id
+    if outcome == "red":
+        row["failing"] = [check.name for check in verdict.failing]
+    _write_pairs(ports, task_id, pairs, row)
+    return _Fresh(report=report)
 
 
 def _cancelled_pair(
