@@ -1219,3 +1219,44 @@ async def test_the_fact_of_another_head_is_ignored():
     assert ports.tracker.run_reruns == ["7"]
     assert patch["ci_cancel_rerun"]["head"] == HEAD
     assert patch["full_checks"]["passed"] is True
+
+
+# --- a live run on the head is never no_run, so it is never republished or dispatched (GH-564) ---
+
+
+def live_run() -> CiReport:
+    """The head with no declared job yet (the aggregating job reports at the end of the run) and
+    a workflow run still going."""
+    return CiReport(FULL, None, None, None, (), False, frozenset(), frozenset({"7"}))
+
+
+def declared_fallback(*reads, **more):
+    """`falling_back`'s world, but the CI ref does start a run: `reads` is what the CI says."""
+    ports = ports_of(*reads, workspace=FullHead(), **more)
+    ports.workspace.upstream_answer = Upstream("origin/master", UPSTREAM, None)
+    ports.stack.declared_ci_dispatch_at[UPSTREAM] = DISPATCH
+    return ports
+
+
+async def test_a_live_run_with_no_declared_job_is_awaited_past_the_grace_never_republished():
+    ports = declared_fallback(*[live_run()] * 3, report(job("unit"), job("web"), sha=FULL))
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    assert patch["full_checks"]["passed"] is True and patch["full_checks"]["ran_on"] == "ci"
+    assert clock.now > CFG.ci_start_grace_s
+    assert ports.workspace.ci_ref_calls == [("publish", REF)]
+    assert ports.tracker.dispatch_calls == [] and ports.commands.ran == []
+
+
+async def test_a_live_run_still_going_at_the_bound_times_out_without_dispatch_or_republish():
+    # The nearest to the brief's "escalate": a started run that is not finished at the bound is
+    # the `timeout` return of the node (as `test_a_timed_out_ci_fails_...`), never `no_run`.
+    ports = declared_fallback(live_run())
+    clock = Clock()
+    patch = await run(state_of(), ports, clock)
+    record = patch["full_checks"]
+    assert record["passed"] is False and record["failed_step"] == "timeout"
+    assert "no_run" not in str(patch.get("escalated", ""))
+    assert clock.now >= CFG.check_timeout_s
+    assert ports.workspace.ci_ref_calls == [("publish", REF)]
+    assert ports.tracker.dispatch_calls == [] and ports.commands.ran == []

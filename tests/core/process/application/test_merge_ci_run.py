@@ -370,7 +370,13 @@ def test_a_refused_dispatch_is_no_verdict_without_a_second_dispatch(tmp_path):
     assert len(ports.tracker.dispatch_calls) == 1
     [comment] = _refusals(ports)
     assert "dispatch_refused" in comment
+    # GH-564: the reread of the refused pair waits out the grace (nothing written, nothing
+    # dispatched), and the end of the grace spends it.
+    assert _call(ports, tmp_path, clock).reason == "ci_wait"
+    assert "reread_state" not in _pairs(ports)[-1]
+    clock.advance(_cfg(tmp_path).ci_start_grace_s + 1)
     assert _call(ports, tmp_path, clock).reason == "ci_no_verdict"
+    assert _pairs(ports)[-1]["reread_state"] == "unreachable"
     assert len(ports.tracker.dispatch_calls) == 1
 
 
@@ -662,7 +668,8 @@ def test_a_rerun_the_platform_refuses_is_no_verdict_never_red(tmp_path):
     assert pair["outcome"] == "no_verdict" and "rerun_at" not in pair
 
 
-# GH-552: a no_verdict pair of the current master is reread once before ci_no_verdict.
+# GH-552, GH-564: a no_verdict pair of the current master is reread before ci_no_verdict, until
+# a reread ends without a verdict.
 def _no_verdict_pair(tested: str = TESTED[0], **over) -> dict:
     return {
         **_pair(master=MASTER, tested=tested, republished=True, outcome="no_verdict"),
@@ -716,8 +723,14 @@ def test_a_red_run_found_by_the_reread_is_refused_as_red_and_never_merged(tmp_pa
     assert "reread_at" in pair
 
 
-@pytest.mark.parametrize("reading", ["absent", "waiting", "unreadable"])
-def test_a_reread_with_no_verdict_stamps_the_pair_and_triggers_nothing(tmp_path, reading):
+@pytest.mark.parametrize(
+    ("reading", "state"),
+    [("absent", "unreachable"), ("waiting", "timed_out"), ("unreadable", "unreachable")],
+)
+def test_a_terminal_reread_with_no_verdict_stamps_the_pair_and_triggers_nothing(
+    tmp_path, reading, state
+):
+    # GH-564: `_stuck`'s clock is past `check_timeout_s`, so each reading is the end of the wait.
     ports, clock = _stuck(tmp_path)
     if reading == "absent":
         ports.tracker.branch_reports[REF] = _branch(OLD_MASTER)
@@ -731,19 +744,19 @@ def test_a_reread_with_no_verdict_stamps_the_pair_and_triggers_nothing(tmp_path,
     _quiet(ports)
     after = _pairs(ports)
     assert after[0] == before[0]
-    assert after[-1] == {**before[-1], "reread_at": clock()}
+    assert after[-1] == {**before[-1], "reread_at": clock(), "reread_state": state}
     again = _call(ports, tmp_path, clock)
     assert (again.kind, again.reason) == ("refused", "ci_no_verdict")
     assert _pairs(ports) == after and len(ports.tracker.branch_reads) == 1
     _quiet(ports)
 
 
-def test_the_stamp_is_written_before_github_is_asked(tmp_path, monkeypatch):
+def test_a_reread_that_raises_writes_nothing_so_the_pair_is_read_again(tmp_path, monkeypatch):
+    """GH-564 (it was GH-552's 'stamp before asking'): nothing is written before the read."""
     ports, clock = _stuck(tmp_path)
-    seen: list[bool] = []
+    before = [dict(p) for p in _pairs(ports)]
 
     def failing(branch):
-        seen.append("reread_at" in _pairs(ports)[-1])
         raise OSError("gh blew up")
 
     with monkeypatch.context() as patch:
@@ -751,9 +764,9 @@ def test_the_stamp_is_written_before_github_is_asked(tmp_path, monkeypatch):
         with pytest.raises(OSError):
             _call(ports, tmp_path, clock)
 
-    assert seen == [True] and "reread_at" in _pairs(ports)[-1]
-    assert _call(ports, tmp_path, clock).reason == "ci_no_verdict"
-    assert ports.tracker.branch_reads == []
+    assert _pairs(ports) == before
+    ports.tracker.branch_reports[REF] = _branch(TESTED[0])
+    assert _call(ports, tmp_path, clock).kind == "merged"
 
 
 def test_a_no_verdict_pair_of_an_older_master_is_never_reread(tmp_path):
@@ -793,7 +806,7 @@ def test_a_pair_that_never_gets_a_run_is_refused_when_it_ends_and_read_once_more
     # one reread, which finds nothing and refuses again, and no more reads after it.
     assert outcomes[-1] == ("refused", "ci_no_verdict")
     assert [pair.get("outcome") for pair in _pairs(ports)] == ["no_verdict"]
-    assert "reread_at" in _pairs(ports)[0]
+    assert _pairs(ports)[0]["reread_state"] == "unreachable"
     reads = len(ports.tracker.branch_reads)
     _call(ports, tmp_path, clock)
     assert len(ports.tracker.branch_reads) == reads

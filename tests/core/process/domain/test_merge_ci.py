@@ -293,7 +293,8 @@ def test_a_missing_or_short_id_rereads_nothing(pr_head, master):
 @pytest.mark.parametrize(
     "pair",
     [
-        _unread(reread_at="2026-11-03T10:00:00+00:00"),
+        _unread(reread_at="2026-11-03T10:00:00+00:00", reread_state="timed_out"),
+        _unread(reread_at="2026-11-03T10:00:00+00:00", reread_state="unreachable"),
         _unread(released_at="2026-11-03T10:00:00+00:00"),
         _pair(outcome="green", republished=True),
         _pair(outcome="red", republished=True),
@@ -306,7 +307,8 @@ def test_a_missing_or_short_id_rereads_nothing(pr_head, master):
         _unread(head="e" * 40),
     ],
     ids=[
-        "reread",
+        "reread_timed_out",
+        "reread_unreachable",
         "released",
         "green",
         "red",
@@ -329,7 +331,23 @@ def test_only_the_latest_pair_of_the_head_can_be_reread():
     assert merge_ci.rereadable([older, newer], HEAD, MASTER) is None
 
 
-def test_reopened_keeps_reread_at():
-    reopened = merge_ci.reopened(_unread(reread_at="t"), "later")
-    assert reopened["reread_at"] == "t" and reopened["rerun_at"] == "later"
+def test_a_pair_with_only_a_reread_at_is_still_rereadable():
+    # GH-564: GH-552's code stamped `reread_at` before reading; only `reread_state` spends it now.
+    pair = _unread(reread_at="2026-11-03T10:00:00+00:00")
+    assert merge_ci.rereadable([pair], HEAD, MASTER) == pair
+
+
+def test_reopened_drops_the_reread_marks():
+    marked = _unread(reread_at="t", reread_state="timed_out")
+    reopened = merge_ci.reopened(marked, "later")
+    assert reopened["rerun_at"] == "later"
+    assert "reread_at" not in reopened and "reread_state" not in reopened
     assert "reread_at" not in merge_ci.reopened(_unread(), "later")
+
+
+def test_wait_began_is_the_rerun_when_there_is_one_and_the_publish_otherwise():
+    pair = _unread()
+    assert merge_ci.wait_began(pair) == pair["published_at"]
+    assert merge_ci.wait_began({**pair, "rerun_at": "2026-11-03T11:00:00.000Z"}) == (
+        "2026-11-03T11:00:00.000Z"
+    )

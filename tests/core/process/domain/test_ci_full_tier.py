@@ -410,3 +410,38 @@ def test_a_cancelled_run_the_classification_does_not_know_is_still_not_started()
 def test_startup_failure_without_a_cancellation_signal_is_still_not_started() -> None:
     plain = verdict(cancelled_read(job("unit", "SUCCESS", OLD), job("web", "STARTUP_FAILURE", OLD)))
     assert (plain.state, plain.cause) == ("unreachable", "not_started")
+
+
+# --- GH-564: a live run on the head is never `no_run` -----------------------------------------
+
+
+def live(runs_completed: bool | None = False) -> CiReport:
+    """The head with no declared name yet (the aggregating job reports at the end of the run)
+    and one workflow run still going."""
+    return CiReport(HEAD, None, None, None, (), runs_completed, frozenset(), frozenset({"42"}))
+
+
+def test_a_live_run_with_no_declared_name_waits_past_the_grace() -> None:
+    got = verdict(live(), GRACE + 1)
+    assert got.state == "waiting"
+    assert got.cause is None
+
+
+def test_a_live_run_with_no_declared_name_is_timed_out_at_the_bound_not_no_run() -> None:
+    for elapsed in (BOUND, BOUND + 1000):
+        got = verdict(live(), elapsed)
+        assert got.state == "timed_out"
+        assert got.cause != "no_run"
+
+
+def test_no_live_run_and_no_declared_name_past_the_grace_is_still_no_run() -> None:
+    empty = CiReport(HEAD, None, None, None, (), False)
+    for read in (empty, report()):
+        got = verdict(read, GRACE + 1)
+        assert (got.state, got.cause) == ("unreachable", "no_run")
+
+
+def test_no_suite_at_all_past_the_grace_is_still_no_run() -> None:
+    nothing = CiReport(HEAD, None, None, None, (), None, frozenset(), frozenset())
+    got = verdict(nothing, GRACE + 1)
+    assert (got.state, got.cause) == ("unreachable", "no_run")
