@@ -130,8 +130,9 @@ sequenceDiagram
    de la rama base volvió a verde (`landing.released_by_ci`, que no escribe `### Decision` ni
    texto en `Human`). Liberado, el paso se recalcula sobre la vista liberada
    (`landing_plan.released_step`): `sync_master` si la cabeza no contiene el upstream, `rerun`
-   si lo contiene, `wait` si la ascendencia no se puede leer. Ese paso pasa de nuevo por
-   `run_kind_admits` y `takes_action` antes de escribir la entrada `landing`; la
+   si lo contiene, `wait` si la ascendencia no se puede leer. `land` juzga la clase de corrida
+   (`run_kind_admits`) y `takes_action` una sola vez, sobre ese paso liberado y no sobre el de
+   antes de la liberación, y antes de escribir la entrada `landing`; la
    liberación (el desescalado y el `ci_released` de la entrada `escalate`) y la entrada del
    paso siguiente se guardan en una sola escritura de `documents.save`, así que ningún fallo
    deja una liberación sin su paso siguiente. Un escalado que no es de CI (libro
