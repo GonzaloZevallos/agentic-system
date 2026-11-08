@@ -167,16 +167,25 @@ def _is_exact(name: str, check_name: str) -> bool:
 
 
 def _is_expansion(name: str, check_name: str) -> bool:
-    return re.fullmatch(re.escape(name) + r" \(.+\)", check_name) is not None
+    if re.fullmatch(re.escape(name) + r" \(.+\)", check_name) is not None:
+        return True
+    opening = name + " ("
+    if not check_name.startswith(opening):
+        return False
+    tail = check_name[len(opening) :]
+    return tail.endswith(("...", "…")) and ")" not in tail
 
 
 def matches(name: str, check_name: str) -> bool:
     """Whether a check run called `check_name` can belong to the declared `name` (GH-535): the
     one comparison of a declared CI name with a run's name. True for the exact name, or for a
     matrix expansion `<name> (<values>)` (a space, a parenthesis, at least one character, the
-    closing parenthesis, nothing after it). Never a bare prefix (`e2e` is not `e2e-shard (1)`),
-    never case-folded, the name never a pattern. A pairwise answer: when several declared names
-    compete for the same runs, `runs_of` decides."""
+    closing parenthesis, nothing after it), or (GH-556) for the one GitHub truncated:
+    `<name> (<values>...` (or ending in `…`), no closing parenthesis anywhere after the opening
+    one. Known limit: a truncated value list that itself holds a `)` (`pytest (a (b), c...`) is
+    rejected on purpose. Never a bare prefix (`e2e` is not `e2e-shard (1)` nor
+    `e2e-shard (1...`), never case-folded, the name never a pattern. A pairwise answer: when
+    several declared names compete for the same runs, `runs_of` decides."""
     return _is_exact(name, check_name) or _is_expansion(name, check_name)
 
 
@@ -206,8 +215,9 @@ def runs_of(checks: Iterable[CiCheck], declared: Iterable[str]) -> dict[str, tup
     - an exact claim (`check.name == name`) comes first and leaves the pool before any
       expansion is looked at; a name with an exact run counts only its exact runs, so a red
       `check (3.12)` beside a green `check` does not touch `check`;
-    - over what is left, a name with no exact run claims `<name> (<values>)` (see `matches`);
-      never a bare prefix;
+    - over what is left, a name with no exact run claims `<name> (<values>)` (see `matches`),
+      also when GitHub truncated it to `<name> (<values>...` with no closing parenthesis
+      (GH-556; a truncated list holding a `)` is rejected on purpose); never a bare prefix;
     - a run belongs to at most one name: where two names could claim it the earlier declared
       one does. A non-matrix job named `checks (fast)` is therefore `checks`' expansion when
       no exact `checks` run exists and `checks (fast)` is not itself declared; declared beside

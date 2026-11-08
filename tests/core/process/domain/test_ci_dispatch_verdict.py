@@ -6,6 +6,7 @@ import pytest
 
 from agentic.core.process.domain import ci
 from agentic.core.process.domain.ci import CiCheck, DispatchedRun, FailedStage, dispatch_verdict
+from tests.core.process.ci_truncated_names import TRUNCATED_PYTEST
 
 HEAD = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 OTHER = "f" * 40
@@ -220,6 +221,12 @@ def test_one_red_expansion_is_red_and_names_the_declared_id() -> None:
 def test_one_skipped_expansion_is_jobs_missing() -> None:
     verdict = _verdict([_matrix("SUCCESS", "SKIPPED")], names=("pytest",))
     assert (verdict.state, verdict.cause) == ("unreachable", "jobs_missing")
+
+
+def test_a_green_run_whose_jobs_are_truncated_matrix_names_is_green() -> None:
+    """GH-556: GitHub truncates long matrix names, the closing parenthesis goes with it."""
+    verdict = _verdict([_matrix("SUCCESS", "SUCCESS", names=TRUNCATED_PYTEST)], names=("pytest",))
+    assert (verdict.state, verdict.cause, verdict.red) == ("green", None, ())
 
 
 def test_a_matrix_id_with_no_expansion_is_jobs_missing_and_a_prefix_is_not_one() -> None:

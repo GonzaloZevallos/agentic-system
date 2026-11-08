@@ -782,6 +782,16 @@ El 2026-11-07 las corridas despachadas de apostrophe GH-407 (cabeza `17696ed`, c
 - **Riesgo conocido.** Una matriz con un `if:` por expansión se juzgaría saltada; hoy ningún producto la tiene (en apostrophe, `pytest` y el job de shards de e2e sólo tienen `if:` a nivel de job) y cambiar la regla es otra decisión.
 - **§7.** No cambia ningún conjunto cerrado de valores, señal ni etiqueta. **§8.** Sin lecturas nuevas: se cruzan las mismas corridas de un reporte con los nombres declarados.
 
+## Adenda (2026-11-08): la expansión truncada por GitHub también es del id (GH-556)
+
+GitHub trunca los nombres largos de job y el paréntesis de cierre se va con el corte: los shards de `pytest` de apostrophe llegan como `pytest (always, tests/architecture … tests/op...` y `pytest (areas-1, tests/customers ... tests...`. `matches` sólo aceptaba `<id> (<valores>)` cerrado, así que `runs_of` no le daba corridas a `pytest`, `unreported` lo nombraba, el nodo de CI escaló «defecto de planificación» (apostrophe GH-601) y la puerta de merge rechazó con `ci_unknown_names` (apostrophe GH-399, PR #615). Los tests de GH-535 y GH-548/GH-555 usaban nombres cortos y nunca ejercieron un nombre truncado.
+
+- **La regla, en el mismo comparador (`ci._is_expansion`).** Además de la forma cerrada, que no cambia, una corrida es expansión truncada de `<id>` cuando su nombre empieza por `<id> (`, lo que sigue no está vacío, termina en `...` o en `…` y no contiene `)`. Nunca prefijo pelado (`e2e` no es `e2e-shard (1...`), nunca plegado de mayúsculas, y la corrida exacta sigue teniendo precedencia. Un nombre resuelto sólo por expansión, truncada o no, sigue sin estar nunca en verde mientras `report.runs_completed` no sea `True`.
+- **Límite rechazado.** Una lista de valores truncada que contiene un `)` (`pytest (a (b), c...`) no se acepta: distinguirla de una forma cerrada con texto detrás exigiría adivinar dónde cortó GitHub. Está escrito en los docstrings de `matches` y `runs_of`.
+- **Riesgo aceptado.** Un job sin truncar cuyo nombre literal sea como `pytest (loading...` se tomaría como expansión de `pytest`; hoy no existe ninguno.
+- **Alcance.** Todos los consumidores pasan por `runs_of`/`_claims` y heredan el arreglo; `domain/ci_workflow.py` lee nombres sin truncar en tiempo de plan y no cambia, y `superseded_or_cancelled` tampoco (dos shards que se truncan al mismo texto no se prueban aquí).
+- **§7.** Sin señal, etiqueta ni conjunto cerrado nuevo. **§8.** Misma lectura lineal en las corridas del reporte; el input no alcanza nada nuevo.
+
 ## Adenda (2026-11-07): la ruta exigida por el plan se puede revisar tras una decisión del humano (GH-538)
 
 apostrophe GH-538 exigió cuatro archivos bajo `.agentic/tasks/GH-491-evidence/`, que el presubmit rechaza. El humano decidió commitear la evidencia en `scripts/design/evidence/GH-491/`, pero la decisión no llegó a `required_paths`: el chequeo de integración siguió leyendo la lista original y rechazó cada diff durante 53 USD.

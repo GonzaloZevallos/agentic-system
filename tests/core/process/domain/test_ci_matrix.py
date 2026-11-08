@@ -8,6 +8,7 @@ import pytest
 
 from agentic.core.process.domain import ci
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
+from tests.core.process.ci_truncated_names import TRUNCATED_PYTEST
 
 HEAD = "a" * 40
 BASE = "b" * 40
@@ -52,6 +53,64 @@ MATRIX = ("pytest (areas-1, tests/x)", "pytest (always, y)", "pytest (areas-2, z
 )
 def test_matches(name: str, check_name: str, expected: bool) -> None:
     assert ci.matches(name, check_name) is expected
+
+
+# -- GH-556: GitHub truncates long matrix job names, the closing parenthesis goes with it -----
+
+
+@pytest.mark.parametrize(
+    ("check_name", "expected"),
+    [
+        ("pytest (....", True),
+        ("pytest (.. .", False),
+        ("pytest (...", True),
+        ("pytest (…", True),
+        ("pytest ( ...", True),
+        ("pytest ...", False),
+        ("pytest(a...", False),
+        ("pytest (a (b), c...", False),
+        ("Pytest (a...", False),
+        ("pytest (a", False),
+        ("pytest (a...) tail", False),
+        ("e2e-shard (1...", False),
+    ],
+)
+def test_matches_a_truncated_expansion_only_in_its_one_shape(
+    check_name: str, expected: bool
+) -> None:
+    assert ci.matches("pytest", check_name) is expected
+
+
+def test_a_truncated_expansion_is_never_a_bare_prefix() -> None:
+    assert ci.matches("e2e", "e2e-shard (1...") is False
+
+
+@pytest.mark.parametrize("check_name", TRUNCATED_PYTEST)
+def test_matches_the_real_truncated_names(check_name: str) -> None:
+    assert ci.matches("pytest", check_name) is True
+
+
+def test_runs_of_claims_the_real_truncated_names() -> None:
+    shards = tuple(map(run, TRUNCATED_PYTEST))
+    assert ci.runs_of(shards, ("pytest",)) == {"pytest": shards}
+
+
+def test_a_truncated_matrix_is_not_unreported_on_a_completed_report() -> None:
+    rep = report(*map(run, TRUNCATED_PYTEST))
+    assert ci.unreported(rep, ("pytest",), True) == ()
+    assert ci.unreported(rep, ("pytest", "gone"), True) == ("gone",)
+
+
+def test_an_exact_run_beside_truncated_shards_is_the_only_one_claimed() -> None:
+    exact = run("pytest")
+    shards = tuple(map(run, TRUNCATED_PYTEST))
+    assert ci.runs_of([shards[0], exact, shards[1]], ("pytest",)) == {"pytest": (exact,)}
+
+
+def test_a_truncated_expansion_only_name_is_not_green_while_runs_are_not_completed() -> None:
+    rep = report(*map(run, TRUNCATED_PYTEST), completed=None)
+    assert ci.ci_state(rep, ("pytest",)).state == "pending"
+    assert ci.ci_state(report(*map(run, TRUNCATED_PYTEST)), ("pytest",)).state == "green"
 
 
 def test_exact_claims_come_before_expansions() -> None:
