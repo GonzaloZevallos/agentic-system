@@ -4,12 +4,13 @@ and `ci.red_on_base`."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import get_args
 
 import pytest
 
 from agentic.core.process.domain import adr_numbers, ci, landing
-from tests.core.process.domain.test_landing import _facts, _spent
+from tests.core.process.domain.test_landing import _Comment, _facts, _spent
 
 
 def _red(name: str) -> ci.CiCheck:
@@ -297,14 +298,89 @@ def test_the_escalation_entry_is_the_last_live_resolved_escalate_adr_of_an_escal
     assert landing.adr_escalation_entry(_escalated_doc(legacy)) == legacy
 
 
-def test_the_release_baseline_is_the_resolution_of_the_question_else_the_last_diagnose():
-    from datetime import datetime
-
+def test_the_release_baseline_is_the_start_of_the_question_else_the_last_diagnose():
     asked = _escalated_doc(_asked_resolved())
-    assert landing.release_baseline(asked) == datetime.fromisoformat(T1)
+    assert landing.release_baseline(asked) == datetime.fromisoformat(T0)
     diagnosed = _escalated_doc({"head": H1, "step": "diagnose", "at": T0}, escalated="failure")
     assert landing.release_baseline(diagnosed) == datetime.fromisoformat(T0)
     assert landing.release_baseline(_escalated_doc(escalated="failure")) is None
+
+
+# -- GH-561: the owner is told by a comment posted while the step ran, before `resolved_at` ----
+
+ESCALATED_PREFIX = "Escalated: "
+
+
+def _told_doc(at, resolved_at) -> dict:
+    entry = {"head": H1, "step": "escalate_adr", "refusal": REFUSAL, "at": at}
+    if resolved_at is not None:
+        entry["resolved_at"] = resolved_at
+    return _escalated_doc(entry)
+
+
+def _escalated_comment(created_at: str) -> _Comment:
+    return _Comment(ESCALATED_PREFIX + "ADR collision", created_at)
+
+
+def _iso(base: str, delta: timedelta) -> str:
+    return (datetime.fromisoformat(base) + delta).isoformat()
+
+
+# The two documents of the report: the comment lands before (GH-407) or with (GH-601) `resolved_at`.
+GH_407 = ("2026-11-06T21:42:07+00:00", "2026-11-06T21:42:12+00:00", "2026-11-06T21:42:11+00:00")
+GH_601 = ("2026-11-07T06:06:26+00:00", "2026-11-07T06:06:29+00:00", "2026-11-07T06:06:29+00:00")
+EQUAL_SECOND = (T1, T2, T1)
+
+
+@pytest.mark.parametrize(
+    ("at", "resolved_at", "created"),
+    [GH_407, GH_601, EQUAL_SECOND],
+    ids=["gh-407", "gh-601", "equal-second"],
+)
+def test_the_comment_the_step_posted_tells_the_owner(at, resolved_at, created):
+    raw = _told_doc(at, resolved_at)
+
+    assert landing.release_baseline(raw) == datetime.fromisoformat(at)
+    assert landing.owner_told(raw, [_escalated_comment(created)], ESCALATED_PREFIX) is True
+
+
+def test_a_comment_a_second_before_the_step_started_is_clock_skew_and_tells_the_owner():
+    raw = _told_doc(T1, T2)
+    comment = _escalated_comment(_iso(T1, -timedelta(seconds=1)))
+    assert landing.owner_told(raw, [comment], ESCALATED_PREFIX) is True
+
+
+def test_the_tolerance_is_the_named_skew_and_not_a_minute():
+    assert landing.ADR_RELEASE_SKEW == timedelta(seconds=2)
+    raw = _told_doc(T1, T2)
+    stale = _escalated_comment(_iso(T1, -timedelta(minutes=1)))
+    assert landing.owner_told(raw, [stale], ESCALATED_PREFIX) is False
+    edge = _escalated_comment(_iso(T1, -landing.ADR_RELEASE_SKEW))
+    assert landing.owner_told(raw, [edge], ESCALATED_PREFIX) is False
+
+
+def test_without_an_escalated_comment_the_owner_is_not_told():
+    raw = _told_doc(T1, T2)
+    assert landing.owner_told(raw, [_Comment("Decision: renumber", T3)], ESCALATED_PREFIX) is False
+
+
+@pytest.mark.parametrize(
+    "at", [None, "garbage", "2026-11-07T01:00:00"], ids=["none", "bad", "naive"]
+)
+def test_an_unreadable_start_never_falls_back_to_the_resolution(at):
+    raw = _told_doc(at, T3)
+
+    assert landing.release_baseline(raw) is None
+    comments = [_escalated_comment(T1)]
+    assert landing.owner_told(raw, comments, ESCALATED_PREFIX) is True
+
+
+def test_a_document_that_is_not_the_adr_one_keeps_the_strict_comparison_on_the_diagnose():
+    raw = _escalated_doc({"head": H1, "step": "diagnose", "at": T1}, escalated="failure")
+    same = _escalated_comment(T1)
+    later = _escalated_comment(T2)
+    assert landing.owner_told(raw, [same], ESCALATED_PREFIX) is False
+    assert landing.owner_told(raw, [later], ESCALATED_PREFIX) is True
 
 
 def test_released_stamps_the_escalate_adr_entry_and_leaves_an_older_diagnose_alone():

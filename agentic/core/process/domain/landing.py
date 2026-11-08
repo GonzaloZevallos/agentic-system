@@ -1277,13 +1277,31 @@ def adr_escalation_entry(raw: Mapping[str, object]) -> Mapping[str, object] | No
     return last
 
 
+ADR_RELEASE_SKEW = timedelta(seconds=2)
+"""How far before the `escalate_adr` entry's `at` a comment may be created and still be the
+question's. `at` is stamped by this machine and a comment's `created_at` by GitHub, each in
+whole seconds on its own clock, so the two can differ by a second either way."""
+
+
 def release_baseline(raw: Mapping[str, object]) -> datetime | None:
-    """The instant an owner's comment must come after to release the escalation of `raw`
-    (GH-544): the `resolved_at` of the `escalate_adr` entry when `adr_escalation_entry` holds,
-    else the last diagnose's `at` (`diagnose_at`). `None` when it cannot be read as an aware
-    time."""
+    """The instant the owner's question was not yet posted, for the escalation of `raw`
+    (GH-544, GH-561): the `at` of the `escalate_adr` entry when `adr_escalation_entry` holds --
+    the step's start, before it posts its comment; `resolved_at` is stamped after the comment
+    and never read here -- else the last diagnose's `at` (`diagnose_at`). `None` when it cannot
+    be read as an aware time."""
     entry = adr_escalation_entry(raw)
-    return _aware(entry.get("resolved_at") if entry is not None else diagnose_at(raw))
+    return _aware(entry.get("at") if entry is not None else diagnose_at(raw))
+
+
+def owner_told(raw: Mapping[str, object], comments: Iterable[Commented], prefix: str) -> bool:
+    """Whether a `prefix` comment tells the owner of the escalation of `raw` (the one place the
+    owner-release comparison lives). For an `escalate_adr` question the comment must come after
+    its `at` less `ADR_RELEASE_SKEW`, strictly; otherwise after the last diagnose, strictly
+    (`escalated_after`). An unreadable baseline counts the comment, as `escalated_after` does."""
+    baseline = release_baseline(raw)
+    if baseline is not None and adr_escalation_entry(raw) is not None:
+        baseline -= ADR_RELEASE_SKEW
+    return escalated_after(comments, baseline.isoformat() if baseline is not None else None, prefix)
 
 
 def _last_escalate(
