@@ -126,7 +126,7 @@ def _asked(tmp_path, edit=_point_at_the_new_number, *, comments=None, stamps=Non
             comments or [("Escalated: ADR collision", ESCALATED_COMMENT), (DECISION, DECIDED)]
         )
     ]
-    ports.tracker.states[5] = IssueState("OPEN", "", labels, None, ())
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, labels)
     ports.documents.record_closure(
         "GH-5",
         {"title": "t", "description": "d", "sections": {"Human": f"### Decision\n\n{DECISION}"}},
@@ -286,7 +286,11 @@ def test_a_comment_posted_before_the_escalation_does_not_release(tmp_path):
 # where the comment shares its second with the entry's `at`.
 GH_407 = ("2026-11-06T21:42:07+00:00", "2026-11-06T21:42:12+00:00", "2026-11-06T21:42:11+00:00")
 GH_601 = ("2026-11-07T06:06:26+00:00", "2026-11-07T06:06:29+00:00", "2026-11-07T06:06:29+00:00")
-EQUAL_SECOND = ("2026-11-07T08:00:00+00:00", "2026-11-07T08:00:04+00:00", "2026-11-07T08:00:00+00:00")
+EQUAL_SECOND = (
+    "2026-11-07T08:00:00+00:00",
+    "2026-11-07T08:00:04+00:00",
+    "2026-11-07T08:00:00+00:00",
+)
 OWNER_ANSWERED = "2026-11-08T09:00:00+00:00"
 
 

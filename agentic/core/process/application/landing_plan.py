@@ -485,12 +485,7 @@ def _owner_release(
         comments = ports.tracker.timestamped_comments(task_id)
     except (ValueError, OSError):
         return _unreleased("waiting_on_human")
-    baseline = landing.release_baseline(raw)
-    # `escalated_after` reads the instant as the ISO text the document stores; `None` (unreadable)
-    # stays what it was, so the comment counts.
-    if not landing.escalated_after(
-        comments, baseline.isoformat() if baseline is not None else None, ESCALATED
-    ):
+    if not landing.owner_told(raw, comments, ESCALATED):
         return _unreleased("waiting_on_human")
     decision = decision_since([comment.body for comment in comments], ESCALATED)
     if decision is None:

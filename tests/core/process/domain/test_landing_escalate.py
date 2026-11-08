@@ -364,7 +364,9 @@ def test_without_an_escalated_comment_the_owner_is_not_told():
     assert landing.owner_told(raw, [_Comment("Decision: renumber", T3)], ESCALATED_PREFIX) is False
 
 
-@pytest.mark.parametrize("at", [None, "garbage", "2026-11-07T01:00:00"], ids=["none", "bad", "naive"])
+@pytest.mark.parametrize(
+    "at", [None, "garbage", "2026-11-07T01:00:00"], ids=["none", "bad", "naive"]
+)
 def test_an_unreadable_start_never_falls_back_to_the_resolution(at):
     raw = _told_doc(at, T3)
 
