@@ -429,13 +429,15 @@ def _moves_lines(moves: Sequence[tuple[str, str]]) -> str:
     return "\n".join(f"- {old} -> {new}" for old, new in moves)
 
 
-def adr_collision_reason(found: Renaming | Ambiguous, cap: int) -> str:
+def adr_collision_reason(found: Renaming | Ambiguous, cap: int, failed: str | None = None) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
     is a number two own ADRs share (nothing was calculated); one with moves names each move
     the rule chose, its closed reason and the path and line to fix by hand; a `Renaming` is
     here only because `cap` renumbers were spent and master kept taking the numbers they
-    chose. Every case ends with the way out."""
+    chose. Every case ends with the way out. `failed` (GH-544) is the closed outcome of the last
+    `apply_adr_decision` on the head, said in one line; with no moves to apply (a duplicate own
+    number) "decide on this issue" is not offered, because no decision could be applied."""
     if isinstance(found, Ambiguous) and not found.moves:
         what = (
             f"The branch has ADR files that share a number ({found.reason}): {found.detail}. "
@@ -453,10 +455,17 @@ def adr_collision_reason(found: Renaming | Ambiguous, cap: int) -> str:
             f"{cap} renumbers were spent and master still holds the numbers they chose. "
             f"The moves that kept losing to master:\n{_moves_lines(found.moves)}"
         )
+    if failed is not None:
+        what += f"\nThe last attempt to apply your decision ended `{failed}`; nothing was pushed."
+    if isinstance(found, Ambiguous) and not found.moves:
+        return (
+            f"{what}\nNo model was run and the task was not restarted. To go on, {WAY_OUT_ADR}. "
+            "A new head goes through the landing table again."
+        )
     return (
-        f"{what}\nNo model was run and the task was not restarted. To go on, {WAY_OUT_ADR}, "
-        "or decide on this issue. A new head goes through the landing table again; a reply "
-        "without a new head does not ask again."
+        f"{what}\nTo go on, {WAY_OUT_ADR}, or decide on this issue. A new head goes through "
+        "the landing table again; a decision on the issue is applied by a model pass that "
+        "edits only the lines named above."
     )
 
 
@@ -470,18 +479,35 @@ def escalate_adr(context: LandingContext) -> None:
         context.log(f"agentic: land: {context.task_id}: escalate_adr: no collision to ask about")
         return
     cap = landing_rules.LANDING_RENUMBERS_MAX
+    before = context.ports.documents.load(context.task_id) or {}
+    applied = [
+        entry
+        for entry in landing_plan.all_entries(before)
+        if entry.get("step") == "apply_adr_decision" and entry.get("head") == context.head
+    ]
+    last = applied[-1].get("outcome") if applied else None
+    failed = last if isinstance(last, str) and last != "applied" else None
     _escalate(
         context,
         "ADR number collision with master the renumbering cannot settle",
         "questions",
-        [adr_collision_reason(found, cap)],
+        [adr_collision_reason(found, cap, failed)],
     )
     document = context.ports.documents.load(context.task_id)
     if document is None:
         return
     cost = document.get("cost_usd", 0.0)
+    entries = [dict(entry) for entry in landing_plan.all_entries(document)]
+    open_asks = [
+        entry
+        for entry in entries
+        if entry.get("step") == "escalate_adr" and not entry.get("resolved_at")
+    ]
+    if open_asks and found.moves:
+        # What a later owner's decision is applied to (`apply_adr_decision` compares it).
+        open_asks[-1]["moves"] = [[old, new] for old, new in found.moves]
     resolved = landing_rules.resolve_open(
-        landing_plan.all_entries(document),
+        entries,
         (context.clock or _now)(),
         cost if isinstance(cost, int | float) else 0.0,
     )

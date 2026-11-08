@@ -788,6 +788,7 @@ class MemoryWorkspace:
         self.outside_differs = False
         self.outside_reads: list[tuple[Path, str, str, str]] = []
         self.restored: list[Path] = []
+        self.resets: list[tuple[Path, str]] = []
         self.commits: list[tuple[Path, str]] = []
         self.merges: list[tuple[Path, str]] = []
         # GH-463: the `message` of every `merge`, in order, and the sha each
@@ -1049,6 +1050,14 @@ class MemoryWorkspace:
         self.restored.append(path)
         self.dirty.discard(path)
         self.uncommitted.discard(path)
+
+    def reset_hard(self, path: Path, sha: str) -> None:
+        """GH-544: with `track_commits`, the branch loses every commit after `sha`."""
+        self.resets.append((path, sha))
+        if self.track_commits:
+            known = [commit.sha for commit in self.branch_commits]
+            if sha in known:
+                del self.branch_commits[known.index(sha) + 1 :]
 
     def is_committed(self, path: Path) -> bool:
         return path not in self.uncommitted

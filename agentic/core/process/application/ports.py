@@ -1014,6 +1014,13 @@ class Workspace(Protocol):
         untracked one it wrote are gone and the ignored environment stays."""
         ...
 
+    def reset_hard(self, path: Path, sha: str) -> None:
+        """Puts the checkout at `path` back at commit `sha` (GH-544): `git reset --hard <sha>`
+        then `git clean -fd`, never `-x`. What a landing step that committed locally and did
+        not push uses to leave the task branch where the pull request's head is. Raises
+        `GitError`."""
+        ...
+
     def is_committed(self, path: Path) -> bool:
         """No change to a **tracked** file under `path`. The looser one, and the question
         behind the `+dirty` of a system version (ADR-0008): a scratch file git never
