@@ -35,7 +35,7 @@ from ..domain.task import (
     add_merge_ci,
     add_tracker_failures,
 )
-from . import adr_collision, ci_flakes, ci_push, landing_flakes, landing_plan
+from . import adr_collision, ci_flakes, ci_push, ci_trust, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
 from .poll import (
@@ -142,17 +142,22 @@ def merge_task(
     base = task_base(raw, ports)
     touched: tuple[str, ...] | None = None
     range_base: str | None = None
+    # The workflow the stack names for an untrusted head, read at master because the dispatch
+    # runs the default branch's workflow (GH-547); an unreadable stack names none.
+    dispatch: CiDispatch | None = None
     if head is not None and ports.workspace.fetch_commit(head):
         # GH-547: what the merge brings in is `merge-base(head, master)...head`, read once per
         # call; a base the task merged master past would count master's own commits as the
         # task's. An unreadable merge base stops the merge: it never falls back to the task base.
-        try:
-            range_base = ports.workspace.merge_base(head, master)
-            touched = ports.workspace.changed_paths(range_base, head)
-        except GitError as exc:
-            return MergeResult("stopped", f"diff_unreadable: {exc}")
+        # GH-565: `ci_trust.read_range` is that one read, shared with the full_checks node.
+        trust = ci_trust.read_range(ports, head, master)
+        if trust.merge_base_error is not None:
+            return MergeResult("stopped", f"diff_unreadable: {trust.merge_base_error}")
+        range_base, touched, dispatch = trust.range_base, trust.paths, trust.dispatch
     elif head is not None:
         return MergeResult("stopped", f"head_unreachable: {head}")
+    else:
+        dispatch = ci_trust.dispatch_at(ports, master)
     # Read once, on the one master this verb resolved: only a diff that touches `docs/adr/`
     # costs the read, and the collision cannot change between the decision and the re-decision.
     collision = None
@@ -163,7 +168,6 @@ def merge_task(
             return MergeResult("stopped", f"adr_unreadable: {exc}")
     declared = ports.stack.ci(base)
     names = ci_gate(raw, declared).names
-    dispatch = _dispatch(ports, master)
     # GH-463: the decided fresh run, once there is one: it replaces the pull request's own report.
     fresh_runs: list[ci.CiReport] = []
     report: ci.CiReport | ci.CiUnreadable | None = None
@@ -373,15 +377,6 @@ def with_ci_run(
             pair, facts.pr_head, facts.current_master, facts.ci_run_inert, ran=report.head_sha
         ),
     )
-
-
-def _dispatch(ports: Ports, master: str) -> CiDispatch | None:
-    """The workflow the stack names for an untrusted head, read at master because the dispatch
-    runs the default branch's workflow (GH-547); an unreadable stack names none."""
-    try:
-        return ports.stack.ci_dispatch(master)
-    except ValueError:
-        return None
 
 
 def _criteria(ports: Ports, head: str, range_base: str | None) -> tuple[str, ...] | None:

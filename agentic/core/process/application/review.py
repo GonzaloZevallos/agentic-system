@@ -41,7 +41,7 @@ from agentic.shared.configuration import Configuration, ReviewMode, experiment_s
 from ..domain import ci, docs, presubmit, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from . import ci_push, shadow_review
+from . import ci_push, ci_trust, shadow_review
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Checkout, GitError, Ports
@@ -306,16 +306,17 @@ async def _push_speculatively(
     tiered = bool(ports.stack.delivery_checks(base))
     if not ci_names or not tiered or subtask_id != rules.reviewed_unit_name(state):
         return None
-    try:
-        paths: tuple[str, ...] | None = ports.workspace.changed_paths(base, head)
-    except GitError:
-        paths = None
+    trust = await anyio.to_thread.run_sync(
+        lambda: ci_trust.read(
+            ports, head, task_base=base, resolve_master=lambda: ports.workspace.upstream()
+        )
+    )
     if not speculation.push_due(
         state,
         subtask_id,
         ci_names=ci_names,
         tiered=tiered,
-        untrusted=rules.ci_untrusted(paths),
+        untrusted=rules.ci_untrusted(trust.paths),
         head=head,
     ):
         return None

@@ -16,7 +16,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__IssueRow["IssueRow"]
     class ports__IssueState["IssueState"]
     class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
@@ -30,10 +29,33 @@ classDiagram
     class ports__OwnerRuleEntry["OwnerRuleEntry"]
     class ports__PerfLock["PerfLock"]
     class ports__PerfRunner["PerfRunner"]
+    class ports__Ports["Ports"]
+    class ports__Presubmit["Presubmit"]
     ports__LockHeld o-- ports__LockRecord
 ```
 
 ## Relaciones con otras páginas
 
 - [application: checks](classes-process-application-checks.md)
+  - `presubmit.CheckoutPresubmit` agrega a `ports.Ports`
   - `presubmit.Readiness` se asocia con `ports.LoadReader`
+- [application: landing](classes-process-application-landing.md)
+  - `landing_plan.LandingContext` se asocia con `ports.Ports`
+- [application: support (parte 1)](classes-process-application-support-1.md)
+  - `ports.Ports` se asocia con `limits.RunLimits`
+- [application: support (parte 2)](classes-process-application-support-2.md)
+  - `ports.Ports` se asocia con `ports.CheckScheduler`
+  - `ports.Ports` se asocia con `ports.Commands`
+  - `ports.Ports` se asocia con `ports.FlagVocabulary`
+  - `ports.Ports` se asocia con `ports.Inbox`
+- [application: support (parte 4)](classes-process-application-support-4.md)
+  - `ports.Ports` se asocia con `ports.ProcessReaper`
+  - `ports.Ports` se asocia con `ports.ProductKnowledge`
+  - `ports.Ports` se asocia con `ports.ProductStack`
+  - `ports.Ports` se asocia con `ports.Prompts`
+  - `ports.Ports` se asocia con `ports.RoleRunner`
+  - `ports.Ports` se asocia con `ports.SampleApp`
+- [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.TaskDocuments`
+  - `ports.Ports` se asocia con `ports.Tracker`
+  - `ports.Ports` se asocia con `ports.Workspace`
