@@ -1417,3 +1417,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-08T00:03:33.891+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your diff changes a flow, step contract, decision table or port, update the hand-written page under docs/architecture that describes it, in the same change, and check it with git diff --stat.
+  confidence: medium
+  seen_in:
+  - GH-544
+  sources:
+  - finding
+  added_at: '2026-11-08T02:06:19.281+00:00'
