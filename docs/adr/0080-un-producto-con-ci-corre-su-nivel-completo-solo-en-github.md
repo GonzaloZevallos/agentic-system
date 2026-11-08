@@ -427,7 +427,11 @@ un verde posterior para exactamente ese par nunca se mergeó. Dos defectos, un m
   es un par indeciso nuevo: no hereda `reread_at` ni `reread_state`.
 - **Costo aceptado.** `running_runs` es de mejor esfuerzo: una suite sin `databaseId` legible no
   cuenta y vuelve el comportamiento anterior. Una corrida ajena viva sobre la cabeza con el workflow
-  declarado sin arrancar escala con clase `ci` (en `full_checks`, `timeout`) en el tope en vez de
-  despachar el respaldo de GH-531: falla del lado seguro. Una corrida que termina después de
+  declarado sin arrancar escala con clase `ci` en el tope en vez de despachar el respaldo de
+  GH-531: falla del lado seguro. En `full_checks` es una escalada de clase `ci` con la causa cerrada
+  `run_unfinished` (una corrida viva que no reportó ningún job declarado al llegar al tope), nunca
+  un registro rojo `timeout`: no reabre la integración ni cobra al Developer, y no despacha ni
+  republica. Una corrida con algún job declarado ya reportado que sigue pendiente en el tope conserva
+  el `timeout` rojo de siempre. Una corrida que termina después de
   `check_timeout_s` sigue fuera de la espera declarada. Una relectura en espera cuesta una lectura
   GraphQL por vuelta del poller y por tarea, solo hasta ese tope.

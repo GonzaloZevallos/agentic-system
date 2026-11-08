@@ -1248,15 +1248,16 @@ async def test_a_live_run_with_no_declared_job_is_awaited_past_the_grace_never_r
     assert ports.tracker.dispatch_calls == [] and ports.commands.ran == []
 
 
-async def test_a_live_run_still_going_at_the_bound_times_out_without_dispatch_or_republish():
-    # The nearest to the brief's "escalate": a started run that is not finished at the bound is
-    # the `timeout` return of the node (as `test_a_timed_out_ci_fails_...`), never `no_run`.
+async def test_a_live_run_with_no_declared_job_at_the_bound_escalates_ci_without_a_return():
+    # GH-564: not `no_run` (no dispatch, no republish) and not a red `timeout` return either: the
+    # run is alive and said nothing about the suite, so the integration does not reopen.
+    state = state_of()
     ports = declared_fallback(live_run())
     clock = Clock()
-    patch = await run(state_of(), ports, clock)
-    record = patch["full_checks"]
-    assert record["passed"] is False and record["failed_step"] == "timeout"
-    assert "no_run" not in str(patch.get("escalated", ""))
+    patch = await run(state, ports, clock)
+    assert_escalated_ci(patch, ports, state)
+    assert "still going" in patch["escalated"] and "no_run" not in patch["escalated"]
+    assert "subtasks" not in patch and "full_checks" not in patch
     assert clock.now >= CFG.check_timeout_s
     assert ports.workspace.ci_ref_calls == [("publish", REF)]
     assert ports.tracker.dispatch_calls == [] and ports.commands.ran == []
