@@ -23,6 +23,7 @@ NOT_REOPENING = (
     "settle",
     "escalate_ledger",
     "escalate_adr",
+    "apply_adr_decision",
     "escalate",
     "none",
 )

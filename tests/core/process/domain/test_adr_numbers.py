@@ -446,3 +446,80 @@ def test_no_collision_in_a_set_means_none_in_any_of_its_subsets():
                 assert found(part) == {}, (whole, part)
     assert clear > 1  # the empty set and at least one more: the property is not vacuous
     assert found(paths[:1]) != {}  # and a set with a collision is not clear
+
+
+# -- GH-544: renumber_decided, the rewrite that lists what it cannot decide ---------------
+
+
+def _decided(moves, texts, lines, trees=None):
+    return adr_numbers.renumber_decided(moves, lines, trees or {}, texts)
+
+
+def test_decided_with_nothing_undecidable_is_the_renumber_result_and_no_spots():
+    texts = {
+        OLD: (None, "# ADR-0049: mine\n"),
+        "agentic/x.py": ("a = 1\n", "a = 1\n# see docs/adr/0049-mine.md\n"),
+    }
+    lines = [_line(OLD, "# ADR-0049: mine")]
+    decided = _decided({OLD: NEW}, texts, lines)
+    assert decided == adr_numbers.DecidedRenaming(_rewrite({OLD: NEW}, texts, lines), ())
+
+
+def test_decided_rewrites_all_it_can_and_lists_every_own_line_it_cannot():
+    # The one reference the owner named (app/main.py:228 in apostrophe GH-407) plus a range
+    # and a table row: `renumber` stops at the first, `renumber_decided` keeps going.
+    texts = {
+        OLD: (None, "# ADR-0049: mine\n"),
+        "app/main.py": ("", "ok = 1\n# ADR-0049 says\nx = 1  # (docs/adr/0049)\n"),
+        "docs/a.md": ("", "numbers 0049–0060\n| 0049 | row |\nsee ADR-0049\n"),
+    }
+    lines = [
+        _line("app/main.py", "# ADR-0049 says"),
+        _line("app/main.py", "x = 1  # (docs/adr/0049)"),
+        _line("docs/a.md", "numbers 0049–0060"),
+        _line("docs/a.md", "| 0049 | row |"),
+        _line("docs/a.md", "see ADR-0049"),
+    ]
+    assert isinstance(_rewrite({OLD: NEW}, texts, lines), Ambiguous)
+    decided = _decided({OLD: NEW}, texts, lines)
+    assert decided.renaming.moves == ((OLD, NEW),)
+    assert decided.renaming.texts["app/main.py"] == (
+        "ok = 1\n# ADR-0050 says\nx = 1  # (docs/adr/0049)\n"
+    )
+    assert decided.renaming.texts["docs/a.md"] == (
+        "numbers 0049–0060\n| 0049 | row |\nsee ADR-0050\n"
+    )
+    assert decided.spots == (
+        ("app/main.py", 3, "x = 1  # (docs/adr/0049)"),
+        ("docs/a.md", 1, "numbers 0049–0060"),
+        ("docs/a.md", 2, "| 0049 | row |"),
+    )
+
+
+def test_decided_lists_a_line_the_branch_cites_after_master_s_file_arrived():
+    texts = {OLD: (None, "x\n"), "d.md": ("", "ADR-0049 is theirs or mine?\n")}
+    lines = [_line("d.md", "ADR-0049 is theirs or mine?", commit="late")]
+    decided = _decided({OLD: NEW}, texts, lines, {"late": ["0049-theirs.md"]})
+    assert decided.spots == (("d.md", 1, "ADR-0049 is theirs or mine?"),)
+    assert "d.md" not in decided.renaming.texts  # held back for whoever edits the spot
+
+
+def test_decided_names_a_spot_in_the_moved_file_by_its_new_path():
+    texts = {OLD: (None, "# ADR-0049\ndecision 0049 was taken\n")}
+    lines = [_line(OLD, "decision 0049 was taken")]
+    decided = _decided({OLD: NEW}, texts, lines)
+    assert decided.spots == ((NEW, 2, "decision 0049 was taken"),)
+
+
+def test_decided_does_not_list_a_line_the_branch_did_not_add():
+    texts = {OLD: (None, "x\n"), "d.md": ("year 0049\n", "year 0049\nnew\n")}
+    assert _decided({OLD: NEW}, texts, [_line("d.md", "new")]).spots == ()
+
+
+def test_decided_keeps_the_refusals_renumber_makes_loudly():
+    with pytest.raises(ValueError, match=OLD):
+        _decided({OLD: NEW}, {}, [])
+    moves = {f"{ADR}0054-a.md": f"{ADR}0061-a.md", f"{ADR}0054-b.md": f"{ADR}0062-b.md"}
+    texts = {f"{ADR}0054-a.md": (None, "a\n"), f"{ADR}0054-b.md": (None, "b\n")}
+    result = _decided(moves, texts, [])
+    assert isinstance(result, Ambiguous) and result.reason == "duplicate_own_number"

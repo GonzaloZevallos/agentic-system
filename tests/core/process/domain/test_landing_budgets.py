@@ -3,6 +3,7 @@ upstream sha and never touches `LANDING_PASSES_MAX`; a `sync` verdict of the dia
 one more `sync_master` before any restart. Pure: facts and spent budgets in, a step out."""
 
 from dataclasses import replace
+from typing import get_args
 
 import pytest
 
@@ -203,3 +204,114 @@ def test_a_delivered_verdict_sync_diagnose_does_not_block_the_next_diagnose():
     assert landing.already_dispatched([unlandable], HEAD, "diagnose", MASTER) is True
     unmarked = {"head": HEAD, "step": "diagnose", "delivered": True}
     assert landing.already_dispatched([unmarked], HEAD, "diagnose", MASTER) is True
+
+
+# -- GH-544: the decision slots and the review an applied decision owes -------------------------
+
+T0, T1, T2 = (f"2026-11-07T0{n}:00:00+00:00" for n in range(3))
+MOVES = [["docs/adr/0070-x.md", "docs/adr/0074-x.md"]]
+
+
+def _apply(outcome="applied", head=HEAD, at=T0) -> dict:
+    return {
+        "head": head,
+        "step": "apply_adr_decision",
+        "refusal": "adr_number_taken",
+        "decision_at": at,
+        "outcome": outcome,
+        "moves": MOVES,
+    }
+
+
+def _review(head=HEAD) -> dict:
+    return {"head": head, "step": "re_review", "refusal": "head_not_reviewed"}
+
+
+def test_the_decision_cap_is_two_and_only_the_closed_outcomes_but_stale_use_a_slot():
+    assert landing.LANDING_ADR_DECISIONS_MAX == 2
+    spending = ["applied", "out_of_bounds", "role_failed", "checks_red", "still_colliding"]
+    for outcome in spending:
+        assert landing.adr_decisions_spent([_apply(outcome)]) == 1
+    assert landing.adr_decisions_spent([_apply("stale_moves"), _apply("stale_moves")]) == 0
+    assert landing.adr_decisions_spent([_apply("stale_moves"), _apply("applied")]) == 1
+
+
+def test_an_entry_written_before_the_step_existed_spends_no_slot_and_owes_no_review():
+    legacy = [{"head": HEAD, "step": "escalate_adr", "resolved_at": T0}, _review()]
+    assert landing.adr_decisions_spent(legacy) == 0
+    assert landing.adr_review_owed(legacy) is False
+    assert landing.adr_decisions_spent([{"step": "apply_adr_decision"}]) == 0
+
+
+def test_the_cap_spent_asks_the_human_again_instead_of_applying():
+    entries = [
+        {"head": HEAD, "step": "escalate_adr", "refusal": "adr_number_taken", "released_at": T1}
+    ]
+    ambiguous = landing.Ambiguous("unclassified_token", "a:1", (("a", "b"),))
+    free = _spent(adr_decisions=landing.LANDING_ADR_DECISIONS_MAX - 1)
+    full = _spent(adr_decisions=landing.LANDING_ADR_DECISIONS_MAX)
+    assert landing.adr_decision_due(entries, HEAD, ambiguous, free)
+    assert not landing.adr_decision_due(entries, HEAD, ambiguous, full)
+
+
+def test_a_restoration_does_not_give_a_slot_back_but_hides_the_idempotency_key():
+    # `adr_decisions_spent` is read over all entries; `adr_decision_due` over the live ones.
+    all_entries = [_apply("applied"), _apply("checks_red", at=T1)]
+    assert landing.adr_decisions_spent(all_entries) == 2
+    assert landing.adr_decisions_spent(all_entries[1:]) == 1
+
+
+def _review_step(spent) -> LandingStep:
+    return landing.landing_step("head_not_reviewed", _facts(), spent, ())
+
+
+def test_the_owed_review_is_not_refused_by_the_pass_budget_but_the_next_one_is():
+    full = landing.LANDING_PASSES_MAX
+    assert _review_step(_spent(passes=full)).kind == "diagnose"
+    owed = _review_step(_spent(passes=full, adr_review_owed=True))
+    assert owed == LandingStep("re_review", "head_not_reviewed")
+    assert _review_step(_spent(passes=full + 1, adr_review_owed=True)).kind == "re_review"
+
+
+def test_the_review_is_owed_until_a_re_review_is_recorded_after_the_applied_decision():
+    owed = [_apply("applied")]
+    assert landing.adr_review_owed(owed) is True
+    assert landing.adr_review_owed([*owed, _review("c" * 40)]) is False
+
+
+def test_a_sync_master_in_between_does_not_lose_the_owed_review():
+    sync = {"head": HEAD, "step": "sync_master", "refusal": "merge_conflict"}
+    assert landing.adr_review_owed([_apply("applied"), sync]) is True
+    assert landing.adr_review_owed([_apply("applied"), sync, _review()]) is False
+
+
+def test_a_decision_that_failed_owes_no_review_and_a_review_before_it_does_not_pay_it():
+    assert landing.adr_review_owed([_apply("checks_red")]) is False
+    assert landing.adr_review_owed([_review(), _apply("applied")]) is True
+    later = [_apply("applied"), _review(), _apply("applied", at=T1)]
+    assert landing.adr_review_owed(later) is True
+
+
+def test_once_the_review_is_recorded_the_pass_budget_decides_again():
+    full = landing.LANDING_PASSES_MAX
+    owed = landing.adr_review_owed([_apply("applied")])
+    assert _review_step(_spent(passes=full, adr_review_owed=owed)).kind == "re_review"
+    paid = landing.adr_review_owed([_apply("applied"), _review()])
+    assert _review_step(_spent(passes=full, adr_review_owed=paid)).kind == "diagnose"
+    assert _review_step(_spent(passes=full - 1, adr_review_owed=paid)).kind == "re_review"
+
+
+def test_the_outcome_is_the_closed_set_the_plan_names_and_entry_of_drops_any_other():
+    assert set(get_args(landing.AdrDecisionOutcome)) == {
+        "applied",
+        "stale_moves",
+        "out_of_bounds",
+        "role_failed",
+        "checks_red",
+        "still_colliding",
+    }
+    kept = landing.entry_of({"step": "apply_adr_decision", "outcome": "exploded", "moves": "x"})
+    assert "outcome" not in kept and "moves" not in kept
+    full = landing.entry_of({**_apply("stale_moves"), "head_after": "c" * 40})
+    assert full["outcome"] == "stale_moves" and full["moves"] == MOVES
+    assert full["decision_at"] == T0 and full["head_after"] == "c" * 40

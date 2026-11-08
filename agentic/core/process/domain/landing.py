@@ -18,13 +18,14 @@ from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
 
 from . import ci, merge_ci, presubmit, rules
-from .adr_numbers import Renaming
+from .adr_numbers import Ambiguous, Renaming
 from .document import HUMAN
 from .roles import LANDING_DIAGNOSER
 from .task import (
     UPSTREAM_KEY,
     VERDICT_KEY,
     VERDICT_SYNC,
+    AdrDecisionOutcome,
     Carried,
     CiLogRecord,
     DiagnosisVerdict,
@@ -56,6 +57,7 @@ LandingStepKind = Literal[
     "settle",
     "escalate_ledger",
     "escalate_adr",
+    "apply_adr_decision",
     "escalate",
     "none",
 ]
@@ -73,8 +75,11 @@ slice of their own, then go on with the rest; `LandingStep.units` is the slice),
 was possible), `escalate` (GH-371: every failing required check is also red on the base branch,
 so the task escalates to the human with no model run), `escalate_adr` (an `adr_number_taken`
 collision the renumbering rule cannot settle -- ambiguous, or its cap spent -- asks the human
-once per head, with no model run and no restart) and `none` (nothing the system can do: the
-human's)."""
+once per head, with no model run and no restart), `apply_adr_decision` (GH-544: the owner
+decided on that question; the rule recomputes the renumbering and a Developer pass edits only the
+lines it cannot decide, a model step charged to neither `LANDING_PASSES_MAX` nor the syncs) and
+`none` (nothing the system can do: the human's)."""
+
 
 RestartWhy = Literal["single_unit", "no_clean_slice", "slice_refused", "unreadable"]
 """Why a landing that exhausted its budgets restarts instead of landing a slice (GH-297):
@@ -107,6 +112,8 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_model"
         case "land_slice" | "settle" | "escalate" | "escalate_ledger" | "escalate_adr":
             return "land_checks"
+        case "apply_adr_decision":
+            return "land_model"
         case _:
             return "land_model"
 
@@ -150,6 +157,12 @@ LANDING_RENUMBERS_MAX = 3
 """`renumber` steps per task (GH-229), counted from the `landing` list and charged neither to
 `LANDING_SYNCS_MAX` nor to `LANDING_PASSES_MAX`; declared, not measured. A fourth collision
 is the `diagnose`: no further push."""
+
+LANDING_ADR_DECISIONS_MAX = 2
+"""`apply_adr_decision` entries per task (GH-544) whose `outcome` is not `stale_moves`, counted
+over all entries in `LandingSpent.adr_decisions` (`adr_decisions_spent`), so a restoration does not
+hand the budget back; declared, not measured. Charged to neither `LANDING_PASSES_MAX` nor the
+syncs, and the step never reaches `exhausted()`."""
 
 LANDING_UNSYNCED_MAX = 2
 """`sync_master` passes closed without their upstream (`lacks`) per upstream sha; declared, not
@@ -230,6 +243,11 @@ class LandingSpent:
     # GH-463: the `ci_no_verdict` escalation of the head was released (`released_no_verdict`)
     # and the pair it granted is not yet spent: the table waits instead of escalating again.
     no_verdict_released: bool = False
+    # GH-544: `apply_adr_decision` entries that used a slot (`adr_decisions_spent`), and whether
+    # the review an applied decision owes was not yet recorded (`adr_review_owed`): that one
+    # `re_review` is not refused by `LANDING_PASSES_MAX`, though it counts as a pass.
+    adr_decisions: int = 0
+    adr_review_owed: bool = False
 
     @property
     def unlandable(self) -> bool:
@@ -250,6 +268,7 @@ def landing_step(
     escalated: bool = False,
     adr_escalated: bool = False,
     names_escalated: bool = False,
+    adr_decision_due: bool = False,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
     (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
@@ -258,7 +277,9 @@ def landing_step(
     exhausted budget under it is that escalation, never a slice or a restart. `adr_escalated`
     (a *resolved* `escalate_adr` entry for this head and refusal is recorded) does the same for
     an `adr_number_taken` the renumbering cannot settle: one `escalate_adr`, then `none`, and
-    never `exhausted()`, so no diagnose, slice or restart. A model pass or a
+    never `exhausted()`, so no diagnose, slice or restart. `adr_decision_due` (`adr_decision_due`:
+    the owner decided on that question and a slot is free) makes it `apply_adr_decision`, GH-544.
+    A model pass or a
     sync past its budget is the exhaustion: the `land_slice` when `slicing` is a `Slice`, else
     the `diagnose` carrying `slicing` as its `restart_why` (`None`: as before GH-297). A task
     whose latest diagnosis is `unlandable` has no step left (`none`); one whose diagnosis said
@@ -341,6 +362,8 @@ def landing_step(
             # Released this very round (`no_verdict_released`): nothing to do but persist it.
             return step("wait") if spent.no_verdict_released else step("escalate")
         case "not_approved" | "head_not_reviewed":
+            if spent.adr_review_owed:
+                return step("re_review")  # GH-544: the review an applied decision owes, once
             return pass_("re_review")
         case "open_findings_blocking":
             if ledger_only:
@@ -385,6 +408,8 @@ def landing_step(
                 spent.renumbers < LANDING_RENUMBERS_MAX
             ):
                 return step("renumber")
+            if adr_decision_due:
+                return step("apply_adr_decision")
             return step("none") if adr_escalated else step("escalate_adr")
         case "merge_failed":
             return exhausted()
@@ -857,6 +882,7 @@ def already_dispatched(
     *,
     unstarted: bool = False,
     names: Sequence[str] = (),
+    decision_at: str | None = None,
 ) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
@@ -872,7 +898,9 @@ def already_dispatched(
     With `unstarted` (`rules.landing_pass` says the pass is `unstarted`, GH-450) the last entry
     is recorded and the executor never reopened anything, so it is not taken and `land` runs it
     again on the same entry. An `escalate` asked with `names` (GH-485) is taken only by an entry
-    that recorded the same names, so a new set of wrong names is asked again on the same head."""
+    that recorded the same names, so a new set of wrong names is asked again on the same head. An
+    `escalate_adr` is taken as `adr_asked` says (GH-544), and an `apply_adr_decision` only by an
+    entry of the same head recorded for the same `decision_at`."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
@@ -894,7 +922,10 @@ def already_dispatched(
             recorded = entry.get(UPSTREAM_KEY)
             return not isinstance(recorded, str) or recorded == upstream
         if step == "escalate_adr":
-            return bool(entry.get("resolved_at"))
+            refusal = entry.get("refusal")
+            return adr_asked(landing, head, refusal if isinstance(refusal, str) else None)
+        if step == "apply_adr_decision":
+            return decision_at is not None and entry.get("decision_at") == decision_at
         if step == "escalate" and names:
             return entry.get("names") == list(names)
         if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
@@ -902,6 +933,98 @@ def already_dispatched(
         return True
 
     return step != "land_slice" and any(taken(entry) for entry in landing)
+
+
+def adr_asked(entries: Sequence[Mapping[str, object]], head: str, refusal: str | None) -> bool:
+    """Whether an `escalate_adr` question is still pending on `head` for `refusal` (GH-544): a
+    *resolved* `escalate_adr` entry of that head and refusal placed after the last
+    `apply_adr_decision` entry of the same head. The one reader of that fact: the table's
+    `adr_escalated` and `already_dispatched` both call it, and nothing reads the entry's
+    `resolved_at` on its own."""
+    last_applied = max(
+        (
+            index
+            for index, entry in enumerate(entries)
+            if entry.get("step") == "apply_adr_decision" and entry.get("head") == head
+        ),
+        default=-1,
+    )
+    return any(
+        entry.get("step") == "escalate_adr"
+        and entry.get("head") == head
+        and entry.get("refusal") == refusal
+        and bool(entry.get("resolved_at"))
+        for entry in entries[last_applied + 1 :]
+    )
+
+
+_ADR_DECISION_SPENT: frozenset[str] = frozenset(
+    {"applied", "out_of_bounds", "role_failed", "checks_red", "still_colliding"}
+)
+
+
+def adr_decisions_spent(entries: Sequence[Mapping[str, object]]) -> int:
+    """The `apply_adr_decision` entries that used a slot of `LANDING_ADR_DECISIONS_MAX`: those
+    whose `outcome` is one of the closed set but `stale_moves`. Read over all entries, as
+    `renumbers` is, so a restoration does not give a slot back (GH-544)."""
+    return sum(
+        1
+        for entry in entries
+        if entry.get("step") == "apply_adr_decision" and entry.get("outcome") in _ADR_DECISION_SPENT
+    )
+
+
+def adr_decision_due(
+    entries: Sequence[Mapping[str, object]],
+    head: str,
+    collision: Ambiguous | Renaming | None,
+    spent: LandingSpent,
+) -> bool:
+    """Whether an owner's decision on `head` is waiting for its `apply_adr_decision` (GH-544):
+    the last `escalate_adr` entry of the head carrying `released_at` has no
+    `apply_adr_decision` of the given (live) `entries` with that `decision_at`, `collision` is
+    an `Ambiguous` with moves to apply, and `spent` has a free slot. The released entry need not
+    carry `moves`: one written by GH-412 is eligible. Entries without `released_at`, or other
+    heads', never count."""
+    released_at = next(
+        (
+            entry.get("released_at")
+            for entry in reversed(entries)
+            if entry.get("step") == "escalate_adr"
+            and entry.get("head") == head
+            and entry.get("released_at")
+        ),
+        None,
+    )
+    if released_at is None:
+        return False
+    if not isinstance(collision, Ambiguous) or not collision.moves:
+        return False
+    if spent.adr_decisions >= LANDING_ADR_DECISIONS_MAX:
+        return False
+    return not any(
+        entry.get("step") == "apply_adr_decision"
+        and entry.get("head") == head
+        and entry.get("decision_at") == released_at
+        for entry in entries
+    )
+
+
+def adr_review_owed(entries: Sequence[Mapping[str, object]]) -> bool:
+    """Whether the review an applied decision owes is still to be recorded (GH-544): the last
+    `apply_adr_decision` with `outcome: applied` has no `re_review` entry after it, on any head,
+    so a `sync_master` in between does not lose it. Feeds `LandingSpent.adr_review_owed`."""
+    applied = max(
+        (
+            index
+            for index, entry in enumerate(entries)
+            if entry.get("step") == "apply_adr_decision" and entry.get("outcome") == "applied"
+        ),
+        default=None,
+    )
+    if applied is None:
+        return False
+    return not any(entry.get("step") == "re_review" for entry in entries[applied + 1 :])
 
 
 def landing_open(state: TaskState) -> bool:
@@ -941,6 +1064,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         "restart_why",
         "released_at",
         "ci_released",
+        "decision_at",
+        "head_after",
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
@@ -973,7 +1098,28 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["failure"] = failure
     if (logs := _ci_logs_of(raw.get("ci_logs"))) is not None:
         out["ci_logs"] = logs
+    # GH-544, `apply_adr_decision` entries; optional, read with `.get` everywhere.
+    for outcome in get_args(AdrDecisionOutcome):
+        if raw.get("outcome") == outcome:
+            out["outcome"] = outcome
+    if (moves := _moves_of(raw.get("moves"))) is not None:
+        out["moves"] = moves
     return out
+
+
+def _moves_of(value: object) -> list[list[str]] | None:
+    """`value` as the `moves` of an `apply_adr_decision` entry: `[old, new]` path pairs, `None`
+    when it is not one."""
+    if not isinstance(value, list):
+        return None
+    pairs = [
+        [str(pair[0]), str(pair[1])]
+        for pair in value
+        if isinstance(pair, list | tuple)
+        and len(pair) == 2
+        and all(isinstance(path, str) for path in pair)
+    ]
+    return pairs if len(pairs) == len(value) else None
 
 
 def _ci_logs_of(value: object) -> list[CiLogRecord] | None:
@@ -1096,7 +1242,14 @@ def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
         if isinstance(entries, list)
         else []
     )
-    last = max((i for i, e in enumerate(written) if e.get("step") == "diagnose"), default=None)
+    if adr_escalation_entry(raw) is not None:
+        # GH-544: the question was `escalate_adr`; its entry carries the release, so
+        # `adr_decision_due` finds the decision and the diagnose calendar is left alone.
+        last = max(
+            (i for i, e in enumerate(written) if e.get("step") == "escalate_adr"), default=None
+        )
+    else:
+        last = max((i for i, e in enumerate(written) if e.get("step") == "diagnose"), default=None)
     if last is not None:
         written[last] = {**written[last], "released_at": at}
     return {
@@ -1107,6 +1260,30 @@ def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
         "landing": written,
         "sections": {HUMAN: rules.human_section(_with_sections(raw), str(reason), decision)},
     }
+
+
+def adr_escalation_entry(raw: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The live `escalate_adr` entry when `raw` is waiting on the owner's answer to it (GH-544):
+    the document is escalated and the last live entry is a resolved `escalate_adr`. Recorded
+    `moves` are not required, so an entry written before this step existed qualifies. Pure."""
+    if not raw.get("escalated"):
+        return None
+    live = live_entries(raw)
+    if not live:
+        return None
+    last = live[-1]
+    if last.get("step") != "escalate_adr" or not last.get("resolved_at"):
+        return None
+    return last
+
+
+def release_baseline(raw: Mapping[str, object]) -> datetime | None:
+    """The instant an owner's comment must come after to release the escalation of `raw`
+    (GH-544): the `resolved_at` of the `escalate_adr` entry when `adr_escalation_entry` holds,
+    else the last diagnose's `at` (`diagnose_at`). `None` when it cannot be read as an aware
+    time."""
+    entry = adr_escalation_entry(raw)
+    return _aware(entry.get("resolved_at") if entry is not None else diagnose_at(raw))
 
 
 def _last_escalate(

@@ -318,8 +318,10 @@ def test_escalate_adr_is_a_live_step_but_not_an_always_taken_one():
     assert not landing_plan.takes_action("escalate_adr", frozenset())
 
 
-def _adr_step(raw: dict) -> landing.LandingStep:
-    facts = rules.MergeFacts(
+def _adr_facts(
+    collision=adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0054", (("a", "b"),)),
+):
+    return rules.MergeFacts(
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,
@@ -335,9 +337,12 @@ def _adr_step(raw: dict) -> landing.LandingStep:
         checks_master="b" * 40,
         checks_passed=True,
         current_master="b" * 40,
-        adr_collision=adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0054"),
+        adr_collision=collision,
     )
-    return landing_plan.step_for(raw, "adr_number_taken", facts)
+
+
+def _adr_step(raw: dict) -> landing.LandingStep:
+    return landing_plan.step_for(raw, "adr_number_taken", _adr_facts())
 
 
 def test_step_for_asks_until_the_escalation_is_resolved_then_waits():
@@ -346,6 +351,173 @@ def test_step_for_asks_until_the_escalation_is_resolved_then_waits():
     assert _adr_step({"landing": [_asked("escalate_adr", resolved_at="t")]}).kind == "none"
     other_head = _asked("escalate_adr", head="c" * 40, resolved_at="t")
     assert _adr_step({"landing": [other_head]}).kind == "escalate_adr"
+
+
+# --- GH-544: an owner's decision on an `escalate_adr` question releases it ---
+
+ASKED_AT = "2026-11-07T10:00:00+00:00"
+ESCALATED_COMMENT_AT = "2026-11-07T10:00:10+00:00"
+DECIDED_AT = "2026-11-07T11:00:00+00:00"
+
+
+def _adr_raw(*extra: dict, escalated: bool = True, resolved_at: str | None = ASKED_AT) -> dict:
+    entry = _asked("escalate_adr", at=ASKED_AT)
+    if resolved_at is not None:
+        entry["resolved_at"] = resolved_at
+    return {
+        "escalated": "ADR collision" if escalated else None,
+        "escalation_class": "questions",
+        "landing": [entry, *extra],
+    }
+
+
+def _adr_ports(*comments: tuple[str, str], labels=(), state="OPEN"):
+    ports = memory_ports(tracker=MemoryTracker())
+    ports.tracker.timestamped["GH-9"] = [IssueComment(body, at) for body, at in comments]
+    ports.tracker.states[9] = IssueState(state, "", (), None, labels)
+    return ports
+
+
+def _adr_release(raw: dict, *comments: tuple[str, str], **world):
+    ports = _adr_ports(*comments, **world)
+    cfg = Configuration(product_dir="/p")
+    return landing_plan.release(ports, cfg, "GH-9", raw, 9, head=HEAD)
+
+
+OWNER_DECIDED = (("Escalated: ADR collision", ESCALATED_COMMENT_AT), ("renumber it", DECIDED_AT))
+
+
+def test_release_asked_holds_back_an_adr_question_on_a_collision_a_decision_can_apply():
+    raw = _adr_raw()
+    assert landing_plan.release_asked(raw, "none", refusal="adr_number_taken", facts=_adr_facts())
+
+
+@pytest.mark.parametrize(
+    ("raw", "refusal", "collision", "head"),
+    [
+        (_adr_raw(), None, "ambiguous", HEAD),
+        (_adr_raw(), "merge_failed", "ambiguous", HEAD),
+        (_adr_raw(escalated=False), "adr_number_taken", "ambiguous", HEAD),
+        (_adr_raw(resolved_at=None), "adr_number_taken", "ambiguous", HEAD),
+        (_adr_raw(), "adr_number_taken", "ambiguous", "c" * 40),
+        (_adr_raw(), "adr_number_taken", "no_moves", HEAD),
+        (_adr_raw(), "adr_number_taken", "renaming", HEAD),
+        (_adr_raw(), "adr_number_taken", None, HEAD),
+        (
+            _adr_raw(
+                {"head": HEAD, "step": "apply_adr_decision", "outcome": "checks_red", "at": "1"},
+                {"head": HEAD, "step": "apply_adr_decision", "outcome": "role_failed", "at": "2"},
+            ),
+            "adr_number_taken",
+            "ambiguous",
+            HEAD,
+        ),
+    ],
+    ids=[
+        "no_refusal",
+        "other_refusal",
+        "not_escalated",
+        "question_open",
+        "other_head",
+        "no_moves",
+        "renaming",
+        "no_collision",
+        "cap_spent",
+    ],
+)
+def test_release_asked_is_false_when_any_part_of_the_adr_shape_is_missing(
+    raw, refusal, collision, head
+):
+    found = {
+        "ambiguous": adr_numbers.Ambiguous("unclassified_token", "d", (("a", "b"),)),
+        "no_moves": adr_numbers.Ambiguous("unclassified_token", "d"),
+        "renaming": adr_numbers.Renaming((("a", "b"),), {}),
+        None: None,
+    }[collision]
+    facts = _adr_facts(found)
+    facts = facts if head == HEAD else rules.MergeFacts(**{**facts.__dict__, "pr_head": head})
+    assert not landing_plan.release_asked(raw, "none", refusal=refusal, facts=facts)
+
+
+def test_release_asked_without_refusal_and_facts_is_what_it_was():
+    assert not landing_plan.release_asked(_adr_raw(), "none")
+    assert landing_plan.release_asked(_adr_raw(), "diagnose")
+    assert not landing_plan.release_asked(_adr_raw(), "renumber")
+
+
+def test_an_owner_comment_after_the_adr_question_releases_it_and_the_table_applies_it():
+    raw = _adr_raw()
+    outcome = _adr_release(raw, *OWNER_DECIDED)
+    assert (outcome.released, outcome.decision) == (True, "renumber it")
+    view = apply(raw, landing_plan.release_patch(raw, outcome, "b" * 40, DECIDED_AT))
+    assert not view.get("escalated")
+    assert _adr_step(raw).kind == "none"
+    assert _adr_step(view).kind == "apply_adr_decision"
+
+
+def test_a_legacy_adr_entry_without_moves_is_released_and_applied_too():
+    raw = _adr_raw()
+    assert "moves" not in raw["landing"][0]
+    outcome = _adr_release(raw, *OWNER_DECIDED)
+    assert outcome.released
+
+
+@pytest.mark.parametrize(
+    ("comments", "world"),
+    [
+        ((), {}),
+        ((("go on", "2026-11-07T09:00:00+00:00"), OWNER_DECIDED[0]), {}),
+        (OWNER_DECIDED, {"labels": ("needs-human",)}),
+        (OWNER_DECIDED, {"labels": None}),
+        (OWNER_DECIDED, {"state": "CLOSED"}),
+    ],
+    ids=["no_comment", "comment_before_the_escalation", "needs_human", "unreadable", "closed"],
+)
+def test_the_adr_release_waits_while_a_condition_fails(comments, world):
+    outcome = _adr_release(_adr_raw(), *comments, **world)
+    assert (outcome.released, outcome.why) == (False, "waiting_on_human")
+
+
+def test_the_adr_release_is_measured_against_the_question_not_the_last_diagnose():
+    old_diagnose = {
+        "head": HEAD,
+        "step": "diagnose",
+        "delivered": True,
+        "at": "2026-11-07T08:00:00+00:00",
+    }
+    raw = {**_adr_raw(), "landing": [old_diagnose, *_adr_raw()["landing"]]}
+    comments = (
+        ("Escalated: ADR collision", "2026-11-07T08:30:00+00:00"),
+        ("later", "2026-11-07T08:40:00+00:00"),
+    )
+    # An `Escalated:` comment that predates the question is not the question's.
+    assert not _adr_release(raw, *comments).released
+    assert _adr_release(raw, *OWNER_DECIDED).released
+
+
+def test_an_apply_entry_keyed_to_the_decision_is_not_applied_again():
+    raw = _adr_raw()
+    released = apply(
+        raw,
+        landing_plan.release_patch(
+            raw, landing_plan.Release("x", "released", True), "b" * 40, DECIDED_AT
+        ),
+    )
+    done = {
+        "head": HEAD,
+        "step": "apply_adr_decision",
+        "decision_at": DECIDED_AT,
+        "outcome": "applied",
+        "at": DECIDED_AT,
+    }
+    again = {**released, "landing": [*released["landing"], done]}
+    assert _adr_step(released).kind == "apply_adr_decision"
+    assert _adr_step(again).kind != "apply_adr_decision"
+    assert landing_plan.adr_decision_at(landing_plan.live_entries(released), HEAD) == DECIDED_AT
+
+
+def test_apply_adr_decision_is_a_live_step():
+    assert landing_plan.takes_action("apply_adr_decision", landing_plan.LIVE_STEPS)
 
 
 # --- GH-442: a landing escalation only CI caused is released by the table, never by a restart ---

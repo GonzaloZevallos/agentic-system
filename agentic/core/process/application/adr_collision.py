@@ -14,10 +14,18 @@ there is no cache. Which numbers collide, what they become and what is rewritten
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from ..domain import adr_numbers
-from ..domain.adr_numbers import ADR_DIR, Ambiguous, OwnAdr, OwnLine, Renaming
+from ..domain.adr_numbers import (
+    ADR_DIR,
+    Ambiguous,
+    DecidedRenaming,
+    OwnAdr,
+    OwnLine,
+    Renaming,
+)
 from .ports import Ports
 
 
@@ -27,18 +35,19 @@ def touches_adrs(paths: Sequence[str] | None) -> bool:
     return any(path.startswith(f"{ADR_DIR}/") for path in paths or ())
 
 
-def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous | None:
-    """What the branch at `head` has to renumber to land on `master`, `Ambiguous` when that
-    cannot be decided mechanically, `None` when no own ADR takes a number master holds.
+@dataclass(frozen=True)
+class _Inputs:
+    """What `renumber` and `renumber_decided` are given, read once from git."""
 
-    An own ADR is a file one of the branch's non-merge commits added in `master..head`; one a
-    later commit of the branch removed or renamed (a renumber already done) is not, so it
-    must still be in the tree at `head`.
+    moves: Mapping[str, str]
+    lines: Sequence[OwnLine]
+    trees: Mapping[str, Sequence[str]]
+    texts: Mapping[str, tuple[str | None, str]]
 
-    The first pass asks `collisions` about every added ADR against master's tree: a subset
-    has neither a duplicate number nor a number master holds under another name unless the
-    whole has it, so `{}` there is `None` for any head, after one tree read. That result only
-    filters, it is never returned: the answer is computed on the ADRs still at `head`."""
+
+def _inputs(ports: Ports, master: str, head: str) -> _Inputs | Ambiguous | None:
+    """The reads of `adr_collision` (see the module docstring for what each costs): `None`
+    when no own ADR takes a number master holds, an `Ambiguous` for a duplicate own number."""
     workspace = ports.workspace
     added = workspace.added_adrs(master, head)
     if not added:
@@ -68,4 +77,33 @@ def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous 
         text = workspace.show(head, path)
         if text is not None:
             texts[path] = (workspace.show(master, path), text)
-    return adr_numbers.renumber(moves, lines, trees, texts)
+    return _Inputs(moves, lines, trees, texts)
+
+
+def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous | None:
+    """What the branch at `head` has to renumber to land on `master`, `Ambiguous` when that
+    cannot be decided mechanically, `None` when no own ADR takes a number master holds.
+
+    An own ADR is a file one of the branch's non-merge commits added in `master..head`; one a
+    later commit of the branch removed or renamed (a renumber already done) is not, so it
+    must still be in the tree at `head`.
+
+    The first pass asks `collisions` about every added ADR against master's tree: a subset
+    has neither a duplicate number nor a number master holds under another name unless the
+    whole has it, so `{}` there is `None` for any head, after one tree read. That result only
+    filters, it is never returned: the answer is computed on the ADRs still at `head`."""
+    read = _inputs(ports, master, head)
+    if not isinstance(read, _Inputs):
+        return read
+    return adr_numbers.renumber(read.moves, read.lines, read.trees, read.texts)
+
+
+def adr_decided(ports: Ports, master: str, head: str) -> DecidedRenaming | Ambiguous | None:
+    """`adr_collision` for an owner's decision (GH-544): the same reads (`_inputs`), then
+    `renumber_decided`, which applies every rewrite the grammar can make and lists the own lines
+    it cannot (`spots`). A `DecidedRenaming` with no spots is a collision `adr_collision` calls
+    a `Renaming`; one with spots is the `Ambiguous` it calls so."""
+    read = _inputs(ports, master, head)
+    if not isinstance(read, _Inputs):
+        return read
+    return adr_numbers.renumber_decided(read.moves, read.lines, read.trees, read.texts)

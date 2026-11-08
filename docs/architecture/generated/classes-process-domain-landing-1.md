@@ -23,6 +23,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 ```mermaid
 classDiagram
     class adr_numbers__Ambiguous["Ambiguous"]
+    class adr_numbers__DecidedRenaming["DecidedRenaming"]
     class adr_numbers__OwnAdr["OwnAdr"]
     class adr_numbers__OwnLine["OwnLine"]
     class adr_numbers__Renaming["Renaming"]
@@ -32,5 +33,5 @@ classDiagram
     class cost_history__Bucket["Bucket"]
     class cost_history__Floor["Floor"]
     class cost_history__History["History"]
-    class cost_history__Pair["Pair"]
+    adr_numbers__DecidedRenaming --> adr_numbers__Renaming
 ```

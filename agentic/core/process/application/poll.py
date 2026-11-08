@@ -419,7 +419,10 @@ def _landing_step(
     step is the one `landing_plan.released_step` gives on the released view, the one `land`
     recomputes, so the child registers under the run kind of the step it will take."""
     waiting = cfg is not None and landing_plan.release_asked(
-        raw, landing_plan.step_for(raw, refusal, facts).kind
+        raw,
+        landing_plan.step_for(raw, refusal, facts).kind,
+        refusal=refusal,
+        facts=facts,
     )
     outcome = (
         landing_plan.release(

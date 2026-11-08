@@ -172,6 +172,7 @@ class EvaluationWorkspace:
             "remove_checkout",
             "rename_branch",
             "repository_at",
+            "reset_hard",
             "restore_clean",
             "setup_tree",
             "show",

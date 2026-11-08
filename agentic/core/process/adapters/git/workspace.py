@@ -255,6 +255,10 @@ class GitWorkspace:
         self._git("checkout", "--", ".", cwd=path)
         self._git("clean", "-fd", cwd=path)
 
+    def reset_hard(self, path: Path, sha: str) -> None:
+        self._git("reset", "--hard", sha, cwd=path)
+        self._git("clean", "-fd", cwd=path)
+
     def is_committed(self, path: Path) -> bool:
         # The same flags `system_version` uses, so the two never disagree about a tree.
         return not self._git("status", "--porcelain", "--untracked-files=no", cwd=path)

@@ -12,6 +12,7 @@ from agentic.core.process.domain import ci, document, landing, rules
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import (
+    AdrDecisionOutcome,
     Carried,
     CiCause,
     CiLogRecord,
@@ -479,6 +480,8 @@ _SAMPLE: dict[object, object] = {
     FailureReason: "account_limit",
     DiagnosisVerdict: "sync",
     CiCause: "no_run",
+    AdrDecisionOutcome: "applied",
+    list[list[str]]: [["a", "b"]],
 }
 
 

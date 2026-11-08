@@ -166,22 +166,47 @@ def _row_at(rows: Sequence[tuple[int, str]], offset: int) -> tuple[int, str]:
     return index, rows[index - 1][1]
 
 
-def renumber(
+@dataclass(frozen=True)
+class DecidedRenaming:
+    """What `renumber_decided` made of a collision `renumber` calls `Ambiguous`: the
+    `renaming` with every rewrite the grammar can decide, and the `spots`, every own line
+    it cannot (`unclassified_token`, `range` or `cites_master_after_sync`) as `(path, line,
+    text)`: the path as written (the new one for a moved file), the 1-based line, and the
+    line as `renaming` leaves it, which is the line a pass that edits the spots finds."""
+
+    renaming: Renaming
+    spots: tuple[tuple[str, int, str], ...]
+
+
+@dataclass(frozen=True)
+class _Grammar:
+    """The inputs of one rewrite, read once: what `renumber` and `renumber_decided` share."""
+
+    carried: tuple[tuple[str, str], ...]
+    numbers: dict[str, str]
+    names: dict[str, str]
+    pattern: re.Pattern[str]
+    own_by_path: dict[str, dict[str, list[str]]]
+    trees: Mapping[str, Sequence[str]]
+
+
+@dataclass
+class _Scan:
+    """One text's rewrite and what in it is undecided, each as `(line index, line)`, in the
+    order `renumber` reports them: ranges, then citations of master's file, then the rest."""
+
+    text: str
+    ranges: list[tuple[int, str]]
+    cites: list[tuple[int, str]]
+    unclassified: list[tuple[int, str]]
+
+
+def _grammar(
     moves: Mapping[str, str],
     lines: Sequence[OwnLine],
     trees: Mapping[str, Sequence[str]],
     texts: Mapping[str, tuple[str | None, str]],
-) -> Renaming | Ambiguous:
-    """Apply `moves` (old path -> new path) to `texts` (path -> its text at master, `None`
-    if absent, and at the branch head), in one simultaneous substitution per text.
-
-    The closed grammar: (a) the full old file name, with or without a `docs/adr/` or
-    `adr/` prefix, anywhere; (b) `ADR-NNNN` and `ADR NNNN`; (c) a list after one `ADR` or
-    `ADRs` head joined by `,`, `and`, `y` or `/`. (b) and (c) are rewritten only on lines
-    the branch's own commits added. `trees` maps a commit to the ADR names in its tree.
-    A renumbered number left on an own line outside the grammar makes it `Ambiguous`, and so
-    does one that is the end of a range (`ADR-0054…ADR-0060`): moving one end silently would
-    change what the range names. Every `Ambiguous` carries `moves`."""
+) -> _Grammar | Ambiguous:
     carried = tuple(sorted(moves.items()))
     numbers: dict[str, str] = {}
     names: dict[str, str] = {}
@@ -198,7 +223,6 @@ def renumber(
     own_by_path: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     for line in lines:
         own_by_path[line.path][line.text].append(line.commit)
-
     pattern = re.compile(
         r"(?P<prefix>docs/adr/|adr/)?(?<![\w-])(?P<name>"
         + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
@@ -210,56 +234,127 @@ def renumber(
         + _ITEM
         + ")*)"
     )
+    return _Grammar(carried, numbers, names, pattern, own_by_path, trees)
+
+
+def _scan(
+    grammar: _Grammar, path: str, at_master: str | None, at_head: str, *, hold: bool
+) -> _Scan:
+    """Rewrite `at_head` in one simultaneous substitution and collect what is undecided.
+    With `hold`, a line holding a range, and an item list that cites master's file, stay as
+    they were: the lines whoever edits the spots finds untouched."""
+    numbers, names = grammar.numbers, grammar.names
+    master_lines = set((at_master or "").splitlines())
+    own = {t: c for t, c in grammar.own_by_path.get(path, {}).items() if t not in master_lines}
+    rows = _rows(at_head)
+    covered: list[tuple[int, int]] = []
+    ranges: list[tuple[int, str]] = []
+    cites: list[tuple[int, str]] = []
 
     def held(commit: str, number: str) -> bool:
-        return any(number_of(n) == number and n not in names for n in trees.get(commit, ()))
+        return any(number_of(n) == number and n not in names for n in grammar.trees.get(commit, ()))
 
-    def rewrite(path: str, at_master: str | None, at_head: str) -> str | Ambiguous:
-        master_lines = set((at_master or "").splitlines())
-        own = {t: c for t, c in own_by_path.get(path, {}).items() if t not in master_lines}
-        rows = _rows(at_head)
-        covered: list[tuple[int, int]] = []
-        problems: list[Ambiguous] = []
+    for index, (_, line) in enumerate(rows, 1):
+        if line not in own:
+            continue
+        for ends in _RANGE.finditer(line):
+            if ends.group("first") in numbers or ends.group("last") in numbers:
+                ranges.append((index, line))
+                break
+    range_lines = {index for index, _ in ranges}
 
-        for index, (_, line) in enumerate(rows, 1):
-            if line not in own:
-                continue
-            for ends in _RANGE.finditer(line):
-                if ends.group("first") in numbers or ends.group("last") in numbers:
-                    return Ambiguous("range", f"{path}:{index}: {line}", carried)
-
-        def substitute(found: re.Match[str]) -> str:
-            if found.group("name") is not None:
-                covered.append(found.span())
-                return (found.group("prefix") or "") + names[found.group("name")]
-            index, line = _row_at(rows, found.start())
-            if line not in own:
-                return found.group(0)
-            cited = [n for n in _DIGITS.findall(found.group("items")) if n in numbers]
-            if any(held(commit, n) for n in cited for commit in own[line]):
-                problems.append(
-                    Ambiguous("cites_master_after_sync", f"{path}:{index}: {line}", carried)
-                )
+    def substitute(found: re.Match[str]) -> str:
+        named = found.group("name") is not None
+        index, line = _row_at(rows, found.start()) if hold or not named else (0, "")
+        if hold and index in range_lines:
+            return found.group(0)
+        if named:
             covered.append(found.span())
-            return _DIGITS.sub(lambda i: numbers.get(i.group(0), i.group(0)), found.group(0))
+            return (found.group("prefix") or "") + names[found.group("name")]
+        if line not in own:
+            return found.group(0)
+        cited = [n for n in _DIGITS.findall(found.group("items")) if n in numbers]
+        covered.append(found.span())
+        if any(held(commit, n) for n in cited for commit in own[line]):
+            cites.append((index, line))
+            if hold:
+                return found.group(0)
+        return _DIGITS.sub(lambda i: numbers.get(i.group(0), i.group(0)), found.group(0))
 
-        rewritten = pattern.sub(substitute, at_head)
-        if problems:
-            return problems[0]
-        for index, (start, line) in enumerate(rows, 1):
-            if line not in own:
-                continue
-            for token in _TOKEN.finditer(line):
-                spot = start + token.start()
-                if token.group(0) in numbers and not any(a <= spot < b for a, b in covered):
-                    return Ambiguous("unclassified_token", f"{path}:{index}: {line}", carried)
-        return rewritten
+    rewritten = grammar.pattern.sub(substitute, at_head)
+    unclassified: list[tuple[int, str]] = []
+    for index, (start, line) in enumerate(rows, 1):
+        if line not in own:
+            continue
+        for token in _TOKEN.finditer(line):
+            spot = start + token.start()
+            if token.group(0) in numbers and not any(a <= spot < b for a, b in covered):
+                unclassified.append((index, line))
+                break
+    return _Scan(rewritten, ranges, cites, unclassified)
 
+
+def renumber(
+    moves: Mapping[str, str],
+    lines: Sequence[OwnLine],
+    trees: Mapping[str, Sequence[str]],
+    texts: Mapping[str, tuple[str | None, str]],
+) -> Renaming | Ambiguous:
+    """Apply `moves` (old path -> new path) to `texts` (path -> its text at master, `None`
+    if absent, and at the branch head), in one simultaneous substitution per text.
+
+    The closed grammar: (a) the full old file name, with or without a `docs/adr/` or
+    `adr/` prefix, anywhere; (b) `ADR-NNNN` and `ADR NNNN`; (c) a list after one `ADR` or
+    `ADRs` head joined by `,`, `and`, `y` or `/`. (b) and (c) are rewritten only on lines
+    the branch's own commits added. `trees` maps a commit to the ADR names in its tree.
+    A renumbered number left on an own line outside the grammar makes it `Ambiguous`, and so
+    does one that is the end of a range (`ADR-0054…ADR-0060`): moving one end silently would
+    change what the range names. Every `Ambiguous` carries `moves`."""
+    grammar = _grammar(moves, lines, trees, texts)
+    if isinstance(grammar, Ambiguous):
+        return grammar
     written: dict[str, str] = {}
     for path, (at_master, at_head) in sorted(texts.items()):
-        result = rewrite(path, at_master, at_head)
-        if isinstance(result, Ambiguous):
-            return result
-        if path in moves or result != at_head:
-            written[moves.get(path, path)] = result
-    return Renaming(tuple(sorted(moves.items())), written)
+        scan = _scan(grammar, path, at_master, at_head, hold=False)
+        undecided: tuple[tuple[AmbiguityReason, list[tuple[int, str]]], ...] = (
+            ("range", scan.ranges),
+            ("cites_master_after_sync", scan.cites),
+            ("unclassified_token", scan.unclassified),
+        )
+        for reason, found in undecided:
+            if found:
+                index, line = found[0]
+                return Ambiguous(reason, f"{path}:{index}: {line}", grammar.carried)
+        if path in moves or scan.text != at_head:
+            written[moves.get(path, path)] = scan.text
+    return Renaming(grammar.carried, written)
+
+
+def renumber_decided(
+    moves: Mapping[str, str],
+    lines: Sequence[OwnLine],
+    trees: Mapping[str, Sequence[str]],
+    texts: Mapping[str, tuple[str | None, str]],
+) -> DecidedRenaming | Ambiguous:
+    """`renumber` that does not stop at the first thing it cannot decide (GH-544): the same
+    grammar and the same single simultaneous substitution, but every own line left as an
+    `unclassified_token`, a `range` or a `cites_master_after_sync` is kept as it was and
+    listed in `spots`, sorted by path and line, so an owner's decision can be applied to just
+    those lines. A moved number twice is still `Ambiguous("duplicate_own_number")`: no spot
+    is there to edit."""
+    grammar = _grammar(moves, lines, trees, texts)
+    if isinstance(grammar, Ambiguous):
+        return grammar
+    written: dict[str, str] = {}
+    spots: list[tuple[str, int, str]] = []
+    for path, (at_master, at_head) in sorted(texts.items()):
+        scan = _scan(grammar, path, at_master, at_head, hold=True)
+        target = moves.get(path, path)
+        if path in moves or scan.text != at_head:
+            written[target] = scan.text
+        rows = scan.text.splitlines()
+        undecided = {
+            index for found in (scan.ranges, scan.cites, scan.unclassified) for index, _ in found
+        }
+        spots.extend((target, index, rows[index - 1]) for index in sorted(undecided))
+    return DecidedRenaming(Renaming(grammar.carried, written), tuple(sorted(spots)))
