@@ -5,6 +5,7 @@ in-memory ports and the `Launcher` fake: no `gh`, no `Popen`, no worktree."""
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from typing import Literal, get_args
 
@@ -16,7 +17,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
     Upstream,
 )
-from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import ci, document, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.landing import LandingStepKind
 from agentic.core.process.domain.task import PullRequest
@@ -28,7 +29,13 @@ from tests.core.process.application.test_poll import (
     _paused,
     _round,
 )
-from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryTracker, memory_ports
+from tests.fakes import (
+    FakeLauncher,
+    MemoryRunRegistry,
+    MemoryStack,
+    MemoryTracker,
+    memory_ports,
+)
 
 HEAD = "a" * 40
 MASTER = "b" * 40
@@ -922,3 +929,44 @@ def test_a_close_docs_record_with_a_foreign_parent_or_other_paths_is_not_covered
     assert _decision(_reloaded(close_docs=foreign)).reason == "head_not_reviewed"
     outside = {"parent": HEAD, "head": DOCS_HEAD, "paths": ["agentic/core/x.py"]}
     assert _decision(_reloaded(close_docs=outside)).reason == "head_not_reviewed"
+
+
+# GH-552: the poller assesses a no_verdict pair of the current master as one more read to make.
+def _ci_no_verdict_world(**pair_over):
+    pair = {
+        "head": HEAD,
+        "master": MASTER,
+        "tested": "d" * 40,
+        "mode": "push",
+        "published_at": "2026-11-03T10:00:00+00:00",
+        "republished": True,
+        "superseded": [],
+        "outcome": "no_verdict",
+        "cause": "no_run",
+        **pair_over,
+    }
+    ports = _ports(5, checks=False, merge_ci=[pair], escalated=True)
+    ports.workspace.contains_answer = "no"
+    ports = dataclasses.replace(ports, stack=MemoryStack(checks={"tests": "x"}, ci=("web",)))
+    own = ci.CiCheck("web", "COMPLETED", "SUCCESS", "https://github.com/o/r/actions/runs/1/job/5")
+    ports.tracker.ci_reports = [
+        ci.CiReport(HEAD, "master", "9" * 40, "2026-11-03T09:00:00+00:00", (own,))
+    ]
+    return ports
+
+
+def _assessed(ports):
+    found = poll.assess_merge(
+        ports, "GH-5", ports.documents.load("GH-5") or {}, 5, frozenset(), MASTER
+    )
+    assert isinstance(found, poll.MergeAssessment)
+    return found.decision
+
+
+def test_an_escalated_task_with_a_rereadable_no_verdict_pair_is_assessed_ci_run():
+    assert _assessed(_ci_no_verdict_world()) == rules.MergeDecision("ci_run", None)
+
+
+def test_the_same_pair_once_reread_is_assessed_ci_no_verdict():
+    ports = _ci_no_verdict_world(reread_at="2026-11-03T10:30:00+00:00")
+    assert _assessed(ports) == rules.MergeDecision("refuse", "ci_no_verdict")
