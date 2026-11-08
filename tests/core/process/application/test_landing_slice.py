@@ -447,12 +447,25 @@ def test_a_slice_whose_required_matrix_id_has_all_its_expansions_green_merges():
     assert [s["units"] for s in _doc(ports)["landed_slices"]] == [["a", "b"]]
 
 
-@pytest.mark.parametrize("completed", [None, False])
+@pytest.mark.parametrize("completed", [None, False, True])
 def test_a_slice_with_a_pending_matrix_shard_stays_open_and_escalates_no_unknown_names(completed):
+    # `True` is a report that says its workflow runs are done while a shard still reads pending:
+    # the one answer where only the matcher keeps `pytest` from being an unreported name.
     ports = _world(frozenset({"integration.py"}))
     _matrix_ci(ports, pending=("pytest (areas-2, b)",), completed=completed)
 
     _land(ports)
+    # the slice has waited past the confirmation of an unreported name (`2 * ci.CI_POLL_S`)
+    document = _doc(ports)
+    ports.documents.save(
+        {
+            **document,
+            "landing": [
+                *document["landing"][:-1],
+                {**document["landing"][-1], "at": "2026-10-21T23:58:00+00:00"},
+            ],
+        }
+    )
     _land(ports)
 
     entry = _doc(ports)["landing"][-1]
