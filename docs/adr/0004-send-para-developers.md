@@ -637,3 +637,10 @@ se cortaba otra vez.
   (ADR-0008) y no se agrega valor.
 - La nota de negaciones sale del motivo del escalado (`RoleFailure`). La cuenta sigue en
   `Failure.denials` y en la línea de sistema de la sección del rol que entrega.
+
+**Consecuencia conocida.** Con la nota fuera del motivo, un rol que escala sin entregar ya no
+muestra su cuenta de negaciones en el documento de la tarea: queda en `Failure.denials` y la
+línea de sistema solo la escribe el rol que entrega. El trabajo "cuando leo una corrida que
+escaló, quiero ver cuántas negaciones hubo" (`docs/product/role-failures.md`) queda pendiente
+de una decisión del plan: una línea de sistema en la sección del escalado, nunca de nuevo en
+el motivo.
