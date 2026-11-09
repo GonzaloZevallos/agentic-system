@@ -220,7 +220,13 @@ def _apply(outcome="applied", head=HEAD, at=T0) -> dict:
         "decision_at": at,
         "outcome": outcome,
         "moves": MOVES,
+        "bounds": landing.ADR_EDIT_BOUNDS,
     }
+
+
+def _old(outcome="applied", at=T0) -> dict:
+    """An `apply_adr_decision` written before GH-576: no `bounds`, so version 1."""
+    return {key: value for key, value in _apply(outcome, at=at).items() if key != "bounds"}
 
 
 def _review(head=HEAD) -> dict:
@@ -291,7 +297,11 @@ def test_an_apply_that_cannot_be_matched_counts_against_every_key_of_its_head():
 
 
 def test_an_apply_without_a_head_counts_against_every_key():
-    headless = {"step": "apply_adr_decision", "outcome": "applied"}
+    headless = {
+        "step": "apply_adr_decision",
+        "outcome": "applied",
+        "bounds": landing.ADR_EDIT_BOUNDS,
+    }
     assert landing.adr_decisions_spent([headless], HEAD, MOVES_KEY) == 1
     assert landing.adr_decisions_spent([headless], "d" * 40, (("x", "y"),)) == 1
 
@@ -379,3 +389,125 @@ def test_the_outcome_is_the_closed_set_the_plan_names_and_entry_of_drops_any_oth
     full = landing.entry_of({**_apply("stale_moves"), "head_after": "c" * 40})
     assert full["outcome"] == "stale_moves" and full["moves"] == MOVES
     assert full["decision_at"] == T0 and full["head_after"] == "c" * 40
+
+
+# -- GH-576: the slots are versioned by the set of lines a pass may edit ------------------------
+
+
+def _versioned(outcome, bounds=landing.ADR_EDIT_BOUNDS, at=T0) -> dict:
+    return {**_apply(outcome, at=at), "bounds": bounds}
+
+
+def test_the_edit_bounds_version_is_two():
+    assert landing.ADR_EDIT_BOUNDS == 2
+
+
+def test_two_failed_applies_of_the_old_bounds_spend_no_slot_of_the_current_ones():
+    old = [_ask(), _old("checks_red"), _old("out_of_bounds")]
+
+    assert landing.adr_decisions_spent(old, HEAD, MOVES_KEY) == 0
+    assert landing.adr_decision_due([_ask(T2)], HEAD, landing.Ambiguous("x", "a:1", MOVES_KEY), old)
+
+
+def test_applies_of_the_current_bounds_spend_their_slots():
+    current = [_ask(), _versioned("checks_red"), _versioned("out_of_bounds")]
+
+    assert landing.adr_decisions_spent(current, HEAD, MOVES_KEY) == 2
+
+
+def test_a_mixed_list_counts_only_the_current_version():
+    mixed = [_ask(), _old("checks_red"), _versioned("out_of_bounds"), _versioned("applied", 1)]
+
+    assert landing.adr_decisions_spent(mixed, HEAD, MOVES_KEY) == 1
+
+
+def test_a_bounds_that_is_not_an_int_reads_as_the_old_version():
+    for bad in (True, "2", 2.0, None):
+        entries = [_ask(), {**_apply("applied"), "bounds": bad}]
+        assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 0
+
+
+def test_a_stale_moves_apply_of_the_current_bounds_still_spends_nothing():
+    entries = [_ask(), _versioned("stale_moves"), _versioned("stale_moves")]
+
+    assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 0
+
+
+def test_an_entry_keeps_a_positive_int_bounds_and_drops_any_other():
+    assert landing.entry_of({"bounds": 2})["bounds"] == 2
+    for bad in (0, -1, True, "2", 1.5):
+        assert "bounds" not in landing.entry_of({"bounds": bad})
+
+
+# -- GH-576: the rows of an `out_of_bounds` apply -----------------------------------------------
+
+
+def test_out_of_bounds_detail_keeps_five_rows_and_counts_the_sixth():
+    five = [(f"docs/a{n}.md", n) for n in range(5)]
+
+    assert landing.out_of_bounds_detail(five) == (
+        [{"path": path, "line": line} for path, line in five],
+        0,
+    )
+    shown, left = landing.out_of_bounds_detail([*five, ("docs/z.md", 9)])
+    assert shown == [{"path": path, "line": line} for path, line in five]
+    assert left == 1
+    assert landing.out_of_bounds_detail([]) == ([], 0)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "a\nb.md",
+        "a\rb.md",
+        "a`b.md",
+        "a{{b.md",
+        "a<!--b.md",
+        "a-->b.md",
+        "[x](y.md)",
+        "https://x.example/a.md",
+        "a\x00b.md",
+        "a\tb.md",
+        "",
+        "d/" + "x" * landing.OUT_OF_BOUNDS_PATH_MAX,
+    ],
+)
+def test_a_path_that_cannot_be_published_is_counted_never_shown(path):
+    assert landing.out_of_bounds_detail([(path, 3), ("docs/ok.md", 4)]) == (
+        [{"path": "docs/ok.md", "line": 4}],
+        1,
+    )
+
+
+def test_a_refused_path_does_not_take_a_shown_place():
+    pairs = [("a`.md", 1), *[(f"docs/{n}.md", n) for n in range(6)]]
+
+    shown, left = landing.out_of_bounds_detail(pairs)
+
+    assert [row["path"] for row in shown] == [f"docs/{n}.md" for n in range(5)]
+    assert left == 2
+
+
+def test_an_entry_keeps_the_out_of_bounds_rows_well_formed_and_drops_the_rest():
+    raw = {
+        "out_of_bounds_lines": [
+            {"path": "docs/a.md", "line": 3, "text": "secret"},
+            {"path": "docs/b.md", "line": 0},
+            {"path": "docs/c.md", "line": -1},
+            {"path": 4, "line": 1},
+            {"path": "docs/d.md", "line": True},
+            "docs/e.md:1",
+        ],
+        "out_of_bounds_more": 2,
+    }
+
+    entry = landing.entry_of(raw)
+
+    assert entry["out_of_bounds_lines"] == [
+        {"path": "docs/a.md", "line": 3},
+        {"path": "docs/b.md", "line": 0},
+    ]
+    assert entry["out_of_bounds_more"] == 2
+    for bad in (0, -1, True, "2"):
+        assert "out_of_bounds_more" not in landing.entry_of({"out_of_bounds_more": bad})
+    assert "out_of_bounds_lines" not in landing.entry_of({"out_of_bounds_lines": [{"path": 1}]})

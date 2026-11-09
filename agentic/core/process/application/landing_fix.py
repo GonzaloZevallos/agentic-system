@@ -442,6 +442,34 @@ def _red_blocks(red_checks: Sequence[Mapping[str, object]]) -> list[tuple[str, s
     return blocks
 
 
+def _out_of_bounds_text(rows: Sequence[Mapping[str, object]], more: int) -> str:
+    """The lines of the question after an `out_of_bounds` apply: each recorded `path:line` that
+    is shaped like one and whose path is publishable, at most `OUT_OF_BOUNDS_SHOWN_MAX` (the rest,
+    and the ones refused, join `more`), then how many more; a fixed line when none can be shown."""
+    shown: list[str] = []
+    left = max(0, more)
+    for row in rows:
+        path, line = row.get("path"), row.get("line")
+        if (
+            not isinstance(path, str)
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or line < 0
+        ):
+            continue
+        if (
+            landing_rules.publishable_path(path)
+            and len(shown) < landing_rules.OUT_OF_BOUNDS_SHOWN_MAX
+        ):
+            shown.append(f"- `{path}:{line}`" if line else f"- `{path}` (the whole file)")
+        else:
+            left += 1
+    if not shown:
+        return "\nNo line detail could be read."
+    text = "\nThe lines it touched outside the allowed set:\n" + "\n".join(shown)
+    return f"{text}\nand {left} more" if left else text
+
+
 def adr_collision_reason(
     found: Renaming | Ambiguous,
     cap: int,
@@ -450,6 +478,8 @@ def adr_collision_reason(
     slots_left: bool = True,
     red_checks: Sequence[Mapping[str, object]] = (),
     red_more: int = 0,
+    out_of_bounds_lines: Sequence[Mapping[str, object]] = (),
+    out_of_bounds_more: int = 0,
 ) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
@@ -463,7 +493,11 @@ def adr_collision_reason(
     are spent, so the question says no further decision will be applied. After a `checks_red`
     line come the checks that were red (`red_checks`, as the entry records them) with their
     last lines, those that recovered, and how many more were left out (`red_more`); with none
-    recorded a fixed line says so. The whole question stays under `MERGE_COMMENT_MAX`, the
+    recorded a fixed line says so. After an `out_of_bounds` line (GH-576) come the paths and lines
+    the pass touched outside its bounds (`out_of_bounds_lines`, as the entry records them, a line
+    of 0 being the whole file; a row whose path `landing.publishable_path` refuses is counted, not
+    shown) and `and N more` for those left out (`out_of_bounds_more`); with none recorded a fixed
+    line says so. The whole question stays under `MERGE_COMMENT_MAX`, the
     tails going last check first."""
     if isinstance(found, Ambiguous) and not found.moves:
         what = (
@@ -485,6 +519,8 @@ def adr_collision_reason(
     if failed is not None:
         what += f"\nThe last attempt to apply your decision ended `{failed}`; nothing was pushed."
     blocks = _red_blocks(red_checks) if failed == "checks_red" else []
+    if failed == "out_of_bounds":
+        what += _out_of_bounds_text(out_of_bounds_lines, out_of_bounds_more)
     if failed == "checks_red" and not blocks:
         what += "\nThe checks were red; no check detail could be read."
     if isinstance(found, Ambiguous) and not found.moves:
@@ -549,6 +585,8 @@ def escalate_adr(context: LandingContext) -> None:
         [item for item in recorded if isinstance(item, dict)] if isinstance(recorded, list) else []
     )
     more = applied[-1].get("red_more") if applied else None
+    rows = applied[-1].get("out_of_bounds_lines") if applied else None
+    cut = applied[-1].get("out_of_bounds_more") if applied else None
     slots_left = (
         context.head is None
         or not found.moves
@@ -569,6 +607,12 @@ def escalate_adr(context: LandingContext) -> None:
                 slots_left=slots_left,
                 red_checks=detail,
                 red_more=more if isinstance(more, int) and more > 0 else 0,
+                out_of_bounds_lines=(
+                    [item for item in rows if isinstance(item, dict)]
+                    if isinstance(rows, list)
+                    else []
+                ),
+                out_of_bounds_more=cut if isinstance(cut, int) and cut > 0 else 0,
             )
         ],
     )

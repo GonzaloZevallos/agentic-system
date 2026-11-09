@@ -1145,6 +1145,21 @@ class LandingEntry(TypedDict, total=False):
     # more were left out. Never the raw log; absent on an entry written before.
     red_checks: list[RedCheck]
     red_more: int
+    # GH-576, an `apply_adr_decision` entry: the `landing.ADR_EDIT_BOUNDS` it ran under (absent
+    # reads as 1), and, when it ended `out_of_bounds`, the `{path, line}` rows that were out
+    # (`landing.out_of_bounds_detail`, paths cleaned there, never the text of a line) and how
+    # many more were left out.
+    bounds: int
+    out_of_bounds_lines: list[OutOfBoundsLine]
+    out_of_bounds_more: int
+
+
+class OutOfBoundsLine(TypedDict):
+    """One line an `apply_adr_decision` pass edited outside its bounds, as a `landing` entry keeps
+    it (GH-576): the cleaned path and the line (0, the whole file). Never the text of the line."""
+
+    path: str
+    line: int
 
 
 JobLogCause = Literal["read", "unreadable", "empty", "other_head", "timed_out"]

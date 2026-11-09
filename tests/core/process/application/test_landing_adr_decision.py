@@ -450,8 +450,10 @@ def test_gh_407_one_more_spent_apply_on_the_same_key_is_not_due(tmp_path):
         "apply_adr_decision",
         decision_at=SECOND_RELEASE,
         outcome="still_colliding",
+        bounds=landing_rules.ADR_EDIT_BOUNDS,
     )
     entries = _gh_407_entries()
+    entries[3]["bounds"] = landing_rules.ADR_EDIT_BOUNDS  # the checks_red apply of the same key
     entries.insert(4, more)
     raw = _gh_407_document(entries)
     facts = _gh_407_facts()
