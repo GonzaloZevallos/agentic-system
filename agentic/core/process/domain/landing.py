@@ -36,6 +36,7 @@ from .task import (
     LandedSliceRef,
     LandingEntry,
     MergeCiRecord,
+    OutOfBoundsLine,
     ReleasePatch,
     SlicesClosedPatch,
     Subtask,
@@ -163,6 +164,20 @@ LANDING_ADR_DECISIONS_MAX = 2
 `outcome` is not `stale_moves`, counted over all entries by `adr_decisions_spent`, so a
 restoration does not hand the budget back; declared, not measured. Charged to neither
 `LANDING_PASSES_MAX` nor the syncs, and the step never reaches `exhausted()`."""
+
+ADR_EDIT_BOUNDS = 2
+"""The version of the set of lines an `apply_adr_decision` pass may edit (GH-576). Every entry
+records it as `bounds`, one without it is version 1, and `adr_decisions_spent` counts only the
+entries of this version. Any change that widens or narrows that set
+(`adr_numbers.DecidedRenaming.spots` and `bound`, rule (d) among them) raises it in the same diff,
+and raising it is the only way to give decision slots back. Declared, not measured."""
+
+OUT_OF_BOUNDS_SHOWN_MAX = 5
+"""The most `{path, line}` rows of an `out_of_bounds` apply a landing entry keeps (GH-576); the
+rest are counted in `out_of_bounds_more`."""
+
+OUT_OF_BOUNDS_PATH_MAX = 200
+"""The longest path an `out_of_bounds` row shows; a longer one is counted, never shown."""
 
 LANDING_UNSYNCED_MAX = 2
 """`sync_master` passes closed without their upstream (`lacks`) per upstream sha; declared, not
@@ -980,12 +995,21 @@ def _moves_key(moves: object) -> tuple[tuple[str, str], ...] | None:
     return tuple(pairs)
 
 
+def _bounds_of(entry: Mapping[str, object]) -> int:
+    """The `ADR_EDIT_BOUNDS` an `apply_adr_decision` entry ran under: its `bounds` when an int
+    (not a bool), 1 otherwise, which is how every entry written before GH-576 reads."""
+    bounds = entry.get("bounds")
+    return bounds if isinstance(bounds, int) and not isinstance(bounds, bool) else 1
+
+
 def adr_decisions_spent(
     entries: Sequence[Mapping[str, object]], head: str, moves: Sequence[Sequence[str]]
 ) -> int:
     """The `apply_adr_decision` entries that used a slot of `LANDING_ADR_DECISIONS_MAX` for the
     collision (`head`, `moves`): those whose `outcome` is one of the closed set but `stale_moves`
-    (GH-570). The one counter of the cap: the step table, `release_asked` and the question the
+    (GH-570) and whose `bounds` is `ADR_EDIT_BOUNDS` (GH-576: an apply that ran under other
+    bounds gave its slot back; a missing `bounds` is 1). The one reader of `bounds`, and the one
+    counter of the cap: the step table, `release_asked` and the question the
     owner reads all call it. Read over all entries, as `renumbers` is, so a restoration does not
     give a slot back (GH-544).
 
@@ -1001,6 +1025,7 @@ def adr_decisions_spent(
         if (
             entry.get("step") != "apply_adr_decision"
             or entry.get("outcome") not in _ADR_DECISION_SPENT
+            or _bounds_of(entry) != ADR_EDIT_BOUNDS
         ):
             continue
         applied_on = entry.get("head")
@@ -1171,7 +1196,65 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["red_checks"] = red
     if isinstance(more := raw.get("red_more"), int) and not isinstance(more, bool) and more > 0:
         out["red_more"] = more
+    # GH-576, an `apply_adr_decision` entry: the version of the edit bounds it ran under and, when
+    # it ended `out_of_bounds`, the rows that were out and how many more were left out.
+    if isinstance(bounds := raw.get("bounds"), int) and not isinstance(bounds, bool) and bounds > 0:
+        out["bounds"] = bounds
+    if (rows := _out_of_bounds_lines_of(raw.get("out_of_bounds_lines"))) is not None:
+        out["out_of_bounds_lines"] = rows
+    if (
+        isinstance(left := raw.get("out_of_bounds_more"), int)
+        and not isinstance(left, bool)
+        and left > 0
+    ):
+        out["out_of_bounds_more"] = left
     return out
+
+
+def publishable_path(path: str) -> bool:
+    """Whether `path` may be written in a tracker comment (GH-576): no control character, none of
+    `presubmit.ID_FORBIDDEN` (a line break, a backtick, `{{`, `<!--`, `-->`), no link (`](` or
+    `://`), not empty and no longer than `OUT_OF_BOUNDS_PATH_MAX`. The one predicate of the paths
+    an `out_of_bounds` report shows."""
+    return (
+        0 < len(path) <= OUT_OF_BOUNDS_PATH_MAX
+        and not any(ord(char) < 32 or ord(char) == 127 for char in path)
+        and not any(bad in path for bad in presubmit.ID_FORBIDDEN)
+        and "](" not in path
+        and "://" not in path
+    )
+
+
+def out_of_bounds_detail(pairs: Sequence[tuple[str, int]]) -> tuple[list[OutOfBoundsLine], int]:
+    """The `{path, line}` rows of an `out_of_bounds` apply to store and how many were left out
+    (GH-576): every pair whose path is not `publishable_path` is dropped and counted, and at most
+    `OUT_OF_BOUNDS_SHOWN_MAX` of the rest are kept, in order; the others are counted. A line of
+    0 is the whole file. Never the text of a line."""
+    shown: list[OutOfBoundsLine] = []
+    left = 0
+    for path, line in pairs:
+        if publishable_path(path) and len(shown) < OUT_OF_BOUNDS_SHOWN_MAX:
+            shown.append({"path": path, "line": line})
+        else:
+            left += 1
+    return shown, left
+
+
+def _out_of_bounds_lines_of(value: object) -> list[OutOfBoundsLine] | None:
+    """`value` as the `out_of_bounds_lines` of an `apply_adr_decision` entry: its `{path, line}`
+    rows with a string path and a non-negative int line, whatever else dropped (a document is
+    edited by hand); `None` when none is left."""
+    if not isinstance(value, list):
+        return None
+    rows: list[OutOfBoundsLine] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        path, line = item.get("path"), item.get("line")
+        if isinstance(path, str) and isinstance(line, int) and not isinstance(line, bool):
+            if line >= 0:
+                rows.append({"path": path, "line": line})
+    return rows or None
 
 
 def _red_checks_of(value: object) -> list[presubmit.RedCheck] | None:

@@ -21,6 +21,7 @@ from agentic.core.process.domain.task import (
     FailureReason,
     LandedSliceRef,
     LandingEntry,
+    OutOfBoundsLine,
 )
 from tests.gh150_stranded import GH150_STRANDED
 
@@ -484,6 +485,7 @@ _SAMPLE: dict[object, object] = {
     AdrDecisionOutcome: "applied",
     list[list[str]]: [["a", "b"]],
     list[RedCheck]: [{"name": "tests", "tail": ["a"], "recovered": False}],
+    list[OutOfBoundsLine]: [{"path": "docs/a.md", "line": 3}],
 }
 
 

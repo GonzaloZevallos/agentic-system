@@ -862,6 +862,7 @@ class MemoryWorkspace:
         self.branch_commits: list[BranchCommit] = []
         self.added_adrs_calls: list[tuple[str, str]] = []
         self.added_lines_calls: list[tuple[str, str, tuple[str, ...]]] = []
+        self.paths_naming_calls: list[tuple[str, str]] = []
         self.tree_names_calls: list[tuple[str, str]] = []
         # GH-262: each `base_of` ask (a `git config --get` on the real adapter), in order.
         self.base_of_calls: list[str] = []
@@ -1285,6 +1286,12 @@ class MemoryWorkspace:
                     return None
                 return self.show(self.branch_commits[index - 1].sha, relative)
         return None
+
+    def paths_naming(self, revision: str, needle: str) -> list[str]:
+        self.paths_naming_calls.append((revision, needle))
+        return sorted(
+            path for (ref, path), text in self.files.items() if ref == revision and needle in text
+        )
 
     def commit_date(self, ref: str) -> str | None:
         return self.commit_dates.get(ref)

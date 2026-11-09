@@ -218,3 +218,42 @@ intento fallido (apostrophe GH-407, PR #618).
   el comentario ahora dice que el chequeo se recuperó.
 - **§7.** Ninguna métrica, etiqueta, atributo de span ni clase de escalado nuevo: volver a
   preguntar sigue usando `questions`.
+
+## Adenda (GH-576)
+
+Enmienda GH-544 y GH-570: en apostrophe GH-407 (PR #618) la fila del índice de ADR entró por
+la resolución de un merge, no por un commit propio. La regla no la reescribía y no era un punto:
+si el pase del modelo no la tocaba, el chequeo `docs` quedaba en rojo (`checks_red`); si la
+tocaba, el resultado era `out_of_bounds`. Los dos cupos de la colisión se gastaron así.
+
+- **Lectura ampliada, solo con decisión.** `adr_decided` (no `adr_collision`) pide además a
+  `_inputs` que lea todo archivo de la cabeza que nombra un archivo movido, de quien sea la
+  línea (`Workspace.paths_naming`, un `git grep -l -F` por archivo movido; ninguna ruta de
+  índice se escribe en el sistema). `renumber` y `adr_collision` dan el mismo resultado para toda
+  entrada.
+- **Regla (d), solo en `renumber_decided`.** La etiqueta numérica `[NNNN]` de un enlace
+  Markdown se reescribe cuando el destino del mismo enlace es un archivo movido y la etiqueta es
+  el número viejo de ese archivo; nunca por un número suelto en la línea.
+- **Líneas `bound`.** `DecidedRenaming.bound` son las líneas que la regla (a) o (d) reescribió
+  y el primer título de cada ADR movido. El pase puede moverlas dentro de su archivo (para
+  mantener ordenado un índice) pero no cambiarles el texto; el `brief` se lo dice.
+- **Comprobación por contenido.** `adr_numbers.outside_bounds` compara multiconjuntos de líneas
+  por archivo y reemplaza a `within_spots`. Es el único lugar donde se calcula qué líneas puede
+  editar el pase; `landing_adr` solo lo lee.
+- **Cupos versionados.** `ADR_EDIT_BOUNDS = 2` se escribe en cada entrada de apply como
+  `bounds`; una entrada sin el campo vale 1 y `adr_decisions_spent` (el único lector) cuenta
+  solo las de la versión vigente. Ampliar o reducir el conjunto de líneas editables sube la
+  constante en el mismo diff, y subirla es la única manera de devolver los cupos gastados con
+  otro conjunto, sin cambiar qué mide el tope.
+- **Informe de `out_of_bounds`.** La entrada guarda `out_of_bounds_lines` (a lo sumo
+  `OUT_OF_BOUNDS_SHOWN_MAX` filas `{path, line}`) y `out_of_bounds_more`. Toda ruta pasa por la
+  limpieza del texto del comentario (sin salto de línea, comilla invertida, `{{`, `<!--`/`-->`
+  ni enlace); la que no pasa solo se cuenta en `out_of_bounds_more`. Nunca se publica el texto de
+  una línea.
+- **Costo (§8).** Un `git grep -l -F` por archivo movido, solo con una colisión con decisión del
+  dueño; escala con el tamaño del árbol de la cabeza y solo se leen enteros los archivos que
+  nombran el archivo movido.
+- **§7.** Ninguna métrica, etiqueta ni atributo de span nuevo.
+- **Riesgo.** La regla (a) reescribe como texto los archivos generados; si el generador ordena
+  por número, el pase debe mover la fila (por eso las líneas `bound` pueden reordenarse). Si el
+  chequeo `docs` sigue en rojo, el informe de `checks_red` (GH-570) lo muestra.

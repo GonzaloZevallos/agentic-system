@@ -239,3 +239,37 @@ def test_gh384_shape_with_only_the_listed_citations_renumbers_just_the_colliding
     assert isinstance(found, Renaming)
     assert found.moves == GH384_MOVES
     assert _gh384_step(found, head).kind == "renumber"
+
+
+def _merged_index_row(ports):
+    """GH-407: the branch's own commit adds the ADR and a citation; the index row naming it
+    reached the head only through a merge resolution, so no own line holds it."""
+    base = ports.workspace.master_sha
+    ports.workspace.advance_master(THEIRS)
+    head = ports.workspace.add_branch_commit(
+        adds=(MINE,), lines=(("docs/notes.md", CITES),), master=base
+    )
+    index = "docs/architecture/decisiones.md"
+    _text(ports, head, MINE, "# ADR-0049: mine\n")
+    _text(ports, head, "docs/notes.md", f"{CITES}\n")
+    _text(ports, head, index, "| [0049](../adr/0049-mine.md) | Mine |\n")
+    return head, index
+
+
+def test_adr_decided_reads_and_rewrites_a_file_that_names_the_adr_only_through_a_merge():
+    ports = _ports()
+    head, index = _merged_index_row(ports)
+    result = adr_collision.adr_decided(ports, ports.workspace.master_sha, head)
+    assert not isinstance(result, Ambiguous) and result is not None
+    assert result.renaming.texts[index] == "| [0050](../adr/0050-mine.md) | Mine |\n"
+    assert (index, 1, "| [0050](../adr/0050-mine.md) | Mine |") in result.bound
+    assert ports.workspace.paths_naming_calls == [(head, "0049-mine.md")]
+
+
+def test_adr_collision_does_not_read_a_file_that_names_the_adr_only_through_a_merge():
+    ports = _ports()
+    head, index = _merged_index_row(ports)
+    result = adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
+    assert isinstance(result, Renaming)
+    assert index not in result.texts
+    assert ports.workspace.paths_naming_calls == []

@@ -146,6 +146,7 @@ def _applied(outcome="applied", head=H1, decision_at=T2, **over) -> dict:
         "decision_at": decision_at,
         "outcome": outcome,
         "moves": [list(m) for m in MOVES],
+        "bounds": landing.ADR_EDIT_BOUNDS,
         **over,
     }
 

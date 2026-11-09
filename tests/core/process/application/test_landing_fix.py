@@ -2060,6 +2060,7 @@ def _spent_decisions(count, head=HEAD, moves=(A_MOVE,)) -> list[dict]:
             "refusal": "adr_number_taken",
             "decision_at": released,
             "outcome": "checks_red",
+            "bounds": landing_rules.ADR_EDIT_BOUNDS,
         }
         for _ in range(count)
     ]
@@ -2439,3 +2440,88 @@ def test_the_asked_question_carries_the_detail_recorded_on_the_last_apply(tmp_pa
     assert "`lint` failed, then passed on rerun" in question
     assert "and 1 more checks were red" in question
     assert "decide on this issue" in question
+
+
+# --- GH-576: the question says which lines an out_of_bounds pass touched -----
+
+
+def _out(path, line) -> dict:
+    return {"path": path, "line": line}
+
+
+def _out_reason(rows=(), more=0, failed="out_of_bounds") -> str:
+    return landing_fix.adr_collision_reason(
+        FOUND_AMBIGUOUS, 3, failed, out_of_bounds_lines=rows, out_of_bounds_more=more
+    )
+
+
+def test_an_out_of_bounds_question_lists_the_paths_and_lines_touched():
+    text = _out_reason([_out("app/main.py", 238), _out("docs/notes.md", 0)], more=2)
+
+    assert "ended `out_of_bounds`; nothing was pushed." in text
+    assert "- `app/main.py:238`" in text
+    assert "- `docs/notes.md` (the whole file)" in text
+    assert "and 2 more" in text
+    assert text.index("app/main.py:238") < text.index("To go on")
+
+
+def test_an_out_of_bounds_question_with_no_rows_says_a_fixed_line():
+    text = _out_reason()
+
+    assert "No line detail could be read." in text
+    assert "No line detail" not in _out_reason(failed="checks_red")
+    assert "and 0 more" not in text
+
+
+def test_rows_of_another_outcome_are_not_shown():
+    text = _out_reason([_out("app/main.py", 238)], failed="checks_red")
+
+    assert "app/main.py:238" not in text
+
+
+def test_a_hand_edited_row_with_a_refused_path_is_not_published():
+    text = _out_reason([_out("a`b.md", 1), _out("[x](y)", 2), _out("ok.md", 3), {"path": 5}])
+
+    assert "ok.md:3" in text
+    assert "a`b.md" not in text and "[x](y)" not in text
+    assert "No line detail" not in text
+
+
+def test_the_question_without_out_of_bounds_rows_is_the_text_of_before():
+    assert _out_reason(failed=None, rows=[_out("a.md", 1)]) == (
+        landing_fix.adr_collision_reason(FOUND_AMBIGUOUS, 3)
+    )
+
+
+def test_the_asked_question_carries_the_rows_recorded_on_the_last_apply(tmp_path):
+    spent = _spent_decisions(1)
+    spent[-1].update(
+        outcome="out_of_bounds",
+        bounds=landing_rules.ADR_EDIT_BOUNDS,
+        out_of_bounds_lines=[_out("app/main.py", 238)],
+        out_of_bounds_more=3,
+    )
+
+    question = _asked_question(tmp_path, spent)
+
+    assert "- `app/main.py:238`" in question and "and 3 more" in question
+    assert "decide on this issue" in question
+
+
+def test_two_failed_applies_of_the_old_bounds_offer_the_decision_again(tmp_path):
+    spent = _spent_decisions(2)
+    for entry in spent[1:]:
+        del entry["bounds"]  # written before GH-576: version 1
+    spent[-1]["outcome"] = "out_of_bounds"
+
+    question = _asked_question(tmp_path, spent)
+
+    assert "decide on this issue" in question
+    assert "no further decision will be applied" not in question
+
+
+def test_two_failed_applies_of_the_current_bounds_do_not(tmp_path):
+    question = _asked_question(tmp_path, _spent_decisions(2))
+
+    assert "decide on this issue" not in question
+    assert "no further decision will be applied" in question
