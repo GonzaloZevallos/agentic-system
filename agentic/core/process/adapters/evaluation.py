@@ -164,6 +164,7 @@ class EvaluationWorkspace:
             "merge_keeping_conflicts",
             "merge_upstream_into",
             "overlay",
+            "paths_naming",
             "prune",
             "record_setup_tree",
             "remote_dispatch_refs",
