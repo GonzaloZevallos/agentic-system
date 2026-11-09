@@ -657,27 +657,13 @@ class ClaudeSdkRunner:
                             # SDK turns that into ResultError after yielding the
                             # ResultMessage.
                             cost, session = _left_behind(result)
-                            if exc.subtype == "error_max_turns":
-                                raise AttemptFailed(
-                                    max_turns_motive(max_turns, _reported_error(exc)),
-                                    cost,
-                                    session,
-                                    reason="max_turns",
-                                    denials=denials,
-                                    turn_notice=notice_firings > 0,
-                                    turn_notice_firings=notice_firings,
-                                    deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                                    presubmit_denials=presubmit_denials,
-                                    main_thread_turns=turns.value,
-                                ) from exc
-                            raise AttemptFailed(
-                                failure_motive(_reported_error(exc)),
+                            raise _reported_failure(
+                                _reported_error(exc),
                                 cost,
                                 session,
-                                reason=failure_reason(_reported_error(exc)),
+                                max_turns=max_turns,
                                 denials=denials,
-                                turn_notice=notice_firings > 0,
-                                turn_notice_firings=notice_firings,
+                                notice_firings=notice_firings,
                                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                                 presubmit_denials=presubmit_denials,
                                 main_thread_turns=turns.value,
@@ -687,6 +673,20 @@ class ClaudeSdkRunner:
                         ) as exc:  # the SDK raises its own hierarchy; all of it is a failure
                             if stalled is not None:
                                 raise _stall_failure() from exc
+                            if result is not None and _failed(result):
+                                # The CLI already reported why it ended; the SDK lost it
+                                # (a message after the error result reset its
+                                # `_last_error_result`), so this exit arrives bare. The
+                                # reported result is the news, not the exit code.
+                                raise _result_failure(
+                                    result,
+                                    max_turns=max_turns,
+                                    denials=denials,
+                                    notice_firings=notice_firings,
+                                    deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                                    presubmit_denials=presubmit_denials,
+                                    main_thread_turns=turns.value,
+                                ) from exc
                             raise AttemptFailed(
                                 f"SDK error: {exception_motive(exc)}",
                                 reason="sdk",
@@ -730,33 +730,17 @@ class ClaudeSdkRunner:
                 f"[{role.name}] delivered with {background} sub-agent(s) launched in "
                 "the background; the session ended at the delivery, without them\n"
             )
+        if _failed(result):
+            raise _result_failure(
+                result,
+                max_turns=max_turns,
+                denials=denials,
+                notice_firings=notice_firings,
+                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                presubmit_denials=presubmit_denials,
+                main_thread_turns=turns.value,
+            )
         cost, session = _left_behind(result)
-        if result.subtype == "error_max_turns":
-            raise AttemptFailed(
-                max_turns_motive(max_turns, _reported_result(result)),
-                cost,
-                session,
-                reason="max_turns",
-                denials=denials,
-                turn_notice=notice_firings > 0,
-                turn_notice_firings=notice_firings,
-                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                presubmit_denials=presubmit_denials,
-                main_thread_turns=turns.value,
-            )
-        if result.is_error:
-            raise AttemptFailed(
-                failure_motive(_reported_result(result)),
-                cost,
-                session,
-                reason=failure_reason(_reported_result(result)),
-                denials=denials,
-                turn_notice=notice_firings > 0,
-                turn_notice_firings=notice_firings,
-                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                presubmit_denials=presubmit_denials,
-                main_thread_turns=turns.value,
-            )
         return RawResult(
             structured_output=result.structured_output,
             cost_usd=cost,
@@ -900,6 +884,72 @@ def _reported_result(result: ResultMessage) -> ReportedFailure:
         result=result.result,
         api_error_status=result.api_error_status,
         terminal_reason=result.terminal_reason,
+    )
+
+
+def _failed(result: ResultMessage) -> bool:
+    """A result that ended the run as a failure: the turn cut by its subtype (whatever
+    `is_error` says, as the end of the stream has always read it), or any other error."""
+    return result.subtype == "error_max_turns" or result.is_error
+
+
+def _reported_failure(
+    report: ReportedFailure,
+    cost: float,
+    session: str,
+    *,
+    max_turns: int,
+    denials: int,
+    notice_firings: int,
+    deliveries: int,
+    presubmit_denials: int,
+    main_thread_turns: int,
+) -> AttemptFailed:
+    """The one place that decides what a failed run is, from the payload the CLI
+    reported for it: the turn cut is `max_turns`, anything else is told by
+    `failure_reason`. Both carry the cost and the session the run left behind."""
+    if report.subtype == "error_max_turns":
+        error, reason = max_turns_motive(max_turns, report), "max_turns"
+    else:
+        error, reason = failure_motive(report), failure_reason(report)
+    return AttemptFailed(
+        error,
+        cost,
+        session,
+        reason=reason,
+        denials=denials,
+        turn_notice=notice_firings > 0,
+        turn_notice_firings=notice_firings,
+        deliveries=deliveries,
+        presubmit_denials=presubmit_denials,
+        main_thread_turns=main_thread_turns,
+    )
+
+
+def _result_failure(
+    result: ResultMessage,
+    *,
+    max_turns: int,
+    denials: int,
+    notice_firings: int,
+    deliveries: int,
+    presubmit_denials: int,
+    main_thread_turns: int,
+) -> AttemptFailed:
+    """The `AttemptFailed` of a `ResultMessage` the runner already received, at the end
+    of the stream or when the exit came after it: its reason, its motive, its cost and
+    its session all read off that message (GH-571)."""
+    cost, session = _left_behind(result)
+    return _reported_failure(
+        _reported_result(result),
+        cost,
+        session,
+        max_turns=max_turns,
+        denials=denials,
+        notice_firings=notice_firings,
+        deliveries=deliveries,
+        presubmit_denials=presubmit_denials,
+        main_thread_turns=main_thread_turns,
     )
 
 

@@ -95,10 +95,12 @@ y eso es lo que el job de arriba niega. El número concreto y cómo se declara �
 propio de cada rol— es calibración de ingeniería contra esta definición.
 
 **Continuar la sesión no repone el presupuesto.** Un reintento tras `max_turns` continúa la
-sesión del intento que falló (ADR-0004, adenda 2026-09-14), y eso es correcto: el rol no
-vuelve a releer lo que ya leyó. Pero la memoria no compra turnos; el segundo intento arranca
-con el mismo tope. De ahí que un tope corto no se arregle con el reintento: se agota dos
-veces y escala igual.
+sesión solo si el intento cortado dejó una (ADR-0004, adenda 2026-09-14), y eso es correcto: el
+rol no vuelve a releer lo que ya leyó. Pero la memoria no compra turnos: el reintento arranca
+con el tope del rol, salvo los roles de `RETRY_TURNS` (hoy `landing_diagnoser`,
+`tech_lead_review` y `tech_lead_review_light`), que tras un corte por turnos reciben su propio
+tope absoluto. De ahí que un tope corto, en un rol que no está en esa tabla, no se arregle con
+el reintento: se agota dos veces y escala igual.
 
 **Un presupuesto agotado no se disfraza de entrega.** Un rol que se está quedando sin
 turnos no puede entregar un resultado cuyo contenido real sea "no me alcanzó": el Product

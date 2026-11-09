@@ -1658,8 +1658,14 @@ _TURN_CAP_FACT = (
 # slug (GH-449, ADR-0004 addendum). A closed table: a role not in it retries with the cap
 # it started with. Absolute and not a delta because the CLI's counting of a resumed
 # session (cumulative or per invocation) was never measured; 64 leaves at least 40 new
-# turns over the diagnoser's base of 24 either way.
-RETRY_TURNS: Mapping[str, int] = MappingProxyType({"landing_diagnoser": 64})
+# turns over the diagnoser's base of 24 either way. The two reviewers get 48 for the same
+# reasoning over their base of 20 (GH-571): they were cut at 20 in apostrophe GH-589 and
+# GH-590, and a cold retry was cut again. Provisional like the diagnoser's 64: nobody has
+# yet measured whether the reviewers' turns go to reading or to checks and background
+# processes, and 20 and 48 are to be recalibrated from that measurement.
+RETRY_TURNS: Mapping[str, int] = MappingProxyType(
+    {"landing_diagnoser": 64, "tech_lead_review": 48, "tech_lead_review_light": 48}
+)
 
 
 def retry_turns(role: Role, failures: Sequence[Failure]) -> int:

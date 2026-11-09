@@ -597,3 +597,50 @@ registro sin el campo se lee con `role.max_turns`.
 **Consecuencias.** `RoleRunner.run_once` recibe el tope del intento (`max_turns`, `None` es
 `role.max_turns`). El prompt del sistema sigue mostrando `role.max_turns` en `{{max_turns}}`, el
 mismo en todos los intentos.
+
+## Adenda (2026-11-09): un `ProcessError` tardío tras un resultado de error, y el reintento del revisor
+
+GH-571. En apostrophe GH-589 y GH-590 el Tech Lead revisor llegó a su tope de 20 turnos
+(`done: 21 turns`) y escaló dos veces como `SDK error: Command failed with exit code 1`.
+
+**Causa.** El CLI emite un `ResultMessage` con `is_error` y subtipo `error_max_turns`. Si
+después llega un mensaje que no es `system/session_state_changed`, el SDK olvida ese resultado
+(`_last_error_result`, `claude_agent_sdk/_internal/query.py`), y la salida con código 1 llega
+como un `ProcessError` crudo y no como `ResultError`. El runner lo trataba como `SDK error`
+sin mirar el resultado que ya tenía: sin costo, sin sesión, y el reintento arrancaba en frío y
+se cortaba otra vez.
+
+**Decisión.**
+
+- Un solo constructor, `_result_failure`, decide todo `AttemptFailed` armado desde un
+  `ResultMessage` ya recibido: el fin del stream y el `except Exception` con un resultado de
+  error. La rama `ResultError` comparte con él la decisión sobre el reporte
+  (`_reported_failure`). El corte por turnos es `reason="max_turns"`; cualquier otro subtipo
+  de error usa `failure_motive`/`failure_reason`. Todos llevan el costo y la sesión del
+  resultado. Sin resultado, o con uno de éxito, el fallo sigue siendo `SDK error: …` con
+  `reason="sdk"`, byte a byte.
+- Se generaliza a todo subtipo de error, no solo `error_max_turns`: las razones de causa
+  externa (`account_limit`, `upstream`, `network`, `disk_full`) aparecen ahora también por la
+  vía tardía, y `account_limit` y `disk_full` dejan de reintentarse en el momento, como ya
+  ocurría por la vía `ResultError`. "Fallos propios por tarea" baja en las corridas afectadas
+  y los `sdk` históricos no se reescriben: comparar líneas de base de un lado y otro de este
+  commit no es 1:1.
+- `RETRY_TURNS` suma `tech_lead_review` y `tech_lead_review_light` con 48, absoluto y
+  provisional, con el razonamiento del diagnoser (GH-449). Aún no se midió si los turnos del
+  revisor se van en lectura o en checks y procesos en segundo plano; 20 y 48 se recalibran con
+  esa medición (`main_thread_turns`, `check_runs`, `reaped` de GH-589 y GH-590).
+- No hay turno final forzado (el SDK no lo permite) ni brazo de verificador en
+  `turn_cut_retry_message`: pedirle a un revisor cortado que entregue un veredicto lo
+  obligaría a entregar uno que no alcanzó. Con la sesión recuperada y el tope mayor, el
+  reintento continúa la revisión.
+- El `turn_cap` del pedido es el `max_turns` que ya existe: el conjunto de razones es cerrado
+  (ADR-0008) y no se agrega valor.
+- La nota de negaciones sale del motivo del escalado (`RoleFailure`). La cuenta sigue en
+  `Failure.denials` y en la línea de sistema de la sección del rol que entrega.
+
+**Consecuencia conocida.** Con la nota fuera del motivo, un rol que escala sin entregar ya no
+muestra su cuenta de negaciones en el documento de la tarea: queda en `Failure.denials` y la
+línea de sistema solo la escribe el rol que entrega. El trabajo "cuando leo una corrida que
+escaló, quiero ver cuántas negaciones hubo" (`docs/product/role-failures.md`) queda pendiente
+de una decisión del plan: una línea de sistema en la sección del escalado, nunca de nuevo en
+el motivo.

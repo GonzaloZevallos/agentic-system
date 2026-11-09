@@ -40,6 +40,8 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_INTERVIEWEE,
+    TECH_LEAD_REVIEWER,
+    TECH_LEAD_REVIEWER_LIGHT,
     UI_LEAD,
     UX_DESIGNER,
     UX_LEAD,
@@ -48,6 +50,7 @@ from agentic.core.process.domain.roles import (
     reads_by_index,
     render,
 )
+from agentic.core.process.domain.rules import RETRY_TURNS
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
@@ -358,16 +361,18 @@ async def test_role_failure_carries_the_last_attempts_motive_verbatim():
     assert info.value.failures[-1]["error"] == motive
 
 
-async def test_role_failure_names_the_runs_total_denials_when_there_were_any():
-    # The run's total: every recorded failure's denials, never a per-attempt figure
-    # (glossary: Negación) — attempt 1 can burn every denial fighting the permission
-    # layer and attempt 2 still fail on something else.
+async def test_role_failure_keeps_the_denials_out_of_its_reason_but_in_the_failures():
+    # Inverted by GH-571: the reason used to end with the denial note. The count stays
+    # on every recorded `Failure` (glossary: Negación), and a delivering run's section
+    # keeps its note line (see the `run_role_prepends_the_denial_note…` tests).
     a = AttemptFailed("a", 0.01, denials=5)
     b = AttemptFailed("b", 0.02, denials=3)
     runner = ScriptedRunner(pjm=[a, b])
     with pytest.raises(RoleFailure) as info:
         await run_pjm(runner)
-    assert str(info.value) == f"PjM failed 2 times: b {rules.denial_note(PJM, 8)}"
+    assert str(info.value) == "PjM failed 2 times: b"
+    assert "The system denied" not in str(info.value)
+    assert [f["denials"] for f in info.value.failures] == [5, 3]
 
 
 async def test_role_failure_says_nothing_about_denials_when_there_were_none():
@@ -479,7 +484,44 @@ async def test_a_diagnoser_failing_for_another_reason_retries_with_the_base_cap(
 
 
 @pytest.mark.parametrize(
-    "role", [r for r in ROLES if r.slug != "landing_diagnoser"], ids=lambda r: r.slug
+    "role", [TECH_LEAD_REVIEWER, TECH_LEAD_REVIEWER_LIGHT], ids=lambda r: r.slug
+)
+async def test_a_reviewer_cut_twice_by_max_turns_resumes_the_session_at_the_raised_cap(role):
+    # GH-589/GH-590: the cut attempt's cost and session survive (the runner no longer
+    # reports it as `SDK error`), so the retry continues it with 48 turns, and the
+    # escalation says why the role stopped.
+    cut = AttemptFailed(
+        "run failed (max_turns): max_turns (20) exhausted",
+        1.0,
+        session_id="sess-cut",
+        reason="max_turns",
+        denials=2,
+    )
+    runner = ScriptedRunner(**{role.slug: [cut, cut]})
+    with pytest.raises(RoleFailure) as info:
+        await run_with_retry(
+            role,
+            "task",
+            system_prompt="s",
+            model="m",
+            retries=1,
+            vocabulary={},
+            cwd=Path("/p"),
+            runner=runner,
+            owner_task="GH-1",
+        )
+    assert [c["max_turns"] for c in runner.calls] == [20, 48]
+    assert runner.calls[1]["resume"] == "sess-cut"
+    assert "max_turns (20) exhausted" in str(info.value)
+    assert "SDK error" not in str(info.value)
+    assert "The system denied" not in str(info.value)
+    assert info.value.cost_usd == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    "role",
+    [r for r in ROLES if r.slug not in RETRY_TURNS],
+    ids=lambda r: r.slug,
 )
 async def test_every_other_role_retries_a_max_turns_cut_with_its_own_unchanged_cap(role):
     cut = AttemptFailed("run failed (max_turns)", 0.4, session_id="sess-cut", reason="max_turns")
