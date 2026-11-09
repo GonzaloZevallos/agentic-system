@@ -9,7 +9,8 @@ when one can (a number master already holds under another file name, or a number
 share) does it read `tree_names(head)` a second time, to drop what a later commit removed.
 The lines, the trees of the commits that added them and the texts of the rewrite are read
 only on a real collision. All of it is bounded by the branch's own commits and ADR files;
-there is no cache. Which numbers collide, what they become and what is rewritten is
+there is no cache. `adr_decided` alone adds one `paths_naming` (a `git grep -l -F`) per moved
+file, and reads whole only the files that name it (GH-576); `adr_collision` never does. Which numbers collide, what they become and what is rewritten is
 `domain.adr_numbers`'s; this module reads and hands over, it compares no number."""
 
 from __future__ import annotations
