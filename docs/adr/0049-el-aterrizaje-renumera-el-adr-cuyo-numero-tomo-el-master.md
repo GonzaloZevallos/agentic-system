@@ -196,5 +196,25 @@ intento fallido (apostrophe GH-407, PR #618).
   gastados, la pregunta deja de ofrecer «decide on this issue»: dice que no se aplicará otra
   decisión a esa colisión y da la salida a mano (`WAY_OUT_ADR`). Una cabeza nueva vuelve a
   pasar por la tabla.
+- **Qué chequeo estaba en rojo.** Cuando un `apply_adr_decision` termina `checks_red`, la
+  entrada guarda dos claves opcionales (se leen con `.get`; un documento anterior se lee como
+  antes): `red_checks`, una lista de `{name, tail, recovered}`, y `red_more`, cuántos chequeos
+  rojos quedaron fuera (solo si es mayor que 0). Las construye y sanea una sola función,
+  `presubmit.red_checks`, sobre las mismas filas de la puerta que lee el predicado `checks_red`
+  (que no cambia): primero los que siguen rojos, luego los que se recuperaron, cada grupo por
+  orden de primer fallo, hasta `RED_CHECKS_MAX = 3`. Un chequeo rojo lleva la cola de su
+  última fila fallida (forma `_tail_of`), con cada línea que contiene un token de
+  `ID_FORBIDDEN` reemplazada por `[line dropped]`; uno recuperado lleva `recovered: true` y
+  ninguna cola. Nunca se guarda el log crudo ni nadie vuelve a sanear. `escalate_adr` los
+  agrega al comentario que ya publica (nunca un segundo comentario): cada chequeo rojo con sus
+  últimas líneas, los recuperados como «falló y luego pasó al repetir», y «and N more checks
+  were red»; si `checks_red` llegó sin detalle, una línea fija lo dice. La pregunta entera se
+  recorta bajo `MERGE_COMMENT_MAX` con el mismo recorte de la evidencia de merge
+  (`presubmit.fit_comment`).
+- **§8.** Desde aquí la cola acotada (a lo sumo `TAIL_LINES` líneas y `MERGE_TAIL_CHARS`
+  caracteres por chequeo, 3 chequeos) de la salida de un chequeo que corrió el stack llega al
+  documento de la tarea y a quien pueda leer el issue; es lo que pide el pedido, y el saneo es
+  en el origen. Un flake sigue terminando en `checks_red` (el predicado lee todas las filas):
+  el comentario ahora dice que el chequeo se recuperó.
 - **§7.** Ninguna métrica, etiqueta, atributo de span ni clase de escalado nuevo: volver a
   preguntar sigue usando `questions`.
