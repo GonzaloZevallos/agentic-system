@@ -20,7 +20,7 @@ from agentic.core.process.application.ports import (
     RawResult,
     Upstream,
 )
-from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import document, presubmit, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.adr_numbers import Ambiguous, Renaming
 from agentic.core.process.domain.ci import CiCheck, CiReport
@@ -2362,3 +2362,80 @@ def test_the_ci_no_verdict_escalation_carries_the_cause_the_pair_recorded(tmp_pa
     assert result.step == "escalate"
     [entry] = [e for e in _doc(ports)["landing"] if e["step"] == "escalate"]
     assert entry["refusal"] == "ci_no_verdict" and entry["cause"] == "no_run"
+
+
+# --- GH-570: the question says which check was red ----------------------------------------------
+
+FOUND_AMBIGUOUS = Ambiguous("range", "docs/notes.md:2: ADR-0054…ADR-0060", (A_MOVE,))
+
+
+def _red(name, *lines, recovered=False) -> dict:
+    return {"name": name, "tail": list(lines), "recovered": recovered}
+
+
+def _reason(red_checks=(), red_more=0, failed="checks_red") -> str:
+    return landing_fix.adr_collision_reason(
+        FOUND_AMBIGUOUS, 3, failed, red_checks=red_checks, red_more=red_more
+    )
+
+
+def test_the_question_names_the_red_check_and_its_last_lines():
+    text = _reason([_red("tests", "collected 3", "FAILED test_a")])
+
+    assert "ended `checks_red`; nothing was pushed." in text
+    assert "`tests`, last lines:" in text
+    assert "```text\ncollected 3\nFAILED test_a\n```" in text
+    assert text.index("`tests`") < text.index("To go on")
+
+
+def test_a_recovered_check_is_said_to_have_passed_on_rerun():
+    text = _reason([_red("lint", recovered=True)])
+
+    assert "`lint` failed, then passed on rerun; nothing was pushed." in text
+    assert "```text" not in text
+
+
+def test_more_red_checks_than_shown_are_counted():
+    text = _reason([_red("tests", "x")], red_more=2)
+
+    assert "and 2 more checks were red" in text
+
+
+def test_checks_red_with_no_detail_says_a_fixed_line():
+    text = _reason()
+
+    assert "The checks were red; no check detail could be read." in text
+    assert "The checks were red" not in _reason(failed="out_of_bounds")
+
+
+def test_the_question_without_red_checks_is_the_text_of_before():
+    before = landing_fix.adr_collision_reason(FOUND_AMBIGUOUS, 3)
+
+    assert _reason(failed=None) == before
+    assert _reason(failed="out_of_bounds", red_checks=[_red("tests", "x")]) == (
+        landing_fix.adr_collision_reason(FOUND_AMBIGUOUS, 3, "out_of_bounds")
+    )
+
+
+def test_four_red_checks_with_oversized_tails_stay_under_the_comment_cap():
+    big = [_red(f"check{i}", *["x" * 2500] * 30) for i in range(4)]  # a document edited by hand
+
+    text = _reason(big, red_more=1)
+
+    assert len(text) <= presubmit.MERGE_COMMENT_MAX
+    assert "and 1 more checks were red" in text
+    assert "last lines omitted" in text
+    assert all(f"`check{i}`" in text for i in range(4))
+
+
+def test_the_asked_question_carries_the_detail_recorded_on_the_last_apply(tmp_path):
+    spent = _spent_decisions(1)
+    spent[-1]["red_checks"] = [_red("tests", "FAILED test_a"), _red("lint", recovered=True)]
+    spent[-1]["red_more"] = 1
+
+    question = _asked_question(tmp_path, spent)
+
+    assert "`tests`, last lines:" in question and "FAILED test_a" in question
+    assert "`lint` failed, then passed on rerun" in question
+    assert "and 1 more checks were red" in question
+    assert "decide on this issue" in question

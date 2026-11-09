@@ -33,7 +33,7 @@ from typing import (
 
 from .ci_push import PushKind
 from .plan_route import CriticState, Route
-from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate
+from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
 
 Status = Literal[
@@ -1140,6 +1140,11 @@ class LandingEntry(TypedDict, total=False):
     outcome: AdrDecisionOutcome
     moves: list[list[str]]
     head_after: str
+    # GH-570, an `apply_adr_decision` entry that ended `checks_red`, both optional: which checks
+    # were red (`presubmit.red_checks`, sanitized there, at most `RED_CHECKS_MAX`) and how many
+    # more were left out. Never the raw log; absent on an entry written before.
+    red_checks: list[RedCheck]
+    red_more: int
 
 
 JobLogCause = Literal["read", "unreadable", "empty", "other_head", "timed_out"]

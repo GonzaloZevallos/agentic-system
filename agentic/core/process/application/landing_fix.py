@@ -429,12 +429,27 @@ def _moves_lines(moves: Sequence[tuple[str, str]]) -> str:
     return "\n".join(f"- {old} -> {new}" for old, new in moves)
 
 
+def _red_blocks(red_checks: Sequence[Mapping[str, object]]) -> list[tuple[str, str, list[str]]]:
+    """The recorded red checks as (name, kind, tail) to show, `kind` being `red` or
+    `recovered`; whatever is not shaped like one is skipped (a document is edited by hand)."""
+    blocks: list[tuple[str, str, list[str]]] = []
+    for check in red_checks:
+        name, tail = check.get("name"), check.get("tail")
+        if not isinstance(name, str) or not name:
+            continue
+        lines = [line for line in tail if isinstance(line, str)] if isinstance(tail, list) else []
+        blocks.append((name, "recovered" if check.get("recovered") is True else "red", lines))
+    return blocks
+
+
 def adr_collision_reason(
     found: Renaming | Ambiguous,
     cap: int,
     failed: str | None = None,
     *,
     slots_left: bool = True,
+    red_checks: Sequence[Mapping[str, object]] = (),
+    red_more: int = 0,
 ) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
@@ -445,7 +460,11 @@ def adr_collision_reason(
     `apply_adr_decision` on the head, said in one line; with no moves to apply (a duplicate own
     number) "decide on this issue" is not offered, because no decision could be applied. Neither
     is it once `slots_left` is false (GH-570): the decision slots of this collision on this head
-    are spent, so the question says no further decision will be applied."""
+    are spent, so the question says no further decision will be applied. After a `checks_red`
+    line come the checks that were red (`red_checks`, as the entry records them) with their
+    last lines, those that recovered, and how many more were left out (`red_more`); with none
+    recorded a fixed line says so. The whole question stays under `MERGE_COMMENT_MAX`, the
+    tails going last check first."""
     if isinstance(found, Ambiguous) and not found.moves:
         what = (
             f"The branch has ADR files that share a number ({found.reason}): {found.detail}. "
@@ -465,24 +484,46 @@ def adr_collision_reason(
         )
     if failed is not None:
         what += f"\nThe last attempt to apply your decision ended `{failed}`; nothing was pushed."
+    blocks = _red_blocks(red_checks) if failed == "checks_red" else []
+    if failed == "checks_red" and not blocks:
+        what += "\nThe checks were red; no check detail could be read."
     if isinstance(found, Ambiguous) and not found.moves:
-        return (
-            f"{what}\nNo model was run and the task was not restarted. To go on, {WAY_OUT_ADR}. "
+        ending = (
+            f"No model was run and the task was not restarted. To go on, {WAY_OUT_ADR}. "
             "A new head goes through the landing table again; a reply without a new head does "
             "not ask again."
         )
-    if isinstance(found, Ambiguous) and not slots_left:
-        return (
-            f"{what}\nBoth decision slots for this collision on this head are spent, so no "
+    elif isinstance(found, Ambiguous) and not slots_left:
+        ending = (
+            f"Both decision slots for this collision on this head are spent, so no "
             f"further decision will be applied to it. To go on, {WAY_OUT_ADR}. A new head goes "
             "through the landing table again; a reply without a new head does not ask again."
         )
-    return (
-        f"{what}\nTo go on, {WAY_OUT_ADR}, or decide on this issue. A new head goes through "
-        "the landing table again; a reply without a new head does not ask again, except a "
-        "decision on the issue, which is applied by a model pass that edits only the lines "
-        "named above."
-    )
+    else:
+        ending = (
+            f"To go on, {WAY_OUT_ADR}, or decide on this issue. A new head goes through "
+            "the landing table again; a reply without a new head does not ask again, except a "
+            "decision on the issue, which is applied by a model pass that edits only the lines "
+            "named above."
+        )
+
+    def text(kept: int) -> str:
+        parts: list[str] = []
+        for i, (name, kind, lines) in enumerate(blocks):
+            if kind == "recovered":
+                parts.append(f"`{name}` failed, then passed on rerun; nothing was pushed.")
+            elif not lines:
+                parts.append(f"`{name}`, no last lines were recorded.")
+            elif i < kept:
+                parts.append(f"`{name}`, last lines:\n\n{presubmit.fence_tail(lines)}")
+            else:
+                parts.append(f"`{name}`, last lines omitted")
+        if blocks and red_more > 0:
+            parts.append(f"and {red_more} more checks were red")
+        detail = "".join(f"\n\n{part}" for part in parts)
+        return f"{what}{detail}\n{ending}" if not parts else f"{what}{detail}\n\n{ending}"
+
+    return presubmit.fit_comment(text, len(blocks))
 
 
 def escalate_adr(context: LandingContext) -> None:
@@ -503,6 +544,11 @@ def escalate_adr(context: LandingContext) -> None:
     ]
     last = applied[-1].get("outcome") if applied else None
     failed = last if isinstance(last, str) and last != "applied" else None
+    recorded = applied[-1].get("red_checks") if applied else None
+    detail = (
+        [item for item in recorded if isinstance(item, dict)] if isinstance(recorded, list) else []
+    )
+    more = applied[-1].get("red_more") if applied else None
     slots_left = (
         context.head is None
         or not found.moves
@@ -515,7 +561,16 @@ def escalate_adr(context: LandingContext) -> None:
         context,
         "ADR number collision with master the renumbering cannot settle",
         "questions",
-        [adr_collision_reason(found, cap, failed, slots_left=slots_left)],
+        [
+            adr_collision_reason(
+                found,
+                cap,
+                failed,
+                slots_left=slots_left,
+                red_checks=detail,
+                red_more=more if isinstance(more, int) and more > 0 else 0,
+            )
+        ],
     )
     document = context.ports.documents.load(context.task_id)
     if document is None:

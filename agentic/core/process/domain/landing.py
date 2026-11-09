@@ -1165,7 +1165,40 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
             out["outcome"] = outcome
     if (moves := _moves_of(raw.get("moves"))) is not None:
         out["moves"] = moves
+    # GH-570, an `apply_adr_decision` that ended `checks_red`: shaped here, never sanitized
+    # (`presubmit.red_checks` did that when it built them).
+    if (red := _red_checks_of(raw.get("red_checks"))) is not None:
+        out["red_checks"] = red
+    if isinstance(more := raw.get("red_more"), int) and not isinstance(more, bool) and more > 0:
+        out["red_more"] = more
     return out
+
+
+def _red_checks_of(value: object) -> list[presubmit.RedCheck] | None:
+    """`value` as the `red_checks` of an `apply_adr_decision` entry: `{name, tail, recovered}`
+    per check, `None` when any is not shaped like that (a document is edited by hand)."""
+    if not isinstance(value, list) or not value:
+        return None
+    kept: list[presubmit.RedCheck] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            return None
+        name, lines, recovered = item.get("name"), item.get("tail"), item.get("recovered")
+        if (
+            not isinstance(name, str)
+            or not isinstance(lines, list)
+            or not all(isinstance(line, str) for line in lines)
+            or not isinstance(recovered, bool)
+        ):
+            return None
+        kept.append(
+            {
+                "name": name,
+                "tail": [line for line in lines if isinstance(line, str)],
+                "recovered": recovered,
+            }
+        )
+    return kept
 
 
 def _moves_of(value: object) -> list[list[str]] | None:
