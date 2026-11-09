@@ -1464,3 +1464,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-09T17:25:33.930+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, check each plan invariant against what your diff changes in behaviour, not only the files it touches. If you narrow or widen a bound another component consumes, raise the plan's named constant in the same diff.
+  confidence: medium
+  seen_in:
+  - GH-576
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-09T22:45:30.509+00:00'
