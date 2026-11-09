@@ -164,6 +164,13 @@ LANDING_ADR_DECISIONS_MAX = 2
 restoration does not hand the budget back; declared, not measured. Charged to neither
 `LANDING_PASSES_MAX` nor the syncs, and the step never reaches `exhausted()`."""
 
+ADR_EDIT_BOUNDS = 2
+"""The version of the set of lines the model pass of `apply_adr_decision` may edit (GH-576),
+written in each entry as `bounds`; an entry without it is version 1. Any change that widens or
+narrows that set (`adr_numbers.DecidedRenaming.spots` and `bound`, rule (d) among them) raises
+it in the same diff, so the slots the older set spent are not charged to the new one. Declared,
+not measured."""
+
 LANDING_UNSYNCED_MAX = 2
 """`sync_master` passes closed without their upstream (`lacks`) per upstream sha; declared, not
 measured. The second is the `diagnose`: a branch that cannot take master in is not retried."""
