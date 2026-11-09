@@ -1446,3 +1446,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-08T12:45:48.952+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change behavior that a flow or architecture doc describes, update that doc in the same change, citing the real file and symbol for each new rule, and re-read the doc's sections on that flow before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-570
+  sources:
+  - finding
+  added_at: '2026-11-09T16:18:22.871+00:00'
