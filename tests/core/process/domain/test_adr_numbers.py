@@ -462,7 +462,8 @@ def test_decided_with_nothing_undecidable_is_the_renumber_result_and_no_spots():
     }
     lines = [_line(OLD, "# ADR-0049: mine")]
     decided = _decided({OLD: NEW}, texts, lines)
-    assert decided == adr_numbers.DecidedRenaming(_rewrite({OLD: NEW}, texts, lines), ())
+    assert decided.renaming == _rewrite({OLD: NEW}, texts, lines)
+    assert decided.spots == ()
 
 
 def test_decided_rewrites_all_it_can_and_lists_every_own_line_it_cannot():
@@ -523,3 +524,115 @@ def test_decided_keeps_the_refusals_renumber_makes_loudly():
     texts = {f"{ADR}0054-a.md": (None, "a\n"), f"{ADR}0054-b.md": (None, "b\n")}
     result = _decided(moves, texts, [])
     assert isinstance(result, Ambiguous) and result.reason == "duplicate_own_number"
+
+
+# -- GH-576: rule (d), the bound lines and the content bounds check ------------------------
+
+INDEX = "docs/architecture/decisiones.md"
+ROW = "| [0049](../adr/0049-mine.md) | Mine |"
+ROW_AFTER = "| [0050](../adr/0050-mine.md) | Mine |"
+
+
+def test_a_link_label_follows_its_moved_target_on_a_line_the_branch_did_not_add():
+    # GH-407: the index row came in by a merge resolution, so no own commit added it.
+    texts = {OLD: (None, "x\n"), INDEX: ("", f"| a | b |\n{ROW}\n")}
+    decided = _decided({OLD: NEW}, texts, [])
+    assert decided.renaming.texts[INDEX] == f"| a | b |\n{ROW_AFTER}\n"
+    assert decided.spots == ()
+    # `renumber` has no rule (d): the label stays, only the target follows (rule (a)).
+    plain = _rewrite({OLD: NEW}, texts, [])
+    assert plain.texts[INDEX] == "| a | b |\n| [0049](../adr/0050-mine.md) | Mine |\n"
+
+
+def test_a_link_to_a_file_that_did_not_move_keeps_its_label_even_with_the_moved_number():
+    texts = {OLD: (None, "x\n"), INDEX: ("", "[0049](0049-theirs.md) and 0049\n")}
+    decided = _decided({OLD: NEW}, texts, [])
+    assert INDEX not in decided.renaming.texts
+    assert decided.bound == ()
+
+
+def test_only_the_link_to_the_moved_file_changes_when_masters_file_has_the_same_number():
+    line = "[0049](0049-mine.md) [0049](0049-theirs.md)"
+    texts = {OLD: (None, "x\n"), "d.md": ("", f"{line}\n")}
+    decided = _decided({OLD: NEW}, texts, [])
+    assert decided.renaming.texts["d.md"] == "[0050](0050-mine.md) [0049](0049-theirs.md)\n"
+
+
+def test_a_label_that_is_not_the_old_number_of_its_target_is_left_as_it_is():
+    texts = {OLD: (None, "x\n"), "d.md": ("", "[0048](docs/adr/0049-mine.md) [x](0049-mine.md)\n")}
+    decided = _decided({OLD: NEW}, texts, [])
+    assert decided.renaming.texts["d.md"] == "[0048](docs/adr/0050-mine.md) [x](0050-mine.md)\n"
+
+
+def test_gh_601_own_row_is_decided_by_rule_d_and_is_no_spot_any_more():
+    texts = {OLD: (None, "x\n"), INDEX: ("", f"{ROW}\n")}
+    lines = [_line(INDEX, ROW)]
+    plain = _rewrite({OLD: NEW}, texts, lines)
+    assert isinstance(plain, Ambiguous) and plain.reason == "unclassified_token"
+    decided = _decided({OLD: NEW}, texts, lines)
+    assert decided.spots == ()
+    assert decided.renaming.texts[INDEX] == f"{ROW_AFTER}\n"
+    assert decided.bound == ((INDEX, 1, ROW_AFTER),)
+
+
+def test_a_label_outside_a_link_to_the_moved_file_is_still_a_spot_on_an_own_line():
+    row = "| [0049](other.md) | see 0049-mine.md |"
+    texts = {OLD: (None, "x\n"), "d.md": ("", f"{row}\n")}
+    decided = _decided({OLD: NEW}, texts, [_line("d.md", row)])
+    assert decided.spots == (("d.md", 1, "| [0049](other.md) | see 0050-mine.md |"),)
+    assert decided.bound == ()  # a spot is never a bound line
+
+
+def test_the_bound_lines_are_the_rewritten_ones_and_the_title_of_the_moved_adr():
+    texts = {
+        OLD: (None, "# ADR-0049: mine\n\nsee docs/adr/0049-mine.md\n"),
+        "a.py": ("", "ok\n# docs/adr/0049-mine.md\n"),
+        INDEX: ("", f"top\n{ROW}\n"),
+    }
+    decided = _decided({OLD: NEW}, texts, [])
+    assert decided.bound == (
+        ("a.py", 2, "# docs/adr/0050-mine.md"),
+        (NEW, 1, "# ADR-0049: mine"),
+        (NEW, 3, "see docs/adr/0050-mine.md"),
+        (INDEX, 2, ROW_AFTER),
+    )
+
+
+def _bounds(spots=(), bound=()):
+    return adr_numbers.DecidedRenaming(Renaming((), {}), tuple(spots), tuple(bound))
+
+
+def test_outside_bounds_accepts_an_in_place_edit_of_a_spot():
+    found = _bounds(spots=[("m.py", 2, 'MSG = "ADR-0049"')])
+    before = {"m.py": 'a = 1\nMSG = "ADR-0049"\n'}
+    after = {"m.py": 'a = 1\nMSG = "ADR-0050"\n'}
+    assert adr_numbers.outside_bounds(before, after, found) == ()
+
+
+def test_outside_bounds_lets_a_bound_row_move_but_not_change():
+    rows = ["| [0076](a) |", "| [0077](b) |", "| [0078](c) |"]
+    found = _bounds(bound=[(INDEX, 3, rows[2])])
+    before = {INDEX: "\n".join([rows[0], rows[2], rows[1]]) + "\n"}
+    after = {INDEX: "\n".join(rows) + "\n"}
+    assert adr_numbers.outside_bounds(before, after, found) == ()
+    edited = {INDEX: "\n".join([rows[0], rows[1], "| [0078](c) edited |"]) + "\n"}
+    assert adr_numbers.outside_bounds(before, edited, found) == ((INDEX, 2), (INDEX, 3))
+
+
+def test_outside_bounds_names_a_foreign_line_and_an_added_or_removed_line():
+    found = _bounds(spots=[("m.py", 2, "S = 1")])
+    before = {"m.py": "a = 1\nS = 1\nb = 1\n"}
+    changed = {"m.py": "a = 2\nS = 2\nb = 1\n"}
+    assert adr_numbers.outside_bounds(before, changed, found) == (("m.py", 1),)
+    # A spot is one line for one line: a second line in its place is not allowed.
+    assert adr_numbers.outside_bounds(before, {"m.py": "a = 1\nS = 2\nS = 3\nb = 1\n"}, found) == (
+        ("m.py", 3),
+    )
+    assert adr_numbers.outside_bounds(before, {"m.py": "a = 1\nS = 1\n"}, found) == (("m.py", 3),)
+
+
+def test_outside_bounds_names_a_path_with_neither_a_spot_nor_a_bound_line_at_line_zero():
+    found = _bounds(spots=[("m.py", 1, "S = 1")])
+    assert adr_numbers.outside_bounds({}, {"new.py": "x\n"}, found) == (("new.py", 0),)
+    unchanged = {"m.py": "S = 1\n"}
+    assert adr_numbers.outside_bounds(unchanged, unchanged, found) == ()
