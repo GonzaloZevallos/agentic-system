@@ -963,3 +963,68 @@ def test_a_tokenless_form_returns_its_command_whatever_the_ids_hold():
     assert presubmit.rerun_command("pytest", red("FAILED a`b\n"), form, "merge") == "pytest --lf"
     huge = "".join(f"FAILED {'x' * 600}{n:02d}\n" for n in range(45))
     assert presubmit.rerun_command("pytest", red(huge), form, "merge") == "pytest --lf"
+
+
+# --- GH-570: which checks of a gate run were red ----------------------------------------------
+
+
+def _row(name, passed, output="", **extra):
+    return {"name": name, "command": f"run {name}", "passed": passed, "output": output, **extra}
+
+
+def test_a_clean_red_row_is_reported_still_red_with_its_tail():
+    shown, more = presubmit.red_checks([_row("tests", False, "a\nFAILED b\n")])
+
+    assert shown == [{"name": "tests", "tail": ["a", "FAILED b"], "recovered": False}]
+    assert more == 0
+
+
+def test_a_red_row_then_a_passing_rerun_is_recovered_with_no_tail():
+    shown, _ = presubmit.red_checks(
+        [_row("tests", False, "boom"), _row("tests", True, "ok", rerun=True)]
+    )
+
+    assert shown == [{"name": "tests", "tail": [], "recovered": True}]
+
+
+@pytest.mark.parametrize("token", ["{{", "}}", "<!--", "-->", "`"])
+def test_a_line_with_a_forbidden_token_is_replaced_and_the_line_count_kept(token):
+    output = f"first\nbad {token} line\nlast"
+
+    [check], _ = presubmit.red_checks([_row("tests", False, output)])
+
+    assert check["tail"] == ["first", "[line dropped]", "last"]
+
+
+def test_two_red_names_keep_the_order_of_first_failure():
+    shown, _ = presubmit.red_checks(
+        [_row("lint", False, "l"), _row("tests", False, "t"), _row("lint", False, "l2")]
+    )
+
+    assert [check["name"] for check in shown] == ["lint", "tests"]
+    assert shown[0]["tail"] == ["l2"]  # the last failing row
+
+
+def test_four_still_red_names_give_three_entries_and_a_count_of_one():
+    rows = [_row(name, False, name) for name in ("a", "b", "c", "d")]
+
+    shown, more = presubmit.red_checks(rows)
+
+    assert [check["name"] for check in shown] == ["a", "b", "c"]
+    assert more == 1
+
+
+def test_still_red_sorts_before_recovered():
+    shown, _ = presubmit.red_checks(
+        [_row("lint", False, "x"), _row("lint", True), _row("tests", False, "t")]
+    )
+
+    assert [(check["name"], check["recovered"]) for check in shown] == [
+        ("tests", False),
+        ("lint", True),
+    ]
+
+
+def test_a_gate_run_with_no_red_row_reports_nothing():
+    assert presubmit.red_checks([_row("tests", True)]) == ([], 0)
+    assert presubmit.red_checks([]) == ([], 0)

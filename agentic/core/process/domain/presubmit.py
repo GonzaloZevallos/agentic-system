@@ -15,7 +15,7 @@ from __future__ import annotations
 import posixpath
 import re
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -831,6 +831,57 @@ def merge_checks_record(
     return record
 
 
+class RedCheck(TypedDict):
+    """One check of a gate run that failed, as a landing entry keeps it (GH-570): its name,
+    the sanitized last lines of its last failing row (empty when it `recovered`, that is its
+    last row passed)."""
+
+    name: str
+    tail: list[str]
+    recovered: bool
+
+
+RED_CHECKS_MAX = 3
+"""The most red checks a landing entry keeps the detail of (GH-570); the rest are counted."""
+
+LINE_DROPPED = "[line dropped]"
+
+
+def red_checks(results: Sequence[CheckResult]) -> tuple[list[RedCheck], int]:
+    """Which checks of a gate run were red, for a landing entry (GH-570): every name with a
+    failing row, in order of first failure, those still red (their last row failed) before
+    those that recovered (their last row passed). At most `RED_CHECKS_MAX` are kept; the
+    int is how many were left out. A check still red carries the tail of its last failing
+    row in the `_tail_of` shape, each line holding an `ID_FORBIDDEN` token replaced by
+    `LINE_DROPPED`; a recovered one carries no tail. The only place a stored check detail
+    is built and sanitized."""
+    first: dict[str, int] = {}
+    last_failing: dict[str, CheckResult] = {}
+    last_passed: dict[str, bool] = {}
+    for row in results:
+        name = row["name"]
+        last_passed[name] = row["passed"]
+        if not row["passed"]:
+            first.setdefault(name, len(first))
+            last_failing[name] = row
+    names = sorted(first, key=lambda name: (last_passed[name], first[name]))
+    shown: list[RedCheck] = []
+    for name in names[:RED_CHECKS_MAX]:
+        recovered = last_passed[name]
+        lines = [] if recovered else _tail_of(last_failing[name]["output"])
+        shown.append(
+            {
+                "name": name,
+                "tail": [
+                    LINE_DROPPED if any(bad in line for bad in ID_FORBIDDEN) else line
+                    for line in lines
+                ],
+                "recovered": recovered,
+            }
+        )
+    return shown, max(0, len(names) - RED_CHECKS_MAX)
+
+
 def _derived_step(declared: Mapping[str, str], results: Sequence[CheckResult] | None) -> FailedStep:
     if not declared:
         return "no_checks"
@@ -903,10 +954,23 @@ def failed_checks_markdown(
             parts.append(f"`{name}`, {suffix}")
         return "\n\n".join(parts)
 
-    kept = len(blocks)
+    return fit_comment(text, len(blocks))
+
+
+def fit_comment(text: Callable[[int], str], blocks: int) -> str:
+    """The comment `text(kept)` renders with the tails of the first `kept` of `blocks`
+    entries, for the largest `kept` that fits `MERGE_COMMENT_MAX`: the tails go last entry
+    first, and `text(0)` is returned when even that is over."""
+    kept = blocks
     while kept > 0 and len(text(kept)) > MERGE_COMMENT_MAX:
         kept -= 1
     return text(kept)
+
+
+def fence_tail(lines: Sequence[str]) -> str:
+    """`lines` in a `text` fence a comment can carry, mentions neutralised as in the merge
+    evidence."""
+    return _fenced("\n".join(lines), True)
 
 
 def _fenced(tail_text: str, neutralise: bool) -> str:

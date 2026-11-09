@@ -159,10 +159,10 @@ LANDING_RENUMBERS_MAX = 3
 is the `diagnose`: no further push."""
 
 LANDING_ADR_DECISIONS_MAX = 2
-"""`apply_adr_decision` entries per task (GH-544) whose `outcome` is not `stale_moves`, counted
-over all entries in `LandingSpent.adr_decisions` (`adr_decisions_spent`), so a restoration does not
-hand the budget back; declared, not measured. Charged to neither `LANDING_PASSES_MAX` nor the
-syncs, and the step never reaches `exhausted()`."""
+"""`apply_adr_decision` entries per collision, keyed by (head, moves) (GH-544, GH-570), whose
+`outcome` is not `stale_moves`, counted over all entries by `adr_decisions_spent`, so a
+restoration does not hand the budget back; declared, not measured. Charged to neither
+`LANDING_PASSES_MAX` nor the syncs, and the step never reaches `exhausted()`."""
 
 LANDING_UNSYNCED_MAX = 2
 """`sync_master` passes closed without their upstream (`lacks`) per upstream sha; declared, not
@@ -243,10 +243,9 @@ class LandingSpent:
     # GH-463: the `ci_no_verdict` escalation of the head was released (`released_no_verdict`)
     # and the pair it granted is not yet spent: the table waits instead of escalating again.
     no_verdict_released: bool = False
-    # GH-544: `apply_adr_decision` entries that used a slot (`adr_decisions_spent`), and whether
-    # the review an applied decision owes was not yet recorded (`adr_review_owed`): that one
-    # `re_review` is not refused by `LANDING_PASSES_MAX`, though it counts as a pass.
-    adr_decisions: int = 0
+    # GH-544: whether the review an applied decision owes was not yet recorded
+    # (`adr_review_owed`): that one `re_review` is not refused by `LANDING_PASSES_MAX`, though it
+    # counts as a pass.
     adr_review_owed: bool = False
 
     @property
@@ -963,33 +962,95 @@ _ADR_DECISION_SPENT: frozenset[str] = frozenset(
 )
 
 
-def adr_decisions_spent(entries: Sequence[Mapping[str, object]]) -> int:
-    """The `apply_adr_decision` entries that used a slot of `LANDING_ADR_DECISIONS_MAX`: those
-    whose `outcome` is one of the closed set but `stale_moves`. Read over all entries, as
-    `renumbers` is, so a restoration does not give a slot back (GH-544)."""
-    return sum(
-        1
+def _moves_key(moves: object) -> tuple[tuple[str, str], ...] | None:
+    """`moves` as a tuple of `(old, new)` tuples, whether it is a YAML list of lists or a
+    `Renaming.moves`; `None` when it is not a sequence of pairs of strings."""
+    if not isinstance(moves, Sequence) or isinstance(moves, str):
+        return None
+    pairs: list[tuple[str, str]] = []
+    for pair in moves:
+        if (
+            isinstance(pair, str)
+            or not isinstance(pair, Sequence)
+            or len(pair) != 2
+            or not all(isinstance(part, str) for part in pair)
+        ):
+            return None
+        pairs.append((pair[0], pair[1]))
+    return tuple(pairs)
+
+
+def adr_decisions_spent(
+    entries: Sequence[Mapping[str, object]], head: str, moves: Sequence[Sequence[str]]
+) -> int:
+    """The `apply_adr_decision` entries that used a slot of `LANDING_ADR_DECISIONS_MAX` for the
+    collision (`head`, `moves`): those whose `outcome` is one of the closed set but `stale_moves`
+    (GH-570). The one counter of the cap: the step table, `release_asked` and the question the
+    owner reads all call it. Read over all entries, as `renumbers` is, so a restoration does not
+    give a slot back (GH-544).
+
+    An apply belongs to the key when its `head` is `head` and its `decision_at` is the
+    `released_at` of an `escalate_adr` entry of the same head whose recorded `moves`, normalized
+    to tuples of `(old, new)` tuples, equal `moves` normalized. An apply that cannot be matched
+    (no `decision_at`, no such question, a question with no `moves`) counts against every key of
+    its head; one with no `head` counts against every key, so an older document is never looser
+    than the per-task count was."""
+    key = _moves_key(moves)
+    spent = 0
+    for entry in entries:
+        if (
+            entry.get("step") != "apply_adr_decision"
+            or entry.get("outcome") not in _ADR_DECISION_SPENT
+        ):
+            continue
+        applied_on = entry.get("head")
+        if applied_on is None:
+            spent += 1
+        elif applied_on == head and _answers(entries, entry, head, key):
+            spent += 1
+    return spent
+
+
+def _answers(
+    entries: Sequence[Mapping[str, object]],
+    apply: Mapping[str, object],
+    head: str,
+    key: tuple[tuple[str, str], ...] | None,
+) -> bool:
+    """Whether `apply` (on `head`) counts against the collision `key`: it answers a question of
+    that key, or answers none that can be told (`adr_decisions_spent`)."""
+    decision_at = apply.get("decision_at")
+    if not decision_at:
+        return True
+    recorded = [
+        _moves_key(entry.get("moves"))
         for entry in entries
-        if entry.get("step") == "apply_adr_decision" and entry.get("outcome") in _ADR_DECISION_SPENT
-    )
+        if entry.get("step") == "escalate_adr"
+        and entry.get("head") == head
+        and entry.get("released_at") == decision_at
+    ]
+    if not recorded or recorded[-1] is None:
+        return True
+    return recorded[-1] == key
 
 
 def adr_decision_due(
-    entries: Sequence[Mapping[str, object]],
+    live: Sequence[Mapping[str, object]],
     head: str,
     collision: Ambiguous | Renaming | None,
-    spent: LandingSpent,
+    every: Sequence[Mapping[str, object]],
 ) -> bool:
     """Whether an owner's decision on `head` is waiting for its `apply_adr_decision` (GH-544):
     the last `escalate_adr` entry of the head carrying `released_at` has no
-    `apply_adr_decision` of the given (live) `entries` with that `decision_at`, `collision` is
-    an `Ambiguous` with moves to apply, and `spent` has a free slot. The released entry need not
-    carry `moves`: one written by GH-412 is eligible. Entries without `released_at`, or other
-    heads', never count."""
+    `apply_adr_decision` of the given `live` entries with that `decision_at`, `collision` is
+    an `Ambiguous` with moves to apply, and the slots of that collision on `head` are not spent
+    (`adr_decisions_spent` over `every` entry, so a restoration never gives a slot back,
+    GH-570). The released entry need not carry `moves`: one written by GH-412 is eligible.
+    Entries without `released_at`, or other heads', never count."""
     released_at = next(
         (
             entry.get("released_at")
-            for entry in reversed(entries)
+            for entry in reversed(live)
             if entry.get("step") == "escalate_adr"
             and entry.get("head") == head
             and entry.get("released_at")
@@ -1000,13 +1061,13 @@ def adr_decision_due(
         return False
     if not isinstance(collision, Ambiguous) or not collision.moves:
         return False
-    if spent.adr_decisions >= LANDING_ADR_DECISIONS_MAX:
+    if adr_decisions_spent(every, head, collision.moves) >= LANDING_ADR_DECISIONS_MAX:
         return False
     return not any(
         entry.get("step") == "apply_adr_decision"
         and entry.get("head") == head
         and entry.get("decision_at") == released_at
-        for entry in entries
+        for entry in live
     )
 
 
@@ -1104,7 +1165,40 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
             out["outcome"] = outcome
     if (moves := _moves_of(raw.get("moves"))) is not None:
         out["moves"] = moves
+    # GH-570, an `apply_adr_decision` that ended `checks_red`: shaped here, never sanitized
+    # (`presubmit.red_checks` did that when it built them).
+    if (red := _red_checks_of(raw.get("red_checks"))) is not None:
+        out["red_checks"] = red
+    if isinstance(more := raw.get("red_more"), int) and not isinstance(more, bool) and more > 0:
+        out["red_more"] = more
     return out
+
+
+def _red_checks_of(value: object) -> list[presubmit.RedCheck] | None:
+    """`value` as the `red_checks` of an `apply_adr_decision` entry: `{name, tail, recovered}`
+    per check, `None` when any is not shaped like that (a document is edited by hand)."""
+    if not isinstance(value, list) or not value:
+        return None
+    kept: list[presubmit.RedCheck] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            return None
+        name, lines, recovered = item.get("name"), item.get("tail"), item.get("recovered")
+        if (
+            not isinstance(name, str)
+            or not isinstance(lines, list)
+            or not all(isinstance(line, str) for line in lines)
+            or not isinstance(recovered, bool)
+        ):
+            return None
+        kept.append(
+            {
+                "name": name,
+                "tail": [line for line in lines if isinstance(line, str)],
+                "recovered": recovered,
+            }
+        )
+    return kept
 
 
 def _moves_of(value: object) -> list[list[str]] | None:

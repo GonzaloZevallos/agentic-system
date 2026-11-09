@@ -24,7 +24,7 @@ from ..domain import landing, rules
 from ..domain import landing as landing_rules
 from ..domain.adr_numbers import DecidedRenaming
 from ..domain.check_schedule import CheckPriority
-from ..domain.presubmit import describe_checks
+from ..domain.presubmit import RedCheck, describe_checks, red_checks
 from ..domain.roles import DEVELOPER
 from ..domain.task import AdrDecisionOutcome, TaskState, apply
 from .adr_collision import adr_collision, adr_decided
@@ -109,8 +109,20 @@ def _unit(state: TaskState) -> str | None:
     return unit["id"] if unit is not None and "id" in unit else None
 
 
-Result = tuple[AdrDecisionOutcome, str | None, bool]
-"""The outcome, the head pushed (`applied` only) and whether the verdict is carried to it."""
+RedDetail = tuple[list[RedCheck], int]
+"""Which checks were red and how many more were left out (`presubmit.red_checks`)."""
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckedRed:
+    """The Developer pass ended `checks_red`; `detail` says which checks were red."""
+
+    detail: RedDetail
+
+
+Result = tuple[AdrDecisionOutcome, str | None, bool, RedDetail | None]
+"""The outcome, the head pushed (`applied` only), whether the verdict is carried to it and,
+for `checks_red` only, which checks were red."""
 
 
 def apply_adr_decision(context: LandingContext) -> None:
@@ -122,8 +134,8 @@ def apply_adr_decision(context: LandingContext) -> None:
     if unit is None or sha is None:
         context.log(f"agentic: land: {context.task_id}: apply_adr_decision: nothing to apply")
         return
-    outcome, head_after, carried = _apply(context, state, unit, sha)
-    _finish(context, state, unit, outcome, head_after, carried)
+    outcome, head_after, carried, red = _apply(context, state, unit, sha)
+    _finish(context, state, unit, outcome, head_after, carried, red)
 
 
 def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Result:
@@ -132,30 +144,32 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
     try:
         found = adr_decided(ports, sha, head)
     except GitError:
-        return "stale_moves", None, False
+        return "stale_moves", None, False, None
     recorded = _recorded_moves(_document(context), head)
     if not isinstance(found, DecidedRenaming) or not found.spots:
-        return "stale_moves", None, False
+        return "stale_moves", None, False, None
     moves = found.renaming.moves
     if recorded is not None and recorded != [list(pair) for pair in moves]:
-        return "stale_moves", None, False
+        return "stale_moves", None, False, None
     try:
         checkout = task_checkout(state, context.cfg, ports)
     except SetupFailed:
-        return "role_failed", None, False
+        return "role_failed", None, False, None
     pushed = False
     try:
         with merges_cleared(workspace, checkout.path, _owned(context, state)):
             try:
                 result = _write_and_ask(context, state, unit, checkout.path, found, sha)
+                if isinstance(result, CheckedRed):
+                    return "checks_red", None, False, result.detail
                 if isinstance(result, str):
-                    return result, None, False
+                    return result, None, False, None
                 new_head, carried = result
                 workspace.push(checkout.branch, lease=head)
                 pushed = True
-                return "applied", new_head, carried
+                return "applied", new_head, carried, None
             except GitError:
-                return "stale_moves", None, False
+                return "stale_moves", None, False, None
     finally:
         if not pushed:
             try:
@@ -171,9 +185,10 @@ def _write_and_ask(
     path: Path,
     found: DecidedRenaming,
     sha: str,
-) -> tuple[str, bool] | AdrDecisionOutcome:
+) -> tuple[str, bool] | AdrDecisionOutcome | CheckedRed:
     """The mechanical commit, the Developer pass and the checks on what it left: the new head
-    and whether the verdict carries to it, or the closed outcome that stops the step."""
+    and whether the verdict carries to it, or the closed outcome that stops the step
+    (`CheckedRed` for `checks_red`, with which checks were red)."""
     ports, head = context.ports, context.head
     workspace = ports.workspace
     renaming = found.renaming
@@ -220,9 +235,10 @@ def _write_and_ask(
 
 def _developer(
     context: LandingContext, state: TaskState, path: Path, mechanical: str, found: DecidedRenaming
-) -> AdrDecisionOutcome | None:
+) -> AdrDecisionOutcome | CheckedRed | None:
     """The Developer pass over the spot lines, through the delivery gate every Developer
-    delivers through. `None` when it delivered with green checks."""
+    delivers through. `None` when it delivered with green checks; `CheckedRed` when the last
+    gate run left a red row (which checks, from `presubmit.red_checks`)."""
     ports, cfg = context.ports, context.cfg
     base = task_base(state, ports)
     checks = ports.stack.checks(base)
@@ -272,7 +288,7 @@ def _developer(
     if output is None:
         return "role_failed"
     if any(not row["passed"] for row in gate.results or []):
-        return "checks_red"
+        return CheckedRed(red_checks(gate.results or []))
     return None
 
 
@@ -292,9 +308,12 @@ def _finish(
     outcome: AdrDecisionOutcome,
     head_after: str | None,
     carried: bool,
+    red: RedDetail | None = None,
 ) -> None:
     """Resolves the entry with its closed `outcome`; `applied` carries the verdict as the
-    domain said and logs it, any other outcome asks the owner again."""
+    domain said and logs it, any other outcome asks the owner again. `red` (`checks_red`
+    only) is written next to the outcome: `red_checks` when not empty, `red_more` when
+    above 0 (GH-570)."""
     raw = _document(context)
     entries = [dict(entry) for entry in all_entries(raw)]
     mine = [
@@ -306,6 +325,12 @@ def _finish(
     ]
     if mine:
         mine[-1]["outcome"] = outcome
+        if red is not None:
+            shown, more = red
+            if shown:
+                mine[-1]["red_checks"] = [dict(check) for check in shown]
+            if more > 0:
+                mine[-1]["red_more"] = more
         if head_after is not None:
             mine[-1]["head_after"] = head_after
     cost = raw.get("cost_usd", 0.0)

@@ -10,6 +10,7 @@ import pytest
 
 from agentic.core.process.domain import ci, document, landing, rules
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
+from agentic.core.process.domain.presubmit import RedCheck
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import (
     AdrDecisionOutcome,
@@ -482,6 +483,7 @@ _SAMPLE: dict[object, object] = {
     CiCause: "no_run",
     AdrDecisionOutcome: "applied",
     list[list[str]]: [["a", "b"]],
+    list[RedCheck]: [{"name": "tests", "tail": ["a"], "recovered": False}],
 }
 
 
@@ -491,6 +493,14 @@ def test_entry_of_keeps_every_key_landing_entry_declares():
     full = {key: _SAMPLE[hint] for key, hint in hints.items()}
     kept = landing.entry_of(full)
     assert set(kept) == set(hints)
+
+
+def test_entry_of_drops_a_red_checks_that_is_not_shaped_like_one():
+    good = [{"name": "tests", "tail": ["a"], "recovered": False}]
+    assert landing.entry_of({"red_checks": good, "red_more": 2}).get("red_checks") == good
+    for bad in ([{"name": "tests", "tail": "a", "recovered": False}], [], "x", [{"name": 1}]):
+        assert "red_checks" not in landing.entry_of({"red_checks": bad})
+    assert "red_more" not in landing.entry_of({"red_more": 0})
 
 
 def test_entry_of_does_not_take_a_bool_for_the_spawn_count():

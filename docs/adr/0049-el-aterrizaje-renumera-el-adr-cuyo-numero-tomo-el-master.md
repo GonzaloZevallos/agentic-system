@@ -171,3 +171,50 @@ issue sobre una pregunta `escalate_adr` ahora se aplica (apostrophe GH-407, PR #
   con lease, a lo sumo dos veces por tarea.
 - **Riesgos conocidos.** La corrección de la referencia reescrita la juzga sólo la
   `re_review` pendiente; `stale_moves` puede repetirse mientras el master siga moviéndose.
+
+## Adenda (GH-570)
+
+Enmienda la viñeta «Tope» de GH-544: el tope era por tarea y una tarea larga puede chocar dos
+veces con el master en cabezas distintas; el segundo choque quedaba sin cupo tras un solo
+intento fallido (apostrophe GH-407, PR #618).
+
+- **Tope por colisión.** `LANDING_ADR_DECISIONS_MAX = 2` (mismo valor) se cuenta por la clave
+  (cabeza, `moves`), no por tarea. Un `apply_adr_decision` pertenece a una clave cuando su
+  `head` es esa cabeza y su `decision_at` es el `released_at` de una `escalate_adr` de la misma
+  cabeza cuyos `moves` registrados, normalizados a tuplas de pares `(old, new)`, igualan los de
+  la clave (así una lista de YAML y un `Renaming` recalculado comparan igual).
+- **Lo que no se puede emparejar cuenta contra todas las claves de su cabeza.** Un apply sin
+  `decision_at`, sin pregunta que lo explique o cuya pregunta no registró `moves` gasta cupo en
+  cada clave de su cabeza; uno sin `head`, en cada clave. Un documento viejo nunca queda más
+  suelto que con el conteo por tarea.
+- **Sin cambios.** `stale_moves` sigue sin usar cupo, y una restauración sigue sin devolverlo
+  (el tope se lee sobre todas las entradas; la idempotencia, sobre las vivas).
+- **Una sola función cuenta.** `landing.adr_decisions_spent(entries, head, moves)` la leen la
+  tabla de pasos (`adr_decision_due`), `landing_plan.release_asked` y la pregunta de
+  `escalate_adr`; `LandingSpent.adr_decisions` desaparece.
+- **Texto con el tope gastado.** Cuando los dos cupos de esa colisión en esa cabeza están
+  gastados, la pregunta deja de ofrecer «decide on this issue»: dice que no se aplicará otra
+  decisión a esa colisión y da la salida a mano (`WAY_OUT_ADR`). Una cabeza nueva vuelve a
+  pasar por la tabla.
+- **Qué chequeo estaba en rojo.** Cuando un `apply_adr_decision` termina `checks_red`, la
+  entrada guarda dos claves opcionales (se leen con `.get`; un documento anterior se lee como
+  antes): `red_checks`, una lista de `{name, tail, recovered}`, y `red_more`, cuántos chequeos
+  rojos quedaron fuera (solo si es mayor que 0). Las construye y sanea una sola función,
+  `presubmit.red_checks`, sobre las mismas filas de la puerta que lee el predicado `checks_red`
+  (que no cambia): primero los que siguen rojos, luego los que se recuperaron, cada grupo por
+  orden de primer fallo, hasta `RED_CHECKS_MAX = 3`. Un chequeo rojo lleva la cola de su
+  última fila fallida (forma `_tail_of`), con cada línea que contiene un token de
+  `ID_FORBIDDEN` reemplazada por `[line dropped]`; uno recuperado lleva `recovered: true` y
+  ninguna cola. Nunca se guarda el log crudo ni nadie vuelve a sanear. `escalate_adr` los
+  agrega al comentario que ya publica (nunca un segundo comentario): cada chequeo rojo con sus
+  últimas líneas, los recuperados como «falló y luego pasó al repetir», y «and N more checks
+  were red»; si `checks_red` llegó sin detalle, una línea fija lo dice. La pregunta entera se
+  recorta bajo `MERGE_COMMENT_MAX` con el mismo recorte de la evidencia de merge
+  (`presubmit.fit_comment`).
+- **§8.** Desde aquí la cola acotada (a lo sumo `TAIL_LINES` líneas y `MERGE_TAIL_CHARS`
+  caracteres por chequeo, 3 chequeos) de la salida de un chequeo que corrió el stack llega al
+  documento de la tarea y a quien pueda leer el issue; es lo que pide el pedido, y el saneo es
+  en el origen. Un flake sigue terminando en `checks_red` (el predicado lee todas las filas):
+  el comentario ahora dice que el chequeo se recuperó.
+- **§7.** Ninguna métrica, etiqueta, atributo de span ni clase de escalado nuevo: volver a
+  preguntar sigue usando `questions`.

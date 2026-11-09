@@ -91,6 +91,11 @@ sequenceDiagram
    (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`) no empuja,
    deja el checkout en la cabeza con `Workspace.reset_hard` (en un `finally`, también ante una
    excepción) y vuelve a preguntar por `escalate_adr`, que nombra el último resultado fallido.
+   Cuando el resultado es `checks_red`, la entrada `apply_adr_decision` registra además
+   `red_checks` (nombre, últimas líneas saneadas y si el chequeo se recuperó) y `red_more`,
+   construidos solo por `agentic/core/process/domain/presubmit.py:red_checks` (a lo sumo
+   `RED_CHECKS_MAX`); la pregunta los muestra en el mismo comentario, acotado por
+   `MERGE_COMMENT_MAX`, o dice que no se pudo leer el detalle.
 5. **Cuando el paso reabre el stage técnico.** Un `fix` o un `re_review` que necesita a un
    Developer lanza una reanudación desde el documento
    (`agentic/cli.py:_resume_spawner`: `agentic resume --issue N --from-document --yes --detach`)
@@ -108,7 +113,9 @@ sequenceDiagram
    El rechazo `adr_number_taken` no pasa por `exhausted()`: es, en este orden:
    `renumber` cuando la regla decide la colisión y quedan renumeraciones
    (`LANDING_RENUMBERS_MAX`); `apply_adr_decision` cuando el dueño liberó la pregunta
-   `escalate_adr` y queda cupo (`adr_decision_due`, `LANDING_ADR_DECISIONS_MAX`); `none` cuando
+   `escalate_adr` y queda cupo para esa colisión (`adr_decision_due`, `LANDING_ADR_DECISIONS_MAX`, contado por
+   (cabeza, `moves`) con `agentic/core/process/domain/landing.py:adr_decisions_spent`; agotado el
+   cupo, la pregunta deja de ofrecer una decisión); `none` cuando
    la pregunta sigue pendiente (`adr_asked`); si no, una sola `escalate_adr` por (cabeza,
    rechazo). Nunca `diagnose` ni `restart` (ADR-0049, adendas GH-412 y GH-544). La decisión no
    gasta `LANDING_PASSES_MAX`, pero la primera `re_review` tras una decisión aplicada se exime
