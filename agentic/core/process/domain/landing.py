@@ -168,9 +168,9 @@ restoration does not hand the budget back; declared, not measured. Charged to ne
 ADR_EDIT_BOUNDS = 2
 """The version of the set of lines an `apply_adr_decision` pass may edit (GH-576). Every entry
 records it as `bounds`, one without it is version 1, and `adr_decisions_spent` counts only the
-entries of this version. Any change that widens or narrows that set (`adr_numbers.DecidedRenaming.spots`
-and `bound`, rule (d) among them) raises it in the same diff, and raising it is the only way to give
-decision slots back. Declared, not measured."""
+entries of this version. Any change that widens or narrows that set
+(`adr_numbers.DecidedRenaming.spots` and `bound`, rule (d) among them) raises it in the same diff,
+and raising it is the only way to give decision slots back. Declared, not measured."""
 
 OUT_OF_BOUNDS_SHOWN_MAX = 5
 """The most `{path, line}` rows of an `out_of_bounds` apply a landing entry keeps (GH-576); the

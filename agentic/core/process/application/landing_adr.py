@@ -22,7 +22,7 @@ from pathlib import Path
 
 from ..domain import landing, rules
 from ..domain import landing as landing_rules
-from ..domain.adr_numbers import DecidedRenaming
+from ..domain.adr_numbers import DecidedRenaming, outside_bounds
 from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import RedCheck, describe_checks, red_checks
 from ..domain.roles import DEVELOPER
@@ -58,39 +58,30 @@ def decision_text(raw: Mapping[str, object]) -> str:
     return text[text.rindex(marker) :].strip() if marker in text else text.strip()
 
 
-def brief(decision: str, moves: Sequence[tuple[str, str]], spots: Sequence[Spot]) -> str:
-    """What the Developer is told: the owner's decision, the renaming already applied and the
-    exact lines it may change, never a number to choose."""
+def brief(
+    decision: str,
+    moves: Sequence[tuple[str, str]],
+    spots: Sequence[Spot],
+    bound: Sequence[Spot] = (),
+) -> str:
+    """What the Developer is told: the owner's decision, the renaming already applied, the
+    exact lines it may change, and the lines the system already rewrote, which it may move
+    inside their file (to keep an index sorted) but not change; never a number to choose."""
     applied = "\n".join(f"- {old} -> {new}" for old, new in moves)
     lines = "\n".join(f"- {path}:{line}: {text}" for path, line, text in spots)
+    fixed = "\n".join(f"- {path}:{line}: {text}" for path, line, text in bound)
     return (
         "## Landing: apply the owner's decision on an ADR collision\n\n"
         "The numbering rule already renamed the ADRs below and rewrote every reference it can "
         f"decide; that commit is in your checkout.\n\nMoves already applied:\n{applied}\n\n"
         f"The owner's decision:\n\n{decision}\n\n"
         "You may change ONLY these lines (path:line: text), one for one: no line added or "
-        "removed, no other file. Never choose an ADR number: the new numbers are the moves "
-        f"above. Commit your edit.\n\nLines you may change:\n{lines}\n"
+        "removed. Never choose an ADR number: the new numbers are the moves "
+        f"above. Commit your edit.\n\nLines you may change:\n{lines}\n\n"
+        "The system already rewrote the lines below. You may move them inside their file (for "
+        "example, to keep an index sorted) but you must not change their text, and no other "
+        f"line may change in any file.\n\nLines already rewritten:\n{fixed or '- (none)'}\n"
     )
-
-
-def within_spots(
-    before: Mapping[str, str], after: Mapping[str, str], spots: Sequence[Spot]
-) -> bool:
-    """Whether the Developer changed only the lines of `spots`, in place: per path, the same
-    number of lines (none added or removed) and every line that differs is a spot's line
-    number. `before` and `after` are the texts of each changed path on either side."""
-    allowed = {(path, line) for path, line, _ in spots}
-    for path, new_text in after.items():
-        old, new = before.get(path, "").splitlines(), new_text.splitlines()
-        if len(old) != len(new):
-            return False
-        if any(
-            a != b and (path, number) not in allowed
-            for number, (a, b) in enumerate(zip(old, new), 1)
-        ):
-            return False
-    return True
 
 
 def _recorded_moves(raw: Mapping[str, object], head: str) -> list[list[str]] | None:
@@ -120,9 +111,17 @@ class CheckedRed:
     detail: RedDetail
 
 
-Result = tuple[AdrDecisionOutcome, str | None, bool, RedDetail | None]
-"""The outcome, the head pushed (`applied` only), whether the verdict is carried to it and,
-for `checks_red` only, which checks were red."""
+@dataclasses.dataclass(frozen=True)
+class OutOfBounds:
+    """The Developer pass changed lines `outside_bounds` refuses; `pairs` are their
+    `(path, line)`, as it returns them."""
+
+    pairs: tuple[tuple[str, int], ...]
+
+
+Result = tuple[AdrDecisionOutcome, str | None, bool, RedDetail | None, OutOfBounds | None]
+"""The outcome, the head pushed (`applied` only), whether the verdict is carried to it, for
+`checks_red` only which checks were red, and for `out_of_bounds` only which lines."""
 
 
 def apply_adr_decision(context: LandingContext) -> None:
@@ -134,8 +133,8 @@ def apply_adr_decision(context: LandingContext) -> None:
     if unit is None or sha is None:
         context.log(f"agentic: land: {context.task_id}: apply_adr_decision: nothing to apply")
         return
-    outcome, head_after, carried, red = _apply(context, state, unit, sha)
-    _finish(context, state, unit, outcome, head_after, carried, red)
+    outcome, head_after, carried, red, out = _apply(context, state, unit, sha)
+    _finish(context, state, unit, outcome, head_after, carried, red, out)
 
 
 def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Result:
@@ -144,32 +143,34 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
     try:
         found = adr_decided(ports, sha, head)
     except GitError:
-        return "stale_moves", None, False, None
+        return "stale_moves", None, False, None, None
     recorded = _recorded_moves(_document(context), head)
     if not isinstance(found, DecidedRenaming) or not found.spots:
-        return "stale_moves", None, False, None
+        return "stale_moves", None, False, None, None
     moves = found.renaming.moves
     if recorded is not None and recorded != [list(pair) for pair in moves]:
-        return "stale_moves", None, False, None
+        return "stale_moves", None, False, None, None
     try:
         checkout = task_checkout(state, context.cfg, ports)
     except SetupFailed:
-        return "role_failed", None, False, None
+        return "role_failed", None, False, None, None
     pushed = False
     try:
         with merges_cleared(workspace, checkout.path, _owned(context, state)):
             try:
                 result = _write_and_ask(context, state, unit, checkout.path, found, sha)
                 if isinstance(result, CheckedRed):
-                    return "checks_red", None, False, result.detail
+                    return "checks_red", None, False, result.detail, None
+                if isinstance(result, OutOfBounds):
+                    return "out_of_bounds", None, False, None, result
                 if isinstance(result, str):
-                    return result, None, False, None
+                    return result, None, False, None, None
                 new_head, carried = result
                 workspace.push(checkout.branch, lease=head)
                 pushed = True
-                return "applied", new_head, carried, None
+                return "applied", new_head, carried, None, None
             except GitError:
-                return "stale_moves", None, False, None
+                return "stale_moves", None, False, None, None
     finally:
         if not pushed:
             try:
@@ -185,10 +186,11 @@ def _write_and_ask(
     path: Path,
     found: DecidedRenaming,
     sha: str,
-) -> tuple[str, bool] | AdrDecisionOutcome | CheckedRed:
+) -> tuple[str, bool] | AdrDecisionOutcome | CheckedRed | OutOfBounds:
     """The mechanical commit, the Developer pass and the checks on what it left: the new head
     and whether the verdict carries to it, or the closed outcome that stops the step
-    (`CheckedRed` for `checks_red`, with which checks were red)."""
+    (`CheckedRed` for `checks_red`, with which checks were red, `OutOfBounds` for
+    `out_of_bounds`, with which lines)."""
     ports, head = context.ports, context.head
     workspace = ports.workspace
     renaming = found.renaming
@@ -208,14 +210,11 @@ def _write_and_ask(
     new_head = workspace.full_head(path)
     if new_head == mechanical:
         return "role_failed"
-    spots_by_path = {spot[0] for spot in found.spots}
     changed = workspace.changed_paths(mechanical, new_head)
-    if not set(changed) <= spots_by_path:
-        return "out_of_bounds"
     before = {relative: workspace.show(mechanical, relative) or "" for relative in changed}
     after = {relative: workspace.show(new_head, relative) or "" for relative in changed}
-    if not within_spots(before, after, found.spots):
-        return "out_of_bounds"
+    if bad := outside_bounds(before, after, found):
+        return OutOfBounds(bad)
     if adr_collision(ports, sha, new_head) is not None:
         return "still_colliding"
     source = {new: old for old, new in renaming.moves}
@@ -262,7 +261,7 @@ def _developer(
         if reason := presubmit_refusal(moved, ports.workspace.is_clean(path), gate):
             raise ValueError(reason)
 
-    text = brief(decision_text(_document(context)), found.renaming.moves, found.spots)
+    text = brief(decision_text(_document(context)), found.renaming.moves, found.spots, found.bound)
     span = context.role_span(DEVELOPER) if context.role_span else nullcontext(None)
     with span as run:
         output, patch = asyncio.run(
@@ -309,11 +308,14 @@ def _finish(
     head_after: str | None,
     carried: bool,
     red: RedDetail | None = None,
+    out: OutOfBounds | None = None,
 ) -> None:
     """Resolves the entry with its closed `outcome`; `applied` carries the verdict as the
     domain said and logs it, any other outcome asks the owner again. `red` (`checks_red`
     only) is written next to the outcome: `red_checks` when not empty, `red_more` when
-    above 0 (GH-570)."""
+    above 0 (GH-570). Every apply entry records `bounds`, the `ADR_EDIT_BOUNDS` it ran under;
+    `out` (`out_of_bounds` only) is written as `out_of_bounds_lines` when not empty and
+    `out_of_bounds_more` when above 0 (GH-576), cleaned by `landing.out_of_bounds_detail`."""
     raw = _document(context)
     entries = [dict(entry) for entry in all_entries(raw)]
     mine = [
@@ -325,6 +327,13 @@ def _finish(
     ]
     if mine:
         mine[-1]["outcome"] = outcome
+        mine[-1]["bounds"] = landing.ADR_EDIT_BOUNDS
+        if out is not None:
+            lines, left = landing.out_of_bounds_detail(out.pairs)
+            if lines:
+                mine[-1]["out_of_bounds_lines"] = lines
+            if left > 0:
+                mine[-1]["out_of_bounds_more"] = left
         if red is not None:
             shown, more = red
             if shown:

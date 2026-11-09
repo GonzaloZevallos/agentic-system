@@ -82,11 +82,12 @@ sequenceDiagram
    es una `Ambiguous` con los mismos `moves` que registró `escalate_adr`, el resultado es
    `stale_moves` y no se corre ningún modelo. Después escribe y commitea la renumeración
    mecánica (`Workspace.commit_paths`) y le da al Developer la decisión del dueño, los `moves`
-   aplicados y las líneas exactas donde puede escribir (`landing_adr.brief`): solo esas líneas,
-   una por una, sin elegir nunca un número. Revisa los límites
-   (`landing_adr.within_spots`: mismos archivos, misma cantidad de líneas por archivo y solo
-   cambian los números de línea de los puntos), que los chequeos hayan quedado en verde y que
-   no quede colisión (`adr_collision`). Si todo está bien empuja con `lease=head`
+   aplicados, las líneas exactas donde puede escribir y las que la regla ya reescribió, que
+   puede mover dentro de su archivo (para mantener ordenado un índice) pero no cambiar
+   (`landing_adr.brief`): sin elegir nunca un número. Revisa los límites por contenido
+   (`agentic/core/process/domain/adr_numbers.py:outside_bounds`, sobre `DecidedRenaming.spots`
+   y `bound`, que es lo único que decide qué líneas puede tocar el pase), que los chequeos hayan
+   quedado en verde y que no quede colisión (`adr_collision`). Si todo está bien empuja con `lease=head`
    (`Workspace.push`) y el resultado es `applied` con `head_after`; en cualquier otro resultado
    (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`) no empuja,
    deja el checkout en la cabeza con `Workspace.reset_hard` (en un `finally`, también ante una
@@ -96,6 +97,11 @@ sequenceDiagram
    construidos solo por `agentic/core/process/domain/presubmit.py:red_checks` (a lo sumo
    `RED_CHECKS_MAX`); la pregunta los muestra en el mismo comentario, acotado por
    `MERGE_COMMENT_MAX`, o dice que no se pudo leer el detalle.
+   Cuando el resultado es `out_of_bounds`, la entrada registra `out_of_bounds_lines` (a lo sumo
+   cinco `{path, line}`, con la ruta saneada por `landing.out_of_bounds_detail`; la línea 0 es el
+   archivo entero) y `out_of_bounds_more` con las que no se muestran, nunca el texto de una línea.
+   Toda entrada de apply registra `bounds` (`ADR_EDIT_BOUNDS`): el tope por colisión solo cuenta
+   las de la versión vigente, y una entrada sin `bounds` vale 1.
 5. **Cuando el paso reabre el stage técnico.** Un `fix` o un `re_review` que necesita a un
    Developer lanza una reanudación desde el documento
    (`agentic/cli.py:_resume_spawner`: `agentic resume --issue N --from-document --yes --detach`)

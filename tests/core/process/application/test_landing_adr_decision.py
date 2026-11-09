@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from agentic.core.process.application import landing, landing_plan
-from agentic.core.process.application.landing_adr import within_spots
+from agentic.core.process.application.landing_adr import brief
 from agentic.core.process.application.landing_plan import entries as plan_entries
 from agentic.core.process.application.ports import (
     CommandResult,
@@ -238,17 +238,6 @@ def test_an_edit_of_a_spot_file_beyond_its_spot_lines_is_out_of_bounds(tmp_path,
         "apply_adr_decision",
         "out_of_bounds",
     )
-
-
-def test_within_spots_accepts_the_spot_lines_alone_and_refuses_any_other_change():
-    spots = [(CODE, 1, CITES_CODE)]
-    before = {CODE: CITES_CODE + "\nOTHER = 1\n"}
-
-    assert within_spots(before, {CODE: 'MSG = "x"\nOTHER = 1\n'}, spots)
-    assert not within_spots(before, {CODE: 'MSG = "x"\nOTHER = 2\n'}, spots)
-    assert not within_spots(before, {CODE: CITES_CODE + "\n"}, spots)
-    assert not within_spots(before, {CODE: CITES_CODE + "\nOTHER = 1\nMORE = 1\n"}, spots)
-    assert not within_spots(before, {"other.py": "x\n"}, spots)
 
 
 def test_moves_that_differ_from_the_recorded_ones_are_stale_and_push_nothing(tmp_path):
@@ -561,3 +550,177 @@ def test_an_apply_that_does_not_end_checks_red_records_no_red_detail(tmp_path):
     entry = _apply_entry(ports)
     assert entry["outcome"] == "out_of_bounds"
     assert "red_checks" not in entry and "red_more" not in entry
+
+
+# --- GH-576: the lines the renumbering itself moves are inside the bounds ----------------------
+
+INDEX = "docs/architecture/decisiones.md"
+ROW_MINE = "| [0049](../adr/0049-mine.md) | mine |"
+ROW_THEIRS = "| [0049](../adr/0049-theirs.md) | theirs |"
+ROW_OLD = "| [0048](../adr/0048-old.md) | old |"
+ROW_MINE_NEW = "| [0050](../adr/0050-mine.md) | mine |"
+# What a merge left: the branch's row before master's, so the renumbered row is out of order.
+MERGED_INDEX = "\n".join([ROW_OLD, ROW_MINE, ROW_THEIRS]) + "\n"
+SORTED_INDEX = "\n".join([ROW_OLD, ROW_THEIRS, ROW_MINE_NEW]) + "\n"
+
+
+class IndexChecks(MemoryCommands):
+    """The `docs` check as a function of the checkout: red while an index row still carries the
+    old label or the rows are out of order, green otherwise."""
+
+    def run(self, cwd, command, timeout_s, *, env=None) -> CommandResult:
+        result = super().run(cwd, command, timeout_s, env=env)
+        if command != "run docs":
+            return result
+        index = cwd / INDEX
+        rows = index.read_text(encoding="utf-8").splitlines() if index.exists() else []
+        labels = [row.split("]")[0] for row in rows]
+        if any("0049-mine" in row for row in rows) or labels != sorted(labels):
+            return CommandResult(1, "docs stale: the ADR index is out of date\n")
+        return CommandResult(0, "ok\n")
+
+
+def _spend_two_slots(ports, head) -> None:
+    """GH-407's document: two applies on this head and moves, both written before `bounds`."""
+    [asked] = _entries(ports)
+    first = {**asked, "at": "2026-10-13T00:00:00+00:00", "released_at": "2026-10-13T01:00:00+00:00"}
+    second = {
+        **first,
+        "at": "2026-10-13T02:00:00+00:00",
+        "released_at": "2026-10-13T03:00:00+00:00",
+    }
+    applies = [
+        {"head": head, "step": "apply_adr_decision", "decision_at": first["released_at"]},
+        {"head": head, "step": "apply_adr_decision", "decision_at": second["released_at"]},
+    ]
+    applies[0].update(outcome="checks_red", at="2026-10-13T01:10:00+00:00")
+    applies[1].update(outcome="out_of_bounds", at="2026-10-13T03:10:00+00:00")
+    for entry in (first, second, *applies):
+        entry["resolved_at"] = "2026-10-13T04:00:00+00:00"
+    ports.documents.record_closure(
+        "GH-5", {"landing": [first, applies[0], second, applies[1], asked]}
+    )
+
+
+def _gh_407_world(tmp_path, edit, *, own_row=False, commands=None):
+    extra = ((CODE, CITES_CODE), (INDEX, ROW_MINE)) if own_row else ((CODE, CITES_CODE),)
+    ports, head = _asked_with(tmp_path, edit, extra)
+    ports = dataclasses.replace(
+        ports,
+        stack=MemoryStack(checks={"docs": "run docs"}),
+        commands=commands or IndexChecks(),
+    )
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
+    if not own_row:  # a merge brought the row in: no own commit added it
+        ports.workspace.files[(head, INDEX)] = MERGED_INDEX
+    else:
+        ports.workspace.files[(head, INDEX)] = ROW_MINE + "\n"
+    _spend_two_slots(ports, head)
+    return ports, head
+
+
+def _asked_with(tmp_path, edit, extra):
+    ports, head = _world(tmp_path, extra=extra)
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
+    ports.workspace.diff_paths = (MINE, NOTES, CODE)
+    (tmp_path / "GH-5" / "app").mkdir(parents=True)
+    first, _ = _round(tmp_path, ports)
+    assert (first.kind, first.step) == ("dispatched", "escalate_adr"), first
+    ports.tracker.timestamped["GH-5"] = [
+        IssueComment("Escalated: ADR collision", ESCALATED_COMMENT),
+        IssueComment(DECISION, DECIDED),
+    ]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, ())
+    ports.documents.record_closure(
+        "GH-5",
+        {"title": "t", "description": "d", "sections": {"Human": f"### Decision\n\n{DECISION}"}},
+    )
+    return ports, head
+
+
+def _spot_and_index(index_text):
+    def edit(ports, cwd):
+        (cwd / CODE).write_text('MSG = "see (docs/adr/0050)"\n', encoding="utf-8")
+        (cwd / INDEX).parent.mkdir(parents=True, exist_ok=True)
+        (cwd / INDEX).write_text(index_text, encoding="utf-8")
+        ports.workspace.commit_paths(cwd, [CODE, INDEX], "Point the spot, sort the index")
+        ports.workspace.diff_paths = (CODE, INDEX)
+
+    return edit
+
+
+def test_gh_407_the_index_row_a_merge_brought_in_follows_the_move_and_the_apply_pushes(tmp_path):
+    ports, head = _gh_407_world(tmp_path, _spot_and_index(SORTED_INDEX))
+
+    result, lines = _round(tmp_path, ports)
+
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    assert ports.workspace.pushes == [(BRANCH, head)]
+    entry = _entries(ports)[-1]
+    assert entry["outcome"] == "applied" and entry["bounds"] == landing_rules.ADR_EDIT_BOUNDS
+    pushed = entry["head_after"]
+    rows = (ports.workspace.show(pushed, INDEX) or "").splitlines()
+    assert rows == [ROW_OLD, ROW_THEIRS, ROW_MINE_NEW]
+    assert ports.workspace.show(pushed, CODE) == 'MSG = "see (docs/adr/0050)"\n'
+
+
+def test_gh_407_the_index_row_the_branch_added_follows_the_move_and_the_apply_pushes(tmp_path):
+    ports, head = _gh_407_world(tmp_path, _spot_and_index(ROW_MINE_NEW + "\n"), own_row=True)
+
+    result, lines = _round(tmp_path, ports)
+
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    assert ports.workspace.pushes == [(BRANCH, head)]
+    assert _entries(ports)[-1]["outcome"] == "applied"
+
+
+def test_a_pass_that_leaves_the_index_unsorted_ends_checks_red_not_pushed(tmp_path):
+    unsorted = "\n".join([ROW_OLD, ROW_MINE_NEW, ROW_THEIRS]) + "\n"
+    ports, _ = _gh_407_world(tmp_path, _spot_and_index(unsorted))
+
+    _round(tmp_path, ports)
+
+    entry = [e for e in _entries(ports) if e["step"] == "apply_adr_decision"][-1]
+    assert entry["outcome"] == "checks_red" and entry["bounds"] == landing_rules.ADR_EDIT_BOUNDS
+    assert entry["red_checks"][0]["name"] == "docs"
+    assert ports.workspace.pushes == []
+
+
+def test_a_pass_that_edits_the_text_of_a_foreign_line_is_out_of_bounds_and_names_it(tmp_path):
+    ports, head = _asked(tmp_path, _change_a_line_beside_the_spot)
+    ports.workspace.files[(head, CODE)] = CITES_CODE + "\nOTHER = 1\n"
+
+    _round(tmp_path, ports)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "out_of_bounds" and entry["bounds"] == landing_rules.ADR_EDIT_BOUNDS
+    assert {"path": CODE, "line": 2} in entry["out_of_bounds_lines"]
+    assert "out_of_bounds_more" not in entry
+    assert ports.workspace.pushes == []
+
+
+def test_a_pass_that_edits_the_text_of_a_bound_row_is_out_of_bounds(tmp_path):
+    changed = SORTED_INDEX.replace("| mine |", "| mine, reworded |")
+    ports, _ = _gh_407_world(tmp_path, _spot_and_index(changed))
+
+    _round(tmp_path, ports)
+
+    entry = [e for e in _entries(ports) if e["step"] == "apply_adr_decision"][-1]
+    assert entry["outcome"] == "out_of_bounds"
+    assert entry["out_of_bounds_lines"]
+    assert all(row["path"] == INDEX for row in entry["out_of_bounds_lines"])
+    assert ports.workspace.pushes == []
+
+
+def test_the_brief_lists_the_bound_lines_the_pass_may_move_but_not_change():
+    text = brief(
+        DECISION,
+        [(MINE, "docs/adr/0050-mine.md")],
+        [(CODE, 1, CITES_CODE)],
+        [(INDEX, 3, ROW_MINE_NEW)],
+    )
+
+    assert f"{CODE}:1: {CITES_CODE}" in text
+    assert f"{INDEX}:3: {ROW_MINE_NEW}" in text
+    assert "move" in text and "must not change their text" in text
+    assert "no other line may change" in text
