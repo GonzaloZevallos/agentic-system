@@ -125,13 +125,10 @@ class Escalating(Exception):
 class RoleFailure(Escalating):
     def __init__(self, role: Role, failures: list[Failure]):
         last = failures[-1]["error"] if failures else "no attempts were made"
-        reason = f"{role.name} failed {len(failures)} times: {last}"
-        if count := sum(f.get("denials", 0) for f in failures):
-            # The run's total, over every failed attempt: none of them delivered, so
-            # there is no delivering attempt's own count to add (`_run_denials`'s own
-            # rule for the run that does deliver).
-            reason = f"{reason} {rules.denial_note(role, count)}"
-        super().__init__(role, failures, reason)
+        # The write denials are not part of why the role failed: they live in
+        # `Failure.denials` and, for a run that delivers, in the section's system line
+        # (GH-571).
+        super().__init__(role, failures, f"{role.name} failed {len(failures)} times: {last}")
 
 
 class PromptFailure(Escalating):

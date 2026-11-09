@@ -4518,8 +4518,20 @@ def test_retry_turns_leaves_an_unlisted_role_at_its_own_cap_after_a_cut():
     assert rules.retry_turns(roles.DEVELOPER, [_cut("max_turns")]) == roles.DEVELOPER.max_turns
 
 
+@pytest.mark.parametrize("role", [roles.TECH_LEAD_REVIEWER, roles.TECH_LEAD_REVIEWER_LIGHT])
+def test_retry_turns_gives_a_reviewer_48_only_after_a_max_turns_cut(role):
+    assert rules.retry_turns(role, [_cut("max_turns")]) == 48
+    assert rules.retry_turns(role, [_cut("sdk")]) == 20
+    assert rules.retry_turns(role, [_cut("max_turns"), _cut("schema")]) == 20
+    assert rules.retry_turns(role, []) == 20
+
+
 def test_retry_turns_table_is_closed_and_read_only():
-    assert dict(rules.RETRY_TURNS) == {"landing_diagnoser": 64}
+    assert dict(rules.RETRY_TURNS) == {
+        "landing_diagnoser": 64,
+        "tech_lead_review": 48,
+        "tech_lead_review_light": 48,
+    }
     with pytest.raises(TypeError):
         rules.RETRY_TURNS["developer"] = 1  # type: ignore[index]
 

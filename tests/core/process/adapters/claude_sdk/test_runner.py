@@ -442,6 +442,102 @@ async def test_an_sdk_exception_with_no_message_names_its_type_instead_of_nothin
         await run_once(make_runner(), tmp_path)
 
 
+def _late_exit(*messages):
+    """A stream that yields `messages` and then dies with the bare `ProcessError` the SDK
+    raises when a message after the error result reset its `_last_error_result`
+    (GH-589/GH-590): the exit is not a `ResultError`."""
+    from claude_agent_sdk import ProcessError
+
+    async def query(prompt, options):
+        for message in messages:
+            yield message
+        raise ProcessError("Command failed with exit code 1", exit_code=1)
+
+    return query
+
+
+def _late_system_message() -> SystemMessage:
+    return SystemMessage(subtype="task_notification", data={})
+
+
+async def test_a_late_process_error_after_a_max_turns_result_is_the_turn_cut(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        module,
+        "query",
+        _late_exit(
+            result(
+                subtype="error_max_turns",
+                is_error=True,
+                total_cost_usd=1.0065,
+                session_id="sess-cut",
+                result="was reading the diff",
+            ),
+            _late_system_message(),
+        ),
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(make_runner(), tmp_path)
+    assert info.value.reason == "max_turns"
+    assert info.value.cost_usd == 1.0065
+    assert info.value.session_id == "sess-cut"
+    assert "SDK error" not in str(info.value)
+    assert "was reading the diff" in str(info.value)
+
+
+async def test_a_late_process_error_after_another_error_result_keeps_its_reason_cost_and_session(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        module,
+        "query",
+        _late_exit(
+            result(
+                subtype="error_during_execution",
+                is_error=True,
+                total_cost_usd=0.4,
+                session_id="sess-err",
+                errors=["boom"],
+                api_error_status=429,
+            ),
+            _late_system_message(),
+        ),
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(make_runner(), tmp_path)
+    assert info.value.reason == "account_limit"
+    assert info.value.cost_usd == 0.4
+    assert info.value.session_id == "sess-err"
+    assert "boom" in str(info.value)
+    assert "SDK error" not in str(info.value)
+
+
+async def test_a_process_error_with_no_result_before_it_is_still_an_sdk_error(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(module, "query", _late_exit(_late_system_message()))
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(make_runner(), tmp_path)
+    assert str(info.value) == "SDK error: Command failed with exit code 1 (exit code: 1)"
+    assert info.value.reason == "sdk"
+    assert info.value.cost_usd == 0.0
+    assert info.value.session_id == ""
+
+
+async def test_a_process_error_after_a_non_error_result_is_still_an_sdk_error(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        module,
+        "query",
+        _late_exit(result(structured_output=None, total_cost_usd=0.3), _late_system_message()),
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(make_runner(), tmp_path)
+    assert str(info.value) == "SDK error: Command failed with exit code 1 (exit code: 1)"
+    assert info.value.reason == "sdk"
+    assert info.value.cost_usd == 0.0
+
+
 LIMIT_PROSE = "API Error: You've hit your session limit · resets 11:20pm"
 
 
