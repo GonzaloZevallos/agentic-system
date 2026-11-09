@@ -1333,6 +1333,12 @@ class Workspace(Protocol):
         a `ref` git does not know."""
         ...
 
+    def paths_naming(self, revision: str, needle: str) -> list[str]:
+        """The tracked paths at `revision` whose text contains `needle` as a fixed string,
+        sorted (GH-576: every file that names a moved ADR, whichever commit put the line
+        there). Empty when none does. Raises `GitError` for a `revision` git does not know."""
+        ...
+
     def fetch_commit(self, sha: str) -> bool:
         """Whether `sha` is a commit this checkout has, fetching it from `origin` when it
         is not (a pull request's head the local branch never saw). Never raises."""

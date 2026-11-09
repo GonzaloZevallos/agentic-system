@@ -152,6 +152,27 @@ def test_tree_names_of_a_ref_git_does_not_know_raises(collision):
         GitWorkspace(collision.repo, IDENTITY).tree_names("no-such-ref", "docs/adr")
 
 
+def test_paths_naming_lists_the_tracked_paths_at_a_revision_holding_the_needle_sorted(collision):
+    ws = GitWorkspace(collision.repo, IDENTITY)
+    # The needle is a fixed string: its dots are dots, not wildcards.
+    assert ws.paths_naming(collision.head, "ADR-0049") == [
+        "docs/adr/0049-mine.md",
+        "docs/adr/0049-theirs.md",
+        "docs/more.md",
+        "docs/notes.md",
+    ]
+    assert ws.paths_naming(collision.head, "0049-mine.md") == []
+    assert ws.paths_naming(collision.first, "ADR-0001") == ["docs/notes.md"]
+    assert ws.paths_naming(collision.head, "ADR.0049") == []
+    # What is read is the revision's text, not the working tree's nor another revision's.
+    assert ws.paths_naming(collision.master, "again") == []
+
+
+def test_paths_naming_of_a_revision_git_does_not_know_raises(collision):
+    with pytest.raises(GitError, match="grep"):
+        GitWorkspace(collision.repo, IDENTITY).paths_naming("no-such-ref", "ADR-0049")
+
+
 def test_added_adrs_of_a_ref_git_does_not_know_raises(collision):
     with pytest.raises(GitError, match="log"):
         GitWorkspace(collision.repo, IDENTITY).added_adrs("no-such-ref", collision.head)

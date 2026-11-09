@@ -9,8 +9,10 @@ when one can (a number master already holds under another file name, or a number
 share) does it read `tree_names(head)` a second time, to drop what a later commit removed.
 The lines, the trees of the commits that added them and the texts of the rewrite are read
 only on a real collision. All of it is bounded by the branch's own commits and ADR files;
-there is no cache. Which numbers collide, what they become and what is rewritten is
-`domain.adr_numbers`'s; this module reads and hands over, it compares no number."""
+there is no cache. `adr_decided` alone adds one `paths_naming` (a `git grep -l -F`) per moved
+file, and reads whole only the files that name it (GH-576); `adr_collision` never does.
+Which numbers collide, what they become and what is rewritten is `domain.adr_numbers`'s; this
+module reads and hands over, it compares no number."""
 
 from __future__ import annotations
 
@@ -45,9 +47,14 @@ class _Inputs:
     texts: Mapping[str, tuple[str | None, str]]
 
 
-def _inputs(ports: Ports, master: str, head: str) -> _Inputs | Ambiguous | None:
+def _inputs(
+    ports: Ports, master: str, head: str, *, named_anywhere: bool = False
+) -> _Inputs | Ambiguous | None:
     """The reads of `adr_collision` (see the module docstring for what each costs): `None`
-    when no own ADR takes a number master holds, an `Ambiguous` for a duplicate own number."""
+    when no own ADR takes a number master holds, an `Ambiguous` for a duplicate own number.
+    With `named_anywhere` (the owner-decision path only, GH-576) it also reads every file at
+    `head` that names a moved file, whoever's commit put the line there (a merge resolution
+    included): one `paths_naming` per moved file."""
     workspace = ports.workspace
     added = workspace.added_adrs(master, head)
     if not added:
@@ -73,7 +80,11 @@ def _inputs(ports: Ports, master: str, head: str) -> _Inputs | Ambiguous | None:
         for commit in sorted({x.commit for x in lines})
     }
     texts: dict[str, tuple[str | None, str]] = {}
-    for path in sorted({x.path for x in lines} | set(moves)):
+    paths = {x.path for x in lines} | set(moves)
+    if named_anywhere:
+        for old in sorted(moves):
+            paths.update(workspace.paths_naming(head, old.rsplit("/", 1)[-1]))
+    for path in sorted(paths):
         text = workspace.show(head, path)
         if text is not None:
             texts[path] = (workspace.show(master, path), text)
@@ -102,8 +113,9 @@ def adr_decided(ports: Ports, master: str, head: str) -> DecidedRenaming | Ambig
     """`adr_collision` for an owner's decision (GH-544): the same reads (`_inputs`), then
     `renumber_decided`, which applies every rewrite the grammar can make and lists the own lines
     it cannot (`spots`). A `DecidedRenaming` with no spots is a collision `adr_collision` calls
-    a `Renaming`; one with spots is the `Ambiguous` it calls so."""
-    read = _inputs(ports, master, head)
+    a `Renaming`; one with spots is the `Ambiguous` it calls so. It also reads the files that
+    name a moved ADR without an own line (`named_anywhere`), and applies rule (d) to them."""
+    read = _inputs(ports, master, head, named_anywhere=True)
     if not isinstance(read, _Inputs):
         return read
     return adr_numbers.renumber_decided(read.moves, read.lines, read.trees, read.texts)

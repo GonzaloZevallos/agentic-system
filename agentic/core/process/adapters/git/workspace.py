@@ -817,6 +817,15 @@ class GitWorkspace:
         out = self._git(*_PLAIN, "ls-tree", "--name-only", "-z", ref, "--", f"{directory}/")
         return tuple(name.rpartition("/")[2] for name in out.split("\0") if name)
 
+    def paths_naming(self, revision: str, needle: str) -> list[str]:
+        result = self._run(*_PLAIN, "grep", "-l", "-z", "-F", "-e", needle, revision, "--")
+        if result.returncode == 1 and not result.stdout:
+            return []
+        if result.returncode != 0:
+            raise GitError(f"git grep -l -F failed: {result.stderr.strip()}", stderr=result.stderr)
+        prefix = f"{revision}:"
+        return sorted(name.removeprefix(prefix) for name in result.stdout.split("\0") if name)
+
     def fetch_commit(self, sha: str) -> bool:
         if self._run("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
             return True
