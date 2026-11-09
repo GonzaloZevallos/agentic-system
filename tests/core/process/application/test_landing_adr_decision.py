@@ -223,8 +223,8 @@ def test_an_edit_outside_the_spots_pushes_nothing_and_asks_again(tmp_path):
 
 @pytest.mark.parametrize("edit", [_change_a_line_beside_the_spot, _add_a_line_after_the_spot])
 def test_an_edit_of_a_spot_file_beyond_its_spot_lines_is_out_of_bounds(tmp_path, edit):
-    """The path is a spot's, so only the line-level guard (`within_spots`) can refuse it: a
-    non-spot line changed, or a line added, in the file that has a spot."""
+    """The path is a spot's, so only the line-level guard (`adr_numbers.outside_bounds`) can
+    refuse it: a non-spot line changed, or a line added, in the file that has a spot."""
     ports, head = _asked(tmp_path, edit)
     ports.workspace.files[(head, CODE)] = CITES_CODE + "\nOTHER = 1\n"
 
