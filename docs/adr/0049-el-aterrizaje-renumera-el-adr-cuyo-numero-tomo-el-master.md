@@ -257,3 +257,34 @@ tocaba, el resultado era `out_of_bounds`. Los dos cupos de la colisión se gasta
 - **Riesgo.** La regla (a) reescribe como texto los archivos generados; si el generador ordena
   por número, el pase debe mover la fila (por eso las líneas `bound` pueden reordenarse). Si el
   chequeo `docs` sigue en rojo, el informe de `checks_red` (GH-570) lo muestra.
+
+## Adenda (GH-579)
+
+Una referencia que ninguna confirmación no-merge de la rama agregó (la trajo la resolución de un
+merge, como `docs/product/sales.md` en apostrophe GH-407) no era reescrita ni listada, y la
+decisión del dueño terminaba `out_of_bounds`.
+
+- **Línea no propia.** En una ruta que la rama cambió desde `merge_base(master, head)` y que
+  nombra un número viejo (`Workspace.paths_naming` por número), una línea que ninguna confirmación
+  no-merge agregó y que el master no tiene es un `spot` (`unclassified_token`) si lleva una forma
+  ADR de un número movido: `ADR-NNNN`, `ADR NNNN`, una lista `ADRs` o un `docs/adr/NNNN` /
+  `adr/NNNN` desnudo. Vale en las dos rutas (`renumber`, que devuelve `Ambiguous`, y
+  `renumber_decided`), porque ambas pasan por el mismo `_scan`. El código nunca la reescribe.
+- **Texto del master.** Una línea es del master si está en el archivo en el master **o** en la base
+  del merge; así lo que el master cambió después de la base no se lee como de la rama.
+- **Número desnudo.** Un número de cuatro dígitos suelto en una línea no propia nunca es un
+  `spot` (una fila CSV, un hash, prosa): el `_TOKEN` sigue siendo solo de las líneas propias.
+- **Costo.** Solo con una colisión real: un `merge_base`, un `changed_paths`, un `paths_naming`
+  por número viejo y, por archivo candidato (cambiado por la rama y que nombra el número), el
+  texto en la base del merge. El archivo del ADR movido no es candidato: todo él es de la rama.
+- **Límites por línea y líneas `keep`.** `outside_bounds` informa cada cambio fuera de límites por
+  su número de línea, nunca como `(ruta, 0)` de archivo entero; solo compara `splitlines()`, así
+  que un cambio de fin de línea o del salto final queda dentro de límites. Las líneas que las
+  reglas (b)/(c) reescriben (`ADR-NNNN`, listas `ADRs`) entran en `bound`: pueden moverse, no
+  cambiar de texto. Toda línea listada que la decisión deja igual se nombra en un mensaje de
+  commit con `keep <ruta>:<línea>` (`kept_spots`; vale un commit vacío): el resultado es `applied`
+  solo si cada `spot` cambió de texto o está en un `keep`; si no, `role_failed`.
+- **`upstream`.** La entrada `escalate_adr` registra, opcional, el sha del upstream de la
+  pregunta; si al aplicar es otro, el resultado es `stale_moves` y no se empuja. Sin el campo se
+  aplica como antes. La pregunta lista cada `spot` como `ruta:línea` (sin texto de línea, con
+  `and N more` para el resto), y `ADR_EDIT_BOUNDS` sube a 3 porque cambia el conjunto editable.

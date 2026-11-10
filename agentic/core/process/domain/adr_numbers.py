@@ -135,6 +135,9 @@ _SEPARATOR = r"(?:\s*,\s*(?:(?:and|y)\s+)?|\s+(?:and|y)\s+|\s*/\s*)"
 _ITEM = r"\d{4}(?!\d)"
 _TOKEN = re.compile(r"(?<!\d)\d{4}(?!\d)")
 _DIGITS = re.compile(r"\d{4}")
+# GH-579: a bare reference to an ADR directory entry, `docs/adr/NNNN` or `adr/NNNN`, whatever
+# follows the number (a slug that is not the moved name included).
+_BARE_PATH = re.compile(r"(?<![\w-])(?:docs/)?adr/(?P<number>\d{4})(?!\d)")
 _HEADING = re.compile(r"#{1,6}\s")
 
 # What can sit between the two ends of a range of ADR numbers, as a regex alternation: an
@@ -175,8 +178,9 @@ class DecidedRenaming:
     text)`: the path as written (the new one for a moved file), the 1-based line, and the
     line as `renaming` leaves it, which is the line a pass that edits the spots finds.
 
-    `bound` (GH-576), in the same shape and order: every line (a spot excluded) where rule (a)
-    or (d) rewrote a name or a link label, and the first Markdown heading of each moved ADR.
+    `bound` (GH-576), in the same shape and order: every line (a spot excluded) where rule (a),
+    (b), (c) or (d) rewrote a name, a number or a link label (GH-579: (b) and (c) too), and the
+    first Markdown heading of each moved ADR.
     A pass may move these lines inside their file (a sorted index) but never change their
     text; `outside_bounds` is what checks it."""
 
@@ -196,6 +200,7 @@ class _Grammar:
     own_by_path: dict[str, dict[str, list[str]]]
     trees: Mapping[str, Sequence[str]]
     link_labels: bool = False
+    bases: Mapping[str, str | None] = field(default_factory=dict)
 
 
 @dataclass
@@ -207,7 +212,7 @@ class _Scan:
     ranges: list[tuple[int, str]]
     cites: list[tuple[int, str]]
     unclassified: list[tuple[int, str]]
-    rewrote: set[int] = field(default_factory=set)  # lines (a) or (d) rewrote, `hold` only
+    rewrote: set[int] = field(default_factory=set)  # lines (a) to (d) rewrote, `hold` only
 
 
 def _grammar(
@@ -217,6 +222,7 @@ def _grammar(
     texts: Mapping[str, tuple[str | None, str]],
     *,
     link_labels: bool = False,
+    bases: Mapping[str, str | None] | None = None,
 ) -> _Grammar | Ambiguous:
     carried = tuple(sorted(moves.items()))
     numbers: dict[str, str] = {}
@@ -255,7 +261,7 @@ def _grammar(
         + _ITEM
         + ")*)"
     )
-    return _Grammar(carried, numbers, names, pattern, own_by_path, trees, link_labels)
+    return _Grammar(carried, numbers, names, pattern, own_by_path, trees, link_labels, bases or {})
 
 
 def _scan(
@@ -263,9 +269,18 @@ def _scan(
 ) -> _Scan:
     """Rewrite `at_head` in one simultaneous substitution and collect what is undecided.
     With `hold`, a line holding a range, and an item list that cites master's file, stay as
-    they were: the lines whoever edits the spots finds untouched."""
+    they were: the lines whoever edits the spots finds untouched.
+
+    GH-579: in a path the reads marked as a candidate (`grammar.bases`), a line no own commit
+    added and master does not hold (at master or at the merge base) is classified on the
+    grammar's ADR forms only: an `ADR-NNNN` / `ADR NNNN` / `ADRs` list or a bare
+    `docs/adr/NNNN` of a moved number makes it an `unclassified_token`. Never rewritten, and a
+    bare four-digit token there is never one."""
     numbers, names = grammar.numbers, grammar.names
     master_lines = set((at_master or "").splitlines())
+    candidate = path in grammar.bases
+    foreign_skip = master_lines | set((grammar.bases.get(path) or "").splitlines())
+    foreign: list[tuple[int, str]] = []
     own = {t: c for t, c in grammar.own_by_path.get(path, {}).items() if t not in master_lines}
     rows = _rows(at_head)
     covered: list[tuple[int, int]] = []
@@ -308,6 +323,9 @@ def _scan(
             rewrote.add(index)
             return (found.group("prefix") or "") + names[found.group("name")]
         if line not in own:
+            cited_there = _DIGITS.findall(found.group("items"))
+            if candidate and line not in foreign_skip and any(n in numbers for n in cited_there):
+                foreign.append((index, line))
             return found.group(0)
         cited = [n for n in _DIGITS.findall(found.group("items")) if n in numbers]
         covered.append(found.span())
@@ -315,10 +333,22 @@ def _scan(
             cites.append((index, line))
             if hold:
                 return found.group(0)
-        return _DIGITS.sub(lambda i: numbers.get(i.group(0), i.group(0)), found.group(0))
+        moved = _DIGITS.sub(lambda i: numbers.get(i.group(0), i.group(0)), found.group(0))
+        if moved != found.group(0):  # GH-579: rule (b)/(c) rewrote this line
+            rewrote.add(index)
+        return moved
 
     rewritten = grammar.pattern.sub(substitute, at_head)
     unclassified: list[tuple[int, str]] = []
+    if candidate:
+        for index, (start, line) in enumerate(rows, 1):
+            if line in own or line in foreign_skip:
+                continue
+            for bare in _BARE_PATH.finditer(line):
+                spot = start + bare.start()
+                if bare.group("number") in numbers and not any(a <= spot < b for a, b in covered):
+                    foreign.append((index, line))
+                    break
     for index, (start, line) in enumerate(rows, 1):
         if line not in own:
             continue
@@ -327,6 +357,7 @@ def _scan(
             if token.group(0) in numbers and not any(a <= spot < b for a, b in covered):
                 unclassified.append((index, line))
                 break
+    unclassified = sorted(set(unclassified) | set(foreign))
     return _Scan(rewritten, ranges, cites, unclassified, rewrote if hold else set())
 
 
@@ -335,6 +366,8 @@ def renumber(
     lines: Sequence[OwnLine],
     trees: Mapping[str, Sequence[str]],
     texts: Mapping[str, tuple[str | None, str]],
+    *,
+    bases: Mapping[str, str | None] | None = None,
 ) -> Renaming | Ambiguous:
     """Apply `moves` (old path -> new path) to `texts` (path -> its text at master, `None`
     if absent, and at the branch head), in one simultaneous substitution per text.
@@ -345,8 +378,13 @@ def renumber(
     the branch's own commits added. `trees` maps a commit to the ADR names in its tree.
     A renumbered number left on an own line outside the grammar makes it `Ambiguous`, and so
     does one that is the end of a range (`ADR-0054…ADR-0060`): moving one end silently would
-    change what the range names. Every `Ambiguous` carries `moves`."""
-    grammar = _grammar(moves, lines, trees, texts)
+    change what the range names. Every `Ambiguous` carries `moves`.
+
+    `bases` (GH-579) maps the paths the reads marked as candidates to their text at the merge
+    base of master and the branch (`None` if absent): on those paths a line no own commit added
+    and neither master nor the merge base holds, carrying an ADR form of a moved number, is an
+    `unclassified_token` too (a merge resolution's reference). Without it nothing changes."""
+    grammar = _grammar(moves, lines, trees, texts, bases=bases)
     if isinstance(grammar, Ambiguous):
         return grammar
     written: dict[str, str] = {}
@@ -371,14 +409,16 @@ def renumber_decided(
     lines: Sequence[OwnLine],
     trees: Mapping[str, Sequence[str]],
     texts: Mapping[str, tuple[str | None, str]],
+    *,
+    bases: Mapping[str, str | None] | None = None,
 ) -> DecidedRenaming | Ambiguous:
     """`renumber` that does not stop at the first thing it cannot decide (GH-544): the same
     grammar and the same single simultaneous substitution, but every own line left as an
     `unclassified_token`, a `range` or a `cites_master_after_sync` is kept as it was and
     listed in `spots`, sorted by path and line, so an owner's decision can be applied to just
     those lines. A moved number twice is still `Ambiguous("duplicate_own_number")`: no spot
-    is there to edit."""
-    grammar = _grammar(moves, lines, trees, texts, link_labels=True)
+    is there to edit. `bases` is `renumber`'s (GH-579)."""
+    grammar = _grammar(moves, lines, trees, texts, link_labels=True, bases=bases)
     if isinstance(grammar, Ambiguous):
         return grammar
     written: dict[str, str] = {}
@@ -414,8 +454,11 @@ def outside_bounds(
     lines per path: a removed line must be the text of a spot of that path, no more lines are
     added than removed, a `bound` line is still there as often as it was (it may have moved),
     and every other line is untouched. An added or changed line is named by its 1-based line
-    in `after`, a removed one by its line in `before`; a changed path with neither a spot nor
-    a `bound` line is `(path, 0)`."""
+    in `after`, a removed one by its line in `before`. A path with neither a spot nor a `bound`
+    line goes through the same comparison with nothing allowed (GH-579), so it is reported by
+    line like any other, never as a whole file: the line number is never 0. Only
+    `splitlines()` is compared: a change of line endings or of the final newline alone is in
+    bounds."""
     spots: dict[str, Counter[str]] = defaultdict(Counter)
     for path, _, text in found.spots:
         spots[path][text] += 1
@@ -426,9 +469,6 @@ def outside_bounds(
     for path, new_text in after.items():
         old_text = before.get(path, "")
         if old_text == new_text:
-            continue
-        if path not in spots and path not in bound:
-            outside.add((path, 0))
             continue
         old, new = old_text.splitlines(), new_text.splitlines()
         removed, added = Counter(old) - Counter(new), Counter(new) - Counter(old)
@@ -450,6 +490,22 @@ def outside_bounds(
         )
         outside.update((path, number) for number in free)
     return tuple(sorted(outside))
+
+
+_KEEP = re.compile(r"keep (?P<path>.+):(?P<line>[0-9]+)")
+
+
+def kept_spots(messages: str, spots: Sequence[tuple[str, int, str]]) -> set[tuple[str, int]]:
+    """The `(path, line)` of the `spots` that a pass named as kept unchanged (GH-579): a line of
+    `messages` (the commit messages of the pass) that is exactly `keep <path>:<line>`, with the
+    line number of the mechanical commit, as `spots` carries it. Anything else is ignored,
+    and so is a `keep` line naming something that is not a spot."""
+    named = {
+        (found["path"], int(found["line"]))
+        for row in messages.splitlines()
+        if (found := _KEEP.fullmatch(row))
+    }
+    return named & {(path, line) for path, line, _ in spots}
 
 
 def _positions(lines: Sequence[str], wanted: Mapping[str, int]) -> dict[str, list[int]]:

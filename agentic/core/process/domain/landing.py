@@ -165,7 +165,7 @@ LANDING_ADR_DECISIONS_MAX = 2
 restoration does not hand the budget back; declared, not measured. Charged to neither
 `LANDING_PASSES_MAX` nor the syncs, and the step never reaches `exhausted()`."""
 
-ADR_EDIT_BOUNDS = 2
+ADR_EDIT_BOUNDS = 3
 """The version of the set of lines an `apply_adr_decision` pass may edit (GH-576). Every entry
 records it as `bounds`, one without it is version 1, and `adr_decisions_spent` counts only the
 entries of this version. Any change that widens or narrows that set

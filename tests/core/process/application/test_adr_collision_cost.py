@@ -23,7 +23,7 @@ from agentic.core.process.application.ports import AddedAdr
 from agentic.core.process.domain import adr_numbers
 from agentic.core.process.domain.adr_numbers import Ambiguous, OwnAdr, OwnLine, Renaming
 from tests.core.process.application.test_poll_merge import HEAD, URL, _pr, _ready
-from tests.fakes import BranchCommit, MemoryTracker, memory_ports
+from tests.fakes import MERGE_BASE, BranchCommit, MemoryTracker, memory_ports
 
 MINE = "docs/adr/0049-mine.md"
 THEIRS = "docs/adr/0049-theirs.md"
@@ -185,6 +185,15 @@ class _Stub:
     def show(self, ref: str, path: str) -> str | None:
         return "# ADR\n"
 
+    def merge_base(self, left: str, right: str) -> str:
+        return "base"
+
+    def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
+        return ()
+
+    def paths_naming(self, revision: str, needle: str) -> list[str]:
+        return []
+
 
 def _old_order(workspace, master: str, head: str):
     """GH-229's order, as it was: the head's tree first, then `collisions` on what is left."""
@@ -249,3 +258,54 @@ def test_the_stacked_false_collision_shape_is_pinned_as_it_is_today():
     result = adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
     assert isinstance(result, Renaming)
     assert result.moves == ((mine, "docs/adr/0051-gh229.md"),)
+
+
+def _collision_ports():
+    """A real collision whose branch changed `docs/a.md` and `docs/b.md` (both name 0049, the
+    second one through no own line) and `docs/c.md` (names nothing)."""
+    ports = memory_ports(tracker=MemoryTracker())
+    base = ports.workspace.master_sha
+    ports.workspace.advance_master(THEIRS)
+    head = ports.workspace.add_branch_commit(
+        adds=(MINE,), lines=(("docs/a.md", "see ADR-0049 here"),), master=base
+    )
+    for path, text in (
+        (MINE, "# ADR-0049: mine\n"),
+        ("docs/a.md", "see ADR-0049 here\n"),
+        ("docs/b.md", "merged ADR-0049\n"),
+        ("docs/c.md", "nothing\n"),
+    ):
+        ports.workspace.files[(head, path)] = text
+    ports.workspace.diff_paths = (MINE, "docs/a.md", "docs/b.md", "docs/c.md")
+    return ports, head
+
+
+def test_gh_579_a_real_collision_adds_one_merge_base_one_diff_and_one_grep_per_old_number():
+    ports, head = _collision_ports()
+    master = ports.workspace.master_sha
+    before = (len(ports.workspace.merge_base_asks), len(ports.workspace.diff_reads))
+    adr_collision.adr_collision(ports, master, head)
+    assert len(ports.workspace.merge_base_asks) == before[0] + 1
+    assert len(ports.workspace.diff_reads) == before[1] + 1
+    assert ports.workspace.paths_naming_calls == [(head, "0049")]
+    adr_collision.adr_decided(ports, master, head)
+    assert ports.workspace.paths_naming_calls[1:] == [(head, "0049-mine.md"), (head, "0049")]
+
+
+def test_gh_579_each_candidate_file_costs_one_read_of_its_merge_base_text():
+    ports, head = _collision_ports()
+    reads: list[tuple[str, str]] = []
+    real = ports.workspace.show
+    ports.workspace.show = lambda ref, path: (reads.append((ref, path)), real(ref, path))[1]
+    adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
+    merge_base = [path for ref, path in reads if ref == MERGE_BASE]
+    assert sorted(merge_base) == ["docs/a.md", "docs/b.md"]  # not c.md, not the moved ADR
+
+
+def test_gh_579_no_collision_reads_no_merge_base_no_diff_and_no_grep():
+    ports = _ports(diff=(MINE,))
+    ports.workspace.advance_master("docs/adr/0048-x.md")
+    head = ports.workspace.add_branch_commit(adds=(MINE,))
+    adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
+    assert ports.workspace.paths_naming_calls == []
+    assert ports.workspace.merge_base_asks == [] and ports.workspace.diff_reads == []

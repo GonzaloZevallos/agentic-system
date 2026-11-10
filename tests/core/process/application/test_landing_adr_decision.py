@@ -31,9 +31,9 @@ from tests.core.process.application.test_landing_renumber import (
     _world,
 )
 from tests.core.process.application.test_poll import _cfg
-from tests.core.process.application.test_poll_merge import _HeldLocks
+from tests.core.process.application.test_poll_merge import URL, _HeldLocks, _pr
 from tests.core.process.domain.test_landing import _facts
-from tests.fakes import MemoryCommands, MemoryStack, ScriptedRunner
+from tests.fakes import MemoryCommands, MemoryStack, MemoryTracker, ScriptedRunner, memory_ports
 
 CODE = "app/main.py"
 CITES_CODE = 'MSG = "see (docs/adr/0049)"'
@@ -97,9 +97,9 @@ def _boom(ports, cwd):
     raise RuntimeError("the harness broke")
 
 
-def _round(tmp_path, ports, live=LIVE):
+def _round(tmp_path, ports, live=LIVE, paths=(MINE, NOTES, CODE)):
     lines: list[str] = []
-    ports.workspace.diff_paths = (MINE, NOTES, CODE)  # the pull request's own paths
+    ports.workspace.diff_paths = paths  # the pull request's own paths
     result = landing.land(
         "GH-5",
         _cfg(tmp_path),
@@ -724,3 +724,197 @@ def test_the_brief_lists_the_bound_lines_the_pass_may_move_but_not_change():
     assert f"{INDEX}:3: {ROW_MINE_NEW}" in text
     assert "move" in text and "must not change their text" in text
     assert "no other line may change" in text
+
+
+# -- GH-579: apostrophe GH-407's shape, the keep lines and the upstream drift -----------------
+
+G_ADR = "docs/adr/0076-payment-methods.md"
+G_MOVED = "docs/adr/0078-payment-methods.md"
+G_MAIN = "app/main.py"
+G_SALES = "docs/product/sales.md"
+G_MAIN_LINE = "x = 1  # (docs/adr/0076)"
+G_SALES_TEXT = (
+    "# Ventas\n\npuerto OnTheSpotPayments (ADR-0076)\n(ADR-0007, ADR-0076, payments.md)\n"
+)
+G_BASE = "# Ventas\n\n"
+KEEP_SALES = "keep docs/product/sales.md:3\nkeep docs/product/sales.md:4"
+
+
+def _asked_407(tmp_path, edit):
+    """Branch ADR 0076 against master's 0076/0077; `app/main.py` cites it in an own commit and
+    `docs/product/sales.md` only through a merge (no own line). The decision is on the issue."""
+    ports = memory_ports(tracker=MemoryTracker())
+    workspace = ports.workspace
+    workspace.ROOT, workspace.track_commits, workspace.full_shas = tmp_path, True, True
+    base = workspace.master_sha
+    workspace.advance_master("docs/adr/0076-other.md", "docs/adr/0077-another.md")
+    head = workspace.add_branch_commit(
+        adds=(G_ADR,),
+        lines=((G_ADR, "# ADR-0076: payment methods"), (G_MAIN, G_MAIN_LINE)),
+        master=base,
+    )
+    files = {G_ADR: "# ADR-0076: payment methods\n", G_MAIN: G_MAIN_LINE + "\n"}
+    files[G_SALES] = G_SALES_TEXT
+    workspace.files.update({(head, path): text for path, text in files.items()})
+    for ref in (base, workspace.master_sha):
+        workspace.files[(ref, G_SALES)] = G_BASE
+    workspace.merge_bases[(workspace.master_sha, head)] = base
+    url = URL.format(5)
+    ports.tracker.prs[url] = dataclasses.replace(_pr(), head_oid=head)
+    unit = {"id": "only", "status": "approved", "reviewed_head": head}
+    ports.documents.save(
+        {
+            "id": "GH-5",
+            "status": "ready_for_review",
+            "pull_request": url,
+            "subtasks": {"only": unit},
+        }
+    )
+    workspace.remote_tips[BRANCH] = head
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
+    (tmp_path / "GH-5" / "app").mkdir(parents=True)
+    (tmp_path / "GH-5" / "docs" / "product").mkdir(parents=True)
+    paths = (G_ADR, G_MAIN, G_SALES)
+    first, _ = _round(tmp_path, ports, paths=paths)
+    assert (first.kind, first.step) == ("dispatched", "escalate_adr"), first
+    ports.tracker.timestamped["GH-5"] = [
+        IssueComment("Escalated: ADR collision", ESCALATED_COMMENT),
+        IssueComment(DECISION, DECIDED),
+    ]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None, ())
+    ports.documents.record_closure(
+        "GH-5",
+        {"title": "t", "description": "d", "sections": {"Human": f"### Decision\n\n{DECISION}"}},
+    )
+    return ports, head, paths
+
+
+def _commit_407(ports, cwd, files: dict[str, str], message: str):
+    for relative, text in files.items():
+        (cwd / relative).write_text(text, encoding="utf-8")
+    ports.workspace.commit_paths(cwd, list(files), message)
+    ports.workspace.diff_paths = tuple(files)
+
+
+MAIN_AFTER = "x = 1  # (docs/adr/0078)\n"
+SALES_AFTER = G_SALES_TEXT.replace("ADR-0076", "ADR-0078")
+SALES_ONE_LINE = G_SALES_TEXT.replace("ADR-0076)\n(", "ADR-0078)\n(")
+
+
+def _rewrites_all_three(ports, cwd):
+    _commit_407(ports, cwd, {G_MAIN: MAIN_AFTER, G_SALES: SALES_AFTER}, "Point at 0078")
+
+
+def _edits_main_keeps_sales(ports, cwd):
+    _commit_407(ports, cwd, {G_MAIN: MAIN_AFTER}, f"Point main.py at 0078\n\n{KEEP_SALES}")
+
+
+def _keeps_everything(ports, cwd):
+    _commit_407(ports, cwd, {}, f"Nothing to edit\n\nkeep app/main.py:1\n{KEEP_SALES}")
+
+
+def _edits_one_and_skips_another(ports, cwd):
+    _commit_407(
+        ports, cwd, {G_MAIN: MAIN_AFTER}, "Point main.py at 0078\n\nkeep docs/product/sales.md:3"
+    )
+
+
+def _edits_sales_line_three_and_keeps_four(ports, cwd):
+    _commit_407(
+        ports,
+        cwd,
+        {G_MAIN: MAIN_AFTER, G_SALES: SALES_ONE_LINE},
+        "Point at 0078\n\nkeep docs/product/sales.md:4",
+    )
+
+
+def _round_407(tmp_path, ports, paths):
+    return _round(tmp_path, ports, paths=paths)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        _rewrites_all_three,
+        _edits_main_keeps_sales,
+        _keeps_everything,
+        _edits_sales_line_three_and_keeps_four,
+    ],
+    ids=["rewrites-all", "keeps-sales", "keeps-everything", "edits-one-keeps-other"],
+)
+def test_gh_579_the_decision_on_gh_407s_collision_lands_without_out_of_bounds(tmp_path, edit):
+    ports, head, paths = _asked_407(tmp_path, edit)
+    [asked] = _entries(ports)
+    assert asked["moves"] == [[G_ADR, G_MOVED]]
+
+    result, lines = _round_407(tmp_path, ports, paths)
+
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    applied = _entries(ports)[-1]
+    assert applied["outcome"] == "applied", applied
+    assert "out_of_bounds_lines" not in applied
+    assert ports.workspace.pushes == [(BRANCH, head)]
+    [prompt] = ports.runner.prompts("developer")
+    for listed in (f"{G_MAIN}:1:", f"{G_SALES}:3:", f"{G_SALES}:4:"):
+        assert listed in prompt
+    assert "keep <path>:<line>" in prompt and "--allow-empty" in prompt
+
+
+@pytest.mark.parametrize("edit", [_edits_one_and_skips_another])
+def test_gh_579_a_spot_neither_edited_nor_kept_is_a_role_failure_and_pushes_nothing(tmp_path, edit):
+    ports, head, paths = _asked_407(tmp_path, edit)
+
+    result, _ = _round_407(tmp_path, ports, paths)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == []
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)][1] == (
+        "apply_adr_decision",
+        "role_failed",
+    )
+    assert ports.workspace.branch_commits[-1].sha == head
+
+
+def test_gh_579_a_kept_line_the_pass_did_not_name_with_the_right_number_does_not_count(tmp_path):
+    def wrong_numbers(ports, cwd):
+        _commit_407(ports, cwd, {G_MAIN: MAIN_AFTER}, "Point\n\nkeep docs/product/sales.md:30\n")
+
+    ports, _, paths = _asked_407(tmp_path, wrong_numbers)
+
+    _round_407(tmp_path, ports, paths)
+
+    assert _entries(ports)[1]["outcome"] == "role_failed"
+
+
+def test_gh_579_a_different_upstream_than_the_one_asked_about_is_stale_and_runs_nothing(tmp_path):
+    ports, _, paths = _asked_407(tmp_path, _rewrites_all_three)
+    [asked] = _entries(ports)
+    assert asked["upstream"] == ports.workspace.master_sha
+    ports.workspace.advance_master()  # master moved, the moves are the same
+
+    _round_407(tmp_path, ports, paths)
+
+    assert ports.workspace.pushes == [] and ports.runner.calls == []
+    assert _entries(ports)[1]["outcome"] == "stale_moves"
+
+
+def test_gh_579_an_entry_without_upstream_is_applied_as_before(tmp_path):
+    ports, head, paths = _asked_407(tmp_path, _rewrites_all_three)
+    old = [{k: v for k, v in e.items() if k != "upstream"} for e in _entries(ports)]
+    ports.documents.record_closure("GH-5", {"landing": old})
+    ports.workspace.advance_master()
+
+    _round_407(tmp_path, ports, paths)
+
+    assert ports.workspace.pushes == [(BRANCH, head)]
+
+
+def test_gh_579_the_question_escalate_adr_posts_lists_every_spot_of_the_collision(tmp_path):
+    """The wiring: `escalate_adr` feeds its one `adr_decided` result into the posted question."""
+    ports, _, _ = _asked_407(tmp_path, _rewrites_all_three)
+
+    [question] = ports.documents.load("GH-5")["questions_for_human"]
+
+    for row in (f"`{G_MAIN}:1`", f"`{G_SALES}:3`", f"`{G_SALES}:4`"):
+        assert row in question
+    assert "puerto OnTheSpotPayments" not in question  # never the text of a line

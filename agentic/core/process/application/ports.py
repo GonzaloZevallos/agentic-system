@@ -1273,6 +1273,12 @@ class Workspace(Protocol):
         Raises `GitError` when git cannot answer, an unknown ref included."""
         ...
 
+    def commit_messages(self, base: str, head: str) -> str:
+        """The messages of the commits in `base..head`, oldest first, as `git log --reverse
+        --format=%B` prints them (GH-579: where an ADR decision's `keep <path>:<line>` lines
+        are read). Raises `GitError`."""
+        ...
+
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
         pull request changes against the commit it branched from. Raises `GitError`."""

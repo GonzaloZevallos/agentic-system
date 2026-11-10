@@ -22,7 +22,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import document, presubmit, rules
 from agentic.core.process.domain import landing as landing_rules
-from agentic.core.process.domain.adr_numbers import Ambiguous, Renaming
+from agentic.core.process.domain.adr_numbers import Ambiguous, DecidedRenaming, Renaming
 from agentic.core.process.domain.ci import CiCheck, CiReport
 from agentic.core.process.domain.roles import PAIR_PM_TECH_LEAD
 from tests.core.process.application.test_merge_ci import _check, _report
@@ -2525,3 +2525,76 @@ def test_two_failed_applies_of_the_current_bounds_do_not(tmp_path):
 
     assert "decide on this issue" not in question
     assert "no further decision will be applied" in question
+
+
+# -- GH-579: the question lists every spot as path:line ----------------------------------------
+
+_SPOT_MOVES = (("docs/adr/0076-x.md", "docs/adr/0078-x.md"),)
+
+
+def test_gh_579_the_question_lists_every_spot_as_path_and_line_and_never_a_line_text():
+    found = Ambiguous("unclassified_token", "app/main.py:238: SECRET", _SPOT_MOVES)
+    spots = (("app/main.py", 238), ("docs/product/sales.md", 35), ("docs/product/sales.md", 149))
+
+    text = landing_fix.adr_collision_reason(found, 3, spots=spots)
+
+    for row in ("`app/main.py:238`", "`docs/product/sales.md:35`", "`docs/product/sales.md:149`"):
+        assert row in text
+    assert "SECRET" not in text and "Fix by hand: app/main.py" not in text
+
+
+def test_gh_579_without_spots_the_question_says_what_the_ambiguity_detail_says():
+    found = Ambiguous("unclassified_token", "app/main.py:238: x", _SPOT_MOVES)
+    assert "Fix by hand: app/main.py:238: x." in landing_fix.adr_collision_reason(found, 3)
+
+
+def test_gh_579_a_flood_of_spots_ends_with_and_n_more_under_the_comment_limit():
+    found = Ambiguous("unclassified_token", "a:1", _SPOT_MOVES)
+    spots = tuple((f"docs/product/file-{n:05d}.md", n + 1) for n in range(5000))
+    spots += (("../outside\n.md", 1),)  # a path the landing refuses to publish
+
+    text = landing_fix.adr_collision_reason(found, 3, spots=spots)
+
+    assert len(text) < presubmit.MERGE_COMMENT_MAX
+    assert "../outside" not in text
+    assert text.count("\nand ") == 1 and "more\n" in text
+    assert "`docs/product/file-00000.md:1`" in text
+
+
+def test_gh_579_escalate_adr_posts_the_spots_of_its_one_adr_decided_call(tmp_path, monkeypatch):
+    """The wiring: the question `escalate_adr` posts is built from the spots of a single
+    `adr_decided` call on the head, not from `Ambiguous.detail` (which would say `SECRET`)."""
+    calls: list[tuple[str, str]] = []
+    spots = (
+        ("app/main.py", 238, "SECRET text"),
+        ("docs/product/sales.md", 35, "SECRET text"),
+        ("../outside\n.md", 1, "SECRET text"),  # refused by publishable_path: counted, not shown
+    )
+
+    def decided(_ports, upstream, head):
+        calls.append((upstream, head))
+        return DecidedRenaming(Renaming(_SPOT_MOVES, {}), spots)
+
+    monkeypatch.setattr(landing_fix, "adr_decided", decided)
+    ports = _ports(5)
+    found = Ambiguous("unclassified_token", "app/main.py:238: SECRET", _SPOT_MOVES)
+    context = _adr_context(ports, tmp_path, found, [])
+
+    landing_fix.escalate_adr(context)
+
+    [question] = _doc(ports)["questions_for_human"]
+    assert calls == [(MASTER, HEAD)]
+    assert "`app/main.py:238`" in question and "`docs/product/sales.md:35`" in question
+    assert "and 1 more" in question
+    assert "SECRET" not in question and "../outside" not in question
+
+
+def test_gh_579_a_row_recorded_with_line_zero_still_renders_as_the_whole_file():
+    found = Ambiguous("unclassified_token", "a:1", _SPOT_MOVES)
+    rows = [{"path": "docs/product/sales.md", "line": 0}]
+
+    text = landing_fix.adr_collision_reason(
+        found, 3, "out_of_bounds", out_of_bounds_lines=rows, slots_left=True
+    )
+
+    assert "`docs/product/sales.md` (the whole file)" in text

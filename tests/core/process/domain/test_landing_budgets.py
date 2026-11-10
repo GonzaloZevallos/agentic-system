@@ -398,8 +398,8 @@ def _versioned(outcome, bounds=landing.ADR_EDIT_BOUNDS, at=T0) -> dict:
     return {**_apply(outcome, at=at), "bounds": bounds}
 
 
-def test_the_edit_bounds_version_is_two():
-    assert landing.ADR_EDIT_BOUNDS == 2
+def test_the_edit_bounds_version_is_three():
+    assert landing.ADR_EDIT_BOUNDS == 3
 
 
 def test_two_failed_applies_of_the_old_bounds_spend_no_slot_of_the_current_ones():

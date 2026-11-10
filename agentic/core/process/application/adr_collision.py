@@ -11,6 +11,11 @@ The lines, the trees of the commits that added them and the texts of the rewrite
 only on a real collision. All of it is bounded by the branch's own commits and ADR files;
 there is no cache. `adr_decided` alone adds one `paths_naming` (a `git grep -l -F`) per moved
 file, and reads whole only the files that name it (GH-576); `adr_collision` never does.
+On a real collision both add (GH-579) one `merge_base`, one `changed_paths`, one `paths_naming`
+per old number and, for each file the branch changed that names one (a moved ADR file is not
+one), its text at the merge base, plus its texts at master and at head when no own line
+already brought it in: what classifies a reference no non-merge commit of the branch added.
+No collision, none of it.
 Which numbers collide, what they become and what is rewritten is `domain.adr_numbers`'s; this
 module reads and hands over, it compares no number."""
 
@@ -45,6 +50,7 @@ class _Inputs:
     lines: Sequence[OwnLine]
     trees: Mapping[str, Sequence[str]]
     texts: Mapping[str, tuple[str | None, str]]
+    bases: Mapping[str, str | None]
 
 
 def _inputs(
@@ -84,11 +90,20 @@ def _inputs(
     if named_anywhere:
         for old in sorted(moves):
             paths.update(workspace.paths_naming(head, old.rsplit("/", 1)[-1]))
-    for path in sorted(paths):
+    # GH-579: a file the branch changed that names an old number is a candidate for the
+    # references no non-merge commit of the branch added; its merge-base text is master's too.
+    base = workspace.merge_base(master, head)
+    changed = set(workspace.changed_paths(base, head))
+    naming: set[str] = set()
+    for number in adr_numbers.old_numbers(moves):
+        naming.update(workspace.paths_naming(head, number))
+    candidates = sorted((changed & naming) - set(moves))  # a moved ADR is all the branch's
+    for path in sorted(paths | set(candidates)):
         text = workspace.show(head, path)
         if text is not None:
             texts[path] = (workspace.show(master, path), text)
-    return _Inputs(moves, lines, trees, texts)
+    bases = {path: workspace.show(base, path) for path in candidates if path in texts}
+    return _Inputs(moves, lines, trees, texts, bases)
 
 
 def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous | None:
@@ -106,7 +121,7 @@ def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous 
     read = _inputs(ports, master, head)
     if not isinstance(read, _Inputs):
         return read
-    return adr_numbers.renumber(read.moves, read.lines, read.trees, read.texts)
+    return adr_numbers.renumber(read.moves, read.lines, read.trees, read.texts, bases=read.bases)
 
 
 def adr_decided(ports: Ports, master: str, head: str) -> DecidedRenaming | Ambiguous | None:
@@ -118,4 +133,6 @@ def adr_decided(ports: Ports, master: str, head: str) -> DecidedRenaming | Ambig
     read = _inputs(ports, master, head, named_anywhere=True)
     if not isinstance(read, _Inputs):
         return read
-    return adr_numbers.renumber_decided(read.moves, read.lines, read.trees, read.texts)
+    return adr_numbers.renumber_decided(
+        read.moves, read.lines, read.trees, read.texts, bases=read.bases
+    )
