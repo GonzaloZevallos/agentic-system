@@ -19,6 +19,7 @@ classDiagram
     class landing__LandResult["LandResult"]
     class landing_adr__CheckedRed["CheckedRed"]
     class landing_adr__OutOfBounds["OutOfBounds"]
+    class landing_fix__Fix["Fix"]
     class landing_plan__LandingContext["LandingContext"]
     class landing_plan__Release["Release"]
     class landing_plan__RoleRun["RoleRun"]

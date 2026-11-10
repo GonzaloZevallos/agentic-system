@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..domain import ci, merge_ci, plan_settlement, presubmit, rules
@@ -483,6 +484,7 @@ def adr_collision_reason(
     out_of_bounds_lines: Sequence[Mapping[str, object]] = (),
     out_of_bounds_more: int = 0,
     spots: Sequence[tuple[str, int]] = (),
+    rewrites: Sequence[tuple[str, int]] = (),
 ) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
@@ -501,18 +503,26 @@ def adr_collision_reason(
     of 0 being the whole file; a row whose path `landing.publishable_path` refuses is counted, not
     shown) and `and N more` for those left out (`out_of_bounds_more`); with none recorded a fixed
     line says so. The whole question stays under `MERGE_COMMENT_MAX`, the
-    tails going last check first."""
+    tails going last check first. `rewrites` (GH-582) are the `bound` lines of a decision with no
+    spot: given only then, the question says the rule rewrites them and that a `Decision:` applies
+    that after the checks, with no model pass (same `path:line` rows and cap as the spots); without
+    them, or when nothing could be computed, the text says "Fix by hand" as ever. After a
+    `git_failed` line one more says that a new decision retries."""
     if isinstance(found, Ambiguous) and not found.moves:
         what = (
             f"The branch has ADR files that share a number ({found.reason}): {found.detail}. "
             "No number was calculated, so there is nothing to apply."
         )
     elif isinstance(found, Ambiguous):
-        fix = (
-            f"Fix by hand, every line the rule cannot decide:\n{_spots_text(spots)}"
-            if spots
-            else f"Fix by hand: {found.detail}."
-        )
+        if spots:
+            fix = f"Fix by hand, every line the rule cannot decide:\n{_spots_text(spots)}"
+        elif rewrites:
+            fix = (
+                "The rule rewrites these lines itself; an owner's `Decision:` applies them after "
+                f"running the checks, with no model pass:\n{_spots_text(rewrites)}"
+            )
+        else:
+            fix = f"Fix by hand: {found.detail}."
         what = (
             "The branch's ADR numbers collide with master's and the renumbering cannot rewrite "
             f"every reference without guessing (`{found.reason}`). The numbers the rule chose:\n"
@@ -525,6 +535,8 @@ def adr_collision_reason(
         )
     if failed is not None:
         what += f"\nThe last attempt to apply your decision ended `{failed}`; nothing was pushed."
+        if failed == "git_failed":
+            what += "\nA git operation failed (the log names it); a new `Decision:` retries it."
     blocks = _red_blocks(red_checks) if failed == "checks_red" else []
     if failed == "out_of_bounds":
         what += _out_of_bounds_text(out_of_bounds_lines, out_of_bounds_more)
@@ -541,6 +553,13 @@ def adr_collision_reason(
             f"Both decision slots for this collision on this head are spent, so no "
             f"further decision will be applied to it. To go on, {WAY_OUT_ADR}. A new head goes "
             "through the landing table again; a reply without a new head does not ask again."
+        )
+    elif isinstance(found, Ambiguous) and rewrites and not spots:
+        ending = (
+            f"To go on, {WAY_OUT_ADR}, or decide on this issue. A new head goes through "
+            "the landing table again; a reply without a new head does not ask again, except a "
+            "decision on the issue, which rewrites the lines named above and runs the checks, "
+            "with no model pass."
         )
     else:
         ending = (
@@ -569,20 +588,32 @@ def adr_collision_reason(
     return presubmit.fit_comment(text, len(blocks))
 
 
-def _spots_to_fix(context: LandingContext) -> tuple[tuple[str, int], ...]:
-    """The `(path, line)` of every spot of the collision on the head (GH-579), from one
-    `adr_decided` call; empty when it cannot be computed or has none (the question then says
-    what `Ambiguous.detail` says). Never the text of a line."""
+@dataclass(frozen=True)
+class Fix:
+    """The `(path, line)` of the `spots` and of the `bound` lines of the collision on the head."""
+
+    spots: tuple[tuple[str, int], ...]
+    bound: tuple[tuple[str, int], ...]
+
+
+def _spots_to_fix(context: LandingContext) -> Fix | None:
+    """The spots and the `bound` lines of the collision on the head (GH-579, GH-582), from one
+    `adr_decided` call; `None` when it could not be computed (no sha or head, a `GitError`, not a
+    `DecidedRenaming`: the question then says what `Ambiguous.detail` says). Never the text of a
+    line."""
     sha = context.upstream.sha
     if sha is None or context.head is None:
-        return ()
+        return None
     try:
         decided = adr_decided(context.ports, sha, context.head)
     except GitError:
-        return ()
+        return None
     if not isinstance(decided, DecidedRenaming):
-        return ()
-    return tuple((path, line) for path, line, _ in decided.spots)
+        return None
+    return Fix(
+        tuple((path, line) for path, line, _ in decided.spots),
+        tuple((path, line) for path, line, _ in decided.bound),
+    )
 
 
 SPOTS_TEXT_MAX = 20_000
@@ -630,7 +661,9 @@ def escalate_adr(context: LandingContext) -> None:
     more = applied[-1].get("red_more") if applied else None
     rows = applied[-1].get("out_of_bounds_lines") if applied else None
     cut = applied[-1].get("out_of_bounds_more") if applied else None
-    spots = _spots_to_fix(context)
+    fix = _spots_to_fix(context)
+    spots = fix.spots if fix is not None else ()
+    rewrites = fix.bound if fix is not None and not fix.spots else ()
     slots_left = (
         context.head is None
         or not found.moves
@@ -650,6 +683,7 @@ def escalate_adr(context: LandingContext) -> None:
                 failed,
                 slots_left=slots_left,
                 spots=spots,
+                rewrites=rewrites,
                 red_checks=detail,
                 red_more=more if isinstance(more, int) and more > 0 else 0,
                 out_of_bounds_lines=(

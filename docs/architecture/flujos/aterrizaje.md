@@ -89,7 +89,8 @@ sequenceDiagram
    y `bound`, que es lo único que decide qué líneas puede tocar el pase), que los chequeos hayan
    quedado en verde y que no quede colisión (`adr_collision`). Si todo está bien empuja con `lease=head`
    (`Workspace.push`) y el resultado es `applied` con `head_after`; en cualquier otro resultado
-   (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`) no empuja,
+   (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`, `git_failed`,
+   `ambiguous`, `no_collision`) no empuja,
    deja el checkout en la cabeza con `Workspace.reset_hard` (en un `finally`, también ante una
    excepción) y vuelve a preguntar por `escalate_adr`, que nombra el último resultado fallido.
    Cuando el resultado es `checks_red`, la entrada `apply_adr_decision` registra además
@@ -101,6 +102,35 @@ sequenceDiagram
    solos están dentro de límites), las líneas (b)/(c) son `bound`, lo que la decisión deja igual se
    nombra con `keep <ruta>:<línea>` en un commit (`kept_spots`; `role_failed` si un `spot` ni
    cambió ni se nombró), y `escalate_adr` registra `upstream` (otro sha al aplicar: `stale_moves`).
+   **GH-582:** `stale_moves` es solo que el master se movió desde la pregunta o que los `moves`
+   de la regla cambiaron. `apply_adr_decision` comprueba en este orden: el upstream registrado
+   contra el sha, un error de git al recalcular (`git_failed`), que ya no haya colisión
+   (`no_collision`), que la colisión sea `Ambiguous` (`ambiguous`) y, al final, que los `moves`
+   sean los registrados (`stale_moves`); cada rechazo deja una línea de log que nombra la
+   condición. Si `adr_decided` devuelve una `DecidedRenaming` sin `spots` (la regla (d), un enlace Markdown
+   con la etiqueta `NNNN` y el destino `NNNN-slug.md`, reescribió toda referencia, por ejemplo una fila de índice), no corre
+   el Developer: el sistema hace el commit mecánico, corre una vez los chequeos de entrega con
+   `before` en la cabeza anterior a ese commit, decide `checks_red` por los resultados de la puerta
+   (un rechazo del testigo o de rutas, o unos resultados ausentes, también terminan `checks_red`,
+   nunca `applied`), comprueba con `adr_collision` que no quede colisión (`still_colliding`) y
+   empuja con lease. Las líneas reescritas no se reordenan: un índice cuyos chequeos exigen orden
+   termina `checks_red`. Tabla de resultados:
+
+   | Resultado | Gasta cupo | Vuelve a preguntar | Empuja |
+   |---|---|---|---|
+   | `applied` | sí | no | sí |
+   | `out_of_bounds`, `role_failed`, `checks_red`, `still_colliding` | sí | sí | no |
+   | `stale_moves`, `git_failed` | no | sí | no |
+   | `ambiguous` | no | sí, sin ofrecer decisión | no |
+   | `no_collision` | no | no | no |
+
+   `git_failed` y `ambiguous` no gastan cupo: GH-652 se repetía porque el dueño volvía a decidir,
+   no de forma automática; un fallo de git no es obra del dueño y `ambiguous` nunca ofrece una
+   decisión. La pregunta de `escalate_adr` dice que la regla reescribe las líneas `bound` y que una
+   `Decision:` las aplica sin pase de modelo solo con una `DecidedRenaming` sin `spots` y con
+   `bound`; si el cálculo falló, es `Ambiguous` o no se calculó, conserva «Fix by hand». Tras un
+   `git_failed`, dice que una nueva `Decision:` reintenta. El camino automático (`renumber`) y
+   `ADR_EDIT_BOUNDS` no cambian.
    Cuando el resultado es `out_of_bounds`, la entrada registra `out_of_bounds_lines` (a lo sumo
    cinco `{path, line}`, con la ruta saneada por `landing.out_of_bounds_detail`; la línea 0 es el
    archivo entero) y `out_of_bounds_more` con las que no se muestran, nunca el texto de una línea.

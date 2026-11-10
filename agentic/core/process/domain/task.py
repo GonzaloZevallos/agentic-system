@@ -1057,14 +1057,27 @@ class PlanSettledRow(TypedDict):
 
 
 AdrDecisionOutcome = Literal[
-    "applied", "stale_moves", "out_of_bounds", "role_failed", "checks_red", "still_colliding"
+    "applied",
+    "stale_moves",
+    "out_of_bounds",
+    "role_failed",
+    "checks_red",
+    "still_colliding",
+    "git_failed",
+    "no_collision",
+    "ambiguous",
 ]
 """How an `apply_adr_decision` entry ended (GH-544), closed; `landing` re-exports it:
 `applied` (a new head was pushed),
-`stale_moves` (master moved and the rule now picks other numbers than the question named),
+`stale_moves` (master moved, or the rule now picks other numbers than the question named; GH-582:
+never any other cause),
 `out_of_bounds` (the pass edited a line that is not a spot), `role_failed` (the Developer pass
 failed), `checks_red` (the product's checks failed on the result) and `still_colliding` (the
-result still holds a number master took). Every one but `applied` asks again."""
+result still holds a number master took). GH-582 names the refusals that used to read as
+`stale_moves`: `git_failed` (a git read, commit or push failed; nothing was pushed),
+`no_collision` (the head no longer collides with master) and `ambiguous` (the collision is one
+the rule cannot decide even with an owner's decision). Every one but `applied` and `no_collision`
+asks again; `git_failed`, `no_collision` and `ambiguous` spend no decision slot."""
 
 
 class LandingEntry(TypedDict, total=False):
