@@ -1009,8 +1009,9 @@ def adr_decisions_spent(
 ) -> int:
     """The `apply_adr_decision` entries that used a slot of `LANDING_ADR_DECISIONS_MAX` for the
     collision (`head`, `moves`): those whose `outcome` is one of `_ADR_DECISION_SPENT` (the closed
-    set but `stale_moves`, GH-570, `git_failed`, `no_collision` and `ambiguous`, GH-582) and whose `bounds` is `ADR_EDIT_BOUNDS` (GH-576: an apply that ran under other
-    bounds gave its slot back; a missing `bounds` is 1). The one reader of `bounds`, and the one
+    set but `stale_moves`, GH-570, `git_failed`, `no_collision` and `ambiguous`, GH-582) and whose
+    `bounds` is `ADR_EDIT_BOUNDS` (GH-576: an apply that ran under other bounds gave its slot back;
+    a missing `bounds` is 1). The one reader of `bounds`, and the one
     counter of the cap: the step table, `release_asked` and the question the
     owner reads all call it. Read over all entries, as `renumbers` is, so a restoration does not
     give a slot back (GH-544).

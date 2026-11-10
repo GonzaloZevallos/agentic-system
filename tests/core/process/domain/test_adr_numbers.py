@@ -812,3 +812,21 @@ def test_gh_579_a_branch_without_stale_non_own_tokens_still_gets_a_renaming():
     head = f"{SALES_MASTER}new line about ADR-0007 only\n"
     result = _renumber(_gh407(head, []))
     assert result == Renaming(((GONE, MOVED),), {MOVED: "# ADR-0076: payments\n"})
+
+
+def test_gh_582_a_link_label_row_is_ambiguous_for_renumber_and_bound_for_renumber_decided():
+    """apostrophe GH-652: the row `| [0049](../adr/0049-mine.md) |` of an index. `renumber` leaves
+    the label `[0049]` an `unclassified_token`; rule (d) of `renumber_decided` rewrites the row."""
+    row = "| [0049](../adr/0049-mine.md) | mine |"
+    index = "docs/architecture/decisiones.md"
+    texts = {OLD: (None, "# ADR-0049: mine\n"), index: ("", row + "\n")}
+    lines = [_line(OLD, "# ADR-0049: mine"), _line(index, row)]
+
+    refused = _rewrite({OLD: NEW}, texts, lines)
+    decided = _decided({OLD: NEW}, texts, lines)
+
+    assert isinstance(refused, Ambiguous) and refused.reason == "unclassified_token"
+    assert refused.detail.startswith(f"{index}:1:")
+    assert isinstance(decided, adr_numbers.DecidedRenaming) and decided.spots == ()
+    assert (index, 1, "| [0050](../adr/0050-mine.md) | mine |") in decided.bound
+    assert decided.renaming.texts[index] == "| [0050](../adr/0050-mine.md) | mine |\n"

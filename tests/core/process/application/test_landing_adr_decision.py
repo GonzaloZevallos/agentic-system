@@ -11,12 +11,13 @@ from typing import Any
 
 import pytest
 
-from agentic.core.process.application import landing, landing_plan
-from agentic.core.process.application.adr_collision import adr_decided
+from agentic.core.process.application import landing, landing_adr, landing_plan
+from agentic.core.process.application.adr_collision import adr_collision, adr_decided
 from agentic.core.process.application.landing_adr import brief
 from agentic.core.process.application.landing_plan import entries as plan_entries
 from agentic.core.process.application.ports import (
     CommandResult,
+    GitError,
     IssueComment,
     IssueState,
     RawResult,
@@ -35,7 +36,6 @@ from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import URL, _HeldLocks, _pr
 from tests.core.process.domain.test_landing import _facts
 from tests.fakes import (
-    MERGE_BASE,
     MemoryCommands,
     MemoryStack,
     MemoryTracker,
@@ -932,24 +932,22 @@ def test_gh_579_the_question_escalate_adr_posts_lists_every_spot_of_the_collisio
 # -- GH-582: apostrophe GH-652's shape, a decision the rule settles with no spot left ----------
 
 ROW_BARE = "| 0049 | mine, said bare |"
-MASTER_BASE = "# Decisiones\n"
 
 
-def _gh_652_world(tmp_path, *, own_row=True, bare=False, edit=_boom, commands=None, stack=None):
+def _gh_652_world(tmp_path, *, bare=False, edit=_boom, commands=None, stack=None):
     """Branch ADR 0049 against master's 0049. `docs/architecture/decisiones.md` holds master's
-    own row for its 0049 and, besides it, the branch's row `| [0049](../adr/0049-mine.md) |`: an
-    own line (`own_row`) or one a merge resolution brought (no own commit added it). The question
+    own row for its 0049 and, besides it, the branch's row `| [0049](../adr/0049-mine.md) |`, an
+    own line. The question
     is asked with `renumber` (the row's label is an `unclassified_token`), the decision is
     recomputed with `renumber_decided` (rule (d) rewrites the row: no spot is left)."""
-    extra = ((INDEX, ROW_MINE),) if own_row else ()
+    extra = ((INDEX, ROW_MINE),)
+    extra += ((INDEX, ROW_BARE),) if bare else ()
 
     def prepare(ports, head):
         workspace = ports.workspace
         tail = ROW_BARE + "\n" if bare else ""
         workspace.files[(head, INDEX)] = f"{ROW_THEIRS}\n{ROW_MINE}\n{tail}"
         workspace.files[(workspace.master_sha, INDEX)] = ROW_THEIRS + "\n"
-        if not own_row:  # nothing of the branch is in the file at the merge base
-            workspace.files[(MERGE_BASE, INDEX)] = MASTER_BASE
 
     paths = (MINE, NOTES, INDEX)
     ports, head = _asked_with(tmp_path, edit, extra, prepare=prepare, paths=paths)
@@ -979,10 +977,11 @@ def test_gh_652_the_question_calls_the_row_ambiguous_and_the_decision_finds_no_s
     ports, head, _ = _gh_652_world(tmp_path)
 
     [asked] = _entries(ports)
-    [question] = ports.documents.load("GH-5")["questions_for_human"]
 
     assert asked["moves"] == [[MINE, "docs/adr/0050-mine.md"]]
-    assert f"Fix by hand: {INDEX}:" in question
+    found = adr_collision(ports, ports.workspace.master_sha, head)
+    assert found == adr_numbers.Ambiguous("unclassified_token", found.detail, found.moves)
+    assert found.detail.startswith(f"{INDEX}:")
     found = adr_decided(ports, ports.workspace.master_sha, head)
     assert isinstance(found, adr_numbers.DecidedRenaming) and found.spots == ()
     assert any(path == INDEX for path, _, _ in found.bound)
@@ -1009,3 +1008,132 @@ def test_gh_652_a_decision_with_no_spot_is_applied_without_a_model_pass(tmp_path
     assert [command for _, command in ports.commands.ran] == ["run docs"]
     unit = ports.documents.load("GH-5")["subtasks"]["only"]
     assert unit["reviewed_head"] == pushed  # only names and numbers changed: the review is carried
+
+
+def test_gh_652_a_bare_number_beside_the_row_still_goes_through_the_developer(tmp_path):
+    def sort_the_bare_row(ports, cwd):
+        text = f"{ROW_THEIRS}\n{ROW_MINE_NEW}\n| 0050 | mine, said bare |\n"
+        _commit_407(ports, cwd, {INDEX: text}, f"Point the bare row\n\nkeep {NOTES}:0")
+
+    ports, head, paths = _gh_652_world(tmp_path, bare=True, edit=sort_the_bare_row)
+
+    _round(tmp_path, ports, paths=paths)
+
+    [prompt] = ports.runner.prompts("developer")
+    assert f"{INDEX}:3: {ROW_BARE}" in prompt
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "applied", entry
+
+
+def test_gh_652_a_red_check_ends_checks_red_and_pushes_nothing(tmp_path):
+    commands = WhereChecksRan(None, **{"run docs": [CommandResult(1, "docs stale\n")] * 5})
+    ports, head, paths = _gh_652_world(tmp_path, commands=commands)
+    commands.workspace = ports.workspace
+
+    _round(tmp_path, ports, paths=paths)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "checks_red", entry
+    assert entry["red_checks"][0]["name"] == "docs"
+    assert ports.workspace.pushes == [] and ports.runner.calls == []
+    assert ports.workspace.branch_commits[-1].sha == head  # the checkout was put back
+
+
+def test_gh_652_a_witness_that_disagrees_ends_checks_red_not_applied(tmp_path):
+    commands = WhereChecksRan(None, witness=[CommandResult(1, "not this checkout\n")] * 5)
+    stack = MemoryStack(checks={"docs": "run docs"}, witness="witness")
+    ports, head, paths = _gh_652_world(tmp_path, commands=commands, stack=stack)
+    commands.workspace = ports.workspace
+
+    _, lines = _round(tmp_path, ports, paths=paths)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "checks_red", (entry, lines)
+    assert "red_checks" not in entry
+    assert ports.workspace.pushes == []
+
+
+def _decided_as(monkeypatch, answer):
+    def decided(ports, master, head):
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(landing_adr, "adr_decided", decided)
+
+
+def test_gh_582_a_git_failure_reading_the_collision_is_git_failed_and_asks_again(
+    tmp_path, monkeypatch
+):
+    ports, head, paths = _gh_652_world(tmp_path)
+    _decided_as(monkeypatch, GitError("git grep failed"))
+
+    _, lines = _round(tmp_path, ports, paths=paths)
+
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)][1:] == [
+        ("apply_adr_decision", "git_failed"),
+        ("escalate_adr", None),
+    ]
+    assert any("adr_decided could not read git" in line for line in lines)
+    assert ports.workspace.pushes == [] and ports.runner.calls == []
+    assert "A git operation failed" in ports.documents.load("GH-5")["questions_for_human"][0]
+
+
+def test_gh_582_a_failed_push_is_git_failed_not_stale_moves(tmp_path):
+    ports, head, paths = _gh_652_world(tmp_path)
+    ports.workspace.push_failures = 1
+
+    _round(tmp_path, ports, paths=paths)
+
+    assert _apply_entry(ports)["outcome"] == "git_failed"
+    assert ports.workspace.branch_commits[-1].sha == head
+
+
+def test_gh_582_a_collision_that_is_gone_is_no_collision_and_does_not_ask_again(
+    tmp_path, monkeypatch
+):
+    ports, head, paths = _gh_652_world(tmp_path)
+    _decided_as(monkeypatch, None)
+
+    _, lines = _round(tmp_path, ports, paths=paths)
+
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)][1:] == [
+        ("apply_adr_decision", "no_collision")
+    ]
+    assert any("no longer collides" in line for line in lines)
+    assert ports.workspace.pushes == []
+
+
+def test_gh_582_a_collision_the_rule_cannot_decide_is_ambiguous_and_asks_again(
+    tmp_path, monkeypatch
+):
+    ports, _, paths = _gh_652_world(tmp_path)
+    _decided_as(monkeypatch, adr_numbers.Ambiguous("duplicate_own_number", "x", ()))
+
+    _round(tmp_path, ports, paths=paths)
+
+    assert _apply_entry(ports)["outcome"] == "ambiguous"
+    assert _entries(ports)[-1]["step"] == "escalate_adr"
+    assert ports.workspace.pushes == []
+
+
+def test_gh_582_a_changed_upstream_wins_over_a_collision_that_is_gone(tmp_path, monkeypatch):
+    ports, _, paths = _gh_652_world(tmp_path)
+    ports.workspace.advance_master()
+    _decided_as(monkeypatch, None)
+
+    _round(tmp_path, ports, paths=paths)
+
+    assert _apply_entry(ports)["outcome"] == "stale_moves"
+
+
+def test_gh_582_the_question_says_the_rule_rewrites_the_row_when_no_spot_is_left(tmp_path):
+    ports, _, _ = _gh_652_world(tmp_path)
+
+    # The question above is the one asked before the fix of the text: `escalate_adr` itself
+    # computes it from `adr_decided`, so it names the rewrite and not "Fix by hand".
+    [question] = ports.documents.load("GH-5")["questions_for_human"]
+
+    assert "The rule rewrites these lines itself" in question
+    assert f"`{INDEX}:2`" in question
+    assert "Fix by hand" not in question and "no model pass" in question

@@ -265,7 +265,16 @@ def test_a_failed_decision_then_its_new_question_resolved_is_none_again():
 
 
 @pytest.mark.parametrize(
-    "outcome", ["out_of_bounds", "role_failed", "checks_red", "still_colliding", "stale_moves"]
+    "outcome",
+    [
+        "out_of_bounds",
+        "role_failed",
+        "checks_red",
+        "still_colliding",
+        "stale_moves",
+        "git_failed",
+        "ambiguous",
+    ],
 )
 def test_each_failed_outcome_followed_by_its_question_asks_again(outcome):
     entries = [_released(), _applied(outcome)]

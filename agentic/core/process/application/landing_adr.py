@@ -222,7 +222,7 @@ def _write_and_ask(
     and whether the verdict carries to it, or the closed outcome that stops the step
     (`CheckedRed` for `checks_red`, with which checks were red, `OutOfBounds` for
     `out_of_bounds`, with which lines)."""
-    ports, head = context.ports, context.head
+    ports = context.ports
     workspace = ports.workspace
     renaming = found.renaming
     for old, _ in renaming.moves:
