@@ -1062,6 +1062,7 @@ AdrDecisionOutcome = Literal[
     "out_of_bounds",
     "role_failed",
     "checks_red",
+    "checks_timeout",
     "still_colliding",
     "git_failed",
     "no_collision",
@@ -1076,8 +1077,11 @@ failed), `checks_red` (the product's checks failed on the result) and `still_col
 result still holds a number master took). GH-582 names the refusals that used to read as
 `stale_moves`: `git_failed` (a git read, commit or push failed; nothing was pushed),
 `no_collision` (the head no longer collides with master) and `ambiguous` (the collision is one
-the rule cannot decide even with an owner's decision). Every one but `applied` and `no_collision`
-asks again; `git_failed`, `no_collision` and `ambiguous` spend no decision slot."""
+the rule cannot decide even with an owner's decision). GH-585 adds `checks_timeout` (a check of
+the gate timed out and no check was red: nothing was pushed). Every one but `applied` and
+`no_collision` asks again; `git_failed`, `no_collision`, `ambiguous` and `checks_timeout` spend
+no decision slot, and neither does a `checks_red` with no `gate_tier`
+(`landing.adr_decisions_spent`)."""
 
 
 class LandingEntry(TypedDict, total=False):
@@ -1158,6 +1162,11 @@ class LandingEntry(TypedDict, total=False):
     # more were left out. Never the raw log; absent on an entry written before.
     red_checks: list[RedCheck]
     red_more: int
+    # GH-585, an `apply_adr_decision` entry whose run built the gate: which checks it ran,
+    # `delivery` (the product's `delivery_checks`) or `all` (the product declares none). Written by
+    # `landing_adr._finish`, read by `landing.adr_decisions_spent` alone. A `str`, not the closed
+    # pair, because a value a hand edit left unreadable must still read as present.
+    gate_tier: str
     # GH-576, an `apply_adr_decision` entry: the `landing.ADR_EDIT_BOUNDS` it ran under (absent
     # reads as 1), and, when it ended `out_of_bounds`, the `{path, line}` rows that were out
     # (`landing.out_of_bounds_detail`, paths cleaned there, never the text of a line) and how

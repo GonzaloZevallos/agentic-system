@@ -19,12 +19,13 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from ..domain import landing, rules
 from ..domain import landing as landing_rules
 from ..domain.adr_numbers import Ambiguous, DecidedRenaming, kept_spots, outside_bounds
 from ..domain.check_schedule import CheckPriority
-from ..domain.presubmit import RedCheck, describe_checks, final_results, red_checks
+from ..domain.presubmit import CheckResult, RedCheck, describe_checks, gate_verdict, red_checks
 from ..domain.roles import DEVELOPER
 from ..domain.task import AdrDecisionOutcome, TaskState, apply
 from .adr_collision import adr_collision, adr_decided
@@ -32,8 +33,8 @@ from .checkouts import SetupFailed, task_base, task_checkout
 from .landing_fix import _accounting, escalate_adr
 from .landing_plan import LandingContext, adr_decision_at, all_entries
 from .landing_sync import _carries, _message, _owned, merges_cleared, record_landing
-from .ports import GitError, Workspace
-from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
+from .ports import GitError, Ports, Workspace
+from .presubmit import CheckoutPresubmit, fast_tier, readiness_of, reuse_of
 from .resume import state_from
 from .run_role import run_role
 
@@ -120,13 +121,32 @@ def _unit(state: TaskState) -> str | None:
     return unit["id"] if unit is not None and "id" in unit else None
 
 
+GateTier = Literal["delivery", "all"]
+"""Which checks the apply gate ran (GH-585): `delivery`, the product's `delivery_checks` (the same
+`fast_tier` a Developer delivery runs; what is left is the merge gate's, over the pushed head), or
+`all` when the product declares no such tier."""
+
+
+def gate_tier_of(ports: Ports, base: str) -> GateTier:
+    """The tier `_gate` runs for a product at `base`."""
+    return "delivery" if ports.stack.delivery_checks(base) else "all"
+
+
 RedDetail = tuple[list[RedCheck], int]
 """Which checks were red and how many more were left out (`presubmit.red_checks`)."""
 
 
 @dataclasses.dataclass(frozen=True)
 class CheckedRed:
-    """The Developer pass ended `checks_red`; `detail` says which checks were red."""
+    """The gate left a red check: `checks_red`; `detail` says which checks were red."""
+
+    detail: RedDetail
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckedTimeout:
+    """The gate left no red check but one timed out: `checks_timeout`; `detail` says which
+    checks timed out (`presubmit.red_checks`, each with `timed_out` true)."""
 
     detail: RedDetail
 
@@ -139,9 +159,12 @@ class OutOfBounds:
     pairs: tuple[tuple[str, int], ...]
 
 
-Result = tuple[AdrDecisionOutcome, str | None, bool, RedDetail | None, OutOfBounds | None]
+Result = tuple[
+    AdrDecisionOutcome, str | None, bool, RedDetail | None, OutOfBounds | None, GateTier | None
+]
 """The outcome, the head pushed (`applied` only), whether the verdict is carried to it, for
-`checks_red` only which checks were red, and for `out_of_bounds` only which lines."""
+`checks_red` and `checks_timeout` which checks were red or timed out, for `out_of_bounds` only
+which lines, and the tier of the gate the run built (`None` when it ended before building it)."""
 
 
 def apply_adr_decision(context: LandingContext) -> None:
@@ -153,14 +176,19 @@ def apply_adr_decision(context: LandingContext) -> None:
     if unit is None or sha is None:
         context.log(f"agentic: land: {context.task_id}: apply_adr_decision: nothing to apply")
         return
-    outcome, head_after, carried, red, out = _apply(context, state, unit, sha)
-    _finish(context, state, unit, outcome, head_after, carried, red, out)
+    outcome, head_after, carried, red, out, tier = _apply(context, state, unit, sha)
+    _finish(context, state, unit, outcome, head_after, carried, red, out, tier)
 
 
-def _refused(context: LandingContext, outcome: AdrDecisionOutcome, check: str) -> Result:
+def _refused(
+    context: LandingContext,
+    outcome: AdrDecisionOutcome,
+    check: str,
+    tier: GateTier | None = None,
+) -> Result:
     """The step ends `outcome` without pushing, and the log names the check that failed."""
     context.log(f"agentic: land: {context.task_id}: apply_adr_decision: {check} -> {outcome}")
-    return outcome, None, False, None, None
+    return outcome, None, False, None, None, tier
 
 
 def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Result:
@@ -188,6 +216,7 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
         # failure is infrastructure, not the owner's doing, and spends no slot.
         outcome: AdrDecisionOutcome = "role_failed" if found.spots else "git_failed"
         return _refused(context, outcome, f"the task checkout's setup failed ({failed.step})")
+    tier = gate_tier_of(ports, task_base(state, ports))
     pushed = False
     try:
         with merges_cleared(workspace, checkout.path, _owned(context, state)):
@@ -195,22 +224,25 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
                 result = _write_and_ask(context, state, unit, checkout.path, found, sha)
                 if isinstance(result, CheckedRed):
                     _refused(context, "checks_red", "the checks were red on the result")
-                    return "checks_red", None, False, result.detail, None
+                    return "checks_red", None, False, result.detail, None, tier
+                if isinstance(result, CheckedTimeout):
+                    _refused(context, "checks_timeout", "a check timed out and none was red")
+                    return "checks_timeout", None, False, result.detail, None, tier
                 if isinstance(result, OutOfBounds):
                     _refused(
                         context,
                         "out_of_bounds",
                         "the Developer pass changed lines outside the bounds",
                     )
-                    return "out_of_bounds", None, False, None, result
+                    return "out_of_bounds", None, False, None, result, tier
                 if isinstance(result, str):  # `_write_and_ask` logged the check that stopped it
-                    return result, None, False, None, None
+                    return result, None, False, None, None, tier
                 new_head, carried = result
                 workspace.push(checkout.branch, lease=head)
                 pushed = True
-                return "applied", new_head, carried, None, None
+                return "applied", new_head, carried, None, None, tier
             except GitError as failed:
-                return _refused(context, "git_failed", f"a git write failed ({failed})")
+                return _refused(context, "git_failed", f"a git write failed ({failed})", tier)
     finally:
         if not pushed:
             try:
@@ -226,11 +258,11 @@ def _write_and_ask(
     path: Path,
     found: DecidedRenaming,
     sha: str,
-) -> tuple[str, bool] | AdrDecisionOutcome | CheckedRed | OutOfBounds:
+) -> tuple[str, bool] | AdrDecisionOutcome | CheckedRed | CheckedTimeout | OutOfBounds:
     """The mechanical commit, the Developer pass and the checks on what it left: the new head
     and whether the verdict carries to it, or the closed outcome that stops the step
-    (`CheckedRed` for `checks_red`, with which checks were red, `OutOfBounds` for
-    `out_of_bounds`, with which lines)."""
+    (`CheckedRed` for `checks_red`, with which checks were red, `CheckedTimeout` for
+    `checks_timeout`, `OutOfBounds` for `out_of_bounds`, with which lines)."""
     ports = context.ports
     workspace = ports.workspace
     renaming = found.renaming
@@ -321,14 +353,15 @@ def _unanswered_spots(
 
 def _gate(context: LandingContext, state: TaskState, path: Path, before: str) -> CheckoutPresubmit:
     """The delivery gate over the checkout at `path`, measured from `before`: the one
-    construction both the Developer pass and the no-spots branch go through."""
+    construction both the Developer pass and the no-spots branch go through. It runs the
+    delivery tier, as a Developer's delivery does (GH-585), never the product's whole suite."""
     ports, cfg = context.ports, context.cfg
     base = task_base(state, ports)
     return CheckoutPresubmit(
         ports,
         path,
         before,
-        ports.stack.checks(base),
+        fast_tier(ports.stack.checks(base), ports.stack.delivery_checks(base)),
         cfg.check_timeout_s,
         priority=CheckPriority.SUBTASK,
         wait_max_s=cfg.check_wait_max_s,
@@ -342,11 +375,12 @@ def _gate(context: LandingContext, state: TaskState, path: Path, before: str) ->
 
 def _gate_red(
     context: LandingContext, gate: CheckoutPresubmit, refusal: str | None
-) -> CheckedRed | None:
-    """`CheckedRed` when the gate run of the no-spots branch is not green, judged from
-    `gate.results` alone (`final_results`: a check that ran twice counts by its last row); a
-    refusal with no red row (the witness, unstageable paths) or no results at all is red too,
-    with an empty detail and a log line naming the cause. `None` when green."""
+) -> CheckedRed | CheckedTimeout | None:
+    """`CheckedRed` or `CheckedTimeout` when the gate run of the no-spots branch is not green,
+    judged by `presubmit.gate_verdict` over `gate.results` alone (a check that ran twice counts
+    by its last row; a real red beats a timeout); a refusal with no red row (the witness,
+    unstageable paths) or no results at all is red too, with an empty detail and a log line
+    naming the cause. `None` when green."""
     results = gate.results
     if results is None:
         context.log(
@@ -354,8 +388,8 @@ def _gate_red(
             f"({'refused: ' + refusal if refusal else 'not run'})"
         )
         return CheckedRed(([], 0))
-    if any(not row["passed"] for row in final_results(results)):
-        return CheckedRed(red_checks(results))
+    if (verdict := _judged(results)) is not None:
+        return verdict
     if refusal is not None:
         context.log(
             f"agentic: land: {context.task_id}: apply_adr_decision: the gate refused with no "
@@ -365,14 +399,28 @@ def _gate_red(
     return None
 
 
+def _judged(results: Sequence[CheckResult]) -> CheckedRed | CheckedTimeout | None:
+    """What `presubmit.gate_verdict` says of `results`, as the step's own closed value; `None`
+    when green. The one place the step turns a verdict into an outcome."""
+    match gate_verdict(results):
+        case "red":
+            return CheckedRed(red_checks(results))
+        case "timed_out":
+            return CheckedTimeout(red_checks(results))
+        case _:
+            return None
+
+
 def _developer(
     context: LandingContext, state: TaskState, path: Path, mechanical: str, found: DecidedRenaming
-) -> AdrDecisionOutcome | CheckedRed | None:
+) -> AdrDecisionOutcome | CheckedRed | CheckedTimeout | None:
     """The Developer pass over the spot lines, through the delivery gate every Developer
     delivers through. `None` when it delivered with green checks; `CheckedRed` when the last
-    gate run left a red row (which checks, from `presubmit.red_checks`)."""
+    gate run left a red row and `CheckedTimeout` when it left only a timed-out one (which
+    checks, from `presubmit.red_checks`)."""
     ports, cfg = context.ports, context.cfg
-    checks = ports.stack.checks(task_base(state, ports))
+    base = task_base(state, ports)
+    checks = fast_tier(ports.stack.checks(base), ports.stack.delivery_checks(base))
     gate = _gate(context, state, path, mechanical)
 
     def committed(_: dict) -> None:
@@ -405,9 +453,7 @@ def _developer(
     ports.documents.save(apply(state_from(_document(context)), state_from(_accounting(patch))))
     if output is None:
         return _refused(context, "role_failed", "the Developer pass delivered nothing")[0]
-    if any(not row["passed"] for row in gate.results or []):
-        return CheckedRed(red_checks(gate.results or []))
-    return None
+    return _judged(gate.results or [])
 
 
 def presubmit_refusal(moved: bool, clean: bool, gate: CheckoutPresubmit) -> str | None:
@@ -428,10 +474,11 @@ def _finish(
     carried: bool,
     red: RedDetail | None = None,
     out: OutOfBounds | None = None,
+    tier: GateTier | None = None,
 ) -> None:
     """Resolves the entry with its closed `outcome`; `applied` carries the verdict as the
-    domain said and logs it, any other outcome asks the owner again. `red` (`checks_red`
-    only) is written next to the outcome: `red_checks` when not empty, `red_more` when
+    domain said and logs it, any other outcome asks the owner again. `red` (`checks_red` and
+    `checks_timeout`) is written next to the outcome: `red_checks` when not empty, `red_more` when
     above 0 (GH-570). Every apply entry records `bounds`, the `ADR_EDIT_BOUNDS` it ran under;
     `out` (`out_of_bounds` only) is written as `out_of_bounds_lines` when not empty and
     `out_of_bounds_more` when above 0 (GH-576), cleaned by `landing.out_of_bounds_detail`."""
@@ -447,6 +494,8 @@ def _finish(
     if mine:
         mine[-1]["outcome"] = outcome
         mine[-1]["bounds"] = landing.ADR_EDIT_BOUNDS
+        if tier is not None:  # GH-585: the tier of the gate the run built; the slot count's key
+            mine[-1]["gate_tier"] = tier
         if out is not None:
             lines, left = landing.out_of_bounds_detail(out.pairs)
             if lines:

@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 classDiagram
     class landing__LandResult["LandResult"]
     class landing_adr__CheckedRed["CheckedRed"]
+    class landing_adr__CheckedTimeout["CheckedTimeout"]
     class landing_adr__OutOfBounds["OutOfBounds"]
     class landing_fix__Fix["Fix"]
     class landing_plan__LandingContext["LandingContext"]

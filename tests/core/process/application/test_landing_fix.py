@@ -2062,6 +2062,7 @@ def _spent_decisions(count, head=HEAD, moves=(A_MOVE,)) -> list[dict]:
             "decision_at": released,
             "outcome": "checks_red",
             "bounds": landing_rules.ADR_EDIT_BOUNDS,
+            "gate_tier": "delivery",  # GH-585: a checks_red with no tier gives its slot back
         }
         for _ in range(count)
     ]
@@ -2408,6 +2409,53 @@ def test_checks_red_with_no_detail_says_a_fixed_line():
 
     assert "The checks were red; no check detail could be read." in text
     assert "The checks were red" not in _reason(failed="out_of_bounds")
+
+
+def _slow(name, *lines) -> dict:
+    return {**_red(name, *lines), "timed_out": True}
+
+
+def test_gh_585_the_question_after_checks_timeout_names_the_check_the_seconds_and_the_way_out():
+    text = landing_fix.adr_collision_reason(
+        FOUND_AMBIGUOUS,
+        3,
+        "checks_timeout",
+        red_checks=[_slow("web-e2e", "step 3 ok")],
+        timeout_s=1500,
+    )
+
+    assert "ended `checks_timeout`; nothing was pushed." in text
+    assert "`web-e2e`" in text and "after 1500 s" in text
+    assert "spent no decision slot" in text
+    assert "`delivery_checks`" in text and "`check_timeouts`" in text
+    assert "`web-e2e` timed out, last lines:" in text
+    assert "or decide on this issue" in text  # the decision is still offered
+    assert "The checks were red; no check detail" not in text
+    assert len(text) < presubmit.MERGE_COMMENT_MAX
+
+
+def test_gh_585_a_timeout_question_with_no_recorded_detail_still_says_what_it_can():
+    text = landing_fix.adr_collision_reason(FOUND_AMBIGUOUS, 3, "checks_timeout")
+
+    assert "spent no decision slot" in text and "`check_timeouts`" in text
+    assert "none recorded" in text and " s " not in text.split("Checks timed out")[1][:12]
+
+
+def test_gh_585_a_timed_out_check_after_checks_red_is_not_called_failed():
+    text = _reason([_slow("e2e", "slow"), _red("lint", "bad")])
+
+    assert "`e2e` timed out, last lines:" in text
+    assert "`lint`, last lines:" in text
+
+
+def test_gh_585_the_timeout_question_stays_under_the_comment_cap():
+    big = [_slow(f"check{i}", *["x" * 2500] * 30) for i in range(4)]
+
+    text = landing_fix.adr_collision_reason(
+        FOUND_AMBIGUOUS, 3, "checks_timeout", red_checks=big, red_more=1, timeout_s=1500
+    )
+
+    assert len(text) <= presubmit.MERGE_COMMENT_MAX
 
 
 def test_the_question_without_red_checks_is_the_text_of_before():

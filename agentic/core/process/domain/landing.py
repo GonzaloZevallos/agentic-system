@@ -978,6 +978,10 @@ _ADR_DECISION_SPENT: frozenset[str] = frozenset(
     {"applied", "out_of_bounds", "role_failed", "checks_red", "still_colliding"}
 )
 
+GATE_TIER_UNREADABLE = "unreadable"
+"""What `entry_of` keeps for a `gate_tier` that is not a string: still a `gate_tier`, so its
+`checks_red` still spends its slot."""
+
 
 def _moves_key(moves: object) -> tuple[tuple[str, str], ...] | None:
     """`moves` as a tuple of `(old, new)` tuples, whether it is a YAML list of lists or a
@@ -1011,7 +1015,10 @@ def adr_decisions_spent(
     collision (`head`, `moves`): those whose `outcome` is one of `_ADR_DECISION_SPENT` (the closed
     set but `stale_moves`, GH-570, `git_failed`, `no_collision` and `ambiguous`, GH-582) and whose
     `bounds` is `ADR_EDIT_BOUNDS` (GH-576: an apply that ran under other bounds gave its slot back;
-    a missing `bounds` is 1). The one reader of `bounds`, and the one
+    a missing `bounds` is 1). GH-585: `checks_timeout` is not in the set, and a `checks_red` with
+    no `gate_tier` key at all (judged against the whole suite, before the apply gate ran the
+    delivery tier) gives its slot back; one with any `gate_tier`, even an unknown one, counts. The
+    one reader of `bounds` and of `gate_tier`, and the one
     counter of the cap: the step table, `release_asked` and the question the
     owner reads all call it. Read over all entries, as `renumbers` is, so a restoration does not
     give a slot back (GH-544).
@@ -1029,6 +1036,9 @@ def adr_decisions_spent(
             entry.get("step") != "apply_adr_decision"
             or entry.get("outcome") not in _ADR_DECISION_SPENT
             or _bounds_of(entry) != ADR_EDIT_BOUNDS
+            # GH-585: a checks_red judged against the product's whole suite (no `gate_tier`) gives
+            # its slot back; any value of the key, even an unknown one, keeps it spent.
+            or (entry.get("outcome") == "checks_red" and "gate_tier" not in entry)
         ):
             continue
         applied_on = entry.get("head")
@@ -1197,6 +1207,9 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     # (`presubmit.red_checks` did that when it built them).
     if (red := _red_checks_of(raw.get("red_checks"))) is not None:
         out["red_checks"] = red
+    if "gate_tier" in raw:  # present is all `adr_decisions_spent` asks; unreadable reads as spent
+        tier = raw.get("gate_tier")
+        out["gate_tier"] = tier if isinstance(tier, str) else GATE_TIER_UNREADABLE
     if isinstance(more := raw.get("red_more"), int) and not isinstance(more, bool) and more > 0:
         out["red_more"] = more
     # GH-576, an `apply_adr_decision` entry: the version of the edit bounds it ran under and, when
@@ -1261,8 +1274,9 @@ def _out_of_bounds_lines_of(value: object) -> list[OutOfBoundsLine] | None:
 
 
 def _red_checks_of(value: object) -> list[presubmit.RedCheck] | None:
-    """`value` as the `red_checks` of an `apply_adr_decision` entry: `{name, tail, recovered}`
-    per check, `None` when any is not shaped like that (a document is edited by hand)."""
+    """`value` as the `red_checks` of an `apply_adr_decision` entry: `{name, tail, recovered,
+    timed_out}` per check (`timed_out` False when absent), `None` when any is not shaped like that
+    (a document is edited by hand)."""
     if not isinstance(value, list) or not value:
         return None
     kept: list[presubmit.RedCheck] = []
@@ -1270,11 +1284,13 @@ def _red_checks_of(value: object) -> list[presubmit.RedCheck] | None:
         if not isinstance(item, Mapping):
             return None
         name, lines, recovered = item.get("name"), item.get("tail"), item.get("recovered")
+        timed_out = item.get("timed_out", False)  # an entry written before GH-585 has none
         if (
             not isinstance(name, str)
             or not isinstance(lines, list)
             or not all(isinstance(line, str) for line in lines)
             or not isinstance(recovered, bool)
+            or not isinstance(timed_out, bool)
         ):
             return None
         kept.append(
@@ -1282,6 +1298,7 @@ def _red_checks_of(value: object) -> list[presubmit.RedCheck] | None:
                 "name": name,
                 "tail": [line for line in lines if isinstance(line, str)],
                 "recovered": recovered,
+                "timed_out": timed_out,
             }
         )
     return kept

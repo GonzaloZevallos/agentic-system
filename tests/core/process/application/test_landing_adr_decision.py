@@ -452,6 +452,7 @@ def test_gh_407_one_more_spent_apply_on_the_same_key_is_not_due(tmp_path):
     )
     entries = _gh_407_entries()
     entries[3]["bounds"] = landing_rules.ADR_EDIT_BOUNDS  # the checks_red apply of the same key
+    entries[3]["gate_tier"] = "delivery"  # judged on a tier, so its slot stays spent (GH-585)
     entries.insert(4, more)
     raw = _gh_407_document(entries)
     facts = _gh_407_facts()
@@ -517,7 +518,12 @@ def test_a_checks_red_apply_records_which_check_was_red_and_its_last_lines(tmp_p
     entry = _apply_entry(ports)
     assert entry["outcome"] == "checks_red"
     assert entry["red_checks"] == [
-        {"name": "tests", "tail": ["collected 3", "FAILED test_a - boom"], "recovered": False}
+        {
+            "name": "tests",
+            "tail": ["collected 3", "FAILED test_a - boom"],
+            "recovered": False,
+            "timed_out": False,
+        }
     ]
     assert "red_more" not in entry
     assert ports.workspace.pushes == []
@@ -547,7 +553,7 @@ def test_only_the_last_gate_run_is_reported_when_the_gate_ran_twice(tmp_path):
     entry = _apply_entry(ports)
     assert entry["outcome"] == "checks_red"
     assert entry["red_checks"] == [
-        {"name": "lint", "tail": ["SECOND run: lint red"], "recovered": False}
+        {"name": "lint", "tail": ["SECOND run: lint red"], "recovered": False, "timed_out": False}
     ]
 
 
@@ -1157,3 +1163,221 @@ def test_gh_582_a_setup_failure_without_spots_is_git_failed_and_spends_no_slot(
     assert ports.workspace.pushes == [] and ports.runner.calls == []
     entry = _apply_entry(ports)
     assert landing_rules.adr_decisions_spent(_entries(ports), entry["head"], []) == 0
+
+
+# --- GH-585: the apply gate runs the delivery tier, a timeout is no red and spends no slot -----
+
+
+def _tiered_world(tmp_path, commands, delivery=("tests",), runner=StubDeveloper):
+    """The asked collision whose product declares `tests` and a slow `e2e` outside its tier."""
+    ports, head = _asked(tmp_path)
+    ports = dataclasses.replace(
+        ports,
+        stack=MemoryStack(
+            checks={"tests": "run tests", "e2e": "run e2e"}, delivery_checks=delivery
+        ),
+        commands=commands,
+    )
+    ports = dataclasses.replace(ports, runner=runner(ports, _point_at_the_new_number))
+    return ports, head
+
+
+def test_gh_585_the_apply_gate_runs_only_the_delivery_tier_and_records_it(tmp_path):
+    commands = MemoryCommands(**{"run e2e": [CommandResult(1, "e2e is red\n")] * 5})
+    ports, head = _tiered_world(tmp_path, commands)
+
+    _round(tmp_path, ports)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "applied", entry
+    assert entry["gate_tier"] == "delivery"
+    assert [command for _, command in ports.commands.ran] == ["run tests"]
+    assert ports.workspace.pushes == [(BRANCH, head)]
+
+
+def test_gh_585_a_product_with_no_tier_runs_everything_and_records_all(tmp_path):
+    commands = MemoryCommands(**{"run e2e": [CommandResult(1, "e2e is red\n")] * 5})
+    ports, _ = _tiered_world(tmp_path, commands, delivery=())
+
+    _round(tmp_path, ports)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "checks_red" and entry["gate_tier"] == "all"
+    assert {command for _, command in ports.commands.ran} == {"run tests", "run e2e"}
+
+
+def test_gh_585_a_red_check_inside_the_tier_is_checks_red_and_spends_a_slot(tmp_path):
+    commands = MemoryCommands(**{"run tests": [CommandResult(1, "FAILED a\n")] * 5})
+    ports, _ = _tiered_world(tmp_path, commands)
+
+    _round(tmp_path, ports)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "checks_red" and entry["gate_tier"] == "delivery"
+    assert (
+        landing_rules.adr_decisions_spent(
+            _entries(ports), entry["head"], _entries(ports)[0]["moves"]
+        )
+        == 1
+    )
+
+
+def _timeout_world(tmp_path, runner=StubDeveloper):
+    slow = CommandResult(124, "tests were slow\n", timed_out=True)
+    return _tiered_world(tmp_path, MemoryCommands(**{"run tests": [slow] * 5}), runner=runner)
+
+
+def test_gh_585_a_check_that_timed_out_is_checks_timeout_pushes_nothing_and_spends_no_slot(
+    tmp_path,
+):
+    ports, head = _timeout_world(tmp_path)
+
+    _, lines = _round(tmp_path, ports)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "checks_timeout", (entry, lines)
+    assert entry["gate_tier"] == "delivery"
+    [check] = entry["red_checks"]
+    assert check["name"] == "tests" and check["timed_out"] is True
+    assert ports.workspace.pushes == []
+    assert ports.workspace.branch_commits[-1].sha == head  # the checkout was put back
+    assert (
+        landing_rules.adr_decisions_spent(_entries(ports), head, _entries(ports)[0]["moves"]) == 0
+    )
+    assert any("checks_timeout" in line for line in lines)
+    # It asks the owner again, as every refusal does.
+    assert _entries(ports)[-1]["step"] == "escalate_adr"
+
+
+def test_gh_585_a_timeout_without_a_developer_pass_is_checks_timeout_too(tmp_path):
+    ports, head, paths = _gh_652_world(
+        tmp_path,
+        commands=WhereChecksRan(None, **{"run docs": [CommandResult(124, "slow\n", True)] * 5}),
+    )
+    ports.commands.workspace = ports.workspace
+
+    _round(tmp_path, ports, paths=paths)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "checks_timeout", entry
+    assert entry["red_checks"][0]["timed_out"] is True
+    assert ports.workspace.pushes == [] and ports.runner.calls == []
+
+
+def test_gh_585_a_real_red_beside_a_timeout_stays_checks_red(tmp_path):
+    slow = CommandResult(124, "slow\n", timed_out=True)
+    commands = MemoryCommands(
+        **{"run tests": [slow] * 5, "run e2e": [CommandResult(1, "FAILED x\n")] * 5}
+    )
+    ports, _ = _tiered_world(tmp_path, commands, delivery=())
+
+    _round(tmp_path, ports)
+
+    assert _apply_entry(ports)["outcome"] == "checks_red"
+
+
+def test_gh_585_a_check_that_failed_then_passed_in_a_second_gate_run_is_not_red(tmp_path):
+    commands = MemoryCommands(
+        **{"run tests": [CommandResult(1, "flaky\n"), CommandResult(0, "ok\n")]}
+    )
+
+    class TwiceDeveloper(StubDeveloper):
+        async def run_once(self, role, prompt, **kwargs):
+            result = await super().run_once(role, prompt, **kwargs)
+            kwargs["presubmit"]()  # the gate runs again: the last row of `tests` passes
+            return result
+
+    ports, _ = _tiered_world(tmp_path, commands, runner=TwiceDeveloper)
+
+    _round(tmp_path, ports)
+
+    assert _apply_entry(ports)["outcome"] == "applied"
+
+
+# The GH-652 document of apostrophe: two decisions on one collision ended `checks_red` on the
+# whole suite (no `gate_tier`), the owner then asked a third time.
+G652_HEAD = "b" * 40
+G652_MOVES = [["docs/adr/0078-x.md", "docs/adr/0079-x.md"]]
+G652_ASKS = ("2026-11-10T09:00:00+00:00", "2026-11-10T09:45:00+00:00", "2026-11-10T10:30:00+00:00")
+
+
+def _g652_entries(tier, *, released=False) -> list[dict]:
+    asks = [
+        _entry(
+            f"10T0{n}:00",
+            G652_HEAD,
+            "escalate_adr",
+            resolved_at=f"2026-11-10T0{n}:00:05+00:00",
+            released_at=at,
+            moves=G652_MOVES,
+        )
+        for n, at in zip((9, 9), G652_ASKS, strict=False)
+    ]
+    applies = [
+        _entry(
+            f"10T0{n}:30",
+            G652_HEAD,
+            "apply_adr_decision",
+            decision_at=at,
+            outcome="checks_red",
+            moves=G652_MOVES,
+            bounds=3,
+            **({} if tier is None else {"gate_tier": tier}),
+        )
+        for n, at in zip((9, 9), G652_ASKS, strict=False)
+    ]
+    third = _entry(
+        "10T10:30",
+        G652_HEAD,
+        "escalate_adr",
+        resolved_at="2026-11-10T10:30:05+00:00",
+        moves=G652_MOVES,
+    )
+    if released:
+        third["released_at"] = G652_ASKS[2]
+    return [asks[0], applies[0], asks[1], applies[1], third]
+
+
+def _g652_facts():
+    ambiguous = adr_numbers.Ambiguous(
+        "unclassified_token", "web/src/Inicio.tsx:16", tuple(map(tuple, G652_MOVES))
+    )
+    return _facts(pr_head=G652_HEAD, adr_collision=ambiguous)
+
+
+def _g652_raw(entries) -> dict:
+    return {"escalated": "adr_number_taken", "status": "waiting_on_human", "landing": entries}
+
+
+def test_gh_585_the_gh_652_slots_spent_on_the_whole_suite_are_given_back(tmp_path):
+    entries = _g652_entries(None)
+    raw = _g652_raw(entries)
+    facts = _g652_facts()
+
+    assert landing_rules.adr_decisions_spent(entries, G652_HEAD, tuple(map(tuple, G652_MOVES))) == 0
+    assert landing_plan.release_asked(
+        raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
+    )
+    assert not landing_rules.adr_decision_due(entries[-1:], G652_HEAD, facts.adr_collision, entries)
+    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"
+
+
+def test_gh_585_a_new_owner_comment_after_the_refund_makes_the_decision_due(tmp_path):
+    entries = _g652_entries(None, released=True)
+    facts = _g652_facts()
+
+    assert landing_rules.adr_decision_due(entries[-1:], G652_HEAD, facts.adr_collision, entries)
+    step = landing_plan.step_for(_g652_raw(entries), "adr_number_taken", facts)
+    assert step.kind == "apply_adr_decision"
+
+
+def test_gh_585_the_same_document_with_a_gate_tier_keeps_both_slots_spent(tmp_path):
+    entries = _g652_entries("delivery", released=True)
+    raw = _g652_raw(entries)
+    facts = _g652_facts()
+
+    assert landing_rules.adr_decisions_spent(entries, G652_HEAD, tuple(map(tuple, G652_MOVES))) == 2
+    assert not landing_plan.release_asked(
+        raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
+    )
+    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"

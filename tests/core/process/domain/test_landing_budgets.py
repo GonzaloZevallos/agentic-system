@@ -212,8 +212,10 @@ T0, T1, T2 = (f"2026-11-07T0{n}:00:00+00:00" for n in range(3))
 MOVES = [["docs/adr/0070-x.md", "docs/adr/0074-x.md"]]
 
 
-def _apply(outcome="applied", head=HEAD, at=T0) -> dict:
-    return {
+def _apply(outcome="applied", head=HEAD, at=T0, tier="delivery") -> dict:
+    """An `apply_adr_decision` entry as it is written today; `tier=None` is one with no
+    `gate_tier` (written before GH-585, which judged the product's whole suite)."""
+    entry = {
         "head": head,
         "step": "apply_adr_decision",
         "refusal": "adr_number_taken",
@@ -222,6 +224,9 @@ def _apply(outcome="applied", head=HEAD, at=T0) -> dict:
         "moves": MOVES,
         "bounds": landing.ADR_EDIT_BOUNDS,
     }
+    if tier is not None:
+        entry["gate_tier"] = tier
+    return entry
 
 
 def _old(outcome="applied", at=T0) -> dict:
@@ -389,6 +394,7 @@ def test_the_outcome_is_the_closed_set_the_plan_names_and_entry_of_drops_any_oth
         "out_of_bounds",
         "role_failed",
         "checks_red",
+        "checks_timeout",
         "still_colliding",
         "git_failed",
         "no_collision",
@@ -521,3 +527,69 @@ def test_an_entry_keeps_the_out_of_bounds_rows_well_formed_and_drops_the_rest():
     for bad in (0, -1, True, "2"):
         assert "out_of_bounds_more" not in landing.entry_of({"out_of_bounds_more": bad})
     assert "out_of_bounds_lines" not in landing.entry_of({"out_of_bounds_lines": [{"path": 1}]})
+
+
+# -- GH-585: a timeout is no slot, and a checks_red judged on the whole suite is refunded -------
+
+
+def test_a_checks_red_with_no_gate_tier_spends_no_slot_but_any_gate_tier_does():
+    assert (
+        landing.adr_decisions_spent([_ask(), _apply("checks_red", tier=None)], HEAD, MOVES_KEY) == 0
+    )
+    for tier in ("delivery", "all", "x", 3, None):
+        entry = {**_apply("checks_red"), "gate_tier": tier}
+        assert landing.adr_decisions_spent([_ask(), entry], HEAD, MOVES_KEY) == 1, tier
+
+
+def test_other_outcomes_count_with_or_without_a_gate_tier():
+    for outcome in ("applied", "out_of_bounds", "role_failed", "still_colliding"):
+        for tier in (None, "delivery"):
+            entries = [_ask(), _apply(outcome, tier=tier)]
+            assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 1, (outcome, tier)
+
+
+def test_out_of_bounds_of_the_current_bounds_counts_without_a_gate_tier():
+    entries = [_ask(), _apply("out_of_bounds", tier=None)]
+
+    assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 1
+
+
+def test_a_checks_timeout_never_spends_a_slot():
+    assert "checks_timeout" not in landing._ADR_DECISION_SPENT
+    for tier in (None, "delivery", "all"):
+        entries = [_ask(), _apply("checks_timeout", tier=tier), _apply("checks_timeout", tier=tier)]
+        assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 0, tier
+    assert landing.entry_of(_apply("checks_timeout"))["outcome"] == "checks_timeout"
+
+
+def test_an_entry_keeps_its_gate_tier_when_it_is_a_string():
+    assert landing.entry_of({"gate_tier": "delivery"}).get("gate_tier") == "delivery"
+    assert landing.entry_of({"gate_tier": "all"}).get("gate_tier") == "all"
+    # A value that is not a string is still a gate_tier that was written: it must survive a
+    # round trip through entry_of so that its checks_red keeps spending its slot.
+    for odd in (3, None, ["all"]):
+        kept = landing.entry_of({**_apply("checks_red"), "gate_tier": odd})
+        assert "gate_tier" in kept
+        assert landing.adr_decisions_spent([_ask(), kept], HEAD, MOVES_KEY) == 1
+
+
+def test_ci_failed_on_a_renamed_head_reruns_once_and_then_spends_a_pass():
+    applied = [_ask(), _apply("applied"), _review()]
+    assert landing.adr_review_owed(applied) is False
+
+    first = _step("ci_failed", _spent(adr_review_owed=False))
+    second = _step("ci_failed", _spent(reruns_on_head=1, passes=0))
+    third = _step("ci_failed", _spent(reruns_on_head=1, passes=1))
+
+    assert first.kind == "rerun"
+    assert second.kind == "fix" and third.kind == "fix"
+    assert _step("ci_failed", _spent(reruns_on_head=1, passes=landing.LANDING_PASSES_MAX)).kind == (
+        "diagnose"
+    )
+
+
+def test_a_renamed_head_owing_its_review_gets_it_without_spending_a_pass():
+    owed = landing.adr_review_owed([_ask(), _apply("applied")])
+    spent = _spent(passes=landing.LANDING_PASSES_MAX, adr_review_owed=owed)
+
+    assert _review_step(spent) == LandingStep("re_review", "head_not_reviewed")
