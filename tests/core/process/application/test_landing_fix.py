@@ -22,7 +22,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import document, presubmit, rules
 from agentic.core.process.domain import landing as landing_rules
-from agentic.core.process.domain.adr_numbers import Ambiguous, Renaming
+from agentic.core.process.domain.adr_numbers import Ambiguous, DecidedRenaming, Renaming
 from agentic.core.process.domain.ci import CiCheck, CiReport
 from agentic.core.process.domain.roles import PAIR_PM_TECH_LEAD
 from tests.core.process.application.test_merge_ci import _check, _report
@@ -2559,6 +2559,34 @@ def test_gh_579_a_flood_of_spots_ends_with_and_n_more_under_the_comment_limit():
     assert "../outside" not in text
     assert text.count("\nand ") == 1 and "more\n" in text
     assert "`docs/product/file-00000.md:1`" in text
+
+
+def test_gh_579_escalate_adr_posts_the_spots_of_its_one_adr_decided_call(tmp_path, monkeypatch):
+    """The wiring: the question `escalate_adr` posts is built from the spots of a single
+    `adr_decided` call on the head, not from `Ambiguous.detail` (which would say `SECRET`)."""
+    calls: list[tuple[str, str]] = []
+    spots = (
+        ("app/main.py", 238, "SECRET text"),
+        ("docs/product/sales.md", 35, "SECRET text"),
+        ("../outside\n.md", 1, "SECRET text"),  # refused by publishable_path: counted, not shown
+    )
+
+    def decided(_ports, upstream, head):
+        calls.append((upstream, head))
+        return DecidedRenaming(Renaming(_SPOT_MOVES, {}), spots)
+
+    monkeypatch.setattr(landing_fix, "adr_decided", decided)
+    ports = _ports(5)
+    found = Ambiguous("unclassified_token", "app/main.py:238: SECRET", _SPOT_MOVES)
+    context = _adr_context(ports, tmp_path, found, [])
+
+    landing_fix.escalate_adr(context)
+
+    [question] = _doc(ports)["questions_for_human"]
+    assert calls == [(MASTER, HEAD)]
+    assert "`app/main.py:238`" in question and "`docs/product/sales.md:35`" in question
+    assert "and 1 more" in question
+    assert "SECRET" not in question and "../outside" not in question
 
 
 def test_gh_579_a_row_recorded_with_line_zero_still_renders_as_the_whole_file():
