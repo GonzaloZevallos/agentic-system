@@ -130,6 +130,7 @@ class EvaluationWorkspace:
             "build_slice",
             "changed_lines",
             "changed_paths",
+            "commit_messages",
             "checkout_names",
             "checkout_path",
             "cleanup",
