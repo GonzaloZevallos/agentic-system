@@ -89,8 +89,8 @@ sequenceDiagram
    y `bound`, que es lo único que decide qué líneas puede tocar el pase), que los chequeos hayan
    quedado en verde y que no quede colisión (`adr_collision`). Si todo está bien empuja con `lease=head`
    (`Workspace.push`) y el resultado es `applied` con `head_after`; en cualquier otro resultado
-   (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`, `git_failed`,
-   `ambiguous`, `no_collision`) no empuja,
+   (`role_failed`, `checks_red`, `checks_timeout`, `out_of_bounds`, `still_colliding`,
+   `stale_moves`, `git_failed`, `ambiguous`, `no_collision`) no empuja,
    deja el checkout en la cabeza con `Workspace.reset_hard` (en un `finally`, también ante una
    excepción) y vuelve a preguntar por `escalate_adr`, que nombra el último resultado fallido.
    Cuando el resultado es `checks_red`, la entrada `apply_adr_decision` registra además
@@ -98,6 +98,17 @@ sequenceDiagram
    construidos solo por `agentic/core/process/domain/presubmit.py:red_checks` (a lo sumo
    `RED_CHECKS_MAX`); la pregunta los muestra en el mismo comentario, acotado por
    `MERGE_COMMENT_MAX`, o dice que no se pudo leer el detalle.
+   **GH-585:** la puerta del apply corre el nivel de entrega, `fast_tier(checks, delivery_checks)`
+   (`landing_adr._gate`), como la entrega de un Developer y no la suite completa del producto; el
+   nivel completo de la cabeza empujada lo juzga el merge. El veredicto sale de
+   `presubmit.gate_verdict` sobre `final_results`: un rojo real gana a un timeout, y el campo
+   `timed_out` de la fila decide, nunca su texto. Si un chequeo agotó su tiempo y ninguno está en
+   rojo, el resultado es `checks_timeout`: la entrada registra `red_checks` con `timed_out`, no
+   empuja, no gasta cupo y la pregunta dice qué chequeo y cuántos segundos. Toda entrada cuya
+   corrida armó la puerta registra `gate_tier` (`delivery` o `all`, solo lo escribe
+   `landing_adr._finish`); `landing.adr_decisions_spent` es el único que lo lee: un `checks_red`
+   sin esa clave (juzgado contra la suite entera) no gasta cupo y uno con cualquier `gate_tier`,
+   incluso desconocido, sí.
    **GH-579:** los límites se informan por línea (sin archivo entero; fin de línea o salto final
    solos están dentro de límites), las líneas (b)/(c) son `bound`, lo que la decisión deja igual se
    nombra con `keep <ruta>:<línea>` en un commit (`kept_spots`; `role_failed` si un `spot` ni
@@ -119,7 +130,8 @@ sequenceDiagram
    | Resultado | Gasta cupo | Vuelve a preguntar | Empuja |
    |---|---|---|---|
    | `applied` | sí | no | sí |
-   | `out_of_bounds`, `role_failed`, `checks_red`, `still_colliding` | sí | sí | no |
+   | `out_of_bounds`, `role_failed`, `checks_red` (con `gate_tier`), `still_colliding` | sí | sí | no |
+   | `checks_red` sin `gate_tier`, `checks_timeout` | no | sí | no |
    | `stale_moves`, `git_failed` | no | sí | no |
    | `ambiguous` | no | sí, sin ofrecer decisión | no |
    | `no_collision` | no | no | no |
