@@ -16,6 +16,7 @@ from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.landing_sync import reopen
 from agentic.core.process.application.ports import (
     AttemptFailed,
+    GitError,
     IssueComment,
     RawResult,
     Upstream,
@@ -2598,3 +2599,74 @@ def test_gh_579_a_row_recorded_with_line_zero_still_renders_as_the_whole_file():
     )
 
     assert "`docs/product/sales.md` (the whole file)" in text
+
+
+# -- GH-582: a decision with no spot says the rule rewrites the bound lines --------------------
+
+
+def test_gh_582_with_no_spot_and_bound_lines_the_question_says_the_rule_rewrites_them():
+    found = Ambiguous("unclassified_token", "docs/architecture/decisiones.md:85: x", _SPOT_MOVES)
+    rewrites = (("docs/architecture/decisiones.md", 85), ("docs/notes.md", 3))
+
+    text = landing_fix.adr_collision_reason(found, 3, spots=(), rewrites=rewrites)
+
+    assert "The rule rewrites these lines itself" in text and "no model pass" in text
+    assert "`docs/architecture/decisiones.md:85`" in text and "`docs/notes.md:3`" in text
+    assert "Fix by hand" not in text
+
+
+def test_gh_582_with_spots_the_question_keeps_fixing_by_hand_even_with_bound_lines():
+    found = Ambiguous("unclassified_token", "app/main.py:1: x", _SPOT_MOVES)
+
+    text = landing_fix.adr_collision_reason(found, 3, spots=(("app/main.py", 1),), rewrites=())
+
+    assert "Fix by hand, every line the rule cannot decide" in text
+    assert "The rule rewrites these lines itself" not in text
+
+
+def test_gh_582_bound_lines_above_the_cap_end_with_and_n_more():
+    found = Ambiguous("unclassified_token", "a:1", _SPOT_MOVES)
+    rewrites = tuple((f"docs/product/file-{n:05d}.md", n + 1) for n in range(5000))
+
+    text = landing_fix.adr_collision_reason(found, 3, rewrites=rewrites)
+
+    assert len(text) < presubmit.MERGE_COMMENT_MAX and "more\n" in text
+
+
+def test_gh_582_an_adr_decided_that_raises_makes_no_rewrite_claim(tmp_path, monkeypatch):
+    def decided(_ports, _upstream, _head):
+        raise GitError("git grep failed")
+
+    monkeypatch.setattr(landing_fix, "adr_decided", decided)
+    ports = _ports(5)
+    found = Ambiguous("unclassified_token", "app/main.py:238: x", _SPOT_MOVES)
+
+    landing_fix.escalate_adr(_adr_context(ports, tmp_path, found, []))
+
+    [question] = _doc(ports)["questions_for_human"]
+    assert "Fix by hand: app/main.py:238: x." in question
+    assert "The rule rewrites these lines itself" not in question
+
+
+def test_gh_582_escalate_adr_with_a_decision_without_spots_posts_the_rewrite(tmp_path, monkeypatch):
+    bound = (("docs/architecture/decisiones.md", 85, "| [0079](x.md) |"),)
+
+    monkeypatch.setattr(
+        landing_fix, "adr_decided", lambda *_: DecidedRenaming(Renaming(_SPOT_MOVES, {}), (), bound)
+    )
+    ports = _ports(5)
+    found = Ambiguous("unclassified_token", "docs/architecture/decisiones.md:85: x", _SPOT_MOVES)
+
+    landing_fix.escalate_adr(_adr_context(ports, tmp_path, found, []))
+
+    [question] = _doc(ports)["questions_for_human"]
+    assert "`docs/architecture/decisiones.md:85`" in question and "no model pass" in question
+    assert "| [0079](x.md) |" not in question  # never the text of a line
+
+
+def test_gh_582_after_a_git_failure_the_question_says_a_new_decision_retries():
+    found = Ambiguous("unclassified_token", "a:1", _SPOT_MOVES)
+
+    text = landing_fix.adr_collision_reason(found, 3, "git_failed")
+
+    assert "ended `git_failed`" in text and "A git operation failed" in text

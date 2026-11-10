@@ -262,6 +262,13 @@ def test_the_decision_cap_is_two_and_only_the_closed_outcomes_but_stale_use_a_sl
     assert landing.adr_decisions_spent(mixed, HEAD, MOVES_KEY) == 1
 
 
+def test_gh_582_git_failed_no_collision_and_ambiguous_spend_no_slot():
+    for outcome in ("git_failed", "no_collision", "ambiguous"):
+        entries = [_ask(), _apply(outcome), _apply(outcome), _apply(outcome)]
+        assert landing.adr_decisions_spent(entries, HEAD, MOVES_KEY) == 0, outcome
+        assert landing.entry_of(_apply(outcome))["outcome"] == outcome
+
+
 def test_a_slot_is_spent_per_head_and_per_moves_not_per_task():
     entries = [_ask(T0), _apply("checks_red", at=T0), _ask(T1, moves=OTHER_MOVES)]
     entries.append(_apply("applied", at=T1))
@@ -383,6 +390,9 @@ def test_the_outcome_is_the_closed_set_the_plan_names_and_entry_of_drops_any_oth
         "role_failed",
         "checks_red",
         "still_colliding",
+        "git_failed",
+        "no_collision",
+        "ambiguous",
     }
     kept = landing.entry_of({"step": "apply_adr_decision", "outcome": "exploded", "moves": "x"})
     assert "outcome" not in kept and "moves" not in kept

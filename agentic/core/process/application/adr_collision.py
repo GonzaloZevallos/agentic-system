@@ -127,9 +127,11 @@ def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous 
 def adr_decided(ports: Ports, master: str, head: str) -> DecidedRenaming | Ambiguous | None:
     """`adr_collision` for an owner's decision (GH-544): the same reads (`_inputs`), then
     `renumber_decided`, which applies every rewrite the grammar can make and lists the own lines
-    it cannot (`spots`). A `DecidedRenaming` with no spots is a collision `adr_collision` calls
-    a `Renaming`; one with spots is the `Ambiguous` it calls so. It also reads the files that
-    name a moved ADR without an own line (`named_anywhere`), and applies rule (d) to them."""
+    it cannot (`spots`). A `DecidedRenaming` with spots is the `Ambiguous` `adr_collision` calls so;
+    one with none is not always a `Renaming` there (GH-582): rule (d) runs only here, so a link
+    label `adr_collision` leaves an `unclassified_token` is rewritten, and the collision it called
+    `Ambiguous` has no spot left. It also reads the files that name a moved ADR without an own
+    line (`named_anywhere`), and applies rule (d) to them."""
     read = _inputs(ports, master, head, named_anywhere=True)
     if not isinstance(read, _Inputs):
         return read
