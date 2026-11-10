@@ -184,15 +184,24 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
     try:
         checkout = task_checkout(state, context.cfg, ports)
     except SetupFailed as failed:
-        return _refused(context, "role_failed", f"the task checkout's setup failed ({failed.step})")
+        # Without spots no Developer runs, so the step never ends `role_failed` (GH-582): the setup
+        # failure is infrastructure, not the owner's doing, and spends no slot.
+        outcome: AdrDecisionOutcome = "role_failed" if found.spots else "git_failed"
+        return _refused(context, outcome, f"the task checkout's setup failed ({failed.step})")
     pushed = False
     try:
         with merges_cleared(workspace, checkout.path, _owned(context, state)):
             try:
                 result = _write_and_ask(context, state, unit, checkout.path, found, sha)
                 if isinstance(result, CheckedRed):
+                    _refused(context, "checks_red", "the checks were red on the result")
                     return "checks_red", None, False, result.detail, None
                 if isinstance(result, OutOfBounds):
+                    _refused(
+                        context,
+                        "out_of_bounds",
+                        "the Developer pass changed lines outside the bounds",
+                    )
                     return "out_of_bounds", None, False, None, result
                 if isinstance(result, str):  # `_write_and_ask` logged the check that stopped it
                     return result, None, False, None, None

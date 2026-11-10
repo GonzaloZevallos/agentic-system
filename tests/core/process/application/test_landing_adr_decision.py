@@ -1140,7 +1140,9 @@ def test_gh_582_the_question_says_the_rule_rewrites_the_row_when_no_spot_is_left
     assert "Fix by hand" not in question and "no model pass" in question
 
 
-def test_gh_582_a_setup_failure_is_role_failed_and_the_log_names_it(tmp_path, monkeypatch):
+def test_gh_582_a_setup_failure_without_spots_is_git_failed_and_spends_no_slot(
+    tmp_path, monkeypatch
+):
     ports, _, paths = _gh_652_world(tmp_path)
 
     def broken(*_):
@@ -1150,6 +1152,8 @@ def test_gh_582_a_setup_failure_is_role_failed_and_the_log_names_it(tmp_path, mo
 
     _, lines = _round(tmp_path, ports, paths=paths)
 
-    assert _apply_entry(ports)["outcome"] == "role_failed"
-    assert any("the task checkout's setup failed (install) -> role_failed" in x for x in lines)
+    assert _apply_entry(ports)["outcome"] == "git_failed"
+    assert any("the task checkout's setup failed (install) -> git_failed" in x for x in lines)
     assert ports.workspace.pushes == [] and ports.runner.calls == []
+    entry = _apply_entry(ports)
+    assert landing_rules.adr_decisions_spent(_entries(ports), entry["head"], []) == 0

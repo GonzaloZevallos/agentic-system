@@ -306,7 +306,9 @@ la reescribía por la regla (d) y no dejaba `spots`. `_apply` salía por «sin s
 - **`stale_moves` solo por el master.** Se devuelve únicamente si el upstream registrado difiere
   del sha o si los `moves` recalculados difieren de los registrados. Las demás causas tienen
   resultado propio y una línea de log que nombra el chequeo: `git_failed` (error de git al
-  recalcular, al commitear o al empujar), `no_collision` y `ambiguous`. Orden de comprobación:
+  recalcular, al commitear o al empujar, un commit mecánico que no hizo commit, o el fallo de la
+  preparación del checkout de la tarea cuando no hay `spots`, porque sin Developer no hay
+  `role_failed`), `no_collision` y `ambiguous`. Orden de comprobación:
   upstream, error de git, sin colisión, ambigua, `moves`.
 - **Cupo.** Los tres valores nuevos no gastan cupo de decisión: GH-652 se repetía porque el dueño
   volvía a decidir, no de forma automática; un fallo de git no es obra del dueño y `ambiguous`

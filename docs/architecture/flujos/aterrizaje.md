@@ -89,7 +89,8 @@ sequenceDiagram
    y `bound`, que es lo único que decide qué líneas puede tocar el pase), que los chequeos hayan
    quedado en verde y que no quede colisión (`adr_collision`). Si todo está bien empuja con `lease=head`
    (`Workspace.push`) y el resultado es `applied` con `head_after`; en cualquier otro resultado
-   (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`) no empuja,
+   (`role_failed`, `checks_red`, `out_of_bounds`, `still_colliding`, `stale_moves`, `git_failed`,
+   `ambiguous`, `no_collision`) no empuja,
    deja el checkout en la cabeza con `Workspace.reset_hard` (en un `finally`, también ante una
    excepción) y vuelve a preguntar por `escalate_adr`, que nombra el último resultado fallido.
    Cuando el resultado es `checks_red`, la entrada `apply_adr_decision` registra además
