@@ -1275,7 +1275,8 @@ def _out_of_bounds_lines_of(value: object) -> list[OutOfBoundsLine] | None:
 
 def _red_checks_of(value: object) -> list[presubmit.RedCheck] | None:
     """`value` as the `red_checks` of an `apply_adr_decision` entry: `{name, tail, recovered,
-    timed_out}` per check (`timed_out` False when absent), `None` when any is not shaped like that (a document is edited by hand)."""
+    timed_out}` per check (`timed_out` False when absent), `None` when any is not shaped like that
+    (a document is edited by hand)."""
     if not isinstance(value, list) or not value:
         return None
     kept: list[presubmit.RedCheck] = []

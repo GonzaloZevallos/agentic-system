@@ -1079,8 +1079,9 @@ result still holds a number master took). GH-582 names the refusals that used to
 `no_collision` (the head no longer collides with master) and `ambiguous` (the collision is one
 the rule cannot decide even with an owner's decision). GH-585 adds `checks_timeout` (a check of
 the gate timed out and no check was red: nothing was pushed). Every one but `applied` and
-`no_collision` asks again; `git_failed`, `no_collision`, `ambiguous` and `checks_timeout` spend no
-decision slot, and neither does a `checks_red` with no `gate_tier` (`landing.adr_decisions_spent`)."""
+`no_collision` asks again; `git_failed`, `no_collision`, `ambiguous` and `checks_timeout` spend
+no decision slot, and neither does a `checks_red` with no `gate_tier`
+(`landing.adr_decisions_spent`)."""
 
 
 class LandingEntry(TypedDict, total=False):
