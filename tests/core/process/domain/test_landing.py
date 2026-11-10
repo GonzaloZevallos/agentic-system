@@ -484,7 +484,7 @@ _SAMPLE: dict[object, object] = {
     CiCause: "no_run",
     AdrDecisionOutcome: "applied",
     list[list[str]]: [["a", "b"]],
-    list[RedCheck]: [{"name": "tests", "tail": ["a"], "recovered": False}],
+    list[RedCheck]: [{"name": "tests", "tail": ["a"], "recovered": False, "timed_out": False}],
     list[OutOfBoundsLine]: [{"path": "docs/a.md", "line": 3}],
 }
 
@@ -499,7 +499,11 @@ def test_entry_of_keeps_every_key_landing_entry_declares():
 
 def test_entry_of_drops_a_red_checks_that_is_not_shaped_like_one():
     good = [{"name": "tests", "tail": ["a"], "recovered": False}]
-    assert landing.entry_of({"red_checks": good, "red_more": 2}).get("red_checks") == good
+    read = [{**good[0], "timed_out": False}]  # GH-585: an entry with no `timed_out` reads False
+    assert landing.entry_of({"red_checks": good, "red_more": 2}).get("red_checks") == read
+    slow = [{**good[0], "timed_out": True}]
+    assert landing.entry_of({"red_checks": slow}).get("red_checks") == slow
+    assert "red_checks" not in landing.entry_of({"red_checks": [{**good[0], "timed_out": "yes"}]})
     for bad in ([{"name": "tests", "tail": "a", "recovered": False}], [], "x", [{"name": 1}]):
         assert "red_checks" not in landing.entry_of({"red_checks": bad})
     assert "red_more" not in landing.entry_of({"red_more": 0})
