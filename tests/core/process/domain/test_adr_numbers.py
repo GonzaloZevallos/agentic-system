@@ -644,7 +644,9 @@ GONE = f"{ADR}0076-payment-methods.md"
 MOVED = f"{ADR}0078-payment-methods.md"
 SALES = "docs/product/sales.md"
 SALES_MASTER = "# Ventas\n\nunrelated\n"
-SALES_HEAD = "# Ventas\n\nunrelated\npuerto OnTheSpotPayments (ADR-0076)\n(ADR-0007, ADR-0076, payments.md)\n"
+SALES_HEAD = (
+    SALES_MASTER + "puerto OnTheSpotPayments (ADR-0076)\n" + "(ADR-0007, ADR-0076, payments.md)\n"
+)
 
 
 def _gh407(head: str, own: list[OwnLine], *, base: str | None = SALES_MASTER, candidate=True):
