@@ -1474,3 +1474,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-09T22:45:30.509+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each invariant in the plan, walk every exit of the code you change, exceptions included, and check that each one holds it (log line naming the check, outcome, slot spent) before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-582
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-10T09:26:06.578+00:00'
