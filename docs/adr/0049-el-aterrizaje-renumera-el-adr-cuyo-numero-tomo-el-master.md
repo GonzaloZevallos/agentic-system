@@ -331,3 +331,38 @@ la reescribía por la regla (d) y no dejaba `spots`. `_apply` salía por «sin s
 - **Sin cambios.** `adr_numbers.renumber` (el camino automático) y `ADR_EDIT_BOUNDS` siguen
   igual: no cambia qué líneas son `spots` o `bound`. Sin métrica, etiqueta ni atributo de span
   nuevo.
+
+## Adenda (GH-585)
+
+En apostrophe GH-652 el `apply_adr_decision` corría en local la suite completa del producto
+(`ports.stack.checks`), incluido `web-e2e`, que no está en sus `delivery_checks` y cubre el CI. Con
+más de 1500 s terminaba `checks_red` («timed out after 1500 s»), gastaba un cupo y, tras dos,
+la colisión quedaba muerta aunque todos los tests mostrados pasaran.
+
+- **Nivel de entrega.** La puerta del apply corre `fast_tier(checks, delivery_checks)`, igual que
+  la entrega de un Developer, en las dos ramas (con y sin `spots`). El nivel completo de la cabeza
+  empujada lo juzga la puerta de merge (`merge_ci`) como el de cualquier cabeza aterrizada. Un
+  producto sin `delivery_checks` corre todo.
+- **`checks_timeout`.** `presubmit.gate_verdict`, sobre `final_results`, da `red`, `timed_out` o
+  `green`; un rojo real gana a un timeout y el campo `timed_out` de la fila decide, nunca su texto.
+  Si algún chequeo agotó su tiempo y ninguno está en rojo, el resultado es `checks_timeout`: no
+  empuja, deja `red_checks` con `timed_out` y vuelve a preguntar. La pregunta dice qué chequeo, en
+  cuántos segundos, que no gastó cupo y que el producto puede sacarlo de `delivery_checks` o darle
+  más tiempo en `check_timeouts`. Un rechazo sin fila roja (testigo, rutas) o sin resultados sigue
+  siendo `checks_red`.
+- **`gate_tier` y devolución.** Toda entrada cuya corrida armó la puerta registra `gate_tier`
+  (`delivery` o `all`). Solo `landing_adr._finish` lo escribe y solo `landing.adr_decisions_spent`
+  lo lee: un `checks_red` sin la clave (juzgado contra la suite entera) no gasta cupo; con
+  cualquier valor, incluso desconocido o ilegible, sí. GH-652 recupera así sus dos cupos, pero
+  decidir otra vez exige un comentario nuevo del dueño después del merge.
+
+  | Resultado | Gasta cupo | Vuelve a preguntar | Empuja |
+  |---|---|---|---|
+  | `checks_timeout` | no | sí | no |
+  | `checks_red` sin `gate_tier` | no | sí | no |
+
+- **Riesgos aceptados.** Un timeout determinista dentro del nivel cuesta una `Decision:` del dueño y
+  hasta `check_timeout_s` de reloj por intento, sin tope. Un rojo del nivel completo sobre la
+  cabeza renombrada es un `ci_failed` (primero `rerun`, luego un `fix` de `LANDING_PASSES_MAX`),
+  como la cabeza de un `sync_master`. Las invalidaciones cruzadas `stale_moves` entre GH-407,
+  GH-651 y GH-652 no se arreglan aquí.
