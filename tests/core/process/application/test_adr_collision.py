@@ -263,7 +263,8 @@ def test_adr_decided_reads_and_rewrites_a_file_that_names_the_adr_only_through_a
     assert not isinstance(result, Ambiguous) and result is not None
     assert result.renaming.texts[index] == "| [0050](../adr/0050-mine.md) | Mine |\n"
     assert (index, 1, "| [0050](../adr/0050-mine.md) | Mine |") in result.bound
-    assert ports.workspace.paths_naming_calls == [(head, "0049-mine.md")]
+    names = [call for call in ports.workspace.paths_naming_calls if call[1].endswith(".md")]
+    assert names == [(head, "0049-mine.md")]
 
 
 def test_adr_collision_does_not_read_a_file_that_names_the_adr_only_through_a_merge():
@@ -272,4 +273,60 @@ def test_adr_collision_does_not_read_a_file_that_names_the_adr_only_through_a_me
     result = adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
     assert isinstance(result, Renaming)
     assert index not in result.texts
-    assert ports.workspace.paths_naming_calls == []
+    names = [call for call in ports.workspace.paths_naming_calls if call[1].endswith(".md")]
+    assert names == []  # only the GH-579 grep by number, never the one by file name
+
+
+# -- GH-579: apostrophe GH-407's shape -----------------------------------------------------
+
+BRANCH_ADR = "docs/adr/0076-payment-methods.md"
+SALES = "docs/product/sales.md"
+MAIN = "app/main.py"
+SALES_LINES = ("puerto OnTheSpotPayments (ADR-0076)", "(ADR-0007, ADR-0076, payment-methods.md)")
+
+
+def _gh407(ports):
+    """The branch adds ADR 0076 while master holds 0076 and 0077; `main.py` cites it in an own
+    commit, `sales.md` only through a merge resolution (no own line, in the diff of the PR)."""
+    base = ports.workspace.master_sha
+    ports.workspace.advance_master("docs/adr/0076-other.md", "docs/adr/0077-another.md")
+    head = ports.workspace.add_branch_commit(
+        adds=(BRANCH_ADR,), lines=((MAIN, "x = 1  # (docs/adr/0076)"),), master=base
+    )
+    _text(ports, head, BRANCH_ADR, "# ADR-0076: payment methods\n")
+    _text(ports, head, MAIN, "x = 1  # (docs/adr/0076)\n")
+    master = ports.workspace.master_sha
+    sales = "# Ventas\n\n" + "\n".join(SALES_LINES) + "\n"
+    _text(ports, head, SALES, sales)
+    _text(ports, master, SALES, "# Ventas\n\n")
+    _text(ports, base, SALES, "# Ventas\n\n")
+    ports.workspace.diff_paths = (BRANCH_ADR, MAIN, SALES)
+    return head
+
+
+def test_gh_579_the_references_a_merge_brought_in_are_ambiguous_and_listed_with_the_own_one():
+    ports = _ports()
+    head = _gh407(ports)
+    master = ports.workspace.master_sha
+    ambiguous = adr_collision.adr_collision(ports, master, head)
+    assert isinstance(ambiguous, Ambiguous) and ambiguous.reason == "unclassified_token"
+    decided = adr_collision.adr_decided(ports, master, head)
+    assert not isinstance(decided, Ambiguous) and decided is not None
+    assert decided.renaming.moves == ((BRANCH_ADR, "docs/adr/0078-payment-methods.md"),)
+    assert decided.spots == (
+        (MAIN, 1, "x = 1  # (docs/adr/0076)"),
+        (SALES, 3, SALES_LINES[0]),
+        (SALES, 4, SALES_LINES[1]),
+    )
+    assert SALES not in decided.renaming.texts  # never rewritten by code
+
+
+def test_gh_579_a_merged_line_master_held_at_the_merge_base_is_no_spot():
+    ports = _ports()
+    head = _gh407(ports)
+    # master rewrote the file since the merge base, but the line was already in the base
+    _text(ports, ports.workspace.master_sha, SALES, "# Otro\n")
+    _text(ports, "e" * 40, SALES, "# Ventas\n\n" + "\n".join(SALES_LINES) + "\n")
+    result = adr_collision.adr_decided(ports, ports.workspace.master_sha, head)
+    assert not isinstance(result, Ambiguous) and result is not None
+    assert [spot[0] for spot in result.spots] == [MAIN]

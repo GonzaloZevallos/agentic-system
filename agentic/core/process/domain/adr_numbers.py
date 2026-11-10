@@ -260,9 +260,7 @@ def _grammar(
         + _ITEM
         + ")*)"
     )
-    return _Grammar(
-        carried, numbers, names, pattern, own_by_path, trees, link_labels, bases or {}
-    )
+    return _Grammar(carried, numbers, names, pattern, own_by_path, trees, link_labels, bases or {})
 
 
 def _scan(
