@@ -135,6 +135,9 @@ _SEPARATOR = r"(?:\s*,\s*(?:(?:and|y)\s+)?|\s+(?:and|y)\s+|\s*/\s*)"
 _ITEM = r"\d{4}(?!\d)"
 _TOKEN = re.compile(r"(?<!\d)\d{4}(?!\d)")
 _DIGITS = re.compile(r"\d{4}")
+# GH-579: a bare reference to an ADR directory entry, `docs/adr/NNNN` or `adr/NNNN`, whatever
+# follows the number (a slug that is not the moved name included).
+_BARE_PATH = re.compile(r"(?<![\w-])(?:docs/)?adr/(?P<number>\d{4})(?!\d)")
 _HEADING = re.compile(r"#{1,6}\s")
 
 # What can sit between the two ends of a range of ADR numbers, as a regex alternation: an
@@ -196,6 +199,7 @@ class _Grammar:
     own_by_path: dict[str, dict[str, list[str]]]
     trees: Mapping[str, Sequence[str]]
     link_labels: bool = False
+    bases: Mapping[str, str | None] = field(default_factory=dict)
 
 
 @dataclass
@@ -217,6 +221,7 @@ def _grammar(
     texts: Mapping[str, tuple[str | None, str]],
     *,
     link_labels: bool = False,
+    bases: Mapping[str, str | None] | None = None,
 ) -> _Grammar | Ambiguous:
     carried = tuple(sorted(moves.items()))
     numbers: dict[str, str] = {}
@@ -255,7 +260,9 @@ def _grammar(
         + _ITEM
         + ")*)"
     )
-    return _Grammar(carried, numbers, names, pattern, own_by_path, trees, link_labels)
+    return _Grammar(
+        carried, numbers, names, pattern, own_by_path, trees, link_labels, bases or {}
+    )
 
 
 def _scan(
@@ -263,9 +270,18 @@ def _scan(
 ) -> _Scan:
     """Rewrite `at_head` in one simultaneous substitution and collect what is undecided.
     With `hold`, a line holding a range, and an item list that cites master's file, stay as
-    they were: the lines whoever edits the spots finds untouched."""
+    they were: the lines whoever edits the spots finds untouched.
+
+    GH-579: in a path the reads marked as a candidate (`grammar.bases`), a line no own commit
+    added and master does not hold (at master or at the merge base) is classified on the
+    grammar's ADR forms only: an `ADR-NNNN` / `ADR NNNN` / `ADRs` list or a bare
+    `docs/adr/NNNN` of a moved number makes it an `unclassified_token`. Never rewritten, and a
+    bare four-digit token there is never one."""
     numbers, names = grammar.numbers, grammar.names
     master_lines = set((at_master or "").splitlines())
+    candidate = path in grammar.bases
+    foreign_skip = master_lines | set((grammar.bases.get(path) or "").splitlines())
+    foreign: list[tuple[int, str]] = []
     own = {t: c for t, c in grammar.own_by_path.get(path, {}).items() if t not in master_lines}
     rows = _rows(at_head)
     covered: list[tuple[int, int]] = []
@@ -308,6 +324,9 @@ def _scan(
             rewrote.add(index)
             return (found.group("prefix") or "") + names[found.group("name")]
         if line not in own:
+            cited_there = _DIGITS.findall(found.group("items"))
+            if candidate and line not in foreign_skip and any(n in numbers for n in cited_there):
+                foreign.append((index, line))
             return found.group(0)
         cited = [n for n in _DIGITS.findall(found.group("items")) if n in numbers]
         covered.append(found.span())
@@ -319,6 +338,15 @@ def _scan(
 
     rewritten = grammar.pattern.sub(substitute, at_head)
     unclassified: list[tuple[int, str]] = []
+    if candidate:
+        for index, (start, line) in enumerate(rows, 1):
+            if line in own or line in foreign_skip:
+                continue
+            for bare in _BARE_PATH.finditer(line):
+                spot = start + bare.start()
+                if bare.group("number") in numbers and not any(a <= spot < b for a, b in covered):
+                    foreign.append((index, line))
+                    break
     for index, (start, line) in enumerate(rows, 1):
         if line not in own:
             continue
@@ -327,6 +355,7 @@ def _scan(
             if token.group(0) in numbers and not any(a <= spot < b for a, b in covered):
                 unclassified.append((index, line))
                 break
+    unclassified = sorted(set(unclassified) | set(foreign))
     return _Scan(rewritten, ranges, cites, unclassified, rewrote if hold else set())
 
 
@@ -335,6 +364,8 @@ def renumber(
     lines: Sequence[OwnLine],
     trees: Mapping[str, Sequence[str]],
     texts: Mapping[str, tuple[str | None, str]],
+    *,
+    bases: Mapping[str, str | None] | None = None,
 ) -> Renaming | Ambiguous:
     """Apply `moves` (old path -> new path) to `texts` (path -> its text at master, `None`
     if absent, and at the branch head), in one simultaneous substitution per text.
@@ -345,8 +376,13 @@ def renumber(
     the branch's own commits added. `trees` maps a commit to the ADR names in its tree.
     A renumbered number left on an own line outside the grammar makes it `Ambiguous`, and so
     does one that is the end of a range (`ADR-0054…ADR-0060`): moving one end silently would
-    change what the range names. Every `Ambiguous` carries `moves`."""
-    grammar = _grammar(moves, lines, trees, texts)
+    change what the range names. Every `Ambiguous` carries `moves`.
+
+    `bases` (GH-579) maps the paths the reads marked as candidates to their text at the merge
+    base of master and the branch (`None` if absent): on those paths a line no own commit added
+    and neither master nor the merge base holds, carrying an ADR form of a moved number, is an
+    `unclassified_token` too (a merge resolution's reference). Without it nothing changes."""
+    grammar = _grammar(moves, lines, trees, texts, bases=bases)
     if isinstance(grammar, Ambiguous):
         return grammar
     written: dict[str, str] = {}
@@ -371,14 +407,16 @@ def renumber_decided(
     lines: Sequence[OwnLine],
     trees: Mapping[str, Sequence[str]],
     texts: Mapping[str, tuple[str | None, str]],
+    *,
+    bases: Mapping[str, str | None] | None = None,
 ) -> DecidedRenaming | Ambiguous:
     """`renumber` that does not stop at the first thing it cannot decide (GH-544): the same
     grammar and the same single simultaneous substitution, but every own line left as an
     `unclassified_token`, a `range` or a `cites_master_after_sync` is kept as it was and
     listed in `spots`, sorted by path and line, so an owner's decision can be applied to just
     those lines. A moved number twice is still `Ambiguous("duplicate_own_number")`: no spot
-    is there to edit."""
-    grammar = _grammar(moves, lines, trees, texts, link_labels=True)
+    is there to edit. `bases` is `renumber`'s (GH-579)."""
+    grammar = _grammar(moves, lines, trees, texts, link_labels=True, bases=bases)
     if isinstance(grammar, Ambiguous):
         return grammar
     written: dict[str, str] = {}

@@ -636,3 +636,121 @@ def test_outside_bounds_names_a_path_with_neither_a_spot_nor_a_bound_line_at_lin
     assert adr_numbers.outside_bounds({}, {"new.py": "x\n"}, found) == (("new.py", 0),)
     unchanged = {"m.py": "S = 1\n"}
     assert adr_numbers.outside_bounds(unchanged, unchanged, found) == ()
+
+
+# -- GH-579: a reference a merge brought in is classified like an own one ------------------
+
+GONE = f"{ADR}0076-payment-methods.md"
+MOVED = f"{ADR}0078-payment-methods.md"
+SALES = "docs/product/sales.md"
+SALES_MASTER = "# Ventas\n\nunrelated\n"
+SALES_HEAD = (
+    "# Ventas\n\nunrelated\npuerto OnTheSpotPayments (ADR-0076)\n(ADR-0007, ADR-0076, payments.md)\n"
+)
+
+
+def _gh407(head: str, own: list[OwnLine], *, base: str | None = SALES_MASTER, candidate=True):
+    texts = {GONE: (None, "# ADR-0076: payments\n"), SALES: (SALES_MASTER, head)}
+    return {
+        "moves": {GONE: MOVED},
+        "lines": own,
+        "trees": {},
+        "texts": texts,
+        "bases": {SALES: base} if candidate else {},
+    }
+
+
+def _renumber(case):
+    return adr_numbers.renumber(
+        case["moves"], case["lines"], case["trees"], case["texts"], bases=case["bases"]
+    )
+
+
+def _renumber_decided(case):
+    return adr_numbers.renumber_decided(
+        case["moves"], case["lines"], case["trees"], case["texts"], bases=case["bases"]
+    )
+
+
+def test_gh_579_an_own_adr_token_in_a_product_doc_is_rewritten_by_rule_b():
+    own = [_line(SALES, "puerto OnTheSpotPayments (ADR-0076)")]
+    result = _renumber(_gh407(SALES_HEAD.replace("ADR-0076, payments", "ADR-0079, payments"), own))
+    assert isinstance(result, Renaming)
+    assert "puerto OnTheSpotPayments (ADR-0078)" in result.texts[SALES]
+
+
+def test_gh_579_an_adr_token_no_commit_of_the_branch_added_is_a_spot_not_silence():
+    case = _gh407(SALES_HEAD, [])
+    result = _renumber(case)
+    assert isinstance(result, Ambiguous)
+    assert result.reason == "unclassified_token"
+    assert f"{SALES}:4: puerto OnTheSpotPayments (ADR-0076)" in result.detail
+    decided = _renumber_decided(case)
+    assert not isinstance(decided, Ambiguous)
+    assert decided.spots == (
+        (SALES, 4, "puerto OnTheSpotPayments (ADR-0076)"),
+        (SALES, 5, "(ADR-0007, ADR-0076, payments.md)"),
+    )
+    assert SALES not in decided.renaming.texts  # never rewritten by code
+
+
+def test_gh_579_a_path_the_reads_did_not_mark_as_candidate_is_not_classified():
+    result = _renumber(_gh407(SALES_HEAD, [], candidate=False))
+    assert isinstance(result, Renaming)
+
+
+def test_gh_579_a_non_own_line_equal_to_the_merge_base_text_is_masters():
+    base = SALES_HEAD  # master moved on from the merge base, the line is the base's
+    result = _renumber(_gh407(SALES_HEAD, [], base=base))
+    assert isinstance(result, Renaming)
+
+
+def test_gh_579_a_non_own_line_that_master_has_is_not_a_spot():
+    case = _gh407(SALES_HEAD, [])
+    case["texts"][SALES] = (SALES_HEAD, SALES_HEAD)
+    assert isinstance(_renumber(case), Renaming)
+
+
+def test_gh_579_a_bare_adr_path_on_an_own_line_is_still_a_spot():
+    own = [_line("app/main.py", "x = 1  # (docs/adr/0076)")]
+    case = _gh407("same\n", own, candidate=False)
+    case["texts"]["app/main.py"] = ("", "x = 1  # (docs/adr/0076)\n")
+    decided = _renumber_decided(case)
+    assert not isinstance(decided, Ambiguous)
+    assert decided.spots == (("app/main.py", 1, "x = 1  # (docs/adr/0076)"),)
+
+
+@pytest.mark.parametrize("form", ["(docs/adr/0076)", "see adr/0076.", "docs/adr/0076-other.md"])
+def test_gh_579_a_bare_adr_path_on_a_merged_line_is_a_spot(form):
+    head = f"{SALES_MASTER}ref {form}\n"
+    result = _renumber(_gh407(head, []))
+    assert isinstance(result, Ambiguous) and result.reason == "unclassified_token"
+
+
+def test_gh_579_the_moved_file_name_on_a_merged_line_is_rewritten_not_a_spot():
+    head = f"{SALES_MASTER}ref docs/adr/0076-payment-methods.md\n"
+    result = _renumber(_gh407(head, []))
+    assert isinstance(result, Renaming)
+    assert result.texts[SALES].endswith("ref docs/adr/0078-payment-methods.md\n")
+
+
+@pytest.mark.parametrize(
+    "line", ["0076,Cash,1", "| 0076 | row |", "hash a0076b and 0076", "decision 0076 was taken"]
+)
+def test_gh_579_a_bare_four_digit_token_on_a_merged_line_is_never_a_spot(line):
+    head = f"{SALES_MASTER}{line}\n"
+    assert isinstance(_renumber(_gh407(head, [])), Renaming)
+    decided = _renumber_decided(_gh407(head, []))
+    assert not isinstance(decided, Ambiguous) and decided.spots == ()
+
+
+def test_gh_579_only_a_final_newline_difference_is_neither_a_spot_nor_a_rewrite():
+    head = SALES_MASTER.rstrip("\n")
+    result = _renumber(_gh407(head, [], base=SALES_MASTER))
+    assert isinstance(result, Renaming) and SALES not in result.texts
+
+
+def test_gh_579_a_branch_without_stale_non_own_tokens_still_gets_a_renaming():
+    head = f"{SALES_MASTER}new line about ADR-0007 only\n"
+    result = _renumber(_gh407(head, []))
+    assert result == Renaming(((GONE, MOVED),), {MOVED: "# ADR-0076: payments\n"})
