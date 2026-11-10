@@ -907,3 +907,14 @@ def test_gh_579_an_entry_without_upstream_is_applied_as_before(tmp_path):
     _round_407(tmp_path, ports, paths)
 
     assert ports.workspace.pushes == [(BRANCH, head)]
+
+
+def test_gh_579_the_question_escalate_adr_posts_lists_every_spot_of_the_collision(tmp_path):
+    """The wiring: `escalate_adr` feeds its one `adr_decided` result into the posted question."""
+    ports, _, _ = _asked_407(tmp_path, _rewrites_all_three)
+
+    [question] = ports.documents.load("GH-5")["questions_for_human"]
+
+    for row in (f"`{G_MAIN}:1`", f"`{G_SALES}:3`", f"`{G_SALES}:4`"):
+        assert row in question
+    assert "puerto OnTheSpotPayments" not in question  # never the text of a line
