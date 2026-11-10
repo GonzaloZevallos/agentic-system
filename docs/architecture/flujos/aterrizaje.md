@@ -106,8 +106,8 @@ sequenceDiagram
    contra el sha, un error de git al recalcular (`git_failed`), que ya no haya colisión
    (`no_collision`), que la colisión sea `Ambiguous` (`ambiguous`) y, al final, que los `moves`
    sean los registrados (`stale_moves`); cada rechazo deja una línea de log que nombra la
-   condición. Si `adr_decided` devuelve una `DecidedRenaming` sin `spots` (la regla (d), un enlace
-   `[NNNN](…/NNNN-slug.md)`, reescribió toda referencia, por ejemplo una fila de índice), no corre
+   condición. Si `adr_decided` devuelve una `DecidedRenaming` sin `spots` (la regla (d), un enlace Markdown
+   con la etiqueta `NNNN` y el destino `NNNN-slug.md`, reescribió toda referencia, por ejemplo una fila de índice), no corre
    el Developer: el sistema hace el commit mecánico, corre una vez los chequeos de entrega con
    `before` en la cabeza anterior a ese commit, decide `checks_red` por los resultados de la puerta
    (un rechazo del testigo o de rutas, o unos resultados ausentes, también terminan `checks_red`,
