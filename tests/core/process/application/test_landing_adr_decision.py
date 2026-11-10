@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from agentic.core.process.application import landing, landing_plan
+from agentic.core.process.application.adr_collision import adr_decided
 from agentic.core.process.application.landing_adr import brief
 from agentic.core.process.application.landing_plan import entries as plan_entries
 from agentic.core.process.application.ports import (
@@ -33,7 +34,14 @@ from tests.core.process.application.test_landing_renumber import (
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import URL, _HeldLocks, _pr
 from tests.core.process.domain.test_landing import _facts
-from tests.fakes import MemoryCommands, MemoryStack, MemoryTracker, ScriptedRunner, memory_ports
+from tests.fakes import (
+    MERGE_BASE,
+    MemoryCommands,
+    MemoryStack,
+    MemoryTracker,
+    ScriptedRunner,
+    memory_ports,
+)
 
 CODE = "app/main.py"
 CITES_CODE = 'MSG = "see (docs/adr/0049)"'
@@ -619,12 +627,13 @@ def _gh_407_world(tmp_path, edit, *, own_row=False, commands=None):
     return ports, head
 
 
-def _asked_with(tmp_path, edit, extra):
+def _asked_with(tmp_path, edit, extra, *, prepare=None, paths=(MINE, NOTES, CODE)):
     ports, head = _world(tmp_path, extra=extra)
     ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
-    ports.workspace.diff_paths = (MINE, NOTES, CODE)
+    if prepare is not None:
+        prepare(ports, head)
     (tmp_path / "GH-5" / "app").mkdir(parents=True)
-    first, _ = _round(tmp_path, ports)
+    first, _ = _round(tmp_path, ports, paths=paths)
     assert (first.kind, first.step) == ("dispatched", "escalate_adr"), first
     ports.tracker.timestamped["GH-5"] = [
         IssueComment("Escalated: ADR collision", ESCALATED_COMMENT),
@@ -918,3 +927,85 @@ def test_gh_579_the_question_escalate_adr_posts_lists_every_spot_of_the_collisio
     for row in (f"`{G_MAIN}:1`", f"`{G_SALES}:3`", f"`{G_SALES}:4`"):
         assert row in question
     assert "puerto OnTheSpotPayments" not in question  # never the text of a line
+
+
+# -- GH-582: apostrophe GH-652's shape, a decision the rule settles with no spot left ----------
+
+ROW_BARE = "| 0049 | mine, said bare |"
+MASTER_BASE = "# Decisiones\n"
+
+
+def _gh_652_world(tmp_path, *, own_row=True, bare=False, edit=_boom, commands=None, stack=None):
+    """Branch ADR 0049 against master's 0049. `docs/architecture/decisiones.md` holds master's
+    own row for its 0049 and, besides it, the branch's row `| [0049](../adr/0049-mine.md) |`: an
+    own line (`own_row`) or one a merge resolution brought (no own commit added it). The question
+    is asked with `renumber` (the row's label is an `unclassified_token`), the decision is
+    recomputed with `renumber_decided` (rule (d) rewrites the row: no spot is left)."""
+    extra = ((INDEX, ROW_MINE),) if own_row else ()
+
+    def prepare(ports, head):
+        workspace = ports.workspace
+        tail = ROW_BARE + "\n" if bare else ""
+        workspace.files[(head, INDEX)] = f"{ROW_THEIRS}\n{ROW_MINE}\n{tail}"
+        workspace.files[(workspace.master_sha, INDEX)] = ROW_THEIRS + "\n"
+        if not own_row:  # nothing of the branch is in the file at the merge base
+            workspace.files[(MERGE_BASE, INDEX)] = MASTER_BASE
+
+    paths = (MINE, NOTES, INDEX)
+    ports, head = _asked_with(tmp_path, edit, extra, prepare=prepare, paths=paths)
+    ports = dataclasses.replace(
+        ports,
+        stack=stack or MemoryStack(checks={"docs": "run docs"}),
+        commands=commands or WhereChecksRan(ports.workspace),
+    )
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
+    ports.workspace.diff_paths = paths
+    return ports, head, paths
+
+
+class WhereChecksRan(MemoryCommands):
+    """Green checks that note the head of the checkout each command ran on."""
+
+    def __init__(self, workspace, **queues) -> None:
+        super().__init__(**queues)
+        self.workspace, self.heads = workspace, []
+
+    def run(self, cwd, command, timeout_s, *, env=None) -> CommandResult:
+        self.heads.append(self.workspace.full_head(cwd))
+        return super().run(cwd, command, timeout_s, env=env)
+
+
+def test_gh_652_the_question_calls_the_row_ambiguous_and_the_decision_finds_no_spot(tmp_path):
+    ports, head, _ = _gh_652_world(tmp_path)
+
+    [asked] = _entries(ports)
+    [question] = ports.documents.load("GH-5")["questions_for_human"]
+
+    assert asked["moves"] == [[MINE, "docs/adr/0050-mine.md"]]
+    assert f"Fix by hand: {INDEX}:" in question
+    found = adr_decided(ports, ports.workspace.master_sha, head)
+    assert isinstance(found, adr_numbers.DecidedRenaming) and found.spots == ()
+    assert any(path == INDEX for path, _, _ in found.bound)
+
+
+def test_gh_652_a_decision_with_no_spot_is_applied_without_a_model_pass(tmp_path):
+    ports, head, paths = _gh_652_world(tmp_path)
+
+    result, lines = _round(tmp_path, ports, paths=paths)
+
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "applied", (entry, lines)
+    assert ports.workspace.pushes == [(BRANCH, head)]
+    assert ports.runner.calls == []
+    pushed = entry["head_after"]
+    mechanical = ports.workspace.branch_commits[-1].sha
+    assert pushed == mechanical != head
+    assert ports.workspace.show(pushed, "docs/adr/0050-mine.md") == "# ADR-0050: mine\n"
+    assert ports.workspace.show(pushed, MINE) is None
+    rows = (ports.workspace.show(pushed, INDEX) or "").splitlines()
+    assert rows == [ROW_THEIRS, ROW_MINE_NEW]
+    assert ports.commands.heads == [mechanical]  # the stack's checks ran on the mechanical head
+    assert [command for _, command in ports.commands.ran] == ["run docs"]
+    unit = ports.documents.load("GH-5")["subtasks"]["only"]
+    assert unit["reviewed_head"] == pushed  # only names and numbers changed: the review is carried

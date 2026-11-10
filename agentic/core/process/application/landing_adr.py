@@ -22,9 +22,9 @@ from pathlib import Path
 
 from ..domain import landing, rules
 from ..domain import landing as landing_rules
-from ..domain.adr_numbers import DecidedRenaming, kept_spots, outside_bounds
+from ..domain.adr_numbers import Ambiguous, DecidedRenaming, kept_spots, outside_bounds
 from ..domain.check_schedule import CheckPriority
-from ..domain.presubmit import RedCheck, describe_checks, red_checks
+from ..domain.presubmit import RedCheck, describe_checks, final_results, red_checks
 from ..domain.roles import DEVELOPER
 from ..domain.task import AdrDecisionOutcome, TaskState, apply
 from .adr_collision import adr_collision, adr_decided
@@ -157,22 +157,30 @@ def apply_adr_decision(context: LandingContext) -> None:
     _finish(context, state, unit, outcome, head_after, carried, red, out)
 
 
+def _refused(context: LandingContext, outcome: AdrDecisionOutcome, check: str) -> Result:
+    """The step ends `outcome` without pushing, and the log names the check that failed."""
+    context.log(f"agentic: land: {context.task_id}: apply_adr_decision: {check} -> {outcome}")
+    return outcome, None, False, None, None
+
+
 def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Result:
     ports, head = context.ports, context.head
     workspace = ports.workspace
     asked_upstream = _recorded_upstream(_document(context), head)
-    if asked_upstream is not None and asked_upstream != sha:  # master moved since the question
-        return "stale_moves", None, False, None, None
+    if asked_upstream is not None and asked_upstream != sha:
+        return _refused(context, "stale_moves", f"master moved ({asked_upstream} -> {sha})")
     try:
         found = adr_decided(ports, sha, head)
-    except GitError:
-        return "stale_moves", None, False, None, None
+    except GitError as failed:
+        return _refused(context, "git_failed", f"adr_decided could not read git ({failed})")
+    if found is None:
+        return _refused(context, "no_collision", "the head no longer collides with master")
+    if isinstance(found, Ambiguous):
+        return _refused(context, "ambiguous", f"the rule cannot decide ({found.reason})")
     recorded = _recorded_moves(_document(context), head)
-    if not isinstance(found, DecidedRenaming) or not found.spots:
-        return "stale_moves", None, False, None, None
     moves = found.renaming.moves
     if recorded is not None and recorded != [list(pair) for pair in moves]:
-        return "stale_moves", None, False, None, None
+        return _refused(context, "stale_moves", "the rule's moves differ from the recorded ones")
     try:
         checkout = task_checkout(state, context.cfg, ports)
     except SetupFailed:
@@ -187,13 +195,13 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
                 if isinstance(result, OutOfBounds):
                     return "out_of_bounds", None, False, None, result
                 if isinstance(result, str):
-                    return result, None, False, None, None
+                    return _refused(context, result, "the step stopped")
                 new_head, carried = result
                 workspace.push(checkout.branch, lease=head)
                 pushed = True
                 return "applied", new_head, carried, None, None
-            except GitError:
-                return "stale_moves", None, False, None, None
+            except GitError as failed:
+                return _refused(context, "git_failed", f"a git write failed ({failed})")
     finally:
         if not pushed:
             try:
@@ -225,8 +233,21 @@ def _write_and_ask(
         target.write_text(text, encoding="utf-8")
     relatives = sorted({old for old, _ in renaming.moves} | set(renaming.texts))
     if workspace.commit_paths(path, relatives, _message(renaming.moves)) is None:
-        return "stale_moves"
+        context.log(
+            f"agentic: land: {context.task_id}: apply_adr_decision: the mechanical commit "
+            "made no commit"
+        )
+        return "git_failed"
     mechanical = workspace.full_head(path)
+    if not found.spots:  # rule (d) settled everything: no model pass (GH-582)
+        gate = _gate(context, state, path, context.head)
+        refusal = gate()
+        red = _gate_red(context, gate, refusal)
+        if red is not None:
+            return red
+        if adr_collision(ports, sha, mechanical) is not None:
+            return "still_colliding"
+        return mechanical, _carries_to(context, state, unit, found, mechanical, ())
     outcome = _developer(context, state, path, mechanical, found)
     if outcome is not None:
         return outcome
@@ -242,6 +263,22 @@ def _write_and_ask(
         return "role_failed"
     if adr_collision(ports, sha, new_head) is not None:
         return "still_colliding"
+    return new_head, _carries_to(context, state, unit, found, new_head, changed)
+
+
+def _carries_to(
+    context: LandingContext,
+    state: TaskState,
+    unit: str,
+    found: DecidedRenaming,
+    new_head: str,
+    changed: Sequence[str],
+) -> bool:
+    """Whether the reviewed verdict carries to `new_head`: only names and numbers changed
+    (`landing.renumber_carries` over the lines `found` and the pass changed) and the head the
+    round started on is the reviewed one."""
+    workspace, head = context.ports.workspace, context.head
+    renaming = found.renaming
     source = {new: old for old, new in renaming.moves}
     combined = [
         change
@@ -253,8 +290,7 @@ def _write_and_ask(
         )
     ]
     reviewed = state["subtasks"][unit].get("reviewed_head")
-    carried = landing.renumber_carries(combined) and rules.same_commit(reviewed, head)
-    return new_head, carried
+    return landing.renumber_carries(combined) and rules.same_commit(reviewed, head)
 
 
 def _unanswered_spots(
@@ -278,20 +314,16 @@ def _unanswered_spots(
     return left
 
 
-def _developer(
-    context: LandingContext, state: TaskState, path: Path, mechanical: str, found: DecidedRenaming
-) -> AdrDecisionOutcome | CheckedRed | None:
-    """The Developer pass over the spot lines, through the delivery gate every Developer
-    delivers through. `None` when it delivered with green checks; `CheckedRed` when the last
-    gate run left a red row (which checks, from `presubmit.red_checks`)."""
+def _gate(context: LandingContext, state: TaskState, path: Path, before: str) -> CheckoutPresubmit:
+    """The delivery gate over the checkout at `path`, measured from `before`: the one
+    construction both the Developer pass and the no-spots branch go through."""
     ports, cfg = context.ports, context.cfg
     base = task_base(state, ports)
-    checks = ports.stack.checks(base)
-    gate = CheckoutPresubmit(
+    return CheckoutPresubmit(
         ports,
         path,
-        mechanical,
-        checks,
+        before,
+        ports.stack.checks(base),
         cfg.check_timeout_s,
         priority=CheckPriority.SUBTASK,
         wait_max_s=cfg.check_wait_max_s,
@@ -301,6 +333,42 @@ def _developer(
         rerun_forms=ports.stack.rerun_checks(base),
         readiness=readiness_of(ports, base, cfg.check_cores),
     )
+
+
+def _gate_red(
+    context: LandingContext, gate: CheckoutPresubmit, refusal: str | None
+) -> CheckedRed | None:
+    """`CheckedRed` when the gate run of the no-spots branch is not green, judged from
+    `gate.results` alone (`final_results`: a check that ran twice counts by its last row); a
+    refusal with no red row (the witness, unstageable paths) or no results at all is red too,
+    with an empty detail and a log line naming the cause. `None` when green."""
+    results = gate.results
+    if results is None:
+        context.log(
+            f"agentic: land: {context.task_id}: apply_adr_decision: the gate left no results "
+            f"({'refused: ' + refusal if refusal else 'not run'})"
+        )
+        return CheckedRed(([], 0))
+    if any(not row["passed"] for row in final_results(results)):
+        return CheckedRed(red_checks(results))
+    if refusal is not None:
+        context.log(
+            f"agentic: land: {context.task_id}: apply_adr_decision: the gate refused with no "
+            "red check (witness or paths)"
+        )
+        return CheckedRed(([], 0))
+    return None
+
+
+def _developer(
+    context: LandingContext, state: TaskState, path: Path, mechanical: str, found: DecidedRenaming
+) -> AdrDecisionOutcome | CheckedRed | None:
+    """The Developer pass over the spot lines, through the delivery gate every Developer
+    delivers through. `None` when it delivered with green checks; `CheckedRed` when the last
+    gate run left a red row (which checks, from `presubmit.red_checks`)."""
+    ports, cfg = context.ports, context.cfg
+    checks = ports.stack.checks(task_base(state, ports))
+    gate = _gate(context, state, path, mechanical)
 
     def committed(_: dict) -> None:
         moved = ports.workspace.head(path) != mechanical
@@ -406,7 +474,7 @@ def _finish(
     context.ports.documents.save({**current, "landing": resolved})
     record_landing(context, resolved)
     context.log(f"agentic: land: {context.task_id}: apply_adr_decision {outcome}, asking again")
-    if context.facts.adr_collision is None:
+    if outcome == "no_collision" or context.facts.adr_collision is None:
         return
     asked = [
         *resolved,

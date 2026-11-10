@@ -161,8 +161,10 @@ is the `diagnose`: no further push."""
 
 LANDING_ADR_DECISIONS_MAX = 2
 """`apply_adr_decision` entries per collision, keyed by (head, moves) (GH-544, GH-570), whose
-`outcome` is not `stale_moves`, counted over all entries by `adr_decisions_spent`, so a
-restoration does not hand the budget back; declared, not measured. Charged to neither
+`outcome` is a spent one (`_ADR_DECISION_SPENT`: not `stale_moves`, and, GH-582, not `git_failed`,
+`no_collision` or `ambiguous` either: those say the owner's decision was never tried), counted over
+all entries by `adr_decisions_spent`, so a restoration does not hand the budget back; declared, not
+measured. Charged to neither
 `LANDING_PASSES_MAX` nor the syncs, and the step never reaches `exhausted()`."""
 
 ADR_EDIT_BOUNDS = 3
@@ -1006,8 +1008,8 @@ def adr_decisions_spent(
     entries: Sequence[Mapping[str, object]], head: str, moves: Sequence[Sequence[str]]
 ) -> int:
     """The `apply_adr_decision` entries that used a slot of `LANDING_ADR_DECISIONS_MAX` for the
-    collision (`head`, `moves`): those whose `outcome` is one of the closed set but `stale_moves`
-    (GH-570) and whose `bounds` is `ADR_EDIT_BOUNDS` (GH-576: an apply that ran under other
+    collision (`head`, `moves`): those whose `outcome` is one of `_ADR_DECISION_SPENT` (the closed
+    set but `stale_moves`, GH-570, `git_failed`, `no_collision` and `ambiguous`, GH-582) and whose `bounds` is `ADR_EDIT_BOUNDS` (GH-576: an apply that ran under other
     bounds gave its slot back; a missing `bounds` is 1). The one reader of `bounds`, and the one
     counter of the cap: the step table, `release_asked` and the question the
     owner reads all call it. Read over all entries, as `renumbers` is, so a restoration does not
