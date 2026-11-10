@@ -765,3 +765,5 @@ tasks:
       - GH-579
   GH-582@review:
     cost_usd: 0.1094
+  GH-585@review:
+    cost_usd: 0.0846

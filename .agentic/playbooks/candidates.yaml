@@ -1484,3 +1484,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-10T09:26:06.578+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a flow's outcomes or behaviour, search docs/architecture for hand-written descriptions of it and update them in the same change; generated docs alone do not count.
+  confidence: medium
+  seen_in:
+  - GH-585
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-10T12:26:50.332+00:00'
