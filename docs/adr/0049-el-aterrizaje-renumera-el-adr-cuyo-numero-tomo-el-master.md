@@ -288,3 +288,44 @@ decisión del dueño terminaba `out_of_bounds`.
   pregunta; si al aplicar es otro, el resultado es `stale_moves` y no se empuja. Sin el campo se
   aplica como antes. La pregunta lista cada `spot` como `ruta:línea` (sin texto de línea, con
   `and N more` para el resto), y `ADR_EDIT_BOUNDS` sube a 3 porque cambia el conjunto editable.
+
+## Adenda (GH-582)
+
+En apostrophe GH-652 la fila `| [0078](../adr/0078-….md) |` de `docs/architecture/decisiones.md`
+era la única otra referencia. La pregunta (`adr_collision`, sin etiquetas de enlace) la leía como
+`unclassified_token` y decía «Fix by hand»; la decisión (`adr_decided`, con etiquetas de enlace)
+la reescribía por la regla (d) y no dejaba `spots`. `_apply` salía por «sin spots» con
+`stale_moves`, que no gasta cupo, y el dueño volvía a decidir sin fin con el master quieto.
+
+- **Sin spots, sin modelo.** Una `DecidedRenaming` sin `spots` nunca corre al Developer ni termina
+  `role_failed`. El sistema hace el commit mecánico, corre una vez los chequeos de entrega con
+  `before` en la cabeza anterior a ese commit y decide `checks_red` por los resultados de la
+  puerta, no por lo que devuelve la llamada: un rechazo del testigo o de rutas, o unos resultados
+  ausentes, terminan `checks_red`, nunca `applied`. Después comprueba con `adr_collision` que no
+  quede colisión (`still_colliding`) y solo entonces empuja con lease.
+- **`stale_moves` solo por el master.** Se devuelve únicamente si el upstream registrado difiere
+  del sha o si los `moves` recalculados difieren de los registrados. Las demás causas tienen
+  resultado propio y una línea de log que nombra el chequeo: `git_failed` (error de git al
+  recalcular, al commitear o al empujar), `no_collision` y `ambiguous`. Orden de comprobación:
+  upstream, error de git, sin colisión, ambigua, `moves`.
+- **Cupo.** Los tres valores nuevos no gastan cupo de decisión: GH-652 se repetía porque el dueño
+  volvía a decidir, no de forma automática; un fallo de git no es obra del dueño y `ambiguous`
+  nunca ofrece una decisión.
+
+  | Resultado | Gasta cupo | Vuelve a preguntar | Empuja |
+  |---|---|---|---|
+  | `applied` | sí | no | sí |
+  | `out_of_bounds`, `role_failed`, `checks_red`, `still_colliding` | sí | sí | no |
+  | `stale_moves`, `git_failed` | no | sí | no |
+  | `ambiguous` | no | sí, sin ofrecer decisión | no |
+  | `no_collision` | no | no | no |
+
+- **Pregunta.** Solo cuando el cálculo decidido da una `DecidedRenaming` sin `spots` y con líneas
+  `bound`, dice que la regla las reescribe y que una `Decision:` las aplica sin pase de modelo,
+  después de los chequeos. Con error, `Ambiguous` o sin calcular, conserva «Fix by hand». Tras un
+  `git_failed` suma que una nueva `Decision:` reintenta.
+- **Límite conocido.** Las líneas reescritas no se reordenan: si los chequeos de un producto
+  exigen un índice ordenado, la decisión termina `checks_red` (detectado, no remediado).
+- **Sin cambios.** `adr_numbers.renumber` (el camino automático) y `ADR_EDIT_BOUNDS` siguen
+  igual: no cambia qué líneas son `spots` o `bound`. Sin métrica, etiqueta ni atributo de span
+  nuevo.
