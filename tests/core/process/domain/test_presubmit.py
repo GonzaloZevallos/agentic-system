@@ -975,7 +975,9 @@ def _row(name, passed, output="", **extra):
 def test_a_clean_red_row_is_reported_still_red_with_its_tail():
     shown, more = presubmit.red_checks([_row("tests", False, "a\nFAILED b\n")])
 
-    assert shown == [{"name": "tests", "tail": ["a", "FAILED b"], "recovered": False}]
+    assert shown == [
+        {"name": "tests", "tail": ["a", "FAILED b"], "recovered": False, "timed_out": False}
+    ]
     assert more == 0
 
 
@@ -984,7 +986,7 @@ def test_a_red_row_then_a_passing_rerun_is_recovered_with_no_tail():
         [_row("tests", False, "boom"), _row("tests", True, "ok", rerun=True)]
     )
 
-    assert shown == [{"name": "tests", "tail": [], "recovered": True}]
+    assert shown == [{"name": "tests", "tail": [], "recovered": True, "timed_out": False}]
 
 
 @pytest.mark.parametrize("token", ["{{", "}}", "<!--", "-->", "`"])
@@ -1028,3 +1030,55 @@ def test_still_red_sorts_before_recovered():
 def test_a_gate_run_with_no_red_row_reports_nothing():
     assert presubmit.red_checks([_row("tests", True)]) == ([], 0)
     assert presubmit.red_checks([]) == ([], 0)
+
+
+# --- GH-585: the verdict of a gate run, and which red checks timed out -------------------------
+
+
+def test_a_timed_out_row_is_reported_timed_out_from_its_field_not_its_text():
+    shown, _ = presubmit.red_checks(
+        [
+            _row("web-e2e", False, "slow\n(timed out after 1500 s)", timed_out=True),
+            _row("lint", False, "(timed out after 3 s) is only text"),
+        ]
+    )
+
+    assert [(check["name"], check["timed_out"]) for check in shown] == [
+        ("web-e2e", True),
+        ("lint", False),
+    ]
+
+
+def test_a_check_that_timed_out_and_then_passed_is_recovered_and_not_timed_out():
+    shown, _ = presubmit.red_checks(
+        [_row("e2e", False, "x", timed_out=True), _row("e2e", True, "ok", rerun=True)]
+    )
+
+    assert shown == [{"name": "e2e", "tail": [], "recovered": True, "timed_out": False}]
+
+
+def test_a_real_red_beats_a_timeout_in_the_gate_verdict():
+    rows = [_row("e2e", False, "x", timed_out=True), _row("tests", False, "FAILED a")]
+
+    assert presubmit.gate_verdict(rows) == "red"
+
+
+def test_only_a_timeout_gives_the_timed_out_verdict():
+    rows = [_row("tests", True), _row("e2e", False, "x", timed_out=True)]
+
+    assert presubmit.gate_verdict(rows) == "timed_out"
+
+
+def test_a_failed_then_passing_check_is_green_in_the_gate_verdict():
+    rows = [_row("tests", False, "boom"), _row("tests", True, "ok", rerun=True)]
+
+    assert presubmit.gate_verdict(rows) == "green"
+    slow = [_row("e2e", False, "x", timed_out=True), _row("e2e", True, "ok", rerun=True)]
+    assert presubmit.gate_verdict(slow) == "green"
+    assert presubmit.gate_verdict([]) == "green"
+
+
+def test_a_timeout_then_a_real_failure_of_the_same_check_is_red():
+    rows = [_row("tests", False, "x", timed_out=True), _row("tests", False, "FAILED a")]
+
+    assert presubmit.gate_verdict(rows) == "red"

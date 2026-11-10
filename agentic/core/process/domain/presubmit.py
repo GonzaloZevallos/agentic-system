@@ -834,11 +834,13 @@ def merge_checks_record(
 class RedCheck(TypedDict):
     """One check of a gate run that failed, as a landing entry keeps it (GH-570): its name,
     the sanitized last lines of its last failing row (empty when it `recovered`, that is its
-    last row passed)."""
+    last row passed) and whether that failing row `timed_out` (GH-585; read from the row's
+    field, never from its text; an entry stored before reads as False)."""
 
     name: str
     tail: list[str]
     recovered: bool
+    timed_out: bool
 
 
 RED_CHECKS_MAX = 3
@@ -877,9 +879,23 @@ def red_checks(results: Sequence[CheckResult]) -> tuple[list[RedCheck], int]:
                     for line in lines
                 ],
                 "recovered": recovered,
+                "timed_out": not recovered and last_failing[name].get("timed_out", False),
             }
         )
     return shown, max(0, len(names) - RED_CHECKS_MAX)
+
+
+def gate_verdict(results: Sequence[CheckResult]) -> Literal["green", "red", "timed_out"]:
+    """How a gate run came out (GH-585), judged over `final_results` only: `red` when some
+    check's last row failed without timing out, else `timed_out` when some check's last row
+    timed out, else `green`. A real red beats a timeout. The one place a timeout is told from a
+    failure, from the row's `timed_out` field and never from its output."""
+    last = final_results(results)
+    if any(not row["passed"] and not row.get("timed_out", False) for row in last):
+        return "red"
+    if any(row.get("timed_out", False) and not row["passed"] for row in last):
+        return "timed_out"
+    return "green"
 
 
 def _derived_step(declared: Mapping[str, str], results: Sequence[CheckResult] | None) -> FailedStep:
