@@ -178,8 +178,9 @@ class DecidedRenaming:
     text)`: the path as written (the new one for a moved file), the 1-based line, and the
     line as `renaming` leaves it, which is the line a pass that edits the spots finds.
 
-    `bound` (GH-576), in the same shape and order: every line (a spot excluded) where rule (a)
-    or (d) rewrote a name or a link label, and the first Markdown heading of each moved ADR.
+    `bound` (GH-576), in the same shape and order: every line (a spot excluded) where rule (a),
+    (b), (c) or (d) rewrote a name, a number or a link label (GH-579: (b) and (c) too), and the
+    first Markdown heading of each moved ADR.
     A pass may move these lines inside their file (a sorted index) but never change their
     text; `outside_bounds` is what checks it."""
 
@@ -211,7 +212,7 @@ class _Scan:
     ranges: list[tuple[int, str]]
     cites: list[tuple[int, str]]
     unclassified: list[tuple[int, str]]
-    rewrote: set[int] = field(default_factory=set)  # lines (a) or (d) rewrote, `hold` only
+    rewrote: set[int] = field(default_factory=set)  # lines (a) to (d) rewrote, `hold` only
 
 
 def _grammar(
@@ -332,7 +333,10 @@ def _scan(
             cites.append((index, line))
             if hold:
                 return found.group(0)
-        return _DIGITS.sub(lambda i: numbers.get(i.group(0), i.group(0)), found.group(0))
+        moved = _DIGITS.sub(lambda i: numbers.get(i.group(0), i.group(0)), found.group(0))
+        if moved != found.group(0):  # GH-579: rule (b)/(c) rewrote this line
+            rewrote.add(index)
+        return moved
 
     rewritten = grammar.pattern.sub(substitute, at_head)
     unclassified: list[tuple[int, str]] = []
@@ -450,8 +454,11 @@ def outside_bounds(
     lines per path: a removed line must be the text of a spot of that path, no more lines are
     added than removed, a `bound` line is still there as often as it was (it may have moved),
     and every other line is untouched. An added or changed line is named by its 1-based line
-    in `after`, a removed one by its line in `before`; a changed path with neither a spot nor
-    a `bound` line is `(path, 0)`."""
+    in `after`, a removed one by its line in `before`. A path with neither a spot nor a `bound`
+    line goes through the same comparison with nothing allowed (GH-579), so it is reported by
+    line like any other, never as a whole file: the line number is never 0. Only
+    `splitlines()` is compared: a change of line endings or of the final newline alone is in
+    bounds."""
     spots: dict[str, Counter[str]] = defaultdict(Counter)
     for path, _, text in found.spots:
         spots[path][text] += 1
@@ -462,9 +469,6 @@ def outside_bounds(
     for path, new_text in after.items():
         old_text = before.get(path, "")
         if old_text == new_text:
-            continue
-        if path not in spots and path not in bound:
-            outside.add((path, 0))
             continue
         old, new = old_text.splitlines(), new_text.splitlines()
         removed, added = Counter(old) - Counter(new), Counter(new) - Counter(old)
@@ -486,6 +490,22 @@ def outside_bounds(
         )
         outside.update((path, number) for number in free)
     return tuple(sorted(outside))
+
+
+_KEEP = re.compile(r"keep (?P<path>.+):(?P<line>[0-9]+)")
+
+
+def kept_spots(messages: str, spots: Sequence[tuple[str, int, str]]) -> set[tuple[str, int]]:
+    """The `(path, line)` of the `spots` that a pass named as kept unchanged (GH-579): a line of
+    `messages` (the commit messages of the pass) that is exactly `keep <path>:<line>`, with the
+    line number of the mechanical commit, as `spots` carries it. Anything else is ignored,
+    and so is a `keep` line naming something that is not a spot."""
+    named = {
+        (found["path"], int(found["line"]))
+        for row in messages.splitlines()
+        if (found := _KEEP.fullmatch(row))
+    }
+    return named & {(path, line) for path, line, _ in spots}
 
 
 def _positions(lines: Sequence[str], wanted: Mapping[str, int]) -> dict[str, list[int]]:

@@ -631,11 +631,71 @@ def test_outside_bounds_names_a_foreign_line_and_an_added_or_removed_line():
     assert adr_numbers.outside_bounds(before, {"m.py": "a = 1\nS = 1\n"}, found) == (("m.py", 3),)
 
 
-def test_outside_bounds_names_a_path_with_neither_a_spot_nor_a_bound_line_at_line_zero():
+def test_outside_bounds_names_the_lines_of_a_path_with_neither_a_spot_nor_a_bound_line():
+    """GH-579: no `(path, 0)` any more: a two-line edit is reported as those two lines."""
     found = _bounds(spots=[("m.py", 1, "S = 1")])
-    assert adr_numbers.outside_bounds({}, {"new.py": "x\n"}, found) == (("new.py", 0),)
+    assert adr_numbers.outside_bounds({}, {"new.py": "x\n"}, found) == (("new.py", 1),)
     unchanged = {"m.py": "S = 1\n"}
     assert adr_numbers.outside_bounds(unchanged, unchanged, found) == ()
+    before = {"sales.md": "# Ventas\nuno\ndos\ntres\n"}
+    after = {"sales.md": "# Ventas\nUNO\ndos\nTRES\n"}
+    assert adr_numbers.outside_bounds(before, after, found) == (("sales.md", 2), ("sales.md", 4))
+
+
+def test_outside_bounds_never_reports_line_zero():
+    outside = adr_numbers.outside_bounds(
+        {"a.md": "x\n"}, {"a.md": "y\n", "b.md": "z\n"}, _bounds()
+    )
+    assert outside and all(line > 0 for _, line in outside)
+
+
+def test_outside_bounds_accepts_a_change_of_line_endings_or_of_the_final_newline_only():
+    found = _bounds(spots=[("m.py", 1, "S = 1")])
+    lf = {"sales.md": "uno\ndos\n", "m.py": "S = 1\nb\n"}
+    crlf = {"sales.md": "uno\r\ndos\r\n", "m.py": lf["m.py"]}
+    assert adr_numbers.outside_bounds(lf, crlf, found) == ()
+    no_newline = {"sales.md": "uno\ndos", "m.py": "S = 1\nb"}
+    assert adr_numbers.outside_bounds(lf, no_newline, found) == ()
+
+
+RULE_B = "see ADR-0049 for why"
+RULE_B_AFTER = "see ADR-0050 for why"
+
+
+def test_a_line_rule_b_rewrote_is_bound_a_pass_may_move_it_but_not_change_it():
+    texts = {OLD: (None, "# ADR-0049: mine\n"), "a.md": ("", f"top\n{RULE_B}\nend\n")}
+    decided = _decided({OLD: NEW}, texts, [_line("a.md", RULE_B)])
+    assert decided.spots == ()
+    assert ("a.md", 2, RULE_B_AFTER) in decided.bound
+    before = {"a.md": f"top\n{RULE_B_AFTER}\nend\n"}
+    moved = {"a.md": f"{RULE_B_AFTER}\ntop\nend\n"}
+    assert adr_numbers.outside_bounds(before, moved, decided) == ()
+    changed = {"a.md": "top\nsee ADR-0099 for why\nend\n"}
+    assert adr_numbers.outside_bounds(before, changed, decided) == (("a.md", 2),)
+
+
+def test_a_cited_list_rule_c_rewrote_is_bound_too():
+    texts = {OLD: (None, "x\n"), "a.md": ("", "ADRs 0007, 0049\n")}
+    decided = _decided({OLD: NEW}, texts, [_line("a.md", "ADRs 0007, 0049")])
+    assert decided.bound == (("a.md", 1, "ADRs 0007, 0050"),)
+
+
+def test_a_line_held_as_citing_master_after_sync_stays_a_spot_not_a_bound_line():
+    texts = {OLD: (None, "x\n"), "a.md": ("", "see ADR-0049\n")}
+    trees = {"c1": ["0049-theirs.md"]}
+    decided = _decided({OLD: NEW}, texts, [_line("a.md", "see ADR-0049", "c1")], trees)
+    assert decided.spots == (("a.md", 1, "see ADR-0049"),) and decided.bound == ()
+
+
+def test_kept_spots_reads_only_the_keep_lines_naming_a_spot():
+    spots = [("a.md", 3, "x"), ("b.py", 238, "y"), ("c.md", 1, "z")]
+    messages = (
+        "Point main.py at the new number\n\nkeep a.md:3\nkeep b.py:239\n keep c.md:1\n"
+        "keep c.md:1 because\nkeep: c.md:1\nkeep b.py:238\nplain a.md:3\n"
+    )
+    assert adr_numbers.kept_spots(messages, spots) == {("a.md", 3), ("b.py", 238)}
+    assert adr_numbers.kept_spots("", spots) == set()
+    assert adr_numbers.kept_spots("keep a.md:3\r\n", spots) == {("a.md", 3)}
 
 
 # -- GH-579: a reference a merge brought in is classified like an own one ------------------
