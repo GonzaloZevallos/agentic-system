@@ -863,6 +863,7 @@ class MemoryWorkspace:
         self.added_adrs_calls: list[tuple[str, str]] = []
         self.added_lines_calls: list[tuple[str, str, tuple[str, ...]]] = []
         self.paths_naming_calls: list[tuple[str, str]] = []
+        self.commit_texts: dict[str, str] = {}  # GH-579: a tracked commit's message, by sha
         self.tree_names_calls: list[tuple[str, str]] = []
         # GH-262: each `base_of` ask (a `git config --get` on the real adapter), in order.
         self.base_of_calls: list[str] = []
@@ -1176,8 +1177,17 @@ class MemoryWorkspace:
             raise GitError(self.commit_paths_error)
         self.path_commits.append((path, tuple(relatives), message))
         if self.track_commits:
-            return self._commit_branch(path, relatives)
+            sha = self._commit_branch(path, relatives)
+            self.commit_texts[sha] = message
+            return sha
         return "c2"
+
+    def commit_messages(self, base: str, head: str) -> str:
+        """GH-579: the messages of the tracked commits after `base` up to `head`, oldest first."""
+        shas = [commit.sha for commit in self.branch_commits]
+        start = shas.index(base) + 1 if base in shas else 0
+        end = shas.index(head) + 1 if head in shas else len(shas)
+        return "\n".join(self.commit_texts.get(sha, "") + "\n" for sha in shas[start:end])
 
     def _branch_sha(self) -> str:
         count = len(self.branch_commits)

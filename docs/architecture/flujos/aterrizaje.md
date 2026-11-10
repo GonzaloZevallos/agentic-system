@@ -97,6 +97,10 @@ sequenceDiagram
    construidos solo por `agentic/core/process/domain/presubmit.py:red_checks` (a lo sumo
    `RED_CHECKS_MAX`); la pregunta los muestra en el mismo comentario, acotado por
    `MERGE_COMMENT_MAX`, o dice que no se pudo leer el detalle.
+   **GH-579:** los límites se informan por línea (sin archivo entero; fin de línea o salto final
+   solos están dentro de límites), las líneas (b)/(c) son `bound`, lo que la decisión deja igual se
+   nombra con `keep <ruta>:<línea>` en un commit (`kept_spots`; `role_failed` si un `spot` ni
+   cambió ni se nombró), y `escalate_adr` registra `upstream` (otro sha al aplicar: `stale_moves`).
    Cuando el resultado es `out_of_bounds`, la entrada registra `out_of_bounds_lines` (a lo sumo
    cinco `{path, line}`, con la ruta saneada por `landing.out_of_bounds_detail`; la línea 0 es el
    archivo entero) y `out_of_bounds_more` con las que no se muestran, nunca el texto de una línea.

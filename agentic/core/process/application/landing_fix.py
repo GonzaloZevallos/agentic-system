@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 from ..domain import ci, merge_ci, plan_settlement, presubmit, rules
 from ..domain import landing as landing_rules
-from ..domain.adr_numbers import Ambiguous, Renaming
+from ..domain.adr_numbers import Ambiguous, DecidedRenaming, Renaming
 from ..domain.copy import copy_location_parts
 from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import (
@@ -28,9 +28,11 @@ from ..domain.task import (
     apply,
 )
 from . import escalate, landing_plan, landing_sync, merge
+from .adr_collision import adr_decided
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .poll import RESTARTED_BY_LANDING
+from .ports import GitError
 from .resume import state_from
 from .run_role import run_role
 
@@ -480,6 +482,7 @@ def adr_collision_reason(
     red_more: int = 0,
     out_of_bounds_lines: Sequence[Mapping[str, object]] = (),
     out_of_bounds_more: int = 0,
+    spots: Sequence[tuple[str, int]] = (),
 ) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
@@ -505,11 +508,15 @@ def adr_collision_reason(
             "No number was calculated, so there is nothing to apply."
         )
     elif isinstance(found, Ambiguous):
+        fix = (
+            f"Fix by hand, every line the rule cannot decide:\n{_spots_text(spots)}"
+            if spots
+            else f"Fix by hand: {found.detail}."
+        )
         what = (
             "The branch's ADR numbers collide with master's and the renumbering cannot rewrite "
             f"every reference without guessing (`{found.reason}`). The numbers the rule chose:\n"
-            f"{_moves_lines(found.moves)}\n"
-            f"Fix by hand: {found.detail}."
+            f"{_moves_lines(found.moves)}\n{fix}"
         )
     else:
         what = (
@@ -562,6 +569,42 @@ def adr_collision_reason(
     return presubmit.fit_comment(text, len(blocks))
 
 
+def _spots_to_fix(context: LandingContext) -> tuple[tuple[str, int], ...]:
+    """The `(path, line)` of every spot of the collision on the head (GH-579), from one
+    `adr_decided` call; empty when it cannot be computed or has none (the question then says
+    what `Ambiguous.detail` says). Never the text of a line."""
+    sha = context.upstream.sha
+    if sha is None or context.head is None:
+        return ()
+    try:
+        decided = adr_decided(context.ports, sha, context.head)
+    except GitError:
+        return ()
+    if not isinstance(decided, DecidedRenaming):
+        return ()
+    return tuple((path, line) for path, line, _ in decided.spots)
+
+
+SPOTS_TEXT_MAX = 20_000
+"""The most characters of `path:line` rows the question of an `escalate_adr` lists (GH-579), so
+that it stays under `MERGE_COMMENT_MAX` however many spots a collision has."""
+
+
+def _spots_text(spots: Sequence[tuple[str, int]]) -> str:
+    """Each spot as a `path:line` row whose path `landing.publishable_path` accepts, within
+    `SPOTS_TEXT_MAX` characters; the refused and the ones left out are counted in `and N more`."""
+    shown: list[str] = []
+    used = 0
+    for path, line in spots:
+        row = f"- `{path}:{line}`"
+        if landing_rules.publishable_path(path) and used + len(row) + 1 <= SPOTS_TEXT_MAX:
+            shown.append(row)
+            used += len(row) + 1
+    left = len(spots) - len(shown)
+    text = "\n".join(shown)
+    return f"{text}\nand {left} more" if shown and left else text if shown else f"and {left} more"
+
+
 def escalate_adr(context: LandingContext) -> None:
     """The one question the landing asks about an ADR collision `renumber` cannot settle
     (GH-412, ADR-0049): class `questions`, never a restart. The entry is resolved only after
@@ -587,6 +630,7 @@ def escalate_adr(context: LandingContext) -> None:
     more = applied[-1].get("red_more") if applied else None
     rows = applied[-1].get("out_of_bounds_lines") if applied else None
     cut = applied[-1].get("out_of_bounds_more") if applied else None
+    spots = _spots_to_fix(context)
     slots_left = (
         context.head is None
         or not found.moves
@@ -605,6 +649,7 @@ def escalate_adr(context: LandingContext) -> None:
                 cap,
                 failed,
                 slots_left=slots_left,
+                spots=spots,
                 red_checks=detail,
                 red_more=more if isinstance(more, int) and more > 0 else 0,
                 out_of_bounds_lines=(
@@ -629,6 +674,8 @@ def escalate_adr(context: LandingContext) -> None:
     if open_asks and found.moves:
         # What a later owner's decision is applied to (`apply_adr_decision` compares it).
         open_asks[-1]["moves"] = [[old, new] for old, new in found.moves]
+        if context.upstream.sha is not None:  # GH-579: and the master it was asked against
+            open_asks[-1]["upstream"] = context.upstream.sha
     resolved = landing_rules.resolve_open(
         entries,
         (context.clock or _now)(),

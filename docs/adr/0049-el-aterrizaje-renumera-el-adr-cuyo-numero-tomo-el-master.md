@@ -277,3 +277,14 @@ decisión del dueño terminaba `out_of_bounds`.
 - **Costo.** Solo con una colisión real: un `merge_base`, un `changed_paths`, un `paths_naming`
   por número viejo y, por archivo candidato (cambiado por la rama y que nombra el número), el
   texto en la base del merge. El archivo del ADR movido no es candidato: todo él es de la rama.
+- **Límites por línea y líneas `keep`.** `outside_bounds` informa cada cambio fuera de límites por
+  su número de línea, nunca como `(ruta, 0)` de archivo entero; solo compara `splitlines()`, así
+  que un cambio de fin de línea o del salto final queda dentro de límites. Las líneas que las
+  reglas (b)/(c) reescriben (`ADR-NNNN`, listas `ADRs`) entran en `bound`: pueden moverse, no
+  cambiar de texto. Toda línea listada que la decisión deja igual se nombra en un mensaje de
+  commit con `keep <ruta>:<línea>` (`kept_spots`; vale un commit vacío): el resultado es `applied`
+  solo si cada `spot` cambió de texto o está en un `keep`; si no, `role_failed`.
+- **`upstream`.** La entrada `escalate_adr` registra, opcional, el sha del upstream de la
+  pregunta; si al aplicar es otro, el resultado es `stale_moves` y no se empuja. Sin el campo se
+  aplica como antes. La pregunta lista cada `spot` como `ruta:línea` (sin texto de línea, con
+  `and N more` para el resto), y `ADR_EDIT_BOUNDS` sube a 3 porque cambia el conjunto editable.

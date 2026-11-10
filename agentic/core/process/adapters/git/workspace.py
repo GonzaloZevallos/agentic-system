@@ -554,6 +554,9 @@ class GitWorkspace:
         result = self._run("show", f"{ref}:{relative}")
         return result.stdout if result.returncode == 0 else None
 
+    def commit_messages(self, base: str, head: str) -> str:
+        return self._git("log", "--reverse", "--format=%B", f"{base}..{head}")
+
     def commit_date(self, ref: str) -> str | None:
         result = self._run("show", "-s", "--format=%cI", f"{ref}^{{commit}}")
         text = result.stdout.strip()

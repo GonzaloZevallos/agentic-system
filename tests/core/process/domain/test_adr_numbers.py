@@ -643,9 +643,7 @@ def test_outside_bounds_names_the_lines_of_a_path_with_neither_a_spot_nor_a_boun
 
 
 def test_outside_bounds_never_reports_line_zero():
-    outside = adr_numbers.outside_bounds(
-        {"a.md": "x\n"}, {"a.md": "y\n", "b.md": "z\n"}, _bounds()
-    )
+    outside = adr_numbers.outside_bounds({"a.md": "x\n"}, {"a.md": "y\n", "b.md": "z\n"}, _bounds())
     assert outside and all(line > 0 for _, line in outside)
 
 

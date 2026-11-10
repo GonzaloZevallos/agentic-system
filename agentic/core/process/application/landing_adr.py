@@ -22,7 +22,7 @@ from pathlib import Path
 
 from ..domain import landing, rules
 from ..domain import landing as landing_rules
-from ..domain.adr_numbers import DecidedRenaming, outside_bounds
+from ..domain.adr_numbers import DecidedRenaming, kept_spots, outside_bounds
 from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import RedCheck, describe_checks, red_checks
 from ..domain.roles import DEVELOPER
@@ -32,7 +32,7 @@ from .checkouts import SetupFailed, task_base, task_checkout
 from .landing_fix import _accounting, escalate_adr
 from .landing_plan import LandingContext, adr_decision_at, all_entries
 from .landing_sync import _carries, _message, _owned, merges_cleared, record_landing
-from .ports import GitError
+from .ports import GitError, Workspace
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
 from .resume import state_from
 from .run_role import run_role
@@ -78,21 +78,41 @@ def brief(
         "You may change ONLY these lines (path:line: text), one for one: no line added or "
         "removed. Never choose an ADR number: the new numbers are the moves "
         f"above. Commit your edit.\n\nLines you may change:\n{lines}\n\n"
-        "The system already rewrote the lines below. You may move them inside their file (for "
+        "Every line listed above that the decision leaves unchanged must be named in a line of "
+        "a commit message of the form `keep <path>:<line>`, with the path and the line number "
+        "exactly as listed. If nothing needs editing, make one empty commit "
+        "(`git commit --allow-empty`) whose message has those `keep` lines. A listed line that "
+        "is neither edited nor named by a `keep` line fails your delivery.\n\n"
+        "The system already rewrote the lines below, among them the ones where an `ADR-NNNN` "
+        "or an `ADRs` list was renumbered. You may move them inside their file (for "
         "example, to keep an index sorted) but you must not change their text, and no other "
-        f"line may change in any file.\n\nLines already rewritten:\n{fixed or '- (none)'}\n"
+        f"line may change in any file. Keep line endings and the final newline of every file "
+        f"as they are.\n\nLines already rewritten:\n{fixed or '- (none)'}\n"
     )
+
+
+def _released_entry(raw: Mapping[str, object], head: str) -> Mapping[str, object] | None:
+    """The `escalate_adr` entry of `head` the owner's decision released."""
+    decided = adr_decision_at(all_entries(raw), head)
+    for entry in reversed(all_entries(raw)):
+        if entry.get("step") == "escalate_adr" and entry.get("released_at") == decided:
+            return landing.entry_of(entry)
+    return None
 
 
 def _recorded_moves(raw: Mapping[str, object], head: str) -> list[list[str]] | None:
     """The `moves` the released `escalate_adr` entry of `head` recorded, `None` for one written
     before GH-544 (read with `.get`, never indexed)."""
-    decided = adr_decision_at(all_entries(raw), head)
-    for entry in reversed(all_entries(raw)):
-        if entry.get("step") == "escalate_adr" and entry.get("released_at") == decided:
-            moves = landing.entry_of(entry).get("moves")
-            return moves if moves is not None else None
-    return None
+    entry = _released_entry(raw, head)
+    return entry.get("moves") if entry is not None else None
+
+
+def _recorded_upstream(raw: Mapping[str, object], head: str) -> str | None:
+    """The upstream sha the released `escalate_adr` entry of `head` asked about (GH-579), `None`
+    for one written before: such an entry is applied as it always was."""
+    entry = _released_entry(raw, head)
+    upstream = entry.get("upstream") if entry is not None else None
+    return upstream if isinstance(upstream, str) and upstream else None
 
 
 def _unit(state: TaskState) -> str | None:
@@ -140,6 +160,9 @@ def apply_adr_decision(context: LandingContext) -> None:
 def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Result:
     ports, head = context.ports, context.head
     workspace = ports.workspace
+    asked_upstream = _recorded_upstream(_document(context), head)
+    if asked_upstream is not None and asked_upstream != sha:  # master moved since the question
+        return "stale_moves", None, False, None, None
     try:
         found = adr_decided(ports, sha, head)
     except GitError:
@@ -215,6 +238,8 @@ def _write_and_ask(
     after = {relative: workspace.show(new_head, relative) or "" for relative in changed}
     if bad := outside_bounds(before, after, found):
         return OutOfBounds(bad)
+    if _unanswered_spots(workspace, mechanical, new_head, found.spots):
+        return "role_failed"
     if adr_collision(ports, sha, new_head) is not None:
         return "still_colliding"
     source = {new: old for old, new in renaming.moves}
@@ -230,6 +255,27 @@ def _write_and_ask(
     reviewed = state["subtasks"][unit].get("reviewed_head")
     carried = landing.renumber_carries(combined) and rules.same_commit(reviewed, head)
     return new_head, carried
+
+
+def _unanswered_spots(
+    workspace: Workspace, mechanical: str, new_head: str, spots: Sequence[Spot]
+) -> list[Spot]:
+    """The spots a pass neither edited nor named in a `keep <path>:<line>` line of its commit
+    messages (GH-579; the line numbers are the mechanical commit's). Judged by content: in one
+    file, the lines of one text that are not kept must be fewer at `new_head` than at
+    `mechanical`, as many as the spots left to answer. Empty means every spot is answered."""
+    kept = kept_spots(workspace.commit_messages(mechanical, new_head), spots)
+    unkept: dict[tuple[str, str], list[Spot]] = {}
+    for spot in spots:
+        if (spot[0], spot[1]) not in kept:
+            unkept.setdefault((spot[0], spot[2]), []).append(spot)
+    left: list[Spot] = []
+    for (path, text), group in sorted(unkept.items()):
+        count_before = (workspace.show(mechanical, path) or "").splitlines().count(text)
+        count_after = (workspace.show(new_head, path) or "").splitlines().count(text)
+        if count_before - count_after < len(group):
+            left.extend(group)
+    return left
 
 
 def _developer(
