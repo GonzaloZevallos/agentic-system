@@ -183,8 +183,8 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
         return _refused(context, "stale_moves", "the rule's moves differ from the recorded ones")
     try:
         checkout = task_checkout(state, context.cfg, ports)
-    except SetupFailed:
-        return "role_failed", None, False, None, None
+    except SetupFailed as failed:
+        return _refused(context, "role_failed", f"the task checkout's setup failed ({failed.step})")
     pushed = False
     try:
         with merges_cleared(workspace, checkout.path, _owned(context, state)):
@@ -194,8 +194,8 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
                     return "checks_red", None, False, result.detail, None
                 if isinstance(result, OutOfBounds):
                     return "out_of_bounds", None, False, None, result
-                if isinstance(result, str):
-                    return _refused(context, result, "the step stopped")
+                if isinstance(result, str):  # `_write_and_ask` logged the check that stopped it
+                    return result, None, False, None, None
                 new_head, carried = result
                 workspace.push(checkout.branch, lease=head)
                 pushed = True
@@ -233,11 +233,7 @@ def _write_and_ask(
         target.write_text(text, encoding="utf-8")
     relatives = sorted({old for old, _ in renaming.moves} | set(renaming.texts))
     if workspace.commit_paths(path, relatives, _message(renaming.moves)) is None:
-        context.log(
-            f"agentic: land: {context.task_id}: apply_adr_decision: the mechanical commit "
-            "made no commit"
-        )
-        return "git_failed"
+        return _refused(context, "git_failed", "the mechanical commit made no commit")[0]
     mechanical = workspace.full_head(path)
     if not found.spots:  # rule (d) settled everything: no model pass (GH-582)
         gate = _gate(context, state, path, context.head)
@@ -246,23 +242,23 @@ def _write_and_ask(
         if red is not None:
             return red
         if adr_collision(ports, sha, mechanical) is not None:
-            return "still_colliding"
+            return _refused(context, "still_colliding", "the result still collides with master")[0]
         return mechanical, _carries_to(context, state, unit, found, mechanical, ())
     outcome = _developer(context, state, path, mechanical, found)
     if outcome is not None:
         return outcome
     new_head = workspace.full_head(path)
     if new_head == mechanical:
-        return "role_failed"
+        return _refused(context, "role_failed", "the Developer pass made no commit")[0]
     changed = workspace.changed_paths(mechanical, new_head)
     before = {relative: workspace.show(mechanical, relative) or "" for relative in changed}
     after = {relative: workspace.show(new_head, relative) or "" for relative in changed}
     if bad := outside_bounds(before, after, found):
         return OutOfBounds(bad)
     if _unanswered_spots(workspace, mechanical, new_head, found.spots):
-        return "role_failed"
+        return _refused(context, "role_failed", "a spot was neither edited nor kept")[0]
     if adr_collision(ports, sha, new_head) is not None:
-        return "still_colliding"
+        return _refused(context, "still_colliding", "the result still collides with master")[0]
     return new_head, _carries_to(context, state, unit, found, new_head, changed)
 
 
@@ -399,7 +395,7 @@ def _developer(
     # Paid whatever came of it: the cost and the run, never a section or a failure.
     ports.documents.save(apply(state_from(_document(context)), state_from(_accounting(patch))))
     if output is None:
-        return "role_failed"
+        return _refused(context, "role_failed", "the Developer pass delivered nothing")[0]
     if any(not row["passed"] for row in gate.results or []):
         return CheckedRed(red_checks(gate.results or []))
     return None
@@ -473,9 +469,12 @@ def _finish(
         return
     context.ports.documents.save({**current, "landing": resolved})
     record_landing(context, resolved)
-    context.log(f"agentic: land: {context.task_id}: apply_adr_decision {outcome}, asking again")
     if outcome == "no_collision" or context.facts.adr_collision is None:
+        context.log(
+            f"agentic: land: {context.task_id}: apply_adr_decision {outcome}, not asking again"
+        )
         return
+    context.log(f"agentic: land: {context.task_id}: apply_adr_decision {outcome}, asking again")
     asked = [
         *resolved,
         landing.entry_of(

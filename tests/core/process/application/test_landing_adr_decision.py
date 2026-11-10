@@ -13,6 +13,7 @@ import pytest
 
 from agentic.core.process.application import landing, landing_adr, landing_plan
 from agentic.core.process.application.adr_collision import adr_collision, adr_decided
+from agentic.core.process.application.checkouts import SetupFailed
 from agentic.core.process.application.landing_adr import brief
 from agentic.core.process.application.landing_plan import entries as plan_entries
 from agentic.core.process.application.ports import (
@@ -1137,3 +1138,18 @@ def test_gh_582_the_question_says_the_rule_rewrites_the_row_when_no_spot_is_left
     assert "The rule rewrites these lines itself" in question
     assert f"`{INDEX}:2`" in question
     assert "Fix by hand" not in question and "no model pass" in question
+
+
+def test_gh_582_a_setup_failure_is_role_failed_and_the_log_names_it(tmp_path, monkeypatch):
+    ports, _, paths = _gh_652_world(tmp_path)
+
+    def broken(*_):
+        raise SetupFailed("agentic/GH-5", "install", "make install", "boom")
+
+    monkeypatch.setattr(landing_adr, "task_checkout", broken)
+
+    _, lines = _round(tmp_path, ports, paths=paths)
+
+    assert _apply_entry(ports)["outcome"] == "role_failed"
+    assert any("the task checkout's setup failed (install) -> role_failed" in x for x in lines)
+    assert ports.workspace.pushes == [] and ports.runner.calls == []
