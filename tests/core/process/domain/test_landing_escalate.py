@@ -147,6 +147,7 @@ def _applied(outcome="applied", head=H1, decision_at=T2, **over) -> dict:
         "outcome": outcome,
         "moves": [list(m) for m in MOVES],
         "bounds": landing.ADR_EDIT_BOUNDS,
+        "gate_tier": "delivery",  # GH-585: a checks_red without one gives its slot back
         **over,
     }
 
@@ -270,6 +271,7 @@ def test_a_failed_decision_then_its_new_question_resolved_is_none_again():
         "out_of_bounds",
         "role_failed",
         "checks_red",
+        "checks_timeout",
         "still_colliding",
         "stale_moves",
         "git_failed",
