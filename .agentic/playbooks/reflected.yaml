@@ -763,3 +763,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-579
+  GH-582@review:
+    cost_usd: 0.1094
