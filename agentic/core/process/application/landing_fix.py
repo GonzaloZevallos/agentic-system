@@ -433,15 +433,19 @@ def _moves_lines(moves: Sequence[tuple[str, str]]) -> str:
 
 
 def _red_blocks(red_checks: Sequence[Mapping[str, object]]) -> list[tuple[str, str, list[str]]]:
-    """The recorded red checks as (name, kind, tail) to show, `kind` being `red` or
-    `recovered`; whatever is not shaped like one is skipped (a document is edited by hand)."""
+    """The recorded red checks as (name, kind, tail) to show, `kind` being `red`, `timed_out` (a
+    still-red check whose last failing row timed out, GH-585) or `recovered`; whatever is not
+    shaped like one is skipped (a document is edited by hand)."""
     blocks: list[tuple[str, str, list[str]]] = []
     for check in red_checks:
         name, tail = check.get("name"), check.get("tail")
         if not isinstance(name, str) or not name:
             continue
         lines = [line for line in tail if isinstance(line, str)] if isinstance(tail, list) else []
-        blocks.append((name, "recovered" if check.get("recovered") is True else "red", lines))
+        kind = "recovered" if check.get("recovered") is True else "red"
+        if kind == "red" and check.get("timed_out") is True:
+            kind = "timed_out"
+        blocks.append((name, kind, lines))
     return blocks
 
 
@@ -485,6 +489,7 @@ def adr_collision_reason(
     out_of_bounds_more: int = 0,
     spots: Sequence[tuple[str, int]] = (),
     rewrites: Sequence[tuple[str, int]] = (),
+    timeout_s: float | None = None,
 ) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
@@ -507,7 +512,11 @@ def adr_collision_reason(
     spot: given only then, the question says the rule rewrites them and that a `Decision:` applies
     that after the checks, with no model pass (same `path:line` rows and cap as the spots); without
     them, or when nothing could be computed, the text says "Fix by hand" as ever. After a
-    `git_failed` line one more says that a new decision retries."""
+    `git_failed` line one more says that a new decision retries. After a `checks_timeout` line
+    (GH-585) come the checks that timed out (`red_checks` with `timed_out` true), the timeout in
+    seconds (`timeout_s`, when given), that no slot was spent and nothing was pushed, and that the
+    product can move the check out of its `delivery_checks` or give it more time in
+    `check_timeouts` before a new decision; the decision is still offered as `slots_left` says."""
     if isinstance(found, Ambiguous) and not found.moves:
         what = (
             f"The branch has ADR files that share a number ({found.reason}): {found.detail}. "
@@ -537,7 +546,15 @@ def adr_collision_reason(
         what += f"\nThe last attempt to apply your decision ended `{failed}`; nothing was pushed."
         if failed == "git_failed":
             what += "\nA git operation failed (the log names it); a new `Decision:` retries it."
-    blocks = _red_blocks(red_checks) if failed == "checks_red" else []
+    blocks = _red_blocks(red_checks) if failed in ("checks_red", "checks_timeout") else []
+    if failed == "checks_timeout":
+        slow = ", ".join(f"`{name}`" for name, kind, _ in blocks if kind == "timed_out")
+        within = f" after {timeout_s:.0f} s" if timeout_s is not None else ""
+        what += (
+            f"\nChecks timed out{within} and none failed ({slow or 'none recorded'}); the "
+            "attempt spent no decision slot. The product can move the check out of its "
+            "`delivery_checks` or give it more time in `check_timeouts` before you decide again."
+        )
     if failed == "out_of_bounds":
         what += _out_of_bounds_text(out_of_bounds_lines, out_of_bounds_more)
     if failed == "checks_red" and not blocks:
@@ -574,6 +591,12 @@ def adr_collision_reason(
         for i, (name, kind, lines) in enumerate(blocks):
             if kind == "recovered":
                 parts.append(f"`{name}` failed, then passed on rerun; nothing was pushed.")
+            elif kind == "timed_out" and not lines:
+                parts.append(f"`{name}` timed out, no last lines were recorded.")
+            elif kind == "timed_out" and i < kept:
+                parts.append(f"`{name}` timed out, last lines:\n\n{presubmit.fence_tail(lines)}")
+            elif kind == "timed_out":
+                parts.append(f"`{name}` timed out, last lines omitted")
             elif not lines:
                 parts.append(f"`{name}`, no last lines were recorded.")
             elif i < kept:
@@ -685,6 +708,7 @@ def escalate_adr(context: LandingContext) -> None:
                 spots=spots,
                 rewrites=rewrites,
                 red_checks=detail,
+                timeout_s=context.cfg.check_timeout_s,
                 red_more=more if isinstance(more, int) and more > 0 else 0,
                 out_of_bounds_lines=(
                     [item for item in rows if isinstance(item, dict)]
