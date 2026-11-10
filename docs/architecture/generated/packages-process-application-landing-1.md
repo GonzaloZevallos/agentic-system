@@ -53,4 +53,5 @@ graph TD
     m_application__landing_fix --> g_application__lifecycle
     m_application__landing_fix --> g_application__support
     m_application__landing_fix --> g_pkg__domain
+    m_application__landing_fix --> m_application__adr_collision
 ```
