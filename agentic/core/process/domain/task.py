@@ -420,6 +420,49 @@ def add_shadow_reviews(existing: list[ShadowRecord], new: list[ShadowRecord]) ->
     return list(joined.values())
 
 
+ReviewScope = Literal["carried", "resolution", "full"]
+ScopeCause = Literal[
+    "first",
+    "no_merge",
+    "clean",
+    "resolved",
+    "rewritten",
+    "own_before_merge",
+    "foreign_merge",
+    "unreadable",
+    "no_remerge_diff",
+    "over_cap",
+    "renumber",
+]
+
+
+class ReviewScopeRecord(TypedDict):
+    """What one review pass of a unit covered (GH-589, ADR-0089): `unit` the subtask, `head`
+    the head the pass moved `reviewed_head` to, `base` the accepted tip it was measured from
+    (`None` for a first review), `scope` carried / resolution / full and `cause` the single
+    condition of `landing.review_scope` that gave it, `at` the ISO 8601 UTC instant. Written
+    only through `landing.scope_patch`; never read by a verdict, a gate or a landing step."""
+
+    unit: str
+    head: str
+    base: str | None
+    scope: ReviewScope
+    cause: ScopeCause
+    at: str
+
+
+def add_review_scopes(
+    existing: list[ReviewScopeRecord], new: list[ReviewScopeRecord]
+) -> list[ReviewScopeRecord]:
+    """The review scopes of `existing` and `new` as one list: append-only, one row per
+    `(unit, head, base)` (a retried write adds nothing), the first seen kept whole, in
+    arrival order. The only way `review_scopes` is ever written."""
+    joined: dict[tuple[str, str, str | None], ReviewScopeRecord] = {}
+    for row in (*existing, *new):
+        joined.setdefault((row["unit"], row["head"], row["base"]), row)
+    return list(joined.values())
+
+
 class ArmAssignment(TypedDict):
     """`TaskState.assignment`: the arm a product's experiment gave the task (GH-470)."""
 
@@ -1733,6 +1776,10 @@ class TaskState(TaskInput, total=False):
     # and a document written before them has none. Nothing but the shadow use case writes them.
     shadow_reviews: Annotated[list[ShadowRecord], add_shadow_reviews]
     shadow_wait_s: float
+    # What each review pass of a unit covered (GH-589, `ReviewScopeRecord`), `add_review_scopes`.
+    # Read with `.get("review_scopes", [])`: a document written before this field has none, and
+    # no verdict, gate or landing step reads it. Only `landing.scope_patch` writes it.
+    review_scopes: Annotated[list[ReviewScopeRecord], add_review_scopes]
 
 
 def _reducers() -> dict[str, object]:
@@ -1819,6 +1866,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             held_shadows = {r["subtask"] for r in old}
             if fresh_shadows := [r for r in value if r["subtask"] not in held_shadows]:
                 patch[key] = fresh_shadows
+        elif reducer is add_review_scopes:
+            seen = {(r["unit"], r["head"], r["base"]) for r in old}
+            if added_scopes := [r for r in value if (r["unit"], r["head"], r["base"]) not in seen]:
+                patch[key] = added_scopes
         elif reducer is add_restorations:
             held = {r["archive"] for r in old}
             if fresh := [r for r in value if r["archive"] not in held]:

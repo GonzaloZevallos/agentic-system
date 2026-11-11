@@ -241,6 +241,11 @@ def render(
         # (`rules.live_landing`). Written only when there is one, so every document without
         # a restore is byte-identical to one written before.
         **({"restorations": r} if (r := state.get("restorations")) else {}),
+        # What each review pass of a unit covered (GH-589, ADR-0089): carried, resolution or
+        # full, with its cause. Written only when there is a row, so every document of a task
+        # reviewed before it is byte-identical to one written before; parsed back under the
+        # same name. Nothing reads it to decide.
+        **({"review_scopes": r} if (r := state.get("review_scopes")) else {}),
         # The shadow reviews of the integration review under `review_mode` `single` (GH-473) and
         # how long the node waited for them: written only when set, so every document under
         # another mode is byte-identical to one written before them. Parsed back under the

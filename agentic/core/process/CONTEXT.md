@@ -295,6 +295,11 @@ En el código se llama `Presubmit`, el port, y `CheckoutPresubmit`, la implement
 _Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 _Campo_: presubmit check — Software Engineering at Google, cap. 20: "an analysis that blocks committing a pending code change". required status check en GitHub, gated commit en Azure DevOps, admission control (validating, no mutating) en Kubernetes
 
+**Alcance de revisión**:
+Lo que cubre una pasada del revisor sobre una cabeza que avanzó desde la última aprobada, y lo decide una sola función pura, `landing.review_scope`, desde la cadena de primer padre de la punta aceptada a la cabeza (ADR-0089). Tiene tres valores. `carried`: el merge del upstream fue limpio y no hay commits propios después, la aprobación avanza sin revisión. `resolution`: hay una resolución de merge o commits propios después del primer merge, el revisor recibe solo ese texto (el remerge-diff de cada merge más el diff de los posteriores) y su veredicto cubre solo eso. `full`: todo lo demás, con la causa que lo dio (`first`, `no_merge`, `rewritten`, `own_before_merge`, `foreign_merge`, `unreadable`, `no_remerge_diff`, `over_cap`, `renumber`). Cada pasada deja una fila en `review_scopes` (`{unit, head, base, scope, cause, at}`), que escribe solo `landing.scope_patch` en el mismo patch que mueve `reviewed_head`; nada decide a partir de ella.
+En el código se llama `ReviewScope` y `ScopeCause`, el veredicto `ScopeVerdict`, y `RESOLUTION_LINES_MAX` el tope del texto.
+_Avoid_: acarreo (el valor `carried` es un alcance, no el concepto), revisión parcial
+
 **Conjunto de verificadores**:
 Los verificadores de solo lectura de la cabeza integrada que aplican a la tarea (`full_checks`, `copy_review`, `final_validation`, `qa_performance`), que arrancan juntos en el nodo `verify` sobre la misma cabeza; `deliver` espera a todos. Una devolución lleva los hallazgos de todos los que devolvieron (`returned_by` el primero en orden fijo, `returned_with` los demás), un hermano que escala conserva los deltas de los demás, y los archivos de capacidad que aprobó `final_validation` se commitean una sola vez al final (`pending_close_docs`), solo si ninguno devolvió (ADR-0084).
 En el código se llama `verify` (`application/verifiers.py`) y `rules.combined_return`.
