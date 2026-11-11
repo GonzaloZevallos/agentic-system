@@ -219,7 +219,7 @@ Desde GH-588 solo compite la Cabeza del orden de aterrizaje de cada producto; lo
 _Avoid_: turno, cola de merges
 
 **Orden de aterrizaje**:
-La lista única, por producto, de los pull requests entregados y abiertos, del aprobado hace más tiempo al más reciente (`landing_queued_at`, que escribe `deliver` si falta y `restore`, y solo el reinicio del aterrizaje borra). Solo el primero se integra, se revisa y aterriza; los demás esperan aprobados, con el `merge-tree` de solo lectura como único chequeo (ADR-0089). Es lo que decide `domain/landing_order.head`, y nadie más ordena.
+La lista única, por producto, de los pull requests entregados y abiertos, del aprobado hace más tiempo al más reciente (`landing_queued_at`, que escribe `deliver` si falta y `restore`, y solo el reinicio del aterrizaje borra). Solo el primero se integra, se revisa y aterriza; los demás esperan aprobados, con el `merge-tree` de solo lectura como único chequeo (ADR-0090). Es lo que decide `domain/landing_order.head`, y nadie más ordena.
 _Avoid_: merge queue, merge train, cola de merges
 _Campo_: GitHub merge queue, GitLab merge trains, Bors («not rocket science rule»), Zuul
 
@@ -666,7 +666,7 @@ Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decis
 _Avoid_: rescate, merge manual
 _Campo_: sin término de arte
 
-Desde GH-588 el aterrizaje actúa solo sobre la Cabeza del orden de aterrizaje: un pull request que espera su turno solo recibe `wait` o `none` (ADR-0089).
+Desde GH-588 el aterrizaje actúa solo sobre la Cabeza del orden de aterrizaje: un pull request que espera su turno solo recibe `wait` o `none` (ADR-0090).
 
 **Tramo aterrizado**:
 Un prefijo estricto, en orden topológico y cerrado bajo `depends_on`, de las subtareas aprobadas de una tarea cuyo aterrizaje se agotó, que el sistema arma desde master y mergea en un pull request propio (`closes_issue=False`, fuera de `pull_request`) antes de reiniciar (ADR-0048, addenda GH-297). Cada unidad del tramo cumple `review_carries` contra lo que master cambió y ninguna toca las rutas del trabajo del integrador; lo que queda sigue en el pull request principal. Si ningún tramo es posible, el reinicio dice por qué con un motivo cerrado (`single_unit`, `no_clean_slice`, `slice_refused`, `unreadable`).

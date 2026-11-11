@@ -53,7 +53,7 @@ sequenceDiagram
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto (`poll.evaluate_landing_order`, que ordena con
    `agentic/core/process/domain/landing_order.py:head`): los demás PR esperan aprobados, con una
-   sola línea `waiting`, y un `merge-tree` limpio no pide ningún pase (ADR-0089). Luego
+   sola línea `waiting`, y un `merge-tree` limpio no pide ningún pase (ADR-0090). Luego
    `agentic/core/process/application/poll.py:execute` lanza `agentic land --issue N`. El
    verbo es `agentic/cli.py:_land`; corre bajo el lock de la tarea y registrado con el tipo
    de corrida con que se lo lanzó (`land_checks` si no gasta modelo, `land_model` si sí).
