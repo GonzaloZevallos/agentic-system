@@ -6,7 +6,16 @@ from typing import Any, cast, get_args
 import pytest
 
 from agentic.core.process.application.ports import BranchPullRequest
-from agentic.core.process.domain import ci, document, retakes, roles, rules, schemas, task
+from agentic.core.process.domain import (
+    ci,
+    document,
+    retakes,
+    roles,
+    rules,
+    schemas,
+    size_budget,
+    task,
+)
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.docs import Docs, conflict_line
@@ -3131,6 +3140,46 @@ def test_estimate_fits_decides_on_the_larger_of_the_estimate_and_the_history_ref
     # A reference below the estimate changes nothing.
     assert rules.estimate_fits(100, 10, 50.0)
     assert not rules.estimate_fits(160, 10, 50.0)
+
+
+def _size(hand_files=1, hand_lines=1, test_lines=0):
+    return size_budget.PlanSize(hand_files, hand_lines, test_lines)
+
+
+def test_a_plan_with_no_size_is_judged_by_the_cost_line_and_the_legacy_file_limit():
+    # The shape of a plan or document written before the size fields (invariant 3).
+    assert rules.estimate_fits(150, size_budget.LEGACY_FILES, None, None)
+    assert not rules.estimate_fits(150, size_budget.LEGACY_FILES + 1, None, None)
+    assert not rules.estimate_fits(150.01, 1, None, None)
+
+
+def test_a_size_replaces_the_file_count_and_the_cost_line_stays_a_secondary_check():
+    # 90 files in total would be refused by the legacy limit; the size is what is judged.
+    assert rules.estimate_fits(20, 90, None, _size())
+    assert not rules.estimate_fits(150.01, 1, None, _size())
+    assert not rules.estimate_fits(100, 1, 200.0, _size())
+
+
+def test_declared_hand_written_files_are_judged_times_the_floor_factor_rounded_up():
+    ratio = size_budget.UNPROVEN_RATIO
+    ten = size_budget.HAND_FILES * 2 // 3
+    assert size_budget.HAND_FILES == ten * ratio  # 10 files judged 15: on the cap, fits
+    assert rules.estimate_fits(20, 1, None, _size(hand_files=ten))
+    # 11 files judged 16.5, rounded up to 17: over the cap.
+    assert not rules.estimate_fits(20, 1, None, _size(hand_files=ten + 1))
+    # A smaller factor lets the same declaration through.
+    assert rules.estimate_fits(20, 1, None, _size(hand_files=ten + 1), 1.0)
+
+
+def test_declared_hand_written_lines_are_judged_the_same_way():
+    lines = int(size_budget.HAND_LINES / size_budget.UNPROVEN_RATIO)
+    assert rules.estimate_fits(20, 1, None, _size(hand_lines=lines))
+    assert not rules.estimate_fits(20, 1, None, _size(hand_lines=lines + 1))
+
+
+def test_test_lines_get_no_factor_and_their_cap_is_their_own():
+    assert rules.estimate_fits(20, 1, None, _size(test_lines=size_budget.TEST_LINES))
+    assert not rules.estimate_fits(20, 1, None, _size(test_lines=size_budget.TEST_LINES + 1))
 
 
 def test_estimate_cap_is_twice_the_estimate():

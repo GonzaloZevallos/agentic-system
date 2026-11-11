@@ -56,7 +56,8 @@ from .roles import (
 )
 from .schemas import FitDecision, TaskType
 from .scratch import INODE_FLOOR, SpaceReading
-from .size_budget import LEGACY_FILES
+from . import size_budget
+from .size_budget import LEGACY_FILES, UNPROVEN_RATIO, PlanSize
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -5894,13 +5895,27 @@ ESTIMATE_CAP_FACTOR = 2
 PART_WHOLE_FACTOR = 2
 
 
-def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> bool:
+def estimate_fits(
+    cost_usd: float,
+    files: int,
+    reference_usd: float | None,
+    size: PlanSize | None = None,
+    ratio: float = UNPROVEN_RATIO,
+) -> bool:
     """Whether a plan's estimate is small enough to build as one task. It decides on the
     larger of the declared cost and the history's reference (the p90 of the bucket, when
     the bucket has one), never on the declared cost alone: the same model estimates and
-    plans, so the estimate cannot be its own judge."""
+    plans, so the estimate cannot be its own judge. That cost line is the secondary check;
+    with a declared `size` the primary one is the size budget, the hand-written figures
+    judged times the floor `ratio` (`size_budget.judged`). A plan with no size, written
+    before the size fields, is judged as it always was: the cost line and `files` against
+    the legacy file limit."""
     cost = cost_usd if reference_usd is None else max(cost_usd, reference_usd)
-    return cost <= SPLIT_COST_USD and files <= LEGACY_FILES
+    if cost > SPLIT_COST_USD:
+        return False
+    if size is None:
+        return files <= LEGACY_FILES
+    return size_budget.fits(size_budget.judged(size, ratio))
 
 
 # The marker every issue the partition opens carries (ADR-0054): an HTML comment, invisible

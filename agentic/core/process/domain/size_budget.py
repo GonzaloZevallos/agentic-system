@@ -13,6 +13,7 @@ generated globs in, and whoever runs git hands the `NumstatRow`s in.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -174,13 +175,25 @@ def measure(rows: Sequence[NumstatRow], generated_globs: Sequence[str]) -> Actua
     return ActualSize(hand_files, hand_lines, test_lines, generated_files)
 
 
+def judged(size: PlanSize, ratio: float = UNPROVEN_RATIO) -> PlanSize:
+    """The declared figures as the budget judges them: hand-written files and lines times the
+    floor `ratio`, rounded up, test lines as declared (the floor raises, it never refuses)."""
+    return PlanSize(_scaled(size.hand_files, ratio), _scaled(size.hand_lines, ratio), size.test_lines)
+
+
+def crossed(size: PlanSize) -> tuple[str, ...]:
+    """The fields of `size` over their cap, by the name the record stores them under."""
+    over = (
+        (HAND_FILES_FIELD, size.hand_files > HAND_FILES),
+        (HAND_LINES_FIELD, size.hand_lines > HAND_LINES),
+        (TEST_LINES_FIELD, size.test_lines > TEST_LINES),
+    )
+    return tuple(name for name, is_over in over if is_over)
+
+
 def fits(size: PlanSize) -> bool:
     """Whether the figures are within the three caps. The floor factor is the caller's."""
-    return (
-        size.hand_files <= HAND_FILES
-        and size.hand_lines <= HAND_LINES
-        and size.test_lines <= TEST_LINES
-    )
+    return not crossed(size)
 
 
 def divergence(planned: PlanSize, actual: ActualSize) -> Divergence:
@@ -213,6 +226,12 @@ def budget_text(ratio: float | None) -> str:
 
 def _names(names: Sequence[str]) -> str:
     return ", ".join(f"`{name}`" for name in names)
+
+
+def _scaled(figure: int, ratio: float) -> int:
+    # Rounded to 9 places first, so a float product that lands a hair over a whole number
+    # (2.0000000000000004) is not pushed to the next one by the ceiling.
+    return math.ceil(round(figure * ratio, 9))
 
 
 def _ratio(actual: int, planned: int) -> float | None:

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentic.core.process.domain import rules, schemas
+from agentic.core.process.domain import rules, schemas, size_budget
 from agentic.core.process.domain.schemas import (
     PRD,
     Answers,
@@ -13,6 +13,7 @@ from agentic.core.process.domain.schemas import (
     Verdict,
 )
 
+ZERO_SIZE = {"hand_files": 0, "hand_lines": 0, "test_lines": 0}
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
 
@@ -609,9 +610,9 @@ def test_parts_with_a_checklist_still_answer_to_the_cost_and_file_rules():
 def test_a_bad_checklist_item_next_to_parts_is_refused():
     plan = _split(400.0, 90, tracker_checklist=["Post the verdict\nand close it"])
     with pytest.raises(ValueError, match="one non-empty line"):
-        schemas.validate(schemas.TechPlan, plan, {})
+        schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})
     good = _split(400.0, 90, tracker_checklist=CHECKLIST)
-    assert schemas.validate(schemas.TechPlan, good, {})["tracker_checklist"] == CHECKLIST
+    assert schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **good}, {})["tracker_checklist"] == CHECKLIST
 
 
 def test_a_plan_with_no_subtasks_no_parts_and_no_checklist_is_still_refused():
@@ -637,6 +638,7 @@ def test_a_checklist_item_must_be_one_line():
                     "markdown": "m",
                     "estimated_cost_usd": 1,
                     "estimated_files": 0,
+                    **ZERO_SIZE,
                     "ci_required": [],
                     "ci_none_reason": "The work is on the tracker.",
                     "tracker_checklist": [bad],
@@ -686,7 +688,7 @@ def test_an_old_plan_without_performance_parses_with_it_empty():
     old = _plan("m", "api")
     assert "performance" not in old
     assert (
-        schemas.validate(TechPlan, {**old, "estimated_cost_usd": 3, "estimated_files": 4}, {})[
+        schemas.validate(TechPlan, {**old, "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}, {})[
             "performance"
         ]
         == []
@@ -712,6 +714,7 @@ def test_a_convened_plan_round_trips_through_validate():
         **_plan("m", "perf"),
         "estimated_cost_usd": 3,
         "estimated_files": 4,
+        **ZERO_SIZE,
         "performance": [_scenario()],
     }
     data = schemas.validate(TechPlan, raw, {})
@@ -740,13 +743,13 @@ def test_a_convened_plan_round_trips_through_validate():
     ],
 )
 def test_a_scenario_with_a_bad_unit_source_volume_or_basis_is_refused(bad):
-    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}
     with pytest.raises(ValueError):
         schemas.validate(TechPlan, {**raw, "performance": [_scenario(**bad)]}, {})
 
 
 def test_a_plan_cannot_name_a_scenario_or_a_metric_twice():
-    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}
     with pytest.raises(ValueError, match="twice"):
         schemas.validate(TechPlan, {**raw, "performance": [_scenario(), _scenario()]}, {})
     budget = _scenario()["budgets"][0]
@@ -794,7 +797,7 @@ def _budget(**over) -> dict:
     ],
 )
 def test_the_budget_and_scenario_checks_refuse_what_they_guard(scenario, message):
-    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}
     with pytest.raises(ValueError, match=message):
         schemas.validate(TechPlan, {**raw, "performance": [scenario]}, {})
 
@@ -812,6 +815,7 @@ def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_t
             **_plan("m", "perf"),
             "estimated_cost_usd": 3,
             "estimated_files": 4,
+        **ZERO_SIZE,
             "performance": [_scenario()],
         },
         {},
@@ -893,7 +897,7 @@ def _ci_plan(**more):
         for key, value in _plan("m", "api").items()
         if key not in ("ci_required", "ci_none_reason")
     }
-    return {**base, "estimated_cost_usd": 3, "estimated_files": 4, **more}
+    return {**base, "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE, **more}
 
 
 def test_a_plan_with_checks_and_no_reason_is_valid():
@@ -1067,7 +1071,7 @@ def _finding(**more):
 
 def test_a_plan_size_is_a_non_negative_cost_and_file_count():
     ok = schemas.validate(
-        schemas.PlanSize, {"markdown": "", "estimated_cost_usd": 12.5, "estimated_files": 4}, {}
+        schemas.PlanSize, {"markdown": "", "estimated_cost_usd": 12.5, "estimated_files": 4, **ZERO_SIZE}, {}
     )
     assert ok["estimated_cost_usd"] == 12.5 and ok["estimated_files"] == 4
     for bad in (
@@ -1113,6 +1117,7 @@ def _requiring(*paths: str) -> dict:
         "markdown": "m",
         "estimated_cost_usd": 1,
         "estimated_files": 0,
+        **ZERO_SIZE,
         "ci_required": [],
         "ci_none_reason": "The work is on the tracker.",
         "tracker_checklist": ["Post the verdict"],
@@ -1190,3 +1195,75 @@ def test_a_review_without_a_revision_validates_and_a_cited_one_needs_a_one_line_
     ):
         with pytest.raises(ValueError):
             schemas.Review.model_validate(_review(**bad))
+
+
+# The size budget in the plan check (GH-592): a plan that declares its hand-written size is
+# judged on it, through `rules.estimate_fits`; one written before the fields is judged as before.
+
+
+def _sized(cost, hand_files, hand_lines, test_lines=0, files=3):
+    return {
+        **_estimated(cost, files),
+        "hand_files": hand_files,
+        "hand_lines": hand_lines,
+        "test_lines": test_lines,
+    }
+
+
+def test_a_plan_with_no_size_fields_fits_and_is_refused_exactly_as_before():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    check(_estimated(150.0, size_budget.LEGACY_FILES))
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_estimated(150.0, size_budget.LEGACY_FILES + 1))
+    assert schemas.declared_size(_estimated(20.0, 3)) is None
+
+
+def test_a_declared_size_is_judged_times_the_floor_and_the_total_files_no_longer_count():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    check(_sized(20.0, 10, 100, files=90))  # 10 x 1.5 = 15 hand-written files: on the cap
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_sized(20.0, 11, 100))  # 11 x 1.5 = 16.5, judged 17
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_sized(20.0, 5, 267))  # 267 x 1.5 = 400.5, judged 401
+    check(_sized(20.0, 5, 266))
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_sized(20.0, 5, 100, size_budget.TEST_LINES + 1))
+
+
+def test_the_floor_factor_is_a_parameter_of_the_check():
+    check = schemas.plan_check_for(_history(1, []), 0.0, size_ratio=1.0)
+    check(_sized(20.0, 15, 400, size_budget.TEST_LINES))
+
+
+def test_a_waived_fit_still_lets_an_oversized_plan_build_whole():
+    check = schemas.plan_check_for(_history(1, []), 0.0, fit_waived=True)
+    check(_sized(20.0, 30, 900))
+
+
+def test_plan_fits_reports_the_declared_and_the_judged_size_and_what_was_crossed():
+    fit = schemas.plan_fits(_sized(20.0, 11, 100, 700), _history(1, []))
+    assert not fit.fits
+    assert fit.size == size_budget.PlanSize(11, 100, 700)
+    assert fit.judged_size == size_budget.PlanSize(17, 150, 700)
+    assert fit.crossed == ("hand_files", "test_lines")
+    old = schemas.plan_fits(_estimated(20.0, 3), _history(1, []))
+    assert (old.size, old.judged_size, old.crossed) == (None, None, ())
+
+
+def test_a_fresh_plan_output_without_the_size_fields_is_refused_by_the_schema():
+    sized = _sized(20.0, 3, 50)
+    good = {**sized, "invariants": [], "integration": "", "markdown": "### Solution"}
+    assert schemas.validate(TechPlan, good, {})["hand_files"] == 3
+    for field in ("hand_files", "hand_lines", "test_lines"):
+        without = {k: v for k, v in good.items() if k != field}
+        with pytest.raises(ValueError, match=field):
+            schemas.validate(TechPlan, without, {})
+    with pytest.raises(ValueError, match="hand_lines"):
+        schemas.validate(TechPlan, {**good, "hand_lines": -1}, {})
+
+
+def test_the_size_field_descriptions_are_rendered_from_the_budget():
+    fields = schemas.TechPlan.model_fields
+    assert str(size_budget.HAND_FILES) in (fields["hand_files"].description or "")
+    assert str(size_budget.HAND_LINES) in (fields["hand_lines"].description or "")
+    assert str(size_budget.TEST_LINES) in (fields["test_lines"].description or "")

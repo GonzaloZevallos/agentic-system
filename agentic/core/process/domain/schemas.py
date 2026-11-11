@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 
-from . import ci_workflow, plan_view
+from . import ci_workflow, plan_view, size_budget
 from .ci_workflow import WorkflowNames
 from .cost_history import History, Raise, bucket_median, raised_estimate, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
@@ -533,6 +533,23 @@ class TechPlan(RoleOutput):
         description="The files the pull request will show as changed (its `changedFiles`): "
         "code, tests, ADRs, the glossary, lockfiles and generated files all count"
     )
+    hand_files: int = Field(
+        ge=0,
+        description="The hand-written non-test files the pull request will change: a task may "
+        f"declare at most {size_budget.HAND_FILES}. Generated paths, lockfiles and tests never "
+        "count; docs, ADRs, the README and prompt files do",
+    )
+    hand_lines: int = Field(
+        ge=0,
+        description="The hand-written non-test lines the pull request will add: a task may "
+        f"declare at most {size_budget.HAND_LINES}. Generated paths, lockfiles and tests never "
+        "count",
+    )
+    test_lines: int = Field(
+        ge=0,
+        description=f"The test lines the pull request will add: at most {size_budget.TEST_LINES}. "
+        "A path is a test by the directory or the file name the size budget in your prompt names",
+    )
     subtasks: list[Subtask] = Field(
         default_factory=list,
         description="The subtasks, in the order to start them. A task that is a part of a "
@@ -985,12 +1002,32 @@ def _words(
 class FitDecision:
     """Whether a plan's estimate fits one task, with the figures the decision used: the
     declared cost and files and the history's reference, so a text about the decision
-    quotes what was decided on and never recomputes it (ADR-0054)."""
+    quotes what was decided on and never recomputes it (ADR-0054). A plan that declares its
+    hand-written size (GH-592) also carries it as declared (`size`) and as judged after the
+    floor (`judged_size`), and the fields of the size budget the judged figures crossed;
+    all three are empty for a plan written before the size fields."""
 
     fits: bool
     cost_usd: float
     files: int
     reference_usd: float | None
+    size: size_budget.PlanSize | None = None
+    judged_size: size_budget.PlanSize | None = None
+    crossed: tuple[str, ...] = ()
+
+
+def declared_size(data: dict[str, Any]) -> size_budget.PlanSize | None:
+    """The size a plan declares, or `None` for a plan written before the size fields: that
+    one is judged by its cost and its total files alone."""
+    names = (
+        size_budget.HAND_FILES_FIELD,
+        size_budget.HAND_LINES_FIELD,
+        size_budget.TEST_LINES_FIELD,
+    )
+    figures = [data.get(name) for name in names]
+    if not all(isinstance(figure, int) for figure in figures):
+        return None
+    return size_budget.PlanSize(figures[0], figures[1], figures[2])
 
 
 # What a refusal of a plan that does not fit says after the action, once: the split is the
@@ -1023,13 +1060,19 @@ class FitBucket:
 
 
 def plan_fits(
-    data: dict[str, Any], history: History, bucket: FitBucket | None = None
+    data: dict[str, Any],
+    history: History,
+    bucket: FitBucket | None = None,
+    size_ratio: float = size_budget.UNPROVEN_RATIO,
 ) -> FitDecision:
     """The one place that decides whether a plan's estimate fits one task: the larger of
     the declared cost and the history's reference for the plan's own size (its parts, else
     its subtasks) against the limits `rules.estimate_fits` holds. With a `bucket`, the size
     is the run's pinned one (`FitBucket.size`); subtasks still answer to the reference of
-    their own count, so the pin never makes a plan fit that its own bucket refuses."""
+    their own count, so the pin never makes a plan fit that its own bucket refuses.
+
+    A plan that declares its hand-written size is judged on it times `size_ratio`, the floor
+    factor (GH-592); one that does not is judged on its total files, as before."""
 
     # `rules` imports this module for `TaskType`, so the one function that decides the fit
     # is imported where it is used, never copied here (ADR-0054).
@@ -1045,7 +1088,19 @@ def plan_fits(
             references.append(reference_usd(history, own))
         known = [value for value in references if value is not None]
         reference = max(known) if known else None
-    return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
+    size = declared_size(data)
+    if size is None:
+        return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
+    judged = size_budget.judged(size, size_ratio)
+    return FitDecision(
+        estimate_fits(cost, files, reference, size, size_ratio),
+        cost,
+        files,
+        reference,
+        size,
+        judged,
+        size_budget.crossed(judged),
+    )
 
 
 def _single_check(subtasks: Sequence[Any], integration: str) -> None:
@@ -1094,6 +1149,7 @@ def plan_check_for(
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
     plan_shape: str = DEFAULT_PLAN_SHAPE,
+    size_ratio: float = size_budget.UNPROVEN_RATIO,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1123,7 +1179,10 @@ def plan_check_for(
     Under `plan_shape` `single` (GH-471) a plan of shape (A) must have exactly one subtask
     and no integration, so the integration step the arm exists to remove never runs. It is
     judged after the fit, so a plan over the line is still sent toward parts first, and
-    never for shape (B) or (C): a split or a tracker-only plan is not refused for its shape."""
+    never for shape (B) or (C): a split or a tracker-only plan is not refused for its shape.
+
+    A plan that declares its hand-written size (GH-592) is judged on it times `size_ratio`,
+    the floor factor of the size budget; a plan with no size fields is judged as before."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import TRACKER_WITH_PARTS
@@ -1164,7 +1223,7 @@ def plan_check_for(
         words = _words(declared, raised, files, (spent_usd, median))
         if subtasks:
             bucket.observe(len(subtasks))
-        fits = plan_fits(judged, history, bucket).fits
+        fits = plan_fits(judged, history, bucket, size_ratio).fits
         if parts:
             if fit_waived:
                 raise ValueError(
