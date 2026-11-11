@@ -223,16 +223,30 @@ def test_a_waiting_task_that_owes_a_resume_is_not_a_land_candidate():
     assert lands == []
 
 
-def test_a_stranded_diagnose_is_never_a_land_candidate_nor_the_head():
+def test_a_stranded_diagnose_that_waits_is_not_a_land_candidate():
+    ports = _stranded_ports()
+    _ready(ports, 7)
+    _queued(ports, 7, OLD)
+    _queued(ports, 5, NEW)
+
+    found, lands, lines = _round(ports, now=NOW)
+
+    assert found == [7]  # the older pull request leads
+    assert lands == []  # the stranded diagnose waits for its turn like any other
+    assert "agentic: poll: auto-merge #7 -> waiting" not in " ".join(lines)
+
+
+def test_a_stranded_diagnose_is_the_systems_and_leads_when_it_is_the_oldest():
     ports = _stranded_ports()
     _ready(ports, 7)
     _queued(ports, 7, NEW)
     _queued(ports, 5, OLD)
 
-    found, lands, _ = _round(ports, now=NOW)
+    found, lands, lines = _round(ports, now=NOW)
 
-    assert found == [7]  # the stranded diagnose is a person's: it does not lead
-    assert lands == []
+    assert found == []
+    assert lands == [rules.LandCandidate(5, "land_model")]  # `land` frees it (GH-257)
+    assert "agentic: poll: auto-merge #7 -> waiting (clean) behind #5" in lines
 
 
 def test_an_unstarted_pass_lands_once_its_turn_comes():

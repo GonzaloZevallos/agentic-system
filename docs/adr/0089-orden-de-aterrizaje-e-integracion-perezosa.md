@@ -20,7 +20,7 @@ Un PR que espera recibe de `landing_step` solo `wait` o `none`, y el poller no l
 
 ### Tareas de una persona
 
-`HUMAN_OWNED_REFUSALS` (`domain/landing.py`) es la única lista de negativas que dejan la tarea a una persona; `landing_step` y `waits_on_human` la leen. Una Cabeza escalada (o con `needs-human`, o parada) no bloquea: sale del orden y la segunda aterriza. Un diagnóstico atascado (`stranded`) también es de una persona para el orden: `waits_on_human` lo recibe como entrada y no es Cabeza. La liberación de un dueño entra por la misma función: el documento de una escalación liberada se lee sin `escalated`.
+`HUMAN_OWNED_REFUSALS` (`domain/landing.py`) es la única lista de negativas que dejan la tarea a una persona; `landing_step` y `waits_on_human` la leen. Una Cabeza escalada (o con `needs-human`, o parada) no bloquea: sale del orden y la segunda aterriza. Un diagnóstico atascado (`stranded`, GH-257: nadie fue avisado) es del sistema: `land` lo libera y lo reintenta, así que `waits_on_human` lee su documento sin `escalated`, igual que el de una escalación que el dueño ya liberó (el documento como lo dejaría `landing_plan.release_patch`). Ambos entran por el documento que lee la misma función; el poller no repite su definición.
 
 ### Ancla del turno
 

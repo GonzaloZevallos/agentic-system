@@ -883,23 +883,47 @@ def _released(
     raw: TaskState,
     assessed: MergeAssessment | None,
     stopped: bool,
-) -> bool:
-    """Whether an escalated task's owner already answered, so the task is the system's again:
-    the release `_landing_step` asks for the head, read the same way (`landing_plan.release`)."""
+) -> TaskState | None:
+    """The document of an escalated task whose owner already answered, as the release `land`
+    carries out for the head would leave it (`landing_plan.release_patch`), or `None`: the task
+    is the system's again. The release is the one `_landing_step` asks, read the same way."""
     if cfg is None or assessed is None or stopped or not raw.get("escalated"):
-        return False
+        return None
     facts, decision = assessed.facts, assessed.decision
     refusal = decision.reason
     if decision.kind != "refuse" or refusal is None or facts.pr_head is None:
-        return False
+        return None
     if refusal in landing_rules.HUMAN_OWNED_REFUSALS:
-        return False
+        return None
     kind = landing_plan.step_for(raw, refusal, facts, turn="head").kind
     if not landing_plan.release_asked(raw, kind, refusal=refusal, facts=facts):
-        return False
-    return landing_plan.release(
+        return None
+    outcome = landing_plan.release(
         ports, cfg, task_id, raw, number, head=facts.pr_head, upstream=facts.current_master
-    ).released
+    )
+    patch = landing_plan.release_patch(
+        raw, outcome, facts.current_master, datetime.now(UTC).isoformat()
+    )
+    return apply(raw, patch) if patch else None
+
+
+def _system_view(
+    ports: Ports,
+    cfg: Configuration | None,
+    task_id: str,
+    number: int,
+    raw: TaskState,
+    assessed: MergeAssessment | None,
+    stopped: bool,
+    stranded: bool,
+) -> TaskState:
+    """The document `waits_on_human` reads: `raw`, except that an escalation that is not a
+    person's -- a stranded diagnose nobody was told of (GH-257, `land` retries it on the
+    calendar), or one the owner released -- is read as not escalated. Everything else, the
+    definition of a person's task included, is `waits_on_human`'s."""
+    if stranded:
+        return {key: value for key, value in raw.items() if key != "escalated"}
+    return _released(ports, cfg, task_id, number, raw, assessed, stopped) or raw
 
 
 def _member(
@@ -921,19 +945,14 @@ def _member(
     stopped = record is not None and record.stopped_deliberately
     refusal = decision.reason if decision is not None and decision.kind == "refuse" else None
     stranded = assessed is not None and landing_plan.stranded_now(ports, task_id, raw)
-    # The owner's answer to an escalation enters `waits_on_human` through the document it reads:
-    # a released escalation is the system's again, so it is read as not escalated.
-    state = raw
-    if not stranded and _released(ports, cfg, task_id, number, raw, assessed, stopped):
-        state = {key: value for key, value in raw.items() if key != "escalated"}
     waits = landing_rules.waits_on_human(
-        state,
+        _system_view(ports, cfg, task_id, number, raw, assessed, stopped, stranded),
         pr_head,
         refusal,
         spent=landing_plan.spent(raw, pr_head, None),
         stopped=stopped,
         needs_human=assessed is not None and _needs_human(ports, number),
-        stranded=stranded,
+        stranded=False,
     )
     return landing_order.Member(number, _stamp(raw), live_pass, waits)
 
