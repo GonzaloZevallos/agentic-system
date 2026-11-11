@@ -121,7 +121,8 @@ def test_restart_closes_the_open_rows_of_the_subtask_and_forgets_its_session():
     after = apply(state, restart.restart_patch(state, "a", PAIR, "b", "h"))
 
     status = {row["subtask"]: row["status"] for row in rules.findings_rows(after)}
-    assert status == {"a": "fixed", "b": "open"}
+    # Discarded, not fixed: nothing fixed them, so a measurement must not credit a fix.
+    assert status == {"a": "dismissed", "b": "open"}
     assert rules.last_session(after, "Developer", "Developer: a") is None
     assert rules.last_session(state, "Developer", "Developer: a") == "s1"
 
@@ -177,7 +178,7 @@ def _fail(reason: str) -> Any:
 def test_escalation_writes_the_cause_with_the_class_and_the_log():
     patch = rules.escalation("ci", "no verdict", cause="ci_gh_unavailable")
     assert patch["escalation_cause"] == "ci_gh_unavailable"
-    assert "escalation_cause" not in rules.escalation("ci", "no verdict")
+    assert rules.escalation("ci", "no verdict")["escalation_cause"] is None
     assert rules.logged(patch, at="t")["pause_log"] == [
         {"kind": "escalation", "value": "ci", "at": "t", "cause": "ci_gh_unavailable"}
     ]
@@ -263,3 +264,29 @@ def test_a_command_the_cli_does_not_have_is_rejected_by_the_check():
 def test_every_mechanical_cause_has_a_row():
     for cause in CAUSES:
         assert any(key[1] == cause for key in rules.ESCALATION_PROMPTS)
+
+
+def test_a_record_a_reviewer_closed_still_reads_fixed_beside_a_discarded_one():
+    state = _state()
+    state["findings"] = [_finding(version=1), _finding(version=2)]
+    state["settled_findings"] = ["x.py:1"]
+    after = apply(state, restart.restart_patch(state, "a", PAIR, "b", "h"))
+    assert [row["status"] for row in rules.findings_rows(after)] == ["fixed"]
+
+
+def test_no_mechanical_cause_outlives_its_pause():
+    mechanical = apply({"id": "T"}, rules.escalation("ci", "m", cause="ci_run_unfinished"))
+    assert mechanical["escalation_cause"] == "ci_run_unfinished"
+    judged = apply(mechanical, rules.escalation("returns", "again"))
+    assert judged["escalation_cause"] is None
+    again = apply(judged, rules.escalation("ci", "m", cause="ci_gh_unreadable"))
+    resumed = apply(again, rules.resumed({"escalated": "m", **again}, None, at="t"))
+    assert resumed["escalation_cause"] is None and resumed["escalated"] is None
+
+
+def test_the_restarted_returns_prompt_asks_for_a_decision_and_names_existing_commands():
+    from agentic.core.process.domain import escalation_prompts
+
+    question, recommended, options = escalation_prompts.restarted_returns_prompt()
+    assert "brief" in question and recommended in options
+    assert "Decision:" in recommended

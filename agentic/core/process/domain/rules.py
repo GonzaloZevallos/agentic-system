@@ -86,6 +86,7 @@ from .task import (
     FailureReason,
     FindingCategory,
     FindingRecord,
+    FindingStatus,
     FinishedPatch,
     FullChecksRecord,
     LapsePauseEntry,
@@ -402,23 +403,31 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
             rows[key] = record
         elif record["subtask"] not in row["subtask"].split(", "):
             rows[key] = {**row, "subtask": f"{row['subtask']}, {record['subtask']}"}
+
+    def discarded(record: FindingRecord) -> bool:
+        """A clean restart threw this record away: it is not a fix, so it never reads as one."""
+        return record["subtask"] in restarted and record["version"] < restarted[record["subtask"]]
+
+    def closed(row: FindingRecord, key: tuple[str, str]) -> FindingStatus:
+        """`fixed` when a reviewer, an approval or a check closed the row, `dismissed` when the
+        only thing that closed it is a restart discarding its subtask's attempt, `open` else."""
+        if _norm(row["location"]) in settled:
+            return "fixed"
+        records = open_records[key]
+        by_word = [
+            _covered(record, key, approved)
+            or qa_settles(record, qa_approved)
+            or full_checks_settles(record, green)
+            or (key in plan_settled and record["version"] < plan_settled[key])
+            for record in records
+        ]
+        if not all(word or discarded(record) for word, record in zip(by_word, records)):
+            return "open"
+        return "fixed" if any(by_word) else "dismissed"
+
     return [
-        {**row, "status": "fixed"}
-        if row["status"] == "open"
-        and (
-            _norm(row["location"]) in settled
-            or all(
-                _covered(record, key, approved)
-                or qa_settles(record, qa_approved)
-                or full_checks_settles(record, green)
-                or (key in plan_settled and record["version"] < plan_settled[key])
-                or (
-                    record["subtask"] in restarted
-                    and record["version"] < restarted[record["subtask"]]
-                )
-                for record in open_records[key]
-            )
-        )
+        {**row, "status": status}
+        if row["status"] == "open" and (status := closed(row, key)) != "open"
         else row
         for key, row in rows.items()
     ]
@@ -733,12 +742,9 @@ def escalation(
     literal with `**`, the same shape `apply` folds any patch into the whole state.
 
     `cause` (GH-593) is the closed `MechanicalCause` the raise site knew from the error's class
-    and recorded type, never from `reason`'s text; it is written only when given, so a judgment
-    escalation is exactly what it always was."""
-    patch: EscalationPatch = {"escalated": reason, "escalation_class": cls}
-    if cause is not None:
-        patch["escalation_cause"] = cause
-    return patch
+    and recorded type, never from `reason`'s text. It is always written, `None` for a judgment
+    escalation, so a mechanical cause of an earlier pause cannot outlive it."""
+    return {"escalated": reason, "escalation_class": cls, "escalation_cause": cause}
 
 
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> dict[str, Any]:
@@ -3179,6 +3185,7 @@ def resumed(
     patch: dict[str, Any] = {
         "escalated": None,
         "escalation_class": None,
+        "escalation_cause": None,
         "status": resumed_status(state),
         "questions_for_human": [],
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
