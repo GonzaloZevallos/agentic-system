@@ -767,3 +767,5 @@ tasks:
     cost_usd: 0.1094
   GH-585@review:
     cost_usd: 0.0846
+  GH-589@review:
+    cost_usd: 0.0959

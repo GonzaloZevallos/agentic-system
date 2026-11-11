@@ -1494,3 +1494,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-10T12:26:50.332+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: 'For each plan invariant, check every call in the path that can raise: what state is left if it fails before assignment? Add a test where that exact call fails and assert the invariant''s outcome.'
+  confidence: medium
+  seen_in:
+  - GH-589
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-11T18:52:23.958+00:00'
