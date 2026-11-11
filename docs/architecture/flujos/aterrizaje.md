@@ -50,7 +50,10 @@ sequenceDiagram
    el motivo es uno de los rechazos de la tabla del ADR-0048: CI sin terminar o roto,
    hallazgos abiertos, cabeza no revisada, master movido, intentos agotados.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
-   reúne también los candidatos a aterrizar, y
+   reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
+   de cada producto (`poll.evaluate_landing_order`, que ordena con
+   `agentic/core/process/domain/landing_order.py:head`): los demás PR esperan aprobados, con una
+   sola línea `waiting`, y un `merge-tree` limpio no pide ningún pase (ADR-0089). Luego
    `agentic/core/process/application/poll.py:execute` lanza `agentic land --issue N`. El
    verbo es `agentic/cli.py:_land`; corre bajo el lock de la tarea y registrado con el tipo
    de corrida con que se lo lanzó (`land_checks` si no gasta modelo, `land_model` si sí).

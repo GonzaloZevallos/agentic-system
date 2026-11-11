@@ -1122,3 +1122,25 @@ async def test_a_setup_that_fails_escalates_as_ever_and_clears_the_publication_o
     patch = await deliver(OWING, cfg, ports)
     assert patch["escalation_class"] == "setup" and patch["publish_owed"] is None
     _no_longer_owed(ports)
+
+
+async def test_a_delivery_takes_its_place_in_the_landing_order_once_and_a_redelivery_keeps_it(cfg):
+    ports = memory_ports()
+
+    first = await deliver(dict(TASK), cfg, ports)
+    again = await deliver(
+        {**TASK, "pull_request": "https://github.com/o/r/pull/12", **first}, cfg, ports
+    )
+
+    stamp = first["landing_queued_at"]
+    assert stamp
+    assert "landing_queued_at" not in again  # the stamp the state holds stands
+
+
+async def test_a_delivery_that_holds_a_stamp_does_not_rewrite_it(cfg):
+    ports = memory_ports()
+    stamped = {**TASK, "landing_queued_at": "2026-10-01T00:00:00+00:00"}
+
+    patch = await deliver(stamped, cfg, ports)
+
+    assert "landing_queued_at" not in patch

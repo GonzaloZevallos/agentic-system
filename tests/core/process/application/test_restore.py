@@ -556,3 +556,11 @@ def test_a_cut_after_every_step_ends_in_the_state_an_uncut_restore_leaves():
 
     assert snapshot(cut) == snapshot(reference)
     assert cut.workspace.renamed == []
+
+
+def test_a_restored_task_queues_again_at_the_moment_of_the_restoration():
+    world = World(archived_state(landing_queued_at="2026-10-01T00:00:00+00:00"))
+
+    world.run()
+
+    assert world.document()["landing_queued_at"] == NOW

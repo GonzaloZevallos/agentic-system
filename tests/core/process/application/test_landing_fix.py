@@ -596,7 +596,17 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
 
     launcher = FakeLauncher()
     ports = _ports(5)
-    ports.documents.record_closure("GH-5", {"cost_usd": 1.5, "title": "t", "description": "d"})
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "cost_usd": 1.5,
+            "title": "t",
+            "description": "d",
+            "landing_queued_at": "2026-10-14T08:00:00+00:00",
+            "head_since_at": "2026-10-14T09:00:00+00:00",
+            "head_since_head": HEAD,
+        },
+    )
     from agentic.core.process.application.ports import RawResult
     from tests.fakes import ScriptedRunner
 
@@ -644,6 +654,9 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
     closure = ports.documents.closures["GH-5"]
     assert closure["landing_restarts"] == 1
     assert closure["landing_cost_carried"] == pytest.approx(1.9)
+    # GH-588: the fresh run queues again, and its turn is counted from its own head
+    assert closure["landing_queued_at"] is None
+    assert closure["head_since_at"] is None and closure["head_since_head"] is None
     assert [e["step"] for e in spans[0]["landing"]] == ["diagnose"]
     assert spans[0]["landing"][-1]["refusal"] == "merge_failed"
     assert ports.tracker.opened_issues == []

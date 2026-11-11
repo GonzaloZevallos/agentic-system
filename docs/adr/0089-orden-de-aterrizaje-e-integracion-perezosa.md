@@ -20,7 +20,7 @@ Un PR que espera recibe de `landing_step` solo `wait` o `none`, y el poller no l
 
 ### Tareas de una persona
 
-`HUMAN_OWNED_REFUSALS` (`domain/landing.py`) es la única lista de negativas que dejan la tarea a una persona; `landing_step` y `waits_on_human` la leen. Una Cabeza escalada (o con `needs-human`, o parada) no bloquea: sale del orden y la segunda aterriza. Una tarea con un diagnóstico atascado (`stranded`) es del sistema, no de una persona: `land` la reintenta.
+`HUMAN_OWNED_REFUSALS` (`domain/landing.py`) es la única lista de negativas que dejan la tarea a una persona; `landing_step` y `waits_on_human` la leen. Una Cabeza escalada (o con `needs-human`, o parada) no bloquea: sale del orden y la segunda aterriza. Un diagnóstico atascado (`stranded`) también es de una persona para el orden: `waits_on_human` lo recibe como entrada y no es Cabeza. La liberación de un dueño entra por la misma función: el documento de una escalación liberada se lee sin `escalated`.
 
 ### Ancla del turno
 
@@ -32,11 +32,28 @@ El poller (segunda fase de `gather_merges`) es el único que escribe `head_since
 
 ### Negativas y pasos
 
+Cada negativa de `MergeRefusal`, con el paso de la Cabeza (`landing_step` con `turn="head"`) y el de quien espera (`turn="waiting"`). Quien espera nunca llega a un presupuesto, un pase, un tramo ni un reinicio.
+
 | Negativa | Cabeza | Espera |
 | --- | --- | --- |
-| las de `HUMAN_OWNED_REFUSALS` | `none` (y no es Cabeza) | `none` |
-| `not_ready` | `none` | `none` |
-| el resto | la tabla de ADR-0048 | `wait` |
+| `pr_not_open` | `none` (de una persona; no es Cabeza) | `none` |
+| `eval_set` | `none` (de una persona; no es Cabeza) | `none` |
+| `perf_unverified` | `none` (de una persona; no es Cabeza) | `none` |
+| `criteria_over_cap` | `none` (de una persona; no es Cabeza) | `none` |
+| `criteria_unreadable` | `none` (de una persona; no es Cabeza) | `none` |
+| `ci_untrusted_no_dispatch` | `none` (de una persona; no es Cabeza) | `none` |
+| `not_ready` | `none` (aún no está en el aterrizaje) | `none` |
+| `adr_number_taken` | `renumber`, `apply_adr_decision`, `escalate_adr` o `none` | `wait` |
+| `not_approved`, `head_not_reviewed` | `re_review` (o `diagnose` agotado el presupuesto) | `wait` |
+| `open_findings_blocking` | `fix`, `settle` o `escalate_ledger` | `wait` |
+| `open_findings` | `fix_important` o `file_followups_and_land` | `wait` |
+| `eval_set_unreadable`, `ci_missing`, `ci_unreadable` | `wait`; agotada la ventana, `diagnose` o `land_slice` | `wait` |
+| `ci_blocked_by_conflict`, `ci_stale_exhausted`, `attempts_exhausted`, `merge_conflict` | `sync_master` (o `diagnose` agotado el presupuesto) | `wait` |
+| `ci_no_verdict` | `escalate` (o `wait` si ya se liberó) | `wait` |
+| `ci_unknown_names` | `escalate` una vez por (head, nombres), luego `none` | `wait` |
+| `ci_failed`, `checks_failed` | `rerun`, `sync_master`, `fix`, `escalate` o `diagnose` | `wait` |
+| `merge_failed` | `diagnose` o `land_slice` | `wait` |
+| `master_moved` | `wait` | `wait` |
 
 ### Flujo de ADR (GH-579/582/585)
 
@@ -44,7 +61,7 @@ Corre solo para la Cabeza: `adr_number_taken` da `renumber` o `escalate_adr`; un
 
 ### Rendimiento
 
-Las lecturas no crecen: una `assess_merge` y a lo sumo una lectura del issue por tarea entregada, lineales en los PR que esperan; los despachos son O(1) por producto.
+Las lecturas no crecen salvo en una tarea escalada: una `assess_merge` y una lectura del issue por tarea entregada (más los comentarios de un diagnóstico atascado y, en una tarea escalada, la lectura de la liberación, que la Cabeza repite en su paso), lineales en los PR que esperan; los despachos son O(1) por producto.
 
 ### Límites conocidos
 
