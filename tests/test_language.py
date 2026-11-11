@@ -55,6 +55,7 @@ TYPES = {
     "Testigo del checkout": presubmit.witness_refusal,
     "Guarda de esquema": schema_guard,
     "Stack del producto": stack,
+    "Área de riesgo": stack.risk_areas,
     "Brief": knowledge.brief_refusal,
     "Reflector": roles.REFLECTOR,
     "Playbook": playbook.Playbook,

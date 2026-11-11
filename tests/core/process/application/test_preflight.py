@@ -786,6 +786,18 @@ def test_a_refused_merge_inert_glob_refuses_before_spending(stage0):
         declared_stack(replace(ports, stack=stack_), "abc123")
 
 
+def test_an_invalid_risk_areas_declaration_refuses_before_spending(stage0):
+    """The Puerta de arranque reads `risk_areas` with the rest of the stack: a broken one stops
+    the run before any role is paid for, and so does a resume against the task's base."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack_ = MemoryStack()
+    stack_.risk_areas_error = "stack.yaml: 'data-migration' under `risk_areas` is a built-in id"
+    with pytest.raises(ValueError, match=r"under `risk_areas`"):
+        preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
+    with pytest.raises(ValueError, match=r"under `risk_areas`"):
+        declared_stack(replace(ports, stack=stack_), "abc123")
+
+
 DOCS = Docs(generate="make docs", paths=("docs/architecture/generated/**",))
 DOCS_SLUGS = ("tech_lead", "tech_lead_platform", "tech_lead_review", "tech_lead_review_light")
 

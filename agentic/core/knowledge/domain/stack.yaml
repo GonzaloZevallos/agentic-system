@@ -93,6 +93,16 @@ checks:
 # merge_inert:
 #   - "docs/assets/**"
 #
+# `risk_areas`: optional (GH-591). The areas of risk this product adds to the six the system
+# ships, for the PjM's classification. Each has an `id` (a lowercase kebab-case slug, unique,
+# never a built-in id), a one-line `description` and, optional, `paths`: fnmatch globs, read
+# but matched by nothing yet. An invalid entry refuses the run at preflight.
+#
+# risk_areas:
+#   - id: invoicing
+#     description: Invoice totals, taxes and payouts
+#     paths: ["app/billing/**"]
+#
 # `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
 # adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
 # denial carries verbatim. One that was already in the file is not the task's. What a
