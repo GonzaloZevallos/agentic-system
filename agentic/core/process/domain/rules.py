@@ -17,7 +17,16 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, restart, retakes
+from . import (
+    adr_numbers,
+    ci,
+    escalation_prompts,
+    exempt_queue,
+    merge_ci,
+    presubmit,
+    restart,
+    retakes,
+)
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -107,6 +116,7 @@ from .task import (
 # them through `rules`, like any other rule.
 on_return_limit = restart.on_return_limit
 remaining_changes = restart.remaining_changes
+ESCALATION_PROMPTS = escalation_prompts.ESCALATION_PROMPTS
 
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
 PRD_RETURN: ChangeCategory = "definition"
@@ -402,7 +412,10 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
                 or qa_settles(record, qa_approved)
                 or full_checks_settles(record, green)
                 or (key in plan_settled and record["version"] < plan_settled[key])
-                or record["version"] < restarted.get(record["subtask"], 0)
+                or (
+                    record["subtask"] in restarted
+                    and record["version"] < restarted[record["subtask"]]
+                )
                 for record in open_records[key]
             )
         )
@@ -1391,7 +1404,9 @@ def last_session(state: TaskState, role_name: str, section: str) -> str | None:
     floor = state.get("session_floor", {}).get(section, 0)
     for run in reversed(state.get("runs", [])):
         if run["role"] == role_name and run.get("section", run["role"]) == section:
-            return None if run.get("version", 0) <= floor else run.get("session_id") or None
+            if floor and run.get("version", 0) <= floor:
+                return None
+            return run.get("session_id") or None
     return None
 
 
