@@ -1856,7 +1856,9 @@ class MemoryTracker:
         self.closed_issues.append(task_id)
 
     def issue_state(self, number: int) -> IssueState:
-        if number in self.state_errors:
+        # An issue nobody scripted reads like one `gh` could not read: a `ValueError`, the
+        # real adapter's failure, not a `KeyError` no caller catches.
+        if number in self.state_errors or number not in self.states:
             raise ValueError(f"gh issue view {number} failed: scripted")
         return self.states[number]
 
