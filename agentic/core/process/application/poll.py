@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Literal, assert_never, get_args
+from typing import Literal, Protocol, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
@@ -831,6 +831,14 @@ def awaiting_merge(ports: Ports) -> bool:
     return False
 
 
+class OrderLock(Protocol):
+    """The two reads of a run lock the landing order needs; a `RunLock` is one."""
+
+    def read(self, task_id: str) -> LockRecord | None: ...
+
+    def refusal(self, task_id: str) -> str | None: ...
+
+
 @dataclass(frozen=True)
 class OrderEntry:
     """One task of the round's first phase (GH-588): what was read of it and, when a pull request
@@ -869,7 +877,7 @@ def _needs_human(ports: Ports, number: int) -> bool:
 
 def _member(
     ports: Ports,
-    lock: RunLock,
+    lock: OrderLock,
     task_id: str,
     number: int,
     raw: TaskState,
@@ -902,7 +910,7 @@ def evaluate_landing_order(
     ports: Ports,
     eval_set: frozenset[int] | None,
     current_master: str,
-    lock: RunLock,
+    lock: OrderLock,
     busy: frozenset[str] = frozenset(),
 ) -> LandingRound:
     """The first phase (GH-588): `assess_merge` over every task with a pull request and no

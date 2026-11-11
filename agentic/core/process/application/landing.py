@@ -75,7 +75,7 @@ def land(
 
     lock.acquire(task_id, "land")
     try:
-        _note_order(task_id, ports, lock, upstream, eval_set, log)
+        _note_order(task_id, ports, upstream, eval_set, log)
         return _land(
             task_id,
             cfg,
@@ -97,10 +97,20 @@ def land(
         lock.release(task_id)
 
 
+class _Unlocked:
+    """No task is held by a process of its own: the land asking is the only one, and `busy`
+    names it."""
+
+    def read(self, task_id: str) -> None:
+        return None
+
+    def refusal(self, task_id: str) -> None:
+        return None
+
+
 def _note_order(
     task_id: str,
     ports: Ports,
-    lock: RunLock,
     upstream: Upstream,
     eval_set: frozenset[int] | None,
     log: Callable[[str], None],
@@ -111,8 +121,10 @@ def _note_order(
     number = ports.inbox.issue_of(task_id)
     if number is None or upstream.sha is None:
         return
-    # The task's own lock is ours: it reads as a task at work, and a task at work is a member.
-    head = evaluate_landing_order(ports, eval_set, upstream.sha, lock).head
+    # The task itself is ours: it is at work, and a task at work is a member.
+    head = evaluate_landing_order(
+        ports, eval_set, upstream.sha, _Unlocked(), frozenset({task_id})
+    ).head
     if head is not None and head != number:
         log("not the head of the landing order: run by the owner")
 
