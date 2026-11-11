@@ -160,7 +160,7 @@ def _behind(tmp_path, **document):
 # ---- the five behaviours -----------------------------------------------------------------
 
 
-def test_a_branch_behind_master_clean_and_disjoint_carries_the_verdict_and_merges(tmp_path):
+def test_a_branch_behind_master_merged_clean_carries_the_verdict_and_merges(tmp_path):
     ports, world = _behind(tmp_path)
     _diffs(ports, merged=("upstream.py",), own=("feature.py",))
 
