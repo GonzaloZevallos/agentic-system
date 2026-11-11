@@ -98,3 +98,16 @@ def test_what_the_upstream_gained_after_the_branch_point_is_not_counted(product)
 def test_an_unknown_revision_raises_a_git_error(product):
     with pytest.raises(GitError):
         GitWorkspace(product, IDENTITY).numstat("nope", "HEAD")
+
+
+def test_a_branch_that_merged_the_upstream_in_still_counts_only_its_own_rows(product):
+    git("checkout", "-q", "-b", "task", cwd=product)
+    (product / "mine.py").write_text("a\nb\n")
+    commit(product, "mine")
+    git("checkout", "-q", "master", cwd=product)
+    (product / "theirs.py").write_text(BODY)
+    upstream = commit(product, "upstream moved")
+    git("checkout", "-q", "task", cwd=product)
+    git("merge", "-q", "--no-edit", "master", cwd=product)
+    head = git("rev-parse", "HEAD", cwd=product)
+    assert numstat(product, upstream, head) == {"mine.py": (2, 0)}

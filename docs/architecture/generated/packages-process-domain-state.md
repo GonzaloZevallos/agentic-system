@@ -36,6 +36,7 @@ graph TD
     m_domain__rules --> g_domain__roles
     m_domain__rules --> g_pkg__agentic__shared
     m_domain__rules --> m_domain__document
+    m_domain__rules --> m_domain__size_budget
     m_domain__rules --> m_domain__task
     m_domain__size_budget --> g_domain__checks
     m_domain__task --> g_domain__checks

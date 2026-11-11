@@ -18,7 +18,7 @@ import pytest
 from agentic.core.knowledge.domain import knowledge, knowledge_index, owner_rules
 from agentic.core.process.adapters.filesystem.prompts import FilesystemPrompts
 from agentic.core.process.application.preflight import PLACEHOLDERS
-from agentic.core.process.domain import playbook, roles, rules
+from agentic.core.process.domain import playbook, roles, rules, size_budget
 
 REPO = Path(__file__).resolve().parent.parent
 DECISIONS = REPO / "docs" / "decisiones-del-dueño.md"
@@ -128,7 +128,7 @@ def test_every_rozan_names_an_adr_in_force():
 
 # The entry that states each number the code enforces, and the constant it must equal.
 STATED = {
-    "D-d3cd64da": (("150", rules.SPLIT_COST_USD), ("40", rules.SPLIT_FILES)),
+    "D-d3cd64da": (("150", rules.SPLIT_COST_USD), ("40", size_budget.LEGACY_FILES)),
     "D-99072874": (("300", rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD),),
     "D-5c088d42": (("300", rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD),),
 }

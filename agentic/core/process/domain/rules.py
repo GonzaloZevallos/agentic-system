@@ -56,6 +56,7 @@ from .roles import (
 )
 from .schemas import FitDecision, TaskType
 from .scratch import INODE_FLOOR, SpaceReading
+from .size_budget import LEGACY_FILES
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -3067,14 +3068,14 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
             if fit.reference_usd is not None
             else "the history has no reference for this many subtasks"
         )
-        limits = f"{SPLIT_COST_USD} USD and {SPLIT_FILES} files"
+        limits = f"{SPLIT_COST_USD} USD and {LEGACY_FILES} files"
         crossed: list[str] = []
         if fit.reference_usd is not None and fit.reference_usd > max(fit.cost_usd, SPLIT_COST_USD):
             crossed.append(f"the history's reference is over the {SPLIT_COST_USD} USD limit")
         elif fit.cost_usd > SPLIT_COST_USD:
             crossed.append(f"the declared cost is over the {SPLIT_COST_USD} USD limit")
-        if fit.files > SPLIT_FILES:
-            crossed.append(f"the declared files are over the {SPLIT_FILES} file limit")
+        if fit.files > LEGACY_FILES:
+            crossed.append(f"the declared files are over the {LEGACY_FILES} file limit")
         verdict = (
             "; ".join(crossed)
             if crossed
@@ -5886,7 +5887,6 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
 # factor of the safety cap. They live here and nowhere else; every other module asks
 # `estimate_fits` or `estimate_cap` and never repeats a number.
 SPLIT_COST_USD = 150
-SPLIT_FILES = 40
 ESTIMATE_CAP_FACTOR = 2
 # How far over the cost line a part of a split is still built whole without asking
 # (ADR-0054, addendum): twice the line. A separate constant from the cap's factor, which
@@ -5900,7 +5900,7 @@ def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> b
     the bucket has one), never on the declared cost alone: the same model estimates and
     plans, so the estimate cannot be its own judge."""
     cost = cost_usd if reference_usd is None else max(cost_usd, reference_usd)
-    return cost <= SPLIT_COST_USD and files <= SPLIT_FILES
+    return cost <= SPLIT_COST_USD and files <= LEGACY_FILES
 
 
 # The marker every issue the partition opens carries (ADR-0054): an HTML comment, invisible
