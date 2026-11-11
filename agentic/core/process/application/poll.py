@@ -918,21 +918,23 @@ def _member(
     decision = assessed.decision if assessed is not None else None
     pr_head = facts.pr_head if facts is not None else None
     record = lock.read(task_id) if assessed is not None else None
-    common = {
-        "spent": landing_plan.spent(raw, pr_head, None),
-        "stopped": record is not None and record.stopped_deliberately,
-        # A stranded diagnose is the system's: `land` frees it and retries it on the calendar,
-        # so it is no reason to keep the task out of the order.
-        "stranded": False,
-    }
+    stopped = record is not None and record.stopped_deliberately
     refusal = decision.reason if decision is not None and decision.kind == "refuse" else None
-    waits = landing_rules.waits_on_human(raw, pr_head, refusal, needs_human=False, **common)
-    if waits and assessed is not None and landing_plan.stranded_now(ports, task_id, raw):
-        waits = False  # a stranded diagnose is escalated but the system's: `land` retries it
-    if waits and _released(ports, cfg, task_id, number, raw, assessed, bool(common["stopped"])):
-        waits = False  # the owner answered: the release is `land`'s to carry out
-    if not waits and assessed is not None:
-        waits = _needs_human(ports, number)
+    stranded = assessed is not None and landing_plan.stranded_now(ports, task_id, raw)
+    # The owner's answer to an escalation enters `waits_on_human` through the document it reads:
+    # a released escalation is the system's again, so it is read as not escalated.
+    state = raw
+    if not stranded and _released(ports, cfg, task_id, number, raw, assessed, stopped):
+        state = {key: value for key, value in raw.items() if key != "escalated"}
+    waits = landing_rules.waits_on_human(
+        state,
+        pr_head,
+        refusal,
+        spent=landing_plan.spent(raw, pr_head, None),
+        stopped=stopped,
+        needs_human=assessed is not None and _needs_human(ports, number),
+        stranded=stranded,
+    )
     return landing_order.Member(number, _stamp(raw), live_pass, waits)
 
 
@@ -966,7 +968,11 @@ def evaluate_landing_order(
         try:
             assessed = assess_merge(ports, task_id, raw, number, eval_set, current_master)
         except StackUnreadable as unreadable:
-            entries.append(OrderEntry(task_id, number, raw, unreadable, None))
+            # Its pull request is open and recorded: still a member (an unreadable base is
+            # no reason to let a younger pull request pass it).
+            member = _member(ports, cfg, lock, task_id, number, raw, None)
+            entries.append(OrderEntry(task_id, number, raw, unreadable, member))
+            members.append(member)
             continue
         member = None
         if not isinstance(assessed, Abandoned):
@@ -1094,8 +1100,9 @@ def gather_merges(
                 f"agentic: poll: auto-merge #{number} -> waiting ({reading}) behind #{round_.head}"
             )
             continue
-        # The head's CI wait counts from this round on (`head_since_*`, read by `with_ci`).
-        _anchor_turn(ports, task_id, raw, facts, now)
+        if turn == "head":
+            # The head's CI wait counts from this round on (`head_since_*`, read by `with_ci`).
+            _anchor_turn(ports, task_id, raw, facts, now)
         if assessed.conflict_unread:
             head = pull_request.head_oid if pull_request is not None else None
             out.append(f"agentic: poll: auto-merge #{number} -> conflict unread ({head})")

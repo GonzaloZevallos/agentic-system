@@ -75,7 +75,7 @@ def land(
 
     lock.acquire(task_id, "land")
     try:
-        _note_order(task_id, ports, upstream, eval_set, log)
+        _note_order(task_id, cfg, ports, upstream, eval_set, log)
         return _land(
             task_id,
             cfg,
@@ -110,6 +110,7 @@ class _Unlocked:
 
 def _note_order(
     task_id: str,
+    cfg: Configuration,
     ports: Ports,
     upstream: Upstream,
     eval_set: frozenset[int] | None,
@@ -123,7 +124,7 @@ def _note_order(
         return
     # The task itself is ours: it is at work, and a task at work is a member.
     head = evaluate_landing_order(
-        ports, eval_set, upstream.sha, _Unlocked(), frozenset({task_id}), None
+        ports, eval_set, upstream.sha, _Unlocked(), frozenset({task_id}), cfg
     ).head
     if head is not None and head != number:
         log("not the head of the landing order: run by the owner")
