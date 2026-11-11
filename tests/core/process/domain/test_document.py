@@ -5,7 +5,15 @@ import pytest
 import yaml
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, legacy_names, presubmit, roles, rules, task
+from agentic.core.process.domain import (
+    document,
+    legacy_names,
+    presubmit,
+    roles,
+    rules,
+    size_budget,
+    task,
+)
 from agentic.core.process.domain import landing as landing_rules
 from tests.gh150_stranded import GH150_STRANDED
 
@@ -1249,6 +1257,36 @@ def test_the_estimate_keys_round_trip_when_the_state_carries_them():
     assert parsed["estimate_revisions"] == [{"cost_usd": 150.0, "source": "human"}]
     assert parsed["proposed_estimate"] == 180.0
     assert parsed["actual_files"] == 31
+
+
+def test_the_size_records_round_trip_through_the_document():
+    planned = size_budget.PlanSize(9, 300, 450)
+    actual = size_budget.ActualSize(11, 340, 500, 3)
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    text = document.render({**state, "planned_size": planned, "actual_size": actual})
+    assert yaml.safe_load(text.split("---")[1])[size_budget.PLANNED_KEY] == {
+        "hand_files": 9,
+        "hand_lines": 300,
+        "test_lines": 450,
+    }
+    parsed = document.parse(text)
+    assert parsed["planned_size"] == planned
+    assert parsed["actual_size"] == actual
+
+
+def test_a_document_without_size_records_renders_and_parses_without_them():
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    text = document.render(state)
+    for key in (size_budget.PLANNED_KEY, size_budget.ACTUAL_KEY):
+        assert f"\n{key}:" not in text
+        assert key not in document.parse(text)
+
+
+def test_a_size_record_that_is_not_whole_is_dropped_on_parse_not_guessed():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d"}).replace(
+        "\n---\n", "\nplanned_size:\n  hand_files: 3\n---\n", 1
+    )
+    assert "planned_size" not in document.parse(raw)
 
 
 _SLICE = {"branch": "agentic/GH-9.slice-1", "units": ["api"], "head": "a" * 40, "pr": "u/pull/5"}

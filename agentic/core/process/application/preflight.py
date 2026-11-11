@@ -8,7 +8,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
-from ..domain import docs, rules
+from ..domain import docs, rules, size_budget
 from ..domain.roles import ROLES
 from ..domain.run_check import resolve_wall
 from .checkouts import task_base
@@ -34,6 +34,7 @@ PLACEHOLDERS = {
     "checks": "- `tests`: `<the product's own command>`",
     "split_part": "",
     "plan_shape_rule": rules.plan_shape_text("free"),
+    "size_budget": size_budget.budget_text(size_budget.UNPROVEN_RATIO),
     # Empty for a product that declares no `docs`, so the gate renders the prompts as they ship.
     "docs_plan": docs.plan_text(None),
     "docs_review": docs.review_text(None),

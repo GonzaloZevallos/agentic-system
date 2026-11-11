@@ -33,6 +33,7 @@ from typing import (
 
 from .ci_push import PushKind
 from .plan_route import CriticState, Route
+from .size_budget import ActualSize, PlanSize
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
 
@@ -1576,6 +1577,11 @@ class TaskState(TaskInput, total=False):
     fit_question: Annotated[bool, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
+    # The size the plan declared and the size the delivery measured (GH-592), as the records
+    # `size_budget` defines; the document writes them under `size_budget`'s own keys. Absent
+    # on a document from before them, which reads as "no size", never as zero.
+    planned_size: Annotated[PlanSize, last]
+    actual_size: Annotated[ActualSize, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
     # Rules of the plan every subtask honours (issue #42): the one channel between

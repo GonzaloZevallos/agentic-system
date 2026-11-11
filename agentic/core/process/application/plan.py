@@ -19,7 +19,16 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import ci_workflow, cost_history, docs, plan_route, plan_view, rules, schemas
+from ..domain import (
+    ci_workflow,
+    cost_history,
+    docs,
+    plan_route,
+    plan_view,
+    rules,
+    schemas,
+    size_budget,
+)
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -110,6 +119,7 @@ async def _interview_and_plan(
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
+        size_budget=size_budget.budget_text(size_budget.UNPROVEN_RATIO),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -398,6 +408,7 @@ async def _cold_draft(
         proposed_invariants=proposed_invariants,
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
+        size_budget=size_budget.budget_text(size_budget.UNPROVEN_RATIO),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -565,6 +576,8 @@ def _delivered(
             "cost_usd": output.data["estimated_cost_usd"],
             "files": output.data["estimated_files"],
         }
+        if (declared := schemas.declared_size(output.data)) is not None:
+            written["planned_size"] = declared
         if floored is not None:
             written["estimate"]["declared_usd"] = floored.raised.declared_usd
             written["sections"][section] = (

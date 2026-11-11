@@ -2588,6 +2588,9 @@ def planned(
     estimated_cost_usd: float = 20.0,
     estimated_files: int = 5,
     tracker_checklist: Sequence[str] = (),
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
 ) -> RawResult:
     items: list[dict[str, object]] = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
@@ -2604,6 +2607,9 @@ def planned(
             "integration": integration,
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
             **({"tracker_checklist": list(tracker_checklist)} if tracker_checklist else {}),
@@ -2631,6 +2637,9 @@ def planned_tracker_only(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": 0,
+            "hand_files": 0,
+            "hand_lines": 0,
+            "test_lines": 0,
             "ci_required": [],
             "ci_none_reason": "The work is on the tracker.",
             "tracker_checklist": list(checklist),
@@ -2648,6 +2657,9 @@ def planned_parts(
     invariants: Sequence[object] = ("Every part ships alone.",),
     estimated_cost_usd: float = 400.0,
     estimated_files: int = 90,
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
 ) -> RawResult:
     """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
     given, two chained ones."""
@@ -2667,6 +2679,9 @@ def planned_parts(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
         },
