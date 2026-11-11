@@ -33,7 +33,6 @@ ROWS = [
     ("small", None, (LIGHT,), KNOWN, "full", "missing_risk"),
     ("small", ["nope"], (LIGHT,), KNOWN, "full", "unknown_risk"),
     ("small", [], (LIGHT,), None, "full", "stack_unreadable"),
-    ("small", [], (LIGHT,), None, "full", "stack_unreadable"),
     ("small", None, None, KNOWN, "full", "label_unreadable"),
 ]
 

@@ -392,7 +392,10 @@ async def test_classify_with_the_stack_raising_records_full_even_for_no_risk(cfg
 
 
 async def test_classify_accepts_a_product_risk_area_and_refuses_an_unknown_id(cfg):
-    areas = (RiskArea("billing", "Invoices", ("app/billing/**",)),)
+    areas = (
+        RiskArea("billing", "Invoices", ("app/billing/**",)),
+        RiskArea("search-index", "The search index", ()),
+    )
     known = no_labels(
         memory_ports(
             ScriptedRunner(pjm=[sized(risk=["billing"])]), stack=MemoryStack(risk_areas=areas)
@@ -400,7 +403,9 @@ async def test_classify_accepts_a_product_risk_area_and_refuses_an_unknown_id(cf
     )
     patch = await classify(ISSUE_TASK, cfg, known)
     assert (patch["path"], patch["path_cause"]) == ("full", "risk_flag")
-    assert "- `billing`: Invoices" in known.runner.calls[0]["system_prompt"]
+    prompt = known.runner.calls[0]["system_prompt"]
+    assert "- `billing`: Invoices" in prompt
+    assert "- `search-index`: The search index" in prompt
     # Rejected input: an id neither built-in nor declared is never a valid flag.
     unknown = no_labels(memory_ports(ScriptedRunner(pjm=[sized(risk=["billing"])])))
     patch = await classify(ISSUE_TASK, cfg, unknown)
