@@ -1290,7 +1290,8 @@ def test_a_product_that_declares_no_generated_reads_an_empty_tuple():
 
 @pytest.mark.parametrize(
     "glob",
-    ["*", "**", "**/*", "*.ts", "/abs/gen", "../up/gen", "docs/adr/**", ".agentic/**", ".git/x"],
+    ["*", "**", "**/*", "*.ts", "/abs/gen", "../up/gen"]
+    + [f"{root}/x" for root in stack.DOCS_PROTECTED_ROOTS],
 )
 def test_a_generated_glob_that_matches_everything_or_overlaps_a_protected_root_is_refused(glob):
     with pytest.raises(ValueError, match=r"`generated` is refused"):

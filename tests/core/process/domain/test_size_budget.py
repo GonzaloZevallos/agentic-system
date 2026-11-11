@@ -6,16 +6,16 @@ import pytest
 from agentic.core.process.domain import size_budget as budget
 from agentic.core.process.domain.size_budget import ActualSize, NumstatRow, PlanSize
 
-GLOBS = ("docs/architecture/generated/**", "docs/reference/**", "web/gen/*.ts")
+GLOBS = ("gen/arch/**", "gen/reference/**", "web/gen/*.ts")
 
 
 @pytest.mark.parametrize(
     ("path", "kind"),
     [
-        ("agentic/core/process/domain/rules.py", "hand"),
-        ("README.md", "hand"),
-        ("docs/adr/0100-size.md", "hand"),
-        ("agentic/prompts/tech_lead.md", "hand"),
+        ("src/pkg/rules.py", "hand"),
+        ("handbook/README.md", "hand"),
+        ("handbook/adr/0100-size.md", "hand"),
+        ("pkg/prompts/planner.md", "hand"),
         ("tests/core/test_rules.py", "test"),
         ("web/__tests__/page.tsx", "test"),
         ("apps/x/e2e/flow.ts", "test"),
@@ -26,11 +26,11 @@ GLOBS = ("docs/architecture/generated/**", "docs/reference/**", "web/gen/*.ts")
         ("web/button.spec.ts", "test"),
         ("pkg/contest.py", "hand"),
         ("pkg/latest_notes.py", "hand"),
-        ("uv.lock", "generated"),
+        ("svc/uv.lock", "generated"),
         ("web/package-lock.json", "generated"),
         ("services/api/go.sum", "generated"),
-        ("docs/reference/stack-yaml.md", "generated"),
-        ("docs/architecture/generated/map.md", "generated"),
+        ("gen/reference/stack.md", "generated"),
+        ("gen/arch/map.md", "generated"),
         ("web/gen/api.ts", "generated"),
         ("web/gen/deep/api.ts", "hand"),
     ],
@@ -49,11 +49,11 @@ def test_a_generated_glob_wins_over_a_test_path():
 
 def test_measure_splits_hand_test_and_generated_and_counts_added_lines_only():
     rows = (
-        NumstatRow("agentic/a.py", 30, 10),
-        NumstatRow("agentic/b.py", 5, 0),
+        NumstatRow("src/a.py", 30, 10),
+        NumstatRow("src/b.py", 5, 0),
         NumstatRow("tests/test_a.py", 50, 2),
-        NumstatRow("uv.lock", 900, 800),
-        NumstatRow("docs/reference/x.md", 40, 40),
+        NumstatRow("svc/uv.lock", 900, 800),
+        NumstatRow("gen/reference/x.md", 40, 40),
     )
     assert budget.measure(rows, GLOBS) == ActualSize(2, 35, 50, 2)
 
@@ -62,7 +62,7 @@ def test_a_row_with_no_line_is_free_but_a_generated_one_is_still_reported():
     rows = (
         NumstatRow("moved/a.py", 0, 0),
         NumstatRow("img.png", 0, 0),
-        NumstatRow("uv.lock", 0, 0),
+        NumstatRow("svc/uv.lock", 0, 0),
     )
     assert budget.measure(rows, ()) == ActualSize(0, 0, 0, 1)
 
