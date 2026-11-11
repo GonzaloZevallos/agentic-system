@@ -215,6 +215,19 @@ async def test_a_git_failure_reviews_in_full_as_unreadable():
     assert recorded(patch) == ("full", "unreadable")
 
 
+async def test_a_failure_finding_the_accepted_tip_is_unreadable_not_a_first_review():
+    docs = "5" * 40
+    close_docs = {"parent": TIP, "head": docs, "paths": ["docs/product/capability.md"]}
+    ports, runner, st = scenario([Commit(MERGE, (TIP, BROUGHT))], st=state(close_docs=close_docs))
+    ports.workspace.ancestor_errors = {docs}
+
+    patch, call = await run(ports, runner, st)
+
+    assert recorded(patch) == ("full", "unreadable")
+    assert patch["review_scopes"][0]["base"] == TIP
+    assert review_scope.RESOLUTION_SECTION not in call["prompt"]
+
+
 async def test_with_no_landing_pass_the_upstream_is_the_base_branch_tip():
     ports, runner, st = scenario([Commit(MERGE, (TIP, BROUGHT))], resolutions={MERGE: HUNK})
     st = {k: v for k, v in st.items() if k != "landing"}

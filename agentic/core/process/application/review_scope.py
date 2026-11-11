@@ -61,7 +61,9 @@ def scope_of(
     """What the pass over `head` covers and the accepted tip it starts from (`None` for a
     first review). A `GitError` anywhere gives `full` with `unreadable`, or `no_remerge_diff`
     when git cannot print a remerge-diff; never `carried` or `resolution`."""
-    tip: str | None = None
+    # When `accepted_tip` itself fails the tip is not known; the unit's own `reviewed_head` stands
+    # in, so a unit that was reviewed before is never recorded as a `first` review.
+    tip: str | None = state["subtasks"][unit].get("reviewed_head") or None
     try:
         tip = accepted_tip(state, unit, head, path, ports)
         facts = _facts(state, tip, head, path, ports)
