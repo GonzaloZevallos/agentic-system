@@ -41,6 +41,7 @@ from pathlib import Path, PurePosixPath
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
 from ...application.ports import (
+    REMERGE_DIFF_MIN_GIT,
     AddedAdr,
     AddedLine,
     Checkout,
@@ -48,6 +49,7 @@ from ...application.ports import (
     MergeConflict,
     MergeFailed,
     MergeRefusal,
+    RemergeDiffUnsupported,
     Upstream,
     UpstreamMerge,
 )
@@ -130,6 +132,7 @@ _COMMIT = "\x01"
 # Output with every name verbatim and not quoted.
 _PLAIN = ("-c", "core.quotepath=off")
 _NUMBER = re.compile("[0-9]{4}")
+_GIT_VERSION = re.compile(r"git version (\d+)\.(\d+)")
 
 
 # Where the tree a checkout's setup ran on is recorded, in the worktree's own git dir
@@ -754,6 +757,26 @@ class GitWorkspace:
             raise GitError(f"git rev-list {older}..{newer} failed: {result.stderr.strip()}")
         lines = (line.split() for line in result.stdout.splitlines() if line.strip())
         return tuple(rules.Commit(sha, tuple(parents)) for sha, *parents in lines)
+
+    def git_version(self) -> tuple[int, int] | None:
+        try:
+            result = self._run("--version")
+        except (OSError, subprocess.SubprocessError):
+            return None
+        found = _GIT_VERSION.search(result.stdout) if result.returncode == 0 else None
+        return (int(found.group(1)), int(found.group(2))) if found else None
+
+    def merge_resolution(self, merge: str) -> str:
+        version = self.git_version()
+        if version is None or version < REMERGE_DIFF_MIN_GIT:
+            shown = ".".join(map(str, version)) if version else "unknown"
+            raise RemergeDiffUnsupported(
+                f"git show --remerge-diff needs git {'.'.join(map(str, REMERGE_DIFF_MIN_GIT))}"
+                f" or newer, this is {shown}"
+            )
+        # `--format=` leaves out the commit header: a merge with no resolution prints nothing.
+        # The output is not stripped, so a hunk keeps its own whitespace.
+        return self._read_z(*_PLAIN, "show", "--remerge-diff", "--format=", merge)
 
     def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
         # Two-dot, `--no-renames` (a rename lists both sides, whatever `diff.renames` the

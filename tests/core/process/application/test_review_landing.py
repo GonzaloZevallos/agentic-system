@@ -144,6 +144,9 @@ async def test_a_review_with_no_landing_checks_produces_the_patch_it_always_did(
         patch, _ = await run(result)
         patch.pop("runs")
         patch.pop("prompts")
+        # GH-589: the one key a pass adds is its scope record; the rest is as it always was.
+        [scope] = patch.pop("review_scopes")
+        assert (scope["scope"], scope["cause"]) == ("full", "first")
         assert patch == GOLDEN[name], name
 
 

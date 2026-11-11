@@ -2,10 +2,11 @@
 and `re_review`, and the `reopen` they and `landing_fix` share.
 
 `sync_master` merges the upstream into the task branch in the task's worktree, never the
-product checkout (ADR-0039). A clean merge whose paths are disjoint from the branch's own
-carries the Tech Lead's verdict (`landing.review_carries`): `reviewed_head` advances,
-`reviewed_head_carried_from` says where it came from, and the push lets the merge gate
-re-run the checks and the CI on the new head. Anything else reopens the technical stage
+product checkout (ADR-0039). A clean merge of the system's own, made on a head the Tech Lead
+accepted (`rules.head_reviewed`), carries the Tech Lead's verdict (`landing.review_scope`,
+ADR-0089): `reviewed_head` advances, `reviewed_head_carried_from` says where it came from, a
+`review_scopes` entry records the pass, and the push lets the merge gate re-run the checks and
+the CI on the new head. Anything else reopens the technical stage
 under the existing pull request: the reviewed unit goes back to its Developer (a conflict)
 or to its review (`re_review`), the task document says so, and `agentic resume` is spawned
 to run it. `deliver` re-delivers to the same pull request and closes the landing entry.
@@ -28,7 +29,16 @@ from ..domain import adr_numbers, landing, rules
 from ..domain.adr_numbers import Renaming
 from ..domain.docs import Docs, conflict_line
 from ..domain.roles import pair_for
-from ..domain.task import INTEGRATION, ChangeCategory, ChangesRequested, Subtask, TaskState
+from ..domain.task import (
+    INTEGRATION,
+    ChangeCategory,
+    ChangesRequested,
+    ReviewScopeRecord,
+    ScopeCause,
+    Subtask,
+    TaskState,
+    add_review_scopes,
+)
 from . import resume as resuming
 from .adr_collision import adr_collision
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout
@@ -344,7 +354,7 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
             return _failed_reason(f"syncing {sha} failed", failed, sha), "returned"
         if not merged.clean:
             return _conflict_reason(merged.conflicted, sha, _docs(context, state)), "returned"
-        if not _sync_carries(context, state, reviewed, merged.head):
+        if not _sync_carries(context, state, reviewed, merged):
             return f"Master ({sha}) was merged into the branch; review the result as it is.", (
                 "delivered"
             )
@@ -367,8 +377,10 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
             context.log(f"agentic: land: {context.task_id}: sync closed, {merged.head} lacks {sha}")
             return None
         resolved = landing.resolve_open(written, _now(), cost)
-        subtasks = _carries(state, unit, reviewed, merged.head, holds=True)
-        ports.documents.save({**state, "subtasks": subtasks, "landing": resolved})
+        subtasks, scopes = _carries(state, unit, reviewed, merged.head, holds=True, cause="clean")
+        ports.documents.save(
+            {**state, "subtasks": subtasks, "review_scopes": scopes, "landing": resolved}
+        )
         record_landing(context, resolved)
         context.log(
             f"agentic: land: {context.task_id}: master synced, verdict carried to {merged.head}"
@@ -377,37 +389,48 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
 
 
 def _carries(
-    state: TaskState, unit: str, reviewed: str | None, head: str, *, holds: bool
-) -> dict[str, Subtask]:
-    """The only writer of `reviewed_head` and `reviewed_head_carried_from` (ADR-0048): the
-    state's subtasks with `unit`'s verdict advanced to `head` when `holds` (the domain's
-    verdict, `landing.review_carries` for a sync, `landing.renumber_carries` for a
-    renumber) and it has one to carry; unchanged otherwise."""
+    state: TaskState,
+    unit: str,
+    reviewed: str | None,
+    head: str,
+    *,
+    holds: bool,
+    cause: ScopeCause,
+    at: str | None = None,
+) -> tuple[dict[str, Subtask], list[ReviewScopeRecord]]:
+    """The only caller of `landing.scope_patch` in the landings (ADR-0048, ADR-0089): the
+    state's `subtasks` and `review_scopes` after a carried verdict. When `holds` (the
+    domain's verdict, `landing.review_scope` for a sync, `landing.renumber_carries` for a
+    renumber) and the unit has a verdict to carry, `unit`'s `reviewed_head` moves to `head`
+    and the `review_scopes` entry (`carried`, `cause`) is appended in the same patch; otherwise
+    both are unchanged and nothing is recorded."""
+    scopes = state.get("review_scopes", [])
     if not holds or not reviewed:
-        return dict(state["subtasks"])
-    advanced: Subtask = {
-        **state["subtasks"][unit],
-        "reviewed_head": head,
-        "reviewed_head_carried_from": reviewed,
-    }
-    return {**state["subtasks"], unit: advanced}
+        return dict(state["subtasks"]), scopes
+    subtasks, record = landing.scope_patch(
+        state["subtasks"], unit, "carried", cause, reviewed, head, at or _now()
+    )
+    return subtasks, add_review_scopes(scopes, [record])
 
 
 def _sync_carries(
-    context: LandingContext, state: TaskState, reviewed: str | None, head: str
+    context: LandingContext, state: TaskState, reviewed: str | None, merged: UpstreamMerge
 ) -> bool:
-    """Whether the verdict on `reviewed` stands for `head`, the merge commit: the paths the
-    merge brought in against the paths of the branch's own work. An unreadable diff, or a
-    unit never reviewed, carries nothing."""
-    if not reviewed:
+    """Whether the verdict on `reviewed` stands for the clean merge `merged`: the merge's first
+    parent, the pull request head, is one the Tech Lead accepted (`rules.head_reviewed`), and
+    `landing.review_scope` finds nothing after the merge to review. A unit never reviewed, or
+    a head not accepted, carries nothing."""
+    if not reviewed or not rules.head_reviewed(reviewed, state.get("close_docs"), context.head):
         return False
-    workspace = context.ports.workspace
-    try:
-        merge_paths = workspace.changed_paths(reviewed, head)
-        branch_paths = workspace.changed_paths(task_base(state, context.ports), reviewed)
-    except GitError:
-        return False
-    return landing.review_carries(False, merge_paths, branch_paths)
+    facts = landing.ScopeFacts(
+        reviewed=reviewed,
+        readable=True,
+        unreadable_cause=None,
+        reviewed_is_ancestor=True,
+        system_merge=True,
+        steps=(landing.ScopeStep(merged.head, "upstream_merge", ""),),
+    )
+    return landing.review_scope(facts).scope == "carried"
 
 
 def _message(moves: Sequence[tuple[str, str]]) -> str:
@@ -488,11 +511,12 @@ def renumber_adr(context: LandingContext) -> None:
         "carried": carried,
     }
     resolved = landing.resolve_open(all_entries(state), _now(), state.get("cost_usd", 0.0))
-    subtasks = _carries(state, unit, reviewed, new_head, holds=carried)
+    subtasks, scopes = _carries(state, unit, reviewed, new_head, holds=carried, cause="renumber")
     ports.documents.save(
         {
             **state,
             "subtasks": subtasks,
+            "review_scopes": scopes,
             "landing": resolved,
             "adr_renumbered": [*state.get("adr_renumbered", []), record],
         }

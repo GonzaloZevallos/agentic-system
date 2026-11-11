@@ -116,6 +116,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.restore": "lifecycle",
     "application.resume": "lifecycle",
     "application.review": "build",
+    "application.review_scope": "build",
     "application.run_check": "checks",
     "application.run_role": "support",
     "application.schedule": "lifecycle",

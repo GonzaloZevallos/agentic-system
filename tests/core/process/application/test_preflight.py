@@ -21,6 +21,7 @@ from agentic.core.process.application.preflight import (
     nearest_existing,
     no_forbidden,
     no_setup,
+    old_git,
     preflight,
     product_name,
     refuse_scratch_in_a_repository,
@@ -285,6 +286,21 @@ def test_a_dirty_stage0_is_told_before_the_run_starts(stage0):
     warning = unfixed_stage0(ports)
     assert str(stage0) in warning and "+dirty" in warning
     assert f"{stage0}/scripts/stage0.sh" in warning
+
+
+@pytest.mark.parametrize("version", [(2, 35), None])
+def test_an_old_or_unreadable_git_is_told_with_the_measured_version(version):
+    ports = memory_ports()
+    ports.workspace.git_version_answer = version
+    warning = old_git(ports)
+    assert warning is not None and "full reviews" in warning
+    assert ("2.35" if version else "unknown") in warning
+
+
+def test_a_git_that_prints_a_remerge_diff_says_nothing():
+    ports = memory_ports()
+    ports.workspace.git_version_answer = (2, 36)
+    assert old_git(ports) is None
 
 
 def test_a_package_outside_any_repository_says_nothing(stage0):

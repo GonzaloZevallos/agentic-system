@@ -38,6 +38,9 @@ from .task import (
     MergeCiRecord,
     OutOfBoundsLine,
     ReleasePatch,
+    ReviewScope,
+    ReviewScopeRecord,
+    ScopeCause,
     SlicesClosedPatch,
     Subtask,
     SubtaskStatus,
@@ -542,6 +545,113 @@ def review_carries(
     if conflicted:
         return False
     return (set(merge_paths) - set(landed_paths)).isdisjoint(branch_paths)
+
+
+RESOLUTION_LINES_MAX = 600
+"""Lines of resolution text the reviewer is sent (GH-589, ADR-0089). Above it the pass is
+`full` with cause `over_cap`: the text is never truncated. Declared, not measured."""
+
+
+@dataclass(frozen=True)
+class ScopeStep:
+    """One commit on the first-parent chain from the accepted tip to the head. `text` is the
+    remerge-diff of a merge, or the diff of an own commit; `""` when there is none."""
+
+    sha: str
+    kind: Literal["upstream_merge", "own_commit", "foreign_merge"]
+    text: str
+
+
+@dataclass(frozen=True)
+class ScopeFacts:
+    """What `review_scope` decides from, gathered by the application. `reviewed` is the
+    accepted tip (`None`: no review yet); `readable` is False when git could not say, and
+    `unreadable_cause` then names why; `reviewed_is_ancestor` says the accepted tip is an
+    ancestor of the head; `system_merge` says the system made the merge of the upstream
+    itself (informational: a clean merge carries whoever made it); `steps` is the
+    first-parent chain from the accepted tip to the head, oldest first."""
+
+    reviewed: str | None
+    readable: bool
+    unreadable_cause: Literal["unreadable", "no_remerge_diff"] | None
+    reviewed_is_ancestor: bool
+    system_merge: bool
+    steps: tuple[ScopeStep, ...]
+
+
+@dataclass(frozen=True)
+class ScopeVerdict:
+    """What a review pass covers: `scope`, the single `cause` that gave it, and for
+    `resolution` the text the reviewer reads (`""` otherwise)."""
+
+    scope: ReviewScope
+    cause: ScopeCause
+    text: str
+
+
+def _full(cause: ScopeCause) -> ScopeVerdict:
+    return ScopeVerdict("full", cause, "")
+
+
+def review_scope(facts: ScopeFacts) -> ScopeVerdict:
+    """What the review of a head covers (GH-589, ADR-0089): the only place that decides
+    carried / resolution / full. The first condition that holds wins, each one names one
+    cause. The text of a `resolution` is never truncated: above `RESOLUTION_LINES_MAX` the
+    pass is `full`."""
+    steps = facts.steps
+    kinds = [step.kind for step in steps]
+    if facts.reviewed is None:
+        return _full("first")
+    if not facts.readable:
+        return _full(facts.unreadable_cause or "unreadable")
+    if not facts.reviewed_is_ancestor:
+        return _full("rewritten")
+    if "upstream_merge" not in kinds:
+        return _full("no_merge")
+    if "foreign_merge" in kinds:
+        return _full("foreign_merge")
+    if "own_commit" in kinds and kinds.index("own_commit") < kinds.index("upstream_merge"):
+        return _full("own_before_merge")
+    if "own_commit" not in kinds and not any(step.text for step in steps):
+        return ScopeVerdict("carried", "clean", "")
+    shown = [step for step in steps if step.text or step.kind == "own_commit"]
+    text = "\n".join(
+        f"## {step.sha[:12]} ({step.kind})\n{step.text or '(no changes)'}".rstrip("\n")
+        for step in shown
+    )
+    if len(text.splitlines()) > RESOLUTION_LINES_MAX:
+        return _full("over_cap")
+    return ScopeVerdict("resolution", "resolved", text)
+
+
+def scope_patch(
+    subtasks: Mapping[str, Subtask],
+    unit: str,
+    verdict_scope: ReviewScope,
+    cause: ScopeCause,
+    base: str | None,
+    head: str,
+    at: str,
+) -> tuple[dict[str, Subtask], ReviewScopeRecord]:
+    """The single writer of what a review pass left (GH-589): `subtasks` with `unit`'s
+    `reviewed_head` moved to `head` -- and `reviewed_head_carried_from` set to `base` only
+    when the scope is `carried`, cleared otherwise -- and the `ReviewScopeRecord` for the
+    same pass. The caller puts both in one patch, so the head and its record never part.
+    `at` is ISO 8601 UTC, given by the caller."""
+    unit_state: Subtask = {**subtasks[unit], "reviewed_head": head}
+    if verdict_scope == "carried" and base is not None:
+        unit_state["reviewed_head_carried_from"] = base
+    else:
+        unit_state.pop("reviewed_head_carried_from", None)
+    record: ReviewScopeRecord = {
+        "unit": unit,
+        "head": head,
+        "base": base,
+        "scope": verdict_scope,
+        "cause": cause,
+        "at": at,
+    }
+    return {**subtasks, unit: unit_state}, record
 
 
 SLICE_REFUSALS_MAX = 2

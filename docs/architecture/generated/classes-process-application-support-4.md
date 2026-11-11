@@ -21,6 +21,7 @@ classDiagram
     class ports__ProductStack["ProductStack"]
     class ports__Prompts["Prompts"]
     class ports__RawResult["RawResult"]
+    class ports__RemergeDiffUnsupported["RemergeDiffUnsupported"]
     class ports__RoleRunner["RoleRunner"]
     class ports__RunLock["RunLock"]
     class ports__RunProcess["RunProcess"]
@@ -30,13 +31,14 @@ classDiagram
     class ports__SampleApp["SampleApp"]
     class ports__SampleAppHandle["SampleAppHandle"]
     class ports__SchemaGuard["SchemaGuard"]
-    class ports__Scratch["Scratch"]
 ```
 
 ## Relaciones con otras páginas
 
 - [application: support (parte 1)](classes-process-application-support-1.md)
   - `ports.RawResult` se asocia con `ports.CheckRuns`
+- [application: support (parte 2)](classes-process-application-support-2.md)
+  - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.ProcessReaper`
   - `ports.Ports` se asocia con `ports.ProductKnowledge`
