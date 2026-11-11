@@ -363,7 +363,9 @@ def test_a_poll_round_waiting_on_ci_writes_nothing_and_comments_nothing():
 
     _merges(ports)
 
-    assert _doc(ports) == before and ports.tracker.comments == []
+    # GH-588: the poller's one write is the head's anchor (`head_since_*`); no comment.
+    anchored = {k: v for k, v in _doc(ports).items() if not k.startswith("head_since_")}
+    assert anchored == before and ports.tracker.comments == []
 
 
 def test_a_stack_the_poller_cannot_read_leaves_that_task_and_never_aborts_the_round():

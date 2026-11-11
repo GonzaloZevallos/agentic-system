@@ -123,7 +123,8 @@ def test_a_refusal_names_its_reason_in_one_line_per_issue():
     ports.documents.record_closure("GH-6", {"status": "developing"})
     found, lines = _merges(ports)
     assert found == [5]
-    assert lines == ["agentic: poll: auto-merge #6 -> left to the human: not_ready"]
+    # GH-588: a task not yet at the landing is a member of the order and waits behind the head.
+    assert lines == ["agentic: poll: auto-merge #6 -> waiting (unread) behind #5"]
 
 
 def test_an_open_important_finding_refuses():
@@ -255,11 +256,17 @@ def test_an_issue_in_the_eval_set_is_never_a_candidate():
 def test_an_unreadable_eval_set_refuses_every_issue():
     found, lines = _merges(_ports(5, 6), eval_set=None)
     assert found == []
-    assert [line.rsplit(": ", 1)[1] for line in lines] == ["eval_set_unreadable"] * 2
+    # GH-588: the head is refused with its reason; the next one waits behind it.
+    assert lines[0].endswith("left to the human: eval_set_unreadable")
+    assert lines[1] == "agentic: poll: auto-merge #6 -> waiting (unread) behind #5"
 
 
 def test_a_live_lock_skips_the_issue_without_a_line():
-    assert _merges(_ports(5, 6), lock=_Locks(alive={"GH-5"})) == ([6], [])
+    # GH-588: a task at work is still the head, so the next one waits behind it.
+    assert _merges(_ports(5, 6), lock=_Locks(alive={"GH-5"})) == (
+        [],
+        ["agentic: poll: auto-merge #6 -> waiting (clean) behind #5"],
+    )
 
 
 def test_attempts_count_only_for_the_current_head():
@@ -418,7 +425,7 @@ def test_a_round_lists_every_refusal_it_left_to_the_human(tmp_path):
     ports.documents.record_closure("GH-6", {"status": "developing"})
     lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
     assert lines == [
-        "agentic: poll: auto-merge #6 -> left to the human: not_ready",
+        "agentic: poll: auto-merge #6 -> waiting (unread) behind #5",
         "agentic: poll: merge #5 -> pid 4242",
     ]
 

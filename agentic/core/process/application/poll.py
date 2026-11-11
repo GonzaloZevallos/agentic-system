@@ -34,13 +34,13 @@ from ..domain import (
     document,
     exempt_queue,
     experiment,
+    landing_order,
     merge_ci,
     merge_conflict,
     presubmit,
     rules,
 )
 from ..domain import landing as landing_rules
-from ..domain import landing_order
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
@@ -1094,11 +1094,8 @@ def gather_merges(
                 f"agentic: poll: auto-merge #{number} -> waiting ({reading}) behind #{round_.head}"
             )
             continue
-        if _anchor_turn(ports, task_id, raw, facts, now):
-            # The head's CI wait counts from this round, not from a push it waited behind.
-            if facts.ci_waited_s is not None:
-                facts = replace(facts, ci_waited_s=0.0)
-                decision = rules.auto_merge_decision(facts)
+        # The head's CI wait counts from this round on (`head_since_*`, read by `with_ci`).
+        _anchor_turn(ports, task_id, raw, facts, now)
         if assessed.conflict_unread:
             head = pull_request.head_oid if pull_request is not None else None
             out.append(f"agentic: poll: auto-merge #{number} -> conflict unread ({head})")

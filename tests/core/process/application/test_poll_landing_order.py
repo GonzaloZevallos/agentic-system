@@ -84,3 +84,17 @@ def test_an_unstamped_pull_request_goes_after_every_stamped_one():
 
     assert found == [6]
     assert lines == ["agentic: poll: auto-merge #5 -> waiting (clean) behind #6"]
+
+
+def test_the_poller_anchors_the_head_once_and_never_a_waiting_task():
+    ports = _three()
+
+    _merges(ports)
+    first = ports.documents.load("GH-7")
+
+    assert first["head_since_head"] == "a" * 40
+    assert "head_since_at" in first
+    assert "head_since_head" not in ports.documents.load("GH-5")
+    ports.documents.record_closure("GH-7", {"head_since_at": "2026-11-10T11:00:00+00:00"})
+    _merges(ports)
+    assert ports.documents.load("GH-7")["head_since_at"] == "2026-11-10T11:00:00+00:00"
