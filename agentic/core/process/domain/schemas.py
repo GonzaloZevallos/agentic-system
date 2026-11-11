@@ -1019,15 +1019,12 @@ class FitDecision:
 def declared_size(data: dict[str, Any]) -> size_budget.PlanSize | None:
     """The size a plan declares, or `None` for a plan written before the size fields: that
     one is judged by its cost and its total files alone."""
-    names = (
-        size_budget.HAND_FILES_FIELD,
-        size_budget.HAND_LINES_FIELD,
-        size_budget.TEST_LINES_FIELD,
-    )
-    figures = [data.get(name) for name in names]
-    if not all(isinstance(figure, int) for figure in figures):
-        return None
-    return size_budget.PlanSize(figures[0], figures[1], figures[2])
+    hand_files = data.get(size_budget.HAND_FILES_FIELD)
+    hand_lines = data.get(size_budget.HAND_LINES_FIELD)
+    test_lines = data.get(size_budget.TEST_LINES_FIELD)
+    if isinstance(hand_files, int) and isinstance(hand_lines, int) and isinstance(test_lines, int):
+        return size_budget.PlanSize(hand_files, hand_lines, test_lines)
+    return None
 
 
 # What a refusal of a plan that does not fit says after the action, once: the split is the

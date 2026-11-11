@@ -3781,6 +3781,20 @@ PART_OF = ("GH-316", 2)
 GH_338_FIT = FitDecision(False, 20.0, 4, 200.0)
 
 
+def test_the_fit_question_of_a_sized_plan_quotes_the_size_and_the_fields_it_crossed():
+    declared = size_budget.PlanSize(11, 120, 700)
+    judged = size_budget.judged(declared)
+    fit = FitDecision(False, 20.0, 40, None, declared, judged, size_budget.crossed(judged))
+    text = rules.fit_question_text("GH-9", PART_OF, fit)
+    assert "11 hand-written files, 120 hand-written lines and 700 test lines" in text
+    assert f"judged {judged.hand_files} files and {judged.hand_lines} lines" in text
+    assert f"{size_budget.HAND_FILES} hand-written files, {size_budget.HAND_LINES} " in text
+    assert "declared hand-written files are over" in text
+    assert "declared test lines are over" in text
+    assert "hand-written lines are over" not in text
+    assert "40 files" not in text
+
+
 def test_the_fit_question_of_the_gh_338_shape_quotes_its_figures_and_blames_the_reference():
     text = rules.fit_question_text("GH-338", PART_OF, GH_338_FIT)
     assert "part 2 of GH-316" in text and "never split again" in text

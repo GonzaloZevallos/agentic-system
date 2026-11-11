@@ -33,9 +33,9 @@ from typing import (
 
 from .ci_push import PushKind
 from .plan_route import CriticState, Route
-from .size_budget import ActualSize, PlanSize
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
+from .size_budget import ActualSize, PlanSize
 
 Status = Literal[
     "open",

@@ -17,7 +17,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
+from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes, size_budget
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -56,7 +56,6 @@ from .roles import (
 )
 from .schemas import FitDecision, TaskType
 from .scratch import INODE_FLOOR, SpaceReading
-from . import size_budget
 from .size_budget import LEGACY_FILES, UNPROVEN_RATIO, PlanSize
 from .task import (
     INTEGRATION,
@@ -3055,6 +3054,20 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     return f"{previous}\n\n{entry}".strip()
 
 
+# What each field of the size budget says when the judged figures cross its cap.
+_CROSSED_TEXT = {
+    size_budget.HAND_FILES_FIELD: (
+        f"the declared hand-written files are over the {size_budget.HAND_FILES} file cap"
+    ),
+    size_budget.HAND_LINES_FIELD: (
+        f"the declared hand-written lines are over the {size_budget.HAND_LINES} line cap"
+    ),
+    size_budget.TEST_LINES_FIELD: (
+        f"the declared test lines are over the {size_budget.TEST_LINES} line cap"
+    ),
+}
+
+
 def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> str:
     """What the human reads when a part's plan is over the line: the figures the decision
     used (`FitDecision`), the limits, which one was crossed, and the three ways out. No way
@@ -3070,20 +3083,38 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
             else "the history has no reference for this many subtasks"
         )
         limits = f"{SPLIT_COST_USD} USD and {LEGACY_FILES} files"
+        declared = f"{fit.cost_usd:.2f} USD and {fit.files} files"
         crossed: list[str] = []
         if fit.reference_usd is not None and fit.reference_usd > max(fit.cost_usd, SPLIT_COST_USD):
             crossed.append(f"the history's reference is over the {SPLIT_COST_USD} USD limit")
         elif fit.cost_usd > SPLIT_COST_USD:
             crossed.append(f"the declared cost is over the {SPLIT_COST_USD} USD limit")
-        if fit.files > LEGACY_FILES:
-            crossed.append(f"the declared files are over the {LEGACY_FILES} file limit")
+        if fit.size is None:
+            if fit.files > LEGACY_FILES:
+                crossed.append(f"the declared files are over the {LEGACY_FILES} file limit")
+        else:
+            limits = (
+                f"{SPLIT_COST_USD} USD, {size_budget.HAND_FILES} hand-written files, "
+                f"{size_budget.HAND_LINES} hand-written lines and {size_budget.TEST_LINES} "
+                "test lines"
+            )
+            declared = (
+                f"{fit.cost_usd:.2f} USD, {fit.size.hand_files} hand-written files, "
+                f"{fit.size.hand_lines} hand-written lines and {fit.size.test_lines} test lines"
+            )
+            if fit.judged_size is not None:
+                declared += (
+                    f" (judged {fit.judged_size.hand_files} files and "
+                    f"{fit.judged_size.hand_lines} lines after the floor)"
+                )
+            crossed.extend(_CROSSED_TEXT[name] for name in fit.crossed)
         verdict = (
             "; ".join(crossed)
             if crossed
             else "it is over the line by the larger of the declared cost and the reference"
         )
         figures = (
-            f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
+            f"Its plan declares {declared}, and {reference}. "
             f"One task holds at most {limits}: {verdict}. "
         )
     return (

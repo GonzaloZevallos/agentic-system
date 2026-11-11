@@ -612,7 +612,10 @@ def test_a_bad_checklist_item_next_to_parts_is_refused():
     with pytest.raises(ValueError, match="one non-empty line"):
         schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})
     good = _split(400.0, 90, tracker_checklist=CHECKLIST)
-    assert schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **good}, {})["tracker_checklist"] == CHECKLIST
+    assert (
+        schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **good}, {})["tracker_checklist"]
+        == CHECKLIST
+    )
 
 
 def test_a_plan_with_no_subtasks_no_parts_and_no_checklist_is_still_refused():
@@ -688,9 +691,9 @@ def test_an_old_plan_without_performance_parses_with_it_empty():
     old = _plan("m", "api")
     assert "performance" not in old
     assert (
-        schemas.validate(TechPlan, {**old, "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}, {})[
-            "performance"
-        ]
+        schemas.validate(
+            TechPlan, {**old, "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}, {}
+        )["performance"]
         == []
     )
 
@@ -815,7 +818,7 @@ def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_t
             **_plan("m", "perf"),
             "estimated_cost_usd": 3,
             "estimated_files": 4,
-        **ZERO_SIZE,
+            **ZERO_SIZE,
             "performance": [_scenario()],
         },
         {},
@@ -1071,7 +1074,9 @@ def _finding(**more):
 
 def test_a_plan_size_is_a_non_negative_cost_and_file_count():
     ok = schemas.validate(
-        schemas.PlanSize, {"markdown": "", "estimated_cost_usd": 12.5, "estimated_files": 4, **ZERO_SIZE}, {}
+        schemas.PlanSize,
+        {"markdown": "", "estimated_cost_usd": 12.5, "estimated_files": 4, **ZERO_SIZE},
+        {},
     )
     assert ok["estimated_cost_usd"] == 12.5 and ok["estimated_files"] == 4
     for bad in (

@@ -58,6 +58,8 @@ def test_reducers_are_read_from_the_annotations():
         "estimate_revisions",
         "proposed_estimate",
         "actual_files",
+        "planned_size",
+        "actual_size",
         "parts",
         "tracker_checklist",
         "tracker_checklist_posted",

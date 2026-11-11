@@ -178,7 +178,9 @@ def measure(rows: Sequence[NumstatRow], generated_globs: Sequence[str]) -> Actua
 def judged(size: PlanSize, ratio: float = UNPROVEN_RATIO) -> PlanSize:
     """The declared figures as the budget judges them: hand-written files and lines times the
     floor `ratio`, rounded up, test lines as declared (the floor raises, it never refuses)."""
-    return PlanSize(_scaled(size.hand_files, ratio), _scaled(size.hand_lines, ratio), size.test_lines)
+    return PlanSize(
+        _scaled(size.hand_files, ratio), _scaled(size.hand_lines, ratio), size.test_lines
+    )
 
 
 def crossed(size: PlanSize) -> tuple[str, ...]:
