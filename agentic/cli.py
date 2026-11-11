@@ -99,6 +99,7 @@ from .core.process.application.preflight import (
     docs_placeholders_missing,
     no_forbidden,
     no_setup,
+    old_git,
     over_cap,
     owner_over_cap,
     preflight,
@@ -763,7 +764,7 @@ def main() -> None:
             # Tech Lead plan, subtask `eval-cli`).
             preflight(cfg, ports)
             # Said and not enforced: the run is worth less, it is not wrong.
-            for warn in (unfixed_stage0, no_setup, no_brief):
+            for warn in (unfixed_stage0, no_setup, no_brief, old_git):
                 if (warning := warn(ports)) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
             if args.command == "run":
