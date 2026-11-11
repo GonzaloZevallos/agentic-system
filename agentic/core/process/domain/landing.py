@@ -20,6 +20,7 @@ from typing import Any, Literal, Protocol, get_args
 from . import ci, merge_ci, presubmit, rules
 from .adr_numbers import Ambiguous, Renaming
 from .document import HUMAN
+from .landing_order import Turn
 from .roles import LANDING_DIAGNOSER
 from .task import (
     UPSTREAM_KEY,
@@ -292,6 +293,7 @@ def landing_step(
     spent: LandingSpent,
     blocking_owners: tuple[str, ...],
     *,
+    turn: Turn,
     important_units: tuple[str, ...] = (),
     slicing: Slice | RestartWhy | Callable[[], SliceInputs] | None = None,
     ledger_only: bool = False,
@@ -322,7 +324,10 @@ def landing_step(
     provider of the `SliceInputs` that is called, and handed to `slice_or_restart`, only when a
     budget has run out, so a healthy landing reads no git for it. This is the only place
     `slice_or_restart`
-    is called."""
+    is called. `turn` (GH-588, required) is whether the task leads its product's landing order
+    (`head`: everything above) or waits for its turn (`waiting`): a waiting task is left as it
+    is, `none` where the head would be `none` (a person's, or not yet at the landing) and `wait`
+    for every other refusal, so it never reaches a budget, a pass, a slice or a restart."""
 
     # Whatever the caller computed, only this refusal is ledger state (invariant: every other
     # refusal keeps its output).
@@ -349,6 +354,10 @@ def landing_step(
 
     if spent.unlandable:
         return step("none")
+    if turn == "waiting":
+        # GH-588: only the head of the order is integrated and landed. Placed before the
+        # planning defect below, which escalates, and a waiting task escalates nothing.
+        return step("none") if refusal in HUMAN_OWNED_REFUSALS | {"not_ready"} else step("wait")
     if refusal == "ci_unknown_names":
         # GH-485: a planning defect, never a failed check. One `escalate` per (head, names)
         # (`names_escalated`), then nothing; it spends no budget and never goes to

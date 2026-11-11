@@ -59,7 +59,7 @@ def test_the_loop_of_two_conflicting_syncs_for_one_sha_reaches_the_diagnose():
         conflicts=True,
     )
     step = landing_plan.step_for(
-        {"id": "GH-9", "title": "", "description": "", **raw}, "merge_conflict", facts
+        {"id": "GH-9", "title": "", "description": "", **raw}, "merge_conflict", facts, turn="head"
     )
     assert step.kind == "diagnose"
 
@@ -241,11 +241,11 @@ def test_pending_counts_a_released_diagnose_as_go_and_still_skips_an_unreleased_
     live = landing_plan.LIVE_STEPS
     now = datetime.fromisoformat("2026-10-23T07:00:00+00:00")
     raw = _escalated()
-    assert landing_plan.pending(raw, "merge_failed", facts, live, now) is None
-    step = landing_plan.pending(raw, "merge_failed", facts, live, now, released=True)
+    assert landing_plan.pending(raw, "merge_failed", facts, live, now, turn="head") is None
+    step = landing_plan.pending(raw, "merge_failed", facts, live, now, released=True, turn="head")
     assert step is not None and step.kind == "diagnose"
     # Released has no effect on any other step.
-    other = landing_plan.pending({}, "master_moved", facts, live, now, released=True)
+    other = landing_plan.pending({}, "master_moved", facts, live, now, released=True, turn="head")
     assert other is None
 
 
@@ -342,7 +342,7 @@ def _adr_facts(
 
 
 def _adr_step(raw: dict) -> landing.LandingStep:
-    return landing_plan.step_for(raw, "adr_number_taken", _adr_facts())
+    return landing_plan.step_for(raw, "adr_number_taken", _adr_facts(), turn="head")
 
 
 def test_step_for_asks_until_the_escalation_is_resolved_then_waits():
@@ -528,7 +528,9 @@ def _gh374(**over) -> dict:
 
 
 def _step(raw: dict, ancestry=None, facts=None) -> landing.LandingStep:
-    return landing_plan.step_for(raw, "ci_failed", facts or gh374.facts(), ancestry=ancestry)
+    return landing_plan.step_for(
+        raw, "ci_failed", facts or gh374.facts(), ancestry=ancestry, turn="head"
+    )
 
 
 def test_the_recorded_deadlock_shape_is_the_diagnose_before_any_release():
@@ -655,8 +657,13 @@ def test_the_rerun_before_the_release_does_not_spend_the_one_the_release_owes():
 
 def test_the_marker_never_changes_a_refusal_that_is_not_ci_failed():
     raw = _released()
-    step = landing_plan.step_for(raw, "merge_conflict", gh374.facts(), ancestry=lambda: True)
-    assert step.kind == landing_plan.step_for(_gh374(), "merge_conflict", gh374.facts()).kind
+    step = landing_plan.step_for(
+        raw, "merge_conflict", gh374.facts(), ancestry=lambda: True, turn="head"
+    )
+    assert (
+        step.kind
+        == landing_plan.step_for(_gh374(), "merge_conflict", gh374.facts(), turn="head").kind
+    )
 
 
 def test_the_ancestry_is_not_read_without_the_marker():
@@ -700,3 +707,34 @@ def test_red_names_on_base_compared_with_a_head_keeps_only_the_names_red_on_both
     head = _report(gh374.web("FAILURE"), ci.CiCheck("api", "COMPLETED", "FAILURE", "x"))
     base = _report(gh374.web("FAILURE"), ci.CiCheck("api", "COMPLETED", "SUCCESS", "y"))
     assert ci.red_names_on_base(base, ("web", "api"), head) == ("web",)
+
+
+# --- GH-588: the turn in the landing order ---
+
+
+def test_a_waiting_task_is_left_alone_by_the_plan_and_reads_no_slice_inputs():
+    def provider():
+        raise AssertionError("a waiting task must not read the slice inputs")
+
+    exhausted = {"landing": [_sync("merge_conflict") | {"head": HEAD, "at": "t"}] * 9}
+    waiting = landing_plan.step_for(
+        exhausted, "merge_conflict", _adr_facts(None), provider, turn="waiting"
+    )
+    assert waiting.kind == "wait"
+    ask = landing_plan.step_for({}, "adr_number_taken", _adr_facts(), turn="waiting")
+    assert ask.kind == "wait"
+    assert landing_plan.step_for({}, "pr_not_open", _adr_facts(), turn="waiting").kind == "none"
+    assert _adr_step({}).kind == "escalate_adr"  # the head's table is as it was
+
+
+def test_a_waiting_task_is_never_worth_a_land_child_nor_a_released_step():
+    live = landing_plan.LIVE_STEPS
+    now = datetime.fromisoformat("2026-10-23T07:00:00+00:00")
+    facts = _adr_facts()
+    assert landing_plan.pending({}, "adr_number_taken", facts, live, now, turn="head") is not None
+    assert landing_plan.pending({}, "adr_number_taken", facts, live, now, turn="waiting") is None
+    released = landing_plan.Release(None, "released_by_ci", True)
+    step = landing_plan.released_step(
+        {}, released, facts, "merge_conflict", at="2026-10-23T07:00:00+00:00", turn="waiting"
+    )
+    assert step.kind == "wait"

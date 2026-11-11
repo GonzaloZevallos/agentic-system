@@ -101,7 +101,7 @@ def _none_refusals_not_owned(owned: Iterable[str]) -> list[str]:
     return [
         refusal
         for refusal in ALL_REFUSALS
-        if landing.landing_step(refusal, _facts(), _spent(), ()).kind == "none"
+        if landing.landing_step(refusal, _facts(), _spent(), (), turn="head").kind == "none"
         and refusal not in owned
         and refusal != "not_ready"
     ]
@@ -118,4 +118,4 @@ def test_the_check_rejects_a_none_refusal_the_set_forgot():
 @pytest.mark.parametrize("refusal", sorted(HUMAN_OWNED_REFUSALS))
 def test_the_table_answers_none_to_each_owned_refusal_whatever_the_budgets(refusal):
     for spent in (_spent(), _spent(passes=9, syncs=9, waited_s=1e6)):
-        assert landing.landing_step(refusal, _facts(), spent, ()).kind == "none"
+        assert landing.landing_step(refusal, _facts(), spent, (), turn="head").kind == "none"

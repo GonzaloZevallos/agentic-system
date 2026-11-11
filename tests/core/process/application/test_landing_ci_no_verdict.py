@@ -70,7 +70,7 @@ def test_the_released_step_is_a_wait_and_the_pair_is_persisted_by_the_patch():
     raw = _escalated()
     found = _release(_world(), raw, head=HEAD, upstream=NEW_MASTER)
     facts = replace(_facts(), current_master=NEW_MASTER)
-    step = landing_plan.released_step(raw, found, facts, "ci_no_verdict", at=AT)
+    step = landing_plan.released_step(raw, found, facts, "ci_no_verdict", at=AT, turn="head")
     assert step.kind == "wait"
     assert landing_plan.release_patch(raw, found, NEW_MASTER, AT)["merge_ci"]
 

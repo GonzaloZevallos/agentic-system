@@ -20,6 +20,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing as landing_rules
 from ..domain import merge_ci
 from ..domain.landing import LandingStepKind
+from ..domain.landing_order import Turn
 from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_adr, landing_fix, landing_plan, landing_slice, landing_sync
@@ -63,6 +64,7 @@ def land(
     role_span: landing_plan.RoleSpanOpener | None = None,
     run_kind: RunKind = "land_model",
     await_resume: Callable[[str], bool] | None = None,
+    turn: Turn,
 ) -> LandResult:
     """Takes `task_id`'s run lock (`LockHeld` if another process holds it) and releases it
     on the way out, whatever happens. `run_kind` is the kind this process registered under
@@ -88,6 +90,7 @@ def land(
             role_span,
             run_kind,
             _after_releasing(lock, await_resume),
+            turn,
         )
     finally:
         lock.release(task_id)
@@ -123,6 +126,7 @@ def _land(
     role_span: landing_plan.RoleSpanOpener | None,
     run_kind: RunKind,
     await_resume: Callable[[str], bool] | None,
+    turn: Turn,
 ) -> LandResult:
     # The port answers a bare `dict`: the document carries keys beyond the state, and every
     # reader below takes it as the state (`.get` for the keys that may be absent).
@@ -178,6 +182,7 @@ def _land(
             facts,
             slice_inputs,
             landing_plan.head_ancestry(ports, cfg, head, master),
+            turn=turn,
         )
     try:
         now: datetime | None = datetime.fromisoformat(clock())
@@ -204,6 +209,7 @@ def _land(
             at=at,
             slicing=slice_inputs,
             ancestry=landing_plan.head_ancestry(ports, cfg, head, master),
+            turn=turn,
         )
     if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
         return _refused(task_id, raw, run_kind, step.kind, head, log)

@@ -624,6 +624,7 @@ class _LandingLauncher(FakeLauncher):
                     lambda line: None,
                     clock=lambda: "2026-10-14T00:00:00+00:00",
                     live=self.live,
+                    turn="head",
                 )
             )
         return pid
@@ -725,6 +726,7 @@ def test_a_head_that_moved_between_the_decision_and_the_dispatch_writes_nothing(
         frozenset(),
         logged.append,
         live=frozenset({"re_review"}),
+        turn="head",
     )
 
     assert result == landing.LandResult("skipped", "head_moved", "re_review")
@@ -736,7 +738,14 @@ def test_land_takes_the_run_lock_and_releases_it_even_when_it_stops(tmp_path):
     ports = _ports()
     locks = _HeldLocks()
     result = landing.land(
-        "GH-9", _cfg(tmp_path), ports, locks, Upstream("o", MASTER, None), frozenset(), print
+        "GH-9",
+        _cfg(tmp_path),
+        ports,
+        locks,
+        Upstream("o", MASTER, None),
+        frozenset(),
+        print,
+        turn="head",
     )
     assert result.kind == "stopped" and result.reason == "no_pull_request"
     assert locks.taken == ["GH-9"] and locks.released == ["GH-9"]
@@ -762,8 +771,10 @@ def test_a_second_land_of_the_same_head_and_step_is_skipped_without_a_write(tmp_
         lambda line: None,
     )
     live = frozenset({"re_review"})
-    assert landing.land(*args, live=live, resume=lambda number: 4242).kind == "dispatched"
-    again = landing.land(*args, live=live, resume=lambda number: 4242)
+    assert (
+        landing.land(*args, live=live, resume=lambda number: 4242, turn="head").kind == "dispatched"
+    )
+    again = landing.land(*args, live=live, resume=lambda number: 4242, turn="head")
     assert again == landing.LandResult("skipped", "already_dispatched", "re_review")
     assert len(dispatched) == 1 and len((ports.documents.load("GH-5") or {})["landing"]) == 1
 

@@ -41,7 +41,7 @@ def _answer(facts: rules.MergeFacts) -> tuple[rules.MergeDecision, LandingStep |
     decision = rules.auto_merge_decision(facts)
     if decision.kind != "refuse" or decision.reason is None:
         return decision, None
-    return decision, landing_plan.step_for({}, decision.reason, facts)
+    return decision, landing_plan.step_for({}, decision.reason, facts, turn="head")
 
 
 def test_every_expansion_reported_and_completed_names_nothing_to_escalate():

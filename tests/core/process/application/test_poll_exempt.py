@@ -261,6 +261,7 @@ class _StaleLauncher(FakeLauncher):
                 lambda line: None,
                 live=LIVE,
                 run_kind=argv[5],
+                turn="head",
             )
         )
         return pid

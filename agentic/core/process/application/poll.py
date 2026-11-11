@@ -420,7 +420,7 @@ def _landing_step(
     recomputes, so the child registers under the run kind of the step it will take."""
     waiting = cfg is not None and landing_plan.release_asked(
         raw,
-        landing_plan.step_for(raw, refusal, facts).kind,
+        landing_plan.step_for(raw, refusal, facts, turn="head").kind,
         refusal=refusal,
         facts=facts,
     )
@@ -432,14 +432,16 @@ def _landing_step(
         else None
     )
     if outcome is None or not outcome.released or cfg is None or facts.pr_head is None:
-        return landing_plan.pending(raw, refusal, facts, live, now, False)
+        return landing_plan.pending(raw, refusal, facts, live, now, False, turn="head")
     at = now.isoformat()
     ancestry = (
         landing_plan.head_ancestry(ports, cfg, facts.pr_head, facts.current_master)
         if facts.current_master is not None
         else None
     )
-    step = landing_plan.released_step(raw, outcome, facts, refusal, at=at, ancestry=ancestry)
+    step = landing_plan.released_step(
+        raw, outcome, facts, refusal, at=at, ancestry=ancestry, turn="head"
+    )
     patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
     if step.kind == "wait" and patch and refusal == "ci_no_verdict":

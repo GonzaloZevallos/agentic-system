@@ -101,7 +101,7 @@ def step(state: dict, **over) -> LandingStep:
     f = facts(state, **over)
     decision = rules.auto_merge_decision(f)
     assert decision.reason is not None
-    return landing_plan.step_for(state, decision.reason, f)
+    return landing_plan.step_for(state, decision.reason, f, turn="head")
 
 
 def test_a_diagnosis_before_the_restoration_does_not_end_the_landing():

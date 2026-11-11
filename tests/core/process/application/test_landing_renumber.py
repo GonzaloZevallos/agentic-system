@@ -73,6 +73,7 @@ def _land(tmp_path, ports):
         lambda line: None,
         clock=lambda: "2026-10-14T00:00:00+00:00",
         live=LIVE,
+        turn="head",
     )
 
 
@@ -153,6 +154,7 @@ def test_a_rewrite_of_code_is_not_carried_and_the_next_round_re_reviews(tmp_path
         lambda line: None,
         clock=lambda: "2026-10-14T00:00:00+00:00",
         live=frozenset({"re_review"}),
+        turn="head",
     )
     assert result.step == "re_review"
     assert new != head

@@ -57,6 +57,7 @@ def _land(ports, tmp_path, launcher=None):
         clock=lambda: NOW,
         launcher=launcher,
         argv0="agentic",
+        turn="head",
     )
     return result, lines
 
@@ -631,6 +632,7 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
         launcher=launcher,
         argv0="agentic",
         role_span=lambda role: _Span(),
+        turn="head",
     )
 
     assert result.step == "diagnose"
@@ -689,6 +691,7 @@ class _Driver(FakeLauncher):
                 clock=lambda: NOW,
                 launcher=self,
                 argv0="agentic",
+                turn="head",
             )
         elif argv[1] == "merge":
             merge.merge_task(
@@ -1010,6 +1013,7 @@ def _land_at(ports, tmp_path, when, launcher=None):
         clock=lambda: when.isoformat(),
         launcher=launcher,
         argv0="agentic",
+        turn="head",
     )
     return result, lines
 

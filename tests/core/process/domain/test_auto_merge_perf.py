@@ -111,7 +111,7 @@ def test_a_perf_refusal_is_in_the_closed_set_and_the_landing_leaves_it_to_the_hu
     assert "perf_unverified" in get_args(rules.MergeRefusal)
     facts = _facts(**_perf("unverified", HEAD))
     spent = landing.LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnoses=0, waited_s=None)
-    step = landing.landing_step("perf_unverified", facts, spent, ("api",))
+    step = landing.landing_step("perf_unverified", facts, spent, ("api",), turn="head")
     assert step == landing.LandingStep("none", "perf_unverified", ())
 
 

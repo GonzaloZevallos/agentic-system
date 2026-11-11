@@ -75,6 +75,7 @@ def _land(ports, spawner, clock, lines=None):
         (lines if lines is not None else []).append,
         clock=clock,
         resume=spawner,
+        turn="head",
     )
 
 
@@ -227,6 +228,7 @@ def test_an_unstarted_pass_is_run_by_land_on_its_own_entry(monkeypatch):
         frozenset({"re_review"}),
         lines.append,
         clock=clock,
+        turn="head",
     )
 
     after = ports.documents.load("GH-5")["landing"]
@@ -260,6 +262,7 @@ def test_a_stamped_pass_is_resumed_not_run_again(monkeypatch):
         lines.append,
         clock=_Clock(),
         resume=spawner,
+        turn="head",
     )
     assert ran == [] and spawner.spawned == [5]
     assert len(ports.documents.load("GH-5")["landing"]) == 1

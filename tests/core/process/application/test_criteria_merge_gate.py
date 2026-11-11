@@ -152,6 +152,7 @@ def test_land_leaves_a_criteria_refusal_to_the_human_and_spawns_nothing(tmp_path
         lines.append,
         live=frozenset({"sync_master"}),
         resume=lambda number: spawned.append(number) or 1,
+        turn="head",
     )
 
     assert spawned == []

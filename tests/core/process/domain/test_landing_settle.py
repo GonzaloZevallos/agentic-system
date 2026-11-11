@@ -84,6 +84,7 @@ def step_for(s, f=None, refusal=REFUSAL, spent_=None, escalated=False, slicing=N
         ledger_only=plan_settlement.ledger_only(refusal, f, s),
         pending=plan_settlement.pending(s),
         escalated=escalated,
+        turn="head",
     )
 
 
@@ -126,7 +127,7 @@ def test_a_subtask_or_other_location_blocker_is_not_ledger_only():
 
 def test_the_gh374_shape_settles_and_then_the_refusal_is_gone():
     s = state()
-    assert step_for(s) == LandingStep("settle", REFUSAL)
+    assert step_for(s, turn="head") == LandingStep("settle", REFUSAL)
     settled = {**s, "plan_settled": plan_settlement.pending(s)}
     assert [r for r in rules.open_findings(settled) if r["severity"] == "blocking"] == []
     assert plan_settlement.pending(settled) == []
@@ -135,20 +136,20 @@ def test_the_gh374_shape_settles_and_then_the_refusal_is_gone():
 def test_without_a_live_approval_it_escalates_once_then_is_none_on_the_same_head():
     s = state(approved=False)
     assert plan_settlement.pending(s) == []
-    assert step_for(s) == LandingStep("escalate_ledger", REFUSAL)
-    assert step_for(s, escalated=True) == LandingStep("none", REFUSAL)
+    assert step_for(s, turn="head") == LandingStep("escalate_ledger", REFUSAL)
+    assert step_for(s, escalated=True, turn="head") == LandingStep("none", REFUSAL)
 
 
 def test_a_subtask_blocking_row_among_them_is_a_fix_as_before():
     s = state(extra=[rec("agentic/x.py", "bug", 1, scope="subtask", subtask="integration")])
-    assert step_for(s) == LandingStep("fix", REFUSAL, ("integration",))
+    assert step_for(s, turn="head") == LandingStep("fix", REFUSAL, ("integration",))
 
 
 @pytest.mark.parametrize("slicing", [None, "no_clean_slice", landing.Slice(("a", "b"))])
 def test_an_exhausted_landing_under_ledger_only_never_slices_or_diagnoses(slicing):
     s = state(approved=False)
     full = spent(passes=landing.LANDING_PASSES_MAX)
-    assert step_for(s, spent_=full, slicing=slicing).kind == "escalate_ledger"
+    assert step_for(s, spent_=full, slicing=slicing, turn="head").kind == "escalate_ledger"
     # A verdict sync that the budgets refuse is an exhaustion too.
     due = spent(
         diagnoses=1,
@@ -156,7 +157,7 @@ def test_an_exhausted_landing_under_ledger_only_never_slices_or_diagnoses(slicin
         verdict_sync_due=True,
         syncs=landing.LANDING_SYNCS_MAX,
     )
-    assert step_for(s, spent_=due, slicing=slicing).kind == "escalate_ledger"
+    assert step_for(s, spent_=due, slicing=slicing, turn="head").kind == "escalate_ledger"
 
 
 def test_after_diagnosis_never_restarts_a_ledger_only_refusal():
@@ -178,16 +179,21 @@ def test_other_exhausted_refusals_on_an_approved_green_head_keep_their_outputs(
 ):
     s = state()
     f = facts(**over)
-    assert step_for(s, f, refusal, spent(**budget)).kind == "diagnose"
-    assert step_for(s, f, refusal, spent(**budget), slicing=landing.Slice(("a",))).kind == (
-        "land_slice"
-    )
+    assert step_for(s, f, refusal, spent(**budget), turn="head").kind == "diagnose"
+    assert step_for(
+        s, f, refusal, spent(**budget), slicing=landing.Slice(("a",)), turn="head"
+    ).kind == ("land_slice")
 
 
 def test_a_ledger_only_flag_on_another_refusal_changes_nothing():
     f = facts(failed_step="conflict")
     got = landing.landing_step(
-        "merge_conflict", f, spent(syncs=landing.LANDING_SYNCS_MAX), (), ledger_only=True
+        "merge_conflict",
+        f,
+        spent(syncs=landing.LANDING_SYNCS_MAX),
+        (),
+        ledger_only=True,
+        turn="head",
     )
     assert got.kind == "diagnose"
 

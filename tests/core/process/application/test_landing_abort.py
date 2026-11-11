@@ -39,6 +39,7 @@ def _land(ports, tmp_path, log, resumed):
         clock=lambda: "2026-10-14T00:00:00+00:00",
         live=LIVE,
         resume=resume,
+        turn="head",
     )
 
 

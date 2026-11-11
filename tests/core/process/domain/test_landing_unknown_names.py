@@ -12,7 +12,7 @@ NAMES = ("e2e", "pytest")
 def _step(names_escalated=False, **spent):
     facts = _facts(ci_unreported=NAMES)
     return landing.landing_step(
-        "ci_unknown_names", facts, _spent(**spent), (), names_escalated=names_escalated
+        "ci_unknown_names", facts, _spent(**spent), (), names_escalated=names_escalated, turn="head"
     )
 
 

@@ -85,7 +85,9 @@ def test_the_literal_lists_the_refusal_right_after_pr_not_open():
 
 def test_the_landing_asks_the_human_about_the_refusal_and_a_spent_task_has_none_left():
     spent = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnoses=0, waited_s=None)
-    step = landing.landing_step("adr_number_taken", _facts(adr_collision=AMBIGUOUS), spent, ())
+    step = landing.landing_step(
+        "adr_number_taken", _facts(adr_collision=AMBIGUOUS), spent, (), turn="head"
+    )
     assert step == LandingStep("escalate_adr", "adr_number_taken")
     done = replace(spent, diagnoses=1)
-    assert landing.landing_step("adr_number_taken", _facts(), done, ()).kind == "none"
+    assert landing.landing_step("adr_number_taken", _facts(), done, (), turn="head").kind == "none"
