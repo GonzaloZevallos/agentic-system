@@ -268,3 +268,16 @@ def test_an_unsafe_docs_path_fails_when_the_stack_is_read(product):
     )
     with pytest.raises(ValueError, match="overlaps `docs/adr`"):
         GitStack(product).docs(base)
+
+
+def test_generated_is_read_from_the_revision_asked(product):
+    with_key = commit_stack(product, "checks:\n  tests: pytest\ngenerated:\n  - web/gen/**\n")
+    without = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).generated(with_key) == ("web/gen/**",)
+    assert GitStack(product).generated(without) == ()
+
+
+def test_a_match_all_generated_glob_at_the_base_is_an_error_naming_the_key(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\ngenerated:\n  - '**'\n")
+    with pytest.raises(ValueError, match=r"stack.yaml: .*`generated`"):
+        GitStack(product).generated(base)

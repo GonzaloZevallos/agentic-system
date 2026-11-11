@@ -95,6 +95,7 @@ from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
+from agentic.core.process.domain.size_budget import NumstatRow
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -455,6 +456,8 @@ class MemoryStack:
         self.declared_design = design
         # None is a product that declares no `docs` block: no generated docs, today's gate.
         self.declared_docs = docs
+        # Empty is a product that declares no `generated` globs: only the lockfiles and `docs`.
+        self.declared_generated: tuple[str, ...] = ()
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
@@ -602,6 +605,9 @@ class MemoryStack:
     def docs(self, revision: str) -> Docs | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_docs
+
+    def generated(self, revision: str) -> tuple[str, ...]:
+        return self.declared_generated
 
 
 class MemoryCommands:
@@ -976,6 +982,8 @@ class MemoryWorkspace:
         # GH-473: what `changed_lines` answers, and each call.
         self.diff_lines = 0
         self.line_reads: list[tuple[str, str]] = []
+        self.numstat_rows: tuple[NumstatRow, ...] = ()
+        self.numstat_reads: list[tuple[str, str]] = []
         # GH-420: what `introduced_paths` answers (or raises as a `GitError`), each ask as
         # (base, head, against), and the sha `fetched_upstream` reads (None: no upstream).
         self.introduced: tuple[str, ...] = ()
@@ -1407,6 +1415,10 @@ class MemoryWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
+
+    def numstat(self, upstream: str, head: str) -> tuple[NumstatRow, ...]:
+        self.numstat_reads.append((upstream, head))
+        return self.numstat_rows
 
     def changed_lines(self, base: str, head: str) -> int:
         self.line_reads.append((base, head))

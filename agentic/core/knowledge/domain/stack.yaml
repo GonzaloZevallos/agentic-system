@@ -93,6 +93,14 @@ checks:
 # merge_inert:
 #   - "docs/assets/**"
 #
+# `generated`: optional (GH-592). The globs of the paths the product generates, besides its
+# lockfiles and the `docs` paths. They never count against a task's size budget (15 hand-written
+# files, 400 added hand-written lines). A glob that matches everything (`*`, `**`), an absolute
+# path or a `..` segment is refused.
+#
+# generated:
+#   - "web/src/api/*.ts"
+#
 # `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
 # adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
 # denial carries verbatim. One that was already in the file is not the task's. What a

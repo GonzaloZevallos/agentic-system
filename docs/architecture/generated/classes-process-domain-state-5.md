@@ -36,6 +36,7 @@ classDiagram
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
     class task__ReleasePatch["ReleasePatch"]
+    class task__Restoration["Restoration"]
 ```
 
 ## Relaciones con otras páginas

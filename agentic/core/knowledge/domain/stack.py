@@ -123,6 +123,11 @@ metric's name ends with its unit's suffix). Read only by `agentic perf`: it neve
 `checks`, the presubmit, `affected_checks`, `ci` or the merge gate. Absent it reads as `{}`;
 present and empty, or any shape that is not that, fails at load like `design`.
 
+**`generated`**: optional (GH-592). A non-empty list of path globs the product generates, which
+never count against a task's size budget, besides the lockfiles and the `docs.paths`. Each entry
+goes through the same refusal as a `docs` path, so a glob that matches every path is refused at
+load. Absent it reads as `()`.
+
 **`merge_inert`**: optional. A non-empty list of path globs the product promises none of its
 checks reads: master's gain since a recorded check pass that touches only those paths cannot
 change the pass, and the merge reuses it (ADR-0045, amendment). Each entry goes through
@@ -200,6 +205,7 @@ KEYS = (
     "check_budgets",
     "merge_inert",
     "docs",
+    "generated",
     "verifications",
     "check_timeouts",
     "not_ready_exit",
@@ -323,6 +329,27 @@ def docs(data: object, source: object) -> Docs | None:
     if parallel_checks(data, source):
         _refuse_readers_of(paths, declared, source)
     return Docs(generate=generate.strip(), paths=paths)
+
+
+def generated(data: object, source: object) -> tuple[str, ...]:
+    """The globs of the paths the product generates, besides `docs.paths` and the lockfiles:
+    they never count against a task's size budget (`size_budget`, GH-592). Absent is `()`.
+    Present, it is a non-empty list of non-blank globs, each through `_path_refusal` like a
+    `docs` path, so a glob that matches every path (`*`, `**`, `**/*`) fails at load: it would
+    exclude the whole tree from the budget."""
+    declared = _declared(data, source)
+    if "generated" not in declared:
+        return ()
+    found = _declared_nonempty(declared, source, "generated")
+    if not isinstance(found, list) or not all(
+        isinstance(glob, str) and glob.strip() for glob in found
+    ):
+        raise ValueError(f"{source}: expected `generated` to be a list of non-blank glob strings")
+    globs = tuple(glob.strip() for glob in found)
+    for glob in globs:
+        if reason := _path_refusal(glob):
+            raise ValueError(f"{source}: {glob!r} under `generated` is refused: {reason}")
+    return globs
 
 
 def docs_command(block: Docs) -> str:
@@ -1293,6 +1320,14 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         Disabled(),
         "mapping of `generate` and `paths`: the command that rewrites generated docs and the "
         "globs it owns",
+    ),
+    KeyReference(
+        "generated",
+        generated,
+        (),
+        Computed(),
+        "list of path globs the product generates, besides `docs.paths` and the lockfiles: they "
+        "never count against a task's size budget",
     ),
     KeyReference(
         "verifications",
