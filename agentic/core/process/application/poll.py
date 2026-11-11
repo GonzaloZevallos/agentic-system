@@ -875,8 +875,36 @@ def _needs_human(ports: Ports, number: int) -> bool:
     return labels is not None and escalate_module.NEEDS_HUMAN in labels
 
 
+def _released(
+    ports: Ports,
+    cfg: Configuration | None,
+    task_id: str,
+    number: int,
+    raw: TaskState,
+    assessed: MergeAssessment | None,
+    stopped: bool,
+) -> bool:
+    """Whether an escalated task's owner already answered, so the task is the system's again:
+    the release `_landing_step` asks for the head, read the same way (`landing_plan.release`)."""
+    if cfg is None or assessed is None or stopped or not raw.get("escalated"):
+        return False
+    facts, decision = assessed.facts, assessed.decision
+    refusal = decision.reason
+    if decision.kind != "refuse" or refusal is None or facts.pr_head is None:
+        return False
+    if refusal in landing_rules.HUMAN_OWNED_REFUSALS:
+        return False
+    kind = landing_plan.step_for(raw, refusal, facts, turn="head").kind
+    if not landing_plan.release_asked(raw, kind, refusal=refusal, facts=facts):
+        return False
+    return landing_plan.release(
+        ports, cfg, task_id, raw, number, head=facts.pr_head, upstream=facts.current_master
+    ).released
+
+
 def _member(
     ports: Ports,
+    cfg: Configuration | None,
     lock: OrderLock,
     task_id: str,
     number: int,
@@ -901,6 +929,8 @@ def _member(
     waits = landing_rules.waits_on_human(raw, pr_head, refusal, needs_human=False, **common)
     if waits and assessed is not None and landing_plan.stranded_now(ports, task_id, raw):
         waits = False  # a stranded diagnose is escalated but the system's: `land` retries it
+    if waits and _released(ports, cfg, task_id, number, raw, assessed, bool(common["stopped"])):
+        waits = False  # the owner answered: the release is `land`'s to carry out
     if not waits and assessed is not None:
         waits = _needs_human(ports, number)
     return landing_order.Member(number, _stamp(raw), live_pass, waits)
@@ -912,6 +942,7 @@ def evaluate_landing_order(
     current_master: str,
     lock: OrderLock,
     busy: frozenset[str] = frozenset(),
+    cfg: Configuration | None = None,
 ) -> LandingRound:
     """The first phase (GH-588): `assess_merge` over every task with a pull request and no
     `closed_at`, and the head of the landing order over them (`landing_order.head`, the one
@@ -928,7 +959,7 @@ def evaluate_landing_order(
         if raw.get("closed_at") or not raw.get("pull_request"):
             continue
         if task_id in busy or lock.refusal(task_id) is not None:
-            member = _member(ports, lock, task_id, number, raw, None)
+            member = _member(ports, cfg, lock, task_id, number, raw, None)
             entries.append(OrderEntry(task_id, number, raw, None, member))
             members.append(member)
             continue
@@ -939,7 +970,7 @@ def evaluate_landing_order(
             continue
         member = None
         if not isinstance(assessed, Abandoned):
-            member = _member(ports, lock, task_id, number, raw, assessed)
+            member = _member(ports, cfg, lock, task_id, number, raw, assessed)
             members.append(member)
         entries.append(OrderEntry(task_id, number, raw, assessed, member))
     return LandingRound(tuple(entries), landing_order.head(members))
@@ -1012,7 +1043,7 @@ def gather_merges(
     if current_master is None:
         return []  # the round's own upstream note already says why
     found: list[int] = []
-    round_ = evaluate_landing_order(ports, eval_set, current_master, lock, busy)
+    round_ = evaluate_landing_order(ports, eval_set, current_master, lock, busy, cfg)
     for entry in round_.entries:
         task_id, number, raw = entry.task_id, entry.number, entry.raw
         assessed = entry.outcome

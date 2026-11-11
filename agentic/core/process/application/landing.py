@@ -123,7 +123,7 @@ def _note_order(
         return
     # The task itself is ours: it is at work, and a task at work is a member.
     head = evaluate_landing_order(
-        ports, eval_set, upstream.sha, _Unlocked(), frozenset({task_id})
+        ports, eval_set, upstream.sha, _Unlocked(), frozenset({task_id}), None
     ).head
     if head is not None and head != number:
         log("not the head of the landing order: run by the owner")
