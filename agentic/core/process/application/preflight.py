@@ -8,9 +8,10 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
-from ..domain import docs, rules
+from ..domain import docs, rules, task_path
 from ..domain.roles import ROLES
 from ..domain.run_check import resolve_wall
+from ..domain.task import TaskState
 from .checkouts import task_base
 from .ports import REMERGE_DIFF_MIN_GIT, Ports
 from .run_role import load_prompt
@@ -47,6 +48,9 @@ PLACEHOLDERS = {
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.
     "product": "product",
+    # `pjm.md` lists the risk areas PjM chooses from; `classify` passes the product's own, the
+    # gate only has to render the built-in menu.
+    "risk_areas": task_path.risk_menu(()),
 }
 
 
@@ -184,6 +188,17 @@ def product_name(ports: Ports) -> str:
         return ports.stack.product()
     except (ValueError, OSError):
         return UNKNOWN_PRODUCT
+
+
+def risk_areas(ports: Ports, state: TaskState) -> tuple[tuple[str, str], ...] | None:
+    """The `(id, description)` of the risk areas the product declares at the task's base, or
+    `None` when the stack cannot be read: a menu PjM saw incomplete, which `task_path.decide`
+    must not take for "no area applies". The base, like the rest of the stack (GH-591)."""
+    try:
+        revision = task_base(state, ports)
+        return tuple((a.id, a.description) for a in ports.stack.risk_areas(revision))
+    except (ValueError, OSError):
+        return None
 
 
 def no_setup(ports: Ports) -> str | None:
