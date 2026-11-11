@@ -1823,7 +1823,9 @@ class MemoryTracker:
     def issue_state(self, number: int) -> IssueState:
         if number in self.state_errors:
             raise ValueError(f"gh issue view {number} failed: scripted")
-        return self.states[number]
+        # GH-588: the landing order reads the labels of every delivered task's issue; one a
+        # test did not script is open and carries none.
+        return self.states.get(number, IssueState("OPEN", "", None, None, ()))
 
 
 class MemoryCheckResults:

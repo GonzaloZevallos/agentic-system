@@ -40,10 +40,12 @@ from ..domain import (
     rules,
 )
 from ..domain import landing as landing_rules
+from ..domain import landing_order
 from ..domain import retakes as retake_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStep, LandingStepKind
+from ..domain.landing_order import Turn
 from ..domain.retakes import RETAKEN, RETAKEN_AFTER_CRASH, RETAKEN_ORPHANED
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
 from . import (
@@ -412,6 +414,7 @@ def _landing_step(
     facts: rules.MergeFacts,
     live: frozenset[LandingStepKind],
     now: datetime,
+    turn: Turn,
 ) -> LandingStep | None:
     """The step worth a `land` child for a refused task (`landing_plan.pending`). An escalated
     document whose table step is the diagnose asks `landing_plan.release` (GH-328, GH-442; the
@@ -420,7 +423,7 @@ def _landing_step(
     recomputes, so the child registers under the run kind of the step it will take."""
     waiting = cfg is not None and landing_plan.release_asked(
         raw,
-        landing_plan.step_for(raw, refusal, facts, turn="head").kind,
+        landing_plan.step_for(raw, refusal, facts, turn=turn).kind,
         refusal=refusal,
         facts=facts,
     )
@@ -432,7 +435,7 @@ def _landing_step(
         else None
     )
     if outcome is None or not outcome.released or cfg is None or facts.pr_head is None:
-        return landing_plan.pending(raw, refusal, facts, live, now, False, turn="head")
+        return landing_plan.pending(raw, refusal, facts, live, now, False, turn=turn)
     at = now.isoformat()
     ancestry = (
         landing_plan.head_ancestry(ports, cfg, facts.pr_head, facts.current_master)
@@ -440,7 +443,7 @@ def _landing_step(
         else None
     )
     step = landing_plan.released_step(
-        raw, outcome, facts, refusal, at=at, ancestry=ancestry, turn="head"
+        raw, outcome, facts, refusal, at=at, ancestry=ancestry, turn=turn
     )
     patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
@@ -456,6 +459,29 @@ def _landing_step(
     ):
         return None
     return step
+
+
+def _instant(text: object) -> datetime | None:
+    """`text` as an aware instant, `None` when it is not an ISO time."""
+    if not isinstance(text, str):
+        return None
+    try:
+        then = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return then if then.tzinfo is not None else then.replace(tzinfo=UTC)
+
+
+def _turn_anchor(anchor: str | None, raw: TaskState, pr_head: str | None) -> str | None:
+    """`anchor` or, when the poller recorded the instant this very head took the first place
+    of the landing order (`head_since_*`, GH-588), the later of the two: a pull request that
+    waited its turn with a CI nobody asked for is not late for it. A record of another head, or
+    one that does not read, leaves `anchor` as it was."""
+    since = _instant(raw.get("head_since_at"))
+    if since is None or not rules.same_commit(raw.get("head_since_head"), pr_head):
+        return anchor
+    then = _instant(anchor)
+    return anchor if then is not None and then >= since else since.isoformat()
 
 
 def with_ci(
@@ -480,8 +506,10 @@ def with_ci(
     if report is None:
         return replace(facts, ci_required=names)
     if isinstance(report, ci.CiUnreadable):
-        anchor = ci.ci_wait_anchor(
-            raw.get("pushed_head"), raw.get("pushed_at"), facts.pr_head, None
+        anchor = _turn_anchor(
+            ci.ci_wait_anchor(raw.get("pushed_head"), raw.get("pushed_at"), facts.pr_head, None),
+            raw,
+            facts.pr_head,
         )
         return replace(
             facts,
@@ -489,8 +517,12 @@ def with_ci(
             ci_unreadable=report,
             ci_waited_s=_seconds_since(anchor, now),
         )
-    anchor = ci.ci_wait_anchor(
-        raw.get("pushed_head"), raw.get("pushed_at"), facts.pr_head, report.opened_at
+    anchor = _turn_anchor(
+        ci.ci_wait_anchor(
+            raw.get("pushed_head"), raw.get("pushed_at"), facts.pr_head, report.opened_at
+        ),
+        raw,
+        facts.pr_head,
     )
     return replace(
         facts,
@@ -799,6 +831,129 @@ def awaiting_merge(ports: Ports) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class OrderEntry:
+    """One task of the round's first phase (GH-588): what was read of it and, when a pull request
+    of it can lead the order, its `member`. `outcome` is `None` for a task a child already works
+    on (busy or locked: read nothing), a `StackUnreadable`, an `Abandoned` or the assessment."""
+
+    task_id: str
+    number: int
+    raw: TaskState
+    outcome: MergeAssessment | Abandoned | StackUnreadable | None
+    member: landing_order.Member | None
+
+
+@dataclass(frozen=True)
+class LandingRound:
+    """The first phase of `gather_merges`: every task with a pull request, in document order,
+    and the issue at the head of the product's landing order (`None`: nobody eligible)."""
+
+    entries: tuple[OrderEntry, ...]
+    head: int | None
+
+
+def _stamp(raw: TaskState) -> datetime | None:
+    return _instant(raw.get("landing_queued_at"))
+
+
+def _needs_human(ports: Ports, number: int) -> bool:
+    """Whether the issue carries `needs-human`: the one read of the issue per delivered task. An
+    issue that cannot be read does not make its task a person's: the document says the rest."""
+    try:
+        labels = ports.tracker.issue_state(number).labels
+    except (ValueError, OSError):
+        return False
+    return labels is not None and escalate_module.NEEDS_HUMAN in labels
+
+
+def _member(
+    ports: Ports,
+    lock: RunLock,
+    task_id: str,
+    number: int,
+    raw: TaskState,
+    assessed: MergeAssessment | None,
+) -> landing_order.Member:
+    """`task_id`'s place in the order. `assessed` is `None` for a task a child works on: its
+    refusal is not known and nothing is read; the document alone says whether it is a person's."""
+    live_pass = landing_rules.landing_pass_live(raw)
+    facts = assessed.facts if assessed is not None else None
+    decision = assessed.decision if assessed is not None else None
+    pr_head = facts.pr_head if facts is not None else None
+    record = lock.read(task_id) if assessed is not None else None
+    common = {
+        "spent": landing_plan.spent(raw, pr_head, None),
+        "stopped": record is not None and record.stopped_deliberately,
+        # A stranded diagnose is the system's: `land` frees it and retries it on the calendar,
+        # so it is no reason to keep the task out of the order.
+        "stranded": False,
+    }
+    refusal = decision.reason if decision is not None and decision.kind == "refuse" else None
+    waits = landing_rules.waits_on_human(raw, pr_head, refusal, needs_human=False, **common)
+    if not waits and assessed is not None:
+        waits = _needs_human(ports, number)
+    return landing_order.Member(number, _stamp(raw), live_pass, waits)
+
+
+def evaluate_landing_order(
+    ports: Ports,
+    eval_set: frozenset[int] | None,
+    current_master: str,
+    lock: RunLock,
+    busy: frozenset[str] = frozenset(),
+) -> LandingRound:
+    """The first phase (GH-588): `assess_merge` over every task with a pull request and no
+    `closed_at`, and the head of the landing order over them (`landing_order.head`, the one
+    place that sorts). A pull request closed unmerged is not a member; a busy or locked task is,
+    since a child at work is the head if it is the oldest. The one function `gather_merges` and
+    `agentic land` share, so there is no second ordering."""
+    entries: list[OrderEntry] = []
+    members: list[landing_order.Member] = []
+    for task_id in ports.documents.ids():
+        number = ports.inbox.issue_of(task_id)
+        if number is None:
+            continue
+        raw = ports.documents.load(task_id) or {}
+        if raw.get("closed_at") or not raw.get("pull_request"):
+            continue
+        if task_id in busy or lock.refusal(task_id) is not None:
+            member = _member(ports, lock, task_id, number, raw, None)
+            entries.append(OrderEntry(task_id, number, raw, None, member))
+            members.append(member)
+            continue
+        try:
+            assessed = assess_merge(ports, task_id, raw, number, eval_set, current_master)
+        except StackUnreadable as unreadable:
+            entries.append(OrderEntry(task_id, number, raw, unreadable, None))
+            continue
+        member = None
+        if not isinstance(assessed, Abandoned):
+            member = _member(ports, lock, task_id, number, raw, assessed)
+            members.append(member)
+        entries.append(OrderEntry(task_id, number, raw, assessed, member))
+    return LandingRound(tuple(entries), landing_order.head(members))
+
+
+def _anchor_turn(
+    ports: Ports, task_id: str, raw: TaskState, facts: rules.MergeFacts, now: datetime
+) -> bool:
+    """Record, through `record_closure`, the instant `facts.pr_head` first leads the order
+    (`head_since_at`, `head_since_head`) when the document does not hold it for this head. The
+    poller is their only writer. A write a concurrent `save` loses is written again next round
+    with a later instant, which only counts less waiting, never more. True when written."""
+    head = facts.pr_head
+    if head is None or rules.same_commit(raw.get("head_since_head"), head):
+        return False
+    try:
+        ports.documents.record_closure(
+            task_id, {"head_since_at": now.isoformat(), "head_since_head": head}
+        )
+    except (ValueError, OSError):
+        return False
+    return True
+
+
 def gather_merges(
     ports: Ports,
     eval_set: frozenset[int] | None,
@@ -847,25 +1002,20 @@ def gather_merges(
     if current_master is None:
         return []  # the round's own upstream note already says why
     found: list[int] = []
-    for task_id in ports.documents.ids():
-        number = ports.inbox.issue_of(task_id)
-        if number is None:
-            continue
-        raw = ports.documents.load(task_id) or {}
-        reference = raw.get("pull_request")
-        if raw.get("closed_at") or not reference:
-            continue
-        if task_id in busy or lock.refusal(task_id) is not None:
-            continue
-        try:
-            assessed = assess_merge(ports, task_id, raw, number, eval_set, current_master)
-        except StackUnreadable:
+    round_ = evaluate_landing_order(ports, eval_set, current_master, lock, busy)
+    for entry in round_.entries:
+        task_id, number, raw = entry.task_id, entry.number, entry.raw
+        assessed = entry.outcome
+        if assessed is None:
+            continue  # busy or locked: a child already works on it
+        if isinstance(assessed, StackUnreadable):
             # A base the stack cannot be read at (gone, or a malformed key) is this task's
             # problem, never the round's: every other candidate is still decided (GH-216).
             out.append(
                 f"agentic: poll: auto-merge #{number} -> left to the human: stack_unreadable"
             )
             continue
+        reference = raw.get("pull_request")
         if isinstance(assessed, Abandoned):
             # Closed unmerged: nothing to merge. Silent and unwritten unless slices landed
             # for it (GH-334), which this very read decides, without asking the tracker again.
@@ -883,12 +1033,31 @@ def gather_merges(
                     reruns,
                 )
             continue
+        turn = landing_order.turn_of(number, round_.head)
         facts, decision, report, pull_request = (
             assessed.facts,
             assessed.decision,
             assessed.report,
             assessed.pull_request,
         )
+        owned = (
+            entry.member is not None and entry.member.waits_on_human and decision.kind == "refuse"
+        )
+        if turn == "waiting" and not owned:
+            # GH-588: a pull request that is not the head of the order is left as it is,
+            # approved: a clean merge-tree needs no pass, a conflict none until its turn.
+            reading = (
+                "unread" if facts.conflicts is None else "conflicts" if facts.conflicts else "clean"
+            )
+            out.append(
+                f"agentic: poll: auto-merge #{number} -> waiting ({reading}) behind #{round_.head}"
+            )
+            continue
+        if _anchor_turn(ports, task_id, raw, facts, now):
+            # The head's CI wait counts from this round, not from a push it waited behind.
+            if facts.ci_waited_s is not None:
+                facts = replace(facts, ci_waited_s=0.0)
+                decision = rules.auto_merge_decision(facts)
         if assessed.conflict_unread:
             head = pull_request.head_oid if pull_request is not None else None
             out.append(f"agentic: poll: auto-merge #{number} -> conflict unread ({head})")
@@ -908,11 +1077,11 @@ def gather_merges(
                 names = ", ".join(check.name for check in facts.ci_verdict.failing)
                 line += f" ({names})"
             out.append(line)
-            if lands is not None and decision.reason is not None:
+            if lands is not None and decision.reason is not None and turn == "head":
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
                 step = _landing_step(
-                    ports, cfg, task_id, raw, number, decision.reason, facts, live, now
+                    ports, cfg, task_id, raw, number, decision.reason, facts, live, now, turn
                 )
                 if step is not None:
                     kind = landing_rules.run_kind_of(step.kind, decision.reason)
