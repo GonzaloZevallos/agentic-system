@@ -738,3 +738,9 @@ def test_a_waiting_task_is_never_worth_a_land_child_nor_a_released_step():
         {}, released, facts, "merge_conflict", at="2026-10-23T07:00:00+00:00", turn="waiting"
     )
     assert step.kind == "wait"
+
+
+def test_a_waiting_task_with_a_planning_defect_waits_and_the_head_escalates():
+    facts = rules.MergeFacts(**{**_adr_facts().__dict__, "ci_unreported": frozenset({"web"})})
+    assert landing_plan.step_for({}, "ci_unknown_names", facts, turn="head").kind == "escalate"
+    assert landing_plan.step_for({}, "ci_unknown_names", facts, turn="waiting").kind == "wait"
