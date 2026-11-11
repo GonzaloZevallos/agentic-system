@@ -891,6 +891,8 @@ def _member(
     }
     refusal = decision.reason if decision is not None and decision.kind == "refuse" else None
     waits = landing_rules.waits_on_human(raw, pr_head, refusal, needs_human=False, **common)
+    if waits and assessed is not None and landing_plan.stranded_now(ports, task_id, raw):
+        waits = False  # a stranded diagnose is escalated but the system's: `land` retries it
     if not waits and assessed is not None:
         waits = _needs_human(ports, number)
     return landing_order.Member(number, _stamp(raw), live_pass, waits)

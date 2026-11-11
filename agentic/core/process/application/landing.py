@@ -27,7 +27,7 @@ from . import landing_adr, landing_fix, landing_plan, landing_slice, landing_syn
 from .checkouts import SetupFailed, task_checkout
 from .escalate import NEEDS_HUMAN
 from .landing_plan import LandingContext
-from .poll import Abandoned, StackUnreadable, assess_merge
+from .poll import Abandoned, StackUnreadable, assess_merge, evaluate_landing_order
 from .ports import GitError, Launcher, Ports, RunLock, Upstream
 from .resume import state_from
 
@@ -75,6 +75,7 @@ def land(
 
     lock.acquire(task_id, "land")
     try:
+        _note_order(task_id, ports, lock, upstream, eval_set, log)
         return _land(
             task_id,
             cfg,
@@ -94,6 +95,26 @@ def land(
         )
     finally:
         lock.release(task_id)
+
+
+def _note_order(
+    task_id: str,
+    ports: Ports,
+    lock: RunLock,
+    upstream: Upstream,
+    eval_set: frozenset[int] | None,
+    log: Callable[[str], None],
+) -> None:
+    """GH-588: a `land` of a task that is not the head of the landing order runs anyway (it is
+    the owner's call) and says so once. The order is the poller's own (`evaluate_landing_order`);
+    nothing is decided from it here."""
+    number = ports.inbox.issue_of(task_id)
+    if number is None or upstream.sha is None:
+        return
+    # The task's own lock is ours: it reads as a task at work, and a task at work is a member.
+    head = evaluate_landing_order(ports, eval_set, upstream.sha, lock).head
+    if head is not None and head != number:
+        log("not the head of the landing order: run by the owner")
 
 
 def _after_releasing(

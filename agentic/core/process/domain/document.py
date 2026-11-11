@@ -255,6 +255,10 @@ def render(
             if (waited := state.get("shadow_wait_s")) is not None
             else {}
         ),
+        # The landing order's stamp and the head's anchor (GH-588), written only when set.
+        **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
+        **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
+        **({"head_since_head": q} if (q := state.get("head_since_head")) else {}),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
