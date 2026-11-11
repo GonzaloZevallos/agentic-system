@@ -597,6 +597,12 @@ class _HeldLocks:
     def held(self, task_id) -> bool:
         return self.taken.count(task_id) > self.released.count(task_id)
 
+    def read(self, task_id):
+        return None  # no other process holds anything
+
+    def refusal(self, task_id):
+        return None
+
 
 def _unapproved(ports, number: int) -> None:
     """A delivered task whose reviewed unit is not approved: `not_approved`, whose step is
