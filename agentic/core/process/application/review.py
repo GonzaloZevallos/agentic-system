@@ -38,10 +38,10 @@ import anyio
 
 from agentic.shared.configuration import Configuration, ReviewMode, experiment_snapshot
 
-from ..domain import ci, docs, presubmit, rules, speculation
+from ..domain import ci, docs, landing, presubmit, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from . import ci_push, ci_trust, shadow_review
+from . import ci_push, ci_trust, review_scope, shadow_review
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Checkout, GitError, Ports
@@ -62,12 +62,18 @@ async def run_reviewer(
     mode: ReviewMode,
     with_developer: bool,
     ci_names: tuple[str, ...],
+    from_base: str | None = None,
+    resolution: bool = False,
 ) -> tuple[Output | None, TaskState]:
     """One reviewer run over `checkout` (GH-473): the role for `mode`, its sections, the
     product's checks and affected forms read at `base`, the plan's invariants, the docs
     review, the landing gate of `ci_names` and the performance table, then `run_role`. The
     one place that builds that call: `review` makes it for the branch and the integration, the
     shadow for each approved branch, so no second list of sections or arguments exists.
+
+    `from_base` replaces the commit the reviewer diffs from (a resolution-only pass starts at
+    the accepted tip); `resolution` means `state` already holds `RESOLUTION_SECTION`
+    (`review` wrote it), which is added. The shadow passes neither: its call is unchanged.
 
     `with_developer` puts the Developer's own section in front of the reviewer; the
     integration's `single` review leaves it out. A non-empty `ci_names` means `state` already
@@ -93,11 +99,12 @@ async def run_reviewer(
             *((rules.developer_section(subtask_id),) if with_developer else ()),
             *rules.return_sections(state, subtask_id),
             *((CI_SECTION,) if ci_names else ()),
+            *((review_scope.RESOLUTION_SECTION,) if resolution else ()),
             *_perf_table(state, subtask_id),
         ),
         cwd=checkout.path,
         subtask=subtask_id,
-        base=subtask.get("reviewed_head") or checkout.base,
+        base=from_base or subtask.get("reviewed_head") or checkout.base,
         review="an incremental review" if subtask.get("reviewed_head") else "a first review",
         remaining_changes=rules.remaining_changes(
             state, pair_for(subtask_id), cfg.max_changes_requested_per_pair
@@ -158,6 +165,23 @@ async def review(
     if evidence is not None:
         reading = {**state, "sections": {**state.get("sections", {}), CI_SECTION: evidence.section}}
 
+    # What this pass covers (GH-589, ADR-0089): `landing.review_scope` decides it from the
+    # facts `review_scope.scope_of` reads. Only a `resolution` changes the call -- its text
+    # as a system section, and the diff starting at the accepted tip; every other scope is
+    # today's call. A `carried` verdict (a Developer's clean merge with nothing after) still
+    # reviews, from the tip; the sync is what records `carried`, here it is `full`/`clean`.
+    verdict, tip = review_scope.scope_of(state, subtask_id, head, checkout.path, ports)
+    resolving = verdict.scope == "resolution"
+    if resolving:
+        reading = {
+            **reading,
+            "sections": {
+                **reading.get("sections", {}),
+                review_scope.RESOLUTION_SECTION: review_scope.section_text(verdict.text),
+            },
+        }
+    from_base = tip if verdict.scope in ("carried", "resolution") else None
+
     async def reviewed() -> tuple[Output | None, TaskState]:
         return await run_reviewer(
             reading,
@@ -169,6 +193,8 @@ async def review(
             mode=cfg.review_mode,
             with_developer=not (cfg.review_mode == "single" and subtask_id == INTEGRATION),
             ci_names=names if evidence is not None else (),
+            from_base=from_base,
+            resolution=resolving,
         )
 
     shadows = shadow_review.ShadowOutcome()
@@ -185,7 +211,18 @@ async def review(
     if output is None:
         return done(patch)
 
-    subtask = {**subtask, "reviewed_head": head}
+    # The head and what the pass covered are written together, by the one reducer.
+    recorded_scope = "full" if verdict.scope == "carried" else verdict.scope
+    subtasks, scope_record = landing.scope_patch(
+        state["subtasks"],
+        subtask_id,
+        recorded_scope,
+        verdict.cause,
+        from_base or subtask.get("reviewed_head") or checkout.base,
+        head,
+        ports.now(),
+    )
+    subtask = subtasks[subtask_id]
     # The landing lowering is first (GH-441): a finding that asks for what only the pull
     # request's CI can give is an observation before any other rule reads its severity.
     findings, landed = rules.lower_landing_blocks(output.data["findings"])
@@ -229,6 +266,7 @@ async def review(
             # Measurement only (like `subtask_id`): read once by the adapter for
             # `agentic.review.findings`'s `review.kind` label, never persisted.
             "review_kind": rules.review_kind(subtask_id, reviewed_before),
+            "review_scopes": [scope_record],
             # `{}` on the default path, so a document written before issue #28 stays
             # byte-identical (`experiment_snapshot`'s own omit-at-default rule); the
             # resolved model travels, not only the two switches, so an operator who ran
