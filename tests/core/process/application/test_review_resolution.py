@@ -105,6 +105,7 @@ async def test_a_resolved_merge_and_a_later_commit_reach_the_reviewer_as_the_onl
     assert HUNK in call["prompt"] and LATER_DIFF in call["prompt"]
     assert CLEAN_LINE not in call["prompt"]
     assert f"## {review_scope.RESOLUTION_SECTION}" in call["prompt"]
+    assert f"{TIP}.." in call["prompt"]  # the diff the reviewer is told to read starts at the tip
     assert patch["subtasks"]["api"]["reviewed_head"] == HEAD
     assert patch["review_scopes"][0]["base"] == TIP
 
