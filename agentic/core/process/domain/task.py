@@ -894,8 +894,8 @@ class EscalationPatch(TypedDict):
 
     escalated: str | None
     escalation_class: EscalationClass | None
-    # Written only with a known `MechanicalCause` (GH-593); `rules.logged` copies it onto the
-    # `escalation` pause entry.
+    # The `MechanicalCause` of a mechanical pause, `None` for a judgment one (GH-593);
+    # `rules.logged` copies it onto the `escalation` pause entry.
     escalation_cause: NotRequired[MechanicalCause | None]
 
 
