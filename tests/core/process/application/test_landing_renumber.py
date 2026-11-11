@@ -130,6 +130,13 @@ def test_a_docs_only_rewrite_carries_the_review_to_the_new_head(tmp_path):
     new = ports.workspace.branch_commits[-1].sha
     assert _unit(ports)["reviewed_head"] == new
     assert _unit(ports)["reviewed_head_carried_from"] == head
+    [scope] = ports.documents.load("GH-5")["review_scopes"]
+    assert (scope["head"], scope["base"], scope["scope"], scope["cause"]) == (
+        new,
+        head,
+        "carried",
+        "renumber",
+    )
 
 
 def test_a_rewrite_of_code_is_not_carried_and_the_next_round_re_reviews(tmp_path):
@@ -142,6 +149,7 @@ def test_a_rewrite_of_code_is_not_carried_and_the_next_round_re_reviews(tmp_path
     assert ports.workspace.pushes == [(BRANCH, head)]
     assert _unit(ports)["reviewed_head"] == head  # the verdict stays on the head it was given on
     assert "reviewed_head_carried_from" not in _unit(ports)
+    assert not ports.documents.load("GH-5").get("review_scopes")
     assert ports.documents.load("GH-5")["adr_renumbered"][0]["carried"] is False
     _pushed(ports)
     result = landing.land(

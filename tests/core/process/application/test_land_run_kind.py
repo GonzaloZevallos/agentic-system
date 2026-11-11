@@ -22,7 +22,7 @@ from tests.core.process.application.test_landing_fix import (
     _untouched,
     _window,
 )
-from tests.core.process.application.test_landing_sync import NEW, _behind, _diffs
+from tests.core.process.application.test_landing_sync import NEW, _behind
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -137,9 +137,11 @@ def test_a_checks_child_that_finds_a_conflicting_sync_records_nothing_and_spawns
     assert any("step sync_master" in line for line in lines)
 
 
-def test_a_checks_child_that_finds_a_clean_but_overlapping_sync_spawns_no_resume(tmp_path):
+def test_a_checks_child_that_finds_a_sync_whose_push_fails_spawns_no_resume(tmp_path):
     ports, _ = _behind(tmp_path)
-    _diffs(ports, merged=("feature.py",), own=("feature.py",))
+    # A clean merge carries the verdict now; what still reopens the unit for a review (a
+    # model's work) is a synced branch that could not be pushed.
+    ports.workspace.push_failures = 9
     before, closures = dict(_doc(ports)), dict(ports.documents.closures)
     launcher, resumed = FakeLauncher(), _Spawner()
 

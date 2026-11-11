@@ -34,5 +34,6 @@ classDiagram
     class cost_history__Floor["Floor"]
     class cost_history__History["History"]
     class cost_history__Pair["Pair"]
+    class cost_history__Raise["Raise"]
     adr_numbers__DecidedRenaming --> adr_numbers__Renaming
 ```

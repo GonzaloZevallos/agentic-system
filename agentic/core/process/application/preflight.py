@@ -12,7 +12,7 @@ from ..domain import docs, rules
 from ..domain.roles import ROLES
 from ..domain.run_check import resolve_wall
 from .checkouts import task_base
-from .ports import Ports
+from .ports import REMERGE_DIFF_MIN_GIT, Ports
 from .run_role import load_prompt
 
 # Every placeholder any prompt may use, with a value good enough to render. A prompt
@@ -282,6 +282,23 @@ def unfixed_stage0(ports: Ports) -> str | None:
         # The directory spelled out: the script's default is `~/.agentic-stage0`, which
         # is not necessarily the stage0 that is dirty.
         f"{CHECKOUT}/scripts/stage0.sh <sha> {CHECKOUT}"
+    )
+
+
+def old_git(ports: Ports) -> str | None:
+    """Why resolution-only reviews will not happen in this run, or None when git can print
+    a remerge-diff (GH-589, ADR-0089): `git show --remerge-diff` needs git
+    `REMERGE_DIFF_MIN_GIT`. Not a refusal: with an older or unreadable git the review of a
+    merge of master is a full review, the cause recorded as `no_remerge_diff`, and only the
+    saving is lost."""
+    version = ports.workspace.git_version()
+    if version is not None and version >= REMERGE_DIFF_MIN_GIT:
+        return None
+    measured = ".".join(map(str, version)) if version else "unknown"
+    needed = ".".join(map(str, REMERGE_DIFF_MIN_GIT))
+    return (
+        f"git is {measured} here and `git show --remerge-diff` needs {needed}: resolution-only "
+        "reviews fall back to full reviews of the merge (ADR-0089)."
     )
 
 

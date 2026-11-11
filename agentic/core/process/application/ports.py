@@ -849,6 +849,17 @@ class GitError(RuntimeError):
         self.stderr = stderr
 
 
+REMERGE_DIFF_MIN_GIT = (2, 36)
+"""The git version that has `git show --remerge-diff` (GH-589, ADR-0089)."""
+
+
+class RemergeDiffUnsupported(GitError):
+    """`Workspace.merge_resolution` was asked on a git older than `REMERGE_DIFF_MIN_GIT`, or
+    whose version could not be read. Raised before any command runs. A `GitError`, so a
+    caller that already reads a git failure as "cannot tell" reads this one the same way;
+    one that wants the cause (`no_remerge_diff`) catches it first."""
+
+
 class UnstageablePath(GitError):
     """A path under `rules.UNSTAGEABLE` was asked to be staged, or was found staged: the task
     documents, run records, logs and worktrees stay on the machine and are never committed on
@@ -1271,6 +1282,19 @@ class Workspace(Protocol):
         oldest first, each with the ids of its parents, the first parent first (GH-408: what a
         resume reads to tell merges of approved subtasks from anything else). Read only.
         Raises `GitError` when git cannot answer, an unknown ref included."""
+        ...
+
+    def merge_resolution(self, merge: str) -> str:
+        """What a merge commit changed against what git's own merge of its parents gives
+        (GH-589): the stdout of `git show --remerge-diff --format= <merge>`, `""` when the
+        merge needed no resolution. Read only. Raises `RemergeDiffUnsupported`, without
+        running the command, when `git_version()` is below `REMERGE_DIFF_MIN_GIT` or
+        unknown; any other failure raises `GitError`."""
+        ...
+
+    def git_version(self) -> tuple[int, int] | None:
+        """The major and minor of the git this port runs (GH-589), `None` when
+        `git --version` cannot be read or parsed."""
         ...
 
     def commit_messages(self, base: str, head: str) -> str:

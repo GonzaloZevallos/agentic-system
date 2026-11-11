@@ -18,6 +18,7 @@ from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, ShellReaper
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
+    REMERGE_DIFF_MIN_GIT,
     AddedAdr,
     AddedLine,
     Board,
@@ -56,6 +57,7 @@ from agentic.core.process.application.ports import (
     ProductStack,
     Prompts,
     RawResult,
+    RemergeDiffUnsupported,
     RoleRunner,
     RunRegistration,
     RunStopped,
@@ -934,6 +936,15 @@ class MemoryWorkspace:
         self.first_parent_line: tuple[rules.Commit, ...] = ()
         self.first_parent_asks: list[tuple[str, str]] = []
         self.first_parent_error: str | None = None
+        # GH-589: what `merge_resolution` answers per merge sha (`""` for one with no entry:
+        # it needed no resolution), the merges asked, and what `git_version` answers. A
+        # version below `REMERGE_DIFF_MIN_GIT` or `None` makes `merge_resolution` raise
+        # `RemergeDiffUnsupported`, as the real one; `merge_resolution_error` makes it raise
+        # `GitError` instead, per merge sha.
+        self.merge_resolutions: dict[str, str] = {}
+        self.merge_resolution_asks: list[str] = []
+        self.merge_resolution_errors: dict[str, str] = {}
+        self.git_version_answer: tuple[int, int] | None = (2, 43)
         # What `upstream()` answers (the poller's blocker tip, GH-180) and how many times
         # it was asked: the real one fetches, so "once per round, and only when a blocker
         # needs it" is a count.
@@ -1472,6 +1483,18 @@ class MemoryWorkspace:
         if self.first_parent_error is not None:
             raise GitError(self.first_parent_error)
         return self.first_parent_line
+
+    def git_version(self) -> tuple[int, int] | None:
+        return self.git_version_answer
+
+    def merge_resolution(self, merge: str) -> str:
+        self.merge_resolution_asks.append(merge)
+        version = self.git_version_answer
+        if version is None or version < REMERGE_DIFF_MIN_GIT:
+            raise RemergeDiffUnsupported(f"git {version} has no --remerge-diff")
+        if merge in self.merge_resolution_errors:
+            raise GitError(self.merge_resolution_errors[merge])
+        return self.merge_resolutions.get(merge, "")
 
     def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
         self.ancestor_checks.append((path, sha, ref))

@@ -9,6 +9,8 @@ final merge) on the in-memory ports: a round decides, spawns `agentic land` and
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import anyio
 import pytest
 
@@ -25,6 +27,8 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.application.registration import REGISTER_WAIT_S
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain import playbook, rules
+from agentic.core.process.domain.check_results import check_key
+from agentic.core.process.domain.ci import CiVerdict
 from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.task import TaskState
 from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _round
@@ -157,7 +161,7 @@ def _behind(tmp_path, **document):
 # ---- the five behaviours -----------------------------------------------------------------
 
 
-def test_a_branch_behind_master_clean_and_disjoint_carries_the_verdict_and_merges(tmp_path):
+def test_a_branch_behind_master_merged_clean_carries_the_verdict_and_merges(tmp_path):
     ports, world = _behind(tmp_path)
     _diffs(ports, merged=("upstream.py",), own=("feature.py",))
 
@@ -180,35 +184,128 @@ def test_a_branch_behind_master_clean_and_disjoint_carries_the_verdict_and_merge
     assert ports.tracker.merge_calls == [(URL.format(5), NEW)]
 
 
-def test_a_clean_but_overlapping_sync_is_re_reviewed_re_delivered_and_merged(tmp_path):
+def test_a_clean_sync_carries_the_verdict_even_where_master_touched_the_branchs_paths(tmp_path):
     ports, world = _behind(tmp_path)
     _diffs(ports, merged=("feature.py",), own=("feature.py",))
 
     world.tick()
 
-    assert world.resumed == [5]
-    document = _document(ports)
-    assert document["status"] == "developing"
-    assert _unit(ports)["status"] == "delivered"  # a review alone, no Developer pass
-    assert "reviewed_head_carried_from" not in _unit(ports)
-    assert rules.resume_target(document) == "integrate"
-    assert document["pull_request"] == URL.format(5)
+    unit = _unit(ports)
+    assert unit["reviewed_head"] == NEW
+    assert unit["reviewed_head_carried_from"] == HEAD
+    assert world.resumed == []  # no review is asked for
+    [scope] = _document(ports)["review_scopes"]
+    assert scope == {
+        "unit": "only",
+        "head": NEW,
+        "base": HEAD,
+        "scope": "carried",
+        "cause": "clean",
+        "at": scope["at"],
+    }
+    assert scope["at"]
+    assert ports.workspace.merge_resolution_asks == []  # the sync never reads a remerge-diff
 
-    # The resumed review approves the merged head and the delivery goes under the same PR.
-    _reviewed_again(ports)
-    pushes = len(ports.workspace.pushed)
-    patch = _redeliver(ports, tmp_path)
-
-    assert patch["pull_request"] == URL.format(5)
-    assert ports.tracker.pull_requests == []  # no second pull request
-    assert len(ports.workspace.pushed) == pushes + 1
-    [entry] = _document(ports)["landing"]
-    assert entry["resolved_at"] and "cost_usd" in entry
-
+    ports.tracker.head_oid = NEW
     world.tick()
 
     assert [m.kind for m in world.merged] == ["merged"]
     assert ports.tracker.merge_calls == [(URL.format(5), NEW)]
+
+
+def test_the_carried_head_is_not_refused_as_unreviewed(tmp_path):
+    ports, world = _behind(tmp_path)
+    world.tick()
+    unit = _unit(ports)
+
+    decision = rules.auto_merge_decision(_merge_facts(reviewed_head=unit["reviewed_head"]))
+
+    assert decision != rules.MergeDecision("refuse", "head_not_reviewed")
+
+
+def test_a_head_accepted_only_through_close_docs_still_carries(tmp_path):
+    docs_head = "e" * 40
+    close_docs = {"parent": HEAD, "head": docs_head, "paths": ["docs/product/area.md"]}
+    ports = _ports(
+        5, checks=False, merge_attempts={"head": docs_head, "count": 3}, close_docs=close_docs
+    )
+    ports.workspace.upstream_merges[MASTER] = MASTER_CLEAN
+    ports.tracker.head_oid = docs_head
+    world = _World(ports, tmp_path)
+
+    world.tick()
+
+    assert [r.step for r in world.landed] == ["sync_master"]
+    unit = _unit(ports)
+    assert unit["reviewed_head"] == NEW
+    assert unit["reviewed_head_carried_from"] == HEAD
+    [scope] = _document(ports)["review_scopes"]
+    assert (scope["scope"], scope["cause"], scope["base"]) == ("carried", "clean", HEAD)
+
+
+def test_a_head_the_review_does_not_cover_carries_nothing_and_records_nothing(tmp_path):
+    ports = _ports(5, checks=False, merge_attempts={"head": FOREIGN, "count": 3})
+    ports.workspace.upstream_merges[MASTER] = MASTER_CLEAN
+    ports.tracker.head_oid = FOREIGN
+    world = _World(ports, tmp_path)
+
+    world.tick()
+
+    unit = _unit(ports)
+    assert unit["reviewed_head"] == HEAD
+    assert "reviewed_head_carried_from" not in unit
+    assert "review_scopes" not in _document(ports)
+    assert unit["status"] == "delivered"  # it goes back to its review
+    assert world.resumed == [5]
+    assert ports.workspace.merge_resolution_asks == []
+
+
+def _merge_facts(**over) -> rules.MergeFacts:
+    """A pull request whose head is the synced one, with the checks recorded green on the
+    head it had before the sync."""
+    base = rules.MergeFacts(
+        task_id="GH-5",
+        status="ready_for_review",
+        reviewed_unit_approved=True,
+        reviewed_head=NEW,
+        open_blocking=0,
+        open_important=0,
+        pr_state="OPEN",
+        pr_head=NEW,
+        in_eval_set=False,
+        touched_paths=("feature.py",),
+        attempts=0,
+        checks_head=HEAD,
+        checks_master=MASTER,
+        checks_passed=True,
+        current_master=MASTER,
+    )
+    return replace(base, **over)
+
+
+def test_a_pass_recorded_on_the_old_head_does_not_cover_the_carried_head():
+    decision = rules.auto_merge_decision(_merge_facts())
+    assert decision.kind == "run_checks"  # the carried head owes its own run, as ever
+
+
+def test_with_ci_a_run_on_the_old_head_does_not_cover_the_carried_head():
+    stale = _merge_facts(
+        ci_required=("check",),
+        ci_untrusted=False,
+        ci_head=HEAD,
+        ci_verdict=CiVerdict("green", (), ()),
+        ci_fresh=False,
+        ci_waited_s=10.0,
+        ci_covered=False,
+    )
+    decision = rules.auto_merge_decision(stale)
+    assert decision.kind not in {"merge", "run_checks"}
+
+
+def test_a_reusable_pass_is_keyed_by_the_tree_so_the_carried_head_never_inherits_it():
+    before = check_key("p", "tests", "pytest", "tree-of-" + HEAD, "fp")
+    after = check_key("p", "tests", "pytest", "tree-of-" + NEW, "fp")
+    assert before != after
 
 
 def test_a_conflicting_sync_gives_the_conflict_to_a_developer_pass_then_merges(tmp_path):
@@ -228,6 +325,8 @@ def test_a_conflicting_sync_gives_the_conflict_to_a_developer_pass_then_merges(t
     unit = _unit(ports)
     assert unit["status"] == "returned"
     assert "shared.py" in unit["reason"]  # the conflict is the Developer's input
+    assert unit["reviewed_head"] == HEAD
+    assert "review_scopes" not in _document(ports)
     assert unit["change_category"] == "integration-crosscut"
     assert world.resumed == [5]
     assert rules.dispatched_subtasks(_document(ports)) == ["only"]
