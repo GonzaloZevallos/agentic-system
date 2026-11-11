@@ -181,6 +181,21 @@ EscalationClass = Literal[
     "system_delivery",
     "ci",
 ]
+# The causes of an escalation that need no judgment (GH-593), decided at the raise site from the
+# error's class and recorded type, never from its message text: `ci_*` a `full_checks` whose CI
+# gave no verdict (`CiCause` `gh_unavailable`, `gh_unreadable`, `run_unfinished`), `delivery_
+# transient` a `system_delivery` whose push failed on a transient error. Closed, and written
+# only through `rules.escalation(..., cause=...)`; the poller retakes them by themselves.
+MechanicalCause = Literal[
+    "ci_gh_unavailable",
+    "ci_gh_unreadable",
+    "ci_run_unfinished",
+    "delivery_transient",
+]
+# What the poller's calendar and cap are keyed by (`rules.auto_resumable`): a failed attempt's
+# `FailureReason` or an escalation's `MechanicalCause`. One union, one place that maps either
+# to a calendar (`rules.schedule_for`) or a cap (`rules.auto_resume_limit`).
+ResumeKey = FailureReason | MechanicalCause
 
 
 @dataclass(frozen=True)
@@ -868,6 +883,9 @@ class ChangesRequested(TypedDict):
     # absent on every return a review made, so a document written before it reads the same.
     # It never enters `changes_requested`, which counts the pair's limit.
     by: NotRequired[Literal["landing"]]
+    # `2` on a return of a restarted attempt (GH-593, `restart.attempt`): absent on a return of
+    # the first attempt, so a document written before restarts reads every entry as attempt 1.
+    attempt: NotRequired[int]
 
 
 class EscalationPatch(TypedDict):
@@ -876,6 +894,9 @@ class EscalationPatch(TypedDict):
 
     escalated: str | None
     escalation_class: EscalationClass | None
+    # Written only with a known `MechanicalCause` (GH-593); `rules.logged` copies it onto the
+    # `escalation` pause entry.
+    escalation_cause: NotRequired[MechanicalCause | None]
 
 
 class SlicesClosedPatch(TypedDict):
@@ -1016,6 +1037,12 @@ class Subtask(TypedDict, total=False):
     # touched, and on every document written before this task existed — every read is
     # `.get("conflicted_paths", [])`.
     conflicted_paths: list[str]
+    # Set by the approval patch (`rules.approval_patch`) and never cleared by any patch (GH-593):
+    # the subtask was once approved, so a restart cannot throw away reviewed-good work.
+    approved_once: bool
+    # `2` on a subtask a clean restart gave a new attempt (`restart.restart_patch`); absent on
+    # the first attempt, read `.get("attempt", 1)`.
+    attempt: int
 
 
 # One entry of `TaskState.pause_log` (issue #137): the append-only register the
@@ -1051,6 +1078,9 @@ class EscalationPauseEntry(TypedDict):
     at: NotRequired[str]
     # The CI timing of a `ci` escalation that wrote no `FullChecksRecord` (a `no_verdict` one).
     ci: NotRequired[CiTiming]
+    # The mechanical cause the raise site knew (GH-593), from the error's class and recorded
+    # type; absent when it was not known or the escalation is a judgment, which reads as one.
+    cause: NotRequired[MechanicalCause]
 
 
 class FailurePauseEntry(TypedDict):
@@ -1514,6 +1544,26 @@ def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> lis
     return list(joined.values())
 
 
+class RestartPending(TypedDict):
+    """A clean restart (GH-593) the system started and has not finished: the subtask and the head
+    of the attempt it archives. Written by `restart.restart_patch`, so a stopped run resumes the
+    archive and the dispatch instead of repeating the decision."""
+
+    subtask: str
+    archived_head: str
+
+
+class RestartSettledRow(TypedDict):
+    """The open findings of `subtask` with a `version` below this one, settled by a restart as
+    `discarded` for the closed reason `restarted` (GH-593): the attempt that raised them is
+    archived. Per record, never per folded key, like `SettledRow`."""
+
+    subtask: str
+    version: int
+    outcome: Literal["discarded"]
+    reason: Literal["restarted"]
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -1523,6 +1573,9 @@ class TaskState(TaskInput, total=False):
     # The closed reason `escalated` is text for (`EscalationClass`); written only by
     # `rules.escalation`, together with `escalated`, and cleared with it on resume.
     escalation_class: Annotated[EscalationClass | None, last]
+    # The mechanical cause of that escalation when its raise site knew one (GH-593), written by
+    # `rules.escalation` with the class and copied to the pause log by `rules.logged`.
+    escalation_cause: Annotated[MechanicalCause | None, last]
     # One Markdown section per role, keyed by role name, holding the latest delivery.
     # A delivery superseded by a return stays under "<role> (vN)": the document is
     # the raw record of the task, and PjM escalates with the history (ADR-0006).
@@ -1605,6 +1658,18 @@ class TaskState(TaskInput, total=False):
     # derived from the subtask's status at read time. Applied per record by
     # `rules.findings_rows`, after `settled_findings`.
     approval_settled: Annotated[list[SettledRow], operator.add]
+    # The rows a clean restart discarded (`restart.restart_patch`, GH-593), appended in the patch
+    # that restarts and applied per record by `rules.findings_rows`.
+    restart_settled: Annotated[list[RestartSettledRow], operator.add]
+    # Clean restarts used per pair, keyed by the pair's key like `changes_requested` (GH-593).
+    # Written only by `restart.restart_patch`, in the same patch that zeroes the pair's returns.
+    restarts: Annotated[dict[str, int], merge]
+    # The restart in flight (`RestartPending`), `None` once its archive and dispatch finished.
+    restart_pending: Annotated[RestartPending | None, last]
+    # Runs of a section to forget when resuming a session, keyed by section (GH-593): the
+    # `version` of the section's last run at the restart. `rules.last_session` skips every run
+    # of the section at or below it, so a restarted Developer never resumes the archived attempt.
+    session_floor: Annotated[dict[str, int], merge]
     # Where a `PM: final validation` run settled its own earlier rows
     # (`plan_settlement.on_approval` / `on_return`), appended in that run's patch and never
     # derived from `runs` at read time. Applied per record by `rules.findings_rows`.

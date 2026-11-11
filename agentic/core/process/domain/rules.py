@@ -17,7 +17,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
+from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, restart, retakes
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -52,6 +52,7 @@ from .roles import (
     Interview,
     Pair,
     Role,
+    developer_section,
     pair_for,
 )
 from .schemas import FitDecision, TaskType
@@ -79,6 +80,7 @@ from .task import (
     FinishedPatch,
     FullChecksRecord,
     LapsePauseEntry,
+    MechanicalCause,
     MergeCiRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
@@ -88,6 +90,7 @@ from .task import (
     PullRequest,
     Restoration,
     ResumedPauseEntry,
+    ResumeKey,
     ReturnedBy,
     ReviewKind,
     RoleRun,
@@ -99,6 +102,11 @@ from .task import (
     TrackerPosted,
     apply,
 )
+
+# The return-limit decision and the count it reads live in `restart` (GH-593); every caller asks
+# them through `rules`, like any other rule.
+on_return_limit = restart.on_return_limit
+remaining_changes = restart.remaining_changes
 
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
 PRD_RETURN: ChangeCategory = "definition"
@@ -130,20 +138,21 @@ def archivable_document(relative: str, task_id: str) -> bool:
     return relative == relative_path(task_id).as_posix()
 
 
-def remaining_changes(state: TaskState, pair: Pair, limit: int) -> int:
-    """Returns `pair` may still use before PjM escalates."""
-    return limit - state.get("changes_requested", {}).get(pair.key, 0)
-
-
 def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
     """The `returns` patch after one more return of `pair`."""
     return {pair.key: state.get("changes_requested", {}).get(pair.key, 0) + 1}
 
 
-def change_entry(pair: Pair, category: ChangeCategory, reason: str) -> ChangesRequested:
+def change_entry(
+    pair: Pair, category: ChangeCategory, reason: str, attempt: int = 1
+) -> ChangesRequested:
     """One entry of the return history: who returned, in which category, and the reason,
-    so README §3's "same motive between the same roles" is computable."""
-    return {"pair": pair.key, "category": category, "reason": reason}
+    so README §3's "same motive between the same roles" is computable. `attempt` (GH-593) is
+    written only above 1, on a return of a restarted attempt (`restart.attempt`)."""
+    entry: ChangesRequested = {"pair": pair.key, "category": category, "reason": reason}
+    if attempt > 1:
+        entry["attempt"] = attempt
+    return entry
 
 
 def review_kind(subtask_id: str, reviewed_before: bool) -> ReviewKind:
@@ -372,6 +381,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     qa_approved = qa_approved_version(state)
     green = full_checks_green_version(state)
     plan_settled = _plan_settled_versions(state)
+    restarted = _restart_settled_versions(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -392,6 +402,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
                 or qa_settles(record, qa_approved)
                 or full_checks_settles(record, green)
                 or (key in plan_settled and record["version"] < plan_settled[key])
+                or record["version"] < restarted.get(record["subtask"], 0)
                 for record in open_records[key]
             )
         )
@@ -457,6 +468,15 @@ def _plan_settled_versions(state: TaskState) -> dict[tuple[str, str], int]:
     for item in state.get("plan_settled", []):
         key = (_norm(item["location"]), _norm(item["claim"]))
         settled[key] = max(settled.get(key, 0), item["version"])
+    return settled
+
+
+def _restart_settled_versions(state: TaskState) -> dict[str, int]:
+    """The highest version per subtask a clean restart discarded (`restart.restart_patch`): the
+    open records of that subtask below it are closed, for the reason `restarted`."""
+    settled: dict[str, int] = {}
+    for row in state.get("restart_settled", []):
+        settled[row["subtask"]] = max(settled.get(row["subtask"], 0), row["version"])
     return settled
 
 
@@ -544,7 +564,12 @@ def approval_patch(
     return's fields, so no later reader takes it as still returned; every other subtask is
     written exactly as an approval always was. A plain patch, not a full `TaskState` (see
     `resumed`)."""
-    approved: Subtask = {**subtask, "reviewed_head": head, "status": "approved"}
+    approved: Subtask = {
+        **subtask,
+        "reviewed_head": head,
+        "status": "approved",
+        "approved_once": True,
+    }
     if subtask.get("returned_by"):
         approved.pop("returned_by", None)
         approved.pop("returned_with", None)
@@ -684,14 +709,23 @@ def finished(
     return {"status": status, "finished_at": at}
 
 
-def escalation(cls: EscalationClass, reason: str) -> EscalationPatch:
+def escalation(
+    cls: EscalationClass, reason: str, *, cause: MechanicalCause | None = None
+) -> EscalationPatch:
     """The patch that escalates the task: `escalated`, the text for the human, and
     `escalation_class`, the closed reason `agentic.task.paused` groups pauses by. The
     only place either key is written, so a patch cannot carry one without the other.
 
     Returns a plain patch, not a full `TaskState`: every caller folds it into a bigger
-    literal with `**`, the same shape `apply` folds any patch into the whole state."""
-    return {"escalated": reason, "escalation_class": cls}
+    literal with `**`, the same shape `apply` folds any patch into the whole state.
+
+    `cause` (GH-593) is the closed `MechanicalCause` the raise site knew from the error's class
+    and recorded type, never from `reason`'s text; it is written only when given, so a judgment
+    escalation is exactly what it always was."""
+    patch: EscalationPatch = {"escalated": reason, "escalation_class": cls}
+    if cause is not None:
+        patch["escalation_cause"] = cause
+    return patch
 
 
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> dict[str, Any]:
@@ -1352,10 +1386,12 @@ def next_section_version(state: TaskState, section: str) -> int:
 
 def last_session(state: TaskState, role_name: str, section: str) -> str | None:
     """The session id of the latest run of `role_name` that wrote `section`, to resume
-    it; None when that role never wrote there."""
+    it; None when that role never wrote there, or only before a clean restart forgot the
+    section's sessions (`task.TaskState.session_floor`)."""
+    floor = state.get("session_floor", {}).get(section, 0)
     for run in reversed(state.get("runs", [])):
         if run["role"] == role_name and run.get("section", run["role"]) == section:
-            return run.get("session_id") or None
+            return None if run.get("version", 0) <= floor else run.get("session_id") or None
     return None
 
 
@@ -1520,10 +1556,6 @@ def interview_retake_delta(state: TaskState, spec: Interview, branch: str, head:
 # Subtasks (ADR-0011): each in its own branch, sections named after it.
 
 
-def developer_section(subtask_id: str) -> str:
-    return f"Developer: {subtask_id}"
-
-
 REVIEW_PREFIX = f"{TECH_LEAD.name}: review "
 # The system node that runs the whole suite once on the integrated head (GH-358): the section
 # it writes, and the one a Developer returned by it reads its delta from.
@@ -1565,6 +1597,8 @@ def return_sections(state: TaskState, subtask_id: str) -> tuple[str, ...]:
     returned item's delta and the incremental reviewer's spec both come from this one
     function, never from `review_section` directly."""
     subtask = state.get("subtasks", {}).get(subtask_id, {})
+    if restart.restarted_fresh(subtask):
+        return (restart.restart_section(subtask_id),)
     return tuple(_section_of(subtask_id, returned_by) for returned_by in returned_by_all(subtask))
 
 
@@ -3613,6 +3647,13 @@ EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "net
 LAUNCH_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 RETAKE_SCHEDULE: tuple[int, ...] = retakes.RETAKE_SCHEDULE
 
+# Retakes a mechanical cause (GH-593) gets per cause, on `RETAKE_SCHEDULE`: network, CI without a
+# verdict or a transient delivery failure either clears in a few attempts or needs a human with
+# the evidence. Per cause, not per task, so alternating causes can add up; the poller's own
+# budget (`retakes.RETAKE_MAX`) is a separate count.
+MECHANICAL_RETAKE_MAX = 3
+MECHANICAL_CAUSES: tuple[str, ...] = get_args(MechanicalCause)
+
 # After a 429 the only thing that matters is how soon after the account's own reset the
 # next attempt lands, and an attempt the limit cuts again costs ~$0 (the 429 arrives on
 # the role's first turn): a flat 15 minutes, 24 slots to cover a whole 5-hour window
@@ -3649,12 +3690,17 @@ def resumed_entry(*, at: str) -> ResumedPauseEntry:
 
 
 def escalation_entry(
-    value: EscalationClass, at: str | None = None, ci: CiTiming | None = None
+    value: EscalationClass,
+    at: str | None = None,
+    ci: CiTiming | None = None,
+    cause: MechanicalCause | None = None,
 ) -> EscalationPauseEntry:
-    """The one constructor of the `escalation` entry. `at` and `ci` (the CI timing of a `ci`
-    escalation) are omitted when unknown, never written as `None`; `ci` is kept only on the
-    `ci` class."""
+    """The one constructor of the `escalation` entry. `at`, `ci` (the CI timing of a `ci`
+    escalation) and `cause` (GH-593) are omitted when unknown, never written as `None`; `ci` is
+    kept only on the `ci` class."""
     entry = EscalationPauseEntry(kind="escalation", value=value)
+    if cause is not None:
+        entry["cause"] = cause
     if at is not None:
         entry["at"] = at
     if ci is not None and value == "ci":
@@ -3699,7 +3745,7 @@ def logged(
     entries (never the lapses); `ci` is the CI timing, kept on a `ci` escalation only."""
     entries: list[PauseEntry] = [_failure_entry(f, at) for f in failures]
     if (cls := patch.get("escalation_class")) is not None:
-        entries.append(escalation_entry(cls, at, ci))
+        entries.append(escalation_entry(cls, at, ci, patch.get("escalation_cause")))
     entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)
     return {**patch, "pause_log": entries}
 
@@ -3716,31 +3762,42 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
     return log[last_resumed + 1 :]
 
 
-def auto_resumable(state: TaskState) -> FailureReason | None:
-    """Whether the poller may retake this pause on its own, and with which reason
-    (issue #137): the only source of this decision, reading nothing else -- not
-    `escalation_class`, not `escalated`'s own text, not any `failures[].error`. Three
-    things must hold of the current epoch (`_current_epoch`) together: at least one
-    `"failure"` entry (a role actually broke; a pair at its return limit or a bare
-    `"escalation"` entry some other site composed alone is not this), every
-    `"escalation"` entry in it reads `"failure"` (an epoch that also escalated as
-    `"cap"` or `"returns"` is not purely an external cut, whatever its failures were),
-    and every `"failure"` entry's own reason is in `EXTERNAL_REASONS`. The reason
-    returned is the most recent failure's -- what still blocks this pause right now."""
-    failures: list[FailurePauseEntry] = []
-    escalations: list[EscalationPauseEntry] = []
-    for entry in _current_epoch(state):
+def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
+    """The key `entries` are retaken by, `None` when a human is needed (GH-593): the one reading
+    both `auto_resumable` (the poller's) and `pause_kind` (the measurement's) share, so a cause is
+    mechanical in one place. Every failure is in `EXTERNAL_REASONS`, and every escalation is
+    either a `failure` one (a role broke, the failures say why) or carries a `MechanicalCause`;
+    there is at least one failure or one cause. The key is the most recent entry's own: a
+    failure's reason, or an escalation's cause."""
+    keyed: list[ResumeKey] = []
+    for entry in entries:
         if entry["kind"] == "failure":
-            failures.append(entry)
+            if entry["value"] not in EXTERNAL_REASONS:
+                return None
+            keyed.append(entry["value"])
         elif entry["kind"] == "escalation":
-            escalations.append(entry)
-    if not failures:
-        return None
-    if not all(e["value"] == "failure" for e in escalations):
-        return None
-    if not all(f["value"] in EXTERNAL_REASONS for f in failures):
-        return None
-    return failures[-1]["value"]
+            if (cause := entry.get("cause")) is not None:
+                keyed.append(cause)
+            elif entry["value"] != "failure":
+                return None
+    return keyed[-1] if keyed else None
+
+
+def auto_resumable(state: TaskState) -> ResumeKey | None:
+    """Whether the poller may retake this pause on its own, and with which key (issue #137,
+    GH-593): the only source of this decision, reading nothing else -- not `escalation_class`,
+    not `escalated`'s own text, not any `failures[].error`. It reads the current epoch
+    (`_current_epoch`) through `_resume_key`: an epoch of external failures, one whose every
+    escalation carries a `MechanicalCause` (with no failure at all), or a mix of both. A pair at
+    its return limit, or any escalation with no cause that is not a `failure` one, is a human's."""
+    return _resume_key(_current_epoch(state))
+
+
+def pause_kind(entries: Sequence[PauseEntry]) -> Literal["external", "human"]:
+    """Whether a pause is mechanical, so the time it waited is external, or a judgment call, so
+    it is a human's (GH-593). The only place that decides it: measurement asks this and keeps no
+    list of mechanical causes of its own."""
+    return "human" if _resume_key(entries) is None else "external"
 
 
 def stated_reset(state: TaskState) -> datetime | None:
@@ -3756,8 +3813,9 @@ def stated_reset(state: TaskState) -> datetime | None:
     return max((t for t in stated if t is not None), default=None)
 
 
-def schedule_for(reason: FailureReason, chase_prior: int = 0) -> tuple[int, ...]:
-    """The calendar a retake of `reason` follows: the flat `ACCOUNT_LIMIT_SCHEDULE` for
+def schedule_for(reason: ResumeKey, chase_prior: int = 0) -> tuple[int, ...]:
+    """The calendar a retake of `reason` follows (a mechanical cause: the growing
+    `RETAKE_SCHEDULE`, bounded by `MECHANICAL_RETAKE_MAX`): the flat `ACCOUNT_LIMIT_SCHEDULE` for
     a 429, the hourly `ACCOUNT_LIMIT_HOURLY` for a 429 whose whole chase (`chase_prior`)
     reached `ACCOUNT_LIMIT_CHASE_MAX`, the growing `RETAKE_SCHEDULE` for everything
     else. The only place a reason maps to a calendar; no other reason is ever hourly."""
@@ -3797,7 +3855,7 @@ def failed_interviews(state: TaskState) -> list[Interview]:
     return specs
 
 
-def auto_resume_limit(state: TaskState, reason: FailureReason) -> int:
+def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
     """How many window slots this pause's current epoch gets, never `0` and never a
     flag. An `account_limit` gets the whole flat calendar, interview or not: its
     interview ceiling is `interview_ceiling_spent`'s, which counts only the retakes
@@ -3805,7 +3863,9 @@ def auto_resume_limit(state: TaskState, reason: FailureReason) -> int:
     interview's own section (`failed_interviews`) -- a retake already gives an
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
     chase on top of that is not this task's own risk to take -- six otherwise, the
-    whole calendar."""
+    whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593)."""
+    if reason in MECHANICAL_CAUSES:
+        return MECHANICAL_RETAKE_MAX
     if reason == "account_limit":
         return len(ACCOUNT_LIMIT_SCHEDULE)
     return 1 if failed_interviews(state) else len(RETAKE_SCHEDULE)
@@ -3883,7 +3943,7 @@ def productive_retakes(retake_times: Sequence[datetime], starts: Sequence[dateti
     return productive
 
 
-def interview_ceiling_spent(state: TaskState, reason: FailureReason, productive: int) -> bool:
+def interview_ceiling_spent(state: TaskState, reason: ResumeKey, productive: int) -> bool:
     """Whether an `account_limit` pause cut inside an interview already had a retake
     that ran a round: the ceiling ADR-0039 gives interviews (a retake gives it
     `INTERVIEW_RETAKE_ROUNDS` more rounds), spent only by retakes that ran something."""
@@ -4331,7 +4391,7 @@ class ResumeCandidate:
     non-system one -- Tech Lead plan)."""
 
     issue: int
-    reason: FailureReason
+    reason: ResumeKey
     since: datetime
     prior: int
     limit: int
@@ -4379,7 +4439,7 @@ def _governing_reset(r: ResumeCandidate) -> datetime | None:
 
 
 def retake_calendar(
-    reason: FailureReason, prior: int, chase_prior: int, limit: int
+    reason: ResumeKey, prior: int, chase_prior: int, limit: int
 ) -> tuple[tuple[int, ...], int, int]:
     """`(schedule, prior, limit)` a retake of `reason` is measured on: its reason's own
     calendar, and for an `account_limit` past the chase max the hourly one, indexed by
