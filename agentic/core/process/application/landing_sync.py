@@ -357,7 +357,7 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
                 # conflicted, and only the other paths go to a Developer.
                 docs = _docs(context, state)
                 left = docs_settlement.settle_open_merge(
-                    ports.workspace, checkout.path, docs, merged.conflicted, sha
+                    ports.workspace, checkout.path, docs, merged.conflicted, sha, master=sha
                 )
                 if left is None or left:
                     return _conflict_reason(left or merged.conflicted, sha, docs), "returned"

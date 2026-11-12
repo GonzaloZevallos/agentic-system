@@ -54,14 +54,20 @@ def source_of(workspace: Workspace, path: Path, theirs: str, master: str) -> str
 
 
 def settled_source(
-    workspace: Workspace, path: Path, docs: Docs, conflicted: tuple[str, ...], theirs: str
+    workspace: Workspace,
+    path: Path,
+    docs: Docs,
+    conflicted: tuple[str, ...],
+    theirs: str,
+    master: str | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...], str] | None:
     """`(owned, others, source)` for a conflict of merging `theirs` that has an owned part, or
-    `None` when it has none or the source cannot be read. Master is read here, once."""
+    `None` when it has none or the source cannot be read. `master` is the sha the caller
+    already holds (the sync's upstream); without one it is read here, once, from the remote."""
     owned, others = docs_rules.split_conflicts(docs, conflicted)
     if not owned:
         return None
-    master = master_tip(workspace, path)
+    master = master if master is not None else master_tip(workspace, path)
     source = source_of(workspace, path, theirs, master) if master is not None else None
     return None if source is None else (owned, others, source)
 
@@ -88,7 +94,12 @@ def settle_refused_merge(
 
 
 def settle_open_merge(
-    workspace: Workspace, path: Path, docs: Docs | None, conflicted: tuple[str, ...], theirs: str
+    workspace: Workspace,
+    path: Path,
+    docs: Docs | None,
+    conflicted: tuple[str, ...],
+    theirs: str,
+    master: str | None = None,
 ) -> tuple[str, ...] | None:
     """For a merge of `theirs` left open in the checkout at `path` with `conflicted` paths: the
     owned ones settled from one source and staged (`settle_owned`), and the paths still
@@ -99,7 +110,7 @@ def settle_open_merge(
     block = validating(docs)
     if block is None:
         return None
-    found = settled_source(workspace, path, block, conflicted, theirs)
+    found = settled_source(workspace, path, block, conflicted, theirs, master)
     if found is None:
         return None
     owned, others, source = found
