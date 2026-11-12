@@ -1662,6 +1662,10 @@ class TaskState(TaskInput, total=False):
     # What the plan says has to be done to make the subtasks work together beyond
     # merging them; empty when merging is enough and no integrator runs.
     integration_brief: str
+    # The approved break of the public API the plan recorded (GH-610), one sanitized line
+    # (`pull_request.api_break_reason`); absent when the plan approved none. The pull request body
+    # carries it as the product's `api_break_line` when the stack declares one.
+    api_break: str
     # Every finding of every review, in order. Read folded, never rewritten.
     findings: Annotated[list[FindingRecord], operator.add]
     # Locations a review declared settled. A row closes because a reviewer said it did,

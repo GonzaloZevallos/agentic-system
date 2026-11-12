@@ -158,5 +158,9 @@ Everything goes in the structured output, in one call:
   empty when there is none. Never a subtask.
 - `ci_required`, `ci_none_reason` and `required_paths`: as above. Exactly one of
   `ci_required` and `ci_none_reason` is non-empty.
+- `api_break`: the approved reason of a break of the public API, one line of at most 240
+  characters with no backtick, link or double brace; empty when the plan breaks none. The system writes it
+  into the pull request body as the product's `Breaking-API:` line. Never infer it from the
+  `public-api-break` mark: declare it only when this plan approves the break.
 - `markdown`: the full section above, in Markdown.
 </Output>

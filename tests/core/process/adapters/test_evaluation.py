@@ -48,6 +48,7 @@ READS_TRACKER = (
     "issue_state",
     "list_pull_requests",
     "pull_request",
+    "pull_request_body",
     "pull_requests_on",
     "queue",
 )

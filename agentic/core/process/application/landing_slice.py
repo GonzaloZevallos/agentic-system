@@ -19,8 +19,9 @@ from pathlib import Path
 from ..domain import ci, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.check_schedule import CheckPriority
+from ..domain.pull_request import with_required_lines
 from ..domain.task import TaskState, add_flakes
-from . import ci_flakes, landing_plan
+from . import api_break, ci_flakes, landing_plan
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .poll import ci_gate, read_criteria
@@ -215,6 +216,9 @@ def _open(
     k = branch.rsplit("-", 1)[-1]
     body = f"Slice {k} of {task_id}, units {', '.join(units)}; the task's pull request is #{main}"
     try:
+        required = api_break.required_line(ports, master, loaded)
+        if required is not None:
+            body = with_required_lines(body, *required)
         ports.workspace.push(branch)
         reference = ports.tracker.open_pull_request(
             task_id, branch, f"{task_id}: slice {k}", body, closes_issue=False

@@ -12,6 +12,7 @@ from agentic.core.process.application import landing
 from agentic.core.process.application.ports import RawResult, Upstream
 from agentic.core.process.domain import ci
 from agentic.core.process.domain.ci import CiCheck, CiReport
+from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _HeldLocks, _ports
@@ -477,3 +478,27 @@ def test_a_slice_with_a_pending_matrix_shard_stays_open_and_escalates_no_unknown
     assert ports.tracker.merge_calls == [] and ports.tracker.closed_pull_requests == []
     assert all(e.get("refusal") != "ci_unknown_names" for e in _doc(ports)["landing"])
     assert all(e["step"] != "escalate" for e in _doc(ports)["landing"])
+
+
+def _break_world(**document):
+    ports = _world(frozenset({"integration.py"}))
+    ports.stack.declared_api_break_line = ApiBreakLine("Breaking-API:", "docs", "api_breaks")
+    ports.documents.save({**_doc(ports), **document})
+    return ports
+
+
+def test_a_slice_pull_request_carries_the_recorded_api_break_line_first():
+    ports = _break_world(api_break="drops the v1 route")
+
+    _land(ports, FakeLauncher())
+
+    body = ports.tracker.pull_requests[0][2]
+    assert body.startswith("Breaking-API: drops the v1 route\n\nSlice 1 of GH-5")
+
+
+def test_a_slice_pull_request_of_a_task_with_no_recorded_break_is_what_it_was():
+    ports = _break_world()
+
+    _land(ports, FakeLauncher())
+
+    assert ports.tracker.pull_requests[0][2].startswith("Slice 1 of GH-5")

@@ -24,7 +24,7 @@ from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, Ex
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
+from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -562,6 +562,13 @@ class ProductStack(Protocol):
         `None` when the product declares none: a head that touches `.github/` runs the local
         suite and a head with no run escalates. Raises `ValueError` when the key is malformed
         or declared without `ci`."""
+        ...
+
+    def api_break_line(self, revision: str) -> ApiBreakLine | None:
+        """The line a pull request body carries for an approved API break, the CI check that
+        fails without it and that check's step (`core.knowledge`, GH-610), as the commit
+        `revision` declares them. `None` when the product declares none: no body is touched and
+        no landing step is added. Raises `ValueError` when the key is malformed."""
         ...
 
     def check_budgets(self, revision: str) -> dict[str, float]:
@@ -1637,7 +1644,18 @@ class Tracker(Protocol):
         may have answered a truncated page: a failed lookup is never an empty list."""
         ...
 
-    def update_pull_request_body(self, number: int, body: str) -> None: ...
+    def update_pull_request_body(self, number: int, body: str) -> None:
+        """Replaces the body of pull request `number` with `body` whole (`gh pr edit`). A change
+        of the body starts no CI run by itself: a check that reads it reads it on the next
+        `pull_request` event (a push, or a close and reopen). Raises `ValueError` when the
+        platform refuses."""
+        ...
+
+    def pull_request_body(self, number: int) -> str:
+        """The body of pull request `number` as it is now (GH-610). Raises `ValueError` when the
+        platform cannot answer or answers something unreadable: a failed read is never an empty
+        body, which the caller would write over the real one."""
+        ...
 
     def issue_comments(self, task_id: str) -> list[str]:
         """The bodies of the issue's comments, oldest first, whoever wrote them; none

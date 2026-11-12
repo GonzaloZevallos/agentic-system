@@ -20,6 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import yaml
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -79,6 +80,7 @@ from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
 from .core.process.domain.ci import CiReport, CiUnreadable
+from .core.process.domain.presubmit import ApiBreakLine
 from .shared.configuration import STATE_FILE, Configuration, arm_input, state_file_for
 from .shared.environment import own_configuration_unset
 
@@ -264,12 +266,22 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
     # directory) and for `Ports` (GH-391).
     scratch = FilesystemScratch(cfg.scratch_dir, product_key, cfg.product_dir)
     free_space = StatvfsFreeSpace()
+
+    def declared_api_break() -> ApiBreakLine | None:
+        # GH-610: read when a check is red, at HEAD; a stack that cannot be read declares none
+        # here and fails loudly where it is read for a decision.
+        try:
+            return stack.api_break_line("HEAD")
+        except (ValueError, yaml.YAMLError):
+            return None
+
     tracker = (
-        GhTracker(cfg.product_dir)
+        GhTracker(cfg.product_dir, api_break_line=declared_api_break)
         if gh_retry is None
         else GhTracker(
             cfg.product_dir,
             retry=GhRetry(max_wait_s=_GH_WAIT_CAPS[gh_retry], stop=stop_flag),
+            api_break_line=declared_api_break,
         )
     )
     return Ports(

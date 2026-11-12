@@ -21,6 +21,7 @@ from agentic.core.process.domain.ci import (
     DispatchedRun,
     current_runs,
 )
+from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
 
@@ -887,6 +888,7 @@ def _branch_graphql(nodes, *, oid="b" * 40, suites=None):
 def _run_node(name, status, conclusion, url="https://github.com/o/r/actions/runs/1/job/2"):
     return {
         "__typename": "CheckRun",
+        "id": f"id-{name}",
         "name": name,
         "status": status,
         "conclusion": conclusion,
@@ -2102,3 +2104,82 @@ def test_a_dispatched_job_carries_its_times_and_gh_s_zero_value_reads_as_unknown
     assert (unit.started_at, unit.completed_at) == ("2026-11-06T10:00:20Z", "2026-11-06T10:03:20Z")
     assert (web.started_at, web.completed_at) == ("2026-11-06T10:00:30Z", None)
     assert (old.started_at, old.completed_at) == (None, None)
+
+
+class _StepsRun:
+    """A `run` that answers by what it is asked: the steps query by its `id`, the rest alike."""
+
+    def __init__(self, ci, steps=None):
+        self.calls = []
+        self.ci = ci
+        self.steps = steps
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        asked_steps = any(str(a).startswith("id=") for a in args)
+        out = self.steps if asked_steps else self.ci
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+    @property
+    def step_queries(self):
+        return [c for c in self.calls if any(str(a).startswith("id=") for a in c)]
+
+
+def _steps_answer(*steps, more=False):
+    nodes = [{"name": name, "conclusion": conclusion} for name, conclusion in steps]
+    page = {"nodes": nodes, "pageInfo": {"hasNextPage": more}}
+    return json.dumps({"data": {"node": {"steps": page}}})
+
+
+DECLARED = ApiBreakLine("Breaking-API:", "docs", "api_breaks")
+
+
+def _docs_report(run, declared=DECLARED):
+    nodes = [_run_node("docs", "COMPLETED", "FAILURE"), _run_node("tests", "COMPLETED", "FAILURE")]
+    run.ci = _graphql(nodes)
+    return GhTracker(Path("/p"), run, api_break_line=lambda: declared).ci_report(PR)
+
+
+def test_the_red_check_the_stack_names_gets_its_failed_step_from_the_steps_query():
+    run = _StepsRun("", _steps_answer(("Set up job", "SUCCESS"), ("api_breaks", "FAILURE")))
+    report = _docs_report(run)
+    by_name = {c.name: c for c in report.checks}
+    assert by_name["docs"].failed_step == "api_breaks"
+    assert by_name["tests"].failed_step is None
+    assert len(run.step_queries) == 1 and "id=id-docs" in run.step_queries[0]
+
+
+def test_a_first_page_cut_without_a_failing_step_reads_no_step():
+    run = _StepsRun("", _steps_answer(("Set up job", "SUCCESS"), more=True))
+    assert _docs_report(run).checks[0].failed_step is None
+
+
+@pytest.mark.parametrize("answer", ["not json", "{}", '{"data": {"node": null}}'])
+def test_an_unreadable_steps_answer_reads_no_step_and_the_report_stays_readable(answer):
+    report = _docs_report(_StepsRun("", answer))
+    assert isinstance(report, CiReport) and report.checks[0].failed_step is None
+
+
+def test_without_the_declaration_no_steps_query_is_made():
+    run = _StepsRun("", _steps_answer(("api_breaks", "FAILURE")))
+    report = _docs_report(run, declared=None)
+    assert run.step_queries == [] and report.checks[0].failed_step is None
+
+
+def test_a_green_check_of_the_declared_name_is_not_asked():
+    run = _StepsRun("", _steps_answer(("api_breaks", "FAILURE")))
+    run.ci = _graphql([_run_node("docs", "COMPLETED", "SUCCESS")])
+    GhTracker(Path("/p"), run, api_break_line=lambda: DECLARED).ci_report(PR)
+    assert run.step_queries == []
+
+
+def test_pull_request_body_reads_the_body_of_the_number():
+    run = Recorder(stdout=json.dumps({"body": "Breaking-API: x\n\nrest"}))
+    assert GhTracker(Path("/p"), run).pull_request_body(7) == "Breaking-API: x\n\nrest"
+    assert run.calls[0][:4] == ["gh", "pr", "view", "7"]
+
+
+@pytest.mark.parametrize("stdout", ["not json", "{}", '{"body": null}', "[]"])
+def test_an_unreadable_body_raises_instead_of_reading_as_empty(stdout):
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), Recorder(stdout=stdout)).pull_request_body(7)

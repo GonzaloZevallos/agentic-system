@@ -90,7 +90,13 @@ from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandid
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
-from agentic.core.process.domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
+from agentic.core.process.domain.presubmit import (
+    ApiBreakLine,
+    CheckResult,
+    CiCover,
+    CiDispatch,
+    RerunForm,
+)
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -488,6 +494,8 @@ class MemoryStack:
         # None is a product with no `ci_dispatch` (GH-462): an untrusted head runs locally. A
         # test sets it.
         self.declared_ci_dispatch: CiDispatch | None = None
+        # None is a product with no `api_break_line` (GH-610): no body is touched.
+        self.declared_api_break_line: ApiBreakLine | None = None
         # GH-531: the declaration at one revision wins over the one above, and a revision in
         # `stack_error_at` makes `ci` and `ci_dispatch` raise `ValueError` with that text, the
         # way a malformed key at that commit does. The names per revision are `declared_ci`.
@@ -560,6 +568,10 @@ class MemoryStack:
         if revision in self.stack_error_at:
             raise ValueError(self.stack_error_at[revision])
         return self.declared_ci_dispatch_at.get(revision, self.declared_ci_dispatch)
+
+    def api_break_line(self, revision: str) -> ApiBreakLine | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_api_break_line
 
     def check_budgets(self, revision: str) -> dict[str, float]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1612,6 +1624,8 @@ class MemoryTracker:
         # `(number, body)` of each body update.
         self.listed: list[ListedPullRequest] = []
         self.updated_bodies: list[tuple[int, str]] = []
+        self.pull_request_bodies: dict[int, str] = {}
+        self.pull_request_body_error: str | None = None
         # GH-178: `pull_request`'s canned answers by reference (the URL the document
         # stores); `head_oid`, when set, is what every answered pull request reports as
         # its head, so a test moves the head without rebuilding the pull request.
@@ -1834,7 +1848,16 @@ class MemoryTracker:
         return list(self.on_branch.get(branch, []))
 
     def update_pull_request_body(self, number: int, body: str) -> None:
+        self.events.append("update_pull_request_body")
         self.updated_bodies.append((number, body))
+
+    def pull_request_body(self, number: int) -> str:
+        """GH-610: the body of the pull request, scripted by `pull_request_bodies` (by number);
+        `pull_request_body_error` makes it raise `ValueError`, `gh`'s own failure shape."""
+        self.events.append("pull_request_body")
+        if self.pull_request_body_error is not None:
+            raise ValueError(self.pull_request_body_error)
+        return self.pull_request_bodies.get(number, "")
 
     def issue_comments(self, task_id: str) -> list[str]:
         return [*self.earlier, *(text for _, text in self.comments)]

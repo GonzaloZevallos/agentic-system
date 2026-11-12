@@ -18,6 +18,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.domain import document, rules
+from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeReaper, MemoryStack, memory_ports, unstamped
@@ -1196,3 +1197,90 @@ async def test_a_delivery_that_holds_a_stamp_does_not_rewrite_it(cfg):
     patch = await deliver(stamped, cfg, ports)
 
     assert "landing_queued_at" not in patch
+
+
+LINE = ApiBreakLine("Breaking-API:", "docs", "api_breaks")
+
+
+def _breaking_ports(declared: bool = True):
+    ports = memory_ports()
+    if declared:
+        ports.stack.declared_api_break_line = LINE
+    return ports
+
+
+async def test_a_first_delivery_of_an_approved_break_opens_the_pull_request_with_the_line(cfg):
+    ports = _breaking_ports()
+
+    await deliver({**TASK, "api_break": "drops the v1 route"}, cfg, ports)
+
+    body = ports.tracker.pull_requests[0][2]
+    assert body.startswith("Breaking-API: drops the v1 route\n\n## PM")
+    assert ports.tracker.events.count("pull_request_body") == 0
+
+
+async def test_a_break_decided_by_the_owner_is_written_when_the_plan_recorded_none(cfg):
+    ports = _breaking_ports()
+    state = {
+        **TASK,
+        "landing": [{"step": "escalate_api_break", "api_break_decided": "owner says so"}],
+    }
+
+    await deliver(state, cfg, ports)
+
+    assert ports.tracker.pull_requests[0][2].startswith("Breaking-API: owner says so\n\n")
+
+
+async def test_a_redelivery_edits_the_body_before_the_push(cfg):
+    ports = _breaking_ports()
+    ports.tracker.pull_request_bodies[12] = "Closes #12\n\n## PM"
+    pushed = ports.workspace.push
+    ports.workspace.push = lambda *a, **k: (ports.tracker.events.append("push"), pushed(*a, **k))[1]
+    state = {**TASK, "api_break": "drops the v1 route", "pull_request": "https://x/o/r/pull/12"}
+
+    await deliver(state, cfg, ports)
+
+    assert ports.tracker.updated_bodies == [
+        (12, "Breaking-API: drops the v1 route\n\nCloses #12\n\n## PM")
+    ]
+    assert ports.tracker.pull_requests == []
+    assert ports.tracker.events.index("update_pull_request_body") < ports.tracker.events.index(
+        "push"
+    )
+
+
+async def test_a_redelivery_whose_body_declares_the_line_is_not_edited(cfg):
+    ports = _breaking_ports()
+    ports.tracker.pull_request_bodies[12] = "Breaking-API: kept\n\n## PM"
+    state = {**TASK, "api_break": "drops the v1 route", "pull_request": "https://x/o/r/pull/12"}
+
+    await deliver(state, cfg, ports)
+
+    assert ports.tracker.updated_bodies == []
+
+
+async def test_a_redelivery_whose_body_cannot_be_read_fails_as_a_delivery(cfg):
+    ports = _breaking_ports()
+    ports.tracker.pull_request_body_error = "gh pr view failed"
+    state = {**TASK, "api_break": "drops the v1 route", "pull_request": "https://x/o/r/pull/12"}
+
+    patch = await deliver(state, cfg, ports)
+
+    assert "pr body failed: gh pr view failed" in patch["escalated"]
+    assert ports.workspace.pushes == []
+    assert ports.tracker.updated_bodies == []
+
+
+@pytest.mark.parametrize("declared", [True, False])
+async def test_without_the_key_or_without_a_reason_nothing_new_is_called(cfg, declared):
+    ports = _breaking_ports(declared)
+    state = {**TASK, "pull_request": "https://x/o/r/pull/12"}
+    if not declared:
+        state["api_break"] = "a reason the product never asked for"
+
+    await deliver(state, cfg, ports)
+
+    assert ports.tracker.events.count("pull_request_body") == 0
+    assert ports.tracker.updated_bodies == []
+    first = await deliver(TASK, cfg, _breaking_ports(declared))
+    assert first["status"] == "ready_for_review"
