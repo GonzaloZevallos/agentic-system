@@ -1810,8 +1810,9 @@ class LockRecord:
     # The holder's start time as the kernel counts it (`/proc/<pid>/stat`, field 22), so a
     # later process that reuses the pid is told apart; `None` for a record older than it.
     starttime: str | None = None
-    # A human, a signal outside a shutdown or `agentic stop` ended this run on purpose: the
-    # poller never retakes it (`RunLock.keep_stopped`).
+    # `agentic stop` ended this run on purpose, and it is the only writer (`RunLock.keep_stopped`,
+    # `mark_stopped_recordless`): the poller never retakes it. A signal outside a shutdown leaves
+    # no mark and the run is retaken.
     stopped_deliberately: bool = False
 
 
