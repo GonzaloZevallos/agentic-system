@@ -127,9 +127,9 @@ async def _replan(
 
 
 def _plan_over_cap(landed: TaskState) -> task_path.PromoteRequest | None:
-    """The hook for the `plan_over_cap` request (GH-591): the `routing` subtask decides when a
-    light plan has more subtasks than the cap and returns the request here. None until then."""
-    return None
+    """The `plan_over_cap` request (GH-591): `rules.plan_over_cap_request` decides when a light
+    plan has more subtasks than the cap; it is applied in the same node after any role request."""
+    return rules.plan_over_cap_request(landed)
 
 
 def _finished(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
@@ -145,7 +145,10 @@ def _finished(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
         landed, request["from_role"], request["kind"], ports.now(), request["text"]
     )
     kept = apply(kept, dict(moved))
-    section = request["from_role"]
+    # The system is no section of the document: its notice, if any, goes to the Tech Lead's.
+    section = (
+        request["from_role"] if request["from_role"] != "system" else promotion.NOTICE_FALLBACK
+    )
     kept = apply(kept, promotion.refusal_notice(apply(state, kept), section, notice))
     return finish(state, kept, ports)
 
@@ -284,6 +287,8 @@ def _estimate_check(
         stack_ci=_stack_ci(ports, base),
         plan_shape=cfg.plan_shape,
         existing_ids=tuple(state["subtasks"]) if _revising(state) else (),
+        path=task_path.path_of(state),
+        path_label=task_path.path_label_of(state),
     )
 
 

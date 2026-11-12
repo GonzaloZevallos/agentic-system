@@ -17,7 +17,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
+from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes, task_path
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -2136,7 +2136,11 @@ def delivered_subtasks(state: TaskState) -> list[str]:
 
 def dispatched_subtasks(state: TaskState) -> list[str]:
     """Subtasks the next wave runs: the ones to build, and the ones already delivered
-    whose review never happened, which is where a run stopped by the cap resumes."""
+    whose review never happened, which is where a run stopped by the cap resumes. Nothing is
+    dispatched while a promotion waits for the full path's first role (`promotion_pending`):
+    a Developer already running finishes its attempt and gets its one review, no more start."""
+    if promotion_pending(state):
+        return []
     return [*ready_subtasks(state), *delivered_subtasks(state)]
 
 
@@ -2385,15 +2389,69 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
 # the Product Analyst of the path, whichever it was.
 FIRST_NODE = {"feature": "define", "bug": "diagnose", "platform_enhancement": "plan"}
 
+# The role whose run is the full path's first stage (the Product Analyst's name is the same on
+# the feature and the bug path) and the most subtasks a light plan holds (GH-591).
+_FIRST_ROLE = {"feature": "Product Analyst", "bug": "Product Analyst"}
+LIGHT_PLAN_CAP = 2
+
+
+def promotion_pending(state: TaskState) -> bool:
+    """Whether a promotion still owes the task the full path's first role (GH-591): `promotion`
+    is set, the task is a feature or a bug and no run of the Product Analyst started after
+    `promotion.at`. Always false for a platform task (nothing reruns, the cap is just lifted),
+    and for a promotion whose instant cannot be read (it could never be settled)."""
+    promotion = state.get("promotion")
+    role = _FIRST_ROLE.get(state.get("type", ""))
+    if not promotion or role is None:
+        return False
+    at = _instant(promotion.get("at"))
+    if at is None:
+        return False
+    for run in state.get("runs", []):
+        started = _instant(run.get("started_at"))
+        if run.get("role") == role and started is not None and started > at:
+            return False
+    return True
+
+
+def promotion_route(state: TaskState) -> str | None:
+    """The node a promoted task goes back to: the full path's first role while it is owed
+    (`promotion_pending`), else `None`. The one place that answers it; `after_plan`,
+    `after_integrate` and the resume router call it first."""
+    if not promotion_pending(state):
+        return None
+    return FIRST_NODE[state["type"]]
+
+
+def plan_over_cap_request(state: TaskState) -> task_path.PromoteRequest | None:
+    """The promotion a light plan of more than `LIGHT_PLAN_CAP` subtasks asks for, from the
+    system (GH-591). `None` under the owner label `path:light` (the plan check refuses such a
+    plan instead) and on any path but light."""
+    if task_path.path_of(state) != "light" or task_path.path_label_of(state) == "light":
+        return None
+    if len(state.get("subtasks", {})) <= LIGHT_PLAN_CAP:
+        return None
+    return {"kind": "plan_over_cap", "from_role": "system", "text": None}
+
 
 def after_classify(state: TaskState) -> str | None:
     """The fork between the paths of README §2. A feature goes through the definition
     stage; a bug through the diagnosis, the same pair without the interview (issue
     #65); a platform enhancement has no product behaviour to define and starts at the
-    plan, the shortest of the three (issue #46)."""
+    plan, the shortest of the three (issue #46). A light feature or bug (GH-591) skips the
+    definition stage and goes straight to the plan."""
     if state.get("escalated"):
         return None
+    if _light_skips_definition(state):
+        return "plan"
     return FIRST_NODE.get(state.get("type", ""), "plan")
+
+
+def _light_skips_definition(state: TaskState) -> bool:
+    """Whether the light path skips the definition stage for this task (GH-591): a feature or a
+    bug on `light`. The one place the three routers below read the path for it; a platform
+    enhancement has no definition stage to skip."""
+    return task_path.path_of(state) == "light" and state.get("type") in ("feature", "bug")
 
 
 def after_define(state: TaskState) -> str | None:
@@ -2415,7 +2473,7 @@ def after_validate(state: TaskState) -> str | None:
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
     if status == "definition_ready":
-        return design_step(state) or "plan"
+        return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
     return {"discarded": "discard"}.get(status)
 
 
@@ -2444,7 +2502,7 @@ def after_consolidate(state: TaskState) -> str | None:
         return None
     if state.get("status") == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
-    return design_step(state) or "plan"
+    return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
 
 
 def after_write_copy(state: TaskState) -> str | None:
@@ -2456,9 +2514,12 @@ def after_write_copy(state: TaskState) -> str | None:
 def after_plan(state: TaskState) -> str | None:
     """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); a plan whose
     only work is on the tracker (GH-336) goes to `tracker_only`; any other goes to the
-    fan-in. The only routing decision between the three."""
+    fan-in. The only routing decision between the three. A plan that promoted the task
+    (GH-591) goes first to the full path's first role (`promotion_route`)."""
     if state.get("escalated"):
         return None
+    if (back := promotion_route(state)) is not None:
+        return back
     if state.get("parts"):
         return "split"
     return "tracker_only" if tracker_only_plan(state) else "integrate"
@@ -2492,7 +2553,7 @@ def final_validation_due(state: TaskState) -> bool:
     counts as the live approval over it only while `_pair_returns(PAIR_PM_TECH_LEAD)`
     has not yet caught up with how many times it ran -- the same return-matches-run
     counting `_lead_satisfied` uses, not a verdict stored per run."""
-    if not design_applies(state):
+    if task_path.path_of(state) == "light" or not design_applies(state):
         return False
     if not all_approved(state):
         return False
@@ -2515,7 +2576,7 @@ def copy_review_due(state: TaskState) -> bool:
     newer than the latest review of `integration` -- or of the single subtask. A fix after an
     important finding is reviewed again, so the review is due again. `False` outside
     `copy_applies`, byte for byte as today."""
-    if not copy_applies(state) or not all_approved(state):
+    if task_path.path_of(state) == "light" or not copy_applies(state) or not all_approved(state):
         return False
     subtasks = state.get("subtasks", {})
     target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
@@ -2537,6 +2598,8 @@ def qa_performance_due(state: TaskState) -> bool:
     run settles nothing: it reopens the subtask, and the review that approves it again is
     newer than any run that came before. `False` for a plan that convened nothing, byte
     for byte as today."""
+    if task_path.path_of(state) == "light":
+        return False
     if not state.get("performance") or not all_approved(state):
         return False
     subtasks = state.get("subtasks", {})
@@ -2628,6 +2691,8 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if dispatched_subtasks(state):
         return "pipeline"
+    if (back := promotion_route(state)) is not None:
+        return back
     if not all_approved(state):
         return None
     if pre_pr_important_due(state):
@@ -3405,6 +3470,8 @@ def resume_target(state: TaskState) -> str | None:
         return "split"  # paused while opening the parts: finish them, do not plan again
     if tracker_only_plan(state):
         return "tracker_only"  # paused before the checklist was posted: post it, do not plan
+    if (back := promotion_route(state)) is not None:
+        return back  # a promotion waits for the full path's first role (GH-591)
     if state.get("subtasks"):
         # Once there is a plan every road goes through the fan-in, which decides the
         # wave from the same facts: nothing here has to know about waves. Nothing to

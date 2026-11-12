@@ -1143,6 +1143,23 @@ def _revision_check(existing_ids: Sequence[str], subtasks: Sequence[dict[str, An
         )
 
 
+LIGHT_CAP_REFUSAL = "owner label path:light: at most 2 subtasks"
+
+
+def _light_check(data: dict[str, Any], path: str, path_label: str) -> None:
+    """The refusals of the light path (GH-591): no `performance`, and with the owner label
+    `path:light` at most two subtasks (the cap is `rules.LIGHT_PLAN_CAP`)."""
+    if path != "light":
+        return
+    if data.get("performance"):
+        raise ValueError(
+            "this task is on the light path: a plan on it does not convene `performance`; "
+            "leave it empty (a task that needs it is promoted to the full path instead)"
+        )
+    if path_label == "light" and len(data.get("subtasks") or []) > 2:
+        raise ValueError(LIGHT_CAP_REFUSAL)
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
@@ -1153,6 +1170,8 @@ def plan_check_for(
     stack_ci: Sequence[str] = (),
     plan_shape: str = DEFAULT_PLAN_SHAPE,
     existing_ids: Sequence[str] = (),
+    path: str = "full",
+    path_label: str = "none",
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1186,7 +1205,11 @@ def plan_check_for(
 
     With `existing_ids` (the plan is a revision after a promotion, GH-591: subtasks exist and
     `promotion` is set) a plan of subtasks that omits any of them is refused: a revision keeps
-    every id. Without them the check is the first plan's."""
+    every id. Without them the check is the first plan's.
+
+    Under `path` `light` (GH-591) a plan that convenes `performance` is refused, and under the
+    owner label `path:light` (`path_label` `light`) so is a plan of more than two subtasks. A
+    light plan over the cap without the label is not refused: the plan node promotes the task."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import TRACKER_WITH_PARTS
@@ -1216,6 +1239,7 @@ def plan_check_for(
         else:
             plan_check(data)
             _revision_check(existing_ids, subtasks)
+            _light_check(data, path, path_label)
         files, declared = data["estimated_files"], data["estimated_cost_usd"]
         if files < 1:
             raise ValueError("estimated_files must be at least one file: every task changes one")
