@@ -485,6 +485,8 @@ class PlanRoute(TypedDict):
     route: Route
     misrouted: bool
     critic: CriticState
+    # True when a promotion re-planned the task (GH-591): the plan revised, no new interview.
+    after_promotion: NotRequired[bool]
 
 
 class EvaluationRef(TypedDict):
@@ -1023,8 +1025,9 @@ class Subtask(TypedDict, total=False):
     # only serialized system code applies it. Absent on a subtask that asked for nothing and on
     # every document written before this key existed -- every read is `.get("promote_request")`.
     promote_request: PromoteRequest
-    # Set by the plan revision after a promotion on an unchanged final unit whose approved work
-    # has to be checked against the new PRD: its next review is a full one. Absent otherwise.
+    # Set by `plan_revision.revise` on a final unit whose work was approved before a
+    # promotion re-planned the task and whose brief did not change: its review is a full
+    # one against the new PRD. Absent everywhere else.
     prd_recheck: bool
 
 
@@ -1750,8 +1753,9 @@ class TaskState(TaskInput, total=False):
     promotion: Promotion
     # A promotion the plan node asked for (GH-591): the role's `promote` or `plan_over_cap`. The
     # plan node is serialized, so the key needs no reducer; the system step after the model
-    # applies it through `task_path.promote` and clears it. Absent when nothing is pending.
-    plan_promote_request: PromoteRequest
+    # applies it through `task_path.promote` and clears it (sets `None`). Absent or `None` when
+    # nothing is pending.
+    plan_promote_request: PromoteRequest | None
     # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
     # Written once when the run starts, from the frozen entry, so no reducer; omitted from
     # the document when absent.

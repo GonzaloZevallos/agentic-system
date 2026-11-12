@@ -17,6 +17,7 @@ Esta página muestra los módulos del grupo `lifecycle` de `application` y los i
 graph TD
     g_application__build["build (grupo)"]
     g_application__checks["checks (grupo)"]
+    g_application__definition["definition (grupo)"]
     g_application__landing["landing (grupo)"]
     g_application__lifecycle__2["lifecycle parte 2 (grupo)"]
     g_application__reflection["reflection (grupo)"]
@@ -30,6 +31,7 @@ graph TD
     m_application__board_sync["application.board_sync"]
     m_application__poll["application.poll"]
     m_application__registration["application.registration"]
+    m_application__relabel["application.relabel"]
     m_application__restore["application.restore"]
     m_application__archive --> g_application__support
     m_application__archive --> g_domain__machine
@@ -52,6 +54,9 @@ graph TD
     m_application__poll --> m_application__registration
     m_application__registration --> g_application__support
     m_application__registration --> g_domain__state
+    m_application__relabel --> g_application__definition
+    m_application__relabel --> g_application__support
+    m_application__relabel --> g_domain__state
     m_application__restore --> g_application__landing
     m_application__restore --> g_application__lifecycle__2
     m_application__restore --> g_application__support

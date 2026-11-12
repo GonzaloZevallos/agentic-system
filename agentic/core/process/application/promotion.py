@@ -9,7 +9,7 @@ Pure: each returns a value or a patch, none writes the document."""
 from __future__ import annotations
 
 from ..domain import task_path
-from ..domain.task import Subtask, TaskState
+from ..domain.task import Subtask, TaskState, apply
 
 
 def requested(subtask: Subtask, from_role: str, text: str | None) -> Subtask:
@@ -44,3 +44,41 @@ def refusal_notice(state: TaskState, section: str, notice: str | None) -> TaskSt
         return {}
     text = state.get("sections", {}).get(section, "").rstrip()
     return {"sections": {section: f"{text}\n\n{notice}" if text else notice}}
+
+
+# The section a notice goes to when the asker has none (the system's `risk_hits` net): the plan's.
+NOTICE_FALLBACK = "Tech Lead"
+
+
+def applied(state: TaskState, at: str) -> TaskState:
+    """The patch the serialized fan-in adds for every pending request (GH-591): the one
+    `task_path.select_request` picks goes through `task_path.promote` once, with `at`, and EVERY
+    request is cleared in the same patch, so a refused one (the owner label `path:light`) is not
+    asked again. A refusal's notice goes to the asker's section. `{}` when nothing is pending."""
+    subtasks = state.get("subtasks", {})
+    requests = {
+        sid: s["promote_request"] for sid, s in subtasks.items() if s.get("promote_request")
+    }
+    plan_request = state.get("plan_promote_request")
+    if not requests and plan_request is None:
+        return {}
+    chosen = task_path.select_request(plan_request, requests)
+    patch: TaskState = {}
+    notice = None
+    if chosen is not None:
+        moved, notice = task_path.promote(
+            state, chosen["from_role"], chosen["kind"], at, chosen["text"]
+        )
+        patch = dict(moved)
+    if requests:
+        patch["subtasks"] = {
+            sid: {k: v for k, v in subtasks[sid].items() if k != "promote_request"}
+            for sid in requests
+        }
+    if plan_request is not None:
+        patch["plan_promote_request"] = None
+    if chosen is not None and notice:
+        asker = chosen["from_role"]
+        section = asker if asker in state.get("sections", {}) else NOTICE_FALLBACK
+        patch = apply(patch, refusal_notice(apply(state, patch), section, notice))
+    return patch

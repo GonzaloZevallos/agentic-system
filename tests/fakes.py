@@ -985,6 +985,11 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # GH-591: what `touched_paths` answers (renames as both paths, deletions included), the
+        # text that makes it raise `GitError`, and each call.
+        self.touched: tuple[str, ...] = ()
+        self.touched_error: str | None = None
+        self.touched_reads: list[tuple[str, str]] = []
         # GH-473: what `changed_lines` answers, and each call.
         self.diff_lines = 0
         self.line_reads: list[tuple[str, str]] = []
@@ -1419,6 +1424,12 @@ class MemoryWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
+
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        self.touched_reads.append((base, head))
+        if self.touched_error is not None:
+            raise GitError(self.touched_error)
+        return self.touched
 
     def changed_lines(self, base: str, head: str) -> int:
         self.line_reads.append((base, head))

@@ -1131,6 +1131,18 @@ def _ci_names_check(
 PLAN_SHAPE_REFUSAL = "plan_shape single:"
 
 
+def _revision_check(existing_ids: Sequence[str], subtasks: Sequence[dict[str, Any]]) -> None:
+    """The refusal of a revised plan that drops a subtask id (GH-591): the branch behind the
+    id keeps its commits, so the plan rescopes the brief instead of omitting it."""
+    kept = {item["id"] for item in subtasks}
+    missing = [sid for sid in existing_ids if sid not in kept]
+    if missing:
+        raise ValueError(
+            f"a revised plan keeps every subtask id; rescope its brief instead "
+            f"(missing: {', '.join(missing)})"
+        )
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
@@ -1140,6 +1152,7 @@ def plan_check_for(
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
     plan_shape: str = DEFAULT_PLAN_SHAPE,
+    existing_ids: Sequence[str] = (),
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1169,7 +1182,11 @@ def plan_check_for(
     Under `plan_shape` `single` (GH-471) a plan of shape (A) must have exactly one subtask
     and no integration, so the integration step the arm exists to remove never runs. It is
     judged after the fit, so a plan over the line is still sent toward parts first, and
-    never for shape (B) or (C): a split or a tracker-only plan is not refused for its shape."""
+    never for shape (B) or (C): a split or a tracker-only plan is not refused for its shape.
+
+    With `existing_ids` (the plan is a revision after a promotion, GH-591: subtasks exist and
+    `promotion` is set) a plan of subtasks that omits any of them is refused: a revision keeps
+    every id. Without them the check is the first plan's."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import TRACKER_WITH_PARTS
@@ -1198,6 +1215,7 @@ def plan_check_for(
             parts_check(parts)
         else:
             plan_check(data)
+            _revision_check(existing_ids, subtasks)
         files, declared = data["estimated_files"], data["estimated_cost_usd"]
         if files < 1:
             raise ValueError("estimated_files must be at least one file: every task changes one")

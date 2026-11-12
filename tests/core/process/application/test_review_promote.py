@@ -97,3 +97,27 @@ async def test_a_review_that_asks_nothing_keeps_a_request_already_stored():
     runner = ScriptedRunner(tech_lead_review=[_asking(promote=None)])
     after = apply(state, await review(state, CFG, memory_ports(runner)))
     assert after["subtasks"]["api"]["promote_request"] == risk
+
+
+async def test_a_prd_recheck_unit_gets_a_full_review_from_its_base_and_clears_the_flag():
+    """GH-591: approved work met a PRD written after it; the review is a full one from the
+    unit's base with the system line in its brief, and clears `prd_recheck`."""
+    state = _state(prd_recheck=True, reviewed_head="old-head")
+    state["sections"]["Tech Lead"] = "### Solution\n\nHex.\n\n### Subtasks\n\n#### api\n\nb"
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    patch = await review(state, CFG, memory_ports(runner))
+    after = apply(state, patch)
+    prompt = runner.calls[0]["prompt"]
+    assert "PRD written after this work was approved; review it against the PRD." in prompt
+    assert "a first review" in runner.calls[0]["system_prompt"] + prompt
+    assert "prd_recheck" not in after["subtasks"]["api"]
+    assert after["subtasks"]["api"]["status"] == "approved"
+    assert patch["review_scopes"][0]["base"] != "old-head"
+    assert state["subtasks"]["api"]["reviewed_head"] == "old-head"
+
+
+async def test_an_ordinary_delivered_unit_is_not_told_about_a_recheck():
+    state = _state(reviewed_head="old-head")
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review(state, CFG, memory_ports(runner))
+    assert "PRD written after" not in runner.calls[0]["prompt"]

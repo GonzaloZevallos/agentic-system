@@ -3,7 +3,13 @@ plan node only calls them."""
 
 import pytest
 
-from agentic.core.process.domain.plan_route import regate, route, sizes, takes_critic
+from agentic.core.process.domain.plan_route import (
+    after_promotion,
+    regate,
+    route,
+    sizes,
+    takes_critic,
+)
 
 THRESHOLD = 55.0
 
@@ -60,3 +66,11 @@ def test_the_draft_estimate_regates_at_the_threshold(estimate, expected):
 )
 def test_the_sizer_runs_when_the_assignment_carries_the_switch(assignment, plan_review, expected):
     assert sizes(assignment, plan_review) is expected
+
+
+def test_a_promoted_task_with_an_interview_section_resumes_it():
+    assert after_promotion(True) == "resume"
+
+
+def test_a_promoted_task_without_an_interview_section_takes_the_critic_never_a_new_interview():
+    assert after_promotion(False) == "critic"

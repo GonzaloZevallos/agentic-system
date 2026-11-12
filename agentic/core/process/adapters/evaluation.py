@@ -184,6 +184,7 @@ class EvaluationWorkspace:
             "task_checkout",
             "tree",
             "tree_changes",
+            "touched_paths",
             "tree_names",
             "upstream",
             "worktrees",
