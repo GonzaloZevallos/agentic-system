@@ -1553,3 +1553,23 @@ candidates:
   - finding
   - return
   added_at: '2026-11-12T13:54:43.855+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before you deliver, list every non-code deliverable the brief names (ADR addenda, glossary entries, docs) and confirm each one is in the diff, using git diff --stat on its path.
+  confidence: medium
+  seen_in:
+  - GH-603
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T16:10:01.614+00:00'
+- slug: developer_integrator
+  category: standard-seams
+  lesson: Never edit enforcement artefacts (guard allowance registries, check configs) to make your change pass. Change your own test input instead so the guard stays untouched, unless that artefact is a declared seam.
+  confidence: medium
+  seen_in:
+  - GH-603
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T16:10:01.614+00:00'
