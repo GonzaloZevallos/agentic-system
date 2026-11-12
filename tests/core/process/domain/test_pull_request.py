@@ -2,11 +2,19 @@
 units, so the body `deliver` sends is cut to whole sections, and only the first (the PM's
 definition) is ever trimmed, at a blank line outside a fenced block."""
 
+import random
+import re
+
+import pytest
+
 from agentic.core.process.domain.pull_request import (
     PR_BODY_MAX,
+    api_break_reason,
     bounded_body,
+    declares,
     fence_open,
     github_length,
+    with_required_lines,
 )
 
 GITHUB_LIMIT = 65_536
@@ -158,3 +166,82 @@ def test_a_preface_is_counted_against_the_limit_and_never_trimmed():
     assert dropped.text.startswith(f"{NOTE}\n\n")
     assert github_length(dropped.text) <= PR_BODY_MAX
     assert dropped.text.endswith(pointer(dropped.omitted))
+
+
+# apostrophe `scripts/docs/api_breaks.py` (ADR-0066): the rule `declares` copies.
+PRODUCT_DECLARATION = r"^Breaking-API:[ \t]*(\S.*?)[ \t]*$"
+PREFIX = "Breaking-API:"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("Breaking-API: drops the v1 route", True),
+        ("Closes #1\n\nBreaking-API: drops the v1 route", True),
+        ("Closes #1\r\nBreaking-API: crlf\r\nmore", True),
+        ("Breaking-API:\ttab separated", True),
+        ("Breaking-API:", False),
+        ("Breaking-API:   ", False),
+        ("", False),
+        ("see Breaking-API: not at the start", False),
+        ("  Breaking-API: indented", False),
+        ("```\nBreaking-API: inside a fence\n```", True),  # the product does not know fences
+    ],
+)
+def test_declares_follows_the_products_rule(body, expected):
+    assert declares(body, PREFIX) is expected
+    assert (
+        re.search(PRODUCT_DECLARATION, body.replace("\r\n", "\n"), re.M) is not None
+    ) is expected
+
+
+def test_declares_agrees_with_the_product_rule_on_random_bodies():
+    pieces = ["Breaking-API:", " ", "\t", "\n", "\r\n", "x", "reason", "```", "Closes #1"]
+    chooser = random.Random(610)
+    for _ in range(2000):
+        body = "".join(chooser.choice(pieces) for _ in range(chooser.randint(0, 12)))
+        expected = re.search(PRODUCT_DECLARATION, body.replace("\r\n", "\n"), re.M) is not None
+        assert declares(body, PREFIX) is expected, repr(body)
+
+
+def test_with_required_lines_prepends_when_missing_and_is_idempotent():
+    body = "Closes #7\n\n## PM\n\ntext"
+    written = with_required_lines(body, PREFIX, "drops v1")
+    assert written == f"Breaking-API: drops v1\n\n{body}"
+    assert declares(written, PREFIX)
+    assert with_required_lines(written, PREFIX, "other") == written
+
+
+def test_with_required_lines_keeps_a_body_that_declares_it_byte_for_byte():
+    body = "intro\r\nBreaking-API: mine\r\n"
+    assert with_required_lines(body, PREFIX, "system") == body
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("drops the v1 route", "drops the v1 route"),
+        ("  padded  ", "padded"),
+        ("", "missing"),
+        ("   ", "missing"),
+        ("two\nlines", "multiline"),
+        ("x" * 241, "too_long"),
+        ("x" * 240, "x" * 240),
+        ("uses `code`", "forbidden_char"),
+        ("template {{ x }}", "forbidden_char"),
+        ("see [here](u)", "forbidden_char"),
+        ("see https://example.com", "forbidden_char"),
+    ],
+)
+def test_api_break_reason_returns_the_reason_or_a_closed_refusal(text, expected):
+    assert api_break_reason(text) == expected
+
+
+def test_the_required_line_keeps_its_room_when_the_body_is_bounded():
+    parts = [("PM", "word " * 20_000), ("Tech Lead", "plan")]
+    line = "Breaking-API: drops the v1 route"
+    bounded = bounded_body(parts, "Title", pointer, required=line)
+    written = with_required_lines(bounded.text, PREFIX, "drops the v1 route")
+    assert written.startswith(line)
+    assert github_length(written) <= PR_BODY_MAX
+    assert bounded.bounded

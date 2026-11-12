@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Literal, TypeIs, get_args
 
 # Under GitHub's 65,536 with room for `Closes #N\n\n` (the tracker's own prefix).
 PR_BODY_MAX = 60_000
@@ -18,6 +19,58 @@ PR_BODY_MAX = 60_000
 TRUNCATED = "(truncated; full text in the task document)"
 POINTER_HEADING = "Task document"
 _SEPARATOR = "\n\n"
+
+
+RejectReason = Literal["missing", "multiline", "too_long", "forbidden_char"]
+"""Why a recorded API break is refused (`api_break_reason`): closed, so a comment can name it."""
+
+API_BREAK_REASON_MAX = 240
+_REASON_FORBIDDEN = ("`", "{{", "](", "://", "http")
+
+
+def api_break_reason(text: str) -> str | RejectReason:
+    """The reason of an approved API break as the pull request body may carry it, or the closed
+    reason it is refused: one non-empty line (`missing`, `multiline`), at most
+    `API_BREAK_REASON_MAX` characters (`too_long`), with no backtick, `{{` or link
+    (`forbidden_char`). Surrounding blanks are trimmed. Pure."""
+    reason = text.strip()
+    if not reason:
+        return "missing"
+    if "\n" in reason or "\r" in reason:
+        return "multiline"
+    if len(reason) > API_BREAK_REASON_MAX:
+        return "too_long"
+    if any(bad in reason.lower() for bad in _REASON_FORBIDDEN):
+        return "forbidden_char"
+    return reason
+
+
+def is_reject_reason(value: str) -> TypeIs[RejectReason]:
+    """Whether an `api_break_reason` answer is one of its refusals (a reason that is itself the
+    word `missing` is a refusal too: the caller never needs to tell them apart)."""
+    return value in get_args(RejectReason)
+
+
+def declared_reason(body: str, prefix: str) -> str | None:
+    """The reason of the first line of `body` that starts with `prefix`, optional blanks and a
+    non-empty reason, else `None`: `\r\n` read as `\n`, the rule of apostrophe's
+    `scripts/docs/api_breaks.py` (ADR-0066), copied here. The only place a body is read for it."""
+    pattern = rf"^{re.escape(prefix)}[ \t]*(\S.*?)[ \t]*$"
+    found = re.search(pattern, body.replace("\r\n", "\n"), re.MULTILINE)
+    return found.group(1) if found else None
+
+
+def declares(body: str, prefix: str) -> bool:
+    """Whether `body` carries the required line (`declared_reason`)."""
+    return declared_reason(body, prefix) is not None
+
+
+def with_required_lines(body: str, prefix: str, reason: str) -> str:
+    """`body` with the line `<prefix> <reason>` first when it does not declare one already;
+    a body that declares it is returned as it is. The only place the line is concatenated."""
+    if declares(body, prefix):
+        return body
+    return f"{prefix} {reason}{_SEPARATOR}{body}"
 
 
 @dataclass(frozen=True)
@@ -75,6 +128,7 @@ def bounded_body(
     limit: int = PR_BODY_MAX,
     *,
     preface: str = "",
+    required: str = "",
 ) -> BoundedBody:
     """`parts` are `(heading, text)` pairs rendered as `## heading` sections. A body
     within `limit` is exactly their join, or `fallback` when there are none. A longer one
@@ -88,7 +142,12 @@ def bounded_body(
 
     A `preface` (what a replace of the remote branch overwrote, GH-204) leads the body as
     its own block: it counts against `limit` and is never trimmed -- the sections give
-    way to it. With `""` the result is exactly what it was before it existed."""
+    way to it. With `""` the result is exactly what it was before it existed. A `required`
+    line (the product's `Breaking-API:` line) is reserved the same way, but it is not added:
+    the caller puts it in front (`with_required_lines`) and the sections give way to its room."""
+    if required:
+        room = limit - github_length(required) - len(_SEPARATOR)
+        return bounded_body(parts, fallback, pointer, room, preface=preface)
     if preface:
         room = limit - github_length(preface) - len(_SEPARATOR)
         inner = bounded_body(parts, fallback, pointer, room)

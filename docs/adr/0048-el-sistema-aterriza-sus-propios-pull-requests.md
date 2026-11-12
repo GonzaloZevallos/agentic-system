@@ -594,3 +594,28 @@ vigente. Una `diagnose` nueva, entregada después de la liberación, vuelve a re
 contadores por sha ni los `LANDING_*_MAX`): con el tope de syncs agotado, la negativa siguiente da
 `diagnose`, nunca `none`. `landing_step`, `waits_on_human` y el poller siguen leyendo solo
 `LandingSpent.unlandable`.
+
+## Adenda (GH-610): una falla que no es código no reinicia la tarea
+
+**Contexto.** En apostrophe GH-686 el check `docs` falló en su paso `api_breaks` solo porque el cuerpo del
+pull request no tenía la línea `Breaking-API: <motivo>` del producto; el aterrizaje agotó sus presupuestos,
+la tabla eligió `diagnose` y el reinicio costó 141,63 USD sin tocar código.
+
+**Decisión.** Una causa que no es código (`pr_body`, `ci_not_run`) se decide por el nombre del check y del
+paso de la API de checks, nunca por el texto de un log; un paso ausente, truncado o ilegible no es causa.
+Mientras haya causa, `exhausted()` y `after_diagnosis` no devuelven `diagnose`, `land_slice` ni `restart`.
+
+- `fix_pr_body` (sin modelo): solo con las corridas completas (`runs_completed is True`; con corridas vivas
+  el paso es `wait`) y una vez por cabeza. Lee el estado y el cuerpo, edita el cuerpo con
+  `pull_request.with_required_lines` si falta la línea, cierra el pull request y lo reabre; `resolved_at` es
+  la reapertura, desde la cual una corrida nueva leyó el cuerpo nuevo. Si un cierre quedó a medias se retoma
+  desde lo observado, y si la reapertura falla se escala como `system_delivery`. Un pull request cerrado con
+  una entrada `fix_pr_body` sin terminar no es un resultado cerrado (`rules.closed_for_body_fix`).
+- `escalate_api_break` (sin modelo): sin motivo registrado se pregunta al dueño, clase `questions`, causa
+  `api_break_missing`, una vez por cabeza. La respuesta es el comentario del dueño cuya línea empieza con
+  el prefijo del stack, validada por `api_break_answer`; si es inválida y queda una repregunta, se publica la
+  misma pregunta con la razón.
+- Puertos: `Stack.api_break_line` y `Tracker.pull_request_body`; el segundo es una lectura (`ALLOWED` del
+  adaptador de evaluación).
+
+Sin `api_break_line` en el stack, el cuerpo del pull request y los pasos por `ci_failed` no cambian.

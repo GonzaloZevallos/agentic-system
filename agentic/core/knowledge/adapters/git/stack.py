@@ -13,7 +13,7 @@ from ....process.application.ports import RiskArea
 from ....process.domain.design import Design
 from ....process.domain.docs import Docs
 from ....process.domain.performance import Scenario
-from ....process.domain.presubmit import CiCover, CiDispatch, RerunForm
+from ....process.domain.presubmit import ApiBreakLine, CiCover, CiDispatch, RerunForm
 from ....process.domain.run_check import Verification
 from ....process.domain.suppressions import Forbidden
 from ...domain import stack
@@ -42,6 +42,10 @@ class GitStack:
     def ci(self, revision: str) -> tuple[str, ...]:
         data, source = self._declaration(revision)
         return stack.ci(data, source)
+
+    def api_break_line(self, revision: str) -> ApiBreakLine | None:
+        data, source = self._declaration(revision)
+        return stack.api_break_line(data, source)
 
     def affected_checks(self, revision: str) -> dict[str, str]:
         data, source = self._declaration(revision)

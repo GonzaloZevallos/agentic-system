@@ -31,6 +31,7 @@ graph TD
     m_application__integrate["application.integrate"]
     m_application__plan["application.plan"]
     m_application__deliver --> g_application__build__2
+    m_application__deliver --> g_application__checks
     m_application__deliver --> g_application__support
     m_application__deliver --> g_pkg__agentic__shared
     m_application__deliver --> g_pkg__domain

@@ -1421,3 +1421,44 @@ def test_a_risk_area_error_names_the_offending_entry():
 def test_risk_areas_is_a_key_the_stack_knows_and_documents():
     assert "risk_areas" in stack.KEYS
     assert [ref.name for ref in stack.KEY_REFERENCE] == list(stack.KEYS)
+
+
+def api_break_data(entry=None):
+    return {
+        "checks": {"tests": "pytest"},
+        "api_break_line": (
+            {"prefix": "Breaking-API:", "check": "docs", "step": "api_breaks"}
+            if entry is None
+            else entry
+        ),
+    }
+
+
+def test_a_stack_without_api_break_line_declares_none():
+    assert stack.api_break_line({"checks": {"tests": "pytest"}}, "x") is None
+
+
+def test_a_declared_api_break_line_is_a_frozen_triple_and_a_known_key():
+    found = stack.api_break_line(api_break_data(), "x")
+    assert found == stack.ApiBreakLine("Breaking-API:", "docs", "api_breaks")
+    with pytest.raises(AttributeError):
+        found.prefix = "Other:"  # type: ignore[misc]
+    assert "api_break_line" in stack.KEYS
+    stack.checks(api_break_data(), "x")  # an unknown key would raise here
+
+
+@pytest.mark.parametrize(
+    ("entry", "match"),
+    [
+        ("Breaking-API:", "mapping of"),
+        ({"prefix": "Breaking-API:", "check": "docs"}, "non-empty `step`"),
+        ({"prefix": "Breaking-API:", "check": " ", "step": "s"}, "non-empty `check`"),
+        ({"prefix": "", "check": "docs", "step": "s"}, "non-empty `prefix`"),
+        ({"prefix": "Breaking-API", "check": "docs", "step": "s"}, "must end in `:`"),
+        ({"prefix": "A:", "check": "docs", "step": "s", "extra": "x"}, "unknown key"),
+        ({"prefix": "A:", "check": 3, "step": "s"}, "non-empty `check`"),
+    ],
+)
+def test_an_invalid_api_break_line_fails_at_load(entry, match):
+    with pytest.raises(ValueError, match=match):
+        stack.api_break_line(api_break_data(entry), "stack.yaml")

@@ -15,11 +15,12 @@ from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, landing, plan_settlement, rules
+from ..domain import ci, landing, plan_settlement, pull_request, rules
 from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.landing_order import Turn
+from ..domain.presubmit import ApiBreakLine
 from ..domain.roles import Role
 from ..domain.task import (
     INTEGRATION,
@@ -53,6 +54,8 @@ LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
         "escalate_ledger",
         "escalate_adr",
         "apply_adr_decision",
+        "fix_pr_body",
+        "escalate_api_break",
     }
 )
 """Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`, `renumber`),
@@ -289,6 +292,7 @@ def step_for(
     ancestry: Ancestry | None = None,
     *,
     turn: Turn,
+    non_code: landing.NonCodeState | None = None,
 ) -> LandingStep:
     """The one question every caller asks: `landing_step` over the document's spent budgets.
     `slicing` is what `landing_step` decides a slice from at the exhaustion (`slice_inputs`,
@@ -320,7 +324,75 @@ def step_for(
         adr_decision_due=head is not None
         and landing.adr_decision_due(live_entries(raw), head, numeric, all_entries(raw)),
         adr_auto_due=head is not None and landing.adr_auto_due(head, numeric, all_entries(raw)),
+        non_code=non_code,
     )
+
+
+def non_code_state(
+    ports: Ports, raw: TaskState, refusal: rules.MergeRefusal, facts: rules.MergeFacts
+) -> landing.NonCodeState | None:
+    """The failure that is not code, with the facts its step reads (GH-610), or `None` when the
+    refusal is code's (or nothing can be told). Decided by `landing.non_code_failure`, by the
+    names of the check and of its step. The stack is read only when a run is red; the body and the
+    report only when the declared check is red at the declared step."""
+    head, reference = facts.pr_head, raw.get("pull_request")
+    if head is None or not reference:
+        return None
+    failing = facts.ci_verdict is not None and bool(facts.ci_verdict.failing)
+    line: ApiBreakLine | None = None
+    if refusal not in ("ci_missing", "ci_unreadable", "eval_set_unreadable") and failing:
+        try:
+            line = ports.stack.api_break_line(task_base(raw, ports))
+        except (ValueError, OSError):
+            line = None
+    live = live_entries(raw)
+    cause = landing.non_code_failure(
+        refusal, facts, api_break_line=line, body_declares=False, reopened_at=None
+    )
+    declares, completed = False, None
+    if cause == "pr_body" and line is not None:
+        try:
+            declares = pull_request.declares(
+                ports.tracker.pull_request_body(str(reference)), line.prefix
+            )
+        except (ValueError, OSError):
+            declares = False  # unreadable: the executor escalates, nothing restarts
+        cause = landing.non_code_failure(
+            refusal,
+            facts,
+            api_break_line=line,
+            body_declares=declares,
+            reopened_at=landing.pr_body_reopened_at(live, head),
+        )
+        try:
+            report = ports.tracker.ci_report(str(reference))
+        except (ValueError, OSError):
+            report = None
+        completed = report.runs_completed if isinstance(report, ci.CiReport) else None
+    if cause is None:
+        return None
+    fixes = sum(
+        1 for e in all_entries(raw) if e.get("step") == "fix_pr_body" and e.get("head") == head
+    )
+    return landing.NonCodeState(
+        cause=cause,
+        reason_recorded=landing.recorded_api_break(str(raw.get("api_break") or ""), live)
+        is not None,
+        fix_done=fixes >= landing.LANDING_PR_BODY_FIXES_MAX,
+        body_declares=declares,
+        runs_completed=completed,
+        asked=any(e.get("step") == "escalate_api_break" and e.get("head") == head for e in live),
+    )
+
+
+def open_fix(entries: Sequence[dict[str, object]], head: str) -> dict[str, object] | None:
+    """The `fix_pr_body` entry of `head` that was written and not finished: a crash or a failed
+    call left the pull request possibly closed, and the step is taken again from what is
+    observed, never decided again."""
+    for entry in reversed(entries):
+        if entry.get("step") == "fix_pr_body" and entry.get("head") == head:
+            return None if landing.entry_closed(entry) else entry
+    return None
 
 
 def adr_decision_at(entries: Sequence[Mapping[str, object]], head: str) -> str | None:
@@ -490,6 +562,8 @@ class Release:
     decision: str | None
     why: ReleaseWhy
     released: bool = False
+    # GH-610: only for an `escalate_api_break` question, what the owner's comment did to it.
+    answer: landing.ApiBreakAnswer | None = None
 
 
 def _unreleased(why: ReleaseWhy) -> Release:
@@ -572,6 +646,8 @@ def release_asked(
     Without both, that branch is false."""
     if not raw.get("escalated"):
         return False
+    if landing.asked_entry(raw, ("escalate_api_break",)) is not None:
+        return True  # GH-610: the owner's answer to the question, whatever step the table gives
     if refusal == "adr_number_taken" and facts is not None and _adr_release_asked(raw, facts):
         return True
     if kind == "escalate":
@@ -632,17 +708,37 @@ def release(
         return _ci_release(ports, cfg, task_id, raw, number, shape, upstream)
     if shape is not None and head in (None, shape) and landing.ci_no_verdict_entry(raw, shape):
         return _no_verdict_release(ports, cfg, task_id, raw, number, shape, upstream)
-    adr = landing.adr_escalation_entry(raw)
+    adr = landing.asked_entry(raw)
     if adr is not None and head in (None, adr.get("head")) and landing.numeric_adr_question(raw):
         named = _naming_release(ports, raw, upstream)
         if named is not None:
             return named
     if adr is not None and head in (None, adr.get("head")):
         # GH-544: an `escalate_adr` question is answered on the issue, whatever its class.
-        return _owner_release(ports, cfg, task_id, raw, number)
+        owner = _owner_release(ports, cfg, task_id, raw, number)
+        if adr.get("step") == "escalate_api_break" and owner.released:
+            return _api_break_release(ports, raw, owner)
+        return owner
     if raw.get("escalation_class") != "failure" or not landing.diagnose_attempts(raw):
         return _unreleased("needs_restart")
     return _owner_release(ports, cfg, task_id, raw, number)
+
+
+def _api_break_release(ports: Ports, raw: TaskState, owner: Release) -> Release:
+    """An owner's comment on an `escalate_api_break` question (GH-610): released only when it
+    decides (a valid `<prefix> <reason>` line) or is refused with a re-ask left; anything else
+    waits, and a comment already refused does not wake the landing again. Pure over the comment."""
+    wait = _unreleased("waiting_on_human")
+    try:
+        line = ports.stack.api_break_line(task_base(raw, ports))
+    except (ValueError, OSError):
+        return wait
+    if line is None or owner.decision is None:
+        return wait
+    answered = landing.api_break_answer(raw, owner.decision, ports.now(), prefix=line.prefix)
+    if answered.outcome in ("decided", "reasked"):
+        return Release(owner.decision, "released", True, answered)
+    return wait
 
 
 def _naming_release(ports: Ports, raw: TaskState, upstream: str | None) -> Release | None:
@@ -733,6 +829,7 @@ def released_step(
     slicing: landing.Slice | landing.RestartWhy | Callable[[], landing.SliceInputs] | None = None,
     ancestry: Ancestry | None = None,
     turn: Turn,
+    non_code: landing.NonCodeState | None = None,
 ) -> LandingStep:
     """The step the table gives on the document as the release `outcome` leaves it (GH-442):
     `landing.released_by_ci` for a release by CI (stamped with `facts.current_master`),
@@ -740,7 +837,7 @@ def released_step(
     function the poller and `land` ask, so neither decides the step after a release itself."""
     patch = release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
-    return step_for(view, refusal, facts, slicing, ancestry, turn=turn)
+    return step_for(view, refusal, facts, slicing, ancestry, turn=turn, non_code=non_code)
 
 
 def release_patch(raw: TaskState, outcome: Release, upstream: str | None, at: str) -> ReleasePatch:
@@ -752,6 +849,8 @@ def release_patch(raw: TaskState, outcome: Release, upstream: str | None, at: st
         return {}
     if landing.ci_no_verdict_entry(raw, _escalated_head(raw)) is not None:
         return landing.released_no_verdict(raw, upstream, at, outcome.decision)
+    if outcome.answer is not None:
+        return outcome.answer.patch
     if outcome.decision is not None:
         return landing.released(raw, outcome.decision, at)
     if outcome.why == "released_by_naming":
@@ -769,11 +868,12 @@ def pending(
     ancestry: Ancestry | None = None,
     *,
     turn: Turn,
+    non_code: landing.NonCodeState | None = None,
 ) -> LandingStep | None:
     """The step worth a `land` child: built (`live`) and not yet dispatched on this head.
     `released` (GH-328) says a human's answer released the escalated diagnose: the gate that
     would skip it for the escalation is not asked."""
-    step = step_for(raw, refusal, facts, ancestry=ancestry, turn=turn)
+    step = step_for(raw, refusal, facts, ancestry=ancestry, turn=turn, non_code=non_code)
     if not takes_action(step.kind, live) or facts.pr_head is None:
         return None
     gate = diagnose_gate(raw, step.kind, now)

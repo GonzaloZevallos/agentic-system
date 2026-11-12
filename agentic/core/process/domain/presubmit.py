@@ -169,6 +169,18 @@ class CiDispatch:
     sha_input: str
 
 
+@dataclass(frozen=True)
+class ApiBreakLine:
+    """The line a product's pull request body must carry when the task approves an API break
+    (`api_break_line` of the stack, GH-610): the `prefix` it starts with (ends in `:`), the CI
+    `check` that fails without it and the `step` of that check's job that does (the step's
+    `name`). Validated when the stack is parsed."""
+
+    prefix: str
+    check: str
+    step: str
+
+
 # Why a `full_checks` run that wanted CI ran locally, for the causes a timeout may be deferred
 # on (GH-453): CI produced no verdict for that head (`no_run`, `not_started`) or could not be
 # read (`gh_unavailable`, `gh_unreadable`). Every other cause (`publish_failed`, `untrusted`,

@@ -6,6 +6,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
+  - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
   - [domain: playbook](classes-process-domain-playbook.md)
@@ -23,7 +24,6 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
-    class presubmit__BudgetBreach["BudgetBreach"]
     class presubmit__CheckResult["CheckResult"]
     class presubmit__CiCover["CiCover"]
     class presubmit__CiDispatch["CiDispatch"]

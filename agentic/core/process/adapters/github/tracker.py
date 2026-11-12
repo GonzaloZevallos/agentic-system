@@ -12,6 +12,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -29,8 +30,8 @@ from ...application.ports import (
     TrackerTransient,
     TrackerUnreachable,
 )
-from ...domain import ci
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from ...domain.presubmit import ApiBreakLine
 from ...domain.task import (
     PullRequest,
     PullRequestCommit,
@@ -112,7 +113,7 @@ statusCheckRollup {
     pageInfo { hasNextPage }
     nodes {
       __typename
-      ... on CheckRun { name status conclusion detailsUrl startedAt completedAt }
+      ... on CheckRun { id name status conclusion detailsUrl startedAt completedAt }
       ... on StatusContext { context state targetUrl }
     }
   }
@@ -162,6 +163,53 @@ query($owner: String!, $repo: String!, $ref: String!) {
 # A `StatusContext` has no `status`: a state that has not decided is `PENDING` and the rest
 # are `COMPLETED`, so a consumer reads both kinds of check the same way.
 _UNDECIDED_STATES = ("PENDING", "EXPECTED")
+
+
+# The steps of one check run (GH-610), read only for the product's `api_break_line` check when it
+# is red: the one place a step's name tells that the pull request body, not the code, failed it.
+_STEPS_QUERY = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on CheckRun {
+      steps(first: 100) { nodes { name conclusion } pageInfo { hasNextPage } }
+    }
+  }
+}
+"""
+
+_RED = frozenset({"FAILURE", "TIMED_OUT", "STARTUP_FAILURE"})
+
+
+def _failed_step_in(answer: dict) -> str | None:
+    """The name of the first failing step of a `_STEPS_QUERY` answer. `None` when there is none, the
+    list is cut at its first page without one, or the answer cannot be read: never a guess."""
+    try:
+        steps = answer["data"]["node"]["steps"]
+        names = [
+            node["name"]
+            for node in steps["nodes"]
+            if str(node.get("conclusion", "")).upper() == "FAILURE"
+        ]
+        if not names and steps["pageInfo"]["hasNextPage"]:
+            return None
+    except (KeyError, TypeError, AttributeError):
+        return None
+    return names[0] if names and isinstance(names[0], str) else None
+
+
+def _check_run_ids(commit: object) -> dict[str, str]:
+    """Check name -> the GraphQL id of its check run, for the runs of `commit` that give one."""
+    if not isinstance(commit, dict):
+        return {}
+    try:
+        nodes = commit["statusCheckRollup"]["contexts"]["nodes"]
+        return {
+            node["name"]: node["id"]
+            for node in nodes
+            if node.get("__typename") == "CheckRun" and isinstance(node.get("id"), str)
+        }
+    except (KeyError, TypeError):
+        return {}
 
 
 class _Unreadable(Exception):
@@ -278,23 +326,23 @@ def _dispatched_job(job: object) -> CiCheck:
         status=_text(job["status"]).upper(),
         conclusion=conclusion.upper() if isinstance(conclusion, str) and conclusion else None,
         link=job.get("url") or "",
-        failed_stage=_failed_stage_of(job.get("steps")),
+        failed_step=_failed_step_of(job.get("steps")),
         started_at=_instant(job.get("startedAt")),
         completed_at=_instant(job.get("completedAt")),
     )
 
 
-def _failed_stage_of(steps: object) -> ci.FailedStage | None:
-    """The stage of the first step of a job whose conclusion is failure (GH-504), by the step's
-    name through `ci.failed_stage`. `None` when there is no failing step or `steps` cannot be
-    read: the job then reads red as before, and is never made unreadable by its steps."""
+def _failed_step_of(steps: object) -> str | None:
+    """The name of the first step of a job whose conclusion is failure (GH-504; `CiCheck`
+    derives its stage with `ci.failed_stage`). `None` when there is no failing step or `steps`
+    cannot be read: the job then reads red as before, and is never made unreadable by its steps."""
     if not isinstance(steps, list):
         return None
     for step in steps:
         if not isinstance(step, dict) or str(step.get("conclusion", "")).lower() != "failure":
             continue
         name = step.get("name")
-        return ci.failed_stage(name) if isinstance(name, str) else None
+        return name if isinstance(name, str) else None
     return None
 
 
@@ -374,8 +422,11 @@ class GhTracker:
         log: Callable[[str], None] = print_line,
         retry: GhRetry | None = None,
         now: Callable[[], str] = _utc_now,
+        api_break_line: Callable[[], ApiBreakLine | None] = lambda: None,
     ):
         self.product_dir = product_dir
+        # The product's `api_break_line` (GH-610), asked only when a check is red.
+        self._api_break_line = api_break_line
         self._now = now
         self._run = run
         self._log = log
@@ -585,6 +636,16 @@ class GhTracker:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def pull_request_body(self, reference: str) -> str:
+        raw = self._gh_read("pr", "view", str(pull_request_number(reference)), "--json", "body")
+        try:
+            body = json.loads(raw)["body"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"gh pr view answered something unreadable: {raw[:200]!r}") from exc
+        if not isinstance(body, str):
+            raise ValueError(f"gh pr view answered a body that is not text: {raw[:200]!r}")
+        return body
+
     def issue_comments(self, task_id: str) -> list[str]:
         if (number := issue_number(task_id)) is None:
             return []
@@ -716,6 +777,7 @@ class GhTracker:
             pull_request = answer["data"]["repository"]["pullRequest"]
             commit = pull_request["commits"]["nodes"][0]["commit"]
             head_sha, checks = _commit_ci(commit)
+            checks = self._with_failed_step(checks, commit)
             cancelled_runs, running_runs = _suite_run_ids(commit)
             return CiReport(
                 head_sha=head_sha,
@@ -729,6 +791,25 @@ class GhTracker:
             )
         except (_Unreadable, KeyError, IndexError, TypeError):
             return CiUnreadable("gh_unreadable")
+
+    def _with_failed_step(self, checks: tuple[CiCheck, ...], commit: object) -> tuple[CiCheck, ...]:
+        """`checks` with `failed_step` filled on the red runs of the product's `api_break_line`
+        check (GH-610), read from the check API's steps, never from a log. No other check is asked
+        and nothing is asked without the declaration; an unreadable answer leaves `None`."""
+        declared = self._api_break_line()
+        if declared is None:
+            return checks
+        ids = _check_run_ids(commit)
+        out: list[CiCheck] = []
+        for check in checks:
+            run_id = ids.get(check.name)
+            if check.name != declared.check or check.conclusion not in _RED or run_id is None:
+                out.append(check)
+                continue
+            answer = self._graphql(_STEPS_QUERY, ("-F", f"id={run_id}"))
+            step = None if isinstance(answer, CiUnreadable) else _failed_step_in(answer)
+            out.append(replace(check, failed_step=step))
+        return tuple(out)
 
     def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
         """See `Tracker.ci_report`: the latest commit of `branch`, and no pull request."""

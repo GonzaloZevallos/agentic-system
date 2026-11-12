@@ -58,19 +58,25 @@ class CiCheck:
     """One check run, or one commit status, as GraphQL reports it. `status` and
     `conclusion` hold the raw enum values. A `StatusContext` maps `context` to `name`,
     `state` to `conclusion` and `targetUrl` to `link`, with `status` `COMPLETED` or
-    `PENDING`. `failed_stage` is where a dispatched job's first failing step sits (GH-504);
-    its `None` default keeps the GraphQL path and every existing constructor unchanged, and
-    `None` is also what a job with no readable failing step carries: it reads red."""
+    `PENDING`. `failed_step` is the raw name of a dispatched job's first failing step (GH-504,
+    GH-610); its `None` default keeps the GraphQL path and every existing constructor
+    unchanged, and `None` is also what a job with no readable failing step carries: it reads
+    red. `failed_stage` is where that step sits, derived from it by `failed_stage()`."""
 
     name: str
     status: str
     conclusion: str | None
     link: str
-    failed_stage: FailedStage | None = None
+    failed_step: str | None = None
     # GitHub's own instants (ISO-8601 UTC) of a check run or a dispatched job; `None` for a
     # commit status, which carries none, and for a value GitHub did not give (GH-467).
     started_at: str | None = None
     completed_at: str | None = None
+
+    @property
+    def failed_stage(self) -> FailedStage | None:
+        """Where `failed_step` sits (GH-504); `None` without a failing step."""
+        return None if self.failed_step is None else failed_stage(self.failed_step)
 
 
 _RUN_SEGMENT = re.compile(r"/actions/runs/(\d+)(?=[/?#]|$)")

@@ -246,6 +246,8 @@ def test_every_option_names_a_command_that_exists():
             if words[0] == "gh":
                 assert words[:3] == ["gh", "issue", "close"]
                 continue
+            if option == rules.ESCALATION_PROMPTS[("questions", "api_break_missing")][1]:
+                continue  # the owner's answer is a comment on the issue, not a command (GH-610)
             assert words[0] == "agentic"
             command = parser.commands[(words[1],)]
             flags = {w for w in words[2:] if w.startswith("--")}

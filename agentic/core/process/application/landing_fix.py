@@ -375,6 +375,17 @@ def _escalate(
     context.log(f"agentic: land: {context.task_id}: {context.step.kind}: escalated, {reason}")
 
 
+def escalate_landing(
+    context: LandingContext,
+    reason: str,
+    cls: EscalationClass = "system_delivery",
+    questions: Sequence[str] = (),
+) -> None:
+    """`_escalate` for the executors of another module (`landing_body`, GH-610); a step that
+    spends no model and failed on a call fails as `system_delivery` unless it asks."""
+    _escalate(context, reason, cls, questions)
+
+
 def settle(context: LandingContext) -> None:
     """Writes the `plan_settled` rows the live `PM: final validation` approval covers
     (`plan_settlement.pending`, the same list the decision read) into the document and
@@ -1005,8 +1016,20 @@ def diagnose(context: LandingContext) -> None:
     stamped = context.ports.documents.load(context.task_id) or {}
     spent = landing_plan.spent(stamped, context.head, None, context.upstream.sha)
     ledger = plan_settlement.ledger_only(context.step.refusal, context.facts, state_from(stamped))
+    # GH-610: a failure that is not code (the PR body, a CI that did not run) is never restarted.
+    non_code = (
+        landing_plan.non_code_state(
+            context.ports, state_from(stamped), context.step.refusal, context.facts
+        )
+        is not None
+    )
     action = landing_rules.after_diagnosis(
-        verdict, spent, depth, ledger_only=ledger, restored=rules.restored(stamped)
+        verdict,
+        spent,
+        depth,
+        ledger_only=ledger,
+        restored=rules.restored(stamped),
+        non_code=non_code,
     )
     if action == "sync_master":
         context.log(

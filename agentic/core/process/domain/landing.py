@@ -17,7 +17,7 @@ from difflib import SequenceMatcher
 from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
 
-from . import ci, merge_ci, presubmit, rules
+from . import ci, merge_ci, presubmit, pull_request, rules
 from .adr_numbers import Ambiguous, Renaming
 from .document import HUMAN
 from .landing_order import Turn
@@ -67,6 +67,8 @@ LandingStepKind = Literal[
     "escalate_ledger",
     "escalate_adr",
     "apply_adr_decision",
+    "fix_pr_body",
+    "escalate_api_break",
     "escalate",
     "none",
 ]
@@ -87,7 +89,10 @@ collision the renumbering rule cannot settle -- ambiguous, or its cap spent -- a
 once per head, with no model run and no restart), `apply_adr_decision` (GH-544: the owner
 decided on that question; the rule recomputes the renumbering and a Developer pass edits only the
 lines it cannot decide, a model step charged to neither `LANDING_PASSES_MAX` nor the syncs) and
-`none` (nothing the system can do: the human's)."""
+`none` (nothing the system can do: the human's). `fix_pr_body` (GH-610: the product's required
+body line is missing and the task recorded the reason: edit the body, close and reopen the pull
+request so a fresh `pull_request` run reads it; no model, no pass, once per head) and
+`escalate_api_break` (the same failure with no recorded reason: ask the owner once per head)."""
 
 
 RestartWhy = Literal["single_unit", "no_clean_slice", "slice_refused", "unreadable"]
@@ -134,7 +139,15 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_checks"
         case "fix_important":
             return "land_model"
-        case "land_slice" | "settle" | "escalate" | "escalate_ledger" | "escalate_adr":
+        case (
+            "land_slice"
+            | "settle"
+            | "escalate"
+            | "escalate_ledger"
+            | "escalate_adr"
+            | "fix_pr_body"
+            | "escalate_api_break"
+        ):
             return "land_checks"
         case "apply_adr_decision":
             return "land_model"
@@ -213,6 +226,14 @@ rest are counted in `out_of_bounds_more`."""
 
 OUT_OF_BOUNDS_PATH_MAX = 200
 """The longest path an `out_of_bounds` row shows; a longer one is counted, never shown."""
+
+LANDING_PR_BODY_FIXES_MAX = 1
+"""`fix_pr_body` steps per head (GH-610): the body is written, the pull request closed and
+reopened once; a second look at the same head is the human's. Spends no pass and no sync."""
+
+LANDING_API_BREAK_REASKS_MAX = 1
+"""Times the `escalate_api_break` question is published again after an owner's answer that did
+not sanitize (`api_break_answer`); declared, not measured."""
 
 LANDING_UNSYNCED_MAX = 2
 """`sync_master` passes closed without their upstream (`lacks`) per upstream sha; declared, not
@@ -363,6 +384,68 @@ def _resumed_after(diagnosed: datetime | None, pause_log: object) -> bool:
     )
 
 
+NonCodeCause = Literal["pr_body", "ci_not_run"]
+"""Why a task's approved head fails for something outside its code (GH-610): `pr_body` (the
+product's required body line is missing, or the run that failed on it predates the fix) or
+`ci_not_run` (the CI never produced a verdict for a head whose workflow could have run)."""
+
+
+@dataclass(frozen=True)
+class NonCodeState:
+    """What `landing_step` needs about a failure that is not code, computed by the caller:
+    the `cause` (`non_code_failure`), whether the task recorded the reason of its API break
+    (`reason_recorded`), whether the `fix_pr_body` of this head was already taken (`fix_done`),
+    whether the body declares the line now (`body_declares`, `pull_request.declares`), the
+    report's `runs_completed` and whether the `escalate_api_break` question of this head was
+    already published (`asked`)."""
+
+    cause: NonCodeCause | None = None
+    reason_recorded: bool = False
+    fix_done: bool = False
+    body_declares: bool = False
+    runs_completed: bool | None = None
+    asked: bool = False
+
+
+_CI_NOT_RUN_REFUSALS = ("ci_missing", "ci_unreadable", "eval_set_unreadable")
+
+
+def non_code_failure(
+    refusal: rules.MergeRefusal,
+    facts: rules.MergeFacts,
+    *,
+    api_break_line: presubmit.ApiBreakLine | None,
+    body_declares: bool,
+    reopened_at: str | None,
+) -> NonCodeCause | None:
+    """The cause of the refusal when it is not code (GH-610), decided only by the names of the
+    check and of its step, never by the text of a log; a step that is absent, truncated or
+    unreadable (`failed_step` is `None`) gives `None`.
+
+    - `ci_not_run`: `refusal` is one of `ci_missing`, `ci_unreadable`, `eval_set_unreadable` and
+      the head does not touch the CI's definition (`rules.ci_untrusted` is `False`, the predicate
+      of `ci_fallback: untrusted`; unknown paths are not a cause).
+    - `pr_body`: the product declares `api_break_line`, a run of its `check` is red with
+      `failed_step == step`, and the body does not declare the line, or it does but no such run
+      began after the `reopened_at` of the head's `fix_pr_body` (the red run read the old body)."""
+    if refusal in _CI_NOT_RUN_REFUSALS:
+        return "ci_not_run" if rules.ci_untrusted(facts.touched_paths) is False else None
+    if api_break_line is None or facts.ci_verdict is None:
+        return None
+    runs = ci.runs_of(facts.ci_verdict.failing, [api_break_line.check])[api_break_line.check]
+    at_step = [run for run in runs if run.failed_step == api_break_line.step]
+    if not at_step:
+        return None
+    if not body_declares:
+        return "pr_body"
+    reopened = _aware(reopened_at)
+    if reopened is not None and any(
+        (started := _aware(run.started_at)) is not None and started > reopened for run in at_step
+    ):
+        return None
+    return "pr_body"
+
+
 def landing_step(
     refusal: rules.MergeRefusal,
     facts: rules.MergeFacts,
@@ -379,6 +462,7 @@ def landing_step(
     names_escalated: bool = False,
     adr_decision_due: bool = False,
     adr_auto_due: bool = False,
+    non_code: NonCodeState | None = None,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
     (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
@@ -406,7 +490,10 @@ def landing_step(
     is called. `turn` (GH-588, required) is whether the task leads its product's landing order
     (`head`: everything above) or waits for its turn (`waiting`): a waiting task is left as it
     is, `none` where the head would be `none` (a person's, or not yet at the landing) and `wait`
-    for every other refusal, so it never reaches a budget, a pass, a slice or a restart."""
+    for every other refusal, so it never reaches a budget, a pass, a slice or a restart.
+    `non_code` (GH-610) is the failure that is not code (`non_code_failure`) and the facts its
+    step reads: while its `cause` is not `None`, `exhausted()` never ends in a `diagnose` or a
+    `land_slice`, and `ci_failed` takes the step that fixes `pr_body` before any `rerun`."""
 
     # Whatever the caller computed, only this refusal is ledger state (invariant: every other
     # refusal keeps its output).
@@ -418,9 +505,35 @@ def landing_step(
     def ask_once() -> LandingStep:
         return step("none") if escalated else step("escalate_ledger")
 
+    state = non_code or NonCodeState()
+
+    def pr_body_step() -> LandingStep:
+        """The step that fixes a `pr_body` cause (GH-610), in order: wait while runs are live (or
+        the report cannot say), then write the recorded reason once per head, or ask for it once
+        per head; a fix already taken waits for its fresh run, and gives up to the human when the
+        wait ran out or the body still lacks the line."""
+        waited = spent.waited_s
+        if state.runs_completed is not True:
+            return (
+                step("escalate")
+                if waited is not None and waited >= ci.CI_WAIT_MAX_S
+                else step("wait")
+            )
+        if state.reason_recorded:
+            if not state.fix_done:
+                return step("fix_pr_body")
+            if state.body_declares and not (waited is not None and waited >= ci.CI_WAIT_MAX_S):
+                return step("wait")
+            return step("escalate")
+        return step("none") if state.asked else step("escalate_api_break")
+
     def exhausted() -> LandingStep:
         """The one place every budget that ran out ends (invariant: nothing else lists
         the conditions of a slice or a restart)."""
+        if state.cause == "pr_body":
+            return pr_body_step()
+        if state.cause == "ci_not_run":
+            return step("escalate")
         if ledger_only:
             return ask_once()
         answer = slice_or_restart(slicing()) if callable(slicing) else slicing
@@ -496,9 +609,12 @@ def landing_step(
                     return step("wait")
                 if spent.head_has_upstream is False:
                     return _sync(step, exhausted, spent, conflicting=False)
-                return step("rerun")
+                # A red the body causes is never rerun: the old event would read the old body.
+                return pr_body_step() if state.cause == "pr_body" else step("rerun")
             if _red_on_base_only(facts):
                 return step("escalate")
+            if state.cause == "pr_body":
+                return pr_body_step()
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
         case "checks_failed":
             if facts.failed_step == "conflict":
@@ -589,6 +705,7 @@ def after_diagnosis(
     restart_depth: int,
     ledger_only: bool = False,
     restored: bool = False,
+    non_code: bool = False,
 ) -> Literal["sync_master", "restart", "escalate"]:
     """What a delivered diagnosis leads to, the only place a verdict becomes an action
     (GH-330): `sync_master` for a `sync` verdict while the sha's verdict-sync budget and the
@@ -597,7 +714,9 @@ def after_diagnosis(
     written before verdicts) take the second path. A `ledger_only` refusal (GH-374) never
     restarts: no code change resolves ledger state, so it escalates. Neither does a `restored`
     task (`rules.restored`, GH-406): bringing it back from its archive is the human choosing not
-    to start over, so what is not a sync is the human's again."""
+    to start over, so what is not a sync is the human's again. A `non_code` failure (GH-610: the
+    pull request body, a CI that did not run) never restarts either: nothing a rebuilt branch
+    contains fixes it, so it escalates; a `sync` verdict is still taken, as it needs no code."""
     if (
         verdict == VERDICT_SYNC
         and spent.verdict_sync_due
@@ -606,7 +725,7 @@ def after_diagnosis(
         and spent.unsynced_for_upstream < LANDING_UNSYNCED_MAX
     ):
         return "sync_master"
-    if ledger_only or restored:
+    if ledger_only or restored or non_code:
         return "escalate"
     return "restart" if restart_depth < RESTART_DEPTH_MAX else "escalate"
 
@@ -1158,6 +1277,8 @@ def already_dispatched(
             if decision_at is None:  # D-be76583a: the rule's own try, once per head
                 return entry.get("decided_by") == "rule"
             return entry.get("decision_at") == decision_at
+        if step == "escalate_api_break":
+            return bool(entry.get("resolved_at"))  # GH-610: asked only once the comment is posted
         if step == "renumber":
             return entry.get("outcome") != "retry"  # GH-611: a transient end is tried again
         if step == "escalate" and names:
@@ -1382,7 +1503,7 @@ def landing_pass_live(state: TaskState) -> bool:
     return rules.landing_pass_live(state)
 
 
-_ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger")
+_ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger", "escalate_api_break")
 """The steps that ask a person once and leave the task to them until it is released."""
 
 
@@ -1439,6 +1560,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         "naming_released",
         "decision_at",
         "head_after",
+        "api_break_decided",
+        "rejected",
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
@@ -1489,6 +1612,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     if "gate_tier" in raw:  # present is all `adr_decisions_spent` asks; unreadable reads as spent
         tier = raw.get("gate_tier")
         out["gate_tier"] = tier if isinstance(tier, str) else GATE_TIER_UNREADABLE
+    if isinstance(asks := raw.get("reasks"), int) and not isinstance(asks, bool) and asks >= 0:
+        out["reasks"] = asks
     if isinstance(more := raw.get("red_more"), int) and not isinstance(more, bool) and more > 0:
         out["red_more"] = more
     # GH-576, an `apply_adr_decision` entry: the version of the edit bounds it ran under and, when
@@ -1718,11 +1843,12 @@ def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
         if isinstance(entries, list)
         else []
     )
-    if adr_escalation_entry(raw) is not None:
-        # GH-544: the question was `escalate_adr`; its entry carries the release, so
-        # `adr_decision_due` finds the decision and the diagnose calendar is left alone.
+    if (asked := asked_entry(raw)) is not None:
+        # GH-544, GH-610: the question was `escalate_adr` or `escalate_api_break`; its entry
+        # carries the release, so `adr_decision_due` finds the decision and the diagnose
+        # calendar is left alone.
         last = max(
-            (i for i, e in enumerate(written) if e.get("step") == "escalate_adr"), default=None
+            (i for i, e in enumerate(written) if e.get("step") == asked.get("step")), default=None
         )
     else:
         last = max((i for i, e in enumerate(written) if e.get("step") == "diagnose"), default=None)
@@ -1738,19 +1864,31 @@ def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
     }
 
 
-def adr_escalation_entry(raw: Mapping[str, object]) -> Mapping[str, object] | None:
-    """The live `escalate_adr` entry when `raw` is waiting on the owner's answer to it (GH-544):
-    the document is escalated and the last live entry is a resolved `escalate_adr`. Recorded
-    `moves` are not required, so an entry written before this step existed qualifies. Pure."""
+ASKED_STEPS = ("escalate_adr", "escalate_api_break")
+"""The steps whose escalation is released by the owner's answer on the issue (GH-544, GH-610)."""
+
+
+def asked_entry(
+    raw: Mapping[str, object], steps: Sequence[str] = ASKED_STEPS
+) -> Mapping[str, object] | None:
+    """The live entry of one of `steps` when `raw` is waiting on the owner's answer to it
+    (GH-544, GH-610): the document is escalated and the last live entry is a resolved one of
+    them. Recorded `moves` are not required, so an entry written before this step existed
+    qualifies. Pure."""
     if not raw.get("escalated"):
         return None
     live = live_entries(raw)
     if not live:
         return None
     last = live[-1]
-    if last.get("step") != "escalate_adr" or not last.get("resolved_at"):
+    if last.get("step") not in steps or not last.get("resolved_at"):
         return None
     return last
+
+
+def adr_escalation_entry(raw: Mapping[str, object]) -> Mapping[str, object] | None:
+    """`asked_entry` of an `escalate_adr` question alone (GH-544): the ADR readers' own view."""
+    return asked_entry(raw, ("escalate_adr",))
 
 
 ADR_RELEASE_SKEW = timedelta(seconds=2)
@@ -1761,11 +1899,12 @@ whole seconds on its own clock, so the two can differ by a second either way."""
 
 def release_baseline(raw: Mapping[str, object]) -> datetime | None:
     """The instant the owner's question was not yet posted, for the escalation of `raw`
-    (GH-544, GH-561): the `at` of the `escalate_adr` entry when `adr_escalation_entry` holds --
+    (GH-544, GH-561, GH-610): the `at` of the `escalate_adr` or `escalate_api_break` entry when
+    `asked_entry` holds --
     the step's start, before it posts its comment; `resolved_at` is stamped after the comment
     and never read here -- else the last diagnose's `at` (`diagnose_at`). `None` when it cannot
     be read as an aware time."""
-    entry = adr_escalation_entry(raw)
+    entry = asked_entry(raw)
     return _aware(entry.get("at") if entry is not None else diagnose_at(raw))
 
 
@@ -1775,9 +1914,98 @@ def owner_told(raw: Mapping[str, object], comments: Iterable[Commented], prefix:
     its `at` less `ADR_RELEASE_SKEW`, strictly; otherwise after the last diagnose, strictly
     (`escalated_after`). An unreadable baseline counts the comment, as `escalated_after` does."""
     baseline = release_baseline(raw)
-    if baseline is not None and adr_escalation_entry(raw) is not None:
+    if baseline is not None and asked_entry(raw) is not None:
         baseline -= ADR_RELEASE_SKEW
     return escalated_after(comments, baseline.isoformat() if baseline is not None else None, prefix)
+
+
+def recorded_api_break(plan_reason: str, entries: Sequence[Mapping[str, object]]) -> str | None:
+    """The reason of the task's approved API break (GH-610): the plan's (`api_break`, already
+    sanitized) when it has one, else the last `api_break_decided` of the live `entries`, which
+    sanitized the owner's answer. `None` when the task recorded none."""
+    if plan_reason.strip():
+        return plan_reason.strip()
+    decided = [
+        text
+        for entry in entries
+        if entry.get("step") == "escalate_api_break"
+        and isinstance(text := entry.get("api_break_decided"), str)
+        and text
+    ]
+    return decided[-1] if decided else None
+
+
+def pr_body_reopened_at(entries: Sequence[Mapping[str, object]], head: str) -> str | None:
+    """When the system reopened the pull request of `head` after fixing its body (GH-610): the
+    `resolved_at` of the last finished `fix_pr_body` entry of that head, `None` if there is none.
+    The run that failed on the line must have begun after it for the line to have been read."""
+    done = [
+        text
+        for entry in entries
+        if entry.get("step") == "fix_pr_body"
+        and entry.get("head") == head
+        and isinstance(text := entry.get("resolved_at"), str)
+        and text
+    ]
+    return done[-1] if done else None
+
+
+AnswerOutcome = Literal["none", "decided", "reasked", "rejected"]
+"""What an owner's comment did to an `escalate_api_break` question (`api_break_answer`)."""
+
+
+@dataclass(frozen=True)
+class ApiBreakAnswer:
+    """The result of `api_break_answer`: the `outcome`, the `patch` to apply (`{}` for `none`),
+    and for a refusal the closed `reason`. `reasked` says the question is to be published again,
+    with that reason; `rejected` that the re-ask was spent and nothing is posted."""
+
+    outcome: AnswerOutcome
+    patch: ReleasePatch
+    reason: pull_request.RejectReason | None = None
+
+
+def api_break_answer(
+    raw: Mapping[str, object], decision_line: str, at: str, *, prefix: str
+) -> ApiBreakAnswer:
+    """What the owner's comment `decision_line` does to the `escalate_api_break` question of
+    `raw` (GH-610), read only by the first line that starts with `prefix`; `none` when the
+    document is not waiting on that question or the comment has no such line.
+
+    - a reason that sanitizes (`pull_request.api_break_reason`): `decided`, the release patch of
+      `released` with `api_break_decided` written on the entry, so `fix_pr_body` follows;
+    - one that does not, with `reasks` under `LANDING_API_BREAK_REASKS_MAX`: `reasked`, the entry
+      gets `rejected: <reason>` and `reasks + 1`, the task stays escalated;
+    - one that does not, re-ask spent: `rejected`, only `rejected` is annotated, nothing posted.
+    A valid answer at any later time is `decided` again. Pure."""
+    entry = asked_entry(raw, ("escalate_api_break",))
+    declared = pull_request.declared_reason(decision_line, prefix)
+    if entry is None or declared is None:
+        return ApiBreakAnswer("none", {})
+    sanitized = pull_request.api_break_reason(declared)
+    entries = raw.get("landing")
+    written = (
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    index = max(i for i, e in enumerate(written) if e.get("step") == "escalate_api_break")
+    if not pull_request.is_reject_reason(sanitized):
+        patch = released(raw, f"{prefix} {sanitized}", at)
+        released_entries = patch.get("landing")
+        if released_entries is None:
+            return ApiBreakAnswer("none", {})
+        released_entries[index] = {**released_entries[index], "api_break_decided": sanitized}
+        return ApiBreakAnswer("decided", patch)
+    reason = sanitized
+    asked = written[index].get("reasks", 0)
+    reask = asked < LANDING_API_BREAK_REASKS_MAX
+    written[index] = {
+        **written[index],
+        "rejected": reason,
+        "reasks": asked + 1 if reask else asked,
+    }
+    return ApiBreakAnswer("reasked" if reask else "rejected", {"landing": written}, reason)
 
 
 def _last_escalate(

@@ -139,7 +139,14 @@ def test_failed_stage_names_only_the_exact_setup_and_the_checkout_prefix(
 
 
 def _staged(stage: FailedStage | None, name: str = "check") -> CiCheck:
-    return CiCheck(name, "COMPLETED", "FAILURE", f"https://x/job/{name}", stage)
+    step = {"setup": "Set up job", "checkout": "Run actions/checkout@v7", "suite": "Run pytest"}
+    return CiCheck(
+        name,
+        "COMPLETED",
+        "FAILURE",
+        f"https://x/job/{name}",
+        None if stage is None else step[stage],
+    )
 
 
 def test_a_ci_check_without_a_failed_stage_keeps_the_graphql_shape() -> None:
@@ -247,7 +254,7 @@ def test_red_beside_a_pending_expansion_is_red() -> None:
 def test_the_failing_returns_carry_the_declared_names() -> None:
     cancelled = _verdict([_matrix("CANCELLED", "SUCCESS")], names=("pytest",))
     assert (cancelled.cause, cancelled.red_names) == ("not_started", ("pytest",))
-    job = CiCheck(PY[0], "COMPLETED", "FAILURE", "l", failed_stage="checkout")
+    job = CiCheck(PY[0], "COMPLETED", "FAILURE", "l", failed_step="Run actions/checkout@v7")
     checkout = _verdict([_run(jobs=(job, _job(PY[1])))], names=("pytest",))
     assert (checkout.cause, checkout.red_names) == ("checkout_failed", ("pytest",))
     assert _verdict([_matrix("SUCCESS", "SUCCESS")], names=("pytest",)).red == ()

@@ -97,6 +97,13 @@ local suite and the second escalates. The
 accessor returns a `CiDispatch` or, absent, `None`. Both values are validated here, and the workflow
 name is later handed to `gh workflow run`, so it can never be a path.
 
+**`api_break_line`**: optional (GH-610). A mapping of exactly `prefix`, `check` and `step`, all
+non-empty strings, `prefix` ending in `:`: the line (`Breaking-API:`) a pull request body must
+carry for the task's approved API break, the CI check that fails without it and the name of the
+step of that check's job that does. With it the system writes the line first in the body of its
+own pull requests, puts it back when that step is red and the body lacks it, and never restarts a
+task for that failure. The accessor returns an `ApiBreakLine` or, absent, `None`.
+
 **`check_budgets`**: optional (GH-365). A mapping of a check's name, which must also be under
 `checks`, to the seconds the check may take: a positive number (an int or a float, never a bool).
 The budget is compared only by the once-per-task `full_checks` run on the integrated head, never by
@@ -187,6 +194,7 @@ from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.presubmit import (
     FAILED_IDS_TOKEN,
+    ApiBreakLine,
     CiCover,
     CiDispatch,
     RerunForm,
@@ -219,6 +227,7 @@ KEYS = (
     "rerun_checks",
     "ci_covers",
     "ci_dispatch",
+    "api_break_line",
     "check_budgets",
     "merge_inert",
     "risk_areas",
@@ -274,6 +283,8 @@ PLAYWRIGHT_TEST_ID = r"(?m)^(?:  ✘ +\d+ | +\d+\) | +)\[[^\]]+\] › (\S+?:\d+)
 TEST_ID_MAX_LENGTH = 200
 # Every sub-key one `ci_covers` entry declares (GH-453).
 COVER_KEYS = ("job", "failed")
+# Every sub-key `api_break_line` declares (GH-610).
+API_BREAK_KEYS = ("prefix", "check", "step")
 # Every sub-key `ci_dispatch` declares (GH-462), and the shape of its `workflow`: a bare file
 # name, so `gh workflow run` is never handed a path.
 DISPATCH_KEYS = ("workflow", "sha_input")
@@ -841,6 +852,35 @@ def ci_dispatch(data: object, source: object) -> CiDispatch | None:
     if not ci(data, source):
         raise ValueError(f"{source}: `ci_dispatch` requires `ci`: it judges what `ci` reads")
     return CiDispatch(workflow=workflow, sha_input=found["sha_input"].strip())
+
+
+def api_break_line(data: object, source: object) -> ApiBreakLine | None:
+    """The line a pull request body must carry for an approved API break, the check that fails
+    without it and its step (GH-610). Absent is `None`: the system writes no such line.
+
+    Present, a mapping of exactly `prefix`, `check` and `step`, each a non-empty string, `prefix`
+    ending in `:`. Every shape that is not that fails at load, naming the key."""
+    declared = _declared(data, source)
+    if "api_break_line" not in declared:
+        return None
+    found = _declared_nonempty(declared, source, "api_break_line")
+    if not isinstance(found, dict):
+        raise ValueError(f"{source}: expected `api_break_line`, a mapping of {API_BREAK_KEYS}")
+    if unknown := [key for key in found if key not in API_BREAK_KEYS]:
+        raise ValueError(
+            f"{source}: unknown key(s) {', '.join(sorted(map(str, unknown)))} under "
+            f"`api_break_line`; expected {API_BREAK_KEYS}"
+        )
+    for key in API_BREAK_KEYS:
+        value = found.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{source}: expected a non-empty `{key}` under `api_break_line`")
+    prefix = found["prefix"].strip()
+    if not prefix.endswith(":"):
+        raise ValueError(
+            f"{source}: `prefix` under `api_break_line` must end in `:`; got {prefix!r}"
+        )
+    return ApiBreakLine(prefix=prefix, check=found["check"].strip(), step=found["step"].strip())
 
 
 def check_budgets(data: object, source: object) -> dict[str, float]:
@@ -1440,6 +1480,15 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         "requires `ci`. A head that touches .github/ is judged by a workflow_dispatch run of "
         "the base branch's workflow at that sha, and without the key it runs the local suite "
         "([ADR-0080](../adr/0080-un-producto-con-ci-corre-su-nivel-completo-solo-en-github.md))",
+    ),
+    KeyReference(
+        "api_break_line",
+        api_break_line,
+        API_BREAK_KEYS,
+        Disabled(),
+        "mapping of `prefix` (ends in `:`), `check` and `step`: the line a pull request body "
+        "carries for an approved API break, the CI check that fails without it and the name of "
+        "its step; the system writes the line and puts it back instead of restarting the task",
     ),
     KeyReference(
         "check_budgets",

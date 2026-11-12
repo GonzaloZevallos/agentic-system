@@ -225,10 +225,12 @@ def test_a_red_head_whose_gate_already_reran_it_goes_straight_to_a_fix():
 
 
 @pytest.mark.parametrize("refusal", ["eval_set_unreadable", "ci_missing", "ci_unreadable"])
-def test_an_undecidable_ci_waits_until_the_bound_then_diagnoses(refusal):
-    assert _step(refusal, _spent(waited_s=None)).kind == "wait"
-    assert _step(refusal, _spent(waited_s=ci.CI_WAIT_MAX_S - 1)).kind == "wait"
-    assert _step(refusal, _spent(waited_s=ci.CI_WAIT_MAX_S)).kind == "diagnose"
+def test_an_undecidable_ci_waits_until_the_bound_then_diagnoses_a_head_that_touches_the_ci(refusal):
+    # GH-610: a head that does not touch `.github/` escalates instead (`test_landing_non_code`).
+    ci_paths = {"touched_paths": (".github/workflows/ci.yml",)}
+    assert _step(refusal, _spent(waited_s=None), **ci_paths).kind == "wait"
+    assert _step(refusal, _spent(waited_s=ci.CI_WAIT_MAX_S - 1), **ci_paths).kind == "wait"
+    assert _step(refusal, _spent(waited_s=ci.CI_WAIT_MAX_S), **ci_paths).kind == "diagnose"
 
 
 def test_findings_outside_the_task_are_filed_whatever_the_pass_budget():

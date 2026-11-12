@@ -23,7 +23,7 @@ from ..domain.landing import LandingStepKind
 from ..domain.landing_order import Turn
 from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
-from . import landing_adr, landing_fix, landing_plan, landing_slice, landing_sync
+from . import landing_adr, landing_body, landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .escalate import NEEDS_HUMAN
 from .landing_plan import LandingContext
@@ -186,6 +186,11 @@ def _land(
     if head is None:
         return LandResult("skipped", "no_head")
     resumed = landing_slice.open_entry(landing_plan.live_entries(raw), head)
+    # GH-610: a `fix_pr_body` a crash or a failed call left open is taken again from what the
+    # tracker shows, never decided again.
+    fixing = (
+        landing_plan.open_fix(landing_plan.live_entries(raw), head) if resumed is None else None
+    )
     read: list[landing_rules.SliceInputs] = []
 
     def slice_inputs() -> landing_rules.SliceInputs:
@@ -200,6 +205,9 @@ def _land(
             decision.reason,
             tuple(str(u) for u in units) if isinstance(units, list) else (),
         )
+    elif fixing is not None:
+        resumed = fixing
+        step = landing_rules.LandingStep("fix_pr_body", decision.reason)
     else:
         step = landing_plan.step_for(
             raw,
@@ -208,6 +216,7 @@ def _land(
             slice_inputs,
             landing_plan.head_ancestry(ports, cfg, head, master),
             turn=turn,
+            non_code=landing_plan.non_code_state(ports, raw, decision.reason, facts),
         )
     try:
         now: datetime | None = datetime.fromisoformat(clock())
@@ -226,6 +235,28 @@ def _land(
         # view gave; it must be one this run may take before anything is written.
         at = clock()
         released = landing_plan.release_patch(raw, outcome, master, at)
+        answer = outcome.answer
+        if answer is not None and answer.outcome == "reasked":
+            # GH-610: the owner's answer was refused with a re-ask left; the question is published
+            # again with the reason, and the task stays escalated.
+            ports.documents.save(apply(state_from(dict(raw)), released))
+            landing_body.escalate_api_break(
+                LandingContext(
+                    task_id,
+                    cfg,
+                    ports,
+                    landing_rules.LandingStep("escalate_api_break", decision.reason),
+                    head,
+                    upstream,
+                    facts,
+                    log,
+                    role_span=role_span,
+                    clock=clock,
+                ),
+                rejected=answer.reason,
+            )
+            return LandResult("dispatched", step="escalate_api_break")
+        view = apply(raw, released) if released else raw
         step = landing_plan.released_step(
             raw,
             outcome,
@@ -235,6 +266,7 @@ def _land(
             slicing=slice_inputs,
             ancestry=landing_plan.head_ancestry(ports, cfg, head, master),
             turn=turn,
+            non_code=landing_plan.non_code_state(ports, view, decision.reason, facts),
         )
     if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
         return _refused(task_id, raw, run_kind, step.kind, head, log)
@@ -616,5 +648,9 @@ def _dispatch(context: LandingContext) -> None:
             landing_adr.apply_adr_decision(context)
         case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
+        case "fix_pr_body":
+            landing_body.fix_pr_body(context)
+        case "escalate_api_break":
+            landing_body.escalate_api_break(context)
         case _:
             assert_never(kind)

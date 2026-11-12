@@ -90,7 +90,12 @@ sequenceDiagram
    `qa_performance`, `full_checks`; `agentic/core/process/application/verifiers.py:verify`) y
    `deliver` espera a todos; `owner_rules` anexa en la rama de la tarea las reglas que el dueño
    marcó con `Owner's rule:` en el issue (`agentic/core/process/application/owner_rules.py`); `deliver` empuja la rama y abre el pull request con `Tracker.open_pull_request`
-   (`agentic/core/process/application/deliver.py:deliver`).
+   (`agentic/core/process/application/deliver.py:deliver`). Cuando el stack declara
+   `api_break_line` y la tarea tiene un motivo registrado, el cuerpo de la primera entrega lleva
+   la línea `Breaking-API:` primero; en una reentrega `deliver` lee el cuerpo
+   (`Tracker.pull_request_body`), le antepone la línea si falta y lo edita
+   (`Tracker.update_pull_request_body`) antes del push. Sin clave o sin motivo, nada de esto ocurre
+   (`agentic/core/process/domain/pull_request.py:with_required_lines`).
 7. **Merge.** En rondas siguientes el poller reúne los pull requests entregados
    (`agentic/core/process/application/poll.py:gather_merges`) y lanza
    `agentic merge --issue N` (`agentic/cli.py:_merge`). Este verbo llama a

@@ -34,6 +34,7 @@ graph TD
     m_domain__landing --> g_domain__state
     m_domain__landing --> m_domain__adr_numbers
     m_domain__landing --> m_domain__landing_order
+    m_domain__landing --> m_domain__pull_request
     m_domain__plan_revision --> g_domain__state
     m_domain__plan_settlement --> g_domain__roles
     m_domain__plan_settlement --> g_domain__state

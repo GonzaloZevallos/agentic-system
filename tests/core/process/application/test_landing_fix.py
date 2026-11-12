@@ -245,6 +245,8 @@ def test_the_executors_that_are_built_are_the_live_steps():
         "escalate_ledger",
         "escalate_adr",
         "apply_adr_decision",
+        "fix_pr_body",
+        "escalate_api_break",
     }
 
 

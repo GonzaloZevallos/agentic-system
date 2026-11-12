@@ -1060,7 +1060,13 @@ async def test_a_permanent_refusal_of_the_dispatch_publish_names_the_ref_and_git
 
 @pytest.mark.parametrize("stage", ["checkout", "setup"])
 async def test_a_run_whose_only_failing_job_failed_before_the_suite_is_ci_not_usable(stage):
-    failed = CiCheck("web", "COMPLETED", "FAILURE", f"{LINK}/web", failed_stage=stage)
+    failed = CiCheck(
+        "web",
+        "COMPLETED",
+        "FAILURE",
+        f"{LINK}/web",
+        failed_step={"checkout": "Run actions/checkout@v7", "setup": "Set up job"}[stage],
+    )
     ports = dispatching((run_of(job("unit"), failed),))
     state = state_of()
     patch = await run(state, ports)
@@ -1073,7 +1079,7 @@ async def test_a_run_whose_only_failing_job_failed_before_the_suite_is_ci_not_us
 
 
 async def test_a_suite_failure_stays_red_and_returns_the_integration():
-    failed = CiCheck("web", "COMPLETED", "FAILURE", f"{LINK}/web", failed_stage="suite")
+    failed = CiCheck("web", "COMPLETED", "FAILURE", f"{LINK}/web", failed_step="Run pytest")
     ports = dispatching((run_of(job("unit"), failed),))
     patch = await run(state_of(), ports)
     assert patch["full_checks"]["passed"] is False

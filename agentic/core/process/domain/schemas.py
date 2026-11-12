@@ -32,6 +32,7 @@ from .ci_workflow import WorkflowNames
 from .cost_history import History, Raise, bucket_median, raised_estimate, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
+from .pull_request import api_break_reason, is_reject_reason
 from .task import (
     INTEGRATION,
     CopyCategory,
@@ -664,6 +665,13 @@ class TechPlan(RoleOutput):
         "example `.agentic/stack.yaml` when the issue asks for a change in it). Empty when "
         "the issue names none",
     )
+    api_break: str = Field(
+        default="",
+        description="The reason of an API break the plan approves, one line of at most 240 "
+        "characters with no backtick, `{{` or link: the system writes it as the product's "
+        "`Breaking-API:` line in the pull request body. An empty string when the task breaks "
+        "no API",
+    )
 
     promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
 
@@ -691,6 +699,17 @@ class TechPlan(RoleOutput):
             raise ValueError("ci_none_reason must be empty when ci_required names checks")
         if not self.ci_required:
             _one_line(self.ci_none_reason, "ci_none_reason, when ci_required is empty,")
+        return self
+
+    @model_validator(mode="after")
+    def _api_break_sanitized(self) -> TechPlan:
+        if self.api_break.strip():
+            reason = api_break_reason(self.api_break)
+            if is_reject_reason(reason):
+                raise ValueError(f"api_break is refused ({reason}): one clean line of at most 240")
+            self.api_break = reason
+        else:
+            self.api_break = ""
         return self
 
     @model_validator(mode="after")
