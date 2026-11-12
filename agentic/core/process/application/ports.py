@@ -24,7 +24,7 @@ from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, Ex
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
+from ..domain.presubmit import ApiBreakLine, CheckResult, CiCover, CiDispatch, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import Commit, LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -610,6 +610,13 @@ class ProductStack(Protocol):
         Empty when the product declares none, which is legitimate -- a Go product, or
         one that genuinely forbids nothing -- and not an error, the same shape
         `setup`'s absence already has."""
+        ...
+
+    def api_break_line(self, revision: str) -> ApiBreakLine | None:
+        """The line a pull request body must carry for an approved API break, the CI check that
+        fails without it and the step of that check (`api_break_line` of the stack, GH-610), as
+        the commit `revision` declares it. `None` when the key is absent: the system writes no
+        such line. Raises `ValueError` when the key is malformed."""
         ...
 
     def ci(self, revision: str) -> tuple[str, ...]:
@@ -1638,6 +1645,13 @@ class Tracker(Protocol):
         ...
 
     def update_pull_request_body(self, number: int, body: str) -> None: ...
+
+    def pull_request_body(self, reference: str) -> str:
+        """The body of the pull request at `reference` as it is now (GH-610): what the landing
+        reads to know whether the product's required line is there. Raises `ValueError` for a
+        reference that is not a pull request URL, before any call, and when the platform cannot
+        answer or answers something unreadable."""
+        ...
 
     def issue_comments(self, task_id: str) -> list[str]:
         """The bodies of the issue's comments, oldest first, whoever wrote them; none

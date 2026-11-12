@@ -90,7 +90,13 @@ from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandid
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
-from agentic.core.process.domain.presubmit import CheckResult, CiCover, CiDispatch, RerunForm
+from agentic.core.process.domain.presubmit import (
+    ApiBreakLine,
+    CheckResult,
+    CiCover,
+    CiDispatch,
+    RerunForm,
+)
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -468,6 +474,7 @@ class MemoryStack:
         # merge and review tests need; a dict declares them per revision.
         self.declared_ci: dict[str, tuple[str, ...]] = {}
         self.declared_ci_all: tuple[str, ...] = ()
+        self.declared_api_break_line: ApiBreakLine | None = None
         if isinstance(ci, tuple):
             self.declared_ci_all = ci
         elif ci is not None:
@@ -592,6 +599,12 @@ class MemoryStack:
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_forbidden
+
+    def api_break_line(self, revision: str) -> ApiBreakLine | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        if self.ci_error is not None:
+            raise ValueError(self.ci_error)
+        return self.declared_api_break_line
 
     def ci(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1612,6 +1625,10 @@ class MemoryTracker:
         # `(number, body)` of each body update.
         self.listed: list[ListedPullRequest] = []
         self.updated_bodies: list[tuple[int, str]] = []
+        # GH-610: the body `pull_request_body` answers per reference (an edit writes it), and
+        # the `ValueError` text that makes the read fail.
+        self.bodies: dict[str, str] = {}
+        self.body_error: str | None = None
         # GH-178: `pull_request`'s canned answers by reference (the URL the document
         # stores); `head_oid`, when set, is what every answered pull request reports as
         # its head, so a test moves the head without rebuilding the pull request.
@@ -1834,7 +1851,19 @@ class MemoryTracker:
         return list(self.on_branch.get(branch, []))
 
     def update_pull_request_body(self, number: int, body: str) -> None:
+        self.events.append("update_pull_request_body")
         self.updated_bodies.append((number, body))
+        self.bodies[self.url_of(number)] = body
+
+    def url_of(self, number: int) -> str:
+        return self.url.rsplit("/", 1)[0] + f"/{number}"
+
+    def pull_request_body(self, reference: str) -> str:
+        pull_request_number(reference)  # the adapter's own strictness
+        self.events.append("pull_request_body")
+        if self.body_error is not None:
+            raise ValueError(self.body_error)
+        return self.bodies.get(reference, "")
 
     def issue_comments(self, task_id: str) -> list[str]:
         return [*self.earlier, *(text for _, text in self.comments)]

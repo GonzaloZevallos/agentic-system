@@ -584,6 +584,16 @@ class GhTracker:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def pull_request_body(self, reference: str) -> str:
+        raw = self._gh_read("pr", "view", str(pull_request_number(reference)), "--json", "body")
+        try:
+            body = json.loads(raw)["body"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"gh pr view answered something unreadable: {raw[:200]!r}") from exc
+        if not isinstance(body, str):
+            raise ValueError(f"gh pr view answered a body that is not text: {raw[:200]!r}")
+        return body
+
     def issue_comments(self, task_id: str) -> list[str]:
         if (number := issue_number(task_id)) is None:
             return []
