@@ -114,6 +114,10 @@ class TaskFigures:
     unattributed_s: float | None = None
     # What planning cost and returned, for `eval compare`'s planning block (GH-472).
     planning_facts: planning.TaskPlanning | None = None
+    # The task's escalations by cause and the seconds it waited on a human per cause (GH-593);
+    # `None` when a pause is open or unreadable.
+    escalations: tuple[cycle.Escalation, ...] = ()
+    human_wait_s: dict[str, float] | None = None
 
 
 def task_figures(document: ScorecardDocument) -> TaskFigures:
@@ -158,6 +162,8 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         paused_s=None if None in paused_parts else sum(p or 0.0 for p in paused_parts),
         unattributed_s=split.unattributed_s,
         planning_facts=planning.task_planning(document),
+        escalations=cycle.escalations(document),
+        human_wait_s=cycle.human_wait_seconds(document),
     )
 
 
@@ -243,6 +249,16 @@ def _median(values: Sequence[float], excluded: int) -> Figure:
 
 
 @dataclass(frozen=True)
+class CauseCount:
+    """Escalations of one cause and kind over a bucket: `escalations` of them in `tasks` tasks."""
+
+    cause: str
+    kind: str
+    escalations: int
+    tasks: int
+
+
+@dataclass(frozen=True)
 class Scorecard:
     """ADR-0028's four figures, in order, over one baseline's own documents
     (`core/measurement/CONTEXT.md`'s `Scorecard` entry): autonomy, own failures per
@@ -280,6 +296,10 @@ class Scorecard:
     paused_external_h: Figure = Figure(None, 0, 0)
     paused_human_h: Figure = Figure(None, 0, 0)
     unattributed_h: Figure = Figure(None, 0, 0)
+    # Informative only (GH-593), enter no verdict: the escalations by cause and kind, and the
+    # median hours a task waited on a human per cause (`n` of `n + excluded` tasks).
+    escalations_by_cause: tuple[CauseCount, ...] = ()
+    human_wait_by_cause_h: tuple[tuple[str, Figure], ...] = ()
     cycle_closed: int = 0
     cycle_open: int = 0
     active_closed: int = 0
@@ -292,6 +312,30 @@ def _hours(
     """The median, in hours, of one time figure over the tasks where it is known; a task with
     `None` is counted in `excluded`, never as a zero."""
     known = [s / 3600 for f in figures if (s := seconds(f)) is not None]
+    return _median(known, excluded=len(figures) - len(known))
+
+
+def _by_cause(
+    figures: Sequence[TaskFigures],
+) -> tuple[tuple[CauseCount, ...], tuple[tuple[str, Figure], ...]]:
+    """The escalations per (cause, kind) and the median human wait per cause over `figures`."""
+    counts: dict[tuple[str, str], list[int]] = {}
+    for f in figures:
+        for key in {(e.cause, e.kind) for e in f.escalations}:
+            seen = sum(1 for e in f.escalations if (e.cause, e.kind) == key)
+            total, tasks = counts.setdefault(key, [0, 0])
+            counts[key] = [total + seen, tasks + 1]
+    rows = tuple(CauseCount(c, k, n, t) for (c, k), (n, t) in sorted(counts.items()))
+    causes = sorted({c for f in figures for c in (f.human_wait_s or {})})
+    waits = tuple((cause, _wait(figures, cause)) for cause in causes)
+    return rows, waits
+
+
+def _wait(figures: Sequence[TaskFigures], cause: str) -> Figure:
+    """The median hours waiting on a human for `cause`, over the tasks that waited on it."""
+    known = [
+        f.human_wait_s[cause] / 3600 for f in figures if f.human_wait_s and cause in f.human_wait_s
+    ]
     return _median(known, excluded=len(figures) - len(known))
 
 
@@ -344,7 +388,10 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
     for f in terminated:
         for reason, count in f.failures_by_reason.items():
             by_reason[reason] = by_reason.get(reason, 0) + count
+    escalation_rows, wait_rows = _by_cause(figures)
     return Scorecard(
+        escalations_by_cause=escalation_rows,
+        human_wait_by_cause_h=wait_rows,
         autonomy=autonomy,
         own_failures_per_task=own_failures_per_task,
         cost_per_delivery=cost_per_delivery,

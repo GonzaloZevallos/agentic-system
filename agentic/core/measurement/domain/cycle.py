@@ -212,7 +212,7 @@ def pause_intervals(document: Mapping[str, Any]) -> Pauses:
     only `lapse` entries is no pause. Its start is the latest `Failure.ended_at` that matches
     one of its failure entries (same `section` and `reason`, ended after the previous
     `resumed` and no later than that entry), else the opening entry's `at`. It is `external`
-    when `rules.pause_kind` (the only name taken from `rules`) says so (every failure an external reason, every escalation a
+    when `rules.pause_kind` says so (every failure an external reason, every escalation a
     `failure` one or carrying a `MechanicalCause`), `human` otherwise."""
     closed: list[Pause] = []
     complete = True
@@ -343,3 +343,55 @@ def time_split(document: Mapping[str, Any]) -> TimeSplit:
     known = bool(active) and None not in (failed_s, waiting_s, external_s, human_s)
     unattributed = _length([bounds], bounds, covered) if known else None
     return TimeSplit(failed_s, waiting_s, external_s, human_s, unattributed)
+
+
+@dataclass(frozen=True)
+class Escalation:
+    """One escalation of a task and what kind it was: `mechanical` when its pause is external
+    (`rules.pause_kind`), `judgment` when a human was needed (GH-593)."""
+
+    cause: str
+    kind: Literal["mechanical", "judgment"]
+
+
+def _epochs(document: Mapping[str, Any]) -> list[list[Mapping[str, Any]]]:
+    epochs: list[list[Mapping[str, Any]]] = [[]]
+    for entry in document.get("pause_log") or []:
+        if entry["kind"] == "resumed":
+            epochs.append([])
+        else:
+            epochs[-1].append(entry)
+    return epochs
+
+
+def escalations(document: Mapping[str, Any]) -> tuple[Escalation, ...]:
+    """The task's escalations, each labelled by its cause (else its class) and by the kind of
+    pause it opened. An entry with no `cause` reads as a judgment one, as before GH-593."""
+    found: list[Escalation] = []
+    for epoch in _epochs(document):
+        kind = (
+            "mechanical"
+            if pause_kind(cast(Sequence[PauseEntry], epoch)) == "external"
+            else "judgment"
+        )
+        found.extend(
+            Escalation(str(e.get("cause") or e["value"]), kind)
+            for e in epoch
+            if e["kind"] == "escalation"
+        )
+    return tuple(found)
+
+
+def human_wait_seconds(document: Mapping[str, Any]) -> dict[str, float] | None:
+    """The seconds the task waited on a human, by cause: the closed `human` pauses' length.
+    `None` when a pause is open or unreadable, never a partial sum."""
+    pauses = pause_intervals(document)
+    if not pauses.complete:
+        return None
+    waited: dict[str, float] = {}
+    for pause in pauses.closed:
+        if pause.kind == "human":
+            waited[pause.cause] = (
+                waited.get(pause.cause, 0.0) + (pause.end - pause.start).total_seconds()
+            )
+    return waited
