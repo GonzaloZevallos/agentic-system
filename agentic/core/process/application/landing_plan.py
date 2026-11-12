@@ -101,10 +101,11 @@ def _conflicting(entry: Mapping[str, object]) -> bool:
 
 def _readings(
     epoch: Sequence[Mapping[str, object]], upstream: str | None
-) -> tuple[DiagnosisVerdict | None, int, bool]:
+) -> tuple[DiagnosisVerdict | None, int, bool, Mapping[str, object] | None]:
     """What the diagnoses of the `epoch` read as, walked in order (GH-330): the latest
-    delivered one's verdict, the syncs that followed a `sync` verdict for `upstream`, and
-    whether the latest verdict is a `sync` for `upstream` that no `sync_master` has followed.
+    delivered one's verdict, the syncs that followed a `sync` verdict for `upstream`, whether
+    the latest verdict is a `sync` for `upstream` that no `sync_master` has followed, and the
+    entry of the latest delivered diagnosis when it read as `unlandable` (`None` otherwise).
     A `sync` verdict is served by the first `sync_master` for its sha after it; a `sync` for a
     sha that already had `LANDING_VERDICT_SYNCS_MAX` of them (served or not), or with no sha,
     reads as `unlandable`, and so does a delivered entry with no verdict."""
@@ -113,6 +114,7 @@ def _readings(
     waiting: set[str] = set()
     last: DiagnosisVerdict | None = None
     latest: str | None = None
+    unlandable_entry: Mapping[str, object] | None = None
     for entry in epoch:
         sha = entry.get(UPSTREAM_KEY)
         if entry.get("step") == "sync_master" and isinstance(sha, str) and sha in waiting:
@@ -129,11 +131,13 @@ def _readings(
             seen[sha] = seen.get(sha, 0) + 1
             last, latest = VERDICT_SYNC, sha
             waiting = {sha}
+            unlandable_entry = None
         else:
             last, latest = VERDICT_UNLANDABLE, None
             waiting = set()
+            unlandable_entry = entry
     due = upstream is not None and latest == upstream and latest in waiting
-    return last, served.get(upstream, 0) if upstream is not None else 0, due
+    return last, served.get(upstream, 0) if upstream is not None else 0, due, unlandable_entry
 
 
 Ancestry = Callable[[], bool | None]
@@ -186,7 +190,10 @@ def spent(
     def for_upstream(entry: Mapping[str, object]) -> bool:
         return upstream is not None and entry.get(UPSTREAM_KEY) == upstream
 
-    last_verdict, verdict_syncs, due = _readings(epoch, upstream)
+    last_verdict, verdict_syncs, due, binding = _readings(epoch, upstream)
+    in_force = binding is None or landing.verdict_in_force(
+        binding, head, bool(raw.get("escalated")), raw.get("pause_log")
+    )
     release_due = landing.ci_release_due(live, head, upstream)
     return landing.LandingSpent(
         passes=count(lambda e: e.get("step") in ("re_review", "fix")),
@@ -221,6 +228,7 @@ def spent(
         no_verdict_released=head is not None
         and landing.no_verdict_released(live, _merge_ci_records(raw), head),
         adr_review_owed=landing.adr_review_owed(done),
+        verdict_in_force=in_force,
         declined_on_head=count_live(
             lambda e: (
                 e.get("step") == "renumber"
