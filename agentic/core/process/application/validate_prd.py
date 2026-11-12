@@ -59,7 +59,7 @@ async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> Ta
             ports.knowledge.consolidate(data, task.path)
             ports.workspace.commit_all(task.path, f"{state['id']}: product definition")
         patch["status"] = "definition_ready"
-    elif remaining > 0:
+    elif rules.on_return_limit(state, PAIR_PM_PA, limit) == "count":
         patch["changes_requested"] = rules.record_return(state, PAIR_PM_PA)
         patch["change_history"] = [rules.change_entry(PAIR_PM_PA, rules.PRD_RETURN, data["reason"])]
         patch["status"] = "returned"

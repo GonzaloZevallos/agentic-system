@@ -225,6 +225,14 @@ def test_the_return_counts_on_the_pair_and_escalates_at_its_limit():
     assert patch["findings"] and patch["subtasks"]["integration"]["returned_by"] == "full_checks"
 
 
+def test_the_return_asks_the_decision_for_the_modes_pair(monkeypatch):
+    asked = []
+    monkeypatch.setattr(rules, "on_return_limit", lambda *a, **k: asked.append(a[1]) or "escalate")
+    patch = rules.full_checks_return(state(), RED, 2, at=_STAMP, mode="single")
+    assert patch["escalation_class"] == "returns" and "changes_requested" not in patch
+    assert asked == [rules.full_checks_pair("integration", "single")]
+
+
 def test_the_returned_section_is_the_full_checks_one():
     returned = state(subtasks={"integration": {"status": "returned", "returned_by": "full_checks"}})
     assert rules.return_section(returned, "integration") == "Full checks"
