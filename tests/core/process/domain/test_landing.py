@@ -23,6 +23,9 @@ from agentic.core.process.domain.task import (
     LandedSliceRef,
     LandingEntry,
     OutOfBoundsLine,
+    RenumberCause,
+    RenumberMode,
+    RenumberOutcome,
 )
 from tests.gh150_stranded import GH150_STRANDED
 
@@ -482,8 +485,9 @@ _SAMPLE: dict[object, object] = {
     list[CiLogRecord]: [{"job": "check", "bytes": 1, "cause": "read"}],
     FailureReason: "account_limit",
     DiagnosisVerdict: "sync",
-    CiCause: "no_run",
-    AdrDecisionOutcome: "applied",
+    CiCause | RenumberCause: "no_run",
+    AdrDecisionOutcome | RenumberOutcome: "applied",
+    RenumberMode: "dated",
     AdrDecidedBy: "rule",
     list[list[str]]: [["a", "b"]],
     list[RedCheck]: [{"name": "tests", "tail": ["a"], "recovered": False, "timed_out": False}],

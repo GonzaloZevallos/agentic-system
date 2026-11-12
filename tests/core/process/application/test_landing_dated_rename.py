@@ -19,7 +19,7 @@ from tests.fakes import MemoryCommands, MemoryStack, MemoryTracker, memory_ports
 THEIRS = "docs/adr/0079-theirs.md"
 NOTES = "docs/notes.md"
 BRANCH = rules.task_branch("GH-5")
-DOCS = Docs(generate="make docs", paths=("docs/reference/**",))
+DOCS = Docs(generate="make docs", paths=("docs/gen-out/**",))
 FRONT = "---\ndate: 2026-10-30\n---\n# ADR-{n}: mine\n"
 
 
@@ -77,7 +77,7 @@ def test_a_head_holding_0079_is_renamed_to_the_dated_form_and_pushed_once(tmp_pa
     assert result.kind == "dispatched" and result.step == "renumber"
     [(_, relatives, _message)] = ports.workspace.path_commits
     assert mine in relatives and "docs/adr/20261030-mine.md" in relatives
-    assert "docs/reference/**" in relatives
+    assert "docs/gen-out/**" in relatives
     assert ports.workspace.pushes == [(BRANCH, head)]
     assert not (tmp_path / "GH-5" / mine).exists()
     assert (tmp_path / "GH-5" / NOTES).read_text() == "see ADR-20261030-mine for why\n"
