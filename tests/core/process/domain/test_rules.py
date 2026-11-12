@@ -4755,3 +4755,10 @@ def test_orphaned_line_names_a_stopped_and_an_unaccounted_task():
     assert rules.orphaned_line(7, "unaccounted", "spent") == (
         "agentic: poll: #7 owed a run, not taken this round (spent); agentic resume --issue 7"
     )
+
+
+def test_orphaned_line_names_an_interrupted_retake_waiting_on_its_calendar():
+    assert rules.orphaned_line(7, "retake_calendar", "13:05") == (
+        "agentic: poll: #7 interrupted (lock kept): retake due at 13:05; "
+        "remove the agentic label to hold it"
+    )

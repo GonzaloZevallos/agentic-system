@@ -503,7 +503,8 @@ def test_an_interrupted_retake_waiting_on_its_calendar_gets_exactly_one_calendar
     lines, launcher = _go(ports, lock=lock)
     assert launcher.spawned == []
     mentioning = [line for line in lines if "#7" in line]
-    assert len(mentioning) == 1 and "orphaned (no lock): due at" in mentioning[0]
+    assert len(mentioning) == 1 and "interrupted (lock kept): retake due at" in mentioning[0]
+    assert "no lock" not in mentioning[0]
     assert "nothing to do" not in " ".join(lines)
 
 

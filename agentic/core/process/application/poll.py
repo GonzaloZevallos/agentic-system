@@ -1438,7 +1438,9 @@ def gather_retakes(
             case "calendar":
                 # A retake is made, and the next one is only waiting for its time: said, not silent.
                 due = retake_rules.due(used, written_at, timedelta(0)).astimezone(UTC)
-                lines.append(rules.orphaned_line(number, "calendar", due.strftime("%H:%M UTC")))
+                lines.append(
+                    rules.orphaned_line(number, "retake_calendar", due.strftime("%H:%M UTC"))
+                )
                 said.add(number)
             case "human":
                 lines.append(_human_line(number, record, other_boot))

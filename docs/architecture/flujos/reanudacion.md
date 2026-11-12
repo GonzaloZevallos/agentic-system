@@ -66,7 +66,8 @@ sequenceDiagram
      `agentic/core/process/domain/rules.py:next_attempt_at`, y `execute` lanza el hijo y,
      recién cuando el spawn devolvió un pid, deja el comentario `Auto-resumed: `
      (`agentic/core/process/application/poll.py:AUTO_RESUMED`). Las corridas que murieron por un
-     reinicio o una caída las retoma también el poller
+     reinicio, una caída o una señal fuera de un apagado (SIGTERM, SIGHUP, SIGINT; solo
+     `agentic stop` es una parada deliberada) las retoma también el poller
      (`agentic/core/process/application/poll.py:gather_retakes`). Todo hijo que el poller lanza
      lleva `--by-poller` (`agentic/core/process/application/poll.py:_spawn_resume`) y su
      reanudación comenta `Resumed by the poller: `

@@ -4356,7 +4356,14 @@ ORPHANED_QUIET = timedelta(hours=1)
 
 OrphanVerdict = Literal["retake", "none", "quiet", "calendar", "cap_spent"]
 OrphanWhy = Literal[
-    "quiet", "calendar", "no_slot", "cap_spent", "lock_unreadable", "stopped", "unaccounted"
+    "quiet",
+    "calendar",
+    "no_slot",
+    "cap_spent",
+    "lock_unreadable",
+    "stopped",
+    "unaccounted",
+    "retake_calendar",
 ]
 
 
@@ -4401,12 +4408,15 @@ def orphaned_line(number: int, why: OrphanWhy, detail: str = "") -> str:
     takes none. A held orphan says how to stop the retake, a spent or unreadable one says
     what the human runs. `stopped` (GH-616): `agentic stop` stopped the run, so the poller does
     not retake it; `unaccounted`: the round reached the task and did nothing with it, `detail`
-    is the verdict name."""
+    is the verdict name; `retake_calendar`: a run whose dead lock is kept and whose next retake
+    is not due yet, `detail` is the time."""
     hold = "remove the agentic label to hold it"
     human = f"left to the human: agentic resume --issue {number} --from-document"
     resume = f"agentic resume --issue {number}"
     if why == "stopped":
         return f"agentic: poll: #{number} stopped on purpose (agentic stop): not retaken; {resume}"
+    if why == "retake_calendar":
+        return f"agentic: poll: #{number} interrupted (lock kept): retake due at {detail}; {hold}"
     if why == "unaccounted":
         return f"agentic: poll: #{number} owed a run, not taken this round ({detail}); {resume}"
     text, advice = {
