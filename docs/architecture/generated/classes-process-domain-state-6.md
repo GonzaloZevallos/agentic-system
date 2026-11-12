@@ -31,8 +31,14 @@ classDiagram
     class task__TrackerFailureRecord["TrackerFailureRecord"]
     class task__TrackerPosted["TrackerPosted"]
     class task_path__PathDecision["PathDecision"]
+    class task_path__PromoteRequest["PromoteRequest"]
     class task_path__Promotion["Promotion"]
+    class task_path__RiskHit["RiskHit"]
+    class task_path__RiskNone["RiskNone"]
+    class task_path__RiskUnreadable["RiskUnreadable"]
+    task__Subtask --> task_path__PromoteRequest
     task__TaskState --|> task__TaskInput
+    task__TaskState --> task_path__PromoteRequest
     task__TaskState --> task_path__Promotion
 ```
 
