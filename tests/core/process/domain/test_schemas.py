@@ -946,6 +946,46 @@ def test_the_plan_schema_requires_the_ci_keys_and_leaves_required_paths_optional
     assert "required_paths" not in plan["required"]
 
 
+def test_a_plan_keeps_a_clean_api_break_trimmed_and_defaults_to_none():
+    kept = schemas.validate(
+        TechPlan,
+        _ci_plan(ci_required=["web"], ci_none_reason="", api_break="  drops the v1 route "),
+        {},
+    )
+    assert kept["api_break"] == "drops the v1 route"
+    assert (
+        schemas.validate(TechPlan, _ci_plan(ci_required=["web"], ci_none_reason=""), {})[
+            "api_break"
+        ]
+        == ""
+    )
+    assert (
+        schemas.validate(
+            TechPlan, _ci_plan(ci_required=["web"], ci_none_reason="", api_break="   "), {}
+        )["api_break"]
+        == ""
+    )
+    assert "api_break" not in schemas.json_schema(TechPlan, VOCAB)["required"]
+
+
+@pytest.mark.parametrize(
+    ("reason", "why"),
+    [
+        ("two\nlines", "multiline"),
+        ("x" * 241, "too_long"),
+        ("uses `code`", "forbidden_char"),
+        ("see https://example.com/x", "forbidden_char"),
+        ("see [x](y)", "forbidden_char"),
+        ("{{ template }}", "forbidden_char"),
+    ],
+)
+def test_a_plan_whose_api_break_does_not_sanitize_is_refused_with_the_closed_reason(reason, why):
+    with pytest.raises(ValueError, match=why):
+        schemas.validate(
+            TechPlan, _ci_plan(ci_required=["web"], ci_none_reason="", api_break=reason), {}
+        )
+
+
 # --- One fit verdict per estimate, whatever the plan's shape (GH-462) --------------------
 # `FitBucket` pins, for one plan run, the largest subtask count seen: the history's reference
 # no longer depends on whether the output carries parts or subtasks.
