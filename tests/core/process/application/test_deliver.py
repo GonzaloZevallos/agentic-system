@@ -8,8 +8,16 @@ import pytest
 
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application.deliver import deliver
-from agentic.core.process.application.ports import BranchPullRequest, GitError
-from agentic.core.process.domain import document, rules
+from agentic.core.process.application.ports import (
+    BranchPullRequest,
+    GitError,
+    TrackerRateLimited,
+    TrackerRefused,
+    TrackerTimedOut,
+    TrackerTransient,
+    TrackerUnreachable,
+)
+from agentic.core.process.domain import document, pull_request, rules
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeReaper, MemoryStack, memory_ports, unstamped
@@ -167,6 +175,50 @@ async def test_a_failing_open_pull_request_escalates_with_the_error_text(cfg):
     assert rules.auto_resumable({**_big_state(), **patch}) is None
     assert unstamped(patch["pause_log"]) == [{"kind": "escalation", "value": "failure"}]
     assert ports.documents.last["escalated"] == patch["escalated"]
+
+
+@pytest.mark.parametrize(
+    "error", [TrackerTimedOut, TrackerUnreachable, TrackerTransient, TrackerRateLimited]
+)
+async def test_a_transient_pull_request_failure_escalates_as_a_mechanical_delivery_cause(
+    cfg, error
+):
+    """GH-593: classified by the error's type -- the message says nothing a refusal could not."""
+    ports = memory_ports()
+    ports.tracker.open_failures = 1
+    ports.tracker.open_error_type = error
+    patch = await deliver(_big_state(), cfg, ports)
+
+    assert patch["escalation_class"] == "system_delivery"
+    assert patch["escalation_cause"] == "delivery_transient"
+    assert patch["status"] == "waiting_on_human"
+    assert rules.auto_resumable({**_big_state(), **patch}) == "delivery_transient"
+    assert unstamped(patch["pause_log"]) == [
+        {"kind": "escalation", "value": "system_delivery", "cause": "delivery_transient"}
+    ]
+
+
+@pytest.mark.parametrize("error", [TrackerRefused, ValueError])
+async def test_a_refused_pull_request_stays_a_failure_the_poller_does_not_retake(cfg, error):
+    ports = memory_ports()
+    ports.tracker.open_failures = 1
+    ports.tracker.open_error_type = error
+    # The text says "timed out": the classification reads the type, never the words.
+    ports.tracker.open_error = "gh pr create timed out, could not reach GitHub"
+    patch = await deliver(_big_state(), cfg, ports)
+
+    assert patch["escalation_class"] == "failure"
+    assert patch["escalation_cause"] is None
+    assert rules.auto_resumable({**_big_state(), **patch}) is None
+
+
+async def test_a_git_failure_is_never_a_mechanical_delivery_cause(cfg):
+    ports = memory_ports()
+    ports.workspace.push_failures = 1
+    patch = await deliver(TASK, cfg, ports)
+
+    assert patch["escalation_cause"] is None
+    assert rules.auto_resumable({**TASK, **patch}) is None
 
 
 async def test_a_failing_push_escalates_and_never_opens_the_pull_request(cfg):
@@ -1122,6 +1174,25 @@ async def test_a_setup_that_fails_escalates_as_ever_and_clears_the_publication_o
     patch = await deliver(OWING, cfg, ports)
     assert patch["escalation_class"] == "setup" and patch["publish_owed"] is None
     _no_longer_owed(ports)
+
+
+# --- GH-592: the terminal child of a part that split also closes the part's issue ---------
+
+
+async def test_the_terminal_child_of_a_part_closes_the_parts_issue_next_to_its_own(cfg):
+    description = f"Last slice.\n\n{pull_request.closes_marker(346)}"
+    ports = memory_ports()
+    await deliver({**TASK, "description": description}, cfg, ports)
+
+    body = ports.tracker.pull_requests[0][2]
+    assert body.startswith("Closes #346\n\n## PM")
+    assert ports.tracker.closes_issue_calls == [True]  # the adapter adds the task's own line
+
+
+async def test_a_task_without_the_closes_marker_adds_no_closing_line(cfg):
+    ports = memory_ports()
+    await deliver(TASK, cfg, ports)
+    assert "Closes" not in ports.tracker.pull_requests[0][2]
 
 
 async def test_a_delivery_takes_its_place_in_the_landing_order_once_and_a_redelivery_keeps_it(cfg):

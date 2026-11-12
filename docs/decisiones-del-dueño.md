@@ -12,13 +12,13 @@ de una entrada no se edita: corregir es reemplazar, y la regla reemplazada se ta
 mismo commit que agrega la nueva. Las reglas de un producto están en el archivo de su propio
 `docs/product/`.
 
-### D-d3cd64da · 2026-10-28
-Una tarea de más de 150 USD o de unos 40 archivos se parte.
+### D-d3cd64da · 2026-10-28 (reemplazada por D-973ac74f)
+~~Una tarea de más de 150 USD o de unos 40 archivos se parte.~~
 Origen: issue #431, semilla con las reglas dadas entre 2026-10-02 y 2026-10-28
 Rozan: ADR-0054
 
-### D-99072874 · 2026-10-28
-Una parte se construye entera, salvo que pase de 300 USD.
+### D-99072874 · 2026-10-28 (reemplazada por D-70f943b6)
+~~Una parte se construye entera, salvo que pase de 300 USD.~~
 Origen: issue #431, semilla con las reglas dadas entre 2026-10-02 y 2026-10-28
 Rozan: ADR-0054
 
@@ -93,3 +93,15 @@ Origen: issue #431, semilla con las reglas dadas entre 2026-10-02 y 2026-10-28
 ### D-88fd1e7e · 2026-10-28
 El sistema nunca toca datos de producción ni los secretos del entorno de producción.
 Origen: issue #431, semilla con las reglas dadas entre 2026-10-02 y 2026-10-28
+
+### D-973ac74f · 2026-11-11
+Una tarea se dimensiona para integrarse en horas: el presupuesto de tamaño cuenta los archivos y las líneas escritos a mano, los archivos generados nunca cuentan, y la línea de costo de 150 USD queda como chequeo secundario.
+Origen: issue #592, «Owner's rule: a task is sized to merge within hours. The size budget counts hand-written files and lines; generated files never count.» y «The cost line stays as a secondary check.»
+Reemplaza: D-d3cd64da
+Rozan: ADR-0054, ADR-0093
+
+### D-70f943b6 · 2026-11-11
+Una parte que sigue por encima del presupuesto se parte de nuevo; construir entera una parte demasiado grande ya no es una opción.
+Origen: issue #592, «Owner's rule: a part that is still over budget splits again. Building an oversized part whole is no longer an option.»
+Reemplaza: D-99072874
+Rozan: ADR-0054, ADR-0093

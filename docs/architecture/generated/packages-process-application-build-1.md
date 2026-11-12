@@ -17,29 +17,31 @@ Esta página muestra los módulos del grupo `build` de `application` y los impor
 graph TD
     g_application__build__2["build parte 2 (grupo)"]
     g_application__checks["checks (grupo)"]
+    g_application__definition["definition (grupo)"]
+    g_application__lifecycle["lifecycle (grupo)"]
+    g_application__reflection["reflection (grupo)"]
     g_application__support["support (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
     m_application__deliver["application.deliver"]
     m_application__delivered["application.delivered"]
     m_application__develop["application.develop"]
-    m_application__docs_settlement["application.docs_settlement"]
     m_application__escalate["application.escalate"]
     m_application__evaluated["application.evaluated"]
     m_application__integrate["application.integrate"]
+    m_application__plan["application.plan"]
     m_application__deliver --> g_application__build__2
     m_application__deliver --> g_application__support
     m_application__deliver --> g_pkg__agentic__shared
     m_application__deliver --> g_pkg__domain
     m_application__delivered --> g_application__support
     m_application__delivered --> g_pkg__domain
+    m_application__develop --> g_application__build__2
     m_application__develop --> g_application__checks
+    m_application__develop --> g_application__lifecycle
     m_application__develop --> g_application__support
     m_application__develop --> g_pkg__agentic__shared
     m_application__develop --> g_pkg__domain
-    m_application__develop --> m_application__docs_settlement
-    m_application__docs_settlement --> g_application__support
-    m_application__docs_settlement --> g_pkg__domain
     m_application__escalate --> g_application__support
     m_application__escalate --> g_pkg__agentic__shared
     m_application__escalate --> g_pkg__domain
@@ -50,5 +52,10 @@ graph TD
     m_application__integrate --> g_application__support
     m_application__integrate --> g_pkg__agentic__shared
     m_application__integrate --> g_pkg__domain
-    m_application__integrate --> m_application__docs_settlement
+    m_application__plan --> g_application__build__2
+    m_application__plan --> g_application__definition
+    m_application__plan --> g_application__reflection
+    m_application__plan --> g_application__support
+    m_application__plan --> g_pkg__agentic__shared
+    m_application__plan --> g_pkg__domain
 ```

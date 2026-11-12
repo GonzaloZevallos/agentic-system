@@ -40,7 +40,6 @@ graph TD
     m_application__landing_slice --> g_application__support
     m_application__landing_slice --> g_pkg__domain
     m_application__landing_slice --> m_application__landing_plan
-    m_application__landing_sync --> g_application__build
     m_application__landing_sync --> g_application__landing__1
     m_application__landing_sync --> g_application__lifecycle
     m_application__landing_sync --> g_application__support

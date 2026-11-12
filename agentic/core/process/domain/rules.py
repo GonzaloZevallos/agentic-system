@@ -17,7 +17,18 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
-from . import adr_numbers, ci, exempt_queue, merge_ci, presubmit, retakes
+from . import (
+    adr_numbers,
+    ci,
+    escalation_prompts,
+    exempt_queue,
+    merge_ci,
+    presubmit,
+    restart,
+    retakes,
+    size_budget,
+    task_path,
+)
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
@@ -52,10 +63,12 @@ from .roles import (
     Interview,
     Pair,
     Role,
+    developer_section,
     pair_for,
 )
-from .schemas import FitDecision, TaskType
+from .schemas import LIGHT_SUBTASK_CAP, FitDecision, TaskType
 from .scratch import INODE_FLOOR, SpaceReading
+from .size_budget import LEGACY_FILES, UNPROVEN_RATIO, PlanSize
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -76,9 +89,11 @@ from .task import (
     FailureReason,
     FindingCategory,
     FindingRecord,
+    FindingStatus,
     FinishedPatch,
     FullChecksRecord,
     LapsePauseEntry,
+    MechanicalCause,
     MergeCiRecord,
     MergeOutcome,
     OwnerRuleElsewhere,
@@ -88,6 +103,7 @@ from .task import (
     PullRequest,
     Restoration,
     ResumedPauseEntry,
+    ResumeKey,
     ReturnedBy,
     ReviewKind,
     RoleRun,
@@ -99,6 +115,12 @@ from .task import (
     TrackerPosted,
     apply,
 )
+
+# The return-limit decision and the count it reads live in `restart` (GH-593); every caller asks
+# them through `rules`, like any other rule.
+on_return_limit = restart.on_return_limit
+remaining_changes = restart.remaining_changes
+ESCALATION_PROMPTS = escalation_prompts.ESCALATION_PROMPTS
 
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
 PRD_RETURN: ChangeCategory = "definition"
@@ -130,20 +152,21 @@ def archivable_document(relative: str, task_id: str) -> bool:
     return relative == relative_path(task_id).as_posix()
 
 
-def remaining_changes(state: TaskState, pair: Pair, limit: int) -> int:
-    """Returns `pair` may still use before PjM escalates."""
-    return limit - state.get("changes_requested", {}).get(pair.key, 0)
-
-
 def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
     """The `returns` patch after one more return of `pair`."""
     return {pair.key: state.get("changes_requested", {}).get(pair.key, 0) + 1}
 
 
-def change_entry(pair: Pair, category: ChangeCategory, reason: str) -> ChangesRequested:
+def change_entry(
+    pair: Pair, category: ChangeCategory, reason: str, attempt: int = 1
+) -> ChangesRequested:
     """One entry of the return history: who returned, in which category, and the reason,
-    so README §3's "same motive between the same roles" is computable."""
-    return {"pair": pair.key, "category": category, "reason": reason}
+    so README §3's "same motive between the same roles" is computable. `attempt` (GH-593) is
+    written only above 1, on a return of a restarted attempt (`restart.attempt`)."""
+    entry: ChangesRequested = {"pair": pair.key, "category": category, "reason": reason}
+    if attempt > 1:
+        entry["attempt"] = attempt
+    return entry
 
 
 def review_kind(subtask_id: str, reviewed_before: bool) -> ReviewKind:
@@ -361,7 +384,11 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     reviewer's `settled_findings` closes an open row by location, first and for good;
     and an open row an approval covers closes only when *every* open record of its key is
     covered, record by record (`_covered`), so a later regression, a sister's re-raise or
-    an `important` at the same key keeps it open, whatever order they were appended in."""
+    an `important` at the same key keeps it open, whatever order they were appended in.
+
+    A row only a clean restart closed (`restart_settled`, GH-593) reads `dismissed`, never
+    `fixed`: the attempt was thrown away, nobody fixed anything, and the findings report
+    must not credit a fix."""
     # A reviewer's word never closes a `full_checks:` row: only `full_checks_settles` does.
     settled = {
         norm
@@ -372,6 +399,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     qa_approved = qa_approved_version(state)
     green = full_checks_green_version(state)
     plan_settled = _plan_settled_versions(state)
+    restarted = _restart_settled_versions(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -382,19 +410,31 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
             rows[key] = record
         elif record["subtask"] not in row["subtask"].split(", "):
             rows[key] = {**row, "subtask": f"{row['subtask']}, {record['subtask']}"}
+
+    def discarded(record: FindingRecord) -> bool:
+        """A clean restart threw this record away: it is not a fix, so it never reads as one."""
+        return record["subtask"] in restarted and record["version"] < restarted[record["subtask"]]
+
+    def closed(row: FindingRecord, key: tuple[str, str]) -> FindingStatus:
+        """`fixed` when a reviewer, an approval or a check closed the row, `dismissed` when the
+        only thing that closed it is a restart discarding its subtask's attempt, `open` else."""
+        if _norm(row["location"]) in settled:
+            return "fixed"
+        records = open_records[key]
+        by_word = [
+            _covered(record, key, approved)
+            or qa_settles(record, qa_approved)
+            or full_checks_settles(record, green)
+            or (key in plan_settled and record["version"] < plan_settled[key])
+            for record in records
+        ]
+        if not all(word or discarded(record) for word, record in zip(by_word, records)):
+            return "open"
+        return "fixed" if any(by_word) else "dismissed"
+
     return [
-        {**row, "status": "fixed"}
-        if row["status"] == "open"
-        and (
-            _norm(row["location"]) in settled
-            or all(
-                _covered(record, key, approved)
-                or qa_settles(record, qa_approved)
-                or full_checks_settles(record, green)
-                or (key in plan_settled and record["version"] < plan_settled[key])
-                for record in open_records[key]
-            )
-        )
+        {**row, "status": status}
+        if row["status"] == "open" and (status := closed(row, key)) != "open"
         else row
         for key, row in rows.items()
     ]
@@ -457,6 +497,15 @@ def _plan_settled_versions(state: TaskState) -> dict[tuple[str, str], int]:
     for item in state.get("plan_settled", []):
         key = (_norm(item["location"]), _norm(item["claim"]))
         settled[key] = max(settled.get(key, 0), item["version"])
+    return settled
+
+
+def _restart_settled_versions(state: TaskState) -> dict[str, int]:
+    """The highest version per subtask a clean restart discarded (`restart.restart_patch`): the
+    open records of that subtask below it are closed, for the reason `restarted`."""
+    settled: dict[str, int] = {}
+    for row in state.get("restart_settled", []):
+        settled[row["subtask"]] = max(settled.get(row["subtask"], 0), row["version"])
     return settled
 
 
@@ -544,7 +593,12 @@ def approval_patch(
     return's fields, so no later reader takes it as still returned; every other subtask is
     written exactly as an approval always was. A plain patch, not a full `TaskState` (see
     `resumed`)."""
-    approved: Subtask = {**subtask, "reviewed_head": head, "status": "approved"}
+    approved: Subtask = {
+        **subtask,
+        "reviewed_head": head,
+        "status": "approved",
+        "approved_once": True,
+    }
     if subtask.get("returned_by"):
         approved.pop("returned_by", None)
         approved.pop("returned_with", None)
@@ -684,14 +738,20 @@ def finished(
     return {"status": status, "finished_at": at}
 
 
-def escalation(cls: EscalationClass, reason: str) -> EscalationPatch:
+def escalation(
+    cls: EscalationClass, reason: str, *, cause: MechanicalCause | None = None
+) -> EscalationPatch:
     """The patch that escalates the task: `escalated`, the text for the human, and
     `escalation_class`, the closed reason `agentic.task.paused` groups pauses by. The
     only place either key is written, so a patch cannot carry one without the other.
 
     Returns a plain patch, not a full `TaskState`: every caller folds it into a bigger
-    literal with `**`, the same shape `apply` folds any patch into the whole state."""
-    return {"escalated": reason, "escalation_class": cls}
+    literal with `**`, the same shape `apply` folds any patch into the whole state.
+
+    `cause` (GH-593) is the closed `MechanicalCause` the raise site knew from the error's class
+    and recorded type, never from `reason`'s text. It is always written, `None` for a judgment
+    escalation, so a mechanical cause of an earlier pause cannot outlive it."""
+    return {"escalated": reason, "escalation_class": cls, "escalation_cause": cause}
 
 
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> dict[str, Any]:
@@ -1352,9 +1412,13 @@ def next_section_version(state: TaskState, section: str) -> int:
 
 def last_session(state: TaskState, role_name: str, section: str) -> str | None:
     """The session id of the latest run of `role_name` that wrote `section`, to resume
-    it; None when that role never wrote there."""
+    it; None when that role never wrote there, or only before a clean restart forgot the
+    section's sessions (`task.TaskState.session_floor`)."""
+    floor = state.get("session_floor", {}).get(section, 0)
     for run in reversed(state.get("runs", [])):
         if run["role"] == role_name and run.get("section", run["role"]) == section:
+            if floor and run.get("version", 0) <= floor:
+                return None
             return run.get("session_id") or None
     return None
 
@@ -1520,10 +1584,6 @@ def interview_retake_delta(state: TaskState, spec: Interview, branch: str, head:
 # Subtasks (ADR-0011): each in its own branch, sections named after it.
 
 
-def developer_section(subtask_id: str) -> str:
-    return f"Developer: {subtask_id}"
-
-
 REVIEW_PREFIX = f"{TECH_LEAD.name}: review "
 # The system node that runs the whole suite once on the integrated head (GH-358): the section
 # it writes, and the one a Developer returned by it reads its delta from.
@@ -1565,6 +1625,8 @@ def return_sections(state: TaskState, subtask_id: str) -> tuple[str, ...]:
     returned item's delta and the incremental reviewer's spec both come from this one
     function, never from `review_section` directly."""
     subtask = state.get("subtasks", {}).get(subtask_id, {})
+    if restart.restarted_fresh(subtask):
+        return (restart.restart_section(subtask_id),)
     return tuple(_section_of(subtask_id, returned_by) for returned_by in returned_by_all(subtask))
 
 
@@ -2136,7 +2198,11 @@ def delivered_subtasks(state: TaskState) -> list[str]:
 
 def dispatched_subtasks(state: TaskState) -> list[str]:
     """Subtasks the next wave runs: the ones to build, and the ones already delivered
-    whose review never happened, which is where a run stopped by the cap resumes."""
+    whose review never happened, which is where a run stopped by the cap resumes. Nothing is
+    dispatched while a promotion waits for the full path's first role (`promotion_pending`):
+    a Developer already running finishes its attempt and gets its one review, no more start."""
+    if promotion_pending(state):
+        return []
     return [*ready_subtasks(state), *delivered_subtasks(state)]
 
 
@@ -2385,15 +2451,69 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
 # the Product Analyst of the path, whichever it was.
 FIRST_NODE = {"feature": "define", "bug": "diagnose", "platform_enhancement": "plan"}
 
+# The role whose run is the full path's first stage (the Product Analyst's name is the same on
+# the feature and the bug path) and the most subtasks a light plan holds (GH-591).
+_FIRST_ROLE = {"feature": "Product Analyst", "bug": "Product Analyst"}
+LIGHT_PLAN_CAP = LIGHT_SUBTASK_CAP
+
+
+def promotion_pending(state: TaskState) -> bool:
+    """Whether a promotion still owes the task the full path's first role (GH-591): `promotion`
+    is set, the task is a feature or a bug and no run of the Product Analyst started after
+    `promotion.at`. Always false for a platform task (nothing reruns, the cap is just lifted),
+    and for a promotion whose instant cannot be read (it could never be settled)."""
+    promotion = state.get("promotion")
+    role = _FIRST_ROLE.get(state.get("type", ""))
+    if not promotion or role is None:
+        return False
+    at = _instant(promotion.get("at"))
+    if at is None:
+        return False
+    for run in state.get("runs", []):
+        started = _instant(run.get("started_at"))
+        if run.get("role") == role and started is not None and started > at:
+            return False
+    return True
+
+
+def promotion_route(state: TaskState) -> str | None:
+    """The node a promoted task goes back to: the full path's first role while it is owed
+    (`promotion_pending`), else `None`. The one place that answers it; `after_plan`,
+    `after_integrate` and the resume router call it first."""
+    if not promotion_pending(state):
+        return None
+    return FIRST_NODE[state["type"]]
+
+
+def plan_over_cap_request(state: TaskState) -> task_path.PromoteRequest | None:
+    """The promotion a light plan of more than `LIGHT_PLAN_CAP` subtasks asks for, from the
+    system (GH-591). `None` under the owner label `path:light` (the plan check refuses such a
+    plan instead) and on any path but light."""
+    if task_path.path_of(state) != "light" or task_path.path_label_of(state) == "light":
+        return None
+    if len(state.get("subtasks", {})) <= LIGHT_PLAN_CAP:
+        return None
+    return {"kind": "plan_over_cap", "from_role": "system", "text": None}
+
 
 def after_classify(state: TaskState) -> str | None:
     """The fork between the paths of README §2. A feature goes through the definition
     stage; a bug through the diagnosis, the same pair without the interview (issue
     #65); a platform enhancement has no product behaviour to define and starts at the
-    plan, the shortest of the three (issue #46)."""
+    plan, the shortest of the three (issue #46). A light feature or bug (GH-591) skips the
+    definition stage and goes straight to the plan."""
     if state.get("escalated"):
         return None
+    if _light_skips_definition(state):
+        return "plan"
     return FIRST_NODE.get(state.get("type", ""), "plan")
+
+
+def _light_skips_definition(state: TaskState) -> bool:
+    """Whether the light path skips the definition stage for this task (GH-591): a feature or a
+    bug on `light`. The one place the three routers below read the path for it; a platform
+    enhancement has no definition stage to skip."""
+    return task_path.path_of(state) == "light" and state.get("type") in ("feature", "bug")
 
 
 def after_define(state: TaskState) -> str | None:
@@ -2415,7 +2535,7 @@ def after_validate(state: TaskState) -> str | None:
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
     if status == "definition_ready":
-        return design_step(state) or "plan"
+        return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
     return {"discarded": "discard"}.get(status)
 
 
@@ -2444,7 +2564,7 @@ def after_consolidate(state: TaskState) -> str | None:
         return None
     if state.get("status") == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
-    return design_step(state) or "plan"
+    return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
 
 
 def after_write_copy(state: TaskState) -> str | None:
@@ -2456,9 +2576,12 @@ def after_write_copy(state: TaskState) -> str | None:
 def after_plan(state: TaskState) -> str | None:
     """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); a plan whose
     only work is on the tracker (GH-336) goes to `tracker_only`; any other goes to the
-    fan-in. The only routing decision between the three."""
+    fan-in. The only routing decision between the three. A plan that promoted the task
+    (GH-591) goes first to the full path's first role (`promotion_route`)."""
     if state.get("escalated"):
         return None
+    if (back := promotion_route(state)) is not None:
+        return back
     if state.get("parts"):
         return "split"
     return "tracker_only" if tracker_only_plan(state) else "integrate"
@@ -2492,7 +2615,7 @@ def final_validation_due(state: TaskState) -> bool:
     counts as the live approval over it only while `_pair_returns(PAIR_PM_TECH_LEAD)`
     has not yet caught up with how many times it ran -- the same return-matches-run
     counting `_lead_satisfied` uses, not a verdict stored per run."""
-    if not design_applies(state):
+    if task_path.path_of(state) == "light" or not design_applies(state):
         return False
     if not all_approved(state):
         return False
@@ -2515,7 +2638,7 @@ def copy_review_due(state: TaskState) -> bool:
     newer than the latest review of `integration` -- or of the single subtask. A fix after an
     important finding is reviewed again, so the review is due again. `False` outside
     `copy_applies`, byte for byte as today."""
-    if not copy_applies(state) or not all_approved(state):
+    if task_path.path_of(state) == "light" or not copy_applies(state) or not all_approved(state):
         return False
     subtasks = state.get("subtasks", {})
     target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
@@ -2537,6 +2660,8 @@ def qa_performance_due(state: TaskState) -> bool:
     run settles nothing: it reopens the subtask, and the review that approves it again is
     newer than any run that came before. `False` for a plan that convened nothing, byte
     for byte as today."""
+    if task_path.path_of(state) == "light":
+        return False
     if not state.get("performance") or not all_approved(state):
         return False
     subtasks = state.get("subtasks", {})
@@ -2628,6 +2753,8 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if dispatched_subtasks(state):
         return "pipeline"
+    if (back := promotion_route(state)) is not None:
+        return back
     if not all_approved(state):
         return None
     if pre_pr_important_due(state):
@@ -2741,7 +2868,7 @@ def full_checks_return(
         ],
     }
     pair = full_checks_pair(target, mode)
-    if remaining_changes(state, pair, limit) > 0:
+    if on_return_limit(state, pair, limit) == "count":
         patch["changes_requested"] = record_return(state, pair)
         patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]
     else:
@@ -2899,6 +3026,17 @@ def full_checks_heal(
     return {"task_head": head, "full_checks_healed": head}
 
 
+# The CI causes that are a failure to reach or read GitHub, not a verdict about the head or a
+# defect of the plan (GH-593): the poller retakes them by themselves, `run_unfinished` and the two
+# `gh_*` ones. Every other `CiCause` (`dispatch_refused`, `unknown_names`, `no_run`...) names
+# something a retry on the same head does not change, so the human stays the one who decides.
+_CI_MECHANICAL: dict[CiCause, MechanicalCause] = {
+    "gh_unavailable": "ci_gh_unavailable",
+    "gh_unreadable": "ci_gh_unreadable",
+    "run_unfinished": "ci_run_unfinished",
+}
+
+
 def ci_unavailable(
     cause: CiCause, head: str, detail: str, *, at: str, ci: CiTiming | None = None
 ) -> dict[str, Any]:
@@ -2907,7 +3045,9 @@ def ci_unavailable(
     No `full_checks` record and no return: the head has no verdict, and `full_checks_due`
     compares heads, so a resume enters the node again. `cause` is the closed value of the step
     that failed; `detail` is what was tried, prose for the human only. `ci` is the timing of the
-    wait (GH-467), kept on the `ci` escalation entry."""
+    wait (GH-467), kept on the `ci` escalation entry. The escalation carries a `MechanicalCause`
+    (GH-593) only for the causes in `_CI_MECHANICAL`, chosen by the closed `cause`, never by
+    `detail`; any other is a judgment pause and carries none."""
     reason = (
         f"GitHub CI gave no verdict for {head[:7]} ({cause}): {detail}. The suite was not run "
         "on this machine. Fix the CI or the connection and resume; the node runs again on the "
@@ -2917,7 +3057,7 @@ def ci_unavailable(
         {
             "current_role": DEVELOPER.name,
             "status": WAITING_ON_HUMAN,
-            **escalation("ci", reason),
+            **escalation("ci", reason, cause=_CI_MECHANICAL.get(cause)),
         },
         at=at,
         ci=ci,
@@ -3053,12 +3193,30 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     return f"{previous}\n\n{entry}".strip()
 
 
-def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> str:
-    """What the human reads when a part's plan is over the line: the figures the decision
-    used (`FitDecision`), the limits, which one was crossed, and the three ways out. No way
-    out stops the task by resuming it: stopping is the absence of a resume."""
-    origin, number = part_of
-    head = f"{task_id} is part {number} of {origin}; a part is never split again. "
+# What each field of the size budget says when the judged figures cross its cap.
+_CROSSED_TEXT = {
+    size_budget.HAND_FILES_FIELD: (
+        f"the declared hand-written files are over the {size_budget.HAND_FILES} file cap"
+    ),
+    size_budget.HAND_LINES_FIELD: (
+        f"the declared hand-written lines are over the {size_budget.HAND_LINES} line cap"
+    ),
+    size_budget.TEST_LINES_FIELD: (
+        f"the declared test lines are over the {size_budget.TEST_LINES} line cap"
+    ),
+}
+
+
+def fit_question_text(task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None) -> str:
+    """What the human reads when a part at the depth cap has a plan over the line: the
+    figures the decision used (`FitDecision`), the limits, which one was crossed, and the
+    ways out. Building it whole is not one. No way out stops the task by resuming it:
+    stopping is the absence of a resume."""
+    origin, number, depth = part_of
+    head = (
+        f"{task_id} is part {number} of {origin}, at split depth {depth}; a split goes at "
+        f"most {MAX_SPLIT_DEPTH} levels deep, so it cannot split again. "
+    )
     if fit is None:
         figures = "The plan's figures are not known, so which limit it crossed is not either. "
     else:
@@ -3067,40 +3225,59 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
             if fit.reference_usd is not None
             else "the history has no reference for this many subtasks"
         )
-        limits = f"{SPLIT_COST_USD} USD and {SPLIT_FILES} files"
+        limits = f"{SPLIT_COST_USD} USD and {LEGACY_FILES} files"
+        declared = f"{fit.cost_usd:.2f} USD and {fit.files} files"
         crossed: list[str] = []
         if fit.reference_usd is not None and fit.reference_usd > max(fit.cost_usd, SPLIT_COST_USD):
             crossed.append(f"the history's reference is over the {SPLIT_COST_USD} USD limit")
         elif fit.cost_usd > SPLIT_COST_USD:
             crossed.append(f"the declared cost is over the {SPLIT_COST_USD} USD limit")
-        if fit.files > SPLIT_FILES:
-            crossed.append(f"the declared files are over the {SPLIT_FILES} file limit")
+        if fit.size is None:
+            if not size_budget.legacy_fits(fit.files):
+                crossed.append(f"the declared files are over the {LEGACY_FILES} file limit")
+        else:
+            limits = (
+                f"{SPLIT_COST_USD} USD, {size_budget.HAND_FILES} hand-written files, "
+                f"{size_budget.HAND_LINES} hand-written lines and {size_budget.TEST_LINES} "
+                "test lines"
+            )
+            declared = (
+                f"{fit.cost_usd:.2f} USD, {fit.size.hand_files} hand-written files, "
+                f"{fit.size.hand_lines} hand-written lines and {fit.size.test_lines} test lines"
+            )
+            if fit.judged_size is not None:
+                declared += (
+                    f" (judged {fit.judged_size.hand_files} files and "
+                    f"{fit.judged_size.hand_lines} lines after the floor)"
+                )
+            crossed.extend(_CROSSED_TEXT[name] for name in fit.crossed)
         verdict = (
             "; ".join(crossed)
             if crossed
             else "it is over the line by the larger of the declared cost and the reference"
         )
         figures = (
-            f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
+            f"Its plan declares {declared}, and {reference}. "
             f"One task holds at most {limits}: {verdict}. "
         )
     return (
         f"{head}{figures}Choose one:\n"
-        "- Build it whole: comment on the issue and resume; the plan is kept and built as "
-        "one task.\n"
+        "- Narrow the task: comment on the issue what to cut and resume; the task is planned "
+        "again with your comment and judged by the same budget.\n"
         "- Stop and release the parts that depend on it: close the issue as not planned.\n"
         "- Stop and hold them: leave it open and do not resume.\n"
         "Closing the issue as completed without a merge leaves the parts behind it "
-        "blocked. Any resume builds it whole."
+        "blocked. No resume builds the plan as it stands."
     )
 
 
 def part_over_line(
-    task_id: str, part_of: tuple[str, int], fit: FitDecision | None, *, at: str
+    task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None, *, at: str
 ) -> dict[str, Any]:
-    """The patch that pauses a part whose plan is over the line: one `estimate` escalation
-    asking "build it whole or stop", marked by `fit_question` so only its resume waives the
-    fit. It carries no `proposed_estimate`; the plan is kept."""
+    """The patch that pauses a part at the depth cap whose plan is over the line: one
+    `estimate` escalation asking "narrow it or stop", marked by `fit_question` so its resume
+    plans again instead of building. It carries no `proposed_estimate`; the plan stays in
+    the Tech Lead's section."""
     return logged(
         {
             "current_role": PJM.name,
@@ -3130,6 +3307,7 @@ def resumed(
     patch: dict[str, Any] = {
         "escalated": None,
         "escalation_class": None,
+        "escalation_cause": None,
         "status": resumed_status(state),
         "questions_for_human": [],
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
@@ -3143,15 +3321,14 @@ def resumed(
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
     if state.get("fit_question"):
-        # A part whose plan is over the line asked "build it whole or stop"; any resume
-        # answers "build it whole" (stopping is not resuming). Written explicitly: a `last`
-        # reducer ignores a missing key. Only this pause waives, never the cap's.
-        patch["fit_waived"] = True
+        # A part at the depth cap asked "narrow it or stop"; a resume is the first answer
+        # and waives nothing: the task is planned again with the decision in `Human` and
+        # judged by the same budget. Written explicitly: a `last` reducer ignores a
+        # missing key.
         patch["fit_question"] = False
     if state.get("escalation_class") == "estimate" and state.get("parts"):
-        # A part of a split does not fit and the human decided on it (ADR-0054): the plan
-        # is made again as one task, and a second partition is refused.
-        patch["fit_waived"] = True
+        # A split that stopped on the estimate and the human decided on it (ADR-0054): the
+        # plan is made again, with the same budget.
         patch["parts"] = []
     if (
         state.get("escalation_class") == "estimate"
@@ -3357,8 +3534,11 @@ def approved_head(state: TaskState) -> str | None:
 def publication_candidate(state: TaskState) -> str | None:
     """The head a stopped run may still owe (GH-373): `approved_head` of a task that has a
     pull request, no landing pass in flight, no escalation, every unit approved and nothing
-    left for the full tier. `None` otherwise."""
+    left for the full tier. `None` otherwise, and while a clean restart (GH-593) is still owed
+    to the dispatch: the head a restart archived is not one to publish."""
     if not state.get("pull_request") or landing_open(state) or state.get("escalated"):
+        return None
+    if state.get("restart_pending"):
         return None
     if not all_approved(state) or full_checks_due(state):
         return None
@@ -3405,6 +3585,8 @@ def resume_target(state: TaskState) -> str | None:
         return "split"  # paused while opening the parts: finish them, do not plan again
     if tracker_only_plan(state):
         return "tracker_only"  # paused before the checklist was posted: post it, do not plan
+    if (back := promotion_route(state)) is not None:
+        return back  # a promotion waits for the full path's first role (GH-591)
     if state.get("subtasks"):
         # Once there is a plan every road goes through the fan-in, which decides the
         # wave from the same facts: nothing here has to know about waves. Nothing to
@@ -3418,7 +3600,10 @@ def resume_target(state: TaskState) -> str | None:
     status = state.get("status", "open")
     if status == "open":
         # The same fork as `after_classify`, plus the road back to PjM for a task that
-        # paused before it had a type: only PjM turns the human's answer into one.
+        # paused before it had a type: only PjM turns the human's answer into one. A light
+        # feature or bug goes to the plan, as `after_classify` does (GH-591).
+        if _light_skips_definition(state):
+            return "plan"
         return FIRST_NODE.get(state.get("type", ""), "classify")
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
@@ -3427,6 +3612,8 @@ def resume_target(state: TaskState) -> str | None:
         # (ADR-0040): the same one function `after_validate` and every design node's
         # own `after_*` already call, so a resume lands exactly where the live routing
         # would have, however many lead returns or PRD versions came before the pause.
+        if _light_skips_definition(state):
+            return "plan"
         return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate"}.get(status)
@@ -3598,11 +3785,9 @@ def increment_patch(state: TaskState) -> dict[str, Any]:
 
 # The four `FailureReason`s a pause never needed a human for (ADR-0029, extended by
 # issue #137's own `network` and GH-391's `disk_full`): the account's own quota, the
-# provider's own server, the network down, or the disk full. `rules.auto_resumable` is the
-# only reader of this tuple; the scorecard's own exclusion (`core.measurement.domain.
-# scorecard.EXTERNAL_FAILURE_REASONS`) is a separate copy of the same literals --
-# hexagonal keeps `core.process.domain` from importing `core.measurement`, so nothing
-# here imports it.
+# provider's own server, the network down, or the disk full. `rules.auto_resumable` reads this
+# tuple, and so does the measurement (`core.measurement.domain.scorecard`, for its own failures),
+# which imports it rather than keeping a copy; `rules.pause_kind` is the one classifier of a pause.
 EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network", "disk_full")
 
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
@@ -3612,6 +3797,13 @@ EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "net
 # a launch that never registered a run (not a 429) never follows a retake's calendar.
 LAUNCH_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 RETAKE_SCHEDULE: tuple[int, ...] = retakes.RETAKE_SCHEDULE
+
+# Retakes a mechanical cause (GH-593) gets per cause, on `RETAKE_SCHEDULE`: network, CI without a
+# verdict or a transient delivery failure either clears in a few attempts or needs a human with
+# the evidence. Per cause, not per task, so alternating causes can add up; the poller's own
+# budget (`retakes.RETAKE_MAX`) is a separate count.
+MECHANICAL_RETAKE_MAX = 3
+MECHANICAL_CAUSES: tuple[str, ...] = get_args(MechanicalCause)
 
 # After a 429 the only thing that matters is how soon after the account's own reset the
 # next attempt lands, and an attempt the limit cuts again costs ~$0 (the 429 arrives on
@@ -3649,12 +3841,17 @@ def resumed_entry(*, at: str) -> ResumedPauseEntry:
 
 
 def escalation_entry(
-    value: EscalationClass, at: str | None = None, ci: CiTiming | None = None
+    value: EscalationClass,
+    at: str | None = None,
+    ci: CiTiming | None = None,
+    cause: MechanicalCause | None = None,
 ) -> EscalationPauseEntry:
-    """The one constructor of the `escalation` entry. `at` and `ci` (the CI timing of a `ci`
-    escalation) are omitted when unknown, never written as `None`; `ci` is kept only on the
-    `ci` class."""
+    """The one constructor of the `escalation` entry. `at`, `ci` (the CI timing of a `ci`
+    escalation) and `cause` (GH-593) are omitted when unknown, never written as `None`; `ci` is
+    kept only on the `ci` class."""
     entry = EscalationPauseEntry(kind="escalation", value=value)
+    if cause is not None:
+        entry["cause"] = cause
     if at is not None:
         entry["at"] = at
     if ci is not None and value == "ci":
@@ -3699,7 +3896,7 @@ def logged(
     entries (never the lapses); `ci` is the CI timing, kept on a `ci` escalation only."""
     entries: list[PauseEntry] = [_failure_entry(f, at) for f in failures]
     if (cls := patch.get("escalation_class")) is not None:
-        entries.append(escalation_entry(cls, at, ci))
+        entries.append(escalation_entry(cls, at, ci, patch.get("escalation_cause")))
     entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)
     return {**patch, "pause_log": entries}
 
@@ -3716,31 +3913,42 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
     return log[last_resumed + 1 :]
 
 
-def auto_resumable(state: TaskState) -> FailureReason | None:
-    """Whether the poller may retake this pause on its own, and with which reason
-    (issue #137): the only source of this decision, reading nothing else -- not
-    `escalation_class`, not `escalated`'s own text, not any `failures[].error`. Three
-    things must hold of the current epoch (`_current_epoch`) together: at least one
-    `"failure"` entry (a role actually broke; a pair at its return limit or a bare
-    `"escalation"` entry some other site composed alone is not this), every
-    `"escalation"` entry in it reads `"failure"` (an epoch that also escalated as
-    `"cap"` or `"returns"` is not purely an external cut, whatever its failures were),
-    and every `"failure"` entry's own reason is in `EXTERNAL_REASONS`. The reason
-    returned is the most recent failure's -- what still blocks this pause right now."""
-    failures: list[FailurePauseEntry] = []
-    escalations: list[EscalationPauseEntry] = []
-    for entry in _current_epoch(state):
+def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
+    """The key `entries` are retaken by, `None` when a human is needed (GH-593): the one reading
+    both `auto_resumable` (the poller's) and `pause_kind` (the measurement's) share, so a cause is
+    mechanical in one place. Every failure is in `EXTERNAL_REASONS`, and every escalation is
+    either a `failure` one (a role broke, the failures say why) or carries a `MechanicalCause`;
+    there is at least one failure or one cause. The key is the most recent entry's own: a
+    failure's reason, or an escalation's cause."""
+    keyed: list[ResumeKey] = []
+    for entry in entries:
         if entry["kind"] == "failure":
-            failures.append(entry)
+            if entry["value"] not in EXTERNAL_REASONS:
+                return None
+            keyed.append(entry["value"])
         elif entry["kind"] == "escalation":
-            escalations.append(entry)
-    if not failures:
-        return None
-    if not all(e["value"] == "failure" for e in escalations):
-        return None
-    if not all(f["value"] in EXTERNAL_REASONS for f in failures):
-        return None
-    return failures[-1]["value"]
+            if (cause := entry.get("cause")) is not None:
+                keyed.append(cause)
+            elif entry["value"] != "failure":
+                return None
+    return keyed[-1] if keyed else None
+
+
+def auto_resumable(state: TaskState) -> ResumeKey | None:
+    """Whether the poller may retake this pause on its own, and with which key (issue #137,
+    GH-593): the only source of this decision, reading nothing else -- not `escalation_class`,
+    not `escalated`'s own text, not any `failures[].error`. It reads the current epoch
+    (`_current_epoch`) through `_resume_key`: an epoch of external failures, one whose every
+    escalation carries a `MechanicalCause` (with no failure at all), or a mix of both. A pair at
+    its return limit, or any escalation with no cause that is not a `failure` one, is a human's."""
+    return _resume_key(_current_epoch(state))
+
+
+def pause_kind(entries: Sequence[PauseEntry]) -> Literal["external", "human"]:
+    """Whether a pause is mechanical, so the time it waited is external, or a judgment call, so
+    it is a human's (GH-593). The only place that decides it: measurement asks this and keeps no
+    list of mechanical causes of its own."""
+    return "human" if _resume_key(entries) is None else "external"
 
 
 def stated_reset(state: TaskState) -> datetime | None:
@@ -3756,8 +3964,9 @@ def stated_reset(state: TaskState) -> datetime | None:
     return max((t for t in stated if t is not None), default=None)
 
 
-def schedule_for(reason: FailureReason, chase_prior: int = 0) -> tuple[int, ...]:
-    """The calendar a retake of `reason` follows: the flat `ACCOUNT_LIMIT_SCHEDULE` for
+def schedule_for(reason: ResumeKey, chase_prior: int = 0) -> tuple[int, ...]:
+    """The calendar a retake of `reason` follows (a mechanical cause: the growing
+    `RETAKE_SCHEDULE`, bounded by `MECHANICAL_RETAKE_MAX`): the flat `ACCOUNT_LIMIT_SCHEDULE` for
     a 429, the hourly `ACCOUNT_LIMIT_HOURLY` for a 429 whose whole chase (`chase_prior`)
     reached `ACCOUNT_LIMIT_CHASE_MAX`, the growing `RETAKE_SCHEDULE` for everything
     else. The only place a reason maps to a calendar; no other reason is ever hourly."""
@@ -3797,7 +4006,7 @@ def failed_interviews(state: TaskState) -> list[Interview]:
     return specs
 
 
-def auto_resume_limit(state: TaskState, reason: FailureReason) -> int:
+def auto_resume_limit(state: TaskState, reason: ResumeKey) -> int:
     """How many window slots this pause's current epoch gets, never `0` and never a
     flag. An `account_limit` gets the whole flat calendar, interview or not: its
     interview ceiling is `interview_ceiling_spent`'s, which counts only the retakes
@@ -3805,7 +4014,9 @@ def auto_resume_limit(state: TaskState, reason: FailureReason) -> int:
     interview's own section (`failed_interviews`) -- a retake already gives an
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
     chase on top of that is not this task's own risk to take -- six otherwise, the
-    whole calendar."""
+    whole calendar. A `MechanicalCause` gets `MECHANICAL_RETAKE_MAX` (GH-593)."""
+    if reason in MECHANICAL_CAUSES:
+        return MECHANICAL_RETAKE_MAX
     if reason == "account_limit":
         return len(ACCOUNT_LIMIT_SCHEDULE)
     return 1 if failed_interviews(state) else len(RETAKE_SCHEDULE)
@@ -3883,7 +4094,7 @@ def productive_retakes(retake_times: Sequence[datetime], starts: Sequence[dateti
     return productive
 
 
-def interview_ceiling_spent(state: TaskState, reason: FailureReason, productive: int) -> bool:
+def interview_ceiling_spent(state: TaskState, reason: ResumeKey, productive: int) -> bool:
     """Whether an `account_limit` pause cut inside an interview already had a retake
     that ran a round: the ceiling ADR-0039 gives interviews (a retake gives it
     `INTERVIEW_RETAKE_ROUNDS` more rounds), spent only by retakes that ran something."""
@@ -4331,7 +4542,7 @@ class ResumeCandidate:
     non-system one -- Tech Lead plan)."""
 
     issue: int
-    reason: FailureReason
+    reason: ResumeKey
     since: datetime
     prior: int
     limit: int
@@ -4379,7 +4590,7 @@ def _governing_reset(r: ResumeCandidate) -> datetime | None:
 
 
 def retake_calendar(
-    reason: FailureReason, prior: int, chase_prior: int, limit: int
+    reason: ResumeKey, prior: int, chase_prior: int, limit: int
 ) -> tuple[tuple[int, ...], int, int]:
     """`(schedule, prior, limit)` a retake of `reason` is measured on: its reason's own
     calendar, and for an `account_limit` past the chase max the hourly one, indexed by
@@ -5886,94 +6097,94 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
 # factor of the safety cap. They live here and nowhere else; every other module asks
 # `estimate_fits` or `estimate_cap` and never repeats a number.
 SPLIT_COST_USD = 150
-SPLIT_FILES = 40
 ESTIMATE_CAP_FACTOR = 2
-# How far over the cost line a part of a split is still built whole without asking
-# (ADR-0054, addendum): twice the line. A separate constant from the cap's factor, which
-# answers another question.
-PART_WHOLE_FACTOR = 2
+# How many levels a split may go (GH-592): a task splits into parts (depth 1) and a part that
+# is still over the budget splits again (depth 2). A part at this depth does not split: its
+# oversized plan goes to the human with the plan kept.
+MAX_SPLIT_DEPTH = 2
 
 
-def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> bool:
+def estimate_fits(
+    cost_usd: float,
+    files: int,
+    reference_usd: float | None,
+    size: PlanSize | None = None,
+    ratio: size_budget.Ratio = UNPROVEN_RATIO,
+) -> bool:
     """Whether a plan's estimate is small enough to build as one task. It decides on the
     larger of the declared cost and the history's reference (the p90 of the bucket, when
     the bucket has one), never on the declared cost alone: the same model estimates and
-    plans, so the estimate cannot be its own judge."""
+    plans, so the estimate cannot be its own judge. That cost line is the secondary check;
+    with a declared `size` the primary one is the size budget, the hand-written figures
+    judged times the floor `ratio` (`size_budget.judged`). A plan with no size, written
+    before the size fields, is judged as it always was: the cost line and `files` against
+    the legacy file limit."""
     cost = cost_usd if reference_usd is None else max(cost_usd, reference_usd)
-    return cost <= SPLIT_COST_USD and files <= SPLIT_FILES
+    if cost > SPLIT_COST_USD:
+        return False
+    if size is None:
+        return size_budget.legacy_fits(files)
+    return size_budget.fits(size_budget.judged(size, ratio))
 
 
 # The marker every issue the partition opens carries (ADR-0054): an HTML comment, invisible
-# once rendered, that names the task and the part. It is what a retry looks for among the
-# open issues before opening one, and what tells a task it is itself a part.
-_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+) -->")
+# once rendered, that names the task, the part and the depth of the part (GH-592). It is what
+# a retry looks for among the open issues before opening one, and what tells a task it is
+# itself a part. The depth is optional: a marker written before it reads as depth 1.
+_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+)(?: depth (\d+))? -->")
 
 
-def split_marker(task_id: str, part: int) -> str:
-    """The marker of part `part` (1 is the first) of task `task_id`'s partition."""
-    return f"<!-- agentic-split: {task_id} part {part} -->"
+def split_marker(task_id: str, part: int, depth: int) -> str:
+    """The marker of part `part` (1 is the first) of task `task_id`'s partition, which sits
+    at depth `depth` (1 for a part of a task that is not a part, 2 for a part of a part)."""
+    return f"<!-- agentic-split: {task_id} part {part} depth {depth} -->"
 
 
-def split_part_of(body: str) -> tuple[str, int] | None:
-    """The `(task id, part)` the body's marker names, or `None` when it has none: a body
-    with a marker is a part of a partition, and a part never splits again."""
+def split_part_of(body: str) -> tuple[str, int, int] | None:
+    """The `(task id, part, depth)` the body's marker names, or `None` when it has none: a
+    body with a marker is a part of a partition. A marker with no depth, written before
+    parts could split again, is at depth 1."""
     match = _SPLIT_MARKER.search(body)
-    return (match.group(1), int(match.group(2))) if match else None
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2)), int(match.group(3) or 1)
 
 
-def part_builds_whole(fit: FitDecision) -> bool:
-    """Whether a part whose plan is over the size line is built whole without asking the
-    human (ADR-0054, addendum): the larger of the declared cost and the history's reference
-    is at most `PART_WHOLE_FACTOR` times the cost line. Raw figures, no rounding; the number
-    of files never caps this rule. The one place that compares them against that limit."""
-    return max(fit.cost_usd, fit.reference_usd or 0.0) <= PART_WHOLE_FACTOR * SPLIT_COST_USD
+# How a part is sliced (GH-592): the rules every slice of a split answers to. No number of the
+# size budget is repeated here; the budget is `size_budget.budget_text`.
+SLICING_RULES = (
+    "Slice vertically: every part is independently mergeable and master stays green and "
+    "shippable after each one. User-visible behaviour that is not finished stays unreachable "
+    "until its last part (out of the navigation, or behind a flag), and each part's `guard` "
+    "says how. A migration that converts or moves existing data is a part of its own, "
+    "`kind: migration`, idempotent or after a part that writes both shapes (dual-write); "
+    "readers switch after it and the removal of the old shape comes later. Parts you write "
+    "end in exactly one terminal part, the one no other part depends on."
+)
 
 
-def part_whole_marker(task_id: str, fit: FitDecision) -> str:
-    """The content marker of the line `part_whole_line` ends with: the task and the figures
-    it quotes, so the system looks for it among the issue's comments before it posts."""
-    return f"<!-- agentic-part-whole: {task_id} {fit.cost_usd:.2f} {fit.files} -->"
-
-
-def part_whole_line(task_id: str, part_of: tuple[str, int], fit: FitDecision) -> str:
-    """The one line the system posts on the issue when it builds a part whole without asking:
-    which part, the figures the decision used, the rule with its limit, the caps that still
-    apply, and the content marker. It has no prefix: `plan.PART_BUILT_WHOLE`, which
-    `resume.SYSTEM_COMMENTS` registers, is prepended where it is posted, so a resume never
-    reads the line as the human's decision."""
-    origin, number = part_of
-    reference = (
-        f"the history's reference is {fit.reference_usd:.2f} USD"
-        if fit.reference_usd is not None
-        else "the history has no reference for this many subtasks"
-    )
-    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
-    return (
-        f"{task_id} is part {number} of {origin} and is built whole without asking. "
-        f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
-        f"A part is built whole up to {limit} USD on the larger of the two; above it, the "
-        "system asks the human. The task cap and the estimate cap still apply.\n\n"
-        f"{part_whole_marker(task_id, fit)}"
-    )
-
-
-def split_part_text(part_of: tuple[str, int] | None) -> str:
+def split_part_text(part_of: tuple[str, int, int] | None) -> str:
     """What the planning Tech Lead is told about its task being a part of a partition
-    (ADR-0054): empty for a task that is not one. A part is never split again, so the text
-    asks for subtasks only and states the real rule, with the figure taken from the
-    constants: up to `PART_WHOLE_FACTOR` times the cost line, on the larger of the estimate
-    and the history's reference, the system builds the part whole without asking."""
+    (ADR-0054, GH-592): empty for a task that is not one. A part at depth 1 that is over the
+    size budget writes `parts` like any task; at the depth cap (`MAX_SPLIT_DEPTH`) it writes
+    subtasks only and the system asks the human if they are still over the budget. The
+    budget itself is rendered elsewhere (`size_budget.budget_text`), never repeated here."""
     if part_of is None:
         return ""
-    task_id, part = part_of
-    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
+    task_id, part, depth = part_of
+    head = f"This task is part {part} of task {task_id}, at split depth {depth}. "
+    if depth < MAX_SPLIT_DEPTH:
+        return (
+            f"{head}If it does not fit the size budget, write `parts` as a task does: a part "
+            f"splits again, up to depth {MAX_SPLIT_DEPTH}. Otherwise write subtasks. In both "
+            "cases estimate honestly; do not shrink the estimate or inflate it to pick a path. "
+            f"{SLICING_RULES}"
+        )
     return (
-        f"This task is part {part} of task {task_id}. A part is never split again: write "
-        "subtasks only and never `parts`. If your subtasks are over the size limit, write "
-        f"them anyway: up to {limit} USD, on the larger of your estimate and the history's "
-        "reference, the system builds the part whole without asking; above it, the system "
-        "asks the human. In both cases estimate honestly; do not shrink the estimate or inflate "
-        "it to pick a path."
+        f"{head}This is the deepest a split goes: write subtasks only and never `parts`. If "
+        "your subtasks do not fit the size budget, write them anyway and the system asks the "
+        "human what to cut. In either case estimate honestly; do not shrink the estimate or "
+        "inflate it to pick a path."
     )
 
 
@@ -6016,9 +6227,9 @@ _PARTS_STEP = (
     "   small task of its own that lands and shows in the product before the next one starts.\n"
     "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
     "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
-    "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
-    "   If the section `## Human` says the human decided to build this task whole, write\n"
-    "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+    "   Write no subtasks then, and `### Subtasks` is not needed. A part that is still over the\n"
+    "   size budget splits again. If the section `## Human` says to narrow this task, plan the\n"
+    "   narrower task. Work that lands after the merge (a post-merge workflow, a bot\n"
     "   commit) is still a subtask of this task, never a part."
 )
 _PARTS_FIELD = (
@@ -6027,27 +6238,32 @@ _PARTS_FIELD = (
 )
 
 
-def parts_remedy_text(part_of: tuple[str, int] | None) -> str:
-    """The end of the prompt's sentence on a plan over the size limit: for a task that is
-    not a part, to write `parts`; for a part, to write its subtasks anyway."""
-    if part_of is None:
+def _at_depth_cap(part_of: tuple[str, int, int] | None) -> bool:
+    return part_of is not None and part_of[2] >= MAX_SPLIT_DEPTH
+
+
+def parts_remedy_text(part_of: tuple[str, int, int] | None) -> str:
+    """The end of the prompt's sentence on a plan over the size limit: to write `parts`,
+    except for a part at the depth cap, which writes its subtasks anyway."""
+    if not _at_depth_cap(part_of):
         return _PARTS_REMEDY
     return (
         "without the human's decision: write your subtasks anyway and do not shrink the\n"
-        "   estimate to make it fit; the system asks the human whether to build it whole."
+        "   estimate to make it fit; the system asks the human what to cut."
     )
 
 
-def parts_step_text(part_of: tuple[str, int] | None) -> str:
-    """The prompt's step on writing `### Parts`: empty for a part, which never has one."""
-    return _PARTS_STEP if part_of is None else ""
+def parts_step_text(part_of: tuple[str, int, int] | None) -> str:
+    """The prompt's step on writing `### Parts`: empty for a part at the depth cap."""
+    return "" if _at_depth_cap(part_of) else _PARTS_STEP
 
 
-def parts_field_text(part_of: tuple[str, int] | None) -> str:
-    """The prompt's line on the `parts` output field: for a part, that it stays empty."""
-    if part_of is None:
+def parts_field_text(part_of: tuple[str, int, int] | None) -> str:
+    """The prompt's line on the `parts` output field: for a part at the depth cap, that it
+    stays empty."""
+    if not _at_depth_cap(part_of):
         return _PARTS_FIELD
-    return "- `parts`: always empty, because this task is a part and a part is never split again."
+    return "- `parts`: always empty, because this task is at the deepest level a split goes."
 
 
 SPLIT_TRACKER_ITEMS = 10

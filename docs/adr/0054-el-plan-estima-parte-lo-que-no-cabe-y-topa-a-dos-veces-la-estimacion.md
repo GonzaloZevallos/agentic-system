@@ -202,3 +202,20 @@ rechazar.
   una vez.
 - **Riesgo conocido.** Una tarea cuyo costo real supera el doble de la cifra subida sigue
   parando en el tope por estimación (`estimate`): es ADR-0054 funcionando como se diseñó.
+
+## Adenda (2026-11-11): el presupuesto de tamaño reemplaza la construcción entera y la línea de 40 archivos (GH-592)
+
+La parte 24 de 37 de apostrophe (GH-407) declaró 175 archivos y llegó a 263 archivos y 8.400
+líneas. El ADR-0093 cambia lo que esta decisión dice sobre el tamaño de una parte:
+
+- **Reemplazada: la profundidad máxima 1.** Una parte que no cabe se parte de nuevo, hasta
+  profundidad 2; pasada esa, escala con la clase `estimate`, con su plan.
+- **Reemplazada: "una parte se construye entera sin preguntar hasta el doble de la línea"
+  (adenda de GH-346).** `PART_WHOLE_FACTOR`, `part_builds_whole` y `part_whole_line` se borran;
+  el aviso `Part built whole: ` queda solo en `resume.SYSTEM_COMMENTS` como entrada heredada.
+- **Reemplazada: los 40 archivos de `estimate_fits`.** Un plan nuevo se juzga por el presupuesto de
+  tamaño de archivos y líneas escritos a mano (los generados no cuentan), y la línea de 150 USD
+  queda como chequeo secundario. Un plan escrito antes, sin campos de tamaño, se juzga como antes.
+- **Sigue igual:** el tope de dos veces la estimación (`ESTIMATE_CAP_FACTOR`), la clase `estimate`,
+  el marcador idempotente (que ahora puede llevar `depth D`; sin él es profundidad 1) y el
+  histórico del plan.

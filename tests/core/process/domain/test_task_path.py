@@ -153,3 +153,121 @@ def test_promote_rejects_a_text_over_240_characters_or_with_a_newline(text):
 def test_promote_accepts_a_text_of_exactly_240_characters():
     patch, _ = promote(light_state(), "Developer", "role", "now", "x" * 240)
     assert patch["promotion"]["text"] == "x" * 240
+
+
+AREAS = (
+    ("billing-core", ("src/billing/**",)),
+    ("migrations", ("db/migrate/*", "*.sql")),
+    ("empty", ()),
+)
+
+
+@pytest.mark.parametrize(
+    ("touched", "expected"),
+    [
+        (["src/billing/rate.py"], task_path.RiskHit("billing-core")),
+        (["README.md", "db/migrate/001.py"], task_path.RiskHit("migrations")),
+        (["schema.sql"], task_path.RiskHit("migrations")),
+        # Declaration order: the first area that matches wins.
+        (["schema.sql", "src/billing/x.py"], task_path.RiskHit("billing-core")),
+        (["README.md", "src/app.py"], task_path.RiskNone()),
+        ([], task_path.RiskNone()),
+        # The caller passes both paths of a rename and a deleted path: either one matches.
+        (["docs/new.md", "src/billing/old.py"], task_path.RiskHit("billing-core")),
+        (["src/billing/gone.py"], task_path.RiskHit("billing-core")),
+        # An unreadable diff is never `none`.
+        (None, task_path.RiskUnreadable()),
+    ],
+)
+def test_risk_hits(touched, expected):
+    assert task_path.risk_hits(AREAS, touched) == expected
+
+
+def test_an_area_without_paths_never_hits():
+    assert task_path.risk_hits((("empty", ()),), ["anything"]) == task_path.RiskNone()
+
+
+def test_an_invalid_glob_is_unreadable_not_none():
+    for glob in ("[", "", "a[b"):
+        assert task_path.risk_hits((("bad", (glob,)),), ["a.py"]) == task_path.RiskUnreadable()
+
+
+def request(kind, text=None, from_role="Developer"):
+    return {"kind": kind, "from_role": from_role, "text": text}
+
+
+@pytest.mark.parametrize(
+    ("current", "new", "stored"),
+    [
+        (None, request("role"), request("role")),
+        (None, request("risk_area"), request("risk_area")),
+        (request("role", "a"), request("role", "b"), request("role", "b")),
+        (request("role"), request("risk_area"), request("risk_area")),
+        # A `risk_area` request is never replaced, in either write order.
+        (request("risk_area", "m"), request("role"), request("risk_area", "m")),
+        (request("risk_area", "m"), request("risk_area", "n"), request("risk_area", "m")),
+        (request("risk_area"), request("plan_over_cap"), request("risk_area")),
+    ],
+)
+def test_record_request(current, new, stored):
+    assert task_path.record_request(current, new) == stored
+
+
+def test_request_validator_refuses_a_long_or_multiline_text():
+    task_path.validate_request(request("role", "x" * 240))
+    for text in ("x" * 241, "a\nb", "a\rb"):
+        with pytest.raises(ValueError, match="one line"):
+            task_path.validate_request(request("role", text))
+    with pytest.raises(ValueError, match="kind"):
+        task_path.validate_request(request("nope"))
+
+
+def test_select_request_order():
+    risk_b, risk_a = request("risk_area", "b"), request("risk_area", "a")
+    role_1, role_2 = request("role", "1"), request("role", "2")
+    cap, plan_role = request("plan_over_cap", from_role="system"), request("role", "p")
+    select = task_path.select_request
+    assert select(None, {}) is None
+    assert select(cap, {"S2": role_2, "S1": role_1}) == role_1
+    assert select(plan_role, {"S2": role_2, "S1": role_1}) == role_1
+    assert select(cap, {"S3": risk_b, "S2": role_2, "S10": risk_a}) == risk_a  # "S10" < "S3"
+    assert select(plan_role, {"S3": risk_b}) == risk_b
+    assert select(cap, {}) == cap
+    assert select(plan_role, {}) == plan_role
+
+
+@pytest.mark.parametrize("stored", ["light", "full", "none"])
+@pytest.mark.parametrize(
+    ("labels", "promoted"),
+    [
+        (None, False),  # unreadable
+        ((), False),  # none
+        ((LIGHT,), False),
+        ((FULL,), True),
+        ((LIGHT, FULL), True),  # both
+    ],
+)
+def test_relabel(stored, labels, promoted):
+    state = {**light_state(stored), "id": "T-1"}
+    patch, note = task_path.relabel(state, labels, "2026-11-12T00:00:00Z")
+    assert note is None
+    if not promoted:
+        assert patch == {}
+        return
+    new_label = task_path.owner_label(labels)
+    assert patch == {
+        "path": "full",
+        "path_label": new_label,
+        "promotion": {
+            "from_role": "owner",
+            "kind": "owner",
+            "text": None,
+            "at": "2026-11-12T00:00:00Z",
+        },
+    }
+
+
+def test_relabel_none_and_a_full_task_change_nothing():
+    assert task_path.relabel(light_state(), None, "now") == ({}, None)
+    assert task_path.relabel({"path": "full"}, (FULL,), "now") == ({}, None)
+    assert task_path.relabel({}, (FULL,), "now") == ({}, None)

@@ -484,6 +484,8 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
     for label, figure in (
         ("actual/estimate cost:", sc.cost_over_estimate),
         ("actual/estimate files:", sc.files_over_estimate),
+        ("hand files/plan:", sc.hand_files_over_plan),
+        ("hand lines/plan:", sc.hand_lines_over_plan),
     ):
         print(
             f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}, "
@@ -511,6 +513,18 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
         print(
             f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}, "
             f"{figure.excluded} excluded)"
+        )
+    # Informative only, outside the verdict (GH-593): what escalated and what a human was waited
+    # on for, by cause. A bucket with none prints none of it.
+    for row in sc.escalations_by_cause:
+        print(
+            f"escalations [{row.kind}] {row.cause}: {row.escalations} in {row.tasks} of "
+            f"{sc.own_failures_per_task.denominator + sc.own_failures_per_task.excluded} tasks"
+        )
+    for cause, figure in sc.human_wait_by_cause_h:
+        print(
+            f"human_wait_h [{cause}]: {_fmt_figure(figure)} (median, n={figure.denominator} of "
+            f"{figure.denominator + figure.excluded} tasks)"
         )
 
 

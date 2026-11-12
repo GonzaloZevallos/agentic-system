@@ -59,6 +59,7 @@ from ...domain import rules
 from ...domain.ci import Containment
 from ...domain.docs import Ancestry
 from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
+from ...domain.size_budget import NumstatRow
 from ...domain.task import DependencyState, MergeOutcome
 
 WORKTREES = Path(".agentic/worktrees")
@@ -786,6 +787,14 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        # `--no-renames`: a rename is a delete plus an add, so both paths come back; a deletion
+        # is listed. `-z` with `core.quotepath` off: a name comes back as it is.
+        result = self._run(*_PLAIN, "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}")
+        if result.returncode != 0:
+            raise GitError(f"git diff {base}...{head} failed: {result.stderr.strip()}")
+        return tuple(name for name in result.stdout.split("\0") if name)
+
     def changed_lines(self, base: str, head: str) -> int:
         # `--no-renames`: a rename is a delete plus an add whatever `diff.renames` says. A
         # binary file's counts are `-`, which is no line at all.
@@ -797,6 +806,31 @@ class GitWorkspace:
             total += int(added) if added.isdigit() else 0
             total += int(deleted) if deleted.isdigit() else 0
         return total
+
+    def numstat(self, upstream: str, head: str) -> tuple[NumstatRow, ...]:
+        # `-M` and the three-dot base are this measurement's alone (`changed_lines` keeps its
+        # own): a pure move is free, and what the upstream gained is not the task's. `-z`
+        # with `core.quotepath` off hands names back as they are; a rename is
+        # `added\tdeleted\t\0old\0new` and a binary file's counts are `-`.
+        out = self._read_z(*_PLAIN, "diff", "--numstat", "-M", "-z", f"{upstream}...{head}")
+        fields = out.split("\0")
+        rows: list[NumstatRow] = []
+        position = 0
+        while position < len(fields) and fields[position]:
+            added, _, rest = fields[position].partition("\t")
+            deleted, _, name = rest.partition("\t")
+            position += 1
+            if not name:  # a rename: the old and the new path follow as their own fields
+                name = fields[position + 1]
+                position += 2
+            rows.append(
+                NumstatRow(
+                    name,
+                    int(added) if added.isdigit() else 0,
+                    int(deleted) if deleted.isdigit() else 0,
+                )
+            )
+        return tuple(rows)
 
     def introduced_paths(
         self, path: Path, base: str, head: str, against: str | None

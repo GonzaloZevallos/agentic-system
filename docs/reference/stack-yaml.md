@@ -160,6 +160,14 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Qué es**: mapping of `generate` and `paths` and optionally `mode` (`commit` or `validate`): the command that rewrites generated docs, the globs it owns and whether a branch commits the output
 - **Lector**: `agentic.core.knowledge.domain.stack.docs`
 
+## `generated`
+
+- **Presencia**: opcional
+- **Se lee como**: `tuple[str, ...]`
+- **Si falta**: lista vacía (`()`)
+- **Qué es**: list of path globs the product generates, besides `docs.paths` and the lockfiles: they never count against a task's size budget
+- **Lector**: `agentic.core.knowledge.domain.stack.generated`
+
 ## `verifications`
 
 - **Presencia**: opcional

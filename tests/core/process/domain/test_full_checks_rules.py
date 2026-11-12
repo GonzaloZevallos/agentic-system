@@ -82,6 +82,36 @@ def test_ci_unavailable_escalates_with_class_ci_and_writes_no_record_and_no_retu
     assert "full_checks" not in patch and "subtasks" not in patch and "findings" not in patch
 
 
+@pytest.mark.parametrize(
+    ("ci_cause", "mechanical"),
+    [
+        ("gh_unavailable", "ci_gh_unavailable"),
+        ("gh_unreadable", "ci_gh_unreadable"),
+        ("run_unfinished", "ci_run_unfinished"),
+        ("dispatch_refused", None),
+        ("unknown_names", None),
+        ("no_run", None),
+        ("publish_failed", None),
+        ("not_started", None),
+        ("jobs_missing", None),
+        ("checkout_failed", None),
+    ],
+)
+def test_ci_unavailable_is_mechanical_only_for_the_causes_a_retry_can_change(ci_cause, mechanical):
+    """GH-593: the poller retakes a GitHub that could not be read or a run that never ended; a
+    refusal or a defect of the plan stays for the human, chosen by the closed cause."""
+    patch = rules.ci_unavailable(ci_cause, HEAD, "detail", at=_STAMP)
+    assert patch["escalation_cause"] == mechanical
+    assert rules.auto_resumable(apply(state(), patch)) == mechanical
+    assert rules.pause_kind(patch["pause_log"]) == ("external" if mechanical else "human")
+
+
+def test_ci_planning_defect_has_no_mechanical_cause():
+    patch = rules.ci_planning_defect(HEAD, "names", at=_STAMP)
+    assert patch["escalation_cause"] is None
+    assert rules.auto_resumable(apply(state(), patch)) is None
+
+
 def test_a_state_escalated_ci_with_no_passed_record_is_due_again_so_a_resume_re_enters():
     stopped = apply(
         state(task_head=HEAD, owner_rules_seen=HEAD),
@@ -193,6 +223,14 @@ def test_the_return_counts_on_the_pair_and_escalates_at_its_limit():
     assert "changes_requested" not in patch
     # The rows and the reopening are still recorded: a return is never without its rows.
     assert patch["findings"] and patch["subtasks"]["integration"]["returned_by"] == "full_checks"
+
+
+def test_the_return_asks_the_decision_for_the_modes_pair(monkeypatch):
+    asked = []
+    monkeypatch.setattr(rules, "on_return_limit", lambda *a, **k: asked.append(a[1]) or "escalate")
+    patch = rules.full_checks_return(state(), RED, 2, at=_STAMP, mode="single")
+    assert patch["escalation_class"] == "returns" and "changes_requested" not in patch
+    assert asked == [rules.full_checks_pair("integration", "single")]
 
 
 def test_the_returned_section_is_the_full_checks_one():

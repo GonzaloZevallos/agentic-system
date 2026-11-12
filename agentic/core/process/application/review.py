@@ -38,10 +38,10 @@ import anyio
 
 from agentic.shared.configuration import Configuration, ReviewMode, experiment_snapshot
 
-from ..domain import ci, docs, landing, presubmit, rules, speculation
+from ..domain import ci, docs, landing, presubmit, restart, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
-from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from . import ci_push, ci_trust, review_scope, shadow_review
+from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, FindingRecord, TaskState, apply
+from . import ci_push, ci_trust, promotion, review_scope, shadow_review
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Checkout, GitError, Ports
@@ -49,6 +49,9 @@ from .presubmit import declared_checks
 from .run_role import Output, finish, run_role
 
 SYSTEM_APPROVAL = "approved by the system: review_mode single"
+
+
+PRD_RECHECK_LINE = "PRD written after this work was approved; review it against the PRD."
 
 
 async def run_reviewer(
@@ -139,7 +142,6 @@ async def review(
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(TECH_LEAD), ports)
     pair = pair_for(subtask_id)
-    remaining = rules.remaining_changes(state, pair, cfg.max_changes_requested_per_pair)
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
@@ -165,12 +167,23 @@ async def review(
     if evidence is not None:
         reading = {**state, "sections": {**state.get("sections", {}), CI_SECTION: evidence.section}}
 
+    # A unit whose approved work met a PRD written after it (GH-591, `plan_revision.revise`) gets a
+    # full review from its base, not an incremental one, and its brief says why. Only the reading
+    # copy changes; the document's brief stays.
+    rechecking = bool(subtask.get("prd_recheck"))
+    scoped = state
+    if rechecking:
+        fresh = {k: v for k, v in subtask.items() if k != "reviewed_head"}
+        briefed = {**fresh, "brief": f"{subtask['brief']}\n\n{PRD_RECHECK_LINE}"}
+        scoped = {**state, "subtasks": {**state["subtasks"], subtask_id: fresh}}
+        reading = {**reading, "subtasks": {**reading["subtasks"], subtask_id: briefed}}
+
     # What this pass covers (GH-589, ADR-0089): `landing.review_scope` decides it from the
     # facts `review_scope.scope_of` reads. Only a `resolution` changes the call -- its text
     # as a system section, and the diff starting at the accepted tip; every other scope is
     # today's call. A `carried` verdict (a Developer's clean merge with nothing after) still
     # reviews, from the tip; the sync is what records `carried`, here it is `full`/`clean`.
-    verdict, tip = review_scope.scope_of(state, subtask_id, head, checkout.path, ports)
+    verdict, tip = review_scope.scope_of(scoped, subtask_id, head, checkout.path, ports)
     resolving = verdict.scope == "resolution"
     if resolving:
         reading = {
@@ -218,11 +231,17 @@ async def review(
         subtask_id,
         recorded_scope,
         verdict.cause,
-        from_base or subtask.get("reviewed_head") or checkout.base,
+        checkout.base if rechecking else from_base or subtask.get("reviewed_head") or checkout.base,
         head,
         ports.now(),
     )
-    subtask = subtasks[subtask_id]
+    # A promotion this review asks for (GH-591): stored on the unit it reviewed, whatever the
+    # verdict, and only applied by the serialized code that reads it (`task_path.promote`).
+    subtask = promotion.requested(
+        {k: v for k, v in subtasks[subtask_id].items() if k != "prd_recheck"},
+        section,
+        output.data.get("promote"),
+    )
     # The landing lowering is first (GH-441): a finding that asks for what only the pull
     # request's CI can give is an observation before any other rule reads its severity.
     findings, landed = rules.lower_landing_blocks(output.data["findings"])
@@ -306,14 +325,33 @@ async def review(
         # A return discards the pushed run (GH-465): the head will move, and the record that
         # named the old one must not stand for the next.
         patch = apply(patch, {"ci_speculation": None})
-    if remaining > 0:
+    # The one decision of what a return does at the pair's limit (GH-593): count it, restart the
+    # subtask clean, or escalate. Nothing here compares the counter with the limit.
+    decision = rules.on_return_limit(state, pair, cfg.max_changes_requested_per_pair, subtask_id)
+    if decision == "count":
         patch = apply(
             patch,
             {
                 "changes_requested": rules.record_return(state, pair),
-                "change_history": [rules.change_entry(pair, category, reason)],
+                "change_history": [
+                    rules.change_entry(pair, category, reason, restart.attempt(state, pair))
+                ],
             },
         )
+    elif decision == "restart":
+        # The pair is at its limit for the first time: the attempt is archived and the subtask
+        # starts again from a clean context with a rewritten brief. Built over the state that
+        # already holds this review's rows, so they are discarded with the attempt's.
+        after = apply(state, patch)
+        rows = _rows_of(after, subtask_id)
+        first = rows[0]["version"] if rows else 0
+        text = restart.brief(
+            subtask.get("brief", ""),
+            [r for r in rows if r["version"] == first],
+            [r for r in rows if r["version"] != first],
+            [h for h in state.get("change_history", []) if h["pair"] == pair.key],
+        )
+        patch = apply(patch, restart.restart_patch(after, subtask_id, pair, text, head))
     else:
         # Returned as well, without counting: the limit is spent. The human's answer
         # resets the pair and the resume sends the subtask back to its Developer.
@@ -323,6 +361,15 @@ async def review(
         patch = rules.logged(patch, at=ports.now())
         patch["status"] = WAITING_ON_HUMAN
     return done(patch)
+
+
+def _rows_of(state: TaskState, subtask_id: str) -> list[FindingRecord]:
+    """The findings `subtask_id`'s reviews raised, oldest pass first: the material of a rewritten
+    brief. The first pass is the earliest version that raised any, the second is the rest."""
+    return sorted(
+        (f for f in state.get("findings", []) if f["subtask"] == subtask_id),
+        key=lambda f: f["version"],
+    )
 
 
 async def _push_speculatively(

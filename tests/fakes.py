@@ -96,6 +96,7 @@ from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
+from agentic.core.process.domain.size_budget import NumstatRow
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -457,6 +458,8 @@ class MemoryStack:
         self.declared_design = design
         # None is a product that declares no `docs` block: no generated docs, today's gate.
         self.declared_docs = docs
+        # Empty is a product that declares no `generated` globs: only the lockfiles and `docs`.
+        self.declared_generated: tuple[str, ...] = ()
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
@@ -618,6 +621,9 @@ class MemoryStack:
     def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
         # The real spelling, `core.knowledge`'s own: the fake agrees with the adapter.
         return tuple(f":(glob){path}" for path in block.paths)
+
+    def generated(self, revision: str) -> tuple[str, ...]:
+        return self.declared_generated
 
 
 class MemoryCommands:
@@ -1011,9 +1017,16 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # GH-591: what `touched_paths` answers (renames as both paths, deletions included), the
+        # text that makes it raise `GitError`, and each call.
+        self.touched: tuple[str, ...] = ()
+        self.touched_error: str | None = None
+        self.touched_reads: list[tuple[str, str]] = []
         # GH-473: what `changed_lines` answers, and each call.
         self.diff_lines = 0
         self.line_reads: list[tuple[str, str]] = []
+        self.numstat_rows: tuple[NumstatRow, ...] = ()
+        self.numstat_reads: list[tuple[str, str]] = []
         # GH-420: what `introduced_paths` answers (or raises as a `GitError`), each ask as
         # (base, head, against), and the sha `fetched_upstream` reads (None: no upstream).
         self.introduced: tuple[str, ...] = ()
@@ -1477,6 +1490,16 @@ class MemoryWorkspace:
         self.diff_reads.append((base, head))
         return self.diff_paths
 
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        self.touched_reads.append((base, head))
+        if self.touched_error is not None:
+            raise GitError(self.touched_error)
+        return self.touched
+
+    def numstat(self, upstream: str, head: str) -> tuple[NumstatRow, ...]:
+        self.numstat_reads.append((upstream, head))
+        return self.numstat_rows
+
     def changed_lines(self, base: str, head: str) -> int:
         self.line_reads.append((base, head))
         return self.diff_lines
@@ -1690,6 +1713,8 @@ class MemoryTracker:
         # The body of every `open_pull_request` call, the failed ones too.
         self.attempted_bodies: list[str] = []
         self.open_error = "gh pr create failed: Body is too long"
+        # The class `open_pull_request` raises (a `TrackerCallFailed` is a transport failure).
+        self.open_error_type: type[ValueError] = ValueError
         self.comment_failures = 0
         # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).
         self.drop_label_failures = 0
@@ -1768,7 +1793,7 @@ class MemoryTracker:
         self.closes_issue_calls.append(closes_issue)
         if self.open_failures > 0:
             self.open_failures -= 1
-            raise ValueError(self.open_error)
+            raise self.open_error_type(self.open_error)
         self.pull_requests.append((branch, title, body))
         return self.url
 
@@ -2649,6 +2674,9 @@ def planned(
     estimated_cost_usd: float = 20.0,
     estimated_files: int = 5,
     tracker_checklist: Sequence[str] = (),
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
 ) -> RawResult:
     items: list[dict[str, object]] = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
@@ -2665,6 +2693,9 @@ def planned(
             "integration": integration,
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
             **({"tracker_checklist": list(tracker_checklist)} if tracker_checklist else {}),
@@ -2692,6 +2723,9 @@ def planned_tracker_only(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": 0,
+            "hand_files": 0,
+            "hand_lines": 0,
+            "test_lines": 0,
             "ci_required": [],
             "ci_none_reason": "The work is on the tracker.",
             "tracker_checklist": list(checklist),
@@ -2702,6 +2736,16 @@ def planned_tracker_only(
     )
 
 
+# What every part declares besides its title, body and dependencies (GH-592).
+PART_DEFAULTS: dict[str, object] = {
+    "hand_files": 1,
+    "hand_lines": 10,
+    "test_lines": 10,
+    "kind": "change",
+    "guard": "",
+}
+
+
 def planned_parts(
     *parts: dict[str, object],
     cost: float = 0.3,
@@ -2709,13 +2753,17 @@ def planned_parts(
     invariants: Sequence[object] = ("Every part ships alone.",),
     estimated_cost_usd: float = 400.0,
     estimated_files: int = 90,
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
 ) -> RawResult:
     """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
     given, two chained ones."""
-    items: list[dict[str, object]] = list(parts) or [
+    given = list(parts) or [
         {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
         {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
     ]
+    items: list[dict[str, object]] = [{**PART_DEFAULTS, **item} for item in given]
     markdown = "### Solution\n\nCut it.\n\n### Parts\n\n" + "\n\n".join(
         f"#### {i['title']}\n\n{i['body']}" for i in items
     )
@@ -2728,6 +2776,9 @@ def planned_parts(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
         },

@@ -67,7 +67,9 @@ from ...application.ports import Checkout, Ports, ProductKnowledge, Prompts
 from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
+from ...application.relabel import relabelled
 from ...application.review import review
+from ...application.risk_net import risk_net
 from ...application.schedule import run_subtasks
 from ...application.split import split
 from ...application.tracker_only import tracker_only
@@ -93,7 +95,7 @@ from ...domain.roles import (
     UX_LEAD,
     Role,
 )
-from ...domain.task import TaskInput, TaskState
+from ...domain.task import TaskInput, TaskState, apply
 from ..telemetry import NoTelemetry, Telemetry
 
 UseCase = Callable[[TaskState, Configuration, Ports], Awaitable[TaskState]]
@@ -272,12 +274,12 @@ def _pause_node(ports_of: PortsOf):
             }
         )
         answer = answer or {}
-        return rules.resumed(
-            state,
-            answer.get("decision"),
-            answer.get("estimate"),
-            at=ports_of(cfg, config).now(),
+        ports = ports_of(cfg, config)
+        resumed = rules.resumed(
+            state, answer.get("decision"), answer.get("estimate"), at=ports.now()
         )
+        # The owner's labels as they are now (GH-591): `path:full` promotes, nothing demotes.
+        return apply(resumed, relabelled(state, ports))
 
     return pause
 
@@ -314,7 +316,12 @@ def _pipeline(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     # patch (the 58% of spend the request opens with, all labelled `tech_lead`).
     branch.add_node("review", _node(review, TECH_LEAD_REVIEWER, ports_of, telemetry, arm_for))
     branch.add_conditional_edges(START, rules.pipeline_entry, ["develop", "review"])
-    branch.add_conditional_edges("develop", _in_branch(rules.after_develop), ["review", END])
+    # The system's `risk_hits` net sits between a delivery and its review (GH-591): no model.
+    branch.add_node("risk_net", _system_node(risk_net, ports_of))
+    branch.add_conditional_edges(
+        "develop", _in_branch(rules.after_develop), {"review": "risk_net", END: END}
+    )
+    branch.add_edge("risk_net", "review")
     branch.add_edge("review", END)
     return branch.compile(checkpointer=False)
 
@@ -468,7 +475,9 @@ def build_graph(
     )
     graph.add_conditional_edges("write_copy", _route(rules.after_write_copy), ["plan", ESCALATE])
     graph.add_conditional_edges(
-        "plan", _route(rules.after_plan), [INTEGRATE, "split", "tracker_only", ESCALATE]
+        "plan",
+        _route(rules.after_plan),
+        [INTEGRATE, "split", "tracker_only", "define", "diagnose", ESCALATE],
     )
     graph.add_conditional_edges("split", _route(rules.after_split), [END, ESCALATE])
     graph.add_conditional_edges("tracker_only", _route(rules.after_tracker_only), [END, ESCALATE])
@@ -484,6 +493,9 @@ def build_graph(
             VERIFY,
             "deliver",
             "evaluated",
+            # A promotion the fan-in applied sends a feature or a bug back to its first stage.
+            "define",
+            "diagnose",
             ESCALATE,
             END,
         ],

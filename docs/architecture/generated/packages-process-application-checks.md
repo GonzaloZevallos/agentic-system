@@ -15,7 +15,6 @@ Esta página muestra los módulos del grupo `checks` de `application` y los impo
 
 ```mermaid
 graph TD
-    g_application__build["build (grupo)"]
     g_application__definition["definition (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
     g_application__support["support (grupo)"]
@@ -48,7 +47,6 @@ graph TD
     m_application__perf --> g_application__support
     m_application__perf --> g_pkg__agentic__shared
     m_application__perf --> g_pkg__domain
-    m_application__presubmit --> g_application__build
     m_application__presubmit --> g_application__support
     m_application__presubmit --> g_pkg__agentic__shared
     m_application__presubmit --> g_pkg__domain

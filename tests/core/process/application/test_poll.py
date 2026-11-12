@@ -2447,3 +2447,105 @@ def test_the_crash_retake_and_the_reboot_retake_spawn_the_pollers_resume():
     )
     assert len(launcher.spawned) == 2
     assert all("--by-poller" in argv for argv in launcher.spawned)
+
+
+# --- mechanical escalations the poller retakes (GH-593) ----------------------------------------
+
+_CI_LOG = [{"kind": "escalation", "value": "ci", "cause": "ci_gh_unavailable"}]
+_DELIVERY_LOG = [{"kind": "escalation", "value": "system_delivery", "cause": "delivery_transient"}]
+
+
+def _mechanical_comments(*retaken: str) -> list[IssueComment]:
+    """One `Escalated:`, then a pair of `Auto-resumed: <reason>` + `Escalated:` per retake."""
+    comments = [IssueComment(body="Escalated: no verdict", created_at=_stamp(ESCALATED_AT))]
+    for k, reason in enumerate(retaken, start=1):
+        at = ESCALATED_AT + timedelta(hours=k)
+        comments.append(IssueComment(body=f"Auto-resumed: {reason}", created_at=_stamp(at)))
+        comments.append(
+            IssueComment(body="Escalated: no verdict", created_at=_stamp(at + timedelta(minutes=1)))
+        )
+    return comments
+
+
+def _mechanical_ports(log, comments):
+    ports = memory_ports()
+    ports.documents.save(_paused("GH-19", "GitHub CI gave no verdict", log))
+    ports.tracker.timestamped["GH-19"] = comments
+    return ports
+
+
+@pytest.mark.parametrize(
+    ("log", "comment"),
+    [
+        (_CI_LOG, "Auto-resumed: ci gh unavailable"),
+        (_DELIVERY_LOG, "Auto-resumed: delivery transient"),
+    ],
+)
+def test_a_mechanical_escalation_is_retaken_without_a_human_until_its_cap_is_spent(
+    tmp_path, log, comment
+):
+    reason = comment.removeprefix("Auto-resumed: ")
+    spent = None
+    for prior in range(rules.MECHANICAL_RETAKE_MAX + 1):
+        ports = _mechanical_ports(log, _mechanical_comments(*[reason] * prior))
+        launcher = FakeLauncher()
+        now = ESCALATED_AT + timedelta(days=3)
+        lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, now)
+        if prior < rules.MECHANICAL_RETAKE_MAX:
+            assert lines[0] == "agentic: poll: resume #19 -> pid 4242", prior
+            assert ports.tracker.comments == [("GH-19", comment)]
+        else:
+            spent = (lines, launcher.spawned)
+    # The cap spent, the pause is the human's: nothing is launched on top of the evidence.
+    assert spent is not None and spent[1] == []
+
+
+def test_a_task_that_alternates_two_mechanical_causes_never_passes_either_cap(tmp_path):
+    mixed = ["ci gh unavailable", "delivery transient", "ci gh unavailable"]
+    ports = _mechanical_ports(_DELIVERY_LOG, _mechanical_comments(*mixed))
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT + timedelta(days=3))
+    assert launcher.spawned == []
+    assert ports.tracker.comments == []
+    assert rules.MECHANICAL_RETAKE_MAX == len(mixed)
+    two_so_far = _mechanical_ports(_DELIVERY_LOG, _mechanical_comments(*mixed[:2]))
+    launcher = FakeLauncher()
+    _round(
+        _cfg(tmp_path),
+        two_so_far,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT + timedelta(days=3),
+    )
+    assert len(launcher.spawned) == 1
+
+
+@pytest.mark.parametrize(
+    "log",
+    [
+        [{"kind": "escalation", "value": "ci"}],  # dispatch_refused, unknown_names, no_run...
+        [{"kind": "escalation", "value": "system_delivery"}],  # a refused or healed-twice delivery
+        [{"kind": "escalation", "value": "failure"}],  # a push or lease the remote refused
+    ],
+)
+def test_an_escalation_with_no_mechanical_cause_is_never_retaken(tmp_path, log):
+    ports = _mechanical_ports(log, _mechanical_comments())
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT + timedelta(days=3)
+    )
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == [] and ports.tracker.comments == []
+
+
+def test_a_role_failure_by_network_and_account_limit_are_retaken_as_before():
+    for reason in ("network", "account_limit"):
+        state = {
+            "pause_log": [
+                {"kind": "failure", "value": reason, "section": "Developer"},
+                {"kind": "escalation", "value": "failure"},
+            ]
+        }
+        assert rules.auto_resumable(state) == reason
+    assert rules.auto_resume_limit({}, "network") == len(rules.RETAKE_SCHEDULE)
+    assert rules.auto_resume_limit({}, "account_limit") == len(rules.ACCOUNT_LIMIT_SCHEDULE)

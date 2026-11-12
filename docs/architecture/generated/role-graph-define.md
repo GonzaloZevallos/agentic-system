@@ -5,56 +5,41 @@ Esta página muestra los nodos de la fase `define` del grafo de roles y las aris
   - [build](role-graph-build.md)
   - [classify](role-graph-classify.md)
   - [deliver](role-graph-deliver.md)
+  - [design](role-graph-design.md)
   - [Escalado y reanudación](role-graph-escalation.md)
   - [land](role-graph-land.md)
   - [plan](role-graph-plan.md)
-  - [review](role-graph-review.md)
 
 ```mermaid
 graph TD
     __end__["__end__"]
     consolidate["consolidate"]
     define["define"]
-    design_review["design_review"]
     diagnose["diagnose"]
     discard["discard"]
+    phase_build["build (fase)"]
     phase_classify["classify (fase)"]
+    phase_design["design (fase)"]
     phase_plan["plan (fase)"]
-    ui_screens["ui_screens"]
-    ux_flow["ux_flow"]
-    ux_walk["ux_walk"]
     validate["validate"]
-    write_copy["write_copy"]
     consolidate -.-> define
+    consolidate -.-> phase_design
     consolidate -.-> phase_plan
-    consolidate -.-> ux_flow
-    consolidate -.-> write_copy
     define -.-> validate
-    design_review -.-> consolidate
-    design_review -.-> phase_plan
-    design_review -.-> ui_screens
-    design_review -.-> write_copy
     diagnose -.-> validate
     discard -.-> __end__
+    phase_build -.-> define
+    phase_build -.-> diagnose
     phase_classify -.-> define
     phase_classify -.-> diagnose
-    ui_screens -.-> design_review
-    ui_screens -.-> phase_plan
-    ui_screens -.-> write_copy
-    ux_flow -.-> phase_plan
-    ux_flow -.-> ux_walk
-    ux_flow -.-> write_copy
-    ux_walk -.-> phase_plan
-    ux_walk -.-> ui_screens
-    ux_walk -.-> ux_flow
-    ux_walk -.-> write_copy
+    phase_design -.-> consolidate
+    phase_plan -.-> define
+    phase_plan -.-> diagnose
     validate -.-> define
     validate -.-> diagnose
     validate -.-> discard
+    validate -.-> phase_design
     validate -.-> phase_plan
-    validate -.-> ux_flow
-    validate -.-> write_copy
-    write_copy -.-> phase_plan
 ```
 
-Pueden escalar: `consolidate`, `define`, `design_review`, `diagnose`, `discard`, `ui_screens`, `ux_flow`, `ux_walk`, `validate`, `write_copy`
+Pueden escalar: `consolidate`, `define`, `diagnose`, `discard`, `validate`

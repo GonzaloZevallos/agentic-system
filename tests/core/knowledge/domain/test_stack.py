@@ -1292,6 +1292,32 @@ def test_ci_dispatch_without_ci_is_refused():
     refuse_dispatch(data, r"`ci_dispatch` requires `ci`")
 
 
+def test_generated_keeps_each_glob_stripped_in_file_order():
+    declared = {"generated": [" web/src/api/*.ts ", "proto/gen/**"]}
+    assert stack.generated(declared, "x") == ("web/src/api/*.ts", "proto/gen/**")
+
+
+def test_a_product_that_declares_no_generated_reads_an_empty_tuple():
+    assert stack.generated({"checks": {"tests": "pytest"}}, "x") == ()
+    assert "generated" in stack.KEYS
+
+
+@pytest.mark.parametrize(
+    "glob",
+    ["*", "**", "**/*", "*.ts", "/abs/gen", "../up/gen"]
+    + [f"{root}/x" for root in stack.DOCS_PROTECTED_ROOTS],
+)
+def test_a_generated_glob_that_matches_everything_or_overlaps_a_protected_root_is_refused(glob):
+    with pytest.raises(ValueError, match=r"`generated` is refused"):
+        stack.generated({"generated": [glob]}, "stack.yaml")
+
+
+@pytest.mark.parametrize("value", [[], "web/gen", [3], [""], {"a": "b"}])
+def test_a_generated_that_is_not_a_non_empty_list_of_globs_is_an_error(value):
+    with pytest.raises(ValueError, match=r"`generated`"):
+        stack.generated({"generated": value}, "stack.yaml")
+
+
 BUILTIN_RISK_IDS = (
     "data-migration",
     "money-rounding",

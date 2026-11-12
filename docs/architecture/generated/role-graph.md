@@ -5,10 +5,10 @@ Esta página muestra el grafo de roles de `agentic.composition:graph` reducido a
   - [classify](role-graph-classify.md)
   - [define](role-graph-define.md)
   - [deliver](role-graph-deliver.md)
+  - [design](role-graph-design.md)
   - [Escalado y reanudación](role-graph-escalation.md)
   - [land](role-graph-land.md)
   - [plan](role-graph-plan.md)
-  - [review](role-graph-review.md)
 
 ```mermaid
 graph TD
@@ -18,32 +18,36 @@ graph TD
     phase_classify["classify (fase)"]
     phase_define["define (fase)"]
     phase_deliver["deliver (fase)"]
+    phase_design["design (fase)"]
     phase_escalation["escalation (fase)"]
     phase_plan["plan (fase)"]
-    phase_review["review (fase)"]
     __start__ --> phase_classify
     phase_build -.-> __end__
+    phase_build -.-> phase_define
     phase_build -.-> phase_deliver
     phase_build -.-> phase_escalation
-    phase_build -.-> phase_review
     phase_classify -.-> phase_define
     phase_classify -.-> phase_escalation
     phase_classify -.-> phase_plan
     phase_define -.-> __end__
+    phase_define -.-> phase_design
     phase_define -.-> phase_escalation
     phase_define -.-> phase_plan
     phase_deliver -.-> __end__
     phase_deliver -.-> phase_build
     phase_deliver -.-> phase_escalation
+    phase_design -.-> phase_define
+    phase_design -.-> phase_escalation
+    phase_design -.-> phase_plan
     phase_escalation -.-> __end__
     phase_escalation -.-> phase_build
     phase_escalation -.-> phase_classify
     phase_escalation -.-> phase_define
     phase_escalation -.-> phase_deliver
+    phase_escalation -.-> phase_design
     phase_escalation -.-> phase_plan
     phase_plan -.-> __end__
     phase_plan -.-> phase_build
+    phase_plan -.-> phase_define
     phase_plan -.-> phase_escalation
-    phase_review -.-> phase_build
-    phase_review -.-> phase_escalation
 ```

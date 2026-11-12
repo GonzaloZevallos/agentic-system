@@ -35,8 +35,9 @@ from .ci_push import PushKind
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
+from .size_budget import ActualSize, PlanSize
 from .task_path import Path as TaskPath
-from .task_path import PathCause, PathLabel, Promotion
+from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 
 Status = Literal[
     "open",
@@ -183,6 +184,21 @@ EscalationClass = Literal[
     "system_delivery",
     "ci",
 ]
+# The causes of an escalation that need no judgment (GH-593), decided at the raise site from the
+# error's class and recorded type, never from its message text: `ci_*` a `full_checks` whose CI
+# gave no verdict (`CiCause` `gh_unavailable`, `gh_unreadable`, `run_unfinished`), `delivery_
+# transient` a `system_delivery` whose push failed on a transient error. Closed, and written
+# only through `rules.escalation(..., cause=...)`; the poller retakes them by themselves.
+MechanicalCause = Literal[
+    "ci_gh_unavailable",
+    "ci_gh_unreadable",
+    "ci_run_unfinished",
+    "delivery_transient",
+]
+# What the poller's calendar and cap are keyed by (`rules.auto_resumable`): a failed attempt's
+# `FailureReason` or an escalation's `MechanicalCause`. One union, one place that maps either
+# to a calendar (`rules.schedule_for`) or a cap (`rules.auto_resume_limit`).
+ResumeKey = FailureReason | MechanicalCause
 
 
 @dataclass(frozen=True)
@@ -485,6 +501,8 @@ class PlanRoute(TypedDict):
     route: Route
     misrouted: bool
     critic: CriticState
+    # True when a promotion re-planned the task (GH-591): the plan revised, no new interview.
+    after_promotion: NotRequired[bool]
 
 
 class EvaluationRef(TypedDict):
@@ -870,6 +888,9 @@ class ChangesRequested(TypedDict):
     # absent on every return a review made, so a document written before it reads the same.
     # It never enters `changes_requested`, which counts the pair's limit.
     by: NotRequired[Literal["landing"]]
+    # `2` on a return of a restarted attempt (GH-593, `restart.attempt`): absent on a return of
+    # the first attempt, so a document written before restarts reads every entry as attempt 1.
+    attempt: NotRequired[int]
 
 
 class EscalationPatch(TypedDict):
@@ -878,6 +899,9 @@ class EscalationPatch(TypedDict):
 
     escalated: str | None
     escalation_class: EscalationClass | None
+    # The `MechanicalCause` of a mechanical pause, `None` for a judgment one (GH-593);
+    # `rules.logged` copies it onto the `escalation` pause entry.
+    escalation_cause: NotRequired[MechanicalCause | None]
 
 
 class SlicesClosedPatch(TypedDict):
@@ -1018,6 +1042,21 @@ class Subtask(TypedDict, total=False):
     # touched, and on every document written before this task existed — every read is
     # `.get("conflicted_paths", [])`.
     conflicted_paths: list[str]
+    # A promotion this subtask's branch asked for (GH-591, `task_path.record_request`): the
+    # Developer, its review or the `risk_hits` net leave it here, in the branch's own key, and
+    # only serialized system code applies it. Absent on a subtask that asked for nothing and on
+    # every document written before this key existed -- every read is `.get("promote_request")`.
+    promote_request: PromoteRequest
+    # Set by `plan_revision.revise` on a final unit whose work was approved before a
+    # promotion re-planned the task and whose brief did not change: its review is a full
+    # one against the new PRD. Absent everywhere else.
+    prd_recheck: bool
+    # Set by the approval patch (`rules.approval_patch`) and never cleared by any patch (GH-593):
+    # the subtask was once approved, so a restart cannot throw away reviewed-good work.
+    approved_once: bool
+    # `2` on a subtask a clean restart gave a new attempt (`restart.restart_patch`); absent on
+    # the first attempt, read `.get("attempt", 1)`.
+    attempt: int
 
 
 # One entry of `TaskState.pause_log` (issue #137): the append-only register the
@@ -1053,6 +1092,9 @@ class EscalationPauseEntry(TypedDict):
     at: NotRequired[str]
     # The CI timing of a `ci` escalation that wrote no `FullChecksRecord` (a `no_verdict` one).
     ci: NotRequired[CiTiming]
+    # The mechanical cause the raise site knew (GH-593), from the error's class and recorded
+    # type; absent when it was not known or the escalation is a judgment, which reads as one.
+    cause: NotRequired[MechanicalCause]
 
 
 class FailurePauseEntry(TypedDict):
@@ -1129,6 +1171,12 @@ no decision slot, and neither does a `checks_red` with no `gate_tier`
 (`landing.adr_decisions_spent`)."""
 
 
+AdrDecidedBy = Literal["rule"]
+"""Who decided an `apply_adr_decision` entry (D-be76583a), closed: `rule`, the numbering rule on its
+own, with a synthesized "keep the rule's moves" decision. An entry that answers an owner's decision
+carries no `decided_by` and a `decision_at` instead; `landing` re-exports it."""
+
+
 class LandingEntry(TypedDict, total=False):
     """One landing step of the task document's `landing` list (GH-239): the idempotency
     key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
@@ -1199,6 +1247,8 @@ class LandingEntry(TypedDict, total=False):
     # `landing.AdrDecisionOutcome`, the `[old, new]` path pairs the rule recomputed and the head
     # pushed. `escalate_adr` entries never carry them.
     decision_at: str
+    # D-be76583a, an `apply_adr_decision` entry the system took on its own (no `decision_at`).
+    decided_by: AdrDecidedBy
     outcome: AdrDecisionOutcome
     moves: list[list[str]]
     head_after: str
@@ -1280,11 +1330,19 @@ class TrackerPosted(TypedDict):
 
 class PartRecord(TypedDict):
     """One part of a split plan as the document keeps it (ADR-0054): the issue the
-    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
+    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts.
+    `depth` is how deep the part sits in the split (GH-592): 1 for a part of a task that is
+    not a part, 2 for a part of a part. Absent on a record written before parts could split
+    again, which reads as 1. `kind` (`change` or `migration`) and `guard` (how unfinished
+    behaviour stays unreachable, empty for none) are absent on a record written before them
+    (GH-592)."""
 
     title: str
     body: str
     depends_on: list[int]
+    depth: NotRequired[int]
+    kind: NotRequired[Literal["change", "migration"]]
+    guard: NotRequired[str]
 
 
 # Why a `full_checks` run that wanted GitHub CI ran the local full tier instead (GH-376): a
@@ -1516,6 +1574,26 @@ def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> lis
     return list(joined.values())
 
 
+class RestartPending(TypedDict):
+    """A clean restart (GH-593) the system started and has not finished: the subtask and the head
+    of the attempt it archives. Written by `restart.restart_patch`, so a stopped run resumes the
+    archive and the dispatch instead of repeating the decision."""
+
+    subtask: str
+    archived_head: str
+
+
+class RestartSettledRow(TypedDict):
+    """The open findings of `subtask` with a `version` below this one, settled by a restart as
+    `discarded` for the closed reason `restarted` (GH-593): the attempt that raised them is
+    archived. Per record, never per folded key, like `SettledRow`."""
+
+    subtask: str
+    version: int
+    outcome: Literal["discarded"]
+    reason: Literal["restarted"]
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -1525,6 +1603,9 @@ class TaskState(TaskInput, total=False):
     # The closed reason `escalated` is text for (`EscalationClass`); written only by
     # `rules.escalation`, together with `escalated`, and cleared with it on resume.
     escalation_class: Annotated[EscalationClass | None, last]
+    # The mechanical cause of that escalation when its raise site knew one (GH-593), written by
+    # `rules.escalation` with the class and copied to the pause log by `rules.logged`.
+    escalation_cause: Annotated[MechanicalCause | None, last]
     # One Markdown section per role, keyed by role name, holding the latest delivery.
     # A delivery superseded by a return stays under "<role> (vN)": the document is
     # the raw record of the task, and PjM escalates with the history (ADR-0006).
@@ -1578,6 +1659,11 @@ class TaskState(TaskInput, total=False):
     fit_question: Annotated[bool, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
+    # The size the plan declared and the size the delivery measured (GH-592), as the records
+    # `size_budget` defines; the document writes them under `size_budget`'s own keys. Absent
+    # on a document from before them, which reads as "no size", never as zero.
+    planned_size: Annotated[PlanSize, last]
+    actual_size: Annotated[ActualSize, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
     # Rules of the plan every subtask honours (issue #42): the one channel between
@@ -1607,6 +1693,18 @@ class TaskState(TaskInput, total=False):
     # derived from the subtask's status at read time. Applied per record by
     # `rules.findings_rows`, after `settled_findings`.
     approval_settled: Annotated[list[SettledRow], operator.add]
+    # The rows a clean restart discarded (`restart.restart_patch`, GH-593), appended in the patch
+    # that restarts and applied per record by `rules.findings_rows`.
+    restart_settled: Annotated[list[RestartSettledRow], operator.add]
+    # Clean restarts used per pair, keyed by the pair's key like `changes_requested` (GH-593).
+    # Written only by `restart.restart_patch`, in the same patch that zeroes the pair's returns.
+    restarts: Annotated[dict[str, int], merge]
+    # The restart in flight (`RestartPending`), `None` once its archive and dispatch finished.
+    restart_pending: Annotated[RestartPending | None, last]
+    # Runs of a section to forget when resuming a session, keyed by section (GH-593): the
+    # `version` of the section's last run at the restart. `rules.last_session` skips every run
+    # of the section at or below it, so a restarted Developer never resumes the archived attempt.
+    session_floor: Annotated[dict[str, int], merge]
     # Where a `PM: final validation` run settled its own earlier rows
     # (`plan_settlement.on_approval` / `on_return`), appended in that run's patch and never
     # derived from `runs` at read time. Applied per record by `rules.findings_rows`.
@@ -1740,6 +1838,11 @@ class TaskState(TaskInput, total=False):
     path_cause: PathCause
     path_label: PathLabel
     promotion: Promotion
+    # A promotion the plan node asked for (GH-591): the role's `promote` or `plan_over_cap`. The
+    # plan node is serialized, so the key needs no reducer; the system step after the model
+    # applies it through `task_path.promote` and clears it (sets `None`). Absent or `None` when
+    # nothing is pending.
+    plan_promote_request: PromoteRequest | None
     # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
     # Written once when the run starts, from the frozen entry, so no reducer; omitted from
     # the document when absent.

@@ -71,7 +71,14 @@ def test_a_plain_approval_is_what_the_reviewer_always_wrote():
     patch = rules.approval_patch(base, "a", delivered, 1, [], "head1")
     assert patch == {
         "approval_settled": [],
-        "subtasks": {"a": {**delivered, "reviewed_head": "head1", "status": "approved"}},
+        "subtasks": {
+            "a": {
+                **delivered,
+                "reviewed_head": "head1",
+                "status": "approved",
+                "approved_once": True,
+            }
+        },
     }
 
 

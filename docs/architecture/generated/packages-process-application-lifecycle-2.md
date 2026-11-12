@@ -25,6 +25,7 @@ graph TD
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_application__resume["application.resume"]
+    m_application__risk_net["application.risk_net"]
     m_application__schedule["application.schedule"]
     m_application__scratch_sweep["application.scratch_sweep"]
     m_application__stop["application.stop"]
@@ -37,6 +38,9 @@ graph TD
     m_application__resume --> g_domain__machine
     m_application__resume --> g_domain__state
     m_application__resume --> g_pkg__agentic__shared
+    m_application__risk_net --> g_application__support
+    m_application__risk_net --> g_domain__state
+    m_application__risk_net --> g_pkg__agentic__shared
     m_application__schedule --> g_application__support
     m_application__schedule --> g_domain__state
     m_application__schedule --> g_pkg__agentic__shared

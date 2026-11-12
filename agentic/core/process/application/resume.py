@@ -427,12 +427,23 @@ def disagreements(
 ) -> list[str]:
     """Where git no longer holds what the document says: a branch gone, a base that is
     not the one git recorded, an approved subtask whose branch moved after its review. A unit
-    named in `exempt` skips only that last check: its moved branch is an increment (GH-392)."""
+    named in `exempt` skips only that last check: its moved branch is an increment (GH-392).
+
+    The subtask `restart_pending` names (GH-593) is mid-restart: its branch was archived, or is
+    about to be, and the dispatch recreates it, so a missing branch or a moved head is the restart
+    and not a problem. Only that subtask, and only while the restart is pending."""
     problems = []
-    if (branch := state.get("branch")) and workspace.branch_head(branch) is None:
-        problems.append(f"task branch `{branch}` does not exist")
+    restarting = (state.get("restart_pending") or {}).get("subtask")
+    task_branch = state.get("branch")
+    if task_branch and workspace.branch_head(task_branch) is None:
+        # In a task of one subtask the task branch is the restarted one.
+        if not any(
+            sid == restarting and sub.get("branch") == task_branch
+            for sid, sub in state.get("subtasks", {}).items()
+        ):
+            problems.append(f"task branch `{task_branch}` does not exist")
     for sid, sub in state.get("subtasks", {}).items():
-        if not (branch := sub.get("branch")):
+        if not (branch := sub.get("branch")) or sid == restarting:
             continue
         head = workspace.branch_head(branch)
         if head is None:
@@ -511,7 +522,7 @@ def prepare(
         )
     if estimate is not None and paused.get("fit_question"):
         raise ValueError(
-            f"{task_id} is paused asking whether to build the part whole, not for an "
+            f"{task_id} is paused asking whether to narrow the part, not for an "
             "estimate: --estimate does not apply; comment on the issue and resume"
         )
     decision = None
@@ -620,7 +631,11 @@ def _fit_question(task_id: str, paused: TaskState) -> str:
     `rules.fit_question_text` wrote; rebuilt from the marker if the state lost it."""
     if asked := paused.get("escalated"):
         return asked
-    part_of = rules.split_part_of(paused.get("description", "")) or (task_id, 0)
+    part_of = rules.split_part_of(paused.get("description", "")) or (
+        task_id,
+        0,
+        rules.MAX_SPLIT_DEPTH,
+    )
     return rules.fit_question_text(task_id, part_of, None)
 
 

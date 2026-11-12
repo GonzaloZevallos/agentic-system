@@ -116,6 +116,9 @@ async def test_plan_repairs_a_markdown_missing_the_subtasks_heading(cfg):
             "integration": "",
             "estimated_cost_usd": 20.0,
             "estimated_files": 5,
+            "hand_files": 1,
+            "hand_lines": 10,
+            "test_lines": 10,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
         },
@@ -620,7 +623,12 @@ async def test_a_review_runs_on_its_own_subtask_and_nobody_else(cfg):
     assert "subtask `api`" in api["system_prompt"] and "You have 2 left" in api["system_prompt"]
     assert "## Developer: api\n\nx" in api["prompt"] and "## Developer: domain" not in api["prompt"]
     assert patch["subtasks"] == {
-        "api": {**state["subtasks"]["api"], "status": "approved", "reviewed_head": "base"}
+        "api": {
+            **state["subtasks"]["api"],
+            "status": "approved",
+            "reviewed_head": "base",
+            "approved_once": True,
+        }
     }
     assert patch["review_kind"] == "first"
     assert set(patch["sections"]) == {"Tech Lead: review api"}
@@ -832,6 +840,7 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
         **TASK,
         "subtasks": {"api": sub("api", "delivered", branch="b", base="x"), "b": sub("b")},
         "changes_requested": {"Tech Lead→Developer:api": 2},
+        "restarts": {"Tech Lead→Developer:api": 1},
         "subtask_id": "api",
     }
     patch = await review(
