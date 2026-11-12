@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules
+from ..domain import document, lead_time, rules
 from ..domain.roles import PJM, PM
 from ..domain.task import TaskState
 from .ports import Ports
@@ -36,6 +36,7 @@ async def discard(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         {
             "current_role": PJM.name,
             **rules.finished("discarded", datetime.now(UTC).isoformat(timespec="seconds")),
+            **lead_time.NO_MERGE,
             **({"reaped_at_cleanup": list(reaped)} if reaped else {}),
         },
         ports,

@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, pull_request, rules
+from ..domain import document, lead_time, pull_request, rules
 from ..domain.roles import PJM
 from ..domain.task import WAITING_ON_HUMAN, PartRecord, TaskState, apply
 from .ports import Ports
@@ -124,7 +124,9 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     except (ValueError, OSError) as exc:
         return _stopped(current, "commenting the list of parts", exc, ports, _LEFT_COMMENT)
     ended = rules.finished("split", datetime.now(UTC).isoformat(timespec="seconds"))
-    return finish(current, {"current_role": PJM.name, **carried, **ended}, ports)
+    return finish(
+        current, {"current_role": PJM.name, **carried, **ended, **lead_time.NO_MERGE}, ports
+    )
 
 
 def _checklist(

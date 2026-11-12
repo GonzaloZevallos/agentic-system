@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules
+from ..domain import document, lead_time, rules
 from ..domain.roles import PJM
 from ..domain.task import TaskState, TrackerPosted
 from .ports import Ports
@@ -89,6 +89,7 @@ async def tracker_only(state: TaskState, cfg: Configuration, ports: Ports) -> Ta
         {
             "current_role": PJM.name,
             **ended,
+            **lead_time.NO_MERGE,
             **({"tracker_checklist_posted": record} if record else {}),
             **({"reaped_at_cleanup": list(reaped)} if reaped else {}),
         },

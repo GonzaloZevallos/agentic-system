@@ -80,6 +80,7 @@ from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
+    LabelTimeline,
     Launcher,
     LockHeld,
     LockRecord,
@@ -114,6 +115,7 @@ from .core.process.application.stack_review import stack_review as run_stack_rev
 from .core.process.domain import document as task_document
 from .core.process.domain import (
     experiment,
+    lead_time,
     legacy_names,
     reaping,
     rules,
@@ -833,13 +835,20 @@ def main() -> None:
             )
         elif args.command == "close":
             if args.all:
-                work = partial(_close_all, cfg, ports)
+                work = partial(_close_all, cfg, ports, composition.label_timeline(cfg))
             else:
                 task_id = ports.inbox.task_id(args.issue)
-                work = partial(_close, task_id, cfg, ports)
+                work = partial(_close, task_id, cfg, ports, composition.label_timeline(cfg))
         elif args.command == "merge":
             task_id = ports.inbox.task_id(args.issue)
-            work = partial(_merge, task_id, args.issue, cfg, bind_task(ports, task_id))
+            work = partial(
+                _merge,
+                task_id,
+                args.issue,
+                cfg,
+                bind_task(ports, task_id),
+                composition.label_timeline(cfg),
+            )
         elif args.command == "land":
             task_id = ports.inbox.task_id(args.issue)
             work = partial(_land, task_id, cfg, bind_task(ports, task_id), args.run_kind)
@@ -2027,8 +2036,36 @@ def _warn(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+# The label whose last addition starts a task's lead time (GH-599): the one that hands it to the
+# system.
+LEAD_TIME_LABEL = "agentic"
+
+
+def _read_lead_time(
+    task_id: str,
+    ports: Ports,
+    pull_request: PullRequest,
+    label_timeline: LabelTimeline | None,
+) -> lead_time.LeadTime:
+    """The lead time of a merged pull request (GH-599): the last addition of `agentic` to the
+    task's issue and the pull request's own `mergedAt`. A task with no issue, no port or a read
+    that gives nothing is `unreadable`; the read never fails a close."""
+    issue = ports.inbox.issue_of(task_id)
+    read = (
+        label_timeline.label_added_at(issue, LEAD_TIME_LABEL)
+        if label_timeline is not None and issue is not None
+        else None
+    )
+    return lead_time.from_read(read, pull_request.merged_at)
+
+
 def _close_document(
-    task_id: str, cfg: Configuration, ports: Ports, scorer: LangfuseScores | None = None
+    task_id: str,
+    cfg: Configuration,
+    ports: Ports,
+    scorer: LangfuseScores | None = None,
+    *,
+    label_timeline: LabelTimeline | None = None,
 ) -> _ClosureOutcome:
     """The closure of one task: read -> ask `gh` -> write, the body `_close` used to
     run inline and `_close_all`'s sweep now shares (Tech Lead plan, subtask
@@ -2064,7 +2101,7 @@ def _close_document(
             "tracker_error", f"{task_id}: could not read its pull request ({reference})"
         )
     if closed:
-        return _backfill_merge_commit(task_id, raw, pull_request, ports)
+        return _backfill_merge_commit(task_id, raw, pull_request, ports, label_timeline)
     if pull_request.state == "OPEN":
         return _ClosureOutcome(
             "still_open", f"{task_id}: the pull request is still open; nothing to close"
@@ -2098,6 +2135,14 @@ def _close_document(
     # ADR-0054: the files the pull request changed, next to the estimate; a pull request that
     # never merged still has a count, and an unreadable one leaves the key out.
     patch: dict[str, object] = {**values, **files_patch(reference, ports, _warn)}
+    # GH-599: the lead time, once. A key already on the document (any style) is never touched;
+    # a pull request closed without merging has no end and says so without reading the port.
+    if lead_time.LEAD_TIME_KEY not in raw:
+        patch[lead_time.LEAD_TIME_KEY] = (
+            _read_lead_time(task_id, ports, pull_request, label_timeline)
+            if pull_request.state == "MERGED"
+            else lead_time.NO_MERGE[lead_time.LEAD_TIME_KEY]
+        )
     # GH-592: a pull request a person merged has no `actual_size` yet (the auto-merge records
     # it when it merges). The merge commit's first parent is the three-dot upstream there;
     # an unreadable diff leaves the key out, as `actual_files` does.
@@ -2143,19 +2188,29 @@ def _score_closed(
 
 
 def _backfill_merge_commit(
-    task_id: str, raw: Mapping[str, object], pull_request: PullRequest, ports: Ports
+    task_id: str,
+    raw: Mapping[str, object],
+    pull_request: PullRequest,
+    ports: Ports,
+    label_timeline: LabelTimeline | None = None,
 ) -> _ClosureOutcome:
     """A document closed as merged before `merge_commit` existed gets that one key and
     nothing else: `closed_at`, `delivery_outcome`, `human_commits`,
     `human_lines_changed` and `time_to_merge_seconds` are never rewritten (ADR-0038).
     When `gh` has no merge commit to give, nothing is written and the document reads as
-    already closed."""
+    already closed. GH-599: the same write replaces a lead time of `{unknown: no_merge}` when
+    the pull request is now merged, and no other stored value."""
     if not pull_request.merge_commit:
         return _ClosureOutcome(
             "already_closed",
             f"{task_id} already closed on {raw['closed_at']}; its pull request has no merge commit",
         )
-    path = ports.documents.record_closure(task_id, {"merge_commit": pull_request.merge_commit})
+    patch: dict[str, object] = {"merge_commit": pull_request.merge_commit}
+    if pull_request.state == "MERGED" and lead_time.replaceable(raw.get(lead_time.LEAD_TIME_KEY)):
+        patch[lead_time.LEAD_TIME_KEY] = _read_lead_time(
+            task_id, ports, pull_request, label_timeline
+        )
+    path = ports.documents.record_closure(task_id, patch)
     return _ClosureOutcome(
         "backfilled",
         f"{task_id}: merge_commit backfilled ({pull_request.merge_commit})",
@@ -2223,7 +2278,13 @@ def _fast_forward_notice(
     return block, [f"agentic: poll: product checkout {cannot}"]
 
 
-async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> None:
+async def _merge(
+    task_id: str,
+    issue: int,
+    cfg: Configuration,
+    ports: Ports,
+    label_timeline: LabelTimeline | None = None,
+) -> None:
     """`agentic merge --issue N` (GH-178, ADR-0045): the task's pull request merged when
     `rules.auto_merge_decision` says so, after the checks ran on its head merged with the
     upstream. Under the task's own run lock and registered like any run; spends no model
@@ -2247,8 +2308,13 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
             _upstream_eval_set(ports, upstream),
             lambda line: print(line, flush=True),
             registry=_registry_for(cfg),
+            label_timeline=label_timeline,
         )
-        closed = _close_document(task_id, cfg, ports) if result.kind == "merged" else None
+        closed = (
+            _close_document(task_id, cfg, ports, label_timeline=label_timeline)
+            if result.kind == "merged"
+            else None
+        )
     suffix = f": {result.reason}" if result.reason else ""
     print(f"agentic: merge: {task_id} -> {result.kind}{suffix}", flush=True)
     if closed is not None and closed.status != "closed":
@@ -2379,7 +2445,12 @@ async def _land(
     print(f"agentic: land: {task_id} -> {result.kind}{suffix}", flush=True)
 
 
-async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
+async def _close(
+    task_id: str,
+    cfg: Configuration,
+    ports: Ports,
+    label_timeline: LabelTimeline | None = None,
+) -> None:
     """`agentic close --issue N`: the human's verdict on a task's pull request, read
     through `gh` and recorded once. Runs no role and opens no span (`preflight` never
     runs here either); the refusal it still checks before touching a document is the
@@ -2399,7 +2470,7 @@ async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
         raise CannotStart(str(exc)) from exc
     lock = _lock_for(cfg)
     with _locked(lock, task_id):
-        result = _close_document(task_id, cfg, ports)
+        result = _close_document(task_id, cfg, ports, label_timeline=label_timeline)
     if result.status == "backfilled":
         print(f"agentic: {result.message}")
         print(f"doc:                 {result.path}")
@@ -2415,7 +2486,9 @@ async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
     print("agentic: document written, not committed")
 
 
-async def _close_all(cfg: Configuration, ports: Ports) -> None:
+async def _close_all(
+    cfg: Configuration, ports: Ports, label_timeline: LabelTimeline | None = None
+) -> None:
     """`agentic close --all [--product-dir PATH]`: sweeps every task document with a
     `pull_request` and no `closed_at` -- exactly `_refuse_open_pull_request`'s own
     reading of "not yet closed", so the two commands agree -- and closes each one
@@ -2484,7 +2557,7 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
             remaining.append(label)
             continue
         with _locked(lock, task_id):
-            result = _close_document(task_id, cfg, ports)
+            result = _close_document(task_id, cfg, ports, label_timeline=label_timeline)
         if result.status == "closed":
             print(f"agentic: {label}: closed ({result.outcome})")
             closed.append(label)
