@@ -285,6 +285,25 @@ def test_the_template_keeps_parallel_checks_commented_out():
     assert "parallel_checks" in stack.TEMPLATE.read_text(encoding="utf-8")
 
 
+# -- `adr_naming`: how the product names its ADRs (GH-611) --------------------------------
+
+
+@pytest.mark.parametrize("value", ["numbered", "dated"])
+def test_adr_naming_reads_a_declared_value_as_it_is(value):
+    assert stack.adr_naming({"checks": {"tests": "pytest"}, "adr_naming": value}, "x") == value
+
+
+def test_a_product_that_does_not_declare_adr_naming_numbers_its_adrs():
+    assert stack.adr_naming({"checks": {"tests": "pytest"}}, "x") == "numbered"
+
+
+@pytest.mark.parametrize("value", ["date", "Dated", "", None, True, 1, ["dated"], {"dated": 1}])
+def test_an_adr_naming_that_is_not_a_known_value_is_an_error_never_numbered(value):
+    declared = {"checks": {"tests": "pytest"}, "adr_naming": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `adr_naming`.*numbered.*dated"):
+        stack.adr_naming(declared, "stack.yaml")
+
+
 # -- `ci`: the check-run names that gate a merge when GitHub's CI is trusted (ADR-0045) --
 
 

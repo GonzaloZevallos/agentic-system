@@ -116,6 +116,11 @@ also reads `check_budgets`, `delivery_checks`, `affected_checks` and `rerun_chec
 above the ceiling `Configuration.verification_wall_max_s` is refused at preflight, never
 clipped. Absent they read as `{}`.
 
+**`adr_naming`**: optional (GH-611). `numbered` or `dated`: whether the product names its ADRs
+`NNNN-slug.md` or `yyyymmdd-slug.md`. The landing of a branch reads it at master, never from the
+file names: on a `dated` product a branch's numbered ADR is renamed to the dated form instead of
+renumbered. Absent it reads as `numbered`, the numbering of today; any other value fails at load.
+
 **`performance`**: optional (GH-318, ADR-0059). A mapping of scenario name to the `seed` and
 `measure` one-line commands, the `volume` and its `volume_unit` (`rows|days|months|years`)
 they must run against, and the `limits` of its metrics (`{limit, unit: ms|queries|kb}`; the
@@ -164,7 +169,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Protocol, TypeGuard
+from typing import Any, Literal, Protocol, TypeGuard
 
 from agentic.core.process.domain import master_gain
 from agentic.core.process.domain import performance as perf
@@ -211,6 +216,7 @@ KEYS = (
     "verifications",
     "check_timeouts",
     "not_ready_exit",
+    "adr_naming",
 )
 # The six risk ids every product has (GH-591). The process side defines its own `BUILTIN_RISKS`
 # and a test pins the two equal: this tuple is only here so `risk_areas` can refuse a repeat.
@@ -482,6 +488,25 @@ def parallel_checks(data: object, source: object) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{source}: expected `parallel_checks` to be true or false, a boolean")
     return value
+
+
+ADR_NAMINGS = ("numbered", "dated")
+
+
+def adr_naming(data: object, source: object) -> Literal["numbered", "dated"]:
+    """How the product names its ADRs (GH-611): `numbered` (`NNNN-slug.md`) or `dated`
+    (`yyyymmdd-slug.md`). A key absent is `numbered`, every product of today; present, it must be
+    one of the two words, spelt so: a typo that quietly read as `numbered` would leave a dated
+    product renumbering its ADRs, the loop the key exists to end."""
+    declared = _declared(data, source)
+    if "adr_naming" not in declared:
+        return "numbered"
+    value = declared["adr_naming"]
+    if value == "dated":
+        return "dated"
+    if value == "numbered":
+        return "numbered"
+    raise ValueError(f"{source}: expected `adr_naming` to be one of {ADR_NAMINGS}, not {value!r}")
 
 
 def ci(data: object, source: object) -> tuple[str, ...]:
@@ -1405,5 +1430,14 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         Computed(),
         "mapping of check or verification name to the exit code (1 to 255) that says the "
         "environment was not ready",
+    ),
+    KeyReference(
+        "adr_naming",
+        adr_naming,
+        (),
+        Computed(),
+        "`numbered` or `dated`: how the product names its ADRs (`NNNN-slug.md` or "
+        "`yyyymmdd-slug.md`); on `dated`, landing renames a branch's numbered ADR to the dated "
+        "form instead of renumbering it",
     ),
 )

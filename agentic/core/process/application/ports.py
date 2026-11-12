@@ -598,6 +598,15 @@ class ProductStack(Protocol):
         broken, or a glob is refused by `master_gain.glob_refusal`."""
         ...
 
+    def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
+        """How the product names its ADRs (`core.knowledge`, GH-611), as the commit `revision`
+        declares it: `dated` renames a branch's numbered ADR to `yyyymmdd-slug.md` at landing,
+        `numbered` renumbers it. Opt-in: `numbered` when the key is absent -- the landing of
+        today byte for byte -- and also when the revision cannot be read (not fetched, no file,
+        YAML that does not parse): it never raises for those and never infers the answer from
+        file names. Raises `ValueError` when the key is there with any other value."""
+        ...
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         """The areas of risk the product declares for classification (`core.knowledge`), as the
         commit `revision` declares them, in file order. Empty when the key is absent. Raises

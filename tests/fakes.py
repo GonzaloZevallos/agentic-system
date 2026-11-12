@@ -10,7 +10,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
 from agentic.core.knowledge.domain import knowledge
@@ -439,6 +439,7 @@ class MemoryStack:
         check_timeouts: dict[str, float] | None = None,
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
+        adr_naming: Literal["numbered", "dated"] = "numbered",
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -508,6 +509,11 @@ class MemoryStack:
         # text makes `risk_areas` raise it as a `ValueError`, the way a broken key does.
         self.declared_risk_areas = risk_areas
         self.risk_areas_error: str | None = None
+        # GH-611: how the product names its ADRs, by revision (`adr_naming_at` overrides the
+        # default for one), and each revision asked: a test counts the reads.
+        self.declared_adr_naming = adr_naming
+        self.adr_naming_at: dict[str, Literal["numbered", "dated"]] = {}
+        self.adr_naming_reads: list[str] = []
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -582,6 +588,10 @@ class MemoryStack:
         if self.merge_inert_error is not None:
             raise ValueError(self.merge_inert_error)
         return self.declared_merge_inert
+
+    def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
+        self.adr_naming_reads.append(revision)
+        return self.adr_naming_at.get(revision, self.declared_adr_naming)
 
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
