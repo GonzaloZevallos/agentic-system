@@ -593,3 +593,80 @@ def test_a_renamed_head_owing_its_review_gets_it_without_spending_a_pass():
     spent = _spent(passes=landing.LANDING_PASSES_MAX, adr_review_owed=owed)
 
     assert _review_step(spent) == LandingStep("re_review", "head_not_reviewed")
+
+
+# --- the verdict's validity (GH-612) ------------------------------------------------------------
+
+DIAGNOSED = "2026-10-23T09:00:00+00:00"
+ESCALATED = {"kind": "escalation", "value": "failure", "at": "2026-10-23T09:05:00+00:00"}
+RESUMED = {"kind": "resumed", "at": "2026-10-23T11:00:00+00:00"}
+NEWER = "d" * 40
+
+
+def _entry(**over) -> dict:
+    return {"step": "diagnose", "head": HEAD, "at": DIAGNOSED, "delivered": True, **over}
+
+
+def _in_force(entry=None, head=HEAD, escalated=False, log=()) -> bool:
+    return landing.verdict_in_force(entry or _entry(), head, escalated, list(log))
+
+
+def test_an_unlandable_verdict_binds_on_the_same_head_with_no_release():
+    assert _in_force() is True
+    assert _in_force(log=[ESCALATED]) is True
+    assert _in_force(escalated=True, log=[ESCALATED]) is True
+
+
+def test_a_landing_release_frees_the_verdict():
+    assert _in_force(_entry(released_at="2026-10-23T10:00:00+00:00")) is False
+
+
+def test_a_resume_after_the_escalation_frees_the_verdict_unless_the_task_is_escalated_again():
+    assert _in_force(log=[ESCALATED, RESUMED]) is False
+    assert _in_force(escalated=True, log=[ESCALATED, RESUMED]) is True
+
+
+def test_a_resume_before_the_escalation_does_not_free_it():
+    early = {"kind": "resumed", "at": "2026-10-23T09:02:00+00:00"}
+    assert _in_force(log=[early, ESCALATED]) is True
+    before_the_diagnosis = {"kind": "resumed", "at": "2026-10-23T08:00:00+00:00"}
+    assert _in_force(log=[before_the_diagnosis, ESCALATED]) is True
+
+
+def test_without_a_readable_escalation_the_resume_is_compared_to_the_diagnosis():
+    assert _in_force(log=[RESUMED]) is False
+    assert _in_force(log=[{"kind": "escalation", "value": "failure"}, RESUMED]) is False
+    assert _in_force(log=[{"kind": "resumed", "at": "2026-10-23T08:00:00+00:00"}]) is True
+
+
+@pytest.mark.parametrize("at", ["yesterday", "2026-10-23T09:00:00", None, 5])
+def test_an_unreadable_or_naive_instant_leaves_the_verdict_binding(at):
+    assert _in_force(_entry(at=at), log=[ESCALATED, RESUMED]) is True
+    assert _in_force(log=[ESCALATED, {"kind": "resumed", "at": at}]) is True
+
+
+def test_instants_are_compared_as_datetimes_not_as_text():
+    # 12:00+05:00 is 07:00Z: earlier than a 09:05Z escalation, though it sorts after as text.
+    shifted = {"kind": "resumed", "at": "2026-10-23T12:00:00+05:00"}
+    assert _in_force(log=[ESCALATED, shifted]) is True
+
+
+def test_a_new_head_frees_the_verdict_only_when_the_task_is_not_escalated():
+    assert _in_force(head=NEWER) is False
+    assert _in_force(head=NEWER, escalated=True) is True
+
+
+def test_a_head_is_compared_as_a_commit_not_as_text():
+    assert _in_force(_entry(head=HEAD[:12]), head=HEAD) is True
+
+
+def test_an_entry_without_a_head_or_a_head_that_cannot_be_read_binds():
+    assert _in_force(_entry(head=None), head=NEWER) is True
+    assert _in_force(head=None) is True
+
+
+def test_unlandable_needs_the_verdict_in_force():
+    spent = _spent(diagnoses=1, last_verdict=VERDICT_UNLANDABLE)
+    assert spent.verdict_in_force is True and spent.unlandable is True
+    assert replace(spent, verdict_in_force=False).unlandable is False
+    assert replace(_spent(diagnoses=1), verdict_in_force=False).unlandable is False

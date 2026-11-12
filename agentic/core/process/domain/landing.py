@@ -294,11 +294,67 @@ class LandingSpent:
     # (`adr_review_owed`): that one `re_review` is not refused by `LANDING_PASSES_MAX`, though it
     # counts as a pass.
     adr_review_owed: bool = False
+    # Whether the `unlandable` verdict still binds (`verdict_in_force`): `False` once a human
+    # released the escalation it raised, or the head moved on a task that is not escalated.
+    # `True` when there is no such verdict to read. It never refills a budget.
+    verdict_in_force: bool = True
 
     @property
     def unlandable(self) -> bool:
-        """A diagnosis was delivered and the latest one does not name a sync: the human's."""
-        return self.diagnoses > 0 and self.last_verdict != VERDICT_SYNC
+        """A diagnosis was delivered, the latest one does not name a sync and its verdict still
+        binds: the human's."""
+        return self.diagnoses > 0 and self.last_verdict != VERDICT_SYNC and self.verdict_in_force
+
+
+def verdict_in_force(
+    entry: Mapping[str, object],
+    head: str | None,
+    escalated: bool,
+    pause_log: object,
+) -> bool:
+    """Whether the `unlandable` verdict of `entry` (the latest delivered `diagnose` that read
+    as such) still binds. The one place that decides it. It stops binding only when
+
+    - the landing released it (`released_at`), or
+    - the task is not `escalated` and a `resumed` entry of `pause_log` is later than the
+      escalation that followed the diagnosis (the first `escalation` entry at or after its
+      `at`; without a readable one, than the diagnosis itself), or
+    - the task is not `escalated`, the entry names a head and `head` is a readable different
+      commit (`rules.same_commit`).
+
+    Every instant is compared as an aware datetime: one that cannot be read, or has no offset,
+    leaves the verdict binding. While the task is `escalated`, a new head does not free it.
+    No release refills any budget."""
+    if entry.get("released_at"):
+        return False
+    if escalated:
+        return True
+    entry_head = entry.get("head")
+    if isinstance(entry_head, str) and head is not None and not rules.same_commit(entry_head, head):
+        return False
+    return not _resumed_after(_aware(entry.get("at")), pause_log)
+
+
+def _resumed_after(diagnosed: datetime | None, pause_log: object) -> bool:
+    """A `resumed` entry of `pause_log` is later than the escalation that followed the
+    diagnosis made at `diagnosed` (or than the diagnosis, with no readable escalation)."""
+    if diagnosed is None or not isinstance(pause_log, list):
+        return False
+    log = [e for e in pause_log if isinstance(e, Mapping)]
+    anchor = next(
+        (
+            at
+            for e in log
+            if e.get("kind") == "escalation"
+            and (at := _aware(e.get("at"))) is not None
+            and at >= diagnosed
+        ),
+        diagnosed,
+    )
+    return any(
+        e.get("kind") == "resumed" and (at := _aware(e.get("at"))) is not None and at > anchor
+        for e in log
+    )
 
 
 def landing_step(
