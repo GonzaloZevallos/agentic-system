@@ -16,8 +16,11 @@ from collections.abc import Mapping
 
 PHASES: Mapping[str, tuple[str, ...]] = {
     "build": (
+        "fix_important",
         "integrate",
+        "owner_rules",
         "pipeline",
+        "verify",
     ),
     "classify": (
         "__start__",
@@ -26,13 +29,15 @@ PHASES: Mapping[str, tuple[str, ...]] = {
     "define": (
         "consolidate",
         "define",
-        "design_review",
         "diagnose",
         "discard",
+        "validate",
+    ),
+    "design": (
+        "design_review",
         "ui_screens",
         "ux_flow",
         "ux_walk",
-        "validate",
         "write_copy",
     ),
     "deliver": (
@@ -44,11 +49,6 @@ PHASES: Mapping[str, tuple[str, ...]] = {
         "plan",
         "split",
         "tracker_only",
-    ),
-    "review": (
-        "fix_important",
-        "owner_rules",
-        "verify",
     ),
 }
 
@@ -108,15 +108,18 @@ CLUSTERS: Mapping[str, str] = {
     "application.pre_pr_fix": "build",
     "application.preflight": "support",
     "application.presubmit": "checks",
+    "application.promotion": "build",
     "application.qa_performance": "definition",
     "application.reflect": "reflection",
     "application.reflect_run": "reflection",
     "application.registration": "lifecycle",
+    "application.relabel": "lifecycle",
     "application.release": "support",
     "application.restore": "lifecycle",
     "application.resume": "lifecycle",
     "application.review": "build",
     "application.review_scope": "build",
+    "application.risk_net": "lifecycle",
     "application.run_check": "checks",
     "application.run_role": "support",
     "application.schedule": "lifecycle",
@@ -157,6 +160,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.merge_ci": "checks",
     "domain.merge_conflict": "checks",
     "domain.performance": "checks",
+    "domain.plan_revision": "landing",
     "domain.plan_route": "landing",
     "domain.plan_settlement": "landing",
     "domain.plan_view": "landing",

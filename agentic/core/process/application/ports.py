@@ -1333,6 +1333,12 @@ class Workspace(Protocol):
         pull request changes against the commit it branched from. Raises `GitError`."""
         ...
 
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        """Every path `git diff --name-only --no-renames -z <base>...<head>` names (GH-591): a
+        rename is its old and its new path, a deletion is listed. What the `risk_hits` net
+        matches against the product's `risk_areas` globs. Raises `GitError`."""
+        ...
+
     def changed_lines(self, base: str, head: str) -> int:
         """The lines added plus the lines deleted between `base` and `head`
         (`git diff --numstat --no-renames <base>...<head>`, GH-473): how big a subtask's

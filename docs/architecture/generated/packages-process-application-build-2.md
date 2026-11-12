@@ -21,6 +21,7 @@ graph TD
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
     m_application__pre_pr_fix["application.pre_pr_fix"]
+    m_application__promotion["application.promotion"]
     m_application__review["application.review"]
     m_application__review_scope["application.review_scope"]
     m_application__shadow_review["application.shadow_review"]
@@ -30,10 +31,12 @@ graph TD
     m_application__pre_pr_fix --> g_application__support
     m_application__pre_pr_fix --> g_pkg__agentic__shared
     m_application__pre_pr_fix --> g_pkg__domain
+    m_application__promotion --> g_pkg__domain
     m_application__review --> g_application__checks
     m_application__review --> g_application__support
     m_application__review --> g_pkg__agentic__shared
     m_application__review --> g_pkg__domain
+    m_application__review --> m_application__promotion
     m_application__review --> m_application__review_scope
     m_application__review --> m_application__shadow_review
     m_application__review_scope --> g_application__support

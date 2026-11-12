@@ -70,6 +70,27 @@ Tech Lead nunca codea. Tiene dos modos: por tarea, y proactivo sobre el repo.
 
 PjM clasifica toda tarea entrante como **bug**, **feature** o **platform enhancement**.
 
+### Camino ligero y camino completo
+
+Además del tipo, PjM declara el tamaño y los riesgos de la tarea, y `task_path.path_for` decide el
+camino: **`light`** (una tarea pequeña, sin riesgo, o con la etiqueta del dueño `path:light`) o
+**`full`**, el de este documento. Lo que falta o no se entiende da siempre `full`. Una feature o un
+bug en `light` va de la clasificación directo al plan: sin definición, validación de PM, diagnóstico,
+rama de diseño ni textos; tampoco corren la validación final de PM, la revisión de textos ni QA de
+performance, y su plan no convoca `performance` ni pasa de 2 subtareas. La puerta de merge no cambia.
+
+Una tarea `light` sube a `full` por **promoción**, una sola vez y nunca al revés: la pide Tech Lead
+(en el plan o en una revisión) o el Developer con la línea `promote`; la pide el sistema sin gastar
+modelo cuando el diff de una entrega toca un glob de `risk_areas.paths` (`risk_hits`) o cuando el plan
+trae más de 2 subtareas (`plan_over_cap`); y la pide el dueño con la etiqueta `path:full`, que se relee
+al reanudar (`relabel`; `path:light` no degrada una tarea ya promovida). Ningún rol ni rama aplica la
+promoción: dejan un `promote_request` y el turno serializado del sistema (el fan-in, o el paso del
+nodo del plan) aplica el primero en un orden fijo: `risk_area`, `role`, `plan_over_cap`. Una promoción
+no borra ni reinicia ninguna rama: una feature vuelve a `define` y un bug a `diagnose`, luego el plan se
+**revisa** (cada subtarea que no cambia conserva su estado y su cabeza revisada) y una plataforma solo
+levanta el tope. Con `path:light` el sistema no promueve y lo avisa; el plan que pasa de 2 subtareas se
+rechaza.
+
 ### Feature
 
 ```

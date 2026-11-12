@@ -41,9 +41,9 @@ Flujos clave, como diagramas de secuencia:
   una página por fase:
   [classify](architecture/generated/role-graph-classify.md),
   [define](architecture/generated/role-graph-define.md),
+  [design](architecture/generated/role-graph-design.md),
   [plan](architecture/generated/role-graph-plan.md),
-  [build](architecture/generated/role-graph-build.md),
-  [review](architecture/generated/role-graph-review.md),
+  [build](architecture/generated/role-graph-build.md) (con review),
   [deliver](architecture/generated/role-graph-deliver.md),
   [escalado y reanudación](architecture/generated/role-graph-escalation.md) y
   [land](architecture/generated/role-graph-land.md).

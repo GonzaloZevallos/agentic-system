@@ -56,7 +56,11 @@ sequenceDiagram
 4. **Camino.** `classify` (PjM) elige el tipo: feature, bug o platform enhancement
    (README.md, sección 2). Una feature pasa por `define` (Product Analyst) y `validate`
    (PM) antes de `plan` (Tech Lead); un bug reemplaza la definición por `diagnose`; un
-   platform enhancement la salta. Las aristas están en
+   platform enhancement la salta. Una feature o un bug en el camino ligero (`path: light`,
+   ver `agentic/core/process/domain/task_path.py:path_of`) va de `classify` directo a `plan`
+   (`agentic/core/process/domain/rules.py:after_classify`); una promoción a `full` lo manda de
+   vuelta a `define` o `diagnose` (`agentic/core/process/domain/rules.py:promotion_route`) y
+   el plan se revisa sin tocar las ramas. Las aristas están en
    `agentic/core/process/adapters/langgraph/graph.py:build_graph` y sus reglas en
    `agentic/core/process/domain/rules.py`.
 5. **Desarrollo.** El nodo `pipeline` corre, por cada subtarea, el subgrafo `develop` →

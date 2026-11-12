@@ -37,7 +37,7 @@ from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, Red
 from .reaping import ReapedProcess
 from .size_budget import ActualSize, PlanSize
 from .task_path import Path as TaskPath
-from .task_path import PathCause, PathLabel, Promotion
+from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 
 Status = Literal[
     "open",
@@ -501,6 +501,8 @@ class PlanRoute(TypedDict):
     route: Route
     misrouted: bool
     critic: CriticState
+    # True when a promotion re-planned the task (GH-591): the plan revised, no new interview.
+    after_promotion: NotRequired[bool]
 
 
 class EvaluationRef(TypedDict):
@@ -1040,6 +1042,15 @@ class Subtask(TypedDict, total=False):
     # touched, and on every document written before this task existed — every read is
     # `.get("conflicted_paths", [])`.
     conflicted_paths: list[str]
+    # A promotion this subtask's branch asked for (GH-591, `task_path.record_request`): the
+    # Developer, its review or the `risk_hits` net leave it here, in the branch's own key, and
+    # only serialized system code applies it. Absent on a subtask that asked for nothing and on
+    # every document written before this key existed -- every read is `.get("promote_request")`.
+    promote_request: PromoteRequest
+    # Set by `plan_revision.revise` on a final unit whose work was approved before a
+    # promotion re-planned the task and whose brief did not change: its review is a full
+    # one against the new PRD. Absent everywhere else.
+    prd_recheck: bool
     # Set by the approval patch (`rules.approval_patch`) and never cleared by any patch (GH-593):
     # the subtask was once approved, so a restart cannot throw away reviewed-good work.
     approved_once: bool
@@ -1827,6 +1838,11 @@ class TaskState(TaskInput, total=False):
     path_cause: PathCause
     path_label: PathLabel
     promotion: Promotion
+    # A promotion the plan node asked for (GH-591): the role's `promote` or `plan_over_cap`. The
+    # plan node is serialized, so the key needs no reducer; the system step after the model
+    # applies it through `task_path.promote` and clears it (sets `None`). Absent or `None` when
+    # nothing is pending.
+    plan_promote_request: PromoteRequest | None
     # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
     # Written once when the run starts, from the frozen entry, so no reducer; omitted from
     # the document when absent.

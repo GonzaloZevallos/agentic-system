@@ -290,5 +290,8 @@ Everything goes in the structured output, in one call:
 - `reason`: one line, why: on `returned`, what the Developer must fix first; on an
   approval what you verified. Not the verdict itself; the system writes it.
 - `findings`: every finding, most severe first; an empty list if none.
+- `promote`: leave it out unless the task turned out not small, or it touches a risk area of the
+  product: then one line, at most 240 characters, saying why it needs the full path. The system
+  applies it once; a refusal, noted in your section, is final for this task: do not ask again.
 - `markdown`: the full section above, in Markdown.
 </Output>

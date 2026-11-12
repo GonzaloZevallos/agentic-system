@@ -111,10 +111,11 @@ def test_a_control_arm_document_renders_as_it_did():
 # GH-592 added the size budget paragraph and the three size fields to both, so they moved a
 # third time; GH-592 split-depth reworded the `### Parts` step (a part splits again, no
 # build-whole sentence) and moved them a fourth; everything else about the default path is
-# unchanged.
+# unchanged. GH-591 part 2 added the `promote` line to the Output list of both, so they
+# moved a fifth time.
 PROMPT_GOLDENS = {
-    "tech_lead": "6260e92519e78f103d1e1171b5a0dcba6efeec4d4554d4bea7afc275b18af447",
-    "tech_lead_platform": "053219a7c9c3c2d9be77b0aba082bee8dfea46c8187a4d931f9551333807be0a",
+    "tech_lead": "e69c61303f34291f961ec4b28881e7646de0d6c2e71a643dc0755b88682b0024",
+    "tech_lead_platform": "3d40a037948b92a051e18dc4eda4b020804063fc90dcee165b8bea0d6c60fcbe",
 }
 
 

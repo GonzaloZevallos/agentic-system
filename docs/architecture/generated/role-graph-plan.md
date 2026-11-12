@@ -6,9 +6,9 @@ Esta página muestra los nodos de la fase `plan` del grafo de roles y las arista
   - [classify](role-graph-classify.md)
   - [define](role-graph-define.md)
   - [deliver](role-graph-deliver.md)
+  - [design](role-graph-design.md)
   - [Escalado y reanudación](role-graph-escalation.md)
   - [land](role-graph-land.md)
-  - [review](role-graph-review.md)
 
 ```mermaid
 graph TD
@@ -16,12 +16,15 @@ graph TD
     phase_build["build (fase)"]
     phase_classify["classify (fase)"]
     phase_define["define (fase)"]
+    phase_design["design (fase)"]
     plan["plan"]
     split["split"]
     tracker_only["tracker_only"]
     phase_classify -.-> plan
     phase_define -.-> plan
+    phase_design -.-> plan
     plan -.-> phase_build
+    plan -.-> phase_define
     plan -.-> split
     plan -.-> tracker_only
     split -.-> __end__

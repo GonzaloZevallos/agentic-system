@@ -47,6 +47,7 @@ graph TD
     m_domain__rules --> m_domain__restart
     m_domain__rules --> m_domain__size_budget
     m_domain__rules --> m_domain__task
+    m_domain__rules --> m_domain__task_path
     m_domain__size_budget --> g_domain__checks
     m_domain__task --> g_domain__checks
     m_domain__task --> g_domain__landing

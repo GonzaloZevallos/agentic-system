@@ -1215,6 +1215,46 @@ def test_a_review_without_a_revision_validates_and_a_cited_one_needs_a_one_line_
             schemas.Review.model_validate(_review(**bad))
 
 
+@pytest.mark.parametrize("schema", [TechPlan, schemas.Review, schemas.Delivery])
+def test_promote_is_optional_one_line_of_at_most_240_characters(schema):
+    """GH-591: the plan, the review and the Developer may ask for a promotion; one line."""
+    bases = {
+        TechPlan: {
+            **_plan("x", "api"),
+            "estimated_cost_usd": 5.0,
+            "estimated_files": 3,
+            **ZERO_SIZE,
+        },
+        schemas.Review: {"markdown": "x", "reason": "r", "findings": []},
+        schemas.Delivery: {"markdown": "x", "summary": "s", "assumptions": []},
+    }
+    base = bases[schema]
+    assert schemas.validate(schema, base, VOCAB)["promote"] is None
+    asked = schemas.validate(schema, {**base, "promote": "touches a data conversion"}, VOCAB)
+    assert asked["promote"] == "touches a data conversion"
+    assert schemas.validate(schema, {**base, "promote": "x" * 240}, VOCAB)["promote"] == "x" * 240
+    assert schemas.validate(schema, {**base, "promote": "  "}, VOCAB)["promote"] is None
+    for bad in ("x" * 241, "two\nlines", "carriage\rreturn"):
+        with pytest.raises(ValueError):
+            schemas.validate(schema, {**base, "promote": bad}, VOCAB)
+
+
+def test_plan_check_for_refuses_a_revised_plan_that_omits_an_existing_subtask():
+    check = schemas.plan_check_for(_history(2, []), 0.0, existing_ids=("a", "b", "c"))
+    with pytest.raises(ValueError, match="keeps every subtask id; rescope its brief instead"):
+        check(_estimated(20.0, 3, "a", "b"))
+
+
+def test_plan_check_for_accepts_a_revised_plan_that_keeps_every_id_and_adds_one():
+    check = schemas.plan_check_for(_history(3, []), 0.0, existing_ids=("a", "b"))
+    check(_estimated(20.0, 3, "a", "b", "c"))  # does not raise
+
+
+def test_plan_check_for_without_existing_ids_is_a_first_plan_and_unaffected():
+    check = schemas.plan_check_for(_history(2, []), 0.0)
+    check(_estimated(20.0, 3, "a", "b"))  # does not raise
+
+
 # The size budget in the plan check (GH-592): a plan that declares its hand-written size is
 # judged on it, through `rules.estimate_fits`; one written before the fields is judged as before.
 

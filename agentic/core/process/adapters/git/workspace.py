@@ -690,6 +690,14 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        # `--no-renames`: a rename is a delete plus an add, so both paths come back; a deletion
+        # is listed. `-z` with `core.quotepath` off: a name comes back as it is.
+        result = self._run(*_PLAIN, "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}")
+        if result.returncode != 0:
+            raise GitError(f"git diff {base}...{head} failed: {result.stderr.strip()}")
+        return tuple(name for name in result.stdout.split("\0") if name)
+
     def changed_lines(self, base: str, head: str) -> int:
         # `--no-renames`: a rename is a delete plus an add whatever `diff.renames` says. A
         # binary file's counts are `-`, which is no line at all.

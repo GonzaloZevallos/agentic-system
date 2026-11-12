@@ -1,9 +1,10 @@
 """The task's size, its risks and the path it takes (GH-591, part 1; glossary: Tamaño, Riesgo,
 Promoción). Pure: no I/O.
 
-Part 1 only RECORDS the path. `decide` is the one function that derives `light` or `full`, from
-what PjM declared, the owner label and the product's risk areas; `promote` is the one reducer
-that changes `path` afterwards. Nothing routes on either yet.
+`decide` is the one function that derives `light` or `full`, from what PjM declared, the owner
+label and the product's risk areas; `promote` is the one reducer that changes `path` afterwards.
+Part 2 adds the nets that ask for a promotion (`risk_hits`, `relabel`) and the request a branch
+leaves for the serialized code to apply (`PromoteRequest`, `record_request`, `select_request`).
 
 Every value stored is from a closed list: no free text and no product risk id is ever a span
 attribute or a metric label.
@@ -11,9 +12,11 @@ attribute or a metric label.
 
 from __future__ import annotations
 
+import fnmatch
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Literal, TypedDict
+from typing import Any, Final, Literal, TypedDict, get_args
 
 Size = Literal["small", "normal", "large"]
 Path = Literal["light", "full"]
@@ -189,3 +192,109 @@ def promote(
         return {}, None
     promotion: Promotion = {"from_role": from_role, "kind": kind, "text": text, "at": at}
     return {"path": "full", "promotion": promotion}, None
+
+
+class PromoteRequest(TypedDict):
+    """A promotion asked for, not yet applied: stored on the asking subtask
+    (`subtasks[sid]["promote_request"]`) or at the top level (`plan_promote_request`). Only
+    serialized system code turns it into a `promote` call."""
+
+    kind: PromotionKind
+    from_role: str
+    text: str | None
+
+
+def validate_request(request: Mapping[str, Any]) -> None:
+    """Raise `ValueError` for a request `promote` would refuse later, or a kind outside the list."""
+    if request.get("kind") not in get_args(PromotionKind):
+        raise ValueError(f"a promotion request's kind is one of {get_args(PromotionKind)}")
+    text = request.get("text")
+    if text is not None and (len(text) > TEXT_MAX or "\n" in text or "\r" in text):
+        raise ValueError(f"a promotion's text is one line of at most {TEXT_MAX} characters")
+
+
+def record_request(current: PromoteRequest | None, new: PromoteRequest) -> PromoteRequest:
+    """The value to store on a subtask: a `risk_area` request already there is never replaced,
+    whatever the order two writers came in; otherwise the new one wins."""
+    if current is not None and current["kind"] == "risk_area":
+        return current
+    return new
+
+
+def select_request(
+    plan_request: PromoteRequest | None, subtask_requests: Mapping[str, PromoteRequest]
+) -> PromoteRequest | None:
+    """The one request the serialized code applies. Fixed order: `risk_area` by lowest subtask
+    id, then `role` by lowest subtask id, then the plan's (`role` before `plan_over_cap`)."""
+    for kind in ("risk_area", "role"):
+        for sid in sorted(subtask_requests):
+            if subtask_requests[sid]["kind"] == kind:
+                return subtask_requests[sid]
+    return plan_request
+
+
+@dataclass(frozen=True)
+class RiskHit:
+    id: str
+
+
+@dataclass(frozen=True)
+class RiskNone:
+    pass
+
+
+@dataclass(frozen=True)
+class RiskUnreadable:
+    pass
+
+
+RiskVerdict = RiskHit | RiskNone | RiskUnreadable
+
+
+def _matcher(glob: object) -> re.Pattern[str] | None:
+    """The compiled glob, or `None` when it is not a usable one (not a string, empty, a `[`
+    with no `]`, or a pattern the regex engine refuses)."""
+    if not isinstance(glob, str) or not glob:
+        return None
+    for at, char in enumerate(glob):
+        if char == "[" and "]" not in glob[at + 1 :]:
+            return None
+    try:
+        return re.compile(fnmatch.translate(glob))
+    except re.error:
+        return None
+
+
+def risk_hits(
+    areas: Sequence[tuple[str, Sequence[str]]], touched_paths: Sequence[str] | None
+) -> RiskVerdict:
+    """Which product risk area a diff touches: the first, in declaration order, with a glob that
+    matches any touched path. `RiskUnreadable` when the diff could not be read or a glob is
+    invalid, and that is never `RiskNone`. An area with no `paths` never hits. The caller passes
+    both paths of a rename and every deleted path."""
+    if touched_paths is None:
+        return RiskUnreadable()
+    unreadable = False
+    for identifier, globs in areas:
+        compiled = [_matcher(glob) for glob in globs]
+        if any(pattern is None for pattern in compiled):
+            unreadable = True
+            continue
+        if any(p.match(path) for p in compiled if p is not None for path in touched_paths):
+            return RiskHit(identifier)
+    return RiskUnreadable() if unreadable else RiskNone()
+
+
+def relabel(
+    state: Mapping[str, Any], labels: tuple[str, ...] | None, at: str
+) -> tuple[dict[str, Any], str | None]:
+    """What a resume does with the owner labels as they are now. `None` (unreadable), `none` and
+    `light` change nothing: a label never demotes. `full` and `both` promote with `owner`,
+    judged against the NEW label so a stored `path_label: light` does not block it, and write it."""
+    label = owner_label(labels)
+    if label not in ("full", "both"):
+        return {}, None
+    patch, note = promote({**state, "path_label": label}, "owner", "owner", at)
+    if not patch:
+        return {}, note
+    return {**patch, "path_label": label}, note

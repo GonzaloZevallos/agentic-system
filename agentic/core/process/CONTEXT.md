@@ -137,6 +137,11 @@ El único cambio de `path` después de clasificar, y sólo de `light` a `full`: 
 _Avoid_: escalado, devolución, degradación
 _Campo_: sin término de arte
 
+**Ruta ligera**:
+El camino `light` de una feature o un bug (GH-591): del clasificador va directo al plan, y se salta la definición, la validación de PM, el diagnóstico, la rama de diseño y los textos; los verificadores `final_validation_due`, `copy_review_due` y `qa_performance_due` dan falso, y el plan no convoca `performance` ni pasa de 2 subtareas (sin la etiqueta del dueño `path:light` el sistema lo **promueve** con `plan_over_cap`; con ella `plan_check_for` lo rechaza). La puerta de merge no cambia. Sólo `task_path.path_for` la decide y sólo `task_path.promote` la deja. Los roles (Tech Lead, Developer) y la red `risk_hits` no promueven: dejan un `promote_request` en su subtarea (o `plan_promote_request` en el plan), y el turno serializado del sistema aplica el primero en el orden fijo `risk_area`, `role`, `plan_over_cap`. Tras una **Promoción** el sistema manda la tarea a `define` o `diagnose` (`rules.promotion_route`) y no despacha subtareas hasta que corra. Un documento sin `path` es `full`.
+_Avoid_: camino corto, fast path, atajo
+_Campo_: sin término de arte
+
 **Etapa de definición**:
 Tramo del camino de feature entre Product Analyst y el PRD. Estrictamente secuencial.
 _Campo_: sin término de arte

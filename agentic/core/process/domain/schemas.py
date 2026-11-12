@@ -40,7 +40,7 @@ from .task import (
     FindingScope,
     Severity,
 )
-from .task_path import Size
+from .task_path import TEXT_MAX, Size, validate_request
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -554,6 +554,21 @@ def _one_line(text: str, what: str) -> None:
         raise ValueError(f"{what} must be one non-empty line")
 
 
+PROMOTE_DESCRIPTION = (
+    "Only when the task turned out not small, or touches a risk area: one line, at most "
+    f"{TEXT_MAX} characters, saying why it must take the full path. The system applies it, "
+    "once. Leave it out otherwise, and never repeat a request the system refused"
+)
+
+
+def _promote_text(promote: str | None) -> str | None:
+    """A blank request is no request; anything else is the one line `task_path.promote` takes."""
+    if promote is None or not promote.strip():
+        return None
+    validate_request({"kind": "role", "text": promote})
+    return promote
+
+
 def plan_limits(scenario: PerfScenario) -> tuple[float, VolumeUnit, dict[str, Limit]]:
     """The volume, its unit and the limits by metric a measurement of `scenario` uses: the
     plan's numbers, the only ones a verdict compares against (GH-318 invariant 3)."""
@@ -650,6 +665,13 @@ class TechPlan(RoleOutput):
         "the issue names none",
     )
 
+    promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def _promote_is_one_line(self) -> TechPlan:
+        self.promote = _promote_text(self.promote)
+        return self
+
     @model_validator(mode="after")
     def _ci_named_or_excused(self) -> TechPlan:
         for name in self.ci_required:
@@ -724,6 +746,12 @@ class Delivery(RoleOutput):
         "always empty on the integration subtask",
         json_schema_extra={"lines_required": True},
     )
+    promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def _promote_is_one_line(self) -> Delivery:
+        self.promote = _promote_text(self.promote)
+        return self
 
 
 CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
@@ -792,6 +820,13 @@ class Review(RoleOutput):
         description="One line quoting the human decision that moves or drops the path. "
         "Required when `revision_decision` is above 0, empty otherwise",
     )
+
+    promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def _promote_is_one_line(self) -> Review:
+        self.promote = _promote_text(self.promote)
+        return self
 
     @model_validator(mode="after")
     def _revision_is_cited_and_versionable(self) -> Review:
@@ -1233,6 +1268,39 @@ def _ci_names_check(
 PLAN_SHAPE_REFUSAL = "plan_shape single:"
 
 
+def _revision_check(existing_ids: Sequence[str], subtasks: Sequence[dict[str, Any]]) -> None:
+    """The refusal of a revised plan that drops a subtask id (GH-591): the branch behind the
+    id keeps its commits, so the plan rescopes the brief instead of omitting it."""
+    kept = {item["id"] for item in subtasks}
+    missing = [sid for sid in existing_ids if sid not in kept]
+    if missing:
+        raise ValueError(
+            f"a revised plan keeps every subtask id; rescope its brief instead "
+            f"(missing: {', '.join(missing)})"
+        )
+
+
+LIGHT_SUBTASK_CAP = 2
+LIGHT_CAP_REFUSAL = f"owner label path:light: at most {LIGHT_SUBTASK_CAP} subtasks"
+
+
+def _light_check(data: dict[str, Any], path: str, path_label: str) -> None:
+    """The refusals of the light path (GH-591): no `performance`, and with the owner label
+    `path:light` at most two subtasks (the cap is `rules.LIGHT_PLAN_CAP`)."""
+    if path != "light":
+        return
+    over = len(data.get("subtasks") or []) > LIGHT_SUBTASK_CAP
+    if over and path_label != "light":
+        return  # the plan node promotes this task (`plan_over_cap`): nothing else to refuse
+    if data.get("performance"):
+        raise ValueError(
+            "this task is on the light path: a plan on it does not convene `performance`; "
+            "leave it empty (a task that needs it is promoted to the full path instead)"
+        )
+    if path_label == "light" and over:
+        raise ValueError(LIGHT_CAP_REFUSAL)
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
@@ -1242,6 +1310,9 @@ def plan_check_for(
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
     plan_shape: str = DEFAULT_PLAN_SHAPE,
+    existing_ids: Sequence[str] = (),
+    path: str = "full",
+    path_label: str = "none",
     size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
@@ -1276,6 +1347,14 @@ def plan_check_for(
     judged after the fit, so a plan over the line is still sent toward parts first, and
     never for shape (B) or (C): a split or a tracker-only plan is not refused for its shape.
 
+    With `existing_ids` (the plan is a revision after a promotion, GH-591: subtasks exist and
+    `promotion` is set) a plan of subtasks that omits any of them is refused: a revision keeps
+    every id. Without them the check is the first plan's.
+
+    Under `path` `light` (GH-591) a plan that convenes `performance` is refused, and under the
+    owner label `path:light` (`path_label` `light`) so is a plan of more than two subtasks. A
+    light plan over the cap without the label is not refused: the plan node promotes the task.
+
     A plan that declares its hand-written size (GH-592) is judged on it times `size_ratio`,
     the floor factor of the size budget; a plan with no size fields is judged as before."""
 
@@ -1309,6 +1388,8 @@ def plan_check_for(
             parts_check(parts, size_ratio, one_terminal=part_of is not None)
         else:
             plan_check(data)
+            _revision_check(existing_ids, subtasks)
+            _light_check(data, path, path_label)
         files, declared = data["estimated_files"], data["estimated_cost_usd"]
         if files < 1:
             raise ValueError("estimated_files must be at least one file: every task changes one")

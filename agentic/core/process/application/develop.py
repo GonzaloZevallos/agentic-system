@@ -23,7 +23,7 @@ from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from . import archive, ci_flakes
+from . import archive, ci_flakes, promotion
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
@@ -337,6 +337,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     }
     if handled_deps or subtask.get("conflicted_paths"):
         subtask_patch["conflicted_paths"] = conflicted_paths
+    if output is not None:
+        # A promotion the Developer asks for (GH-591): stored on its own subtask under its
+        # section's name, never applied here; the fan-in's serialized step applies it.
+        subtask_patch = promotion.requested(subtask_patch, section, output.data.get("promote"))
     patch["subtasks"] = {subtask_id: subtask_patch}
     if verified:
         patch["status"] = "developing"

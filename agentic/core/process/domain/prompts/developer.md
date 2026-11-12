@@ -160,5 +160,9 @@ Everything goes in the structured output, in one call, after your last commit:
   no items, and always empty on the `integration` subtask.
 - `assumptions`: the decisions from that section, one per line in a single string; an
   empty string if none.
+- `promote`: leave it out unless your diff touches a risk area of the product (for example a
+  conversion of stored data) or the work outgrew a small task: then one line, at most 240
+  characters, saying why the task needs the full path. The system applies it once, after your
+  delivery; a refusal, noted in your section, is final for this task: do not ask again.
 - `markdown`: the full section above, in Markdown.
 </Output>
