@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `lifecycle` de `application` y los i
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks (parte 1)](packages-process-application-checks-1.md)
-  - [application: checks (parte 2)](packages-process-application-checks-2.md)
+  - [application: checks](packages-process-application-checks.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 1)](packages-process-application-landing-1.md)
@@ -33,6 +32,7 @@ graph TD
     m_application__poll["application.poll"]
     m_application__registration["application.registration"]
     m_application__relabel["application.relabel"]
+    m_application__restore["application.restore"]
     m_application__archive --> g_application__support
     m_application__archive --> g_domain__machine
     m_application__archive --> g_domain__state
@@ -57,4 +57,10 @@ graph TD
     m_application__relabel --> g_application__definition
     m_application__relabel --> g_application__support
     m_application__relabel --> g_domain__state
+    m_application__restore --> g_application__landing
+    m_application__restore --> g_application__lifecycle__2
+    m_application__restore --> g_application__support
+    m_application__restore --> g_domain__landing
+    m_application__restore --> g_domain__state
+    m_application__restore --> m_application__archive
 ```

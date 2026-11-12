@@ -119,7 +119,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.resume": "lifecycle",
     "application.review": "build",
     "application.review_scope": "build",
-    "application.risk_net": "checks",
+    "application.risk_net": "lifecycle",
     "application.run_check": "checks",
     "application.run_role": "support",
     "application.schedule": "lifecycle",
