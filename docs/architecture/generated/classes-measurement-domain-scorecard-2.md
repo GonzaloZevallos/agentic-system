@@ -8,6 +8,7 @@ Esta página muestra las clases públicas de los módulos del grupo `scorecard` 
 
 ```mermaid
 classDiagram
+    class evaluation__EvaluationRecord["EvaluationRecord"]
     class evaluation__Score["Score"]
     class evaluation__TaskDocument["TaskDocument"]
     class scorecard__CauseCount["CauseCount"]
@@ -18,3 +19,8 @@ classDiagram
     class scorecard__Verdict["Verdict"]
     scorecard__Scorecard --> scorecard__Figure
 ```
+
+## Relaciones con otras páginas
+
+- [domain: scorecard (parte 1)](classes-measurement-domain-scorecard-1.md)
+  - `scorecard.TaskFigures` se asocia con `cycle.PathFacts`

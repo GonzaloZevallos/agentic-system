@@ -9,11 +9,18 @@ Esta página muestra las clases públicas de los módulos del grupo `scorecard` 
 ```mermaid
 classDiagram
     class cycle__Escalation["Escalation"]
+    class cycle__PathFacts["PathFacts"]
+    class cycle__PathLeadTime["PathLeadTime"]
+    class cycle__PathReport["PathReport"]
     class cycle__Pause["Pause"]
     class cycle__Pauses["Pauses"]
     class cycle__TimeSplit["TimeSplit"]
     class evaluation__EvalEntry["EvalEntry"]
     class evaluation__EvalSet["EvalSet"]
     class evaluation__EvalTaskId["EvalTaskId"]
-    class evaluation__EvaluationRecord["EvaluationRecord"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: scorecard (parte 2)](classes-measurement-domain-scorecard-2.md)
+  - `scorecard.TaskFigures` se asocia con `cycle.PathFacts`
