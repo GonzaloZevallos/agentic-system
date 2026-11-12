@@ -1621,7 +1621,7 @@ class MemoryTracker:
         # The body of every `open_pull_request` call, the failed ones too.
         self.attempted_bodies: list[str] = []
         self.open_error = "gh pr create failed: Body is too long"
-        # The class `open_pull_request` raises: a `TrackerCallFailed` subtype for a transport failure.
+        # The class `open_pull_request` raises: a `TrackerCallFailed` subtype is a transport failure.
         self.open_error_type: type[ValueError] = ValueError
         self.comment_failures = 0
         # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).

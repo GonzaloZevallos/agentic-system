@@ -180,7 +180,9 @@ async def test_a_failing_open_pull_request_escalates_with_the_error_text(cfg):
 @pytest.mark.parametrize(
     "error", [TrackerTimedOut, TrackerUnreachable, TrackerTransient, TrackerRateLimited]
 )
-async def test_a_transient_pull_request_failure_escalates_as_a_mechanical_delivery_cause(cfg, error):
+async def test_a_transient_pull_request_failure_escalates_as_a_mechanical_delivery_cause(
+    cfg, error
+):
     """GH-593: classified by the error's type -- the message says nothing a refusal could not."""
     ports = memory_ports()
     ports.tracker.open_failures = 1

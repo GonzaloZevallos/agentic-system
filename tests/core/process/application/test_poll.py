@@ -2462,9 +2462,7 @@ def _mechanical_comments(*retaken: str) -> list[IssueComment]:
         at = ESCALATED_AT + timedelta(hours=k)
         comments.append(IssueComment(body=f"Auto-resumed: {reason}", created_at=_stamp(at)))
         comments.append(
-            IssueComment(
-                body="Escalated: no verdict", created_at=_stamp(at + timedelta(minutes=1))
-            )
+            IssueComment(body="Escalated: no verdict", created_at=_stamp(at + timedelta(minutes=1)))
         )
     return comments
 
@@ -2478,7 +2476,10 @@ def _mechanical_ports(log, comments):
 
 @pytest.mark.parametrize(
     ("log", "comment"),
-    [(_CI_LOG, "Auto-resumed: ci gh unavailable"), (_DELIVERY_LOG, "Auto-resumed: delivery transient")],
+    [
+        (_CI_LOG, "Auto-resumed: ci gh unavailable"),
+        (_DELIVERY_LOG, "Auto-resumed: delivery transient"),
+    ],
 )
 def test_a_mechanical_escalation_is_retaken_without_a_human_until_its_cap_is_spent(
     tmp_path, log, comment
@@ -2503,9 +2504,7 @@ def test_a_task_that_alternates_two_mechanical_causes_never_passes_either_cap(tm
     mixed = ["ci gh unavailable", "delivery transient", "ci gh unavailable"]
     ports = _mechanical_ports(_DELIVERY_LOG, _mechanical_comments(*mixed))
     launcher = FakeLauncher()
-    _round(
-        _cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT + timedelta(days=3)
-    )
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT + timedelta(days=3))
     assert launcher.spawned == []
     assert ports.tracker.comments == []
     assert rules.MECHANICAL_RETAKE_MAX == len(mixed)
