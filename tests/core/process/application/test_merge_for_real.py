@@ -126,8 +126,8 @@ class World:
             }
         )
 
-    def merge(self) -> None:
-        anyio.run(cli._merge, "GH-209", 209, self.cfg, self.ports)
+    def merge(self, label_timeline: object = None) -> None:
+        anyio.run(cli._merge, "GH-209", 209, self.cfg, self.ports, label_timeline)
 
     def doc(self) -> dict:
         return self.ports.documents.load("GH-209") or {}
@@ -651,3 +651,70 @@ def test_an_auto_merge_records_the_hand_written_size_it_added_over_master(world)
     assert world.doc()["actual_size"] == ActualSize(
         hand_files=1, hand_lines=1, test_lines=0, generated_files=0
     )
+
+
+class FakeLabelTimeline:
+    def __init__(self, read: str | None = "2026-10-05T12:00:00Z"):
+        self.read = read
+        self.calls: list[tuple[int, str]] = []
+
+    def label_added_at(self, issue: int, label: str) -> str | None:
+        self.calls.append((issue, label))
+        return self.read
+
+
+def test_the_system_merge_records_the_label_and_the_pull_requests_own_merged_at(world):
+    timeline = FakeLabelTimeline()
+
+    world.merge(timeline)
+
+    doc = world.doc()
+    # MergingTracker's pull request says 2026-10-06T00:00:00Z; the local clock said otherwise.
+    assert doc["lead_time"] == {
+        "labeled_at": "2026-10-05T12:00:00Z",
+        "merged_at": "2026-10-06T00:00:00Z",
+    }
+    assert doc["auto_merged_at"] != "2026-10-06T00:00:00Z"
+    assert timeline.calls == [(209, "agentic")]
+
+
+def test_an_unreadable_label_records_unreadable_and_the_merge_still_merges(world, capsys):
+    world.merge(FakeLabelTimeline(None))
+
+    assert world.doc()["lead_time"] == {"unknown": "unreadable"}
+    assert "-> merged" in capsys.readouterr().out
+
+
+def test_a_pull_request_read_that_raises_after_the_merge_is_unreadable_not_a_failed_merge(
+    world, capsys
+):
+    real = world.tracker.pull_request
+
+    def read(reference: str):
+        if world.tracker.merge_calls:
+            raise OSError("gh vanished")
+        return real(reference)
+
+    world.tracker.pull_request = read  # type: ignore[method-assign]
+
+    world.merge(FakeLabelTimeline())
+
+    assert world.doc()["lead_time"] == {"unknown": "unreadable"}
+    assert "-> merged" in capsys.readouterr().out
+
+
+def test_a_merge_that_failed_but_landed_records_the_lead_time_from_the_pull_request(world):
+    def landed(reference: str, head: str) -> str:
+        world.tracker.prs[URL] = dataclasses.replace(
+            world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
+        )
+        raise ValueError("gh timed out after merging")
+
+    world.tracker.merge = landed  # type: ignore[method-assign]
+
+    world.merge(FakeLabelTimeline())
+
+    assert world.doc()["lead_time"] == {
+        "labeled_at": "2026-10-05T12:00:00Z",
+        "merged_at": "2026-10-06T00:00:00Z",
+    }
