@@ -16,6 +16,7 @@ from typing import Literal, Protocol
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, landing, plan_settlement, pull_request, rules
+from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.landing_order import Turn
@@ -103,10 +104,11 @@ def _conflicting(entry: Mapping[str, object]) -> bool:
 
 def _readings(
     epoch: Sequence[Mapping[str, object]], upstream: str | None
-) -> tuple[DiagnosisVerdict | None, int, bool]:
+) -> tuple[DiagnosisVerdict | None, int, bool, Mapping[str, object] | None]:
     """What the diagnoses of the `epoch` read as, walked in order (GH-330): the latest
-    delivered one's verdict, the syncs that followed a `sync` verdict for `upstream`, and
-    whether the latest verdict is a `sync` for `upstream` that no `sync_master` has followed.
+    delivered one's verdict, the syncs that followed a `sync` verdict for `upstream`, whether
+    the latest verdict is a `sync` for `upstream` that no `sync_master` has followed, and the
+    entry of the latest delivered diagnosis when it read as `unlandable` (`None` otherwise).
     A `sync` verdict is served by the first `sync_master` for its sha after it; a `sync` for a
     sha that already had `LANDING_VERDICT_SYNCS_MAX` of them (served or not), or with no sha,
     reads as `unlandable`, and so does a delivered entry with no verdict."""
@@ -115,6 +117,7 @@ def _readings(
     waiting: set[str] = set()
     last: DiagnosisVerdict | None = None
     latest: str | None = None
+    unlandable_entry: Mapping[str, object] | None = None
     for entry in epoch:
         sha = entry.get(UPSTREAM_KEY)
         if entry.get("step") == "sync_master" and isinstance(sha, str) and sha in waiting:
@@ -131,11 +134,13 @@ def _readings(
             seen[sha] = seen.get(sha, 0) + 1
             last, latest = VERDICT_SYNC, sha
             waiting = {sha}
+            unlandable_entry = None
         else:
             last, latest = VERDICT_UNLANDABLE, None
             waiting = set()
+            unlandable_entry = entry
     due = upstream is not None and latest == upstream and latest in waiting
-    return last, served.get(upstream, 0) if upstream is not None else 0, due
+    return last, served.get(upstream, 0) if upstream is not None else 0, due, unlandable_entry
 
 
 Ancestry = Callable[[], bool | None]
@@ -188,7 +193,10 @@ def spent(
     def for_upstream(entry: Mapping[str, object]) -> bool:
         return upstream is not None and entry.get(UPSTREAM_KEY) == upstream
 
-    last_verdict, verdict_syncs, due = _readings(epoch, upstream)
+    last_verdict, verdict_syncs, due, binding = _readings(epoch, upstream)
+    in_force = binding is None or landing.verdict_in_force(
+        binding, head, bool(raw.get("escalated")), raw.get("pause_log")
+    )
     release_due = landing.ci_release_due(live, head, upstream)
     return landing.LandingSpent(
         passes=count(lambda e: e.get("step") in ("re_review", "fix")),
@@ -223,6 +231,14 @@ def spent(
         no_verdict_released=head is not None
         and landing.no_verdict_released(live, _merge_ci_records(raw), head),
         adr_review_owed=landing.adr_review_owed(done),
+        verdict_in_force=in_force,
+        declined_on_head=count_live(
+            lambda e: (
+                e.get("step") == "renumber"
+                and e.get("head") == head
+                and e.get("outcome") == "declined"
+            )
+        ),
     )
 
 
@@ -284,6 +300,8 @@ def step_for(
     CI release is waiting for its step."""
     budgets = spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master, ancestry)
     head = facts.pr_head
+    # GH-611: the numeric readers never see a dated product's collision.
+    numeric = None if isinstance(facts.adr_collision, Undated) else facts.adr_collision
     return landing.landing_step(
         refusal,
         facts,
@@ -304,11 +322,8 @@ def step_for(
             raw, facts.pr_head, refusal, "escalate", names=sorted(facts.ci_unreported)
         ),
         adr_decision_due=head is not None
-        and landing.adr_decision_due(
-            live_entries(raw), head, facts.adr_collision, all_entries(raw)
-        ),
-        adr_auto_due=head is not None
-        and landing.adr_auto_due(head, facts.adr_collision, all_entries(raw)),
+        and landing.adr_decision_due(live_entries(raw), head, numeric, all_entries(raw)),
+        adr_auto_due=head is not None and landing.adr_auto_due(head, numeric, all_entries(raw)),
         non_code=non_code,
     )
 
@@ -518,6 +533,7 @@ def stranded_now(ports: Ports, task_id: str, raw: Mapping[str, object]) -> bool:
 ReleaseWhy = Literal[
     "released",
     "released_by_ci",
+    "released_by_naming",
     "released_no_verdict",
     "waiting_on_human",
     "waiting_on_base_ci",
@@ -526,7 +542,9 @@ ReleaseWhy = Literal[
     "task_cap",
 ]
 """Why an escalated landing is or is not released (GH-328, GH-442): a human's decision released
-it (`released`), the base's CI went green and released a CI escalation (`released_by_ci`), it
+it (`released`), the base's CI went green and released a CI escalation (`released_by_ci`), the
+stack declares `adr_naming: dated` and released a numeric ADR question (`released_by_naming`,
+GH-611), it
 waits for a human (or for the label to go, or for an open issue), a CI escalation waits for the
 base's CI or an owner comment (`waiting_on_base_ci`), a `ci_no_verdict` escalation (GH-463) is
 released by a new upstream sha (`released_no_verdict`) or waits for one or for an owner comment
@@ -643,6 +661,11 @@ def _adr_release_asked(raw: Mapping[str, object], facts: rules.MergeFacts) -> bo
     the collision is an `Ambiguous` with moves to apply and the decision cap is not spent."""
     entry = landing.adr_escalation_entry(raw)
     collision = facts.adr_collision
+    if facts.adr_naming == "dated" and collision is not None:
+        # GH-611: the dated question is released by the rule (a numeric one) or by an owner.
+        return (
+            entry is not None and facts.pr_head is not None and entry.get("head") == facts.pr_head
+        )
     return (
         entry is not None
         and facts.pr_head is not None
@@ -686,6 +709,10 @@ def release(
     if shape is not None and head in (None, shape) and landing.ci_no_verdict_entry(raw, shape):
         return _no_verdict_release(ports, cfg, task_id, raw, number, shape, upstream)
     adr = landing.asked_entry(raw)
+    if adr is not None and head in (None, adr.get("head")) and landing.numeric_adr_question(raw):
+        named = _naming_release(ports, raw, upstream)
+        if named is not None:
+            return named
     if adr is not None and head in (None, adr.get("head")):
         # GH-544: an `escalate_adr` question is answered on the issue, whatever its class.
         owner = _owner_release(ports, cfg, task_id, raw, number)
@@ -712,6 +739,23 @@ def _api_break_release(ports: Ports, raw: TaskState, owner: Release) -> Release:
     if answered.outcome in ("decided", "reasked"):
         return Release(owner.decision, "released", True, answered)
     return wait
+
+
+def _naming_release(ports: Ports, raw: TaskState, upstream: str | None) -> Release | None:
+    """GH-611: the release of an unanswered numeric `escalate_adr` question once the stack at
+    `upstream` declares `adr_naming: dated`, once per (head, upstream) pair. `None` when it does
+    not (or the stack at that sha cannot be read as dated): the owner's route is then the only
+    one. Nobody decided, so `decision` is `None`."""
+    if upstream is None:
+        upstream = ports.workspace.upstream().sha
+    question = landing.numeric_adr_question(raw)
+    if upstream is None or question is None or landing.naming_released_for(question, upstream):
+        return None
+    try:
+        dated = ports.stack.adr_naming(upstream) == "dated"
+    except ValueError:
+        return None
+    return Release(None, "released_by_naming", True) if dated else None
 
 
 def _ci_release(
@@ -809,6 +853,8 @@ def release_patch(raw: TaskState, outcome: Release, upstream: str | None, at: st
         return outcome.answer.patch
     if outcome.decision is not None:
         return landing.released(raw, outcome.decision, at)
+    if outcome.why == "released_by_naming":
+        return landing.released_by_naming(raw, upstream, at) if upstream is not None else {}
     return landing.released_by_ci(raw, upstream, at) if upstream is not None else {}
 
 

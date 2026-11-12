@@ -8,9 +8,9 @@ import dataclasses
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
 from agentic.core.knowledge.domain import knowledge
@@ -85,7 +85,7 @@ from agentic.core.process.domain.ci import (
     JobLog,
 )
 from agentic.core.process.domain.design import Design, NotReady
-from agentic.core.process.domain.docs import Docs
+from agentic.core.process.domain.docs import Ancestry, Docs
 from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
@@ -102,6 +102,7 @@ from agentic.core.process.domain.roles import PROMPTS_DIR, ROLES, Role
 from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
+from agentic.core.process.domain.size_budget import NumstatRow
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -445,6 +446,7 @@ class MemoryStack:
         check_timeouts: dict[str, float] | None = None,
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
+        adr_naming: Literal["numbered", "dated"] = "numbered",
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -463,6 +465,8 @@ class MemoryStack:
         self.declared_design = design
         # None is a product that declares no `docs` block: no generated docs, today's gate.
         self.declared_docs = docs
+        # Empty is a product that declares no `generated` globs: only the lockfiles and `docs`.
+        self.declared_generated: tuple[str, ...] = ()
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
@@ -516,6 +520,11 @@ class MemoryStack:
         # text makes `risk_areas` raise it as a `ValueError`, the way a broken key does.
         self.declared_risk_areas = risk_areas
         self.risk_areas_error: str | None = None
+        # GH-611: how the product names its ADRs, by revision (`adr_naming_at` overrides the
+        # default for one), and each revision asked: a test counts the reads.
+        self.declared_adr_naming = adr_naming
+        self.adr_naming_at: dict[str, Literal["numbered", "dated"]] = {}
+        self.adr_naming_reads: list[str] = []
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -591,6 +600,10 @@ class MemoryStack:
             raise ValueError(self.merge_inert_error)
         return self.declared_merge_inert
 
+    def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
+        self.adr_naming_reads.append(revision)
+        return self.adr_naming_at.get(revision, self.declared_adr_naming)
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         if self.risk_areas_error is not None:
@@ -628,6 +641,13 @@ class MemoryStack:
     def docs(self, revision: str) -> Docs | None:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_docs
+
+    def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
+        # The real spelling, `core.knowledge`'s own: the fake agrees with the adapter.
+        return tuple(f":(glob){path}" for path in block.paths)
+
+    def generated(self, revision: str) -> tuple[str, ...]:
+        return self.declared_generated
 
 
 class MemoryCommands:
@@ -889,6 +909,9 @@ class MemoryWorkspace:
         self.master_trees: dict[str, tuple[str, ...]] = {"master0": ()}
         self.branch_commits: list[BranchCommit] = []
         self.added_adrs_calls: list[tuple[str, str]] = []
+        # GH-611: `adr_first_date`'s answer per path (absent is `None`) and each ask.
+        self.first_dates: dict[str, date] = {}
+        self.first_date_calls: list[tuple[str, str]] = []
         self.added_lines_calls: list[tuple[str, str, tuple[str, ...]]] = []
         self.paths_naming_calls: list[tuple[str, str]] = []
         self.commit_texts: dict[str, str] = {}  # GH-579: a tracked commit's message, by sha
@@ -910,6 +933,28 @@ class MemoryWorkspace:
         self.merge_bases: dict[tuple[str, str], str] = {}
         self.merge_base_asks: list[tuple[str, str]] = []
         self.merge_base_error: str | None = None
+        # GH-603: `owned_drift`'s answer per `(head, master_sha)` (nothing when unscripted),
+        # its asks `(head, master_sha, pathspecs)`, and a text that makes it raise `GitError`.
+        self.owned_drifts: dict[tuple[str, str], tuple[str, ...]] = {}
+        self.owned_drift_asks: list[tuple[str, str, tuple[str, ...]]] = []
+        self.owned_drift_error: str | None = None
+        # GH-603: each `restore_owned` call `(path, source, paths, message)`, the head it
+        # answers, and a text that makes it raise `GitError`.
+        self.restore_owned_calls: list[tuple[Path, str, tuple[str, ...], str]] = []
+        self.restored_head = "restored"
+        self.restore_owned_error: str | None = None
+        # GH-603: each `settle_owned` call `(path, paths, source)` and its `GitError` text.
+        self.settle_owned_calls: list[tuple[Path, tuple[str, ...], str]] = []
+        self.settle_owned_error: str | None = None
+        # GH-603: each `merge_settling` call `(path, branch, paths, source)` and the refusal
+        # scripted per branch (a clean merge when absent).
+        self.merge_settling_calls: list[tuple[Path, str, tuple[str, ...], str]] = []
+        self.settling_refusals: dict[str, MergeConflict | MergeFailed] = {}
+        # GH-603: `ancestry`'s answer per `(ours, theirs)` (`diverged` when unscripted), its
+        # asks, and a text that makes it raise `GitError`.
+        self.ancestries: dict[tuple[str, str], Ancestry] = {}
+        self.ancestry_asks: list[tuple[str, str]] = []
+        self.ancestry_error: str | None = None
         # The `lease` every `push` received, in order (the failed ones too); `remote_tips`
         # is what `remote_tip` answers per branch (absent is `None`, the remote has none),
         # `remote_tip_error` makes it raise `GitError`, and `remote_tip_calls` is each ask.
@@ -999,9 +1044,16 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # GH-591: what `touched_paths` answers (renames as both paths, deletions included), the
+        # text that makes it raise `GitError`, and each call.
+        self.touched: tuple[str, ...] = ()
+        self.touched_error: str | None = None
+        self.touched_reads: list[tuple[str, str]] = []
         # GH-473: what `changed_lines` answers, and each call.
         self.diff_lines = 0
         self.line_reads: list[tuple[str, str]] = []
+        self.numstat_rows: tuple[NumstatRow, ...] = ()
+        self.numstat_reads: list[tuple[str, str]] = []
         # GH-420: what `introduced_paths` answers (or raises as a `GitError`), each ask as
         # (base, head, against), and the sha `fetched_upstream` reads (None: no upstream).
         self.introduced: tuple[str, ...] = ()
@@ -1158,6 +1210,37 @@ class MemoryWorkspace:
             paths = self.conflict_paths.get(branch, ("x.py",))
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
+
+    def owned_drift(
+        self, path: Path, head: str, master_sha: str, pathspecs: Sequence[str]
+    ) -> tuple[str, ...]:
+        self.owned_drift_asks.append((head, master_sha, tuple(pathspecs)))
+        if self.owned_drift_error is not None:
+            raise GitError(self.owned_drift_error)
+        return self.owned_drifts.get((head, master_sha), ())
+
+    def restore_owned(self, path: Path, source: str, paths: Sequence[str], message: str) -> str:
+        self.restore_owned_calls.append((path, source, tuple(paths), message))
+        if self.restore_owned_error is not None:
+            raise GitError(self.restore_owned_error)
+        return self.restored_head
+
+    def settle_owned(self, path: Path, paths: Sequence[str], source: str) -> None:
+        self.settle_owned_calls.append((path, tuple(paths), source))
+        if self.settle_owned_error is not None:
+            raise GitError(self.settle_owned_error)
+
+    def merge_settling(
+        self, path: Path, branch: str, paths: Sequence[str], source: str
+    ) -> MergeConflict | MergeFailed | None:
+        self.merge_settling_calls.append((path, branch, tuple(paths), source))
+        return self.settling_refusals.get(branch)
+
+    def ancestry(self, path: Path, ours: str, theirs: str) -> Ancestry:
+        self.ancestry_asks.append((ours, theirs))
+        if self.ancestry_error is not None:
+            raise GitError(self.ancestry_error)
+        return self.ancestries.get((ours, theirs), "diverged")
 
     def merge_in_progress(self, path: Path) -> bool:
         self.merge_in_progress_asks.append(path)
@@ -1398,6 +1481,10 @@ class MemoryWorkspace:
             if path.startswith("docs/adr/")
         )
 
+    def adr_first_date(self, head: str, path: str) -> date | None:
+        self.first_date_calls.append((head, path))
+        return self.first_dates.get(path)
+
     def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
         for number in numbers:
             if not (len(number) == 4 and number.isascii() and number.isdigit()):
@@ -1433,6 +1520,16 @@ class MemoryWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
+
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        self.touched_reads.append((base, head))
+        if self.touched_error is not None:
+            raise GitError(self.touched_error)
+        return self.touched
+
+    def numstat(self, upstream: str, head: str) -> tuple[NumstatRow, ...]:
+        self.numstat_reads.append((upstream, head))
+        return self.numstat_rows
 
     def changed_lines(self, base: str, head: str) -> int:
         self.line_reads.append((base, head))
@@ -2624,6 +2721,9 @@ def planned(
     estimated_cost_usd: float = 20.0,
     estimated_files: int = 5,
     tracker_checklist: Sequence[str] = (),
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
 ) -> RawResult:
     items: list[dict[str, object]] = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
@@ -2640,6 +2740,9 @@ def planned(
             "integration": integration,
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
             **({"tracker_checklist": list(tracker_checklist)} if tracker_checklist else {}),
@@ -2667,6 +2770,9 @@ def planned_tracker_only(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": 0,
+            "hand_files": 0,
+            "hand_lines": 0,
+            "test_lines": 0,
             "ci_required": [],
             "ci_none_reason": "The work is on the tracker.",
             "tracker_checklist": list(checklist),
@@ -2677,6 +2783,16 @@ def planned_tracker_only(
     )
 
 
+# What every part declares besides its title, body and dependencies (GH-592).
+PART_DEFAULTS: dict[str, object] = {
+    "hand_files": 1,
+    "hand_lines": 10,
+    "test_lines": 10,
+    "kind": "change",
+    "guard": "",
+}
+
+
 def planned_parts(
     *parts: dict[str, object],
     cost: float = 0.3,
@@ -2684,13 +2800,17 @@ def planned_parts(
     invariants: Sequence[object] = ("Every part ships alone.",),
     estimated_cost_usd: float = 400.0,
     estimated_files: int = 90,
+    hand_files: int = 1,
+    hand_lines: int = 10,
+    test_lines: int = 10,
 ) -> RawResult:
     """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
     given, two chained ones."""
-    items: list[dict[str, object]] = list(parts) or [
+    given = list(parts) or [
         {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
         {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
     ]
+    items: list[dict[str, object]] = [{**PART_DEFAULTS, **item} for item in given]
     markdown = "### Solution\n\nCut it.\n\n### Parts\n\n" + "\n\n".join(
         f"#### {i['title']}\n\n{i['body']}" for i in items
     )
@@ -2703,6 +2823,9 @@ def planned_parts(
             "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            "hand_files": hand_files,
+            "hand_lines": hand_lines,
+            "test_lines": test_lines,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
         },

@@ -14,12 +14,24 @@ measurable (issue #28)."""
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import ci_workflow, cost_history, docs, plan_route, plan_view, rules, schemas
+from ..domain import (
+    ci_workflow,
+    cost_history,
+    docs,
+    plan_revision,
+    plan_route,
+    plan_view,
+    rules,
+    schemas,
+    size_budget,
+    task_path,
+)
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -29,15 +41,17 @@ from ..domain.roles import (
     TECH_LEAD_REVIEWER,
     Interview,
 )
-from ..domain.task import PlanRoute, Subtask, TaskState, apply
+from ..domain.task import INTEGRATION, PlanRoute, Subtask, TaskState, apply
+from . import promotion
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
 from .ports import GitError, Ports
 from .reflect_run import closed_documents
 from .run_role import Check, Output, finish, run_role
 
-# How the comment that says a part is built whole without asking starts: a resume looks past
-# the system's comments (`resume.SYSTEM_COMMENTS`).
+# How the comment that said a part was built whole without asking started. Legacy (GH-592):
+# nothing posts it any more, but issues carry it and a resume still looks past it
+# (`resume.SYSTEM_COMMENTS`).
 PART_BUILT_WHOLE = "Part built whole: "
 
 # The ephemeral-arm skip path's own value for the existing `{{proposed_invariants}}`
@@ -61,6 +75,8 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     carried: TaskState = {}
     pre_estimate: float | None = None
     files: int | None = None
+    if _revising(state):
+        return await _replan(state, spec, cfg, ports, task.path, history)
     if plan_route.sizes(state.get("assignment"), cfg.plan_review):
         carried, size = await _size(state, cfg, ports, task.path, history)
         if carried.get("escalation_class") is not None:
@@ -77,6 +93,66 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     if cfg.skip_ephemeral:
         return await _plan_cold(state, spec, cfg, ports, task.path, history, carried)
     return await _interview_and_plan(state, spec, cfg, ports, task.path, history, carried)
+
+
+def _revising(state: TaskState) -> bool:
+    """Whether this plan call revises the plan the task already has (GH-591): subtasks exist and
+    a promotion re-planned the task. Anything else is a first plan, byte for byte as before."""
+    return bool(state.get("subtasks")) and bool(state.get("promotion"))
+
+
+def _revised_from(state: TaskState) -> dict[str, Subtask] | None:
+    return dict(state["subtasks"]) if _revising(state) else None
+
+
+async def _replan(
+    state: TaskState,
+    spec: Interview,
+    cfg: Configuration,
+    ports: Ports,
+    cwd: Path,
+    history: cost_history.History,
+) -> TaskState:
+    """The plan stage of a promoted task (GH-591): it revises, it never starts a new
+    interview. `plan_route.after_promotion` picks the existing interview's resume (the retake
+    gives it two rounds of margin) or the critic once; `plan_route` records `after_promotion`."""
+    stage = plan_route.after_promotion(bool(state.get("sections", {}).get(spec.section)))
+    prior = state.get("plan_route")
+    recorded: PlanRoute = {
+        **(prior or _route_record(None, None, cfg, "interview" if stage == "resume" else "critic")),
+        "after_promotion": True,
+    }
+    if stage == "critic":
+        return await _plan_with_critic(state, spec, cfg, ports, cwd, history, {}, recorded)
+    carried = apply({}, {"plan_route": recorded})
+    return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
+
+
+def _plan_over_cap(landed: TaskState) -> task_path.PromoteRequest | None:
+    """The `plan_over_cap` request (GH-591): `rules.plan_over_cap_request` decides when a light
+    plan has more subtasks than the cap; it is applied in the same node after any role request."""
+    return rules.plan_over_cap_request(landed)
+
+
+def _finished(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
+    """`finish` after the plan node's system step: a promotion the model asked for, or the cap
+    asked for, is applied here through `task_path.promote` (the node is serialized) and never
+    left in the document; a refusal's notice goes to the Tech Lead's section."""
+    landed = apply(state, patch)
+    request = patch.get("plan_promote_request") or _plan_over_cap(landed)
+    kept: TaskState = {k: v for k, v in patch.items() if k != "plan_promote_request"}
+    if request is None:
+        return finish(state, kept, ports)
+    moved, notice = task_path.promote(
+        landed, request["from_role"], request["kind"], ports.now(), request["text"]
+    )
+    kept = apply(kept, dict(moved))
+    # The system is no section of the document: its notice, if any, goes to the Tech Lead's.
+    section = (
+        request["from_role"] if request["from_role"] != "system" else promotion.NOTICE_FALLBACK
+    )
+    kept = apply(kept, promotion.refusal_notice(apply(state, kept), section, notice))
+    return finish(state, kept, ports)
 
 
 async def _interview_and_plan(
@@ -110,6 +186,7 @@ async def _interview_and_plan(
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
+        size_budget=size_budget.budget_text(_size_ratio(history)),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -118,13 +195,12 @@ async def _interview_and_plan(
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
     )
     output, floored = _floored(output, interviewed, history)
-    delivered = apply(patch, _delivered(cfg, output, written, spec.author.name, floored))
-    delivered = _covered(state, delivered, floored)
-    judged, built_whole = _after_delivery(
-        state, delivered, part_of, output, history, at=ports.now()
+    delivered = apply(
+        patch, _delivered(cfg, output, written, spec.author.name, floored, _revised_from(state))
     )
-    _tell_built_whole(ports, state["id"], part_of, built_whole)
-    return finish(state, judged, ports)
+    delivered = _covered(state, delivered, floored)
+    judged = _after_delivery(state, delivered, part_of, output, history, at=ports.now())
+    return _finished(state, judged, ports)
 
 
 def _joined(carried: TaskState, patch: TaskState) -> TaskState:
@@ -185,8 +261,8 @@ async def _size(
     return patch, output.data
 
 
-def _part_of(state: TaskState) -> tuple[str, int] | None:
-    """The `(task id, part)` of a task that is a part of a split, else `None`."""
+def _part_of(state: TaskState) -> tuple[str, int, int] | None:
+    """The `(task id, part, depth)` of a task that is a part of a split, else `None`."""
     return rules.split_part_of(state.get("description", ""))
 
 
@@ -194,7 +270,7 @@ def _estimate_check(
     cfg: Configuration,
     state: TaskState,
     history: cost_history.History,
-    part_of: tuple[str, int] | None,
+    part_of: tuple[str, int, int] | None,
     ports: Ports,
 ) -> Check:
     """The plan check both arms share: the structural one plus the estimate's refusals,
@@ -210,7 +286,21 @@ def _estimate_check(
         workflow=ci_workflow.check_run_names(_workflow_texts(ports, base)),
         stack_ci=_stack_ci(ports, base),
         plan_shape=cfg.plan_shape,
+        # The integration unit is the system's, not the model's: a plan never lists it.
+        existing_ids=(
+            tuple(i for i in state["subtasks"] if i != INTEGRATION) if _revising(state) else ()
+        ),
+        path=task_path.path_of(state),
+        path_label=task_path.path_label_of(state),
+        size_ratio=_size_ratio(history),
     )
+
+
+def _size_ratio(history: cost_history.History) -> size_budget.Ratio:
+    """The floor on the declared hand-written size in force: the history's p90 ratio once it
+    proves one, else the fixed `UNPROVEN_RATIO`. The one figure the prompt, the plan check and
+    the part's fit all read (GH-592)."""
+    return cost_history.size_ratio(history) or size_budget.UNPROVEN_RATIO
 
 
 def _spent(state: TaskState) -> float:
@@ -289,51 +379,33 @@ def _stack_ci(ports: Ports, base: str) -> tuple[str, ...]:
 def _after_delivery(
     state: TaskState,
     patch: TaskState,
-    part_of: tuple[str, int] | None,
+    part_of: tuple[str, int, int] | None,
     output: Output | None,
     history: cost_history.History,
     *,
     at: str,
-) -> tuple[TaskState, schemas.FitDecision | None]:
-    """The one place a part's plan is judged over the line (ADR-0054), on both arms. Pure:
-    it returns the patch and, when the system builds the part whole by itself, the decision
-    that says so (the patch is then unchanged: no escalation, no `fit_question`, no
-    `fit_waived`; only a human's waiver is state, this one is evaluated again on every
-    delivered plan). A part that delivered subtasks the fit does not accept, with no waiver
-    and over what `rules.part_builds_whole` allows, keeps its plan and pauses once to ask
-    the human whether to build it whole. Anything else is left as it is;
-    `schemas.plan_fits` decides, so the text quotes the figures the check used."""
-    if output is None or part_of is None or state.get("fit_waived") or not patch.get("subtasks"):
-        return patch, None
-    fit = schemas.plan_fits(output.data, history)
+) -> TaskState:
+    """The one place a part's plan is judged over the line (ADR-0054, GH-592), on both arms.
+    Pure. A part below the depth cap splits again, and the plan check already refused
+    subtasks that do not fit, so nothing is judged here. A part at the cap (`rules.
+    MAX_SPLIT_DEPTH`) that delivered subtasks the fit does not accept, with no waiver
+    recorded before this change, pauses once to ask the human to narrow it or stop: the plan
+    stays in the Tech Lead's section and no subtask is queued, so a resume plans again and
+    nothing is built whole. Anything else is left as it is; `schemas.plan_fits` decides, so
+    the text quotes the figures the check used."""
+    if (
+        output is None
+        or part_of is None
+        or part_of[2] < rules.MAX_SPLIT_DEPTH
+        or state.get("fit_waived")
+        or not patch.get("subtasks")
+    ):
+        return patch
+    fit = schemas.plan_fits(output.data, history, size_ratio=_size_ratio(history))
     if fit.fits:
-        return patch, None
-    if rules.part_builds_whole(fit):
-        return patch, fit
-    return apply(patch, rules.part_over_line(state["id"], part_of, fit, at=at)), None
-
-
-def _tell_built_whole(
-    ports: Ports,
-    task_id: str,
-    part_of: tuple[str, int] | None,
-    fit: schemas.FitDecision | None,
-) -> None:
-    """Tells the issue, once, that a part is built whole without asking (the receptor
-    pattern of `tracker_only`): the comments are read first and the line is posted only if
-    none carries its content marker, so a retry or a resumed run does not repeat it. A
-    tracker that fails does not stop the part: it goes on and the line is missing."""
-    if part_of is None or fit is None:
-        return
-    try:
-        marker = rules.part_whole_marker(task_id, fit)
-        if any(marker in body for body in ports.tracker.issue_comments(task_id)):
-            return
-        ports.tracker.comment(
-            task_id, PART_BUILT_WHOLE + rules.part_whole_line(task_id, part_of, fit)
-        )
-    except (ValueError, OSError):
-        return
+        return patch
+    unbuilt = {key: value for key, value in patch.items() if key != "subtasks"}
+    return apply(unbuilt, rules.part_over_line(state["id"], part_of, fit, at=at))
 
 
 async def _plan_cold(
@@ -360,13 +432,13 @@ async def _plan_cold(
     base = apply(state, carried) if carried else state
     output, written = await _cold_draft(base, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL)
     output, floored = _floored(output, base, history)
-    delivered = _joined(carried or {}, _delivered(cfg, output, written, spec.author.name, floored))
-    delivered = _covered(state, delivered, floored)
-    judged, built_whole = _after_delivery(
-        state, delivered, part_of, output, history, at=ports.now()
+    delivered = _joined(
+        carried or {},
+        _delivered(cfg, output, written, spec.author.name, floored, _revised_from(state)),
     )
-    _tell_built_whole(ports, state["id"], part_of, built_whole)
-    return finish(state, judged, ports)
+    delivered = _covered(state, delivered, floored)
+    judged = _after_delivery(state, delivered, part_of, output, history, at=ports.now())
+    return _finished(state, judged, ports)
 
 
 async def _cold_draft(
@@ -398,6 +470,7 @@ async def _cold_draft(
         proposed_invariants=proposed_invariants,
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
+        size_budget=size_budget.budget_text(_size_ratio(history)),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -438,7 +511,7 @@ async def _plan_with_critic(
     draft, draft_floored = _floored(draft, drafting, history)
     drafted = apply(state, carried)
     regated = plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
-    if not plan_route.takes_critic(regated):
+    if not recorded.get("after_promotion") and not plan_route.takes_critic(regated):
         carried = apply(carried, {"plan_route": {**recorded, "route": regated, "misrouted": True}})
         return await _interview_and_plan(state, spec, cfg, ports, cwd, history, carried)
     draft_text = drafted["sections"][name]
@@ -482,9 +555,9 @@ async def _plan_with_critic(
             if stopped:
                 return finish(state, carried, ports)
             written = {"sections": {name: drafted["sections"][name]}}
-    delivered = _delivered(cfg, final, written, name, floored)
+    delivered = _delivered(cfg, final, written, name, floored, _revised_from(state))
     route_state: TaskState = {"plan_route": {**recorded, "critic": critic_state}}
-    judged, built_whole = _after_delivery(
+    judged = _after_delivery(
         state,
         _covered(state, apply(apply(carried, delivered), route_state), floored),
         part_of,
@@ -492,8 +565,7 @@ async def _plan_with_critic(
         history,
         at=ports.now(),
     )
-    _tell_built_whole(ports, state["id"], part_of, built_whole)
-    return finish(state, judged, ports)
+    return _finished(state, judged, ports)
 
 
 def _critique_input(findings: list[dict]) -> str:
@@ -531,6 +603,7 @@ def _delivered(
     written: TaskState,
     section: str,
     floored: _Floored | None = None,
+    revising: Mapping[str, Subtask] | None = None,
 ) -> TaskState:
     """What a successful plan call adds to its own patch, on either path: the subtasks,
     the invariants, the integration brief, the estimate (ADR-0054), the status -- or, for a
@@ -568,12 +641,17 @@ def _delivered(
             "cost_usd": output.data["estimated_cost_usd"],
             "files": output.data["estimated_files"],
         }
+        if (declared := schemas.declared_size(output.data)) is not None:
+            written["planned_size"] = declared
         if floored is not None:
             written["estimate"]["declared_usd"] = floored.raised.declared_usd
             written["sections"][section] = (
                 f"{written['sections'][section].rstrip()}\n\n{floored.line}"
             )
         written["status"] = "planned"
+        # A promotion the Tech Lead asks for (GH-591): stored, never applied here; the plan
+        # node's serialized system step applies it after the model ran.
+        written.update(promotion.plan_requested(written, section, output.data.get("promote")))
         if output.data.get("tracker_checklist"):
             # What the human must do on the tracker (GH-336); it may sit next to subtasks.
             written["tracker_checklist"] = list(output.data["tracker_checklist"])
@@ -593,9 +671,22 @@ def _delivered(
         if not output.data["subtasks"]:
             # Tracker work only (GH-336): the plan check let it through with no subtasks.
             return written
-        written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
+        if revising is None:
+            written["subtasks"] = {
+                s["id"]: plan_revision.pending(s) for s in output.data["subtasks"]
+            }
+            listed = list(written["subtasks"].values())
+        else:
+            # A promoted task revises the plan it has (GH-591): only the changed and the new
+            # subtasks are written, an unchanged one keeps its state and `reviewed_head`.
+            written["subtasks"] = plan_revision.revise(
+                revising,
+                output.data["subtasks"],
+                approved_work=any(v.get("status") == "approved" for v in revising.values()),
+            )
+            listed = list({**revising, **written["subtasks"]}.values())
         written["sections"][section] = plan_view.with_subtasks_block(
-            written["sections"][section], list(written["subtasks"].values())
+            written["sections"][section], listed
         )
     return written
 
@@ -633,19 +724,3 @@ def _proposed(state: TaskState, spec: Interview, invariants: list[str]) -> str:
             f"{listed}"
         )
     return listed
-
-
-def _pending(item: dict) -> Subtask:
-    pending: Subtask = {
-        "id": item["id"],
-        "title": item["title"],
-        "brief": item["brief"],
-        "seams": item["seams"],
-        "depends_on": item["depends_on"],
-        "status": "pending",
-    }
-    # Persisted only when non-empty (ADR-0040): a plan from before `screens` existed,
-    # and a subtask with no screen of its own, both read back `.get("screens", [])`.
-    if item.get("screens"):
-        pending["screens"] = item["screens"]
-    return pending

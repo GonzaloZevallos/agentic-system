@@ -94,6 +94,8 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    The estimate is the TOTAL, what the task already spent included. The system raises an
    estimate below what the task already spent, or below half the median of a bucket with at
    least five tasks, and records the figure you wrote next to the one the task runs under.
+   {{size_budget}}
+   Declare it in `hand_files`, `hand_lines` and `test_lines`.
    A plan whose estimate is over the size
    limit the system sets, or over the p90 of its bucket, is not built
    {{parts_remedy}}
@@ -152,6 +154,7 @@ Everything goes in the structured output, in one call:
 - `performance`: the scenarios QA Performance measures, as above; empty when not
   convened.
 - `estimated_cost_usd` and `estimated_files`: the two numbers of `### Estimate`.
+- `hand_files`, `hand_lines` and `test_lines`: the size budget's three figures, as above.
 - `tracker_checklist`: what the human must do on the issue tracker, one line per item;
   empty when there is none. Never a subtask.
 - `ci_required`, `ci_none_reason` and `required_paths`: as above. Exactly one of
@@ -160,5 +163,8 @@ Everything goes in the structured output, in one call:
   characters with no backtick, link or double brace; empty when the plan breaks none. The system writes it
   into the pull request body as the product's `Breaking-API:` line. Never infer it from the
   `public-api-break` mark: declare it only when this plan approves the break.
+- `promote`: leave it out unless the task turned out not small, or it touches a risk area of the
+  product: then one line, at most 240 characters, saying why it needs the full path. The system
+  applies it once; a refusal, noted in your section, is final for this task: do not ask again.
 - `markdown`: the full section above, in Markdown.
 </Output>

@@ -285,6 +285,25 @@ def test_the_template_keeps_parallel_checks_commented_out():
     assert "parallel_checks" in stack.TEMPLATE.read_text(encoding="utf-8")
 
 
+# -- `adr_naming`: how the product names its ADRs (GH-611) --------------------------------
+
+
+@pytest.mark.parametrize("value", ["numbered", "dated"])
+def test_adr_naming_reads_a_declared_value_as_it_is(value):
+    assert stack.adr_naming({"checks": {"tests": "pytest"}, "adr_naming": value}, "x") == value
+
+
+def test_a_product_that_does_not_declare_adr_naming_numbers_its_adrs():
+    assert stack.adr_naming({"checks": {"tests": "pytest"}}, "x") == "numbered"
+
+
+@pytest.mark.parametrize("value", ["date", "Dated", "", None, True, 1, ["dated"], {"dated": 1}])
+def test_an_adr_naming_that_is_not_a_known_value_is_an_error_never_numbered(value):
+    declared = {"checks": {"tests": "pytest"}, "adr_naming": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `adr_naming`.*numbered.*dated"):
+        stack.adr_naming(declared, "stack.yaml")
+
+
 # -- `ci`: the check-run names that gate a merge when GitHub's CI is trusted (ADR-0045) --
 
 
@@ -994,6 +1013,20 @@ def test_a_docs_block_of_the_wrong_shape_fails_at_load(block):
         stack.docs(docs_data(block), "stack.yaml")
 
 
+def test_the_docs_mode_defaults_to_commit_and_accepts_the_two_values():
+    assert stack.docs(docs_data(), "x").mode == "commit"
+    block = {"generate": "x", "paths": [GENERATED]}
+    assert stack.docs(docs_data({**block, "mode": "commit"}), "x").mode == "commit"
+    assert stack.docs(docs_data({**block, "mode": "validate"}), "x").mode == "validate"
+
+
+@pytest.mark.parametrize("mode", ["bogus", "Validate", "", None, 3, ["validate"], True])
+def test_a_docs_mode_that_is_not_one_of_the_two_values_fails_at_load(mode):
+    block = {"generate": "x", "paths": [GENERATED], "mode": mode}
+    with pytest.raises(ValueError, match="stack.yaml: expected `mode` under `docs`"):
+        stack.docs(docs_data(block), "stack.yaml")
+
+
 @pytest.mark.parametrize("empty", [None, {}])
 def test_a_docs_block_declared_empty_says_to_leave_the_key_out(empty):
     data = {"checks": {"tests": "pytest"}, "docs": empty}
@@ -1276,6 +1309,32 @@ def test_ci_dispatch_without_ci_is_refused():
     data = dispatch_data()
     del data["ci"]
     refuse_dispatch(data, r"`ci_dispatch` requires `ci`")
+
+
+def test_generated_keeps_each_glob_stripped_in_file_order():
+    declared = {"generated": [" web/src/api/*.ts ", "proto/gen/**"]}
+    assert stack.generated(declared, "x") == ("web/src/api/*.ts", "proto/gen/**")
+
+
+def test_a_product_that_declares_no_generated_reads_an_empty_tuple():
+    assert stack.generated({"checks": {"tests": "pytest"}}, "x") == ()
+    assert "generated" in stack.KEYS
+
+
+@pytest.mark.parametrize(
+    "glob",
+    ["*", "**", "**/*", "*.ts", "/abs/gen", "../up/gen"]
+    + [f"{root}/x" for root in stack.DOCS_PROTECTED_ROOTS],
+)
+def test_a_generated_glob_that_matches_everything_or_overlaps_a_protected_root_is_refused(glob):
+    with pytest.raises(ValueError, match=r"`generated` is refused"):
+        stack.generated({"generated": [glob]}, "stack.yaml")
+
+
+@pytest.mark.parametrize("value", [[], "web/gen", [3], [""], {"a": "b"}])
+def test_a_generated_that_is_not_a_non_empty_list_of_globs_is_an_error(value):
+    with pytest.raises(ValueError, match=r"`generated`"):
+        stack.generated({"generated": value}, "stack.yaml")
 
 
 BUILTIN_RISK_IDS = (

@@ -35,8 +35,9 @@ from .ci_push import PushKind
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
+from .size_budget import ActualSize, PlanSize
 from .task_path import Path as TaskPath
-from .task_path import PathCause, PathLabel, Promotion
+from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 
 Status = Literal[
     "open",
@@ -500,6 +501,8 @@ class PlanRoute(TypedDict):
     route: Route
     misrouted: bool
     critic: CriticState
+    # True when a promotion re-planned the task (GH-591): the plan revised, no new interview.
+    after_promotion: NotRequired[bool]
 
 
 class EvaluationRef(TypedDict):
@@ -1039,6 +1042,15 @@ class Subtask(TypedDict, total=False):
     # touched, and on every document written before this task existed — every read is
     # `.get("conflicted_paths", [])`.
     conflicted_paths: list[str]
+    # A promotion this subtask's branch asked for (GH-591, `task_path.record_request`): the
+    # Developer, its review or the `risk_hits` net leave it here, in the branch's own key, and
+    # only serialized system code applies it. Absent on a subtask that asked for nothing and on
+    # every document written before this key existed -- every read is `.get("promote_request")`.
+    promote_request: PromoteRequest
+    # Set by `plan_revision.revise` on a final unit whose work was approved before a
+    # promotion re-planned the task and whose brief did not change: its review is a full
+    # one against the new PRD. Absent everywhere else.
+    prd_recheck: bool
     # Set by the approval patch (`rules.approval_patch`) and never cleared by any patch (GH-593):
     # the subtask was once approved, so a restart cannot throw away reviewed-good work.
     approved_once: bool
@@ -1131,6 +1143,16 @@ class PlanSettledRow(TypedDict):
     by: Literal["approved", "superseded"]
 
 
+RenumberMode = Literal["number", "dated"]
+RenumberOutcome = Literal["renamed", "declined", "retry"]
+RenumberCause = Literal["slug_taken", "unrewritable", "generate_failed", "unreadable"]
+"""How a `renumber` entry ended on a product that names its ADRs by date (GH-611), closed:
+`mode` says which rename it was (`number` is the renumbering of always). `renamed` made the
+rename; `declined` is final on that head (`slug_taken`: a slug is already an ADR's;
+`unrewritable`: a reference cannot be rewritten without guessing) and the next round asks the
+owner; `retry` is transient (`generate_failed`, `unreadable`): it counts toward the renumber cap
+but the next round tries again."""
+
 AdrDecisionOutcome = Literal[
     "applied",
     "stale_moves",
@@ -1203,7 +1225,13 @@ class LandingEntry(TypedDict, total=False):
     ci_released: str
     # GH-463, `escalate` entries answering `ci_no_verdict`: why GitHub gave no verdict, from the
     # closed `CiCause`; absent when the cause could not be read.
-    cause: CiCause
+    cause: CiCause | RenumberCause
+    # GH-611, `renumber` entries: which rename it was and how it ended (`RenumberOutcome`, stored
+    # in `outcome` beside the `AdrDecisionOutcome`s); `escalate_adr` entries: the upstream sha at
+    # which a numeric question was released because the product names its ADRs by date
+    # (`landing.released_by_naming`), with `released_at` its time.
+    mode: RenumberMode
+    naming_released: str
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
     # entry it is the master sha the diagnosis was made against.
@@ -1237,7 +1265,7 @@ class LandingEntry(TypedDict, total=False):
     decision_at: str
     # D-be76583a, an `apply_adr_decision` entry the system took on its own (no `decision_at`).
     decided_by: AdrDecidedBy
-    outcome: AdrDecisionOutcome
+    outcome: AdrDecisionOutcome | RenumberOutcome
     moves: list[list[str]]
     head_after: str
     # GH-570, an `apply_adr_decision` entry that ended `checks_red`, both optional: which checks
@@ -1324,11 +1352,19 @@ class TrackerPosted(TypedDict):
 
 class PartRecord(TypedDict):
     """One part of a split plan as the document keeps it (ADR-0054): the issue the
-    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
+    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts.
+    `depth` is how deep the part sits in the split (GH-592): 1 for a part of a task that is
+    not a part, 2 for a part of a part. Absent on a record written before parts could split
+    again, which reads as 1. `kind` (`change` or `migration`) and `guard` (how unfinished
+    behaviour stays unreachable, empty for none) are absent on a record written before them
+    (GH-592)."""
 
     title: str
     body: str
     depends_on: list[int]
+    depth: NotRequired[int]
+    kind: NotRequired[Literal["change", "migration"]]
+    guard: NotRequired[str]
 
 
 # Why a `full_checks` run that wanted GitHub CI ran the local full tier instead (GH-376): a
@@ -1645,6 +1681,11 @@ class TaskState(TaskInput, total=False):
     fit_question: Annotated[bool, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
+    # The size the plan declared and the size the delivery measured (GH-592), as the records
+    # `size_budget` defines; the document writes them under `size_budget`'s own keys. Absent
+    # on a document from before them, which reads as "no size", never as zero.
+    planned_size: Annotated[PlanSize, last]
+    actual_size: Annotated[ActualSize, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
     # Rules of the plan every subtask honours (issue #42): the one channel between
@@ -1822,6 +1863,11 @@ class TaskState(TaskInput, total=False):
     path_cause: PathCause
     path_label: PathLabel
     promotion: Promotion
+    # A promotion the plan node asked for (GH-591): the role's `promote` or `plan_over_cap`. The
+    # plan node is serialized, so the key needs no reducer; the system step after the model
+    # applies it through `task_path.promote` and clears it (sets `None`). Absent or `None` when
+    # nothing is pending.
+    plan_promote_request: PromoteRequest | None
     # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
     # Written once when the run starts, from the frozen entry, so no reducer; omitted from
     # the document when absent.

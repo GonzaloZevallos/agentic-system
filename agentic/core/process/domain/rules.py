@@ -18,6 +18,7 @@ from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
 from . import (
+    adr_dated,
     adr_numbers,
     ci,
     escalation_prompts,
@@ -26,6 +27,8 @@ from . import (
     presubmit,
     restart,
     retakes,
+    size_budget,
+    task_path,
 )
 from .copy import copy_location_parts
 from .denials import denial_for
@@ -64,8 +67,9 @@ from .roles import (
     developer_section,
     pair_for,
 )
-from .schemas import FitDecision, TaskType
+from .schemas import LIGHT_SUBTASK_CAP, FitDecision, TaskType
 from .scratch import INODE_FLOOR, SpaceReading
+from .size_budget import LEGACY_FILES, UNPROVEN_RATIO, PlanSize
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -2195,7 +2199,11 @@ def delivered_subtasks(state: TaskState) -> list[str]:
 
 def dispatched_subtasks(state: TaskState) -> list[str]:
     """Subtasks the next wave runs: the ones to build, and the ones already delivered
-    whose review never happened, which is where a run stopped by the cap resumes."""
+    whose review never happened, which is where a run stopped by the cap resumes. Nothing is
+    dispatched while a promotion waits for the full path's first role (`promotion_pending`):
+    a Developer already running finishes its attempt and gets its one review, no more start."""
+    if promotion_pending(state):
+        return []
     return [*ready_subtasks(state), *delivered_subtasks(state)]
 
 
@@ -2444,15 +2452,69 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
 # the Product Analyst of the path, whichever it was.
 FIRST_NODE = {"feature": "define", "bug": "diagnose", "platform_enhancement": "plan"}
 
+# The role whose run is the full path's first stage (the Product Analyst's name is the same on
+# the feature and the bug path) and the most subtasks a light plan holds (GH-591).
+_FIRST_ROLE = {"feature": "Product Analyst", "bug": "Product Analyst"}
+LIGHT_PLAN_CAP = LIGHT_SUBTASK_CAP
+
+
+def promotion_pending(state: TaskState) -> bool:
+    """Whether a promotion still owes the task the full path's first role (GH-591): `promotion`
+    is set, the task is a feature or a bug and no run of the Product Analyst started after
+    `promotion.at`. Always false for a platform task (nothing reruns, the cap is just lifted),
+    and for a promotion whose instant cannot be read (it could never be settled)."""
+    promotion = state.get("promotion")
+    role = _FIRST_ROLE.get(state.get("type", ""))
+    if not promotion or role is None:
+        return False
+    at = _instant(promotion.get("at"))
+    if at is None:
+        return False
+    for run in state.get("runs", []):
+        started = _instant(run.get("started_at"))
+        if run.get("role") == role and started is not None and started > at:
+            return False
+    return True
+
+
+def promotion_route(state: TaskState) -> str | None:
+    """The node a promoted task goes back to: the full path's first role while it is owed
+    (`promotion_pending`), else `None`. The one place that answers it; `after_plan`,
+    `after_integrate` and the resume router call it first."""
+    if not promotion_pending(state):
+        return None
+    return FIRST_NODE[state["type"]]
+
+
+def plan_over_cap_request(state: TaskState) -> task_path.PromoteRequest | None:
+    """The promotion a light plan of more than `LIGHT_PLAN_CAP` subtasks asks for, from the
+    system (GH-591). `None` under the owner label `path:light` (the plan check refuses such a
+    plan instead) and on any path but light."""
+    if task_path.path_of(state) != "light" or task_path.path_label_of(state) == "light":
+        return None
+    if len(state.get("subtasks", {})) <= LIGHT_PLAN_CAP:
+        return None
+    return {"kind": "plan_over_cap", "from_role": "system", "text": None}
+
 
 def after_classify(state: TaskState) -> str | None:
     """The fork between the paths of README §2. A feature goes through the definition
     stage; a bug through the diagnosis, the same pair without the interview (issue
     #65); a platform enhancement has no product behaviour to define and starts at the
-    plan, the shortest of the three (issue #46)."""
+    plan, the shortest of the three (issue #46). A light feature or bug (GH-591) skips the
+    definition stage and goes straight to the plan."""
     if state.get("escalated"):
         return None
+    if _light_skips_definition(state):
+        return "plan"
     return FIRST_NODE.get(state.get("type", ""), "plan")
+
+
+def _light_skips_definition(state: TaskState) -> bool:
+    """Whether the light path skips the definition stage for this task (GH-591): a feature or a
+    bug on `light`. The one place the three routers below read the path for it; a platform
+    enhancement has no definition stage to skip."""
+    return task_path.path_of(state) == "light" and state.get("type") in ("feature", "bug")
 
 
 def after_define(state: TaskState) -> str | None:
@@ -2474,7 +2536,7 @@ def after_validate(state: TaskState) -> str | None:
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
     if status == "definition_ready":
-        return design_step(state) or "plan"
+        return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
     return {"discarded": "discard"}.get(status)
 
 
@@ -2503,7 +2565,7 @@ def after_consolidate(state: TaskState) -> str | None:
         return None
     if state.get("status") == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
-    return design_step(state) or "plan"
+    return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
 
 
 def after_write_copy(state: TaskState) -> str | None:
@@ -2515,9 +2577,12 @@ def after_write_copy(state: TaskState) -> str | None:
 def after_plan(state: TaskState) -> str | None:
     """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); a plan whose
     only work is on the tracker (GH-336) goes to `tracker_only`; any other goes to the
-    fan-in. The only routing decision between the three."""
+    fan-in. The only routing decision between the three. A plan that promoted the task
+    (GH-591) goes first to the full path's first role (`promotion_route`)."""
     if state.get("escalated"):
         return None
+    if (back := promotion_route(state)) is not None:
+        return back
     if state.get("parts"):
         return "split"
     return "tracker_only" if tracker_only_plan(state) else "integrate"
@@ -2551,7 +2616,7 @@ def final_validation_due(state: TaskState) -> bool:
     counts as the live approval over it only while `_pair_returns(PAIR_PM_TECH_LEAD)`
     has not yet caught up with how many times it ran -- the same return-matches-run
     counting `_lead_satisfied` uses, not a verdict stored per run."""
-    if not design_applies(state):
+    if task_path.path_of(state) == "light" or not design_applies(state):
         return False
     if not all_approved(state):
         return False
@@ -2574,7 +2639,7 @@ def copy_review_due(state: TaskState) -> bool:
     newer than the latest review of `integration` -- or of the single subtask. A fix after an
     important finding is reviewed again, so the review is due again. `False` outside
     `copy_applies`, byte for byte as today."""
-    if not copy_applies(state) or not all_approved(state):
+    if task_path.path_of(state) == "light" or not copy_applies(state) or not all_approved(state):
         return False
     subtasks = state.get("subtasks", {})
     target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
@@ -2596,6 +2661,8 @@ def qa_performance_due(state: TaskState) -> bool:
     run settles nothing: it reopens the subtask, and the review that approves it again is
     newer than any run that came before. `False` for a plan that convened nothing, byte
     for byte as today."""
+    if task_path.path_of(state) == "light":
+        return False
     if not state.get("performance") or not all_approved(state):
         return False
     subtasks = state.get("subtasks", {})
@@ -2687,6 +2754,8 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if dispatched_subtasks(state):
         return "pipeline"
+    if (back := promotion_route(state)) is not None:
+        return back
     if not all_approved(state):
         return None
     if pre_pr_important_due(state):
@@ -3125,12 +3194,30 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     return f"{previous}\n\n{entry}".strip()
 
 
-def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> str:
-    """What the human reads when a part's plan is over the line: the figures the decision
-    used (`FitDecision`), the limits, which one was crossed, and the three ways out. No way
-    out stops the task by resuming it: stopping is the absence of a resume."""
-    origin, number = part_of
-    head = f"{task_id} is part {number} of {origin}; a part is never split again. "
+# What each field of the size budget says when the judged figures cross its cap.
+_CROSSED_TEXT = {
+    size_budget.HAND_FILES_FIELD: (
+        f"the declared hand-written files are over the {size_budget.HAND_FILES} file cap"
+    ),
+    size_budget.HAND_LINES_FIELD: (
+        f"the declared hand-written lines are over the {size_budget.HAND_LINES} line cap"
+    ),
+    size_budget.TEST_LINES_FIELD: (
+        f"the declared test lines are over the {size_budget.TEST_LINES} line cap"
+    ),
+}
+
+
+def fit_question_text(task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None) -> str:
+    """What the human reads when a part at the depth cap has a plan over the line: the
+    figures the decision used (`FitDecision`), the limits, which one was crossed, and the
+    ways out. Building it whole is not one. No way out stops the task by resuming it:
+    stopping is the absence of a resume."""
+    origin, number, depth = part_of
+    head = (
+        f"{task_id} is part {number} of {origin}, at split depth {depth}; a split goes at "
+        f"most {MAX_SPLIT_DEPTH} levels deep, so it cannot split again. "
+    )
     if fit is None:
         figures = "The plan's figures are not known, so which limit it crossed is not either. "
     else:
@@ -3139,40 +3226,59 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
             if fit.reference_usd is not None
             else "the history has no reference for this many subtasks"
         )
-        limits = f"{SPLIT_COST_USD} USD and {SPLIT_FILES} files"
+        limits = f"{SPLIT_COST_USD} USD and {LEGACY_FILES} files"
+        declared = f"{fit.cost_usd:.2f} USD and {fit.files} files"
         crossed: list[str] = []
         if fit.reference_usd is not None and fit.reference_usd > max(fit.cost_usd, SPLIT_COST_USD):
             crossed.append(f"the history's reference is over the {SPLIT_COST_USD} USD limit")
         elif fit.cost_usd > SPLIT_COST_USD:
             crossed.append(f"the declared cost is over the {SPLIT_COST_USD} USD limit")
-        if fit.files > SPLIT_FILES:
-            crossed.append(f"the declared files are over the {SPLIT_FILES} file limit")
+        if fit.size is None:
+            if not size_budget.legacy_fits(fit.files):
+                crossed.append(f"the declared files are over the {LEGACY_FILES} file limit")
+        else:
+            limits = (
+                f"{SPLIT_COST_USD} USD, {size_budget.HAND_FILES} hand-written files, "
+                f"{size_budget.HAND_LINES} hand-written lines and {size_budget.TEST_LINES} "
+                "test lines"
+            )
+            declared = (
+                f"{fit.cost_usd:.2f} USD, {fit.size.hand_files} hand-written files, "
+                f"{fit.size.hand_lines} hand-written lines and {fit.size.test_lines} test lines"
+            )
+            if fit.judged_size is not None:
+                declared += (
+                    f" (judged {fit.judged_size.hand_files} files and "
+                    f"{fit.judged_size.hand_lines} lines after the floor)"
+                )
+            crossed.extend(_CROSSED_TEXT[name] for name in fit.crossed)
         verdict = (
             "; ".join(crossed)
             if crossed
             else "it is over the line by the larger of the declared cost and the reference"
         )
         figures = (
-            f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
+            f"Its plan declares {declared}, and {reference}. "
             f"One task holds at most {limits}: {verdict}. "
         )
     return (
         f"{head}{figures}Choose one:\n"
-        "- Build it whole: comment on the issue and resume; the plan is kept and built as "
-        "one task.\n"
+        "- Narrow the task: comment on the issue what to cut and resume; the task is planned "
+        "again with your comment and judged by the same budget.\n"
         "- Stop and release the parts that depend on it: close the issue as not planned.\n"
         "- Stop and hold them: leave it open and do not resume.\n"
         "Closing the issue as completed without a merge leaves the parts behind it "
-        "blocked. Any resume builds it whole."
+        "blocked. No resume builds the plan as it stands."
     )
 
 
 def part_over_line(
-    task_id: str, part_of: tuple[str, int], fit: FitDecision | None, *, at: str
+    task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None, *, at: str
 ) -> dict[str, Any]:
-    """The patch that pauses a part whose plan is over the line: one `estimate` escalation
-    asking "build it whole or stop", marked by `fit_question` so only its resume waives the
-    fit. It carries no `proposed_estimate`; the plan is kept."""
+    """The patch that pauses a part at the depth cap whose plan is over the line: one
+    `estimate` escalation asking "narrow it or stop", marked by `fit_question` so its resume
+    plans again instead of building. It carries no `proposed_estimate`; the plan stays in
+    the Tech Lead's section."""
     return logged(
         {
             "current_role": PJM.name,
@@ -3216,15 +3322,14 @@ def resumed(
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
     if state.get("fit_question"):
-        # A part whose plan is over the line asked "build it whole or stop"; any resume
-        # answers "build it whole" (stopping is not resuming). Written explicitly: a `last`
-        # reducer ignores a missing key. Only this pause waives, never the cap's.
-        patch["fit_waived"] = True
+        # A part at the depth cap asked "narrow it or stop"; a resume is the first answer
+        # and waives nothing: the task is planned again with the decision in `Human` and
+        # judged by the same budget. Written explicitly: a `last` reducer ignores a
+        # missing key.
         patch["fit_question"] = False
     if state.get("escalation_class") == "estimate" and state.get("parts"):
-        # A part of a split does not fit and the human decided on it (ADR-0054): the plan
-        # is made again as one task, and a second partition is refused.
-        patch["fit_waived"] = True
+        # A split that stopped on the estimate and the human decided on it (ADR-0054): the
+        # plan is made again, with the same budget.
         patch["parts"] = []
     if (
         state.get("escalation_class") == "estimate"
@@ -3492,6 +3597,8 @@ def resume_target(state: TaskState) -> str | None:
         return "split"  # paused while opening the parts: finish them, do not plan again
     if tracker_only_plan(state):
         return "tracker_only"  # paused before the checklist was posted: post it, do not plan
+    if (back := promotion_route(state)) is not None:
+        return back  # a promotion waits for the full path's first role (GH-591)
     if state.get("subtasks"):
         # Once there is a plan every road goes through the fan-in, which decides the
         # wave from the same facts: nothing here has to know about waves. Nothing to
@@ -3505,7 +3612,10 @@ def resume_target(state: TaskState) -> str | None:
     status = state.get("status", "open")
     if status == "open":
         # The same fork as `after_classify`, plus the road back to PjM for a task that
-        # paused before it had a type: only PjM turns the human's answer into one.
+        # paused before it had a type: only PjM turns the human's answer into one. A light
+        # feature or bug goes to the plan, as `after_classify` does (GH-591).
+        if _light_skips_definition(state):
+            return "plan"
         return FIRST_NODE.get(state.get("type", ""), "classify")
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
@@ -3514,6 +3624,8 @@ def resume_target(state: TaskState) -> str | None:
         # (ADR-0040): the same one function `after_validate` and every design node's
         # own `after_*` already call, so a resume lands exactly where the live routing
         # would have, however many lead returns or PRD versions came before the pause.
+        if _light_skips_definition(state):
+            return "plan"
         return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate"}.get(status)
@@ -5298,7 +5410,10 @@ class MergeFacts:
     ci_dispatched: bool | None = None
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
-    adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
+    adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | adr_dated.Undated | None = None
+    # GH-611: how the product names its ADRs, read at the round's master by the same read that
+    # found the collision; `None` when there is none.
+    adr_naming: Literal["numbered", "dated"] | None = None
     masters_covered: bool | None = None
     conflicts: bool | None = None
     open_outside: int = 0
@@ -5997,94 +6112,94 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
 # factor of the safety cap. They live here and nowhere else; every other module asks
 # `estimate_fits` or `estimate_cap` and never repeats a number.
 SPLIT_COST_USD = 150
-SPLIT_FILES = 40
 ESTIMATE_CAP_FACTOR = 2
-# How far over the cost line a part of a split is still built whole without asking
-# (ADR-0054, addendum): twice the line. A separate constant from the cap's factor, which
-# answers another question.
-PART_WHOLE_FACTOR = 2
+# How many levels a split may go (GH-592): a task splits into parts (depth 1) and a part that
+# is still over the budget splits again (depth 2). A part at this depth does not split: its
+# oversized plan goes to the human with the plan kept.
+MAX_SPLIT_DEPTH = 2
 
 
-def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> bool:
+def estimate_fits(
+    cost_usd: float,
+    files: int,
+    reference_usd: float | None,
+    size: PlanSize | None = None,
+    ratio: size_budget.Ratio = UNPROVEN_RATIO,
+) -> bool:
     """Whether a plan's estimate is small enough to build as one task. It decides on the
     larger of the declared cost and the history's reference (the p90 of the bucket, when
     the bucket has one), never on the declared cost alone: the same model estimates and
-    plans, so the estimate cannot be its own judge."""
+    plans, so the estimate cannot be its own judge. That cost line is the secondary check;
+    with a declared `size` the primary one is the size budget, the hand-written figures
+    judged times the floor `ratio` (`size_budget.judged`). A plan with no size, written
+    before the size fields, is judged as it always was: the cost line and `files` against
+    the legacy file limit."""
     cost = cost_usd if reference_usd is None else max(cost_usd, reference_usd)
-    return cost <= SPLIT_COST_USD and files <= SPLIT_FILES
+    if cost > SPLIT_COST_USD:
+        return False
+    if size is None:
+        return size_budget.legacy_fits(files)
+    return size_budget.fits(size_budget.judged(size, ratio))
 
 
 # The marker every issue the partition opens carries (ADR-0054): an HTML comment, invisible
-# once rendered, that names the task and the part. It is what a retry looks for among the
-# open issues before opening one, and what tells a task it is itself a part.
-_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+) -->")
+# once rendered, that names the task, the part and the depth of the part (GH-592). It is what
+# a retry looks for among the open issues before opening one, and what tells a task it is
+# itself a part. The depth is optional: a marker written before it reads as depth 1.
+_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+)(?: depth (\d+))? -->")
 
 
-def split_marker(task_id: str, part: int) -> str:
-    """The marker of part `part` (1 is the first) of task `task_id`'s partition."""
-    return f"<!-- agentic-split: {task_id} part {part} -->"
+def split_marker(task_id: str, part: int, depth: int) -> str:
+    """The marker of part `part` (1 is the first) of task `task_id`'s partition, which sits
+    at depth `depth` (1 for a part of a task that is not a part, 2 for a part of a part)."""
+    return f"<!-- agentic-split: {task_id} part {part} depth {depth} -->"
 
 
-def split_part_of(body: str) -> tuple[str, int] | None:
-    """The `(task id, part)` the body's marker names, or `None` when it has none: a body
-    with a marker is a part of a partition, and a part never splits again."""
+def split_part_of(body: str) -> tuple[str, int, int] | None:
+    """The `(task id, part, depth)` the body's marker names, or `None` when it has none: a
+    body with a marker is a part of a partition. A marker with no depth, written before
+    parts could split again, is at depth 1."""
     match = _SPLIT_MARKER.search(body)
-    return (match.group(1), int(match.group(2))) if match else None
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2)), int(match.group(3) or 1)
 
 
-def part_builds_whole(fit: FitDecision) -> bool:
-    """Whether a part whose plan is over the size line is built whole without asking the
-    human (ADR-0054, addendum): the larger of the declared cost and the history's reference
-    is at most `PART_WHOLE_FACTOR` times the cost line. Raw figures, no rounding; the number
-    of files never caps this rule. The one place that compares them against that limit."""
-    return max(fit.cost_usd, fit.reference_usd or 0.0) <= PART_WHOLE_FACTOR * SPLIT_COST_USD
+# How a part is sliced (GH-592): the rules every slice of a split answers to. No number of the
+# size budget is repeated here; the budget is `size_budget.budget_text`.
+SLICING_RULES = (
+    "Slice vertically: every part is independently mergeable and master stays green and "
+    "shippable after each one. User-visible behaviour that is not finished stays unreachable "
+    "until its last part (out of the navigation, or behind a flag), and each part's `guard` "
+    "says how. A migration that converts or moves existing data is a part of its own, "
+    "`kind: migration`, idempotent or after a part that writes both shapes (dual-write); "
+    "readers switch after it and the removal of the old shape comes later. Parts you write "
+    "end in exactly one terminal part, the one no other part depends on."
+)
 
 
-def part_whole_marker(task_id: str, fit: FitDecision) -> str:
-    """The content marker of the line `part_whole_line` ends with: the task and the figures
-    it quotes, so the system looks for it among the issue's comments before it posts."""
-    return f"<!-- agentic-part-whole: {task_id} {fit.cost_usd:.2f} {fit.files} -->"
-
-
-def part_whole_line(task_id: str, part_of: tuple[str, int], fit: FitDecision) -> str:
-    """The one line the system posts on the issue when it builds a part whole without asking:
-    which part, the figures the decision used, the rule with its limit, the caps that still
-    apply, and the content marker. It has no prefix: `plan.PART_BUILT_WHOLE`, which
-    `resume.SYSTEM_COMMENTS` registers, is prepended where it is posted, so a resume never
-    reads the line as the human's decision."""
-    origin, number = part_of
-    reference = (
-        f"the history's reference is {fit.reference_usd:.2f} USD"
-        if fit.reference_usd is not None
-        else "the history has no reference for this many subtasks"
-    )
-    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
-    return (
-        f"{task_id} is part {number} of {origin} and is built whole without asking. "
-        f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
-        f"A part is built whole up to {limit} USD on the larger of the two; above it, the "
-        "system asks the human. The task cap and the estimate cap still apply.\n\n"
-        f"{part_whole_marker(task_id, fit)}"
-    )
-
-
-def split_part_text(part_of: tuple[str, int] | None) -> str:
+def split_part_text(part_of: tuple[str, int, int] | None) -> str:
     """What the planning Tech Lead is told about its task being a part of a partition
-    (ADR-0054): empty for a task that is not one. A part is never split again, so the text
-    asks for subtasks only and states the real rule, with the figure taken from the
-    constants: up to `PART_WHOLE_FACTOR` times the cost line, on the larger of the estimate
-    and the history's reference, the system builds the part whole without asking."""
+    (ADR-0054, GH-592): empty for a task that is not one. A part at depth 1 that is over the
+    size budget writes `parts` like any task; at the depth cap (`MAX_SPLIT_DEPTH`) it writes
+    subtasks only and the system asks the human if they are still over the budget. The
+    budget itself is rendered elsewhere (`size_budget.budget_text`), never repeated here."""
     if part_of is None:
         return ""
-    task_id, part = part_of
-    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
+    task_id, part, depth = part_of
+    head = f"This task is part {part} of task {task_id}, at split depth {depth}. "
+    if depth < MAX_SPLIT_DEPTH:
+        return (
+            f"{head}If it does not fit the size budget, write `parts` as a task does: a part "
+            f"splits again, up to depth {MAX_SPLIT_DEPTH}. Otherwise write subtasks. In both "
+            "cases estimate honestly; do not shrink the estimate or inflate it to pick a path. "
+            f"{SLICING_RULES}"
+        )
     return (
-        f"This task is part {part} of task {task_id}. A part is never split again: write "
-        "subtasks only and never `parts`. If your subtasks are over the size limit, write "
-        f"them anyway: up to {limit} USD, on the larger of your estimate and the history's "
-        "reference, the system builds the part whole without asking; above it, the system "
-        "asks the human. In both cases estimate honestly; do not shrink the estimate or inflate "
-        "it to pick a path."
+        f"{head}This is the deepest a split goes: write subtasks only and never `parts`. If "
+        "your subtasks do not fit the size budget, write them anyway and the system asks the "
+        "human what to cut. In either case estimate honestly; do not shrink the estimate or "
+        "inflate it to pick a path."
     )
 
 
@@ -6127,9 +6242,9 @@ _PARTS_STEP = (
     "   small task of its own that lands and shows in the product before the next one starts.\n"
     "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
     "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
-    "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
-    "   If the section `## Human` says the human decided to build this task whole, write\n"
-    "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+    "   Write no subtasks then, and `### Subtasks` is not needed. A part that is still over the\n"
+    "   size budget splits again. If the section `## Human` says to narrow this task, plan the\n"
+    "   narrower task. Work that lands after the merge (a post-merge workflow, a bot\n"
     "   commit) is still a subtask of this task, never a part."
 )
 _PARTS_FIELD = (
@@ -6138,27 +6253,32 @@ _PARTS_FIELD = (
 )
 
 
-def parts_remedy_text(part_of: tuple[str, int] | None) -> str:
-    """The end of the prompt's sentence on a plan over the size limit: for a task that is
-    not a part, to write `parts`; for a part, to write its subtasks anyway."""
-    if part_of is None:
+def _at_depth_cap(part_of: tuple[str, int, int] | None) -> bool:
+    return part_of is not None and part_of[2] >= MAX_SPLIT_DEPTH
+
+
+def parts_remedy_text(part_of: tuple[str, int, int] | None) -> str:
+    """The end of the prompt's sentence on a plan over the size limit: to write `parts`,
+    except for a part at the depth cap, which writes its subtasks anyway."""
+    if not _at_depth_cap(part_of):
         return _PARTS_REMEDY
     return (
         "without the human's decision: write your subtasks anyway and do not shrink the\n"
-        "   estimate to make it fit; the system asks the human whether to build it whole."
+        "   estimate to make it fit; the system asks the human what to cut."
     )
 
 
-def parts_step_text(part_of: tuple[str, int] | None) -> str:
-    """The prompt's step on writing `### Parts`: empty for a part, which never has one."""
-    return _PARTS_STEP if part_of is None else ""
+def parts_step_text(part_of: tuple[str, int, int] | None) -> str:
+    """The prompt's step on writing `### Parts`: empty for a part at the depth cap."""
+    return "" if _at_depth_cap(part_of) else _PARTS_STEP
 
 
-def parts_field_text(part_of: tuple[str, int] | None) -> str:
-    """The prompt's line on the `parts` output field: for a part, that it stays empty."""
-    if part_of is None:
+def parts_field_text(part_of: tuple[str, int, int] | None) -> str:
+    """The prompt's line on the `parts` output field: for a part at the depth cap, that it
+    stays empty."""
+    if not _at_depth_cap(part_of):
         return _PARTS_FIELD
-    return "- `parts`: always empty, because this task is a part and a part is never split again."
+    return "- `parts`: always empty, because this task is at the deepest level a split goes."
 
 
 SPLIT_TRACKER_ITEMS = 10

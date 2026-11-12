@@ -6,9 +6,9 @@ Esta página muestra el escalado y la reanudación: los nodos `escalate` y `paus
   - [classify](role-graph-classify.md)
   - [define](role-graph-define.md)
   - [deliver](role-graph-deliver.md)
+  - [design](role-graph-design.md)
   - [land](role-graph-land.md)
   - [plan](role-graph-plan.md)
-  - [review](role-graph-review.md)
 
 ```mermaid
 graph TD
@@ -19,6 +19,7 @@ graph TD
     phase_classify["classify (fase)"]
     phase_define["define (fase)"]
     phase_deliver["deliver (fase)"]
+    phase_design["design (fase)"]
     phase_plan["plan (fase)"]
     escalate --> pause
     pause -.-> __end__
@@ -27,5 +28,6 @@ graph TD
     pause -.-> phase_classify
     pause -.-> phase_define
     pause -.-> phase_deliver
+    pause -.-> phase_design
     pause -.-> phase_plan
 ```

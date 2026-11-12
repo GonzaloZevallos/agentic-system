@@ -87,3 +87,21 @@ cuestan como hoy.
   flake; el sistema no distingue ambos casos.
 - Los registros de `merge_checks` anteriores a este cambio no llevan marca de reintento y
   siguen el camino de hoy.
+
+## Addendum (GH-603): modo `validate` del chequeo reservado `docs`
+
+Regla del dueño: «generated docs are never committed in a feature pull request. Master
+regenerates them after each merge; a branch only proves that generation still works.»
+
+- **Qué se agrega.** El bloque `docs:` gana `mode`, con dos valores: `commit` (el default, y lo
+  que pasa si falta) y `validate`. Se lee en el commit base de la tarea, como todo el stack: una
+  rama que agrega `mode: validate` sigue en `commit` hasta la tarea siguiente.
+- **`commit`.** El chequeo `docs` es el de siempre: corre `generate`, falla con `DOCS_STALE` si
+  algo bajo `docs.paths` cambió y restaura las rutas. Su salida no cambia ni un byte.
+- **`validate`.** El chequeo corre `generate`, restaura siempre las rutas de `docs.paths` como
+  las tiene HEAD y falla sólo si `generate` sale distinto de cero (`docs generate exited N`).
+  Nunca imprime `DOCS_STALE`: lo generado ya no se compromete en la rama.
+- **Costo del reintento.** Un `docs` rojo se reintenta una vez como cualquier chequeo rojo, así
+  que con un generador roto el chequeo cuesta unas 2 × `generate` (en apostrophe, unos 2 × 202 s).
+- **Fuera de alcance.** `docs.inputs` (saltar el chequeo en el nivel rápido) queda diferido: ver
+  el addendum GH-603 de ADR-0074.

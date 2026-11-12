@@ -19,7 +19,7 @@ from ..domain.board import Field, FieldWrite
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment, DispatchedRun, JobLog
 from ..domain.design import Design, NotReady
-from ..domain.docs import Docs
+from ..domain.docs import Ancestry, Docs
 from ..domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptKind, ExemptWait
 from ..domain.landing import IssueRef
 from ..domain.performance import Run, Scenario
@@ -36,6 +36,7 @@ from ..domain.scratch import (
     SpaceReading,
     SweepDecision,
 )
+from ..domain.size_budget import NumstatRow
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -605,6 +606,15 @@ class ProductStack(Protocol):
         broken, or a glob is refused by `master_gain.glob_refusal`."""
         ...
 
+    def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
+        """How the product names its ADRs (`core.knowledge`, GH-611), as the commit `revision`
+        declares it: `dated` renames a branch's numbered ADR to `yyyymmdd-slug.md` at landing,
+        `numbered` renumbers it. Opt-in: `numbered` when the key is absent -- the landing of
+        today byte for byte -- and also when the revision cannot be read (not fetched, no file,
+        YAML that does not parse): it never raises for those and never infers the answer from
+        file names. Raises `ValueError` when the key is there with any other value."""
+        ...
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         """The areas of risk the product declares for classification (`core.knowledge`), as the
         commit `revision` declares them, in file order. Empty when the key is absent. Raises
@@ -645,6 +655,19 @@ class ProductStack(Protocol):
         commit `revision` declares them. `None` when the product declares none, which is
         every product until it adopts generated docs -- never an error. Its reserved
         check is already in `checks`; this is the block itself, for the prompts."""
+        ...
+
+    def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
+        """The owned paths of `block` as git `:(glob)` pathspecs (`core.knowledge`'s
+        `docs_pathspecs`, GH-603): the one place that spells them, so a git read the
+        application makes over `docs.paths` agrees with the matcher `domain.docs.owned`."""
+        ...
+
+    def generated(self, revision: str) -> tuple[str, ...]:
+        """The globs of the paths the product generates (`core.knowledge`, GH-592), as the
+        commit `revision` declares them: besides its lockfiles and `docs.paths`, what never
+        counts against a task's size budget. Empty when the key is absent. Raises `ValueError`
+        when the key is there but broken."""
         ...
 
     def performance(self, revision: str) -> dict[str, Scenario]:
@@ -1109,6 +1132,47 @@ class Workspace(Protocol):
         a dirty tree -- since there is then nothing for a Developer to resolve."""
         ...
 
+    def owned_drift(
+        self, path: Path, head: str, master_sha: str, pathspecs: Sequence[str]
+    ) -> tuple[str, ...]:
+        """The files under `pathspecs` (the owned docs paths, spelled by
+        `stack.docs_pathspecs`) that `head` changed since it branched from `master_sha`
+        (GH-603): `git diff --name-only $(merge-base head master_sha) head`, two dots, so a
+        master that moved on and regenerated them is never read as the branch's work. The
+        master is always a sha the caller already holds (`remote_tip`, a sync's upstream),
+        never a branch name, and nothing is fetched. No pathspec yields no file. Raises
+        `GitError` when a sha is absent or the two have no merge base."""
+        ...
+
+    def restore_owned(self, path: Path, source: str, paths: Sequence[str], message: str) -> str:
+        """Puts each of `paths` (literal, already decided by the domain) as `source` has it,
+        or removes it when `source` lacks it, and commits that with `message` (GH-603);
+        returns the head, unchanged when nothing differed. Only on a clean tree. Any failure
+        resets the checkout to the head it started at and raises `GitError`."""
+        ...
+
+    def settle_owned(self, path: Path, paths: Sequence[str], source: str) -> None:
+        """For a merge left open in the checkout at `path`: resolves each of `paths`
+        (literal, decided by the domain) to what `source` has, or removes it when `source`
+        lacks it, and stages that resolution (GH-603). Covers a modify/delete and a rename.
+        Raises `GitError`; the merge stays open for the caller to abort."""
+        ...
+
+    def merge_settling(
+        self, path: Path, branch: str, paths: Sequence[str], source: str
+    ) -> MergeRefusal | None:
+        """`merge` for a conflict confined to `paths` (GH-603): merges `branch`, settles
+        `paths` from `source` and concludes the merge commit. When anything else conflicts,
+        or any step fails, the merge is aborted and the checkout is back as it was, with no
+        merge left open, and the refusal is returned like `merge` does."""
+        ...
+
+    def ancestry(self, path: Path, ours: str, theirs: str) -> Ancestry:
+        """How the commits `ours` and `theirs` compare (GH-603): `same`, `ours-older` when
+        `ours` is an ancestor of `theirs`, `theirs-older` for the reverse and `diverged` for
+        neither. Raises `GitError` when git cannot say."""
+        ...
+
     def abort_merge(self, path: Path) -> None:
         """`git merge --abort` in the checkout at `path`, only when a merge is in progress
         (`MERGE_HEAD` exists), so it is idempotent. Raises `GitError` only when the abort
@@ -1332,10 +1396,24 @@ class Workspace(Protocol):
         pull request changes against the commit it branched from. Raises `GitError`."""
         ...
 
+    def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
+        """Every path `git diff --name-only --no-renames -z <base>...<head>` names (GH-591): a
+        rename is its old and its new path, a deletion is listed. What the `risk_hits` net
+        matches against the product's `risk_areas` globs. Raises `GitError`."""
+        ...
+
     def changed_lines(self, base: str, head: str) -> int:
         """The lines added plus the lines deleted between `base` and `head`
         (`git diff --numstat --no-renames <base>...<head>`, GH-473): how big a subtask's
         change is. A binary file counts as 0. Raises `GitError`."""
+        ...
+
+    def numstat(self, upstream: str, head: str) -> tuple[NumstatRow, ...]:
+        """The size of what `head` adds over `upstream` (`git diff --numstat -M -z
+        <upstream>...<head>`, GH-592): one row per path, under its new name for a rename. The
+        three-dot base keeps what the upstream gained since the branch point out of the count;
+        rename detection makes a pure move cost 0/0. A binary file counts 0/0. Raises
+        `GitError`."""
         ...
 
     def introduced_paths(
@@ -1370,6 +1448,13 @@ class Workspace(Protocol):
         with the commit that added it (GH-229): the branch's own ADRs, whatever master
         took meanwhile and whatever a merge of master brought in. One read of the log.
         A rename counts as the new path being added. Raises `GitError`."""
+        ...
+
+    def adr_first_date(self, head: str, path: str) -> date | None:
+        """The UTC date of the author date of the earliest non-merge commit of `head`'s history
+        that added `path`, following renames (GH-611): the date a dated ADR name carries when
+        its front matter has none. Never the commit that last moved or renamed the path. `None`
+        when no commit added it. One `git log --follow`. Raises `GitError`."""
         ...
 
     def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:

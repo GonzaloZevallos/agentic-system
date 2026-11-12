@@ -22,6 +22,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import adr_numbers, ci, master_gain, merge_ci, merge_conflict, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.adr_dated import Undated
 from ..domain.check_schedule import CheckPriority
 from ..domain.ci_push import scrub
 from ..domain.presubmit import CiDispatch
@@ -37,7 +38,7 @@ from ..domain.task import (
 )
 from . import adr_collision, ci_flakes, ci_push, ci_trust, landing_flakes, landing_plan
 from .checkouts import task_base
-from .delivered import files_patch
+from .delivered import files_patch, size_patch
 from .poll import (
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
@@ -198,6 +199,7 @@ def merge_task(
             replace(
                 base_facts,
                 adr_collision=collision,
+                adr_naming=adr_collision.naming_of(collision),
                 conflicts=github,
                 github_conflicting=rules.github_conflicting(pull_request, head),
             ),
@@ -1209,6 +1211,7 @@ def _merge(
             "auto_merged_at": clock(),
             "auto_merge_method": method,
             **files_patch(reference, ports, log),
+            **size_patch(task_id, master, head, ports, log),
         },
     )
     text = f"{AUTO_MERGED}{head} via {method}"
@@ -1378,6 +1381,11 @@ def _adr_evidence(facts: rules.MergeFacts) -> str:
         return "\n".join(f"- {old} -> {new}" for old, new in collision.moves)
     if isinstance(collision, adr_numbers.Ambiguous):
         return f"Ambiguous: {collision.reason}: {collision.detail}"
+    if isinstance(collision, Undated):
+        return "\n".join(
+            f"- {adr.path}: numbered ADR on a product that names ADRs by date"
+            for adr in collision.own
+        )
     return ""
 
 

@@ -17,7 +17,7 @@ from agentic.core.process.application.ports import (
     TrackerTransient,
     TrackerUnreachable,
 )
-from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import document, pull_request, rules
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
@@ -1175,6 +1175,25 @@ async def test_a_setup_that_fails_escalates_as_ever_and_clears_the_publication_o
     patch = await deliver(OWING, cfg, ports)
     assert patch["escalation_class"] == "setup" and patch["publish_owed"] is None
     _no_longer_owed(ports)
+
+
+# --- GH-592: the terminal child of a part that split also closes the part's issue ---------
+
+
+async def test_the_terminal_child_of_a_part_closes_the_parts_issue_next_to_its_own(cfg):
+    description = f"Last slice.\n\n{pull_request.closes_marker(346)}"
+    ports = memory_ports()
+    await deliver({**TASK, "description": description}, cfg, ports)
+
+    body = ports.tracker.pull_requests[0][2]
+    assert body.startswith("Closes #346\n\n## PM")
+    assert ports.tracker.closes_issue_calls == [True]  # the adapter adds the task's own line
+
+
+async def test_a_task_without_the_closes_marker_adds_no_closing_line(cfg):
+    ports = memory_ports()
+    await deliver(TASK, cfg, ports)
+    assert "Closes" not in ports.tracker.pull_requests[0][2]
 
 
 async def test_a_delivery_takes_its_place_in_the_landing_order_once_and_a_redelivery_keeps_it(cfg):

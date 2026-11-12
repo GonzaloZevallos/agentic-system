@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 import yaml
 
@@ -100,6 +101,20 @@ class GitStack:
             return ()
         return stack.merge_inert(data, source)
 
+    def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
+        """How the product names its ADRs as `revision` declares it (GH-611). A revision that
+        cannot be read -- not fetched, no file, YAML that does not parse, not a mapping, a key
+        the system does not know -- reads `numbered`, the numbering of today: nothing is ever
+        inferred from file names, and an unreadable stack never renames an ADR. A value that is
+        there but wrong still raises `ValueError`, as every other key does."""
+        try:
+            data, source = self._declaration(revision)
+        except (ValueError, yaml.YAMLError):
+            return "numbered"
+        if not isinstance(data, dict) or any(key not in stack.KEYS for key in data):
+            return "numbered"
+        return stack.adr_naming(data, source)
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         data, source = self._declaration(revision)
         return tuple(
@@ -125,6 +140,13 @@ class GitStack:
     def docs(self, revision: str) -> Docs | None:
         data, source = self._declaration(revision)
         return stack.docs(data, source)
+
+    def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
+        return stack.docs_pathspecs(block)
+
+    def generated(self, revision: str) -> tuple[str, ...]:
+        data, source = self._declaration(revision)
+        return stack.generated(data, source)
 
     def performance(self, revision: str) -> dict[str, Scenario]:
         data, source = self._declaration(revision)

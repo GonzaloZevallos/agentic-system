@@ -271,6 +271,19 @@ def test_an_unsafe_docs_path_fails_when_the_stack_is_read(product):
         GitStack(product).docs(base)
 
 
+def test_generated_is_read_from_the_revision_asked(product):
+    with_key = commit_stack(product, "checks:\n  tests: pytest\ngenerated:\n  - web/gen/**\n")
+    without = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).generated(with_key) == ("web/gen/**",)
+    assert GitStack(product).generated(without) == ()
+
+
+def test_a_match_all_generated_glob_at_the_base_is_an_error_naming_the_key(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\ngenerated:\n  - '**'\n")
+    with pytest.raises(ValueError, match=r"stack.yaml: .*`generated`"):
+        GitStack(product).generated(base)
+
+
 def test_risk_areas_come_back_as_the_process_type_from_the_revision_asked(product):
     with_key = commit_stack(
         product,
@@ -297,3 +310,28 @@ def test_an_invalid_risk_area_is_an_error_naming_the_key(product):
     )
     with pytest.raises(ValueError, match=r"stack.yaml: .*`risk_areas`"):
         GitStack(product).risk_areas(base)
+
+
+def test_adr_naming_is_read_from_the_revision_asked(product):
+    dated = commit_stack(product, "checks:\n  tests: pytest\nadr_naming: dated\n")
+    absent = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).adr_naming(dated) == "dated"
+    assert GitStack(product).adr_naming(absent) == "numbered"
+
+
+def test_a_revision_whose_stack_cannot_be_read_names_its_adrs_by_number(product):
+    nothing = git("rev-parse", "--short", "HEAD", cwd=product)  # before any stack file
+    commit_stack(product, "checks: [unclosed\n")
+    broken_yaml = git("rev-parse", "--short", "HEAD", cwd=product)
+    typo = commit_stack(product, "checks:\n  tests: pytest\nadr_namin: dated\n")
+    reader = GitStack(product)
+    assert reader.adr_naming(nothing) == "numbered"
+    assert reader.adr_naming(broken_yaml) == "numbered"
+    assert reader.adr_naming(typo) == "numbered"
+    assert reader.adr_naming("0" * 40) == "numbered"
+
+
+def test_an_adr_naming_value_the_domain_refuses_is_an_error_with_the_source(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\nadr_naming: dates\n")
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `adr_naming`"):
+        GitStack(product).adr_naming(base)

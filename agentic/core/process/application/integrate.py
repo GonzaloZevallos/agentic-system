@@ -40,7 +40,7 @@ from ..domain import rules
 from ..domain.docs import Docs
 from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
-from . import pre_pr_fix
+from . import docs_settlement, pre_pr_fix, promotion
 from .checkouts import SetupFailed, subtask_checkout, task_base, task_checkout
 from .ports import Checkout, Ports
 from .run_role import finish
@@ -70,12 +70,18 @@ def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
         # touches nothing, and the human reading the document sees what this wave found
         # instead of what the wave before it did.
         return {"status": WAITING_ON_HUMAN, "sections": rules.findings_section(state)}
+    # The promotions the wave asked for are applied here, once, before anything is dispatched
+    # (GH-591): only serialized code calls `task_path.promote`, never a branch.
+    promoted = promotion.applied(state, ports.now())
+    state = apply(state, promoted)
     # Every checkout of the wave is born here, one at a time, so the product's setup
     # runs and a failing one stops the wave before a Developer is dispatched. Inside a
     # branch it could not be told to the human: a branch never routes to the escalation.
     try:
         task = task_checkout(state, cfg, ports)
-        patch: TaskState = {"branch": task.branch, "sections": rules.findings_section(state)}
+        patch: TaskState = apply(
+            promoted, {"branch": task.branch, "sections": rules.findings_section(state)}
+        )
         conflicts = _merge_approved(state, task.path, ports)
         # Read only when a merge left something for the integrator: the conflict text is the
         # one place the block's `generate` reaches this stage.
@@ -100,7 +106,7 @@ def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
         for subtask_id in rules.dispatched_subtasks(current):
             subtask_checkout(current, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(DEVELOPER), ports)
+        return finish(state, apply(promoted, unprepared.patch(DEVELOPER)), ports)
     return finish(state, patch, ports)
 
 
@@ -144,6 +150,18 @@ def _merge_approved(state: TaskState, task_path: Path, ports: Ports) -> list[str
         branch = subtask.get("branch")
         if subtask_id == INTEGRATION or subtask.get("status") != "approved" or not branch:
             continue
-        if ports.workspace.merge(task_path, branch) is not None:
+        if not _merged(state, task_path, branch, ports):
             conflicts.append(branch)
     return conflicts
+
+
+def _merged(state: TaskState, task_path: Path, branch: str, ports: Ports) -> bool:
+    """Whether `branch` is in the task branch. A product in `validate` docs mode (GH-603) has
+    a conflict confined to its generated paths settled from master's side instead of left to
+    the integrator; the block is read, at the base, only after `merge` refused."""
+    workspace = ports.workspace
+    refusal = workspace.merge(task_path, branch)
+    if refusal is None:
+        return True
+    docs = ports.stack.docs(task_base(state, ports))
+    return docs_settlement.settle_refused_merge(workspace, task_path, branch, docs, refusal)

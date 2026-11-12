@@ -5,10 +5,10 @@ Esta página muestra los nodos de la fase `classify` del grafo de roles y las ar
   - [build](role-graph-build.md)
   - [define](role-graph-define.md)
   - [deliver](role-graph-deliver.md)
+  - [design](role-graph-design.md)
   - [Escalado y reanudación](role-graph-escalation.md)
   - [land](role-graph-land.md)
   - [plan](role-graph-plan.md)
-  - [review](role-graph-review.md)
 
 ```mermaid
 graph TD

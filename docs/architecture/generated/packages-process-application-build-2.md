@@ -11,37 +11,33 @@ Esta página muestra los módulos del grupo `build` de `application` y los impor
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support](packages-process-application-support.md)
+  - [application: support (parte 1)](packages-process-application-support-1.md)
+  - [application: support (parte 2)](packages-process-application-support-2.md)
 
 ```mermaid
 graph TD
     g_application__checks["checks (grupo)"]
-    g_application__definition["definition (grupo)"]
     g_application__landing["landing (grupo)"]
-    g_application__reflection["reflection (grupo)"]
     g_application__support["support (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
-    m_application__plan["application.plan"]
     m_application__pre_pr_fix["application.pre_pr_fix"]
+    m_application__promotion["application.promotion"]
     m_application__review["application.review"]
     m_application__review_scope["application.review_scope"]
     m_application__shadow_review["application.shadow_review"]
     m_application__split["application.split"]
     m_application__tracker_only["application.tracker_only"]
-    m_application__plan --> g_application__definition
-    m_application__plan --> g_application__reflection
-    m_application__plan --> g_application__support
-    m_application__plan --> g_pkg__agentic__shared
-    m_application__plan --> g_pkg__domain
     m_application__pre_pr_fix --> g_application__landing
     m_application__pre_pr_fix --> g_application__support
     m_application__pre_pr_fix --> g_pkg__agentic__shared
     m_application__pre_pr_fix --> g_pkg__domain
+    m_application__promotion --> g_pkg__domain
     m_application__review --> g_application__checks
     m_application__review --> g_application__support
     m_application__review --> g_pkg__agentic__shared
     m_application__review --> g_pkg__domain
+    m_application__review --> m_application__promotion
     m_application__review --> m_application__review_scope
     m_application__review --> m_application__shadow_review
     m_application__review_scope --> g_application__support

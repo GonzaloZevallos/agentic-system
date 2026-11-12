@@ -1,0 +1,112 @@
+# Provenance: apostrophe GH-407 ("payment methods"), part 24 of 37 of its parent, whose task
+# document was read on 2026-11-11. That document declares `estimate: cost_usd 371.16, files 175`
+# and records `actual_files: 0`; the issue text of this task reports 263 files and 8,400 lines.
+# The document has no per-subtask file lists and no line figures: the paths below are the ones
+# its subtask briefs name, copied exactly. `parts` is a partition written for the test; its
+# sizes are this fixture's own figures, not GH-407's.
+stack:
+  docs_paths: ["docs/architecture/generated/**"]
+  generated: ["docs/api/**"]
+declared:
+  estimated_cost_usd: 371.16
+  estimated_files: 175
+  hand_lines: 8400
+subtasks:
+  hexagon:
+    - app/payment_methods/
+    - app/payment_methods/adapters/sql_payment_methods.py
+    - app/payment_methods/adapters/import_port.py
+    - app/shared/payment_method.py
+    - app/main.py
+    - app/tables.py
+    - app/migrations/versions/0029_payment_method.py
+    - tests/test_refusal_codes.py
+    - tests/migrations/test_table_registry.py
+    - docs/product/payment-methods.md
+    - docs/adr/0082-payment-methods-are-keyed-by-id-and-payment-method-is-frozen.md
+  glyphs:
+    - web/src/components/paymentMethodIcons.ts
+    - web/src/components/paymentMethodIcons.test.ts
+  switch:
+    - app/migrations/versions/0030_payment_payment_method_id.py
+    - app/payments/adapters/tables.py
+    - app/payments/adapters/sql_payments.py
+    - app/payments/adapters/sql_ledgers.py
+    - app/payments/application/record_payment.py
+    - app/sales/adapters/sql_sales.py
+    - app/sales/application/record_sale.py
+    - app/sales/domain/sale.py
+    - app/sales/adapters/import_port.py
+    - tests/migrations/test_schema.py
+    - web/src/api/paymentMethods.ts
+    - web/src/sales/paymentMethods.ts
+    - web/src/mobile-standard/statesSales.ts
+    - web/src/screens/ventas/NuevaVenta.tsx
+    - web/src/screens/clientes/ClienteFicha.tsx
+    - web/src/screens/clientes/accountRows.ts
+    - docs/product/sales.md
+    - docs/product/payments.md
+    - docs/architecture/generated/data-model.md
+  settings-screen:
+    - web/src/api/keys.ts
+    - web/src/copy/emptyStates.ts
+    - web/src/copy/locales/en/emptyStates.json
+    - scripts/design/screens.json
+    - web/src/mobile-standard/statesRecords.ts
+    - web/e2e/paymentMethods.spec.ts
+    - docs/product/payment-methods.md
+  integration:
+    - docs/api/openapi.json
+    - docs/api/index.html
+    - docs/architecture/generated/classes/shared.md
+    - tests/fixtures/openapi_snapshot.json
+    - web/src/copy/en.baseline.json
+parts:
+  - title: The payment_method table and its management
+    body: Add the table, its domain and adapters. No screen reaches it yet.
+    depends_on: []
+    hand_files: 9
+    hand_lines: 250
+    test_lines: 250
+    kind: change
+    guard: "Out of the navigation: no menu entry points at it until the last part."
+  - title: Payment method glyphs
+    body: The icon set the screens will use.
+    depends_on: [1]
+    hand_files: 1
+    hand_lines: 60
+    test_lines: 40
+    kind: change
+    guard: ""
+  - title: Writers record both method and payment_method_id
+    body: Dual-write on payments and sales; readers still read the old column.
+    depends_on: [1]
+    hand_files: 8
+    hand_lines: 250
+    test_lines: 300
+    kind: change
+    guard: ""
+  - title: Fill payment_method_id for existing payments
+    body: Idempotent conversion of the existing payments.
+    depends_on: [3]
+    hand_files: 1
+    hand_lines: 60
+    test_lines: 100
+    kind: migration
+    guard: ""
+  - title: Readers and screens switch to payment_method_id
+    body: Sales and customer screens read the new column.
+    depends_on: [2, 4]
+    hand_files: 9
+    hand_lines: 260
+    test_lines: 200
+    kind: change
+    guard: ""
+  - title: The Settings screen
+    body: The management screen, reachable from the navigation, and the API surface.
+    depends_on: [5]
+    hand_files: 6
+    hand_lines: 200
+    test_lines: 150
+    kind: change
+    guard: ""

@@ -40,6 +40,9 @@ from .task import (
     MergeCiRecord,
     OutOfBoundsLine,
     ReleasePatch,
+    RenumberCause,
+    RenumberMode,
+    RenumberOutcome,
     ReviewScope,
     ReviewScopeRecord,
     ScopeCause,
@@ -315,11 +318,70 @@ class LandingSpent:
     # (`adr_review_owed`): that one `re_review` is not refused by `LANDING_PASSES_MAX`, though it
     # counts as a pass.
     adr_review_owed: bool = False
+    # Whether the `unlandable` verdict still binds (`verdict_in_force`): `False` once a human
+    # released the escalation it raised, or the head moved on a task that is not escalated.
+    # `True` when there is no such verdict to read. It never refills a budget.
+    verdict_in_force: bool = True
+    # GH-611: `renumber` entries of the current head that ended `declined` (a dated rename that
+    # cannot be made on this head: final, the owner is asked).
+    declined_on_head: int = 0
 
     @property
     def unlandable(self) -> bool:
-        """A diagnosis was delivered and the latest one does not name a sync: the human's."""
-        return self.diagnoses > 0 and self.last_verdict != VERDICT_SYNC
+        """A diagnosis was delivered, the latest one does not name a sync and its verdict still
+        binds: the human's."""
+        return self.diagnoses > 0 and self.last_verdict != VERDICT_SYNC and self.verdict_in_force
+
+
+def verdict_in_force(
+    entry: Mapping[str, object],
+    head: str | None,
+    escalated: bool,
+    pause_log: object,
+) -> bool:
+    """Whether the `unlandable` verdict of `entry` (the latest delivered `diagnose` that read
+    as such) still binds. The one place that decides it. It stops binding only when
+
+    - the landing released it (`released_at`), or
+    - the task is not `escalated` and a `resumed` entry of `pause_log` is later than the
+      escalation that followed the diagnosis (the first `escalation` entry at or after its
+      `at`; without a readable one, than the diagnosis itself), or
+    - the task is not `escalated`, the entry names a head and `head` is a readable different
+      commit (`rules.same_commit`).
+
+    Every instant is compared as an aware datetime: one that cannot be read, or has no offset,
+    leaves the verdict binding. While the task is `escalated`, a new head does not free it.
+    No release refills any budget."""
+    if entry.get("released_at"):
+        return False
+    if escalated:
+        return True
+    entry_head = entry.get("head")
+    if isinstance(entry_head, str) and head is not None and not rules.same_commit(entry_head, head):
+        return False
+    return not _resumed_after(_aware(entry.get("at")), pause_log)
+
+
+def _resumed_after(diagnosed: datetime | None, pause_log: object) -> bool:
+    """A `resumed` entry of `pause_log` is later than the escalation that followed the
+    diagnosis made at `diagnosed` (or than the diagnosis, with no readable escalation)."""
+    if diagnosed is None or not isinstance(pause_log, list):
+        return False
+    log = [e for e in pause_log if isinstance(e, Mapping)]
+    anchor = next(
+        (
+            at
+            for e in log
+            if e.get("kind") == "escalation"
+            and (at := _aware(e.get("at"))) is not None
+            and at >= diagnosed
+        ),
+        diagnosed,
+    )
+    return any(
+        e.get("kind") == "resumed" and (at := _aware(e.get("at"))) is not None and at > anchor
+        for e in log
+    )
 
 
 NonCodeCause = Literal["pr_body", "ci_not_run"]
@@ -565,6 +627,14 @@ def landing_step(
         case "attempts_exhausted":
             return _sync(step, exhausted, spent, conflicting=False)
         case "adr_number_taken":
+            if facts.adr_naming == "dated" and facts.adr_collision is not None:
+                # GH-611, the owner's rule: a product that names ADRs by date renames the
+                # branch's numbered ADR and asks nobody, whatever was asked or decided before;
+                # never `apply_adr_decision`. A decline is final on the head, the cap is spent
+                # by retries as well; then one question, then nothing.
+                if spent.renumbers < LANDING_RENUMBERS_MAX and spent.declined_on_head == 0:
+                    return step("renumber")
+                return step("none") if adr_escalated else step("escalate_adr")
             # A clean renaming has its own capped step; anything else -- an ambiguous result,
             # or a renaming past its cap -- is asked once of the human and never restarted: no
             # Developer picks an ADR number, and a restart would meet the same number again.
@@ -1209,6 +1279,8 @@ def already_dispatched(
             return entry.get("decision_at") == decision_at
         if step == "escalate_api_break":
             return bool(entry.get("resolved_at"))  # GH-610: asked only once the comment is posted
+        if step == "renumber":
+            return entry.get("outcome") != "retry"  # GH-611: a transient end is tried again
         if step == "escalate" and names:
             return entry.get("names") == list(names)
         if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
@@ -1237,6 +1309,7 @@ def adr_asked(entries: Sequence[Mapping[str, object]], head: str, refusal: str |
         and entry.get("head") == head
         and entry.get("refusal") == refusal
         and bool(entry.get("resolved_at"))
+        and not entry.get("naming_released")  # GH-611: a numeric question the dated rule released
         for entry in entries[last_applied + 1 :]
     )
 
@@ -1484,6 +1557,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         "restart_why",
         "released_at",
         "ci_released",
+        "naming_released",
         "decision_at",
         "head_after",
         "api_break_decided",
@@ -1491,9 +1565,12 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
-    for cause in get_args(ci.CiCause):
+    for cause in (*get_args(ci.CiCause), *get_args(RenumberCause)):
         if raw.get("cause") == cause:
             out["cause"] = cause
+    for mode in get_args(RenumberMode):
+        if raw.get("mode") == mode:
+            out["mode"] = mode
     if isinstance(cost := raw.get("cost_usd"), int | float) and not isinstance(cost, bool):
         out["cost_usd"] = float(cost)
     if isinstance(base := raw.get("cost_base"), int | float) and not isinstance(base, bool):
@@ -1521,7 +1598,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     if (logs := _ci_logs_of(raw.get("ci_logs"))) is not None:
         out["ci_logs"] = logs
     # GH-544, `apply_adr_decision` entries; optional, read with `.get` everywhere.
-    for outcome in get_args(AdrDecisionOutcome):
+    for outcome in (*get_args(AdrDecisionOutcome), *get_args(RenumberOutcome)):
         if raw.get("outcome") == outcome:
             out["outcome"] = outcome
     if raw.get("decided_by") in get_args(AdrDecidedBy):
@@ -2080,6 +2157,48 @@ def released_by_ci(raw: Mapping[str, object], upstream: str, at: str) -> Release
         return {}
     index, entry = found
     written[index] = {**entry_of(entry), "ci_released": upstream, "released_at": at}
+    cleared = unescalated(raw, at=at)
+    return {
+        "escalated": cleared["escalated"],
+        "escalation_class": cleared["escalation_class"],
+        "status": cleared["status"],
+        "pause_log": cleared["pause_log"],
+        "landing": written,
+    }
+
+
+def naming_released_for(entry: Mapping[str, object], upstream: str | None) -> bool:
+    """Whether `entry` carries the naming release of the pair ending in `upstream`."""
+    return upstream is not None and entry.get("naming_released") == upstream
+
+
+def numeric_adr_question(raw: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The live `escalate_adr` entry (`adr_escalation_entry`) when it asks about numeric `moves`:
+    the question a product that names ADRs by date no longer has to ask (GH-611)."""
+    entry = adr_escalation_entry(raw)
+    return entry if entry is not None and bool(entry.get("moves")) else None
+
+
+def released_by_naming(raw: Mapping[str, object], upstream: str, at: str) -> ReleasePatch:
+    """The one patch that releases an unanswered numeric `escalate_adr` question because the
+    stack at `upstream` declares `adr_naming: dated` (GH-611, the owner's rule): `unescalated`,
+    and `naming_released` (the upstream sha) with `released_at` stamped on the question's entry,
+    so the pair is released once. No `Human` text and no `### Decision`: nobody decided anything.
+    `{}` when there is no numeric question or the entry already carries this pair. Never writes
+    `cost_usd`. The twin of `released_by_ci`; whether the stack says `dated` is the caller's."""
+    question = numeric_adr_question(raw)
+    if question is None or naming_released_for(question, upstream):
+        return {}
+    entries = raw.get("landing")
+    written = (
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    index = max((i for i, e in enumerate(written) if e.get("step") == "escalate_adr"), default=None)
+    if index is None:
+        return {}
+    written[index] = {**written[index], "naming_released": upstream, "released_at": at}
     cleared = unescalated(raw, at=at)
     return {
         "escalated": cleared["escalated"],

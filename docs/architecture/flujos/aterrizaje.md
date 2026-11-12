@@ -30,7 +30,7 @@ sequenceDiagram
     else file_followups_and_land
         Land->>GitHub: open follow-up issues, merge
     else adr_number_taken
-        Land->>GitHub: renumber when the rule can decide; else apply_adr_decision on its own when the rule settles the collision and no question was ever asked (adr_auto_due); else escalate_adr asks the human once, whose decision gives apply_adr_decision, otherwise none
+        Land->>GitHub: on a product that names ADRs by date (adr_naming dated) renumber renames the numbered ADR to yyyymmdd-slug, regenerates the docs and pushes once, never apply_adr_decision; on a numbered product renumber when the rule can decide; else apply_adr_decision on its own when the rule settles the collision and no question was ever asked (adr_auto_due); else escalate_adr asks the human once, whose decision gives apply_adr_decision, otherwise none
     else ci_unknown_names
         Land->>GitHub: escalate once per (head, names) as a planning defect, no budget spent, then none
     else budget spent, ledger only
@@ -198,6 +198,30 @@ sequenceDiagram
    rechazo). Nunca `diagnose` ni `restart` (ADR-0049, adendas GH-412 y GH-544). La decisión no
    gasta `LANDING_PASSES_MAX`, pero la primera `re_review` tras una decisión aplicada se exime
    del tope una vez (`LandingSpent.adr_review_owed`), aunque cuenta como pase.
+   **GH-611, el producto que nombra sus ADR por fecha (`adr_naming: dated`).** Si el stack del
+   producto lo declara, `adr_collision` devuelve `Undated` (los ADR propios que aún llevan
+   `NNNN-` y que master no tiene con ese nombre, choquen o no) y `merge.py` y `poll.py` derivan de
+   ahí `MergeFacts.adr_naming` (`adr_collision.naming_of`), sin una segunda lectura del stack. El
+   brazo fechado de `adr_number_taken` en `landing_step` adelanta a todo lo anterior: `renumber`
+   (también con `Ambiguous`) mientras `renumbers < LANDING_RENUMBERS_MAX` y la cabeza no tenga un
+   rechazo (`LandingSpent.declined_on_head`); pasado eso, un `escalate_adr` y luego `none`. Nunca
+   `apply_adr_decision`, aunque el libro tenga preguntas numéricas resueltas de rondas anteriores.
+   El brazo `renumber` fechado (`landing_sync.py:_renamed_by_date`) relee el nombrado en el sha del
+   upstream de la ronda, recalcula todo desde ese sha (nunca el sha, los `moves` ni el
+   `escalate_adr` de una ronda anterior), trae el upstream (`_bring_in`), calcula el nombre con
+   `adr_dated.rename` (fecha del `date:` del propio ADR o, si falta, la fecha de autor más antigua
+   del commit que añadió su ruta), escribe los archivos, corre el `docs.generate` declarado por
+   el producto bajo un tope de pared (`check_timeouts['docs']`, si no `GENERATE_WALL_S`), hace un
+   solo commit con `Workspace.commit_paths` y empuja con `lease=head`, sin puerta local: el nivel
+   completo del merge juzga la cabeza empujada. Registra `renumber` con `mode: dated` y
+   `outcome`: `renamed`; `declined` (`slug_taken` o `unrewritable`, definitivo para la cabeza) o
+   `retry` (`generate_failed`, también por timeout, o `unreadable`: gastan el tope pero no son un
+   rechazo). Un lease perdido o un modo cambiado no registra nada. El acarreo de la aprobación
+   (`renumber_carries`) no cambia. La pregunta `escalate_adr` fechada nombra la causa y no ofrece
+   una `Decision:` numérica. Una pregunta numérica sin respuesta se libera sola
+   (`landing.released_by_naming`, vía `landing_plan.release`) cuando el stack en el upstream
+   declara `dated`: una vez por (cabeza, upstream), sin texto de `Human`; un stack numérico o
+   ilegible no libera nada (ADR-0094, que enmienda el ADR-0049).
    El rechazo `ci_unknown_names` (GH-485) tampoco pasa por `exhausted()`: un nombre exigido que
    ninguna corrida de chequeo de la cabeza lleva, con todas las corridas de workflow completadas,
    es un defecto de planificación y no un CI lento. `landing_step` lo manda a un solo `escalate`

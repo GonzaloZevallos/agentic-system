@@ -21,6 +21,7 @@ from itertools import chain, combinations
 from agentic.core.process.application import adr_collision, poll
 from agentic.core.process.application.ports import AddedAdr
 from agentic.core.process.domain import adr_numbers
+from agentic.core.process.domain.adr_dated import Undated
 from agentic.core.process.domain.adr_numbers import Ambiguous, OwnAdr, OwnLine, Renaming
 from tests.core.process.application.test_poll_merge import HEAD, URL, _pr, _ready
 from tests.fakes import MERGE_BASE, BranchCommit, MemoryTracker, memory_ports
@@ -309,3 +310,81 @@ def test_gh_579_no_collision_reads_no_merge_base_no_diff_and_no_grep():
     adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
     assert ports.workspace.paths_naming_calls == []
     assert ports.workspace.merge_base_asks == [] and ports.workspace.diff_reads == []
+
+
+# --- GH-611: a dated product (`adr_naming`), read once at master and only for a numbered ADR ---
+
+
+def _dated(ports, *, naming="dated"):
+    ports.stack.declared_adr_naming = naming
+    return ports
+
+
+def test_gh_611_a_branch_that_added_no_numbered_adr_reads_no_stack():
+    ports = _dated(memory_ports(tracker=MemoryTracker()))
+    already = "docs/adr/20261111-mine.md"
+    head = ports.workspace.add_branch_commit(adds=(already,))
+    assert adr_collision.adr_collision(ports, ports.workspace.master_sha, head) is None
+    assert ports.stack.adr_naming_reads == []
+    quiet = _dated(memory_ports(tracker=MemoryTracker()))
+    head = quiet.workspace.add_branch_commit(lines=(("docs/adr/0001-a.md", "x"),))
+    adr_collision.adr_collision(quiet, quiet.workspace.master_sha, head)
+    assert quiet.stack.adr_naming_reads == []
+
+
+def test_gh_611_a_numbered_adr_reads_the_stack_once_at_master_and_numbered_changes_nothing():
+    ports = memory_ports(tracker=MemoryTracker())
+    ports.workspace.advance_master("docs/adr/0048-x.md")
+    head = ports.workspace.add_branch_commit(adds=(MINE,))
+    assert adr_collision.adr_collision(ports, ports.workspace.master_sha, head) is None
+    assert ports.stack.adr_naming_reads == [ports.workspace.master_sha]
+    assert len(ports.workspace.tree_names_calls) == 1  # the numbered path, as it was
+
+
+def test_gh_611_on_a_dated_product_every_own_numbered_adr_master_lacks_is_undated():
+    ports = _dated(memory_ports(tracker=MemoryTracker()))
+    ports.workspace.advance_master("docs/adr/0079-theirs.md", "docs/adr/20261101-held.md")
+    held, free, dated = "docs/adr/0079-mine.md", "docs/adr/0085-free.md", "docs/adr/20261111-d.md"
+    head = ports.workspace.add_branch_commit(adds=(held, free, dated))
+
+    result = adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
+
+    assert isinstance(result, Undated)
+    assert [a.path for a in result.own] == [held, free]  # the dated one is already done
+    assert ports.stack.adr_naming_reads == [ports.workspace.master_sha]
+
+
+def test_gh_611_a_numbered_adr_master_holds_under_the_same_name_is_not_undated():
+    ports = _dated(memory_ports(tracker=MemoryTracker()))
+    ports.workspace.advance_master("docs/adr/0079-mine.md")
+    head = ports.workspace.add_branch_commit(adds=(MINE.replace("0049", "0079"),))
+    assert adr_collision.adr_collision(ports, ports.workspace.master_sha, head) is None
+
+
+def test_gh_611_an_own_adr_a_later_commit_removed_is_not_undated():
+    ports = _dated(memory_ports(tracker=MemoryTracker()))
+    first = ports.workspace.add_branch_commit(adds=(MINE,))
+    head = "c" * 40
+    ports.workspace.branch_commits.append(
+        BranchCommit(head, (), (), ports.workspace.master_sha, removes=(MINE,))
+    )
+    assert first != head
+    assert adr_collision.adr_collision(ports, ports.workspace.master_sha, head) is None
+
+
+def test_gh_611_an_adr_naming_value_the_domain_refuses_reads_numbered_not_an_error(monkeypatch):
+    ports = memory_ports(tracker=MemoryTracker())
+    base = ports.workspace.master_sha
+    ports.workspace.advance_master(THEIRS)
+    head = ports.workspace.add_branch_commit(adds=(MINE,), master=base)
+    ports.workspace.files[(head, MINE)] = "# ADR-0049: mine\n"
+
+    def refused(revision):
+        raise ValueError("expected `adr_naming` to be one of ('numbered', 'dated'), not 'dates'")
+
+    monkeypatch.setattr(ports.stack, "adr_naming", refused)
+
+    result = adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
+
+    assert not isinstance(result, Undated)
+    assert result is not None  # the numeric collision is still found

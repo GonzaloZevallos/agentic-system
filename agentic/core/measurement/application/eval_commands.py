@@ -484,6 +484,8 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
     for label, figure in (
         ("actual/estimate cost:", sc.cost_over_estimate),
         ("actual/estimate files:", sc.files_over_estimate),
+        ("hand files/plan:", sc.hand_files_over_plan),
+        ("hand lines/plan:", sc.hand_lines_over_plan),
     ):
         print(
             f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}, "

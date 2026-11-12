@@ -21,6 +21,7 @@ from agentic.shared.stage0 import CHECKOUT
 from ..domain import check_results as reuse_rules
 from ..domain import presubmit, run_check
 from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
+from ..domain.docs import Docs
 from ..domain.presubmit import (
     AffectedPlan,
     CheckResult,
@@ -30,6 +31,7 @@ from ..domain.presubmit import (
     WitnessResult,
 )
 from ..domain.task import FlakeRecord, GateRecord, TaskState
+from . import docs_settlement
 from .checkouts import task_base
 from .ports import CheckRequest, CommandResult, GitError, Grant, LoadReader, Ports
 from .preflight import criteria_regressed, product_name
@@ -142,6 +144,7 @@ class CheckoutPresubmit:
         flake_gate: FlakeGate = "delivery",
         timeouts: Mapping[str, float] | None = None,
         readiness: Readiness | None = None,
+        docs: Docs | None = None,
     ):
         self.ports = ports
         self.path = path
@@ -193,6 +196,13 @@ class CheckoutPresubmit:
         # The exit that means "not ready" and the load that excuses it, or None: no command is
         # classified and none reads the load (GH-451). Keyword-only, so every site compiles.
         self.readiness = readiness
+        # The product's `docs` block when it is in `validate` mode, else None (GH-603): a
+        # delivery then has what the branch changed under `docs.paths` restored to master's
+        # side before the witness and the checks. None is the gate of before, byte for byte.
+        self.docs = docs_settlement.validating(docs)
+        # The one line the restore leaves in the Developer's section (what it did, or why it
+        # did not), None when it had nothing to say.
+        self.docs_note: str | None = None
         # Set once per call on a clean, moved tree (`_prepare_reuse`): the tree, the
         # environment fingerprint, and whether this checkout may store what it runs.
         self._tree: str | None = None
@@ -285,6 +295,9 @@ class CheckoutPresubmit:
         # The witness sits inside this same branch, first, so no command is ever
         # spawned on a call that refuses for a missing commit or an unclean tree.
         self.unstageable_note = None
+        if moved and clean and self.docs is not None:
+            head = self._restore_owned_docs(head)
+            moved, clean = head != self.before, workspace.is_clean(self.path)
         if moved and clean and self.before:
             # Before the witness and the checks: a delivery that is not one yet costs no run.
             if (refused := self._refuse_unstageable(head)) is not None:
@@ -312,6 +325,40 @@ class CheckoutPresubmit:
         self.refusals += 1
         self._refused_ids.append(self._failed_ids())
         return presubmit.refused(reason, self.refusals)
+
+    def _restore_owned_docs(self, head: str) -> str:
+        """The head after what the branch changed under `docs.paths` since it left master was
+        put back as that merge-base has it (GH-603, `validate` mode), committed with a fixed
+        message; `head` itself when there was nothing to restore. Never aborts the delivery:
+        a master that cannot be read, or any `GitError`, leaves the tree as it was with one line
+        in the Developer's section (`restore_owned` undoes its own partial work)."""
+        docs, workspace = self.docs, self.ports.workspace
+        if docs is None:
+            return head
+        self.docs_note = None
+        try:
+            tip = workspace.remote_tip(self.path, docs_settlement.MASTER)
+            if tip is None:
+                self.docs_note = "Generated docs were not restored: master has no remote tip."
+                return head
+            drift = workspace.owned_drift(
+                self.path, head, tip, self.ports.stack.docs_pathspecs(docs)
+            )
+            if not drift:
+                return head
+            listed = ", ".join(drift)
+            workspace.restore_owned(
+                self.path,
+                workspace.merge_base(head, tip),
+                drift,
+                f"Restore the generated docs to master's side, they are not committed in a "
+                f"feature branch: {listed}",
+            )
+        except GitError as error:
+            self.docs_note = f"Generated docs were not restored: {error}"
+            return head
+        self.docs_note = f"Generated docs restored to master's side: {listed}"
+        return workspace.head(self.path)
 
     def _refuse_unstageable(self, head: str) -> str | None:
         """The refusal for the system's own paths this delivery introduces (GH-420), on the
@@ -534,7 +581,8 @@ class CheckoutPresubmit:
         text = presubmit.checks_markdown(
             self.head, self.results, self.witness_result, base=base, regressions=self.regressions
         )
-        return f"{text}\n\n{self.unstageable_note}" if self.unstageable_note else text
+        notes = [note for note in (self.unstageable_note, self.docs_note) if note]
+        return "\n\n".join([text, *notes])
 
     def _criteria_regressions(self, head: str) -> list[str]:
         """What this head adds past the criteria caps, against the base this gate was given.

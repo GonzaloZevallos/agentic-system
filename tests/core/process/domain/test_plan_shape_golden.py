@@ -107,12 +107,16 @@ def test_a_control_arm_document_renders_as_it_did():
 
 # sha256 of the prompt text rendered with the gate's own placeholders and a fixed date.
 # GH-529 rewrote the two sentences about the estimate floors in both Tech Lead prompts, and
-# GH-535 the sentence about a matrix job's id in `ci_required`, and GH-610 added the `api_break`
-# field, so these two moved three times;
-# everything else about the default path is unchanged.
+# GH-535 the sentence about a matrix job's id in `ci_required`, so these two moved twice;
+# GH-592 added the size budget paragraph and the three size fields to both, so they moved a
+# third time; GH-592 split-depth reworded the `### Parts` step (a part splits again, no
+# build-whole sentence) and moved them a fourth; everything else about the default path is
+# unchanged. GH-591 part 2 added the `promote` line to the Output list of both, so they
+# moved a fifth time; GH-610 added the `api_break` field to the Output list of both and
+# moved them a sixth.
 PROMPT_GOLDENS = {
-    "tech_lead": "cb6c011c643022a827acbf7bb61effd22c44377c7138c8b72a26fa4065bdd508",
-    "tech_lead_platform": "f5ea7f103a63f7d9683a73f24a7aefafa5dec067e3685c5b50e866e585208bdb",
+    "tech_lead": "f6229bafcc8a0f0ad7427b87bc17fd86495de7744fc94dff1147b68bd4783a56",
+    "tech_lead_platform": "b11c6c8569bc199cbbb2c2f1e872f7e7c5a992da6c7db14eb895912a2afd3cff",
 }
 
 

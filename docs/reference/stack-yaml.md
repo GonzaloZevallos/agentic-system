@@ -165,9 +165,17 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Presencia**: opcional
 - **Se lee como**: `Docs | None`
 - **Si falta**: ausente = desactivado (el lector devuelve `None`)
-- **Subclaves**: `generate`, `paths`
-- **Qué es**: mapping of `generate` and `paths`: the command that rewrites generated docs and the globs it owns
+- **Subclaves**: `generate`, `paths`, `mode`
+- **Qué es**: mapping of `generate` and `paths` and optionally `mode` (`commit` or `validate`): the command that rewrites generated docs, the globs it owns and whether a branch commits the output
 - **Lector**: `agentic.core.knowledge.domain.stack.docs`
+
+## `generated`
+
+- **Presencia**: opcional
+- **Se lee como**: `tuple[str, ...]`
+- **Si falta**: lista vacía (`()`)
+- **Qué es**: list of path globs the product generates, besides `docs.paths` and the lockfiles: they never count against a task's size budget
+- **Lector**: `agentic.core.knowledge.domain.stack.generated`
 
 ## `verifications`
 
@@ -193,3 +201,11 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Si falta**: mapa vacío (`{}`)
 - **Qué es**: mapping of check or verification name to the exit code (1 to 255) that says the environment was not ready
 - **Lector**: `agentic.core.knowledge.domain.stack.not_ready_exit`
+
+## `adr_naming`
+
+- **Presencia**: opcional
+- **Se lee como**: `Literal['numbered', 'dated']`
+- **Si falta**: el valor que calcula el lector
+- **Qué es**: `numbered` or `dated`: how the product names its ADRs (`NNNN-slug.md` or `yyyymmdd-slug.md`); on `dated`, landing renames a branch's numbered ADR to the dated form instead of renumbering it
+- **Lector**: `agentic.core.knowledge.domain.stack.adr_naming`

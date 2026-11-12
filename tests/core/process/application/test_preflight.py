@@ -226,6 +226,20 @@ def test_a_broken_parallel_checks_refuses_before_spending(stage0):
         )
 
 
+class BrokenAdrNamingStack(MemoryStack):
+    """A stack whose `adr_naming` is no known value: `declared_stack` must surface it at
+    load, not when landing asks which names an ADR takes."""
+
+    def adr_naming(self, revision: str) -> str:
+        raise ValueError("stack.yaml: expected `adr_naming` to be numbered or dated")
+
+
+def test_a_broken_adr_naming_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="expected `adr_naming`"):
+        preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenAdrNamingStack()))
+
+
 def test_a_stack_without_parallel_checks_passes_and_keeps_its_setup_as_the_answer(stage0):
     """Absent is serial, never an error; and the validation call does not move what
     `declared_stack` returns."""
@@ -375,10 +389,11 @@ ORIGINAL_PARTS_WORDING = {
         "   Each part has a `title`, a `body` (its whole description: the person who builds it has"
         "\n"
         "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
-        "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again."
+        "   Write no subtasks then, and `### Subtasks` is not needed. A part that is still over the"
         "\n"
-        "   If the section `## Human` says the human decided to build this task whole, write\n"
-        "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+        "   size budget splits again. If the section `## Human` says to narrow this task, plan the"
+        "\n"
+        "   narrower task. Work that lands after the merge (a post-merge workflow, a bot\n"
         "   commit) is still a subtask of this task, never a part."
     ),
     "{{parts_field}}": (
@@ -423,7 +438,7 @@ def test_the_planning_prompts_differ_from_before_only_by_the_empty_slot(slug, tm
 def test_a_filled_slot_reaches_the_rendered_prompt(tmp_path):
 
     role = next(r for r in ROLES if r.slug == "tech_lead_platform")
-    values = {**PLACEHOLDERS, "split_part": rules.split_part_text(("GH-316", 2))}
+    values = {**PLACEHOLDERS, "split_part": rules.split_part_text(("GH-316", 2, 2))}
     text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **values).text
     assert "GH-316" in text
     assert "{{" not in text
@@ -441,7 +456,7 @@ def test_the_planning_prompts_say_work_after_the_merge_is_a_subtask_not_a_part(s
     flat = " ".join(text.split())
     assert "a post-merge workflow, a bot commit) " + POST_MERGE_SENTENCE in flat
     # A part never reads it: it has no `### Parts` step at all.
-    part = {**PLACEHOLDERS, "parts_step": rules.parts_step_text(("GH-316", 2))}
+    part = {**PLACEHOLDERS, "parts_step": rules.parts_step_text(("GH-316", 2, 2))}
     part_text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **part)
     assert POST_MERGE_SENTENCE not in " ".join(part_text.text.split())
 
@@ -469,7 +484,7 @@ def part_values(part_of):
 def test_a_part_reads_no_sentence_that_offers_parts_as_the_remedy(slug, tmp_path):
     role = next(r for r in ROLES if r.slug == slug)
     cfg = Configuration(product_dir=tmp_path)
-    text = load_prompt(role, cfg, memory_ports(), {}, **part_values(("GH-316", 2))).text
+    text = load_prompt(role, cfg, memory_ports(), {}, **part_values(("GH-316", 2, 2))).text
     assert "{{" not in text
     assert "GH-316" in text
     for sentence in REMEDY_SENTENCES:
@@ -695,7 +710,7 @@ def test_criteria_texts_skips_the_files_absent_at_the_revision():
 
 
 @pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
-@pytest.mark.parametrize("part_of", [None, ("GH-316", 2)])
+@pytest.mark.parametrize("part_of", [None, ("GH-316", 2, 2)])
 def test_both_tech_lead_prompts_render_the_one_text_on_tracker_work_with_parts(
     slug, part_of, tmp_path
 ):

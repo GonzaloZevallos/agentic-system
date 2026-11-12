@@ -11,32 +11,33 @@ Esta página muestra los módulos del grupo `build` de `application` y los impor
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support](packages-process-application-support.md)
+  - [application: support (parte 1)](packages-process-application-support-1.md)
+  - [application: support (parte 2)](packages-process-application-support-2.md)
 
 ```mermaid
 graph TD
     g_application__build__2["build parte 2 (grupo)"]
     g_application__checks["checks (grupo)"]
+    g_application__definition["definition (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
+    g_application__reflection["reflection (grupo)"]
     g_application__support["support (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
-    m_application__api_break["application.api_break"]
     m_application__deliver["application.deliver"]
     m_application__delivered["application.delivered"]
     m_application__develop["application.develop"]
     m_application__escalate["application.escalate"]
     m_application__evaluated["application.evaluated"]
     m_application__integrate["application.integrate"]
-    m_application__api_break --> g_application__support
-    m_application__api_break --> g_pkg__domain
+    m_application__plan["application.plan"]
     m_application__deliver --> g_application__build__2
     m_application__deliver --> g_application__support
     m_application__deliver --> g_pkg__agentic__shared
     m_application__deliver --> g_pkg__domain
-    m_application__deliver --> m_application__api_break
     m_application__delivered --> g_application__support
     m_application__delivered --> g_pkg__domain
+    m_application__develop --> g_application__build__2
     m_application__develop --> g_application__checks
     m_application__develop --> g_application__lifecycle
     m_application__develop --> g_application__support
@@ -52,4 +53,10 @@ graph TD
     m_application__integrate --> g_application__support
     m_application__integrate --> g_pkg__agentic__shared
     m_application__integrate --> g_pkg__domain
+    m_application__plan --> g_application__build__2
+    m_application__plan --> g_application__definition
+    m_application__plan --> g_application__reflection
+    m_application__plan --> g_application__support
+    m_application__plan --> g_pkg__agentic__shared
+    m_application__plan --> g_pkg__domain
 ```

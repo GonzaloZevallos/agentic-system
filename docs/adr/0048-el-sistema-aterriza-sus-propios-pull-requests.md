@@ -569,6 +569,32 @@ instrucciones. El prompt del rol no cambia, así que su hash tampoco.
 span. La entrada `diagnose` del ledger suma solo `ci_logs: [{job, bytes, cause}]`, con `cause` de la lista
 cerrada `read`, `unreadable`, `empty`, `other_head`, `timed_out`.
 
+## Addendum (GH-612): el veredicto `unlandable` rige hasta que un humano libera su escalado
+
+**Motivación.** En apostrophe GH-407 (PR #690) el diagnosticador dijo `unlandable` (faltaba la línea
+`Breaking-API:` del cuerpo, que es del humano) y la tarea escaló. El dueño arregló el cuerpo y liberó el
+escalado, pero después master se movió y el PR quedó en `merge_conflict`: el veredicto seguía forzando
+`none`, nadie lo sincronizaba y ningún comando lo reabría. Regla del dueño: una `Decision:` del humano que
+libera un escalado limpia el veredicto que lo causó; la negativa siguiente recibe su paso normal.
+
+**Vigencia.** El veredicto `unlandable` rige sobre la cabeza que diagnosticó hasta que un humano libera su
+escalado. La decide solo `landing.verdict_in_force`, sobre la última `diagnose` entregada que lo dio. Deja
+de regir con:
+
+- la liberación del aterrizaje (`released_at` en la entrada);
+- una reanudación (`resumed` en `pause_log`) posterior a la escalada que siguió al diagnóstico, con la
+  tarea ya no escalada (es el camino de `agentic resume`);
+- un cambio de cabeza, **solo con la tarea no escalada**: con el escalado abierto, una cabeza nueva no saca
+  la tarea de manos del humano.
+
+Un instante ilegible o sin zona horaria, una entrada sin cabeza o una cabeza leída `None` dejan el veredicto
+vigente. Una `diagnose` nueva, entregada después de la liberación, vuelve a regir.
+
+**Presupuestos.** Ninguna liberación repone los presupuestos del aterrizaje (`passes`, `syncs`, los
+contadores por sha ni los `LANDING_*_MAX`): con el tope de syncs agotado, la negativa siguiente da
+`diagnose`, nunca `none`. `landing_step`, `waits_on_human` y el poller siguen leyendo solo
+`LandingSpent.unlandable`.
+
 ## Adenda (GH-610): una falla que no es código no reinicia la tarea
 
 **Contexto.** En apostrophe GH-686 el check `docs` falló en su paso `api_breaks` solo porque el cuerpo del
