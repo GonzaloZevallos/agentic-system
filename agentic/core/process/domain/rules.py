@@ -54,7 +54,7 @@ from .roles import (
     Role,
     pair_for,
 )
-from .schemas import FitDecision, TaskType
+from .schemas import LIGHT_SUBTASK_CAP, FitDecision, TaskType
 from .scratch import INODE_FLOOR, SpaceReading
 from .task import (
     INTEGRATION,
@@ -2392,7 +2392,7 @@ FIRST_NODE = {"feature": "define", "bug": "diagnose", "platform_enhancement": "p
 # The role whose run is the full path's first stage (the Product Analyst's name is the same on
 # the feature and the bug path) and the most subtasks a light plan holds (GH-591).
 _FIRST_ROLE = {"feature": "Product Analyst", "bug": "Product Analyst"}
-LIGHT_PLAN_CAP = 2
+LIGHT_PLAN_CAP = LIGHT_SUBTASK_CAP
 
 
 def promotion_pending(state: TaskState) -> bool:
@@ -3485,7 +3485,10 @@ def resume_target(state: TaskState) -> str | None:
     status = state.get("status", "open")
     if status == "open":
         # The same fork as `after_classify`, plus the road back to PjM for a task that
-        # paused before it had a type: only PjM turns the human's answer into one.
+        # paused before it had a type: only PjM turns the human's answer into one. A light
+        # feature or bug goes to the plan, as `after_classify` does (GH-591).
+        if _light_skips_definition(state):
+            return "plan"
         return FIRST_NODE.get(state.get("type", ""), "classify")
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
@@ -3494,6 +3497,8 @@ def resume_target(state: TaskState) -> str | None:
         # (ADR-0040): the same one function `after_validate` and every design node's
         # own `after_*` already call, so a resume lands exactly where the live routing
         # would have, however many lead returns or PRD versions came before the pause.
+        if _light_skips_definition(state):
+            return "plan"
         return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate"}.get(status)

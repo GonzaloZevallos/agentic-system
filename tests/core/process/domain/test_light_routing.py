@@ -57,6 +57,23 @@ def test_light_validate_keeps_a_discarded_bug_and_a_return():
     assert rules.after_validate({"type": "bug", "status": "returned", **LIGHT}) == "diagnose"
 
 
+@pytest.mark.parametrize(("kind", "first"), [("feature", "define"), ("bug", "diagnose")])
+def test_the_resume_router_sends_a_light_open_task_to_plan(kind, first):
+    state = {"type": kind, "status": "open"}
+    assert rules.resume_target({**state, **LIGHT}) == "plan"
+    assert rules.resume_target({**state, **FULL}) == first
+    assert rules.resume_target(state) == first
+    ready = {"type": kind, "status": "definition_ready", "flags": {"touches_ui": True}}
+    assert rules.resume_target({**ready, **LIGHT}) == "plan"
+
+
+def test_the_resume_router_keeps_a_light_platform_task_at_plan_and_classify_for_no_type():
+    assert (
+        rules.resume_target({"type": "platform_enhancement", "status": "open", **LIGHT}) == "plan"
+    )
+    assert rules.resume_target({"status": "open", **LIGHT}) == "classify"
+
+
 def test_an_escalated_light_task_still_ends():
     assert rules.after_classify({"type": "feature", "escalated": True, **LIGHT}) is None
 
@@ -256,6 +273,12 @@ def test_the_owner_label_light_accepts_two_subtasks():
 def test_a_light_plan_over_the_cap_without_the_label_is_not_refused():
     check(path="light", path_label="none")(plan_data(3))
     check(path="light")(plan_data(4))
+
+
+def test_a_light_plan_over_the_cap_with_performance_is_left_to_the_promotion():
+    check(path="light", path_label="none")(plan_data(3, performance=[{"name": "p"}]))
+    with pytest.raises(ValueError, match="performance"):
+        check(path="light", path_label="light")(plan_data(3, performance=[{"name": "p"}]))
 
 
 def test_a_full_plan_over_the_cap_is_not_refused():

@@ -1143,7 +1143,8 @@ def _revision_check(existing_ids: Sequence[str], subtasks: Sequence[dict[str, An
         )
 
 
-LIGHT_CAP_REFUSAL = "owner label path:light: at most 2 subtasks"
+LIGHT_SUBTASK_CAP = 2
+LIGHT_CAP_REFUSAL = f"owner label path:light: at most {LIGHT_SUBTASK_CAP} subtasks"
 
 
 def _light_check(data: dict[str, Any], path: str, path_label: str) -> None:
@@ -1151,12 +1152,15 @@ def _light_check(data: dict[str, Any], path: str, path_label: str) -> None:
     `path:light` at most two subtasks (the cap is `rules.LIGHT_PLAN_CAP`)."""
     if path != "light":
         return
+    over = len(data.get("subtasks") or []) > LIGHT_SUBTASK_CAP
+    if over and path_label != "light":
+        return  # the plan node promotes this task (`plan_over_cap`): nothing else to refuse
     if data.get("performance"):
         raise ValueError(
             "this task is on the light path: a plan on it does not convene `performance`; "
             "leave it empty (a task that needs it is promoted to the full path instead)"
         )
-    if path_label == "light" and len(data.get("subtasks") or []) > 2:
+    if path_label == "light" and over:
         raise ValueError(LIGHT_CAP_REFUSAL)
 
 
