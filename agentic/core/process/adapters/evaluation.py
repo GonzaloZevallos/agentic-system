@@ -122,6 +122,7 @@ class EvaluationWorkspace:
     ALLOWED = frozenset(
         {
             "abort_merge",
+            "ancestry",
             "added_adrs",
             "added_lines",
             "base_of",
@@ -165,7 +166,9 @@ class EvaluationWorkspace:
             "merge_in_progress",
             "merge_keeping_conflicts",
             "merge_resolution",
+            "merge_settling",
             "merge_upstream_into",
+            "owned_drift",
             "overlay",
             "paths_naming",
             "prune",
@@ -177,7 +180,9 @@ class EvaluationWorkspace:
             "rename_branch",
             "repository_at",
             "reset_hard",
+            "restore_owned",
             "restore_clean",
+            "settle_owned",
             "setup_tree",
             "show",
             "subtask_checkout",
