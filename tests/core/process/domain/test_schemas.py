@@ -1272,3 +1272,12 @@ def test_the_size_field_descriptions_are_rendered_from_the_budget():
     assert str(size_budget.HAND_FILES) in (fields["hand_files"].description or "")
     assert str(size_budget.HAND_LINES) in (fields["hand_lines"].description or "")
     assert str(size_budget.TEST_LINES) in (fields["test_lines"].description or "")
+
+
+def test_a_size_field_description_does_not_retype_the_classification_rule():
+    # The rule of what counts (tests, generated paths, lockfiles, docs) lives in
+    # `size_budget.budget_text`; a description that spells it out is a second copy.
+    rule = ("generated", "lockfile", "readme", "adr", "docs", *size_budget.LOCKFILES)
+    for name in ("hand_files", "hand_lines", "test_lines"):
+        description = (schemas.TechPlan.model_fields[name].description or "").lower()
+        assert [word for word in rule if word.lower() in description] == [], name

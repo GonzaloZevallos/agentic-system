@@ -536,14 +536,14 @@ class TechPlan(RoleOutput):
     hand_files: int = Field(
         ge=0,
         description="The hand-written non-test files the pull request will change: a task may "
-        f"declare at most {size_budget.HAND_FILES}. Generated paths, lockfiles and tests never "
-        "count; docs, ADRs, the README and prompt files do",
+        f"declare at most {size_budget.HAND_FILES}. What counts as hand-written is the size "
+        "budget in your prompt",
     )
     hand_lines: int = Field(
         ge=0,
         description="The hand-written non-test lines the pull request will add: a task may "
-        f"declare at most {size_budget.HAND_LINES}. Generated paths, lockfiles and tests never "
-        "count",
+        f"declare at most {size_budget.HAND_LINES}. What counts as hand-written is the size "
+        "budget in your prompt",
     )
     test_lines: int = Field(
         ge=0,
