@@ -1190,3 +1190,21 @@ def test_a_review_without_a_revision_validates_and_a_cited_one_needs_a_one_line_
     ):
         with pytest.raises(ValueError):
             schemas.Review.model_validate(_review(**bad))
+
+
+@pytest.mark.parametrize("schema", [TechPlan, schemas.Review])
+def test_promote_is_optional_one_line_of_at_most_240_characters(schema):
+    """GH-591: the plan and the review may ask for a promotion; the request is one line."""
+    base = (
+        {**_plan("x", "api"), "estimated_cost_usd": 5.0, "estimated_files": 3}
+        if schema is TechPlan
+        else {"markdown": "x", "reason": "r", "findings": []}
+    )
+    assert schemas.validate(schema, base, VOCAB)["promote"] is None
+    asked = schemas.validate(schema, {**base, "promote": "touches a data conversion"}, VOCAB)
+    assert asked["promote"] == "touches a data conversion"
+    assert schemas.validate(schema, {**base, "promote": "x" * 240}, VOCAB)["promote"] == "x" * 240
+    assert schemas.validate(schema, {**base, "promote": "  "}, VOCAB)["promote"] is None
+    for bad in ("x" * 241, "two\nlines", "carriage\rreturn"):
+        with pytest.raises(ValueError):
+            schemas.validate(schema, {**base, "promote": bad}, VOCAB)

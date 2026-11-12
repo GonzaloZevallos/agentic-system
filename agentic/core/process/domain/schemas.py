@@ -40,7 +40,7 @@ from .task import (
     FindingScope,
     Severity,
 )
-from .task_path import Size
+from .task_path import TEXT_MAX, Size, validate_request
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -524,6 +524,21 @@ def _one_line(text: str, what: str) -> None:
         raise ValueError(f"{what} must be one non-empty line")
 
 
+PROMOTE_DESCRIPTION = (
+    "Only when the task turned out not small, or touches a risk area: one line, at most "
+    f"{TEXT_MAX} characters, saying why it must take the full path. The system applies it, "
+    "once. Leave it out otherwise, and never repeat a request the system refused"
+)
+
+
+def _promote_text(promote: str | None) -> str | None:
+    """A blank request is no request; anything else is the one line `task_path.promote` takes."""
+    if promote is None or not promote.strip():
+        return None
+    validate_request({"kind": "role", "text": promote})
+    return promote
+
+
 def plan_limits(scenario: PerfScenario) -> tuple[float, VolumeUnit, dict[str, Limit]]:
     """The volume, its unit and the limits by metric a measurement of `scenario` uses: the
     plan's numbers, the only ones a verdict compares against (GH-318 invariant 3)."""
@@ -602,6 +617,13 @@ class TechPlan(RoleOutput):
         "example `.agentic/stack.yaml` when the issue asks for a change in it). Empty when "
         "the issue names none",
     )
+
+    promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def _promote_is_one_line(self) -> TechPlan:
+        self.promote = _promote_text(self.promote)
+        return self
 
     @model_validator(mode="after")
     def _ci_named_or_excused(self) -> TechPlan:
@@ -745,6 +767,13 @@ class Review(RoleOutput):
         description="One line quoting the human decision that moves or drops the path. "
         "Required when `revision_decision` is above 0, empty otherwise",
     )
+
+    promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def _promote_is_one_line(self) -> Review:
+        self.promote = _promote_text(self.promote)
+        return self
 
     @model_validator(mode="after")
     def _revision_is_cited_and_versionable(self) -> Review:
