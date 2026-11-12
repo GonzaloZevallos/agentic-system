@@ -667,9 +667,7 @@ def _spots_text(spots: Sequence[tuple[str, int]]) -> str:
 
 
 _DATED_CAUSES: dict[str, str] = {
-    "slug_taken": (
-        "the slug after the date is already another ADR's, on master or on this branch"
-    ),
+    "slug_taken": ("the slug after the date is already another ADR's, on master or on this branch"),
     "unrewritable": (
         "a reference to the old number is a list, a range or a form the rule does not rewrite, "
         "and it cannot be changed without guessing"

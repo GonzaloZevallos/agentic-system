@@ -311,8 +311,7 @@ def step_for(
         ),
         adr_decision_due=head is not None
         and landing.adr_decision_due(live_entries(raw), head, numeric, all_entries(raw)),
-        adr_auto_due=head is not None
-        and landing.adr_auto_due(head, numeric, all_entries(raw)),
+        adr_auto_due=head is not None and landing.adr_auto_due(head, numeric, all_entries(raw)),
     )
 
 
@@ -581,9 +580,7 @@ def _adr_release_asked(raw: Mapping[str, object], facts: rules.MergeFacts) -> bo
     if facts.adr_naming == "dated" and collision is not None:
         # GH-611: the dated question is released by the rule (a numeric one) or by an owner.
         return (
-            entry is not None
-            and facts.pr_head is not None
-            and entry.get("head") == facts.pr_head
+            entry is not None and facts.pr_head is not None and entry.get("head") == facts.pr_head
         )
     return (
         entry is not None
