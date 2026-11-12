@@ -15,7 +15,7 @@ ROWS = (
     NumstatRow("agentic/core/new.py", 120, 4),
     NumstatRow("uv.lock", 900, 300),
     NumstatRow("tests/test_new.py", 200, 0),
-    NumstatRow("docs/reference/stack.md", 50, 10),
+    NumstatRow("generated_pages/stack.html", 50, 10),
     NumstatRow("agentic/moved.py", 0, 0),
     NumstatRow("web/src/api/client.ts", 70, 0),
 )
@@ -23,7 +23,7 @@ ROWS = (
 
 def test_the_rows_are_measured_with_the_lockfiles_the_docs_paths_and_the_generated_globs():
     ports = memory_ports()
-    ports.stack.declared_docs = Docs(generate="make docs", paths=("docs/reference/**",))
+    ports.stack.declared_docs = Docs(generate="make docs", paths=("generated_pages/**",))
     ports.stack.declared_generated = ("web/src/api/*.ts",)
     ports.workspace.numstat_rows = ROWS
     logged: list[str] = []
