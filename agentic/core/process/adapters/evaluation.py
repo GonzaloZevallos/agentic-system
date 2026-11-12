@@ -122,6 +122,7 @@ class EvaluationWorkspace:
     ALLOWED = frozenset(
         {
             "abort_merge",
+            "adr_first_date",
             "added_adrs",
             "added_lines",
             "base_of",

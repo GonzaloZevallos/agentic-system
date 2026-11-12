@@ -22,6 +22,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
+    class cost_history__Raise["Raise"]
     class landing__Commented["Commented"]
     class landing__IssueRef["IssueRef"]
     class landing__LandingSpent["LandingSpent"]

@@ -130,6 +130,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.validate_prd": "definition",
     "application.verifiers": "checks",
     "domain.account_reset": "machine",
+    "domain.adr_dated": "landing",
     "domain.adr_numbers": "landing",
     "domain.board": "landing",
     "domain.boot": "machine",

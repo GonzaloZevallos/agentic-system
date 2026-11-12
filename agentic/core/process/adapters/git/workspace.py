@@ -35,7 +35,7 @@ import tarfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
@@ -813,6 +813,24 @@ class GitWorkspace:
             elif line:
                 added.append(AddedAdr(line, commit))
         return tuple(added)
+
+    def adr_first_date(self, head: str, path: str) -> date | None:
+        # `--follow` carries the path back through the renames that gave it its present name;
+        # `--diff-filter=A` keeps the commit that added it under each; the oldest line is the
+        # first of all. `%aI` is the author date with its own offset, read here as UTC.
+        out = self._git(
+            *_PLAIN,
+            "log",
+            "--follow",
+            "--no-merges",
+            "--diff-filter=A",
+            "--format=%aI",
+            head,
+            "--",
+            path,
+        )
+        stamps = [datetime.fromisoformat(line) for line in out.splitlines() if line.strip()]
+        return min(stamps).astimezone(UTC).date() if stamps else None
 
     def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
         for number in numbers:

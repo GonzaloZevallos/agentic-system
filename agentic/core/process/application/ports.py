@@ -1374,6 +1374,13 @@ class Workspace(Protocol):
         A rename counts as the new path being added. Raises `GitError`."""
         ...
 
+    def adr_first_date(self, head: str, path: str) -> date | None:
+        """The UTC date of the author date of the earliest non-merge commit of `head`'s history
+        that added `path`, following renames (GH-611): the date a dated ADR name carries when
+        its front matter has none. Never the commit that last moved or renamed the path. `None`
+        when no commit added it. One `git log --follow`. Raises `GitError`."""
+        ...
+
     def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
         """Every line a non-merge commit of `master..head` added that contains one of
         `numbers` as a plain substring (GH-229), once however many numbers it holds. The

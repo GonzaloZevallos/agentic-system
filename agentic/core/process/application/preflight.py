@@ -137,9 +137,9 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     no task yet at preflight. `checks`, `witness`, `parallel_checks`, `affected_checks`,
     `affected_fallback` (ADR-0046), `delivery_checks`, `rerun_checks` (ADR-0066),
     `check_budgets`, `verifications`, `check_timeouts`, `not_ready_exit` (GH-451), `merge_inert`
-    (GH-353), `risk_areas` (GH-591), `adr_naming` (GH-611), `forbidden` and `design` are all loaded here
-    for validation only, so a broken one fails here and not when a worktree is born or a Developer
-    delivers halfway through the run (issues #36, #37, #38; ADR-0040) -- the
+    (GH-353), `risk_areas` (GH-591), `adr_naming` (GH-611), `forbidden` and `design` are all
+    loaded here for validation only, so a broken one fails here and not when a worktree is born or
+    a Developer delivers halfway through the run (issues #36, #37, #38; ADR-0040) -- the
     return expression stays `setup`'s alone, so `no_setup`'s warning does not move."""
     ports.stack.checks(revision)
     ports.stack.witness(revision)

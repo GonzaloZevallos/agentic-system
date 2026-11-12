@@ -8,7 +8,7 @@ import dataclasses
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -885,6 +885,9 @@ class MemoryWorkspace:
         self.master_trees: dict[str, tuple[str, ...]] = {"master0": ()}
         self.branch_commits: list[BranchCommit] = []
         self.added_adrs_calls: list[tuple[str, str]] = []
+        # GH-611: `adr_first_date`'s answer per path (absent is `None`) and each ask.
+        self.first_dates: dict[str, date] = {}
+        self.first_date_calls: list[tuple[str, str]] = []
         self.added_lines_calls: list[tuple[str, str, tuple[str, ...]]] = []
         self.paths_naming_calls: list[tuple[str, str]] = []
         self.commit_texts: dict[str, str] = {}  # GH-579: a tracked commit's message, by sha
@@ -1393,6 +1396,10 @@ class MemoryWorkspace:
             for path in commit.adds
             if path.startswith("docs/adr/")
         )
+
+    def adr_first_date(self, head: str, path: str) -> date | None:
+        self.first_date_calls.append((head, path))
+        return self.first_dates.get(path)
 
     def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
         for number in numbers:
