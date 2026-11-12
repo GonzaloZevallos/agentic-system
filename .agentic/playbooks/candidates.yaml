@@ -1573,3 +1573,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-12T16:10:01.614+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When your change alters a key flow, update the matching docs/architecture flow document in the same change, and check the diff touches docs before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-611
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T20:47:24.349+00:00'
