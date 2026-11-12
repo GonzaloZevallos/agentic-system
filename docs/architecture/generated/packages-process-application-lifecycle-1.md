@@ -24,6 +24,7 @@ graph TD
     g_domain__checks["checks (grupo de domain)"]
     g_domain__landing["landing (grupo de domain)"]
     g_domain__machine["machine (grupo de domain)"]
+    g_domain__roles["roles (grupo de domain)"]
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_application__archive["application.archive"]
@@ -33,6 +34,7 @@ graph TD
     m_application__restore["application.restore"]
     m_application__archive --> g_application__support
     m_application__archive --> g_domain__machine
+    m_application__archive --> g_domain__roles
     m_application__archive --> g_domain__state
     m_application__board_sync --> g_application__support
     m_application__board_sync --> g_domain__landing
