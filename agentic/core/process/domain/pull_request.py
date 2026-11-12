@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Literal, TypeIs, get_args
 
 # Under GitHub's 65,536 with room for `Closes #N\n\n` (the tracker's own prefix).
 PR_BODY_MAX = 60_000
@@ -45,7 +45,7 @@ def api_break_reason(text: str) -> str | RejectReason:
     return reason
 
 
-def is_reject_reason(value: str) -> bool:
+def is_reject_reason(value: str) -> TypeIs[RejectReason]:
     """Whether an `api_break_reason` answer is one of its refusals (a reason that is itself the
     word `missing` is a refusal too: the caller never needs to tell them apart)."""
     return value in get_args(RejectReason)

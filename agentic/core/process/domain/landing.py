@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from itertools import zip_longest
-from typing import Any, Literal, Protocol, cast, get_args
+from typing import Any, Literal, Protocol, get_args
 
 from . import ci, merge_ci, presubmit, pull_request, rules
 from .adr_numbers import Ambiguous, Renaming
@@ -1913,12 +1913,13 @@ def api_break_answer(
     )
     index = max(i for i, e in enumerate(written) if e.get("step") == "escalate_api_break")
     if not pull_request.is_reject_reason(sanitized):
-        patch = dict(released(raw, f"{prefix} {sanitized}", at))
-        landing = cast(list[LandingEntry], patch["landing"])
-        landing[index] = {**landing[index], "api_break_decided": sanitized}
-        patch["landing"] = landing
+        patch = released(raw, f"{prefix} {sanitized}", at)
+        released_entries = patch.get("landing")
+        if released_entries is None:
+            return ApiBreakAnswer("none", {})
+        released_entries[index] = {**released_entries[index], "api_break_decided": sanitized}
         return ApiBreakAnswer("decided", patch)
-    reason = cast(pull_request.RejectReason, sanitized)
+    reason = sanitized
     asked = written[index].get("reasks", 0)
     reask = asked < LANDING_API_BREAK_REASKS_MAX
     written[index] = {
