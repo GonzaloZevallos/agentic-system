@@ -833,7 +833,8 @@ def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_t
 # first with the rule and no remedy that names parts, and an over-the-line subtask plan is
 # left to the plan stage, which asks the human once.
 
-PART_OF = ("GH-316", 2)
+PART_OF = ("GH-316", 2, 2)
+PART_AT_DEPTH_ONE = ("GH-316", 2, 1)
 # Median 10, p90 200: a declared 20 USD is over the line by the reference alone.
 HIGH_REFERENCE = [10, 10, 10, 10, 200, 200, 200]
 
@@ -841,13 +842,24 @@ HIGH_REFERENCE = [10, 10, 10, 10, 200, 200, 200]
 def test_a_part_that_writes_parts_and_a_checklist_is_told_to_write_subtasks_only():
     # The GH-346 shape: the checklist refusal is never reached.
     check = schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_OF)
-    with pytest.raises(ValueError, match="part 2 of GH-316.*never split again.*subtasks only") as e:
+    with pytest.raises(
+        ValueError, match="part 2 of GH-316.*depth 2.*at most 2 levels.*subtasks only"
+    ) as e:
         check(_split(400.0, 90, tracker_checklist=CHECKLIST))
     assert "write parts" not in str(e.value)
     with pytest.raises(ValueError, match="subtasks only"):
         check(_split(20.0, 3))  # parts that would fit too: refused all the same
     with pytest.raises(ValueError, match="subtasks only"):
         check({**_estimated(20.0, 3), "parts": _split(20.0, 3)["parts"]})  # both shapes
+
+
+def test_a_part_at_depth_one_splits_again_like_any_task():
+    check = schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_AT_DEPTH_ONE)
+    check(_split(400.0, 90))  # parts over the line are accepted
+    with pytest.raises(ValueError, match="does not fit.*write parts"):
+        check(_estimated(400.0, 90))  # subtasks over the line are refused, as for a task
+    with pytest.raises(ValueError, match="fits: write subtasks"):
+        check(_split(20.0, 3))  # parts that would fit are refused, as for a task
 
 
 def test_a_part_with_subtasks_over_the_line_by_the_reference_alone_passes_the_check():

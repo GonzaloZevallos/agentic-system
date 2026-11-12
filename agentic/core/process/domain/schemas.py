@@ -1142,7 +1142,7 @@ def plan_check_for(
     spent_usd: float,
     *,
     fit_waived: bool = False,
-    part_of: tuple[str, int] | None = None,
+    part_of: tuple[str, int, int] | None = None,
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
     plan_shape: str = DEFAULT_PLAN_SHAPE,
@@ -1163,10 +1163,12 @@ def plan_check_for(
     nothing here: its items were checked one by one when the plan was read, and next to parts
     the split posts it on the issue (GH-350).
 
-    A task that is itself a part (`part_of`, the `(task id, part)` of its marker) is never
-    split again: any `parts` is refused first, with the rule and no remedy that names
-    parts, and subtasks over the line are not refused here -- the plan stage asks the human
-    once instead (`plan_fits` decides, ADR-0054).
+    A task that is itself a part (`part_of`, the `(task id, part, depth)` of its marker)
+    splits again like any task while its depth is under `rules.MAX_SPLIT_DEPTH` (GH-592):
+    subtasks over the line are refused and `parts` are asked for. At the cap, any `parts` is
+    refused first, with the rule and no remedy that names parts, and subtasks over the line
+    are not refused here -- the plan stage asks the human once instead (`plan_fits` decides,
+    ADR-0054).
 
     A `ci_required` name the base's workflows (`workflow`, `None` when there is none to
     read) prove no check run carries is refused with the names to use instead, unless the
@@ -1182,7 +1184,9 @@ def plan_check_for(
     the floor factor of the size budget; a plan with no size fields is judged as before."""
 
     # `rules` imports this module, so the one text is imported where it is used.
-    from .rules import TRACKER_WITH_PARTS
+    from .rules import MAX_SPLIT_DEPTH, TRACKER_WITH_PARTS
+
+    at_cap = part_of is not None and part_of[2] >= MAX_SPLIT_DEPTH
 
     bucket = FitBucket()
 
@@ -1190,10 +1194,11 @@ def plan_check_for(
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
         _ci_names_check(data, workflow, stack_ci)
-        if parts and part_of is not None:
+        if parts and part_of is not None and at_cap:
             raise ValueError(
-                f"this task is part {part_of[1]} of {part_of[0]}; a part is never split "
-                "again: write subtasks only, and drop `parts`"
+                f"this task is part {part_of[1]} of {part_of[0]}, at split depth {part_of[2]}; "
+                f"a split goes at most {MAX_SPLIT_DEPTH} levels deep: write subtasks only, "
+                "and drop `parts`"
             )
         if parts and subtasks:
             raise ValueError(
@@ -1233,7 +1238,7 @@ def plan_check_for(
                     "and no parts; a task is split only when it does not fit"
                 )
             return
-        if not fits and not fit_waived and part_of is None:
+        if not fits and not fit_waived and not at_cap:
             raise ValueError(
                 f"{words} does not fit one task "
                 "(or the history's reference for this size does not): write parts, "

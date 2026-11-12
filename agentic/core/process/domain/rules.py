@@ -3068,12 +3068,16 @@ _CROSSED_TEXT = {
 }
 
 
-def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> str:
-    """What the human reads when a part's plan is over the line: the figures the decision
-    used (`FitDecision`), the limits, which one was crossed, and the three ways out. No way
-    out stops the task by resuming it: stopping is the absence of a resume."""
-    origin, number = part_of
-    head = f"{task_id} is part {number} of {origin}; a part is never split again. "
+def fit_question_text(task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None) -> str:
+    """What the human reads when a part at the depth cap has a plan over the line: the
+    figures the decision used (`FitDecision`), the limits, which one was crossed, and the
+    ways out. Building it whole is not one. No way out stops the task by resuming it:
+    stopping is the absence of a resume."""
+    origin, number, depth = part_of
+    head = (
+        f"{task_id} is part {number} of {origin}, at split depth {depth}; a split goes at "
+        f"most {MAX_SPLIT_DEPTH} levels deep, so it cannot split again. "
+    )
     if fit is None:
         figures = "The plan's figures are not known, so which limit it crossed is not either. "
     else:
@@ -3119,21 +3123,22 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
         )
     return (
         f"{head}{figures}Choose one:\n"
-        "- Build it whole: comment on the issue and resume; the plan is kept and built as "
-        "one task.\n"
+        "- Narrow the task: comment on the issue what to cut and resume; the task is planned "
+        "again with your comment and judged by the same budget.\n"
         "- Stop and release the parts that depend on it: close the issue as not planned.\n"
         "- Stop and hold them: leave it open and do not resume.\n"
         "Closing the issue as completed without a merge leaves the parts behind it "
-        "blocked. Any resume builds it whole."
+        "blocked. No resume builds the plan as it stands."
     )
 
 
 def part_over_line(
-    task_id: str, part_of: tuple[str, int], fit: FitDecision | None, *, at: str
+    task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None, *, at: str
 ) -> dict[str, Any]:
-    """The patch that pauses a part whose plan is over the line: one `estimate` escalation
-    asking "build it whole or stop", marked by `fit_question` so only its resume waives the
-    fit. It carries no `proposed_estimate`; the plan is kept."""
+    """The patch that pauses a part at the depth cap whose plan is over the line: one
+    `estimate` escalation asking "narrow it or stop", marked by `fit_question` so its resume
+    plans again instead of building. It carries no `proposed_estimate`; the plan stays in
+    the Tech Lead's section."""
     return logged(
         {
             "current_role": PJM.name,
@@ -3176,15 +3181,14 @@ def resumed(
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
     if state.get("fit_question"):
-        # A part whose plan is over the line asked "build it whole or stop"; any resume
-        # answers "build it whole" (stopping is not resuming). Written explicitly: a `last`
-        # reducer ignores a missing key. Only this pause waives, never the cap's.
-        patch["fit_waived"] = True
+        # A part at the depth cap asked "narrow it or stop"; a resume is the first answer
+        # and waives nothing: the task is planned again with the decision in `Human` and
+        # judged by the same budget. Written explicitly: a `last` reducer ignores a
+        # missing key.
         patch["fit_question"] = False
     if state.get("escalation_class") == "estimate" and state.get("parts"):
-        # A part of a split does not fit and the human decided on it (ADR-0054): the plan
-        # is made again as one task, and a second partition is refused.
-        patch["fit_waived"] = True
+        # A split that stopped on the estimate and the human decided on it (ADR-0054): the
+        # plan is made again, with the same budget.
         patch["parts"] = []
     if (
         state.get("escalation_class") == "estimate"
@@ -5920,10 +5924,10 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
 # `estimate_fits` or `estimate_cap` and never repeats a number.
 SPLIT_COST_USD = 150
 ESTIMATE_CAP_FACTOR = 2
-# How far over the cost line a part of a split is still built whole without asking
-# (ADR-0054, addendum): twice the line. A separate constant from the cap's factor, which
-# answers another question.
-PART_WHOLE_FACTOR = 2
+# How many levels a split may go (GH-592): a task splits into parts (depth 1) and a part that
+# is still over the budget splits again (depth 2). A part at this depth does not split: its
+# oversized plan goes to the human with the plan kept.
+MAX_SPLIT_DEPTH = 2
 
 
 def estimate_fits(
@@ -5950,76 +5954,49 @@ def estimate_fits(
 
 
 # The marker every issue the partition opens carries (ADR-0054): an HTML comment, invisible
-# once rendered, that names the task and the part. It is what a retry looks for among the
-# open issues before opening one, and what tells a task it is itself a part.
-_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+) -->")
+# once rendered, that names the task, the part and the depth of the part (GH-592). It is what
+# a retry looks for among the open issues before opening one, and what tells a task it is
+# itself a part. The depth is optional: a marker written before it reads as depth 1.
+_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+)(?: depth (\d+))? -->")
 
 
-def split_marker(task_id: str, part: int) -> str:
-    """The marker of part `part` (1 is the first) of task `task_id`'s partition."""
-    return f"<!-- agentic-split: {task_id} part {part} -->"
+def split_marker(task_id: str, part: int, depth: int) -> str:
+    """The marker of part `part` (1 is the first) of task `task_id`'s partition, which sits
+    at depth `depth` (1 for a part of a task that is not a part, 2 for a part of a part)."""
+    return f"<!-- agentic-split: {task_id} part {part} depth {depth} -->"
 
 
-def split_part_of(body: str) -> tuple[str, int] | None:
-    """The `(task id, part)` the body's marker names, or `None` when it has none: a body
-    with a marker is a part of a partition, and a part never splits again."""
+def split_part_of(body: str) -> tuple[str, int, int] | None:
+    """The `(task id, part, depth)` the body's marker names, or `None` when it has none: a
+    body with a marker is a part of a partition. A marker with no depth, written before
+    parts could split again, is at depth 1."""
     match = _SPLIT_MARKER.search(body)
-    return (match.group(1), int(match.group(2))) if match else None
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2)), int(match.group(3) or 1)
 
 
-def part_builds_whole(fit: FitDecision) -> bool:
-    """Whether a part whose plan is over the size line is built whole without asking the
-    human (ADR-0054, addendum): the larger of the declared cost and the history's reference
-    is at most `PART_WHOLE_FACTOR` times the cost line. Raw figures, no rounding; the number
-    of files never caps this rule. The one place that compares them against that limit."""
-    return max(fit.cost_usd, fit.reference_usd or 0.0) <= PART_WHOLE_FACTOR * SPLIT_COST_USD
-
-
-def part_whole_marker(task_id: str, fit: FitDecision) -> str:
-    """The content marker of the line `part_whole_line` ends with: the task and the figures
-    it quotes, so the system looks for it among the issue's comments before it posts."""
-    return f"<!-- agentic-part-whole: {task_id} {fit.cost_usd:.2f} {fit.files} -->"
-
-
-def part_whole_line(task_id: str, part_of: tuple[str, int], fit: FitDecision) -> str:
-    """The one line the system posts on the issue when it builds a part whole without asking:
-    which part, the figures the decision used, the rule with its limit, the caps that still
-    apply, and the content marker. It has no prefix: `plan.PART_BUILT_WHOLE`, which
-    `resume.SYSTEM_COMMENTS` registers, is prepended where it is posted, so a resume never
-    reads the line as the human's decision."""
-    origin, number = part_of
-    reference = (
-        f"the history's reference is {fit.reference_usd:.2f} USD"
-        if fit.reference_usd is not None
-        else "the history has no reference for this many subtasks"
-    )
-    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
-    return (
-        f"{task_id} is part {number} of {origin} and is built whole without asking. "
-        f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
-        f"A part is built whole up to {limit} USD on the larger of the two; above it, the "
-        "system asks the human. The task cap and the estimate cap still apply.\n\n"
-        f"{part_whole_marker(task_id, fit)}"
-    )
-
-
-def split_part_text(part_of: tuple[str, int] | None) -> str:
+def split_part_text(part_of: tuple[str, int, int] | None) -> str:
     """What the planning Tech Lead is told about its task being a part of a partition
-    (ADR-0054): empty for a task that is not one. A part is never split again, so the text
-    asks for subtasks only and states the real rule, with the figure taken from the
-    constants: up to `PART_WHOLE_FACTOR` times the cost line, on the larger of the estimate
-    and the history's reference, the system builds the part whole without asking."""
+    (ADR-0054, GH-592): empty for a task that is not one. A part at depth 1 that is over the
+    size budget writes `parts` like any task; at the depth cap (`MAX_SPLIT_DEPTH`) it writes
+    subtasks only and the system asks the human if they are still over the budget. The
+    budget itself is rendered elsewhere (`size_budget.budget_text`), never repeated here."""
     if part_of is None:
         return ""
-    task_id, part = part_of
-    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
+    task_id, part, depth = part_of
+    head = f"This task is part {part} of task {task_id}, at split depth {depth}. "
+    if depth < MAX_SPLIT_DEPTH:
+        return (
+            f"{head}If it does not fit the size budget, write `parts` as a task does: a part "
+            f"splits again, up to depth {MAX_SPLIT_DEPTH}. Otherwise write subtasks. In both "
+            "cases estimate honestly; do not shrink the estimate or inflate it to pick a path."
+        )
     return (
-        f"This task is part {part} of task {task_id}. A part is never split again: write "
-        "subtasks only and never `parts`. If your subtasks are over the size limit, write "
-        f"them anyway: up to {limit} USD, on the larger of your estimate and the history's "
-        "reference, the system builds the part whole without asking; above it, the system "
-        "asks the human. In both cases estimate honestly; do not shrink the estimate or inflate "
-        "it to pick a path."
+        f"{head}This is the deepest a split goes: write subtasks only and never `parts`. If "
+        "your subtasks do not fit the size budget, write them anyway and the system asks the "
+        "human what to cut. In either case estimate honestly; do not shrink the estimate or "
+        "inflate it to pick a path."
     )
 
 
@@ -6062,9 +6039,9 @@ _PARTS_STEP = (
     "   small task of its own that lands and shows in the product before the next one starts.\n"
     "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
     "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
-    "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
-    "   If the section `## Human` says the human decided to build this task whole, write\n"
-    "   subtasks and no parts. Work that lands after the merge (a post-merge workflow, a bot\n"
+    "   Write no subtasks then, and `### Subtasks` is not needed. A part that is still over the\n"
+    "   size budget splits again. If the section `## Human` says to narrow this task, plan the\n"
+    "   narrower task. Work that lands after the merge (a post-merge workflow, a bot\n"
     "   commit) is still a subtask of this task, never a part."
 )
 _PARTS_FIELD = (
@@ -6073,27 +6050,32 @@ _PARTS_FIELD = (
 )
 
 
-def parts_remedy_text(part_of: tuple[str, int] | None) -> str:
-    """The end of the prompt's sentence on a plan over the size limit: for a task that is
-    not a part, to write `parts`; for a part, to write its subtasks anyway."""
-    if part_of is None:
+def _at_depth_cap(part_of: tuple[str, int, int] | None) -> bool:
+    return part_of is not None and part_of[2] >= MAX_SPLIT_DEPTH
+
+
+def parts_remedy_text(part_of: tuple[str, int, int] | None) -> str:
+    """The end of the prompt's sentence on a plan over the size limit: to write `parts`,
+    except for a part at the depth cap, which writes its subtasks anyway."""
+    if not _at_depth_cap(part_of):
         return _PARTS_REMEDY
     return (
         "without the human's decision: write your subtasks anyway and do not shrink the\n"
-        "   estimate to make it fit; the system asks the human whether to build it whole."
+        "   estimate to make it fit; the system asks the human what to cut."
     )
 
 
-def parts_step_text(part_of: tuple[str, int] | None) -> str:
-    """The prompt's step on writing `### Parts`: empty for a part, which never has one."""
-    return _PARTS_STEP if part_of is None else ""
+def parts_step_text(part_of: tuple[str, int, int] | None) -> str:
+    """The prompt's step on writing `### Parts`: empty for a part at the depth cap."""
+    return "" if _at_depth_cap(part_of) else _PARTS_STEP
 
 
-def parts_field_text(part_of: tuple[str, int] | None) -> str:
-    """The prompt's line on the `parts` output field: for a part, that it stays empty."""
-    if part_of is None:
+def parts_field_text(part_of: tuple[str, int, int] | None) -> str:
+    """The prompt's line on the `parts` output field: for a part at the depth cap, that it
+    stays empty."""
+    if not _at_depth_cap(part_of):
         return _PARTS_FIELD
-    return "- `parts`: always empty, because this task is a part and a part is never split again."
+    return "- `parts`: always empty, because this task is at the deepest level a split goes."
 
 
 SPLIT_TRACKER_ITEMS = 10

@@ -9,9 +9,11 @@ Idempotent over a cut `gh` (the receptor pattern): every body carries the marker
 part is opened, and every part opened is recorded in `split_issues` at once. A retry
 therefore completes what is missing and opens nothing twice.
 
-A task that is itself a part (its own description carries a marker) never splits again:
-depth is one. The plan stage asks the human before a part gets here; if one does, it
-escalates as `rules.part_over_line` does, and a human decision builds it whole.
+A task that is itself a part (its own description carries a marker) splits again up to
+`rules.MAX_SPLIT_DEPTH`: its children's markers name this task and carry the depth after its
+own. A part at the cap does not split; the plan stage asks the human before one gets here, and
+if one does, it escalates as `rules.part_over_line` does. The marker's depth is optional when
+read: a part opened before depth existed is found again by a retry, read at depth 1.
 
 Tracker work (GH-350, ADR-0062): a plan with parts may carry a `tracker_checklist`, and the
 task ends `split` without closing its issue, so every open issue that waits on it would wait
@@ -42,15 +44,24 @@ SPLIT = "Split: "
 
 async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     task_id = state["id"]
-    if (part_of := rules.split_part_of(state.get("description", ""))) is not None:
-        # Defensive: the plan stage asks the human before a part reaches here.
+    part_of = rules.split_part_of(state.get("description", ""))
+    if part_of is not None and part_of[2] >= rules.MAX_SPLIT_DEPTH:
+        # Defensive: the plan stage asks the human before a part at the cap reaches here.
         return finish(state, rules.part_over_line(task_id, part_of, None, at=ports.now()), ports)
-    parts = state.get("parts", [])
+    depth = 1 if part_of is None else part_of[2] + 1
+    parts = [{**part, "depth": part.get("depth", depth)} for part in state.get("parts", [])]
     current = state
     # What the node returns besides the end: the graph's channels take the checklist and its
     # record from the patch, never from the document `finish` saved (invariant: the record's
     # hash is that of the checklist in the same state).
     carried: TaskState = {}
+    if parts != state.get("parts", []):
+        # The depth each part is opened at is saved with the record, so a retry opens the
+        # same one.
+        stamped: TaskState = {"parts": parts}
+        finish(current, stamped, ports)
+        current = apply(current, stamped)
+        carried.update(stamped)
     try:
         open_bodies = list(ports.inbox.open_issues())
     except (ValueError, OSError) as exc:
@@ -59,10 +70,13 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         key = str(number)
         if key in current.get("split_issues", {}):
             continue
-        marker = rules.split_marker(task_id, number)
-        url = next((found for found, body in open_bodies if marker in body), None)
+        # Found by what the marker names, not by its text: an old marker has no depth.
+        wanted = (task_id, number, depth)
+        url = next(
+            (found for found, body in open_bodies if rules.split_part_of(body) == wanted), None
+        )
         if url is None:
-            body = _body(current, number, part, len(parts))
+            body = _body(current, number, part, len(parts), depth)
             try:
                 url = ports.tracker.open_issue(part["title"], body, label=PART_LABEL)
             except (ValueError, OSError) as exc:
@@ -144,7 +158,7 @@ def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports, left: st
     return finish(state, patch, ports)
 
 
-def _body(state: TaskState, number: int, part: PartRecord, total: int) -> str:
+def _body(state: TaskState, number: int, part: PartRecord, total: int, depth: int) -> str:
     task_id = state["id"]
     issues = state.get("split_issues", {})
     blockers = ", ".join(f"#{_issue_number(issues[str(dep)])}" for dep in part["depends_on"])
@@ -159,7 +173,7 @@ def _body(state: TaskState, number: int, part: PartRecord, total: int) -> str:
         f"Part {number} of {total} of {task_id}. The plan and its interview are in "
         f"`{document.relative_path(task_id)}`; the original task branch "
         f"`{rules.task_branch(task_id)}` is context for reading, nothing to bring in.",
-        rules.split_marker(task_id, number),
+        rules.split_marker(task_id, number, depth),
     ]
     return "\n\n".join(sections)
 
