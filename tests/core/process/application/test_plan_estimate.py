@@ -4,9 +4,8 @@ both arms, and a plan that fits is delivered with its `estimate`."""
 
 import pytest
 
-from agentic.core.process.application.plan import PART_BUILT_WHOLE, plan
+from agentic.core.process.application.plan import plan
 from agentic.core.process.domain import rules
-from agentic.core.process.domain.schemas import FitDecision
 from agentic.core.process.domain.size_budget import PROVEN_PAIRS, ActualSize, PlanSize
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
@@ -291,8 +290,13 @@ async def test_a_plan_without_a_checklist_stores_none_and_adds_no_block(tmp_path
 PART = {
     **TASK,
     "id": "GH-346",
-    "description": f"Second half.\n\n{rules.split_marker('GH-316', 2)}",
+    "description": f"Second half.\n\n{rules.split_marker('GH-316', 2, 2)}",
 }
+PART_DEPTH_ONE = {
+    **PART,
+    "description": f"Second half.\n\n{rules.split_marker('GH-316', 2, 1)}",
+}
+PART_OLD_MARKER = {**PART, "description": "Second half.\n\n<!-- agentic-split: GH-316 part 2 -->"}
 
 
 def arm_of(arm, tmp_path, *scripted):
@@ -309,7 +313,7 @@ def over_the_line_by_reference(ports):
 
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_a_part_over_the_line_asks_once_and_keeps_its_plan(arm, tmp_path):
+async def test_a_part_at_the_depth_cap_over_the_line_asks_once_and_keeps_its_plan(arm, tmp_path):
     runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0))
     patch = await plan(PART, cfg, over_the_line_by_reference(memory_ports(runner)))
 
@@ -317,27 +321,48 @@ async def test_a_part_over_the_line_asks_once_and_keeps_its_plan(arm, tmp_path):
     assert patch["escalation_class"] == "estimate"
     assert patch["fit_question"] is True
     assert "proposed_estimate" not in patch
-    assert list(patch["subtasks"]) == ["api"]
+    # The plan stays in the Tech Lead's section; nothing is queued to build.
+    assert "subtasks" not in patch and "api" in patch["sections"]["Tech Lead"]
     assert "part 2 of GH-316" in patch["escalated"] and "not planned" in patch["escalated"]
+    assert "Build it whole" not in patch["escalated"]
     assert [e["kind"] for e in patch["pause_log"]].count("escalation") == 1
     assert patch["failures"] == []
 
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_the_resume_of_a_part_over_the_line_builds_it_whole_without_planning_again(
+async def test_the_resume_of_a_part_over_the_line_does_not_waive_the_fit_and_plans_again(
     arm, tmp_path
 ):
     runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0))
     patch = await plan(PART, cfg, over_the_line_by_reference(memory_ports(runner)))
-    paused = apply(PART, patch)
-    calls = len(runner.calls)
+    paused = apply({**PART, "type": "platform_enhancement"}, patch)
 
     assert rules.auto_resumable(paused) is None
-    resumed = apply(paused, rules.resumed(paused, "build it whole", at="2026-11-06T12:00:00+00:00"))
+    resumed = apply(paused, rules.resumed(paused, "narrow it", at="2026-11-06T12:00:00+00:00"))
 
-    assert resumed["fit_waived"] is True and resumed["fit_question"] is False
-    assert rules.resume_target(resumed) == "integrate"
-    assert len(runner.calls) == calls
+    assert "fit_waived" not in resumed and resumed["fit_question"] is False
+    assert rules.resume_target(resumed) == "plan"
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_part_at_depth_one_over_the_line_is_told_to_write_parts_and_never_asked(
+    arm, tmp_path
+):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0), planned_parts())
+    patch = await plan(PART_DEPTH_ONE, cfg, over_the_line_by_reference(memory_ports(runner)))
+
+    assert "does not fit" in patch["failures"][0]["error"]
+    assert "write parts" in patch["failures"][0]["error"]
+    assert "fit_question" not in patch and "escalated" not in patch
+    assert patch["parts"] and "subtasks" not in patch
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_part_with_an_old_marker_is_read_at_depth_one_and_splits(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned_parts())
+    patch = await plan(PART_OLD_MARKER, cfg, memory_ports(runner))
+
+    assert patch["parts"] and "escalated" not in patch
 
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
@@ -390,7 +415,7 @@ async def test_the_tech_lead_of_a_part_is_told_it_is_one(arm, tmp_path):
     await plan(TASK, cfg, memory_ports(whole_runner))
 
     told = part_runner.calls[-1]["system_prompt"]
-    assert "part 2 of task GH-316" in told and "never split again" in told
+    assert "part 2 of task GH-316" in told and "deepest a split goes" in told
     assert "part 2" not in whole_runner.calls[-1]["system_prompt"]
 
 
@@ -414,69 +439,14 @@ async def test_the_tech_lead_of_a_task_that_is_not_a_part_reads_the_original_par
 
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_a_part_at_twice_the_line_is_built_whole_with_one_line_on_the_issue(arm, tmp_path):
-    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=300.0, estimated_files=44))
-    ports = memory_ports(runner)
-    patch = await plan(PART, cfg, ports)
-
-    assert "escalated" not in patch and "fit_question" not in patch and "fit_waived" not in patch
-    assert list(patch["subtasks"]) == ["api"]
-    assert rules.after_plan(apply(PART, patch)) == "integrate"
-    [(task_id, line)] = ports.tracker.comments
-    assert task_id == "GH-346" and line.startswith(PART_BUILT_WHOLE)
-    assert "300.00 USD and 44 files" in line
-    assert rules.part_whole_marker("GH-346", FitDecision(False, 300.0, 44, None)) in line
-
-
-@pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_a_second_plan_of_the_same_part_posts_no_second_line(arm, tmp_path):
-    plans = [planned(estimated_cost_usd=300.0), planned(estimated_cost_usd=300.0)]
-    if arm == "cold":
-        runner, cfg = arm_of(arm, tmp_path, *plans)
-    else:
-        runner = ScriptedRunner(
-            **{ASK: [questions(1, session="e1"), questions(done=True, session="e1")] * 2},
-            **{ANSWER: [tech_answers(1, session="t1")] * 2},
-            tech_lead=plans,
-        )
-        cfg = interviewed(tmp_path)
-    ports = memory_ports(runner)
-    await plan(PART, cfg, ports)
-    again = await plan(PART, cfg, ports)
-
-    assert len(ports.tracker.comments) == 1
-    assert "escalated" not in again and "fit_waived" not in again
-
-
-@pytest.mark.parametrize("arm", ["cold", "interview"])
-@pytest.mark.parametrize("cost", [300.004, 300.01])
-async def test_a_part_just_over_twice_the_line_still_asks(arm, cost, tmp_path):
+@pytest.mark.parametrize("cost", [160.0, 300.0, 400.0])
+async def test_a_part_at_the_depth_cap_is_never_built_whole_over_the_line(arm, cost, tmp_path):
     runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=cost))
     ports = memory_ports(runner)
     patch = await plan(PART, cfg, ports)
 
     assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
     assert "fit_waived" not in patch
-    assert ports.tracker.comments == []
-
-
-@pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_a_part_over_twice_the_line_by_reference_still_asks(arm, tmp_path):
-    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0))
-    patch = await plan(PART, cfg, over_the_line_by_reference(memory_ports(runner)))
-
-    assert patch["fit_question"] is True
-
-
-@pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_a_tracker_that_fails_does_not_stop_a_part_built_whole(arm, tmp_path):
-    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=250.0))
-    ports = memory_ports(runner)
-    ports.tracker.comment_failures = 1
-    patch = await plan(PART, cfg, ports)
-
-    assert "escalated" not in patch and "fit_question" not in patch
-    assert list(patch["subtasks"]) == ["api"]
     assert ports.tracker.comments == []
 
 
@@ -562,15 +532,14 @@ async def test_an_unproven_ratio_is_the_fixed_factor(tmp_path):
     assert "judged x 1.5, rounded up" in " ".join(runner.calls[0]["system_prompt"].split())
 
 
-async def test_a_part_is_judged_with_the_proven_ratio_too(tmp_path):
-    # The verdict on a part is seen in what the system does with a part that does not fit
-    # (it says so on the issue); a part that fits leaves the issue alone.
+async def test_a_part_at_the_depth_cap_is_judged_with_the_proven_ratio_too(tmp_path):
+    # PART is at the depth cap: a plan it cannot fit asks the human, one that fits does not.
     unproven, proven = (
         memory_ports(ScriptedRunner(tech_lead=[planned(hand_files=6)])) for _ in "ab"
     )
     proven.documents.saved.extend(sized_closed(PROVEN_PAIRS))
-    await plan(PART, cold(tmp_path), unproven)
-    await plan(PART, cold(tmp_path), proven)
+    fits = await plan(PART, cold(tmp_path), unproven)
+    refused = await plan(PART, cold(tmp_path), proven)
 
-    assert unproven.tracker.comments == []
-    assert [task_id for task_id, _ in proven.tracker.comments] == ["GH-346"]
+    assert "fit_question" not in fits and "subtasks" in fits
+    assert refused["fit_question"] is True and "subtasks" not in refused

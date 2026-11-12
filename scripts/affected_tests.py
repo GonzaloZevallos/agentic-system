@@ -157,6 +157,11 @@ TABLE: tuple[Row, ...] = (
         "the fixture package whose imports the reader is pinned against",
     ),
     Row(
+        "tests/fixtures/split/*",
+        ("tests/core/process/application/test_split_gh407.py",),
+        "the GH-407 plan the size budget and the parts check are run against",
+    ),
+    Row(
         "tests/fixtures/pre_performance_document.md",
         ("tests/core/process/domain/test_schemas.py",),
         "an old task document that must still parse with no performance scenarios",

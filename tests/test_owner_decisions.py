@@ -129,8 +129,8 @@ def test_every_rozan_names_an_adr_in_force():
 # The entry that states each number the code enforces, and the constant it must equal.
 STATED = {
     "D-d3cd64da": (("150", rules.SPLIT_COST_USD), ("40", size_budget.LEGACY_FILES)),
-    "D-99072874": (("300", rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD),),
-    "D-5c088d42": (("300", rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD),),
+    "D-99072874": (("300", rules.ESTIMATE_CAP_FACTOR * rules.SPLIT_COST_USD),),
+    "D-5c088d42": (("300", rules.ESTIMATE_CAP_FACTOR * rules.SPLIT_COST_USD),),
 }
 STATED_BY_TEXT = (
     ("Los pull requests de lecciones del playbook", "240", playbook.LESSON_MAX_CHARS),

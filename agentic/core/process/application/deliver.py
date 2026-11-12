@@ -15,7 +15,7 @@ from typing import assert_never
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, landing, presubmit, rules
-from ..domain.pull_request import BoundedBody, bounded_body
+from ..domain.pull_request import BoundedBody, bounded_body, closes_line
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
@@ -119,6 +119,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         part
         for part in (
             replaced_note,
+            closes_line(state.get("description", "")),
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
             _perf_preface(state),

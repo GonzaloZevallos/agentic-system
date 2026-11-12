@@ -6,6 +6,7 @@ import pytest
 from agentic.core.process.domain import cost_history, document, experiment, schemas
 from agentic.core.process.domain.schemas import PLAN_SHAPE_REFUSAL
 from agentic.shared.configuration import Configuration, arm_input, experiment_snapshot
+from tests.fakes import PART_DEFAULTS
 
 DECLARATION = {
     "id": "plan-shape",
@@ -145,8 +146,8 @@ def plan(*ids, integration="", cost=20.0, files=3):
 
 def split(cost=200.0, files=50):
     parts = [
-        {"title": "One", "body": "First slice.", "depends_on": []},
-        {"title": "Two", "body": "Second slice.", "depends_on": [1]},
+        {**PART_DEFAULTS, "title": "One", "body": "First slice.", "depends_on": []},
+        {**PART_DEFAULTS, "title": "Two", "body": "Second slice.", "depends_on": [1]},
     ]
     return {**plan("a", cost=cost, files=files), "subtasks": [], "parts": parts}
 

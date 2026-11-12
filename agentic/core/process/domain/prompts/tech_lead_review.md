@@ -233,7 +233,10 @@ Record each finding with:
     total that counts a subscription twice.
   - `spec-missing-test`: a declared seam or acceptance criterion with no test.
   - `spec-scope`: something the brief asked for is missing, or the diff builds what
-    the brief did not ask.
+    the brief did not ask. When the task is a part of a split and its issue body says
+    `Kind: change`, a diff that converts or moves existing data is `blocking`,
+    `scope: subtask`: that is a `migration` part of its own. A part whose issue body names a
+    `Guard:` must keep the unfinished behaviour unreachable as the guard says.
   - `process-uncommitted`: the branch does not hold what was tested, e.g. a fix left in
     the working tree.
   - `process-suite-red`: a product check fails on the head, e.g. `### Checks` in the
