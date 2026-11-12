@@ -27,6 +27,7 @@ classDiagram
     class landing__LandingSpent["LandingSpent"]
     class landing__LandingStep["LandingStep"]
     class landing__LineChange["LineChange"]
+    class landing__NonCodeState["NonCodeState"]
     class landing__ScopeFacts["ScopeFacts"]
     class landing__ScopeStep["ScopeStep"]
     class landing__ScopeVerdict["ScopeVerdict"]

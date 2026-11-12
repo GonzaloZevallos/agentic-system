@@ -35,5 +35,6 @@ classDiagram
     class cost_history__History["History"]
     class cost_history__Pair["Pair"]
     class cost_history__Raise["Raise"]
+    class landing__ApiBreakAnswer["ApiBreakAnswer"]
     adr_numbers__DecidedRenaming --> adr_numbers__Renaming
 ```

@@ -127,6 +127,15 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Qué es**: mapping of `workflow` (a bare file name under .github/workflows/) and `sha_input`; requires `ci`. A head that touches .github/ is judged by a workflow_dispatch run of the base branch's workflow at that sha, and without the key it runs the local suite ([ADR-0080](../adr/0080-un-producto-con-ci-corre-su-nivel-completo-solo-en-github.md))
 - **Lector**: `agentic.core.knowledge.domain.stack.ci_dispatch`
 
+## `api_break_line`
+
+- **Presencia**: opcional
+- **Se lee como**: `ApiBreakLine | None`
+- **Si falta**: ausente = desactivado (el lector devuelve `None`)
+- **Subclaves**: `prefix`, `check`, `step`
+- **Qué es**: mapping of `prefix` (ends in `:`), `check` and `step`: the line a pull request body carries for an approved API break, the CI check that fails without it and the name of its step; the system writes the line and puts it back instead of restarting the task
+- **Lector**: `agentic.core.knowledge.domain.stack.api_break_line`
+
 ## `check_budgets`
 
 - **Presencia**: opcional
