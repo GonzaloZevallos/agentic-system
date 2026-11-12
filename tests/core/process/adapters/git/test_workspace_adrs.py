@@ -2,8 +2,10 @@
 real repository (GH-229): master and a branch that both took ADR 0049, the branch having
 merged master after master took it."""
 
+import os
 import subprocess
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -256,3 +258,34 @@ def test_fetch_commit_reads_the_head_once_when_local_and_twice_when_a_fetch_is_t
     reads.clear()
     assert ws.fetch_commit("f" * 40) is False
     assert len(reads) == 2
+
+
+def test_adr_first_date_is_the_utc_author_date_of_the_commit_that_first_added_the_path(tmp_path):
+    repo = tmp_path / "product"
+    repo.mkdir()
+    git("init", "-q", "-b", "master", cwd=repo)
+    commit(repo, "v0", {"README.md": "x\n"})
+
+    def commit_at(message: str, when: str, files: dict[str, str]) -> None:
+        env = {"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
+        for name, text in files.items():
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text(text)
+        git("add", "-A", cwd=repo)
+        subprocess.run(
+            ["git", *AUTHOR, "commit", "-q", "-m", message],
+            cwd=repo,
+            check=True,
+            env={**os.environ, **env},
+        )
+
+    # 2026-11-03 23:30 at -05:00 is already the 4th in UTC.
+    commit_at("adds 0079", "2026-11-03T23:30:00-05:00", {"docs/adr/0079-x.md": "# x\n" * 8})
+    git("mv", "docs/adr/0079-x.md", "docs/adr/0085-x.md", cwd=repo)
+    commit_at("renames it", "2026-11-09T10:00:00+00:00", {})
+    commit_at("edits it", "2026-11-10T10:00:00+00:00", {"docs/adr/0085-x.md": "# x\n" * 8 + "y\n"})
+    head = git("rev-parse", "HEAD", cwd=repo)
+    ws = GitWorkspace(repo, IDENTITY)
+
+    assert ws.adr_first_date(head, "docs/adr/0085-x.md") == date(2026, 11, 4)
+    assert ws.adr_first_date(head, "docs/adr/0099-never.md") is None

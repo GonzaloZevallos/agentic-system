@@ -192,3 +192,11 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Si falta**: mapa vacío (`{}`)
 - **Qué es**: mapping of check or verification name to the exit code (1 to 255) that says the environment was not ready
 - **Lector**: `agentic.core.knowledge.domain.stack.not_ready_exit`
+
+## `adr_naming`
+
+- **Presencia**: opcional
+- **Se lee como**: `Literal['numbered', 'dated']`
+- **Si falta**: el valor que calcula el lector
+- **Qué es**: `numbered` or `dated`: how the product names its ADRs (`NNNN-slug.md` or `yyyymmdd-slug.md`); on `dated`, landing renames a branch's numbered ADR to the dated form instead of renumbering it
+- **Lector**: `agentic.core.knowledge.domain.stack.adr_naming`

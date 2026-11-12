@@ -42,6 +42,7 @@ from ..domain import (
 )
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
+from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStep, LandingStepKind
@@ -677,7 +678,8 @@ def assess_merge(
             ci_dispatch_declared=dispatch_declared,
         )
 
-    facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
+    collision = _adr_collision(ports, raw, facts, current_master)
+    facts = replace(facts, adr_collision=collision, adr_naming=adr_collision.naming_of(collision))
     decision = rules.auto_merge_decision(gated(facts))
     if facts.pr_head is not None and rules.criteria_probe_wanted(gated(facts)):
         # GH-334: a head that grows a criteria document past its cap is refused before the
@@ -792,7 +794,7 @@ def _abandoned_by_slices(
 
 def _adr_collision(
     ports: Ports, raw: TaskState, facts: rules.MergeFacts, master: str
-) -> Renaming | Ambiguous | None:
+) -> Renaming | Ambiguous | Undated | None:
     """The collision the landing has to see to route `adr_number_taken` (GH-229), read on
     the same master sha the merge verb uses. Whether it is read at all is
     `rules.adr_probe_wanted`'s, derived from the decision's own order (GH-262: a refactor of

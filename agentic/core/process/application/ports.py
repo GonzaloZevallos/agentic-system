@@ -599,6 +599,15 @@ class ProductStack(Protocol):
         broken, or a glob is refused by `master_gain.glob_refusal`."""
         ...
 
+    def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
+        """How the product names its ADRs (`core.knowledge`, GH-611), as the commit `revision`
+        declares it: `dated` renames a branch's numbered ADR to `yyyymmdd-slug.md` at landing,
+        `numbered` renumbers it. Opt-in: `numbered` when the key is absent -- the landing of
+        today byte for byte -- and also when the revision cannot be read (not fetched, no file,
+        YAML that does not parse): it never raises for those and never infers the answer from
+        file names. Raises `ValueError` when the key is there with any other value."""
+        ...
+
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         """The areas of risk the product declares for classification (`core.knowledge`), as the
         commit `revision` declares them, in file order. Empty when the key is absent. Raises
@@ -1432,6 +1441,13 @@ class Workspace(Protocol):
         with the commit that added it (GH-229): the branch's own ADRs, whatever master
         took meanwhile and whatever a merge of master brought in. One read of the log.
         A rename counts as the new path being added. Raises `GitError`."""
+        ...
+
+    def adr_first_date(self, head: str, path: str) -> date | None:
+        """The UTC date of the author date of the earliest non-merge commit of `head`'s history
+        that added `path`, following renames (GH-611): the date a dated ADR name carries when
+        its front matter has none. Never the commit that last moved or renamed the path. `None`
+        when no commit added it. One `git log --follow`. Raises `GitError`."""
         ...
 
     def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:

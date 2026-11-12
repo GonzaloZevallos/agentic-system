@@ -21,11 +21,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
-from ..domain import adr_numbers, landing, rules
+from ..domain import adr_dated, adr_numbers, landing, rules
 from ..domain.adr_numbers import Renaming
 from ..domain.docs import Docs, conflict_line
 from ..domain.roles import pair_for
@@ -48,6 +48,10 @@ from .ports import GitError, Ports, UpstreamMerge, Workspace
 from .registration import REGISTER_WAIT_S
 
 CROSSCUT: ChangeCategory = "integration-crosscut"
+
+GENERATE_WALL_S = 600.0
+"""The wall, in seconds, of the product's `docs.generate` when a dated rename runs it (GH-611) and
+the stack declares no `check_timeouts['docs']`; declared, not measured."""
 
 
 def _now() -> str:
@@ -482,6 +486,9 @@ def renumber_adr(context: LandingContext) -> None:
     except GitError as failed:
         context.log(f"agentic: land: {context.task_id}: renumber: collision unreadable: {failed}")
         return
+    if isinstance(found, adr_dated.Undated):
+        _renamed_by_date(context, state, unit, sha, found)
+        return
     if not isinstance(found, Renaming):
         context.log(f"agentic: land: {context.task_id}: renumber: no clean renaming any more")
         return
@@ -536,3 +543,201 @@ def renumber_adr(context: LandingContext) -> None:
         f"agentic: land: {context.task_id}: renumbered {record['from']} -> {record['to']}, "
         f"pushed {new_head}" + ("" if carried else " (review not carried)")
     )
+
+
+def _dated_texts(
+    workspace: Workspace, sha: str, head: str, own: Sequence[adr_numbers.OwnAdr]
+) -> dict[str, tuple[str | None, str]]:
+    """`(text at master, text at head)` of every file the rename may change: the own ADRs and
+    each file at `head` that names one of their old numbers (the product's own `git grep`)."""
+    paths = {adr.path for adr in own}
+    for adr in own:
+        number = adr_numbers.number_of(adr.path.rsplit("/", 1)[-1])
+        if number is not None:
+            paths.update(workspace.paths_naming(head, number))
+    texts: dict[str, tuple[str | None, str]] = {}
+    for path in sorted(paths):
+        text = workspace.show(head, path)
+        if text is not None:
+            texts[path] = (workspace.show(sha, path), text)
+    return texts
+
+
+def _record_dated(
+    context: LandingContext,
+    state: TaskState,
+    outcome: landing.RenumberOutcome,
+    cause: landing.RenumberCause | None = None,
+) -> TaskState:
+    """The document with its open `renumber` entry resolved and stamped `mode: dated`, the
+    closed `outcome` and, for a decline or a retry, the `cause` (GH-611)."""
+    resolved = landing.resolve_open(all_entries(state), _now(), state.get("cost_usd", 0.0))
+    if resolved and resolved[-1].get("step") == "renumber":
+        resolved[-1]["mode"] = "dated"
+        resolved[-1]["outcome"] = outcome
+        if cause is not None:
+            resolved[-1]["cause"] = cause
+    saved: TaskState = {**state, "landing": resolved}
+    context.ports.documents.save(saved)
+    record_landing(context, resolved)
+    return saved
+
+
+def _renamed_by_date(
+    context: LandingContext,
+    state: TaskState,
+    unit: str,
+    sha: str,
+    found: adr_dated.Undated,
+) -> None:
+    """The dated path of `renumber_adr` (GH-611, the owner's rule): the stack is re-read at the
+    round's master sha, the rename is recomputed from it, written in the task worktree, the
+    product's `docs.generate` is run under a wall, and one commit holds the renamed files, the
+    rewritten ones and the generated docs, pushed with a lease on the head. No local gate: the
+    merge's full tier judges the pushed head. See `task.RenumberOutcome` for how it ends."""
+    ports, head, workspace = context.ports, context.head, context.ports.workspace
+    task = context.task_id
+    try:
+        still_dated = ports.stack.adr_naming(sha) == "dated"
+    except ValueError:
+        still_dated = False
+    if not still_dated:
+        context.log(f"agentic: land: {task}: renumber: the product no longer names ADRs by date")
+        return
+    reviewed = state["subtasks"][unit].get("reviewed_head")
+    try:
+        checkout = task_checkout(state, context.cfg, ports)
+    except SetupFailed as failed:
+        context.log(f"agentic: land: {task}: renumber: not pushed: {failed}")
+        return
+    with merges_cleared(workspace, checkout.path, _owned(context, state)) as merges:
+        try:
+            if _bring_in(context, state, checkout, merges):
+                context.log(f"agentic: land: {task}: renumber: head conflicts locally")
+                return
+            texts = _dated_texts(workspace, sha, head, found.own)
+            first: dict[str, date | None] = {}
+            for adr in found.own:
+                try:
+                    adr_dated.dated_name(adr.path, texts.get(adr.path, (None, ""))[1], None)
+                except ValueError:
+                    first[adr.path] = workspace.adr_first_date(head, adr.path)
+            master_names = workspace.tree_names(sha, adr_numbers.ADR_DIR)
+            own_names = {a.path.rsplit("/", 1)[-1] for a in found.own}
+            kept = [
+                n
+                for n in workspace.tree_names(head, adr_numbers.ADR_DIR)
+                if n not in own_names and n not in master_names
+            ]
+            numbers = sorted(
+                {n for a in found.own if (n := adr_numbers.number_of(a.path.rsplit("/", 1)[-1]))}
+            )
+            lines = [
+                adr_numbers.OwnLine(x.path, x.commit, x.text)
+                for x in workspace.added_lines(sha, head, numbers)
+            ]
+            trees = {
+                commit: workspace.tree_names(commit, adr_numbers.ADR_DIR)
+                for commit in sorted({x.commit for x in lines})
+            }
+            result = adr_dated.rename(
+                found.own,
+                first,
+                texts,
+                master_names=master_names,
+                kept_names=kept,
+                lines=lines,
+                trees=trees,
+            )
+        except GitError as failed:
+            context.log(f"agentic: land: {task}: renumber: unreadable: {failed}")
+            _record_dated(context, state, "retry", "unreadable")
+            return
+        if isinstance(result, adr_dated.Declined):
+            context.log(
+                f"agentic: land: {task}: renumber: declined ({result.cause}): {result.detail}"
+            )
+            _record_dated(context, state, "declined", result.cause)
+            return
+        changes = _dated_changes(workspace, head, result)
+        try:
+            for old, _ in result.moves:
+                (checkout.path / old).unlink(missing_ok=True)
+            for path, text in result.texts.items():
+                target = checkout.path / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding="utf-8")
+            docs = ports.stack.docs(sha)
+            generated: list[str] = []
+            if docs is not None:
+                wall = ports.stack.check_timeouts(sha).get("docs", GENERATE_WALL_S)
+                run = ports.commands.run(checkout.path, docs.generate, wall)
+                if not run.passed:
+                    workspace.restore_clean(checkout.path)
+                    context.log(
+                        f"agentic: land: {task}: renumber: docs.generate failed, not pushed"
+                    )
+                    _record_dated(context, state, "retry", "generate_failed")
+                    return
+                generated = list(docs.paths)
+            relatives = sorted(
+                {old for old, _ in result.moves} | set(result.texts) | set(generated)
+            )
+            message = _dated_message(result.moves)
+            if workspace.commit_paths(checkout.path, relatives, message) is None:
+                context.log(f"agentic: land: {task}: renumber: nothing to commit")
+                return
+            new_head = workspace.full_head(checkout.path)
+            workspace.push(checkout.branch, lease=head)
+        except GitError as failed:
+            context.log(f"agentic: land: {task}: renumber: not pushed: {failed}")
+            return
+    carried = landing.renumber_carries(changes) and rules.same_commit(reviewed, head)
+
+    def stem(path: str) -> str:
+        return path.rsplit("/", 1)[-1].removesuffix(".md")
+
+    record: dict[str, str | bool] = {
+        "mode": "dated",
+        "from": ", ".join(stem(old) for old, _ in result.moves),
+        "to": ", ".join(stem(new) for _, new in result.moves),
+        "head_before": head,
+        "head_after": new_head,
+        "carried": carried,
+    }
+    stamped = _record_dated(context, state, "renamed")
+    subtasks, scopes = _carries(stamped, unit, reviewed, new_head, holds=carried, cause="renumber")
+    ports.documents.save(
+        {
+            **stamped,
+            "subtasks": subtasks,
+            "review_scopes": scopes,
+            "adr_renumbered": [*state.get("adr_renumbered", []), record],
+        }
+    )
+    context.log(
+        f"agentic: land: {task}: renamed {record['from']} -> {record['to']}, pushed {new_head}"
+        + ("" if carried else " (review not carried)")
+    )
+
+
+def _dated_message(moves: Sequence[tuple[str, str]]) -> str:
+    renamed = ", ".join(
+        f"{old.rsplit('/', 1)[-1]} -> {new.rsplit('/', 1)[-1]}" for old, new in moves
+    )
+    return (
+        f"Rename ADR to the dated form: {renamed}\n\n"
+        "The product names its ADRs by date (GH-611, the owner's rule); renamed and rewritten by "
+        "the landing, the generated docs regenerated."
+    )
+
+
+def _dated_changes(
+    workspace: Workspace, head: str, found: adr_dated.DatedRenaming
+) -> list[landing.LineChange]:
+    source = {new: old for old, new in found.moves}
+    changes: list[landing.LineChange] = []
+    for path, text in found.texts.items():
+        before = workspace.show(head, source.get(path, path)) or ""
+        changes.extend(landing.line_changes(path, before, text))
+    return changes

@@ -8,9 +8,9 @@ import dataclasses
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
 from agentic.core.knowledge.domain import knowledge
@@ -440,6 +440,7 @@ class MemoryStack:
         check_timeouts: dict[str, float] | None = None,
         not_ready_exit: dict[str, int] | None = None,
         risk_areas: tuple[RiskArea, ...] = (),
+        adr_naming: Literal["numbered", "dated"] = "numbered",
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -511,6 +512,11 @@ class MemoryStack:
         # text makes `risk_areas` raise it as a `ValueError`, the way a broken key does.
         self.declared_risk_areas = risk_areas
         self.risk_areas_error: str | None = None
+        # GH-611: how the product names its ADRs, by revision (`adr_naming_at` overrides the
+        # default for one), and each revision asked: a test counts the reads.
+        self.declared_adr_naming = adr_naming
+        self.adr_naming_at: dict[str, Literal["numbered", "dated"]] = {}
+        self.adr_naming_reads: list[str] = []
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -585,6 +591,10 @@ class MemoryStack:
         if self.merge_inert_error is not None:
             raise ValueError(self.merge_inert_error)
         return self.declared_merge_inert
+
+    def adr_naming(self, revision: str) -> Literal["numbered", "dated"]:
+        self.adr_naming_reads.append(revision)
+        return self.adr_naming_at.get(revision, self.declared_adr_naming)
 
     def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -885,6 +895,9 @@ class MemoryWorkspace:
         self.master_trees: dict[str, tuple[str, ...]] = {"master0": ()}
         self.branch_commits: list[BranchCommit] = []
         self.added_adrs_calls: list[tuple[str, str]] = []
+        # GH-611: `adr_first_date`'s answer per path (absent is `None`) and each ask.
+        self.first_dates: dict[str, date] = {}
+        self.first_date_calls: list[tuple[str, str]] = []
         self.added_lines_calls: list[tuple[str, str, tuple[str, ...]]] = []
         self.paths_naming_calls: list[tuple[str, str]] = []
         self.commit_texts: dict[str, str] = {}  # GH-579: a tracked commit's message, by sha
@@ -1453,6 +1466,10 @@ class MemoryWorkspace:
             for path in commit.adds
             if path.startswith("docs/adr/")
         )
+
+    def adr_first_date(self, head: str, path: str) -> date | None:
+        self.first_date_calls.append((head, path))
+        return self.first_dates.get(path)
 
     def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
         for number in numbers:
