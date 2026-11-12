@@ -485,6 +485,8 @@ class PlanRoute(TypedDict):
     route: Route
     misrouted: bool
     critic: CriticState
+    # True when a promotion re-planned the task (GH-591): the plan revised, no new interview.
+    after_promotion: NotRequired[bool]
 
 
 class EvaluationRef(TypedDict):

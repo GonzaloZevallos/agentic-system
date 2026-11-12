@@ -69,7 +69,7 @@ def applied(state: TaskState, at: str) -> TaskState:
         moved, notice = task_path.promote(
             state, chosen["from_role"], chosen["kind"], at, chosen["text"]
         )
-        patch = dict(moved)  # type: ignore[assignment]
+        patch = dict(moved)
     if requests:
         patch["subtasks"] = {
             sid: {k: v for k, v in subtasks[sid].items() if k != "promote_request"}

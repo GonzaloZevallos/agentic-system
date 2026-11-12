@@ -19,7 +19,7 @@ SECTION = "PjM"
 def relabelled(state: TaskState, ports: Ports) -> TaskState:
     """The patch a resume adds for the owner's labels as they are now; `{}` when nothing changes."""
     patch, note = task_path.relabel(state, owner_labels(state, ports), ports.now())
-    result: TaskState = dict(patch)  # type: ignore[assignment]
+    result: TaskState = dict(patch)
     if note:
         text = state.get("sections", {}).get(SECTION, "").rstrip()
         result["sections"] = {SECTION: f"{text}\n\n{note}" if text else note}
