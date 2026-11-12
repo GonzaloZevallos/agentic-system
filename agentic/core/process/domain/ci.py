@@ -134,8 +134,8 @@ class JobLog:
 @dataclass(frozen=True)
 class CiVerdict:
     """`failing` is the red runs of the declared checks, in declared order; `missing` the
-    declared names the report never mentions; `cancelled` the red runs of a superseded or
-    cancelled workflow run (`superseded_or_cancelled`) of the declared names that have nothing
+    declared names the report never mentions; `cancelled` the red runs of a cancelled
+    workflow run (`cancelled_run`) of the declared names that have nothing
     else to say: those names are pending, never failing (GH-539). `red` maps each declared name
     that has a red run to those runs (declared order, report order inside): what a finding or
     record that names a check by its identity uses (GH-535), `red_names` its names. Derived from
@@ -250,28 +250,63 @@ def _is_red(check: CiCheck) -> bool:
     return not _pending(check) and not _green(check)
 
 
-def superseded_or_cancelled(report: CiReport, check: CiCheck) -> bool:
-    """Whether `check`, a red one, belongs to a workflow run that was superseded or cancelled and
-    so says nothing about the code (GH-539): the one place that is decided, from the run id in
-    its link (`run_id_of_link`), the `CANCELLED` conclusions of the report's checks,
-    `report.cancelled_runs` and nothing else, never a log or a prose. True when (a) its run has a
-    `CANCELLED` check and the report holds a check of the same name in a run with a greater id
-    (compared as integers), or (b) its run id is in `report.cancelled_runs`. A check that is
-    green or pending, or whose run id cannot be read, is never discarded."""
+def _order_key(check: CiCheck) -> datetime | None:
+    """When a check run began (`started_at`), else when it ended (`completed_at`); `None` when
+    GitHub gave neither or it cannot be read."""
+    return _instant(check.started_at) or _instant(check.completed_at)
+
+
+def _latest_of(name_runs: Sequence[CiCheck]) -> list[CiCheck]:
+    """The runs of one full name that nothing newer replaces (GH-606). A run whose id cannot be
+    read cannot be ordered and is kept; of the readable ones only those with the greatest run id
+    (an integer) stay, and among several with that same id (a rerun) only those with the latest
+    instant; a run with no instant to compare is kept."""
+    readable = [(int(found), check) for check in name_runs if (found := run_id_of_link(check.link))]
+    newest = max((found for found, _ in readable), default=None)
+    same_run = [check for found, check in readable if found == newest]
+    instants = [instant for check in same_run if (instant := _order_key(check)) is not None]
+    latest = max(instants, default=None)
+    kept = {
+        id(check)
+        for check in same_run
+        if latest is None or (instant := _order_key(check)) is None or instant == latest
+    }
+    kept.update(id(check) for check in name_runs if run_id_of_link(check.link) is None)
+    return [check for check in name_runs if id(check) in kept]
+
+
+def current_runs(report: CiReport) -> tuple[CiCheck, ...]:
+    """The latest run of each full check name on the head (GH-606, the owner's rule): the one
+    place that decides which check runs are still current, in report order. The key is
+    `check.name` as GitHub reported it, a matrix expansion or the truncated form included, never
+    the declared name. A run of `report.cancelled_runs` is never a candidate, so it never
+    displaces an earlier decided one; a name that has nothing but such runs keeps them. Of the
+    candidates the greatest run id wins (compared as an integer, which GitHub assigns in growing
+    order); with the same run id, the later `started_at`, else `completed_at`. What cannot be
+    ordered (an unreadable run id, equal or missing instants) is all kept: it is the verdict
+    without the rule, never a guess. Whatever the older run's conclusion, a superseded run
+    decides nothing."""
+    by_name: dict[str, list[CiCheck]] = {}
+    for check in report.checks:
+        by_name.setdefault(check.name, []).append(check)
+    kept: set[int] = set()
+    for name_runs in by_name.values():
+        candidates = [
+            check for check in name_runs if run_id_of_link(check.link) not in report.cancelled_runs
+        ]
+        kept.update(id(check) for check in (_latest_of(candidates) if candidates else name_runs))
+    return tuple(check for check in report.checks if id(check) in kept)
+
+
+def cancelled_run(report: CiReport, check: CiCheck) -> bool:
+    """Whether `check`, a red one, belongs to a workflow run that was cancelled and so says
+    nothing about the code (GH-539): its run id (`run_id_of_link`) is in `report.cancelled_runs`.
+    A check that is green or pending, or whose run id cannot be read, is never discarded. That a
+    newer run supersedes an older one is `current_runs`'s, not this function's (GH-606)."""
     if not _is_red(check):
         return False
     run_id = run_id_of_link(check.link)
-    if run_id is None:
-        return False
-    if run_id in report.cancelled_runs:
-        return True
-    ids = [(run_id_of_link(other.link), other) for other in report.checks]
-    if not any(found == run_id and other.conclusion == "CANCELLED" for found, other in ids):
-        return False
-    return any(
-        found is not None and other.name == check.name and int(found) > int(run_id)
-        for found, other in ids
-    )
+    return run_id is not None and run_id in report.cancelled_runs
 
 
 def rerun_restarted(read: CiReport | CiUnreadable, run_id: str) -> bool:
@@ -281,28 +316,29 @@ def rerun_restarted(read: CiReport | CiUnreadable, run_id: str) -> bool:
 
 
 def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
-    """The verdict of `report` over the `declared` check names, resolved by `runs_of`: a name
+    """The verdict of `report` over the `declared` check names, resolved by `runs_of` over
+    `current_runs` (a run a newer one of the same full name replaced never counts, GH-606): a name
     claims its exact runs, or, with none, its matrix expansions `<name> (<values>)`; a check
-    nobody declared is ignored. Every run of a declared name counts: any red makes the name red,
-    else any pending makes it pending, else it is green. A name resolved only through expansion
-    is pending, never green, while `report.runs_completed` is not `True` (a red expansion
+    nobody declared is ignored. Every current run of a declared name counts: any red makes the
+    name red, else any pending makes it pending, else it is green. A name resolved only through
+    expansion is pending, never green, while `report.runs_completed` is not `True` (a red expansion
     still makes it red). Red is every conclusion that is not green and not pending, an unknown
     one included, so a value GitHub adds later is never read as green. A declared name with no
     run is pending and listed in `missing`. The aggregate is red if any name is red, else
     pending if any is, else green. `CiVerdict.red` holds each red name's red runs. A red run that
-    `superseded_or_cancelled` discards is not red: a name left with nothing else is pending and
-    its discarded runs are in `cancelled` (GH-539)."""
+    `cancelled_run` discards is not red: a name left with nothing else is pending and its
+    discarded runs are in `cancelled` (GH-539)."""
     failing: list[CiCheck] = []
     red_by_name: list[tuple[str, tuple[CiCheck, ...]]] = []
     missing: list[str] = []
     cancelled: list[CiCheck] = []
     waiting = False
-    for name, runs in runs_of(report.checks, declared).items():
+    for name, runs in runs_of(current_runs(report), declared).items():
         if not runs:
             missing.append(name)
             waiting = True
             continue
-        dropped = [check for check in runs if superseded_or_cancelled(report, check)]
+        dropped = [check for check in runs if cancelled_run(report, check)]
         red = tuple(check for check in runs if _is_red(check) and check not in dropped)
         if red:
             failing.extend(red)
@@ -333,7 +369,7 @@ def covering_state(read: CiReport | CiUnreadable | None, job: str, head: str) ->
     the wait. A separate reading from `ci_state`, which keeps `SKIPPED` red."""
     if not isinstance(read, CiReport) or not rules.same_commit(read.head_sha, head):
         return "uncovered"
-    runs = runs_of(read.checks, (job,))[job]
+    runs = runs_of(current_runs(read), (job,))[job]
     if not runs:
         return "uncovered"
     if any(check.conclusion == "SKIPPED" for check in runs):
@@ -347,12 +383,12 @@ def covering_state(read: CiReport | CiUnreadable | None, job: str, head: str) ->
 
 def red_checks(report: CiReport) -> tuple[CiCheck, ...]:
     """Every run of `report` that is red whatever its name, in report order: decided and not
-    green, with the reading of red `ci_state` has, a superseded or cancelled run (GH-539) left
-    out. What a log is fetched for (GH-449)."""
+    green, with the reading of red `ci_state` has: a run `current_runs` replaced (GH-606) or
+    `cancelled_run` discards (GH-539) left out. What a log is fetched for (GH-449)."""
     return tuple(
         check
-        for check in report.checks
-        if _is_red(check) and not superseded_or_cancelled(report, check)
+        for check in current_runs(report)
+        if _is_red(check) and not cancelled_run(report, check)
     )
 
 
@@ -362,7 +398,7 @@ def pending_names(report: CiReport, declared: tuple[str, ...]) -> tuple[str, ...
     through matrix expansion on a report whose `runs_completed` is not `True` is waiting too."""
     return tuple(
         name
-        for name, runs in runs_of(report.checks, declared).items()
+        for name, runs in runs_of(current_runs(report), declared).items()
         if any(_pending(check) for check in runs) or _incomplete(report, name, runs)
     )
 
@@ -382,7 +418,7 @@ def unreported(report: CiReport, names: tuple[str, ...], confirmed: bool) -> tup
     unknown; matching is `runs_of`'s, as in `ci_state` (GH-535)."""
     if not confirmed or report.runs_completed is not True:
         return ()
-    return tuple(name for name, runs in runs_of(report.checks, names).items() if not runs)
+    return tuple(name for name, runs in runs_of(current_runs(report), names).items() if not runs)
 
 
 def unreported_text(
@@ -500,7 +536,7 @@ class FullTierVerdict:
     decided run, `cause` is set only for `unreachable`. `red` is `CiVerdict.red` on the verdicts
     that carry `failing` (`red`, `not_started`, `checkout_failed`) and `()` on every other one
     (GH-535); like there, derived and out of equality. `cancelled` is the state of a head whose
-    every declared name is decided or left only by superseded or cancelled runs, with the runs
+    every declared name is decided or left only by cancelled runs, with the runs
     completed (GH-539): never red, and `cancelled` holds those runs' checks (also carried by the
     verdicts that still wait or time out on a cancellation)."""
 
@@ -562,7 +598,7 @@ def full_tier_verdict(
     the CI is unusable, not that the suite failed; nothing is inferred from a skip (`SKIPPED`
     is red, as in `ci_state`). Red still wins; then a declared name that `unreported` finds (with
     `confirmed` by the caller) is `unreachable/unknown_names` at once, before either bound: a
-    planning defect, not a slow CI (GH-485). The classification of `superseded_or_cancelled`
+    planning defect, not a slow CI (GH-485). The classification of `cancelled_run`
     runs comes before `_NOT_STARTED` (GH-539): a declared name left only by such runs, with
     nothing pending and `runs_completed is True`, is `cancelled`; before that, `waiting`.
     `_NOT_STARTED` stays for `STARTUP_FAILURE` and a `CANCELLED` of a run that is neither.
@@ -768,7 +804,9 @@ def dispatch_verdict(
             return FullTierVerdict("timed_out", (), pending, None)
         return FullTierVerdict("waiting", (), pending, None)
     skipped = any(
-        job.conclusion == "SKIPPED" for runs in runs_of(run.jobs, declared).values() for job in runs
+        job.conclusion == "SKIPPED"
+        for runs in runs_of(current_runs(report), declared).values()
+        for job in runs
     )
     if verdict.missing or skipped:
         return FullTierVerdict("unreachable", (), pending, "jobs_missing")
@@ -787,13 +825,11 @@ def dispatch_verdict(
 
 def _red_runs(report: CiReport, name: str) -> tuple[CiCheck, ...]:
     """The red runs the declared `name` claims in `report`, report order."""
-    return tuple(check for check in runs_of(report.checks, (name,))[name] if _is_red(check))
+    return tuple(check for check in runs_of(current_runs(report), (name,))[name] if _is_red(check))
 
 
 def _first_red(report: CiReport, name: str) -> CiCheck | None:
-    red = tuple(
-        check for check in _red_runs(report, name) if not superseded_or_cancelled(report, check)
-    )
+    red = tuple(check for check in _red_runs(report, name) if not cancelled_run(report, check))
     return red[0] if red else None
 
 
@@ -827,7 +863,7 @@ def ci_findings(
     id the claim says how many of its expansions are red (GH-535)."""
     on_master = master if isinstance(master, CiReport) else None
     extended = list(findings)
-    claimed = runs_of(head.checks, declared)
+    claimed = runs_of(current_runs(head), declared)
     for name, reds in ci_state(head, declared).red:
         red = reds[0]
         evidence = _reference(red)

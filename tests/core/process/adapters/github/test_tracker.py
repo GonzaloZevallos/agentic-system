@@ -14,7 +14,13 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.domain import rules
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.ci import (
+    CiCheck,
+    CiReport,
+    CiUnreadable,
+    DispatchedRun,
+    current_runs,
+)
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
 
@@ -932,6 +938,24 @@ def test_ci_report_keeps_a_red_run_as_the_raw_enums_it_was_reported_with():
     report = GhTracker(Path("/p"), run).ci_report(PR)
     assert isinstance(report, CiReport)
     assert (report.checks[0].status, report.checks[0].conclusion) == ("COMPLETED", "TIMED_OUT")
+
+
+def test_ci_report_carries_both_runs_of_a_name_and_leaves_the_latest_to_the_domain():
+    """GH-606: the adapter reads every check run of the head, a superseded one included; which
+    one is current is `ci.current_runs`'s decision, not the parser's."""
+    old_url = "https://github.com/o/r/actions/runs/43156637045/job/1"
+    new_url = "https://github.com/o/r/actions/runs/43165741456/job/2"
+    nodes = [
+        _run_node("docs", "COMPLETED", "FAILURE", url=old_url),
+        _run_node("docs", "COMPLETED", "SUCCESS", url=new_url),
+    ]
+    report = GhTracker(Path("/p"), Recorder(stdout=_graphql(nodes))).ci_report(PR)
+    assert isinstance(report, CiReport)
+    assert [(c.conclusion, c.link) for c in report.checks] == [
+        ("FAILURE", old_url),
+        ("SUCCESS", new_url),
+    ]
+    assert [c.link for c in current_runs(report)] == [new_url]
 
 
 def test_ci_report_of_a_head_with_no_checks_at_all_is_a_readable_empty_report():
