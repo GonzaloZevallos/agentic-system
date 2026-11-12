@@ -1428,7 +1428,7 @@ def test_d_be76583a_a_collision_with_spots_in_bounds_is_applied_without_asking(
     assert landing_rules.adr_decisions_spent(entries, head, [(MINE, "docs/adr/0050-mine.md")]) == 1
 
 
-def test_d_be76583a_a_red_result_goes_back_to_the_question_and_is_not_retried(
+def test_d_be76583a_an_out_of_bounds_result_goes_back_to_the_question_and_is_not_retried(
     tmp_path, _rule_decides
 ):
     ports, head = _unasked(tmp_path, _edit_elsewhere)  # out of bounds
@@ -1467,3 +1467,41 @@ def test_d_be76583a_more_spots_than_the_rule_applies_are_asked_with_no_model_run
     ]
     entries = landing_plan.all_entries(ports.documents.load("GH-5"))
     assert landing_rules.adr_decisions_spent(entries, head, [(MINE, "docs/adr/0050-mine.md")]) == 0
+
+
+def test_d_be76583a_a_checks_red_result_goes_back_to_the_question_and_is_not_retried(
+    tmp_path, _rule_decides
+):
+    ports, head = _unasked(tmp_path)
+    ports = dataclasses.replace(
+        ports,
+        stack=MemoryStack(checks={"tests": "run tests", "lint": "run lint"}),
+        commands=MemoryCommands(
+            **{"run tests": [CommandResult(1, "collected 3\nFAILED test_a - boom\n")] * 5}
+        ),
+    )
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, _point_at_the_new_number))
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == []
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)] == [
+        ("apply_adr_decision", "checks_red"),
+        ("escalate_adr", None),
+    ]
+    assert _entries(ports)[0]["decided_by"] == "rule"
+    document = ports.documents.load("GH-5")
+    assert document["escalated"] and document["escalation_class"] == "questions"
+    question = document["questions_for_human"][0]
+    assert "tried to apply the renumbering on its own and it ended `checks_red`" in question
+    assert "FAILED test_a - boom" in question
+    # A checks_red judged on a gate tier spends the slot, the owner's included.
+    entries = landing_plan.all_entries(document)
+    assert landing_rules.adr_decisions_spent(entries, head, [(MINE, "docs/adr/0050-mine.md")]) == 1
+    developer_runs = len(ports.runner.calls)
+
+    again, _ = _round(tmp_path, ports)
+
+    assert again.step != "apply_adr_decision" and len(ports.runner.calls) == developer_runs
+    assert [e["step"] for e in _entries(ports)].count("apply_adr_decision") == 1
