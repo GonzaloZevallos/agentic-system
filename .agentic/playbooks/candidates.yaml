@@ -1602,3 +1602,21 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-12T22:42:40.058+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you write logic that reads or writes a document field, search for an existing writer or helper and reuse it. Two copies of the same read or write logic drift apart.
+  confidence: medium
+  seen_in:
+  - GH-599
+  sources:
+  - finding
+  added_at: '2026-11-12T22:52:14.008+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: When the diff adds a port, adapter or module, update the hand-written architecture docs (tables, notes, adapter lists) as well as the generated pages, and grep the docs for sibling mentions.
+  confidence: medium
+  seen_in:
+  - GH-599
+  sources:
+  - finding
+  added_at: '2026-11-12T22:52:14.008+00:00'
