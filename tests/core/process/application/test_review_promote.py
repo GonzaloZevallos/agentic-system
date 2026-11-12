@@ -60,7 +60,9 @@ async def test_the_request_is_stored_on_the_reviewed_unit_whatever_the_verdict(v
         "from_role": rules.review_section("api"),
         "text": "it converts stored data",
     }
-    assert after["subtasks"]["api"]["status"] == ("approved" if verdict == "approved" else "returned")
+    assert after["subtasks"]["api"]["status"] == (
+        "approved" if verdict == "approved" else "returned"
+    )
     assert "path" not in patch or patch["path"] == "light"
     assert "promotion" not in patch
 

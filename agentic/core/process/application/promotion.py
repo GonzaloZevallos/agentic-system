@@ -19,16 +19,21 @@ def requested(subtask: Subtask, from_role: str, text: str | None) -> Subtask:
     if not text or not text.strip():
         return subtask
     new: task_path.PromoteRequest = {"kind": "role", "from_role": from_role, "text": text}
-    return {**subtask, "promote_request": task_path.record_request(subtask.get("promote_request"), new)}
+    return {
+        **subtask,
+        "promote_request": task_path.record_request(subtask.get("promote_request"), new),
+    }
 
 
 def plan_requested(state: TaskState, from_role: str, text: str | None) -> TaskState:
-    """The patch for the request the plan node's Tech Lead asked for: `{"plan_promote_request":
-    ...}`, or `{}` when it asked nothing. The plan node is serialized, so the key needs no reducer."""
+    """The patch for the request the plan node's Tech Lead asked for (`plan_promote_request`),
+    or `{}` when it asked nothing. The plan node is serialized, so the key needs no reducer."""
     if not text or not text.strip():
         return {}
     new: task_path.PromoteRequest = {"kind": "role", "from_role": from_role, "text": text}
-    return {"plan_promote_request": task_path.record_request(state.get("plan_promote_request"), new)}
+    return {
+        "plan_promote_request": task_path.record_request(state.get("plan_promote_request"), new)
+    }
 
 
 def refusal_notice(state: TaskState, section: str, notice: str | None) -> TaskState:

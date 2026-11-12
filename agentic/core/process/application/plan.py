@@ -30,9 +30,9 @@ from ..domain.roles import (
     Interview,
 )
 from ..domain.task import PlanRoute, Subtask, TaskState, apply
+from . import promotion
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
-from . import promotion
 from .ports import GitError, Ports
 from .reflect_run import closed_documents
 from .run_role import Check, Output, finish, run_role

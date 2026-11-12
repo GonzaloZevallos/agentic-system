@@ -49,6 +49,7 @@ graph TD
     m_application__integrate --> g_application__support
     m_application__integrate --> g_pkg__agentic__shared
     m_application__integrate --> g_pkg__domain
+    m_application__plan --> g_application__build__2
     m_application__plan --> g_application__definition
     m_application__plan --> g_application__reflection
     m_application__plan --> g_application__support
