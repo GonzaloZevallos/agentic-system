@@ -1157,6 +1157,12 @@ no decision slot, and neither does a `checks_red` with no `gate_tier`
 (`landing.adr_decisions_spent`)."""
 
 
+AdrDecidedBy = Literal["rule"]
+"""Who decided an `apply_adr_decision` entry (D-be76583a), closed: `rule`, the numbering rule on its
+own, with a synthesized "keep the rule's moves" decision. An entry that answers an owner's decision
+carries no `decided_by` and a `decision_at` instead; `landing` re-exports it."""
+
+
 class LandingEntry(TypedDict, total=False):
     """One landing step of the task document's `landing` list (GH-239): the idempotency
     key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
@@ -1227,6 +1233,8 @@ class LandingEntry(TypedDict, total=False):
     # `landing.AdrDecisionOutcome`, the `[old, new]` path pairs the rule recomputed and the head
     # pushed. `escalate_adr` entries never carry them.
     decision_at: str
+    # D-be76583a, an `apply_adr_decision` entry the system took on its own (no `decision_at`).
+    decided_by: AdrDecidedBy
     outcome: AdrDecisionOutcome
     moves: list[list[str]]
     head_after: str

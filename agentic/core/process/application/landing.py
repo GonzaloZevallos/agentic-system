@@ -297,6 +297,8 @@ def _land(
                 entry["cause"] = pair["cause"]
     if decision_at is not None:
         entry["decision_at"] = decision_at
+    elif step.kind == "apply_adr_decision":
+        entry["decided_by"] = "rule"  # D-be76583a: nobody decided, the rule did
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:

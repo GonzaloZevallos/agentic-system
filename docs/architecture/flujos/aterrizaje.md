@@ -30,7 +30,7 @@ sequenceDiagram
     else file_followups_and_land
         Land->>GitHub: open follow-up issues, merge
     else adr_number_taken
-        Land->>GitHub: renumber when the rule can decide, else escalate_adr asks the human once; the owner's decision gives apply_adr_decision, otherwise none
+        Land->>GitHub: renumber when the rule can decide; else apply_adr_decision on its own when the rule settles the collision and no question was ever asked (adr_auto_due); else escalate_adr asks the human once, whose decision gives apply_adr_decision, otherwise none
     else ci_unknown_names
         Land->>GitHub: escalate once per (head, names) as a planning defect, no budget spent, then none
     else budget spent, ledger only
@@ -164,7 +164,16 @@ sequenceDiagram
    último recurso: avisa en el issue con el motivo y el costo hasta ese momento.
    El rechazo `adr_number_taken` no pasa por `exhausted()`: es, en este orden:
    `renumber` cuando la regla decide la colisión y quedan renumeraciones
-   (`LANDING_RENUMBERS_MAX`); `apply_adr_decision` cuando el dueño liberó la pregunta
+   (`LANDING_RENUMBERS_MAX`); `apply_adr_decision` por su cuenta (D-be76583a) cuando la regla
+   resuelve la colisión sin preguntar (`agentic/core/process/domain/landing.py:adr_auto_due`:
+   `Ambiguous` con `moves`, motivo distinto de `duplicate_own_number`, ningún `escalate_adr` registrado
+   para la cabeza y cupo libre); la entrada lleva `decided_by: rule` y ningún `decision_at`
+   (`agentic/core/process/application/landing.py:land`), y al Developer se le dice
+   `agentic/core/process/application/landing_adr.py:AUTO_DECISION`, no un número a elegir. Con más
+   `spots` que `ADR_AUTO_SPOTS_MAX` el intento termina `ambiguous` sin gastar cupo. Cualquier
+   resultado distinto de `applied` registra la pregunta `escalate_adr`, que dice que la regla lo
+   intentó «por su cuenta», y la regla no vuelve a intentar esa cabeza; `apply_adr_decision` también
+   cuando el dueño liberó la pregunta
    `escalate_adr` y queda cupo para esa colisión (`adr_decision_due`, `LANDING_ADR_DECISIONS_MAX`, contado por
    (cabeza, `moves`) con `agentic/core/process/domain/landing.py:adr_decisions_spent`; agotado el
    cupo, la pregunta deja de ofrecer una decisión); `none` cuando

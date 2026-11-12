@@ -9,7 +9,14 @@ committed, and a Developer pass edits only the `spots` -- the own lines the gram
 decide -- told the owner's `### Decision`, never a number to pick. The system checks the
 bounds of that edit and that no collision is left, then pushes with a lease on the head it
 read. Every outcome but `applied` leaves the checkout at that head and asks again through
-`landing_fix.escalate_adr`; `LANDING_PASSES_MAX` is never spent here."""
+`landing_fix.escalate_adr`; `LANDING_PASSES_MAX` is never spent here.
+
+D-be76583a: when the rule settles the collision (`landing.adr_auto_due`) the same step runs with no
+owner. Its entry carries `decided_by: rule` and no `decision_at`, the Developer is told a
+synthesized decision (`AUTO_DECISION`: keep the rule's moves), and it goes through the same bounded
+path and spends the same slot of the collision. A collision with more `spots` than
+`ADR_AUTO_SPOTS_MAX` ends `ambiguous` before any write; every non-`applied` outcome asks the
+owner's question as always, and the rule never tries that head again."""
 
 from __future__ import annotations
 
@@ -47,6 +54,26 @@ def _now() -> str:
 
 def _document(context: LandingContext) -> dict[str, object]:
     return dict(context.ports.documents.load(context.task_id) or {})
+
+
+AUTO_DECISION = (
+    "### Decision\n\nNo owner decided this: keep the moves the numbering rule chose, exactly as "
+    "listed, and only fix the references on the lines you may change so that they follow them."
+)
+"""What the Developer is told when the rule applies the renumbering on its own (D-be76583a)."""
+
+
+def automatic(raw: Mapping[str, object], head: str) -> bool:
+    """Whether the `apply_adr_decision` being carried out for `head` is the rule's own
+    (D-be76583a): the last of its open entries says `decided_by: rule`."""
+    mine = [
+        entry
+        for entry in all_entries(raw)
+        if entry.get("step") == "apply_adr_decision"
+        and entry.get("head") == head
+        and not entry.get("resolved_at")
+    ]
+    return bool(mine) and mine[-1].get("decided_by") == "rule"
 
 
 def decision_text(raw: Mapping[str, object]) -> str:
@@ -205,6 +232,13 @@ def _apply(context: LandingContext, state: TaskState, unit: str, sha: str) -> Re
         return _refused(context, "no_collision", "the head no longer collides with master")
     if isinstance(found, Ambiguous):
         return _refused(context, "ambiguous", f"the rule cannot decide ({found.reason})")
+    if len(found.spots) > landing.ADR_AUTO_SPOTS_MAX and automatic(_document(context), head):
+        return _refused(
+            context,
+            "ambiguous",
+            f"{len(found.spots)} spots, more than the {landing.ADR_AUTO_SPOTS_MAX} the rule "
+            "applies without an owner",
+        )
     recorded = _recorded_moves(_document(context), head)
     moves = found.renaming.moves
     if recorded is not None and recorded != [list(pair) for pair in moves]:
@@ -428,7 +462,9 @@ def _developer(
         if reason := presubmit_refusal(moved, ports.workspace.is_clean(path), gate):
             raise ValueError(reason)
 
-    text = brief(decision_text(_document(context)), found.renaming.moves, found.spots, found.bound)
+    raw = _document(context)
+    decision = AUTO_DECISION if automatic(raw, context.head) else decision_text(raw)
+    text = brief(decision, found.renaming.moves, found.spots, found.bound)
     span = context.role_span(DEVELOPER) if context.role_span else nullcontext(None)
     with span as run:
         output, patch = asyncio.run(
