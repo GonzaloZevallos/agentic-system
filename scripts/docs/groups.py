@@ -16,8 +16,11 @@ from collections.abc import Mapping
 
 PHASES: Mapping[str, tuple[str, ...]] = {
     "build": (
+        "fix_important",
         "integrate",
+        "owner_rules",
         "pipeline",
+        "verify",
     ),
     "classify": (
         "__start__",
@@ -26,13 +29,15 @@ PHASES: Mapping[str, tuple[str, ...]] = {
     "define": (
         "consolidate",
         "define",
-        "design_review",
         "diagnose",
         "discard",
+        "validate",
+    ),
+    "design": (
+        "design_review",
         "ui_screens",
         "ux_flow",
         "ux_walk",
-        "validate",
         "write_copy",
     ),
     "deliver": (
@@ -44,11 +49,6 @@ PHASES: Mapping[str, tuple[str, ...]] = {
         "plan",
         "split",
         "tracker_only",
-    ),
-    "review": (
-        "fix_important",
-        "owner_rules",
-        "verify",
     ),
 }
 

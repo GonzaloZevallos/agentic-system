@@ -475,7 +475,9 @@ def build_graph(
     )
     graph.add_conditional_edges("write_copy", _route(rules.after_write_copy), ["plan", ESCALATE])
     graph.add_conditional_edges(
-        "plan", _route(rules.after_plan), [INTEGRATE, "split", "tracker_only", ESCALATE]
+        "plan",
+        _route(rules.after_plan),
+        [INTEGRATE, "split", "tracker_only", "define", "diagnose", ESCALATE],
     )
     graph.add_conditional_edges("split", _route(rules.after_split), [END, ESCALATE])
     graph.add_conditional_edges("tracker_only", _route(rules.after_tracker_only), [END, ESCALATE])
@@ -491,6 +493,9 @@ def build_graph(
             VERIFY,
             "deliver",
             "evaluated",
+            # A promotion the fan-in applied sends a feature or a bug back to its first stage.
+            "define",
+            "diagnose",
             ESCALATE,
             END,
         ],
