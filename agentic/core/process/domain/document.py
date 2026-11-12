@@ -285,6 +285,8 @@ def render(
         # The checks and paths the plan requires (GH-371), written only when there are some.
         **({"ci_required": c} if (c := state.get("ci_required")) else {}),
         **({"required_paths": r} if (r := state.get("required_paths")) else {}),
+        # The approved API break's reason (GH-610), only when the plan recorded one.
+        **({"api_break": r} if (r := state.get("api_break")) else {}),
         # The revisions of that list after a human decision (GH-538), only when there are some.
         **({"required_paths_revisions": v} if (v := state.get("required_paths_revisions")) else {}),
         # Every finding of every review, raw: the `Tech Lead: findings` section below is

@@ -558,6 +558,9 @@ def _delivered(
             # The checks the issue's done criteria need green (GH-371); absent otherwise,
             # so the document of an old task, or of one with no such check, is unchanged.
             written["ci_required"] = list(output.data["ci_required"])
+        # GH-610: the approved API break's sanitized reason; a re-plan replaces it, an empty one
+        # included (no break), and `document.render` omits an empty one.
+        written["api_break"] = str(output.data.get("api_break") or "").strip()
         # Always written, an empty list included: a re-plan replaces the list it found
         # (GH-538). `document.render` omits an empty one.
         written["required_paths"] = list(output.data.get("required_paths") or [])

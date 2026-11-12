@@ -1659,6 +1659,9 @@ class TaskState(TaskInput, total=False):
     # Absent in a document written before, which reads as empty.
     ci_required: list[str]
     required_paths: list[str]
+    # The reason of the API break the plan approved (GH-610), one sanitized line; absent or empty
+    # when the plan approves none. `landing.recorded_api_break` is its one reader.
+    api_break: str
     # What the plan says has to be done to make the subtasks work together beyond
     # merging them; empty when merging is enough and no integrator runs.
     integration_brief: str
