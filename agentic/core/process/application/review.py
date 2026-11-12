@@ -140,7 +140,7 @@ async def review(
         return finish(state, unprepared.patch(TECH_LEAD), ports)
     pair = pair_for(subtask_id)
     section = rules.review_section(subtask_id)
-    version =rules.next_version(state, section)
+    version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
     experiment = experiment_snapshot(cfg, cfg.model_for(reviewer.slug, reviewer.kind))
     if rules.system_approves(state, subtask_id, cfg.review_mode):

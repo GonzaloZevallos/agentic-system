@@ -1,6 +1,6 @@
 """A pair at its return limit restarts its subtask once instead of escalating (GH-593, README §3).
 Seam: `application.review.review` (the node that reviews one subtask) over the same fakes as
-`test_review_verdict_origin.py`, with the real `rules.on_return_limit` and `restart.restart_patch`."""
+`test_review_verdict_origin.py`, with the real `rules.on_return_limit` and the restart patch."""
 
 import pytest
 
@@ -110,7 +110,8 @@ async def test_the_restart_goes_through_the_one_constructor():
     state = at_limit()
     patch = await run(state, reviewed("returned", "third reason"))
     written = patch["sections"]["Restart api"]
-    expected = restart.restart_patch(apply(state, {"findings": patch["findings"]}), "api", PAIR, written, HEAD)
+    seen = apply(state, {"findings": patch["findings"]})
+    expected = restart.restart_patch(seen, "api", PAIR, written, HEAD)
     # Same constructor, same keys: nothing is written beside it but the review's own records.
     for key in ("restarts", "changes_requested", "restart_pending", "session_floor"):
         assert patch[key] == expected[key]
