@@ -19,7 +19,16 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import ci_workflow, cost_history, docs, plan_route, plan_view, rules, schemas
+from ..domain import (
+    ci_workflow,
+    cost_history,
+    docs,
+    plan_revision,
+    plan_route,
+    plan_view,
+    rules,
+    schemas,
+)
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -594,7 +603,7 @@ def _delivered(
         if not output.data["subtasks"]:
             # Tracker work only (GH-336): the plan check let it through with no subtasks.
             return written
-        written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
+        written["subtasks"] = {s["id"]: plan_revision.pending(s) for s in output.data["subtasks"]}
         written["sections"][section] = plan_view.with_subtasks_block(
             written["sections"][section], list(written["subtasks"].values())
         )
@@ -634,19 +643,3 @@ def _proposed(state: TaskState, spec: Interview, invariants: list[str]) -> str:
             f"{listed}"
         )
     return listed
-
-
-def _pending(item: dict) -> Subtask:
-    pending: Subtask = {
-        "id": item["id"],
-        "title": item["title"],
-        "brief": item["brief"],
-        "seams": item["seams"],
-        "depends_on": item["depends_on"],
-        "status": "pending",
-    }
-    # Persisted only when non-empty (ADR-0040): a plan from before `screens` existed,
-    # and a subtask with no screen of its own, both read back `.get("screens", [])`.
-    if item.get("screens"):
-        pending["screens"] = item["screens"]
-    return pending

@@ -1208,3 +1208,19 @@ def test_promote_is_optional_one_line_of_at_most_240_characters(schema):
     for bad in ("x" * 241, "two\nlines", "carriage\rreturn"):
         with pytest.raises(ValueError):
             schemas.validate(schema, {**base, "promote": bad}, VOCAB)
+
+
+def test_plan_check_for_refuses_a_revised_plan_that_omits_an_existing_subtask():
+    check = schemas.plan_check_for(_history(2, []), 0.0, existing_ids=("a", "b", "c"))
+    with pytest.raises(ValueError, match="keeps every subtask id; rescope its brief instead"):
+        check(_estimated(20.0, 3, "a", "b"))
+
+
+def test_plan_check_for_accepts_a_revised_plan_that_keeps_every_id_and_adds_one():
+    check = schemas.plan_check_for(_history(3, []), 0.0, existing_ids=("a", "b"))
+    check(_estimated(20.0, 3, "a", "b", "c"))  # does not raise
+
+
+def test_plan_check_for_without_existing_ids_is_a_first_plan_and_unaffected():
+    check = schemas.plan_check_for(_history(2, []), 0.0)
+    check(_estimated(20.0, 3, "a", "b"))  # does not raise

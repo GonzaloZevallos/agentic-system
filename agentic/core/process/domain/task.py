@@ -1023,8 +1023,9 @@ class Subtask(TypedDict, total=False):
     # only serialized system code applies it. Absent on a subtask that asked for nothing and on
     # every document written before this key existed -- every read is `.get("promote_request")`.
     promote_request: PromoteRequest
-    # Set by the plan revision after a promotion on an unchanged final unit whose approved work
-    # has to be checked against the new PRD: its next review is a full one. Absent otherwise.
+    # Set by `plan_revision.revise` on a final unit whose work was approved before a
+    # promotion re-planned the task and whose brief did not change: its review is a full
+    # one against the new PRD. Absent everywhere else.
     prd_recheck: bool
 
 

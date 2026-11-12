@@ -19,6 +19,7 @@ graph TD
     m_domain__cost_history["domain.cost_history"]
     m_domain__landing["domain.landing"]
     m_domain__landing_order["domain.landing_order"]
+    m_domain__plan_revision["domain.plan_revision"]
     m_domain__plan_route["domain.plan_route"]
     m_domain__plan_settlement["domain.plan_settlement"]
     m_domain__plan_view["domain.plan_view"]
@@ -31,6 +32,7 @@ graph TD
     m_domain__landing --> g_domain__state
     m_domain__landing --> m_domain__adr_numbers
     m_domain__landing --> m_domain__landing_order
+    m_domain__plan_revision --> g_domain__state
     m_domain__plan_settlement --> g_domain__roles
     m_domain__plan_settlement --> g_domain__state
     m_domain__plan_view --> g_domain__state
