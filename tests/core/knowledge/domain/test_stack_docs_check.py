@@ -177,3 +177,74 @@ def test_a_directory_path_without_a_glob_owns_everything_under_it(repo):
     assert result.returncode == 1
     assert "new file.mmd" in result.stdout
     assert not (repo / OWNED / "new file.mmd").exists()
+
+
+# What the command was before `Docs.mode` existed, byte for byte (GH-603).
+PINNED_COMMAND = (
+    "(\n"
+    "uv run python tools/diagrams.py\n"
+    ")\n"
+    "generated=$?\n"
+    "stale=$(git status --porcelain --untracked-files=all -- ':(glob)docs/a"
+    "rchitecture/generated/**' ':(glob)docs/api/*.md')\n"
+    "inspected=$?\n"
+    "git reset -q HEAD -- ':(glob)docs/architecture/generated/**' ':(glob)d"
+    "ocs/api/*.md' 2>/dev/null\n"
+    "git checkout -q -- ':(glob)docs/architecture/generated/**' 2>/dev/null\n"
+    "git checkout -q -- ':(glob)docs/api/*.md' 2>/dev/null\n"
+    "git clean -fdq -- ':(glob)docs/architecture/generated/**' ':(glob)docs/api/*.md'\n"
+    'if [ "$generated" -ne 0 ]; then echo "docs generate exited $generated"; fi\n'
+    'if [ "$inspected" -ne 0 ]; then echo "docs: git status failed"; fi\n'
+    'if [ -n "$stale" ]; then echo \'docs stale: commit these\'; echo "$stale"; fi\n'
+    'if [ "$generated" -ne 0 ] || [ "$inspected" -ne 0 ] || [ -n "$stale" ]; then exit 1; fi\n'
+    "exit 0\n"
+)
+
+
+PINNED_DOCS = Docs(
+    "uv run python tools/diagrams.py", ("docs/architecture/generated/**", "docs/api/*.md")
+)
+
+
+def test_commit_mode_and_an_absent_mode_build_the_command_byte_for_byte_as_before():
+    assert stack.docs_command(PINNED_DOCS) == PINNED_COMMAND
+    assert stack.docs_command(Docs(PINNED_DOCS.generate, PINNED_DOCS.paths, "commit")) == (
+        PINNED_COMMAND
+    )
+
+
+def test_docs_pathspecs_are_the_glob_pathspecs_of_the_owned_paths_in_order():
+    assert stack.docs_pathspecs(PINNED_DOCS) == (
+        ":(glob)docs/architecture/generated/**",
+        ":(glob)docs/api/*.md",
+    )
+
+
+def validate_command(paths: tuple[str, ...] = (f"{OWNED}/**",)) -> str:
+    return stack.docs_command(Docs("sh scripts/gen.sh", paths, "validate"))
+
+
+@pytest.mark.parametrize("mode", ["pass", "modify", "untracked", "nested", "delete", "staged"])
+def test_validate_mode_passes_when_generation_changes_the_owned_paths_and_leaves_them_as_head(
+    repo, mode
+):
+    result = run_check(repo, mode, validate_command())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "docs stale" not in result.stdout + result.stderr
+    assert_as_head_has_it(repo)
+    assert git(repo, "status", "--porcelain", "--untracked-files=all") == ""
+    assert git(repo, "diff", "--cached", "--name-only") == ""
+
+
+def test_validate_mode_fails_a_generator_that_exits_non_zero_and_still_restores(repo):
+    result = run_check(repo, "fail", validate_command())
+    assert result.returncode == 1
+    assert "docs generate exited 3" in result.stdout
+    assert "docs stale" not in result.stdout
+    assert_as_head_has_it(repo)
+
+
+def test_validate_mode_never_names_the_stale_line_nor_reads_the_status():
+    text = validate_command()
+    assert stack.DOCS_STALE not in text
+    assert "git status" not in text
