@@ -2958,6 +2958,17 @@ def full_checks_heal(
     return {"task_head": head, "full_checks_healed": head}
 
 
+# The CI causes that are a failure to reach or read GitHub, not a verdict about the head or a
+# defect of the plan (GH-593): the poller retakes them by themselves, `run_unfinished` and the two
+# `gh_*` ones. Every other `CiCause` (`dispatch_refused`, `unknown_names`, `no_run`...) names
+# something a retry on the same head does not change, so the human stays the one who decides.
+_CI_MECHANICAL: dict[CiCause, MechanicalCause] = {
+    "gh_unavailable": "ci_gh_unavailable",
+    "gh_unreadable": "ci_gh_unreadable",
+    "run_unfinished": "ci_run_unfinished",
+}
+
+
 def ci_unavailable(
     cause: CiCause, head: str, detail: str, *, at: str, ci: CiTiming | None = None
 ) -> dict[str, Any]:
@@ -2966,7 +2977,9 @@ def ci_unavailable(
     No `full_checks` record and no return: the head has no verdict, and `full_checks_due`
     compares heads, so a resume enters the node again. `cause` is the closed value of the step
     that failed; `detail` is what was tried, prose for the human only. `ci` is the timing of the
-    wait (GH-467), kept on the `ci` escalation entry."""
+    wait (GH-467), kept on the `ci` escalation entry. The escalation carries a `MechanicalCause`
+    (GH-593) only for the causes in `_CI_MECHANICAL`, chosen by the closed `cause`, never by
+    `detail`; any other is a judgment pause and carries none."""
     reason = (
         f"GitHub CI gave no verdict for {head[:7]} ({cause}): {detail}. The suite was not run "
         "on this machine. Fix the CI or the connection and resume; the node runs again on the "
@@ -2976,7 +2989,7 @@ def ci_unavailable(
         {
             "current_role": DEVELOPER.name,
             "status": WAITING_ON_HUMAN,
-            **escalation("ci", reason),
+            **escalation("ci", reason, cause=_CI_MECHANICAL.get(cause)),
         },
         at=at,
         ci=ci,

@@ -19,7 +19,7 @@ from ..domain.pull_request import BoundedBody, bounded_body
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
-from .ports import BranchPullRequest, GitError, Ports
+from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed
 from .preflight import over_cap
 from .release import release_task
 from .run_role import finish
@@ -390,18 +390,27 @@ def _refused(
     return _ended(state, patch, ports)
 
 
+def _transient(failed: Exception | str) -> bool:
+    """Whether a failed delivery step is a transport failure a retry may change (GH-593): by the
+    error's class, never its text. `TrackerCallFailed` is the base of exactly `timed_out`,
+    `unreachable`, `transient` and `rate_limited`, the closed classification the tracker note
+    uses; a `TrackerRefused`, a `GitError` and a plain `ValueError` are none of them."""
+    return isinstance(failed, TrackerCallFailed)
+
+
 def _undelivered(
     step: str, failed: Exception | str, state: TaskState, replaced: str | None, *, at: str
 ) -> TaskState:
     reason = f"{step}: {failed}; the branch is integrated, resume to deliver again"
     if replaced:
         reason += f". {rules.replaced_note(replaced, [], rules.task_branch(state['id']))}"
+    escalated = (
+        rules.escalation("system_delivery", reason, cause="delivery_transient")
+        if _transient(failed)
+        else rules.escalation("failure", reason)
+    )
     return rules.logged(
-        {
-            "current_role": PJM.name,
-            "status": WAITING_ON_HUMAN,
-            **rules.escalation("failure", reason),
-        },
+        {"current_role": PJM.name, "status": WAITING_ON_HUMAN, **escalated},
         at=at,
     )
 

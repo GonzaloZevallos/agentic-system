@@ -463,3 +463,5 @@ un verde posterior para exactamente ese par nunca se mergeó. Dos defectos, un m
   el `timeout` rojo de siempre. Una corrida que termina después de
   `check_timeout_s` sigue fuera de la espera declarada. Una relectura en espera cuesta una lectura
   GraphQL por vuelta del poller y por tarea, solo hasta ese tope.
+
+**Adenda 2026-11-11 (GH-593).** La entrega transitoria se retoma sola. Cuando abrir el pull request falla con un error de transporte (`timed_out`, `unreachable`, `transient` o `rate_limited`, la misma clasificación cerrada de la nota al tracker, decidida por la clase del error y nunca por su texto), `deliver` escala con la clase `system_delivery` y la causa `delivery_transient`, y el poller la retoma hasta 3 veces. Una negativa (`refused`), un error de git y el doble rechazo de `full_checks_heal` siguen siendo de juicio.
