@@ -70,6 +70,7 @@ from ..domain import (
     playbook,
     rules,
     schemas,
+    task_path,
     turn_notice,
 )
 from ..domain.document import HUMAN
@@ -377,6 +378,9 @@ def render_role_prompt(
     of `load_prompt` that fails on the prompt's own text (a placeholder nobody fills, a
     file the snapshot could not read) and not on the playbook, which is read live."""
     raw, source = ports.prompts.raw(role)
+    # PjM's `{{risk_areas}}` is the product's own menu when `classify` passes it, the built-in
+    # one otherwise: a role run that never reads the stack still renders (GH-591).
+    placeholders.setdefault("risk_areas", task_path.risk_menu(()))
     rendered = render(
         raw,
         source,

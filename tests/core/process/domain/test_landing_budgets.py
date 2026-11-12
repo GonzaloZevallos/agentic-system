@@ -43,7 +43,7 @@ def _spent(**over) -> LandingSpent:
 
 
 def _step(refusal, spent=None, **facts) -> LandingStep:
-    return landing.landing_step(refusal, _facts(**facts), spent or _spent(), ("api",))
+    return landing.landing_step(refusal, _facts(**facts), spent or _spent(), ("api",), turn="head")
 
 
 def test_the_budgets_are_the_plans():
@@ -348,7 +348,7 @@ def test_a_restoration_does_not_give_a_slot_back_but_hides_the_idempotency_key()
 
 
 def _review_step(spent) -> LandingStep:
-    return landing.landing_step("head_not_reviewed", _facts(), spent, ())
+    return landing.landing_step("head_not_reviewed", _facts(), spent, (), turn="head")
 
 
 def test_the_owed_review_is_not_refused_by_the_pass_budget_but_the_next_one_is():

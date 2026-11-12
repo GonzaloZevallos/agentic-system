@@ -220,6 +220,7 @@ def _gh384_step(found, head: str, *, escalated: bool = False) -> landing_rules.L
         _spent(),
         (),
         adr_escalated=escalated,
+        turn="head",
     )
 
 

@@ -8,9 +8,10 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
-from ..domain import docs, rules
+from ..domain import docs, rules, task_path
 from ..domain.roles import ROLES
 from ..domain.run_check import resolve_wall
+from ..domain.task import TaskState
 from .checkouts import task_base
 from .ports import REMERGE_DIFF_MIN_GIT, Ports
 from .run_role import load_prompt
@@ -47,6 +48,9 @@ PLACEHOLDERS = {
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.
     "product": "product",
+    # `pjm.md` lists the risk areas PjM chooses from; `classify` passes the product's own, the
+    # gate only has to render the built-in menu.
+    "risk_areas": task_path.risk_menu(()),
 }
 
 
@@ -133,7 +137,7 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     no task yet at preflight. `checks`, `witness`, `parallel_checks`, `affected_checks`,
     `affected_fallback` (ADR-0046), `delivery_checks`, `rerun_checks` (ADR-0066),
     `check_budgets`, `verifications`, `check_timeouts`, `not_ready_exit` (GH-451), `merge_inert`
-    (GH-353), `forbidden` and `design` are all loaded here
+    (GH-353), `risk_areas` (GH-591), `forbidden` and `design` are all loaded here
     for validation only, so a broken one fails here and not when a worktree is born or a Developer
     delivers halfway through the run (issues #36, #37, #38; ADR-0040) -- the
     return expression stays `setup`'s alone, so `no_setup`'s warning does not move."""
@@ -149,6 +153,7 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     ports.stack.check_timeouts(revision)
     ports.stack.not_ready_exit(revision)
     ports.stack.merge_inert(revision)
+    ports.stack.risk_areas(revision)
     ports.stack.forbidden(revision)
     ports.stack.design(revision)
     ports.stack.ci(revision)
@@ -183,6 +188,17 @@ def product_name(ports: Ports) -> str:
         return ports.stack.product()
     except (ValueError, OSError):
         return UNKNOWN_PRODUCT
+
+
+def risk_areas(ports: Ports, state: TaskState) -> tuple[tuple[str, str], ...] | None:
+    """The `(id, description)` of the risk areas the product declares at the task's base, or
+    `None` when the stack cannot be read: a menu PjM saw incomplete, which `task_path.decide`
+    must not take for "no area applies". The base, like the rest of the stack (GH-591)."""
+    try:
+        revision = task_base(state, ports)
+        return tuple((a.id, a.description) for a in ports.stack.risk_areas(revision))
+    except (ValueError, OSError):
+        return None
 
 
 def no_setup(ports: Ports) -> str | None:

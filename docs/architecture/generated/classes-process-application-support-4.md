@@ -22,6 +22,7 @@ classDiagram
     class ports__Prompts["Prompts"]
     class ports__RawResult["RawResult"]
     class ports__RemergeDiffUnsupported["RemergeDiffUnsupported"]
+    class ports__RiskArea["RiskArea"]
     class ports__RoleRunner["RoleRunner"]
     class ports__RunLock["RunLock"]
     class ports__RunProcess["RunProcess"]
@@ -30,7 +31,6 @@ classDiagram
     class ports__RunStopped["RunStopped"]
     class ports__SampleApp["SampleApp"]
     class ports__SampleAppHandle["SampleAppHandle"]
-    class ports__SchemaGuard["SchemaGuard"]
 ```
 
 ## Relaciones con otras páginas
@@ -46,5 +46,3 @@ classDiagram
   - `ports.Ports` se asocia con `ports.Prompts`
   - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `run_role.GuardChain` agrega a `ports.SchemaGuard`

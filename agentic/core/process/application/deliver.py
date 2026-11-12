@@ -165,6 +165,8 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         "current_role": PJM.name,
         "pushed_head": pushed_head,
         "pushed_at": pushed_at,
+        # GH-588: the place in the landing order is taken once and kept by a re-delivery.
+        **({} if state.get("landing_queued_at") else {"landing_queued_at": ports.now()}),
         **record,
         **posted,
         **({"criteria_over_cap": over} if over else {}),

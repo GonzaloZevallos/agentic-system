@@ -213,7 +213,7 @@ class World:
         )
         decision = rules.auto_merge_decision(facts)
         assert decision.reason is not None
-        return decision.reason, landing_plan.step_for(state, decision.reason, facts)
+        return decision.reason, landing_plan.step_for(state, decision.reason, facts, turn="head")
 
 
 GREEN_ON_THE_OLD_HEAD = {"ci_head": HEAD, "ci_verdict": ci.CiVerdict("green", (), ())}
@@ -227,7 +227,10 @@ def test_a_restored_gh374_shape_settles_its_rows_and_is_synced_not_left_with_not
     world = World(live=archived_state())
     plain = restore.state_from(archived_state())
     stuck = landing_plan.step_for(
-        plain, "merge_conflict", settlement_facts(TASK, plain, pull_request("OPEN"), 443, MASTER)
+        plain,
+        "merge_conflict",
+        settlement_facts(TASK, plain, pull_request("OPEN"), 443, MASTER),
+        turn="head",
     )
     assert stuck.kind == "none"  # the state this task fixes: a diagnose at the head ends it
 
@@ -553,3 +556,11 @@ def test_a_cut_after_every_step_ends_in_the_state_an_uncut_restore_leaves():
 
     assert snapshot(cut) == snapshot(reference)
     assert cut.workspace.renamed == []
+
+
+def test_a_restored_task_queues_again_at_the_moment_of_the_restoration():
+    world = World(archived_state(landing_queued_at="2026-10-01T00:00:00+00:00"))
+
+    world.run()
+
+    assert world.document()["landing_queued_at"] == NOW

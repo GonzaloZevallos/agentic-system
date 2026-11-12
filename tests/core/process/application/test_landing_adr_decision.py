@@ -126,6 +126,7 @@ def _round(tmp_path, ports, live=LIVE, paths=(MINE, NOTES, CODE)):
         lines.append,
         clock=lambda: ASKED,
         live=live,
+        turn="head",
     )
     return result, lines
 
@@ -435,7 +436,7 @@ def test_gh_407_a_fresh_decision_after_the_second_escalation_is_due(tmp_path):
     raw = _gh_407_document(_gh_407_entries())
     facts = _gh_407_facts()
 
-    step = landing_plan.step_for(raw, "adr_number_taken", facts)
+    step = landing_plan.step_for(raw, "adr_number_taken", facts, turn="head")
 
     assert step.kind == "apply_adr_decision"
 
@@ -464,7 +465,10 @@ def test_gh_407_one_more_spent_apply_on_the_same_key_is_not_due(tmp_path):
     raw = _gh_407_document(entries)
     facts = _gh_407_facts()
 
-    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"
+    assert (
+        landing_plan.step_for(raw, "adr_number_taken", facts, turn="head").kind
+        != "apply_adr_decision"
+    )
     assert not landing_plan.release_asked(
         raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
     )
@@ -1366,7 +1370,10 @@ def test_gh_585_the_gh_652_slots_spent_on_the_whole_suite_are_given_back(tmp_pat
         raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
     )
     assert not landing_rules.adr_decision_due(entries[-1:], G652_HEAD, facts.adr_collision, entries)
-    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"
+    assert (
+        landing_plan.step_for(raw, "adr_number_taken", facts, turn="head").kind
+        != "apply_adr_decision"
+    )
 
 
 def test_gh_585_a_new_owner_comment_after_the_refund_makes_the_decision_due(tmp_path):
@@ -1374,7 +1381,7 @@ def test_gh_585_a_new_owner_comment_after_the_refund_makes_the_decision_due(tmp_
     facts = _g652_facts()
 
     assert landing_rules.adr_decision_due(entries[-1:], G652_HEAD, facts.adr_collision, entries)
-    step = landing_plan.step_for(_g652_raw(entries), "adr_number_taken", facts)
+    step = landing_plan.step_for(_g652_raw(entries), "adr_number_taken", facts, turn="head")
     assert step.kind == "apply_adr_decision"
 
 
@@ -1387,7 +1394,10 @@ def test_gh_585_the_same_document_with_a_gate_tier_keeps_both_slots_spent(tmp_pa
     assert not landing_plan.release_asked(
         raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
     )
-    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"
+    assert (
+        landing_plan.step_for(raw, "adr_number_taken", facts, turn="head").kind
+        != "apply_adr_decision"
+    )
 
 
 # --- D-be76583a: the rule applies a collision it settles, with no question ------------------

@@ -152,6 +152,8 @@ def test_a_live_child_of_another_product_with_the_same_task_id_does_not_block_th
 
 def test_gather_merges_skips_a_busy_task_before_assessing_it():
     ports = _ports(5, 6)
+    # GH-588: a busy task is still a member; task 6 is older, so the busy 5 is not the head.
+    ports.documents.record_closure("GH-6", {"landing_queued_at": "2026-11-10T08:00:00+00:00"})
     lines: list[str] = []
 
     found = poll.gather_merges(
@@ -171,8 +173,9 @@ def test_no_issue_is_both_a_merge_and_a_land_candidate():
         ports, frozenset(), MASTER, _Locks(), [], lands, live=LIVE, now=ESCALATED_AT
     )
 
-    assert merges == [7]
-    assert {c.issue for c in lands} == {5, 6}
+    # GH-588: only the head of the order (5, the lowest unstamped) is a candidate at all.
+    assert merges == []
+    assert {c.issue for c in lands} == {5}
     assert not set(merges) & {c.issue for c in lands}
 
 
@@ -195,10 +198,13 @@ def test_gather_merges_classifies_each_land_by_its_step():
 
     poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, live=LIVE, now=ESCALATED_AT)
 
-    assert sorted(lands, key=lambda c: c.issue) == [
-        rules.LandCandidate(5, "land_checks"),
-        rules.LandCandidate(6, "land_model"),
-    ]
+    assert lands == [rules.LandCandidate(5, "land_checks")]  # GH-588: only the head
+    ports.documents.record_closure("GH-6", {"landing_queued_at": "2026-11-10T08:00:00+00:00"})
+    lands.clear()
+
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, live=LIVE, now=ESCALATED_AT)
+
+    assert lands == [rules.LandCandidate(6, "land_model")]
 
 
 def _execute_land(tmp_path, kinds):
@@ -261,6 +267,7 @@ class _StaleLauncher(FakeLauncher):
                 lambda line: None,
                 live=LIVE,
                 run_kind=argv[5],
+                turn="head",
             )
         )
         return pid
@@ -392,7 +399,7 @@ def test_the_gap_before_the_resume_registers_counts_the_land_and_defers_another(
     cap_full = _roles()
     first, launcher, registry = _land_round(tmp_path, ports, cap_full)
     assert launcher.spawned == [_land_argv(5, tmp_path)]
-    assert first == ["agentic: poll: land #5 -> pid 4242", "agentic: poll: land #6 waits: no_slot"]
+    assert first == ["agentic: poll: land #5 -> pid 4242"]  # GH-588: 6 waits behind the head
 
     # The land registered itself and exited into its wait; the resume it spawned has not
     # registered yet: the second round sees cap + 1 through the land's own entry.
@@ -400,7 +407,7 @@ def test_the_gap_before_the_resume_registers_counts_the_land_and_defers_another(
     second, again, _ = _land_round(tmp_path, ports, [*cap_full, land_entry])
 
     assert again.spawned == []
-    assert second == ["agentic: poll: land #6 waits: no_slot"]
+    assert second == []
 
 
 # -- GH-500: the exempt queue over the registry ------------------------------------------------
@@ -430,8 +437,9 @@ def test_the_merge_that_just_started_goes_behind_the_others_next_round(tmp_path)
     _round(cfg, ports, registry, second, _at(6))
 
     assert _merged_issues(first) == ["478"]
-    assert _merged_issues(second) == ["487"]
-    assert registry.exempt_attempts("product")[(478, "merge")].last_attempt == _at(5)
+    # GH-588: one candidate per product, the head; the others wait behind it, not in turns.
+    assert _merged_issues(second) == ["478"]
+    assert registry.exempt_attempts("product")[(478, "merge")].last_attempt == _at(6)
 
 
 def test_a_candidate_is_noted_the_first_time_it_is_seen_and_keeps_that_instant(tmp_path):

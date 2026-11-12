@@ -23,6 +23,7 @@ from agentic.core.process.domain import (
     schema_guard,
     schemas,
     task,
+    task_path,
 )
 from agentic.shared import configuration
 from tests.test_architecture import ALLOWED
@@ -55,6 +56,10 @@ TYPES = {
     "Testigo del checkout": presubmit.witness_refusal,
     "Guarda de esquema": schema_guard,
     "Stack del producto": stack,
+    "Área de riesgo": stack.risk_areas,
+    "Tamaño": task_path.decide,
+    "Riesgo": task_path.risk_menu,
+    "Promoción": task_path.promote,
     "Brief": knowledge.brief_refusal,
     "Reflector": roles.REFLECTOR,
     "Playbook": playbook.Playbook,

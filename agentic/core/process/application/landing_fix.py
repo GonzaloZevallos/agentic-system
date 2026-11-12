@@ -966,7 +966,16 @@ def diagnose(context: LandingContext) -> None:
     # Only after the close: a close that failed leaves the task as it was, not marked restarted.
     carried = saved.get("cost_usd", 0.0) + saved.get("landing_cost_carried", 0.0)
     context.ports.documents.record_closure(
-        context.task_id, {"landing_restarts": 1, "landing_cost_carried": carried}
+        context.task_id,
+        {
+            "landing_restarts": 1,
+            "landing_cost_carried": carried,
+            # GH-588: the fresh run takes its place in the landing order again; a null is read
+            # as absent (`state_from` drops it).
+            "landing_queued_at": None,
+            "head_since_at": None,
+            "head_since_head": None,
+        },
     )
     notice = _restart_notice(saved, reason, carried)
     try:

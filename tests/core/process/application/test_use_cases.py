@@ -9,8 +9,9 @@ from agentic.core.process.application.classify import classify
 from agentic.core.process.application.define import define
 from agentic.core.process.application.diagnose import diagnose
 from agentic.core.process.application.discard import discard, discard_reason
-from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.application.ports import AttemptFailed, IssueState, RawResult, RiskArea
 from agentic.core.process.application.validate_prd import validate_prd
+from agentic.core.process.domain import task_path
 from agentic.core.process.domain.roles import PAIR_PM_PA
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
@@ -315,3 +316,121 @@ async def test_a_discard_that_reaped_nothing_leaves_the_key_out(cfg):
 
     assert "reaped_at_cleanup" not in patch
     assert "reaped_at_cleanup" not in ports.documents.last
+
+
+# --- GH-591, part 1: size, risks and the recorded path ---------------------------------------
+
+
+def sized(size="small", risk=None, type_="feature", confidence="high"):
+    """A classification that also declares its size and risks."""
+    return RawResult(
+        {
+            "markdown": "Clear.",
+            "type": type_,
+            "confidence": confidence,
+            "reason": "r",
+            "size": size,
+            "risk": [] if risk is None else risk,
+        },
+        0.01,
+    )
+
+
+ISSUE_TASK = {"id": "GH-7", "title": "Export report", "description": "Users want CSV."}
+
+
+def no_labels(ports):
+    return with_labels(ports, ())
+
+
+def with_labels(ports, labels):
+    ports.tracker.states[7] = IssueState("OPEN", "", (), None, labels)
+    return ports
+
+
+async def test_classify_records_a_small_task_without_risk_as_light(cfg):
+    ports = no_labels(memory_ports(ScriptedRunner(pjm=[sized()])))
+    patch = await classify(ISSUE_TASK, cfg, ports)
+    assert patch["initial_path"] == patch["path"] == "light"
+    assert (patch["path_cause"], patch["path_label"]) == ("small_no_risk", "none")
+    assert "path `light` (small_no_risk)" in patch["sections"]["PjM"]
+
+
+async def test_classify_with_no_size_or_risk_records_full(cfg):
+    ports = no_labels(memory_ports(ScriptedRunner(pjm=[classified()])))
+    patch = await classify(ISSUE_TASK, cfg, ports)
+    assert patch["path"] == "full" and patch["path_cause"] == "missing_size"
+
+
+async def test_classify_lets_the_owner_label_light_win_over_a_risk_and_says_so(cfg):
+    ports = with_labels(
+        memory_ports(ScriptedRunner(pjm=[sized(risk=["money-rounding"])])), ("path:light",)
+    )
+    patch = await classify(ISSUE_TASK, cfg, ports)
+    assert (patch["path"], patch["path_cause"], patch["path_label"]) == (
+        "light",
+        "owner_light",
+        "light",
+    )
+    assert "Override `path:light` over risk money-rounding" in patch["sections"]["PjM"]
+
+
+async def test_classify_with_unreadable_labels_records_full(cfg):
+    ports = memory_ports(ScriptedRunner(pjm=[sized()]))
+    ports.tracker.state_errors = {7}
+    patch = await classify(ISSUE_TASK, cfg, ports)
+    assert (patch["path"], patch["path_cause"]) == ("full", "label_unreadable")
+    assert patch["path_label"] == "unreadable"
+
+
+async def test_classify_with_the_stack_raising_records_full_even_for_no_risk(cfg):
+    stack = MemoryStack()
+    stack.risk_areas_error = "stack.yaml: broken"
+    ports = no_labels(memory_ports(ScriptedRunner(pjm=[sized()]), stack=stack))
+    patch = await classify(ISSUE_TASK, cfg, ports)
+    assert (patch["path"], patch["path_cause"]) == ("full", "stack_unreadable")
+
+
+async def test_classify_accepts_a_product_risk_area_and_refuses_an_unknown_id(cfg):
+    areas = (
+        RiskArea("billing", "Invoices", ("app/billing/**",)),
+        RiskArea("search-index", "The search index", ()),
+    )
+    known = no_labels(
+        memory_ports(
+            ScriptedRunner(pjm=[sized(risk=["billing"])]), stack=MemoryStack(risk_areas=areas)
+        )
+    )
+    patch = await classify(ISSUE_TASK, cfg, known)
+    assert (patch["path"], patch["path_cause"]) == ("full", "risk_flag")
+    prompt = known.runner.calls[0]["system_prompt"]
+    assert "- `billing`: Invoices" in prompt
+    assert "- `search-index`: The search index" in prompt
+    # Rejected input: an id neither built-in nor declared is never a valid flag.
+    unknown = no_labels(memory_ports(ScriptedRunner(pjm=[sized(risk=["billing"])])))
+    patch = await classify(ISSUE_TASK, cfg, unknown)
+    assert patch["path_cause"] == "unknown_risk"
+    assert "Unknown risk ids: `billing`" in patch["sections"]["PjM"]
+
+
+async def test_classify_stores_the_path_from_the_resolved_type_of_a_low_confidence_guess(cfg):
+    ports = no_labels(
+        memory_ports(ScriptedRunner(pjm=[sized(type_="platform_enhancement", confidence="low")]))
+    )
+    patch = await classify(ISSUE_TASK, cfg, ports)
+    assert patch["type"] == "feature" and patch["path"] == "light"
+
+
+async def test_classify_shows_pjm_the_built_in_menu_and_the_size_rule(cfg):
+    ports = memory_ports(ScriptedRunner(pjm=[sized()]))
+    await classify(TASK, cfg, ports)
+    prompt = ports.runner.calls[0]["system_prompt"]
+    for identifier in task_path.BUILTIN_RISKS:
+        assert f"`{identifier}`" in prompt
+    assert "A new screen or a new flow is never `small`" in prompt
+
+
+async def test_classify_for_a_task_with_no_issue_has_unreadable_labels_and_is_full(cfg):
+    ports = memory_ports(ScriptedRunner(pjm=[sized()]))
+    patch = await classify(TASK, cfg, ports)
+    assert (patch["path"], patch["path_cause"]) == ("full", "label_unreadable")

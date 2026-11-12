@@ -31,6 +31,16 @@ to define behaviour for beyond the person writing the issue: it is never a `feat
 and never a `bug`, whatever it cites (a README, an ADR, a glossary, a prompt) and
 whatever run it shows falling short of that. It is always `platform_enhancement`,
 whatever it adds.
+
+Then size the task and flag its risks. The system decides the path from them; you only
+report what you see.
+
+- `size`: `small`, `normal` or `large`. `small` is a change confined to one place that a
+  person reads in a few minutes. A new screen or a new flow is never `small`.
+- `risk`: the ids of the risk areas the task touches, from this menu and no other id
+  (`[]` when none applies; never leave it out, a missing `risk` is not "no risk"):
+
+{{risk_areas}}
 </Task>
 
 <Hard Limits>
@@ -53,6 +63,6 @@ whatever it adds.
 <Output>
 Everything goes in the structured output, in one call:
 
-- `type`, `confidence` (`high` or `low`), a one-line `reason`.
+- `type`, `confidence` (`high` or `low`), a one-line `reason`, `size` and `risk`.
 - `markdown`: one line of justification, in Markdown.
 </Output>

@@ -486,6 +486,17 @@ class FlagVocabulary(Protocol):
     def load(self) -> dict[str, str]: ...
 
 
+@dataclass(frozen=True)
+class RiskArea:
+    """An area of risk the product declares under `risk_areas` (`core.knowledge`, glossary:
+    Área de riesgo): its slug, a one-line description and the globs it covers. The globs are
+    only carried: nothing matches them yet."""
+
+    id: str
+    description: str
+    paths: tuple[str, ...]
+
+
 class ProductStack(Protocol):
     """How the product declares its code is built and verified (`core.knowledge`), as of
     one of its commits: the task's base, never the branch's. Its name is the exception,
@@ -585,6 +596,12 @@ class ProductStack(Protocol):
         fetched, no file, YAML that does not parse): it never raises for those and never
         falls back to another revision's list. Raises `ValueError` when the key is there but
         broken, or a glob is refused by `master_gain.glob_refusal`."""
+        ...
+
+    def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
+        """The areas of risk the product declares for classification (`core.knowledge`), as the
+        commit `revision` declares them, in file order. Empty when the key is absent. Raises
+        `ValueError` when the declaration is invalid, like its siblings."""
         ...
 
     def forbidden(self, revision: str) -> Sequence[Forbidden]:

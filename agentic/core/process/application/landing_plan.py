@@ -18,6 +18,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import ci, landing, plan_settlement, rules
 from ..domain.adr_numbers import Ambiguous
 from ..domain.landing import LandingStep, LandingStepKind
+from ..domain.landing_order import Turn
 from ..domain.roles import Role
 from ..domain.task import (
     INTEGRATION,
@@ -270,6 +271,8 @@ def step_for(
     facts: rules.MergeFacts,
     slicing: landing.Slice | landing.RestartWhy | Callable[[], landing.SliceInputs] | None = None,
     ancestry: Ancestry | None = None,
+    *,
+    turn: Turn,
 ) -> LandingStep:
     """The one question every caller asks: `landing_step` over the document's spent budgets.
     `slicing` is what `landing_step` decides a slice from at the exhaustion (`slice_inputs`,
@@ -282,6 +285,7 @@ def step_for(
         facts,
         budgets,
         landing.blocking_owners(raw),
+        turn=turn,
         important_units=landing.important_owners(raw),
         slicing=slicing,
         ledger_only=plan_settlement.ledger_only(refusal, facts, raw),
@@ -684,6 +688,7 @@ def released_step(
     at: str,
     slicing: landing.Slice | landing.RestartWhy | Callable[[], landing.SliceInputs] | None = None,
     ancestry: Ancestry | None = None,
+    turn: Turn,
 ) -> LandingStep:
     """The step the table gives on the document as the release `outcome` leaves it (GH-442):
     `landing.released_by_ci` for a release by CI (stamped with `facts.current_master`),
@@ -691,7 +696,7 @@ def released_step(
     function the poller and `land` ask, so neither decides the step after a release itself."""
     patch = release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
-    return step_for(view, refusal, facts, slicing, ancestry)
+    return step_for(view, refusal, facts, slicing, ancestry, turn=turn)
 
 
 def release_patch(raw: TaskState, outcome: Release, upstream: str | None, at: str) -> ReleasePatch:
@@ -716,11 +721,13 @@ def pending(
     now: datetime | None = None,
     released: bool = False,
     ancestry: Ancestry | None = None,
+    *,
+    turn: Turn,
 ) -> LandingStep | None:
     """The step worth a `land` child: built (`live`) and not yet dispatched on this head.
     `released` (GH-328) says a human's answer released the escalated diagnose: the gate that
     would skip it for the escalation is not asked."""
-    step = step_for(raw, refusal, facts, ancestry=ancestry)
+    step = step_for(raw, refusal, facts, ancestry=ancestry, turn=turn)
     if not takes_action(step.kind, live) or facts.pr_head is None:
         return None
     gate = diagnose_gate(raw, step.kind, now)

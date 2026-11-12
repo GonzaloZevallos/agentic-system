@@ -151,6 +151,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.experiment": "state",
     "domain.finding_location": "state",
     "domain.landing": "landing",
+    "domain.landing_order": "landing",
     "domain.legacy_names": "state",
     "domain.master_gain": "checks",
     "domain.merge_ci": "checks",
@@ -181,6 +182,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.suppressions": "checks",
     "domain.system_lessons": "playbook",
     "domain.task": "state",
+    "domain.task_path": "state",
     "domain.turn_notice": "roles",
 }
 

@@ -57,15 +57,15 @@ def test_step_for_escalates_once_per_head_and_names():
     from agentic.core.process.application import landing_plan
 
     facts = _facts(ci_unreported=("e2e",))
-    assert landing_plan.step_for({}, "ci_unknown_names", facts).kind == "escalate"
+    assert landing_plan.step_for({}, "ci_unknown_names", facts, turn="head").kind == "escalate"
     done = {
         "landing": [
             {"head": HEAD, "step": "escalate", "refusal": "ci_unknown_names", "names": ["e2e"]}
         ]
     }
-    assert landing_plan.step_for(done, "ci_unknown_names", facts).kind == "none"
+    assert landing_plan.step_for(done, "ci_unknown_names", facts, turn="head").kind == "none"
     other = _facts(ci_unreported=("e2e", "pytest"))
-    assert landing_plan.step_for(done, "ci_unknown_names", other).kind == "escalate"
+    assert landing_plan.step_for(done, "ci_unknown_names", other, turn="head").kind == "escalate"
 
 
 def _matrix_report(*, shards=("pytest (areas-1, a)", "pytest (areas-2, b)"), pending=(), done=True):

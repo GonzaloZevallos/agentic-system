@@ -75,6 +75,7 @@ def _land(ports, spawner, clock, lines=None):
         (lines if lines is not None else []).append,
         clock=clock,
         resume=spawner,
+        turn="head",
     )
 
 
@@ -227,6 +228,7 @@ def test_an_unstarted_pass_is_run_by_land_on_its_own_entry(monkeypatch):
         frozenset({"re_review"}),
         lines.append,
         clock=clock,
+        turn="head",
     )
 
     after = ports.documents.load("GH-5")["landing"]
@@ -260,7 +262,34 @@ def test_a_stamped_pass_is_resumed_not_run_again(monkeypatch):
         lines.append,
         clock=_Clock(),
         resume=spawner,
+        turn="head",
     )
     assert ran == [] and spawner.spawned == [5]
     assert len(ports.documents.load("GH-5")["landing"]) == 1
     assert result.kind == "dispatched"
+
+
+NOT_HEAD = "not the head of the landing order: run by the owner"
+
+
+def test_a_manual_land_of_a_task_that_is_not_the_head_says_so_and_runs_anyway():
+    ports = _ports(5, 3)
+    ports.documents.record_closure("GH-3", {"landing_queued_at": "2026-10-14T08:00:00+00:00"})
+    ports.documents.record_closure("GH-5", {"landing_queued_at": "2026-10-14T09:00:00+00:00"})
+    lines: list[str] = []
+
+    result = _land(ports, _Spawner(), _Clock(), lines)
+
+    assert lines.count(NOT_HEAD) == 1
+    assert result is not None  # the owner's call: it runs
+
+
+def test_a_manual_land_of_the_head_says_nothing_about_the_order():
+    ports = _ports(5, 3)
+    ports.documents.record_closure("GH-5", {"landing_queued_at": "2026-10-14T08:00:00+00:00"})
+    ports.documents.record_closure("GH-3", {"landing_queued_at": "2026-10-14T09:00:00+00:00"})
+    lines: list[str] = []
+
+    _land(ports, _Spawner(), _Clock(), lines)
+
+    assert NOT_HEAD not in lines

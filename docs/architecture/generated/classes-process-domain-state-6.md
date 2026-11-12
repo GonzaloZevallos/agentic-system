@@ -32,7 +32,10 @@ classDiagram
     class task__TrackerFailure["TrackerFailure"]
     class task__TrackerFailureRecord["TrackerFailureRecord"]
     class task__TrackerPosted["TrackerPosted"]
+    class task_path__PathDecision["PathDecision"]
+    class task_path__Promotion["Promotion"]
     task__TaskState --|> task__TaskInput
+    task__TaskState --> task_path__Promotion
 ```
 
 ## Relaciones con otras páginas
