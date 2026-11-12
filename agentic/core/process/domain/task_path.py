@@ -13,10 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
-
-if TYPE_CHECKING:
-    from .task import TaskState
+from typing import Any, Final, Literal, TypedDict
 
 Size = Literal["small", "normal", "large"]
 Path = Literal["light", "full"]
@@ -147,16 +144,16 @@ def risk_menu(product_areas: Sequence[tuple[str, str]]) -> str:
     return "\n".join(f"- `{identifier}`: {description}" for identifier, description in rows)
 
 
-def path_of(state: TaskState) -> Path:
+def path_of(state: Mapping[str, Any]) -> Path:
     return "light" if state.get("path") == "light" else DEFAULT_PATH
 
 
-def path_label_of(state: TaskState) -> PathLabel:
+def path_label_of(state: Mapping[str, Any]) -> PathLabel:
     value = state.get("path_label")
     return value if value in ("light", "full", "both", "unreadable") else DEFAULT_LABEL
 
 
-def path_cause_of(state: TaskState) -> str:
+def path_cause_of(state: Mapping[str, Any]) -> str:
     return str(state.get("path_cause") or DEFAULT_CAUSE)
 
 
@@ -171,7 +168,7 @@ def classification_patch(decision: PathDecision, label: PathLabel) -> dict[str, 
 
 
 def promote(
-    state: TaskState,
+    state: Mapping[str, Any],
     from_role: str,
     kind: PromotionKind,
     at: str,
