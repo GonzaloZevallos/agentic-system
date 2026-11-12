@@ -230,7 +230,7 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
   archiva el intento y arranca un Developer nuevo, sin sesión, desde la base de la subtarea
   con un brief reescrito (el brief original, los hallazgos de las dos pasadas y una nota breve
   de qué no funcionó). El intento reiniciado tiene su propio contador y **escala recién si
-  llega otra vez al límite** (ADR-0090).
+  llega otra vez al límite** (ADR-0092).
 - Los pares que siguen escalando al llegar al límite, siempre: PM→Product Analyst, UX Lead,
   UI Lead, PM→Tech Lead, QA Performance→Tech Lead, la integración y el par de los chequeos
   completos. PjM entrega la tarea, el historial de devoluciones y el motivo de cada una.
