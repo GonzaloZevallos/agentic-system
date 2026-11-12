@@ -49,9 +49,13 @@ sequenceDiagram
    pagar el rol y dentro de `escalate` volvería a comentar el issue. La corrida termina con
    su estado en el checkpoint (`agentic/composition.py:checkpointer`).
 3. **Quién reanuda.**
-   - Si hace falta una decisión (preguntas abiertas, un par en su límite, una estimación que
-     no cabe), la toma el dueño: comenta en el issue y corre `agentic resume --issue N`
-     (`agentic/cli.py:_resume`).
+   - Si hace falta una decisión (preguntas abiertas, un par en su límite que ya no puede
+     reiniciar, una estimación que no cabe), la toma el dueño: comenta en el issue y corre
+     `agentic resume --issue N` (`agentic/cli.py:_resume`). Un reinicio limpio pendiente
+     (`restart_pending`) no es una decisión ni un desacuerdo: si la corrida se cortó entre el
+     reinicio y el `develop` que lo termina, la rama de la subtarea puede faltar o haberse
+     movido y la reanudación no lo lee como problema
+     (`agentic/core/process/application/resume.py:disagreements`).
    - Si el corte fue mecánico (un rol que falló por algo ajeno a la tarea, el límite de la
      cuenta, un disco lleno, o una escalación con una `MechanicalCause` como un CI sin
      veredicto o una entrega transitoria del sistema), el poller la retoma por su calendario,
