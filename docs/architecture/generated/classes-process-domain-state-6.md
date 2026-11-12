@@ -38,7 +38,6 @@ classDiagram
     class task_path__RiskUnreadable["RiskUnreadable"]
     task__Subtask --> task_path__PromoteRequest
     task__TaskState --|> task__TaskInput
-    task__TaskState --> task_path__PromoteRequest
     task__TaskState --> task_path__Promotion
 ```
 

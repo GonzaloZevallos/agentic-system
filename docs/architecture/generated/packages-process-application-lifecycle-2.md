@@ -4,7 +4,8 @@ Esta página muestra los módulos del grupo `lifecycle` de `application` y los i
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks](packages-process-application-checks.md)
+  - [application: checks (parte 1)](packages-process-application-checks-1.md)
+  - [application: checks (parte 2)](packages-process-application-checks-2.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 1)](packages-process-application-landing-1.md)
@@ -24,10 +25,17 @@ graph TD
     g_domain__machine["machine (grupo de domain)"]
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
+    m_application__restore["application.restore"]
     m_application__resume["application.resume"]
     m_application__schedule["application.schedule"]
     m_application__scratch_sweep["application.scratch_sweep"]
     m_application__stop["application.stop"]
+    m_application__restore --> g_application__landing
+    m_application__restore --> g_application__lifecycle__1
+    m_application__restore --> g_application__support
+    m_application__restore --> g_domain__landing
+    m_application__restore --> g_domain__state
+    m_application__restore --> m_application__resume
     m_application__resume --> g_application__build
     m_application__resume --> g_application__definition
     m_application__resume --> g_application__landing
