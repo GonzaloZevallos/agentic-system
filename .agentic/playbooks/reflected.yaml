@@ -804,3 +804,13 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-592
+  GH-598@review:
+    cost_usd: 0.1234
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-598
