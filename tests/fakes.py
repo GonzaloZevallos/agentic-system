@@ -2650,6 +2650,16 @@ def planned_tracker_only(
     )
 
 
+# What every part declares besides its title, body and dependencies (GH-592).
+PART_DEFAULTS: dict[str, object] = {
+    "hand_files": 1,
+    "hand_lines": 10,
+    "test_lines": 10,
+    "kind": "change",
+    "guard": "",
+}
+
+
 def planned_parts(
     *parts: dict[str, object],
     cost: float = 0.3,
@@ -2663,10 +2673,11 @@ def planned_parts(
 ) -> RawResult:
     """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
     given, two chained ones."""
-    items: list[dict[str, object]] = list(parts) or [
+    given = list(parts) or [
         {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
         {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
     ]
+    items: list[dict[str, object]] = [{**PART_DEFAULTS, **item} for item in given]
     markdown = "### Solution\n\nCut it.\n\n### Parts\n\n" + "\n\n".join(
         f"#### {i['title']}\n\n{i['body']}" for i in items
     )

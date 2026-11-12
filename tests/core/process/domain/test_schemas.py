@@ -13,6 +13,8 @@ from agentic.core.process.domain.schemas import (
     Verdict,
 )
 
+from tests.fakes import PART_DEFAULTS
+
 ZERO_SIZE = {"hand_files": 0, "hand_lines": 0, "test_lines": 0}
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
@@ -441,8 +443,8 @@ def test_plan_check_for_looks_at_the_bucket_of_the_plans_own_subtask_count():
 
 def _split(cost, files, parts=None, **more):
     two = [
-        {"title": "One", "body": "First slice.", "depends_on": []},
-        {"title": "Two", "body": "Second slice.", "depends_on": [1]},
+        {**PART_DEFAULTS, "title": "One", "body": "First slice.", "depends_on": []},
+        {**PART_DEFAULTS, "title": "Two", "body": "Second slice.", "depends_on": [1]},
     ]
     data = _plan("### Solution", "a")
     return {
@@ -456,7 +458,7 @@ def _split(cost, files, parts=None, **more):
 
 
 def _part(depends_on=(), title="T", body="B"):
-    return {"title": title, "body": body, "depends_on": list(depends_on)}
+    return {**PART_DEFAULTS, "title": title, "body": body, "depends_on": list(depends_on)}
 
 
 def test_a_plan_that_does_not_fit_and_builds_whole_is_refused_with_the_split_reason():
@@ -1293,3 +1295,61 @@ def test_a_size_field_description_does_not_retype_the_classification_rule():
     for name in ("hand_files", "hand_lines", "test_lines"):
         description = (schemas.TechPlan.model_fields[name].description or "").lower()
         assert [word for word in rule if word.lower() in description] == [], name
+
+
+# The parts of a split carry a size, a kind and a guard (GH-592).
+
+
+def _piece(hand_files=1, hand_lines=10, test_lines=10, kind="change", depends_on=(), title="T"):
+    return {
+        **_part(depends_on, title=title),
+        "hand_files": hand_files,
+        "hand_lines": hand_lines,
+        "test_lines": test_lines,
+        "kind": kind,
+    }
+
+
+def test_a_part_over_the_size_budget_is_refused_by_name_and_field():
+    parts = [_piece(), _piece(hand_files=11, depends_on=[1])]  # 11 x 1.5 files is over 15
+    with pytest.raises(ValueError, match=r"part 2 does not fit.*hand_files"):
+        schemas.parts_check(parts)
+
+
+def test_the_floor_ratio_judges_a_part_as_it_judges_the_plan():
+    parts = [_piece(), _piece(hand_files=6, depends_on=[1])]
+    schemas.parts_check(parts)  # 6 x 1.5 is 9, within 15
+    with pytest.raises(ValueError, match="part 2 does not fit"):
+        schemas.parts_check(parts, 3.0)  # 6 x 3 is 18
+
+
+def test_a_part_with_no_declared_size_is_judged_as_before():
+    schemas.parts_check([_part(), _part([1])])
+
+
+def test_a_migration_with_no_neighbour_is_refused_and_one_with_a_neighbour_is_not():
+    alone = [_piece(), _piece(kind="migration"), _piece(depends_on=[1])]
+    with pytest.raises(ValueError, match="part 2 is a migration with no neighbour"):
+        schemas.parts_check(alone)
+    after = [_piece(), _piece(kind="migration", depends_on=[1])]
+    schemas.parts_check(after)
+    before = [_piece(kind="migration"), _piece(depends_on=[1])]
+    schemas.parts_check(before)
+
+
+def test_a_part_that_splits_needs_exactly_one_terminal_part():
+    two_sinks = [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1])]
+    schemas.parts_check(two_sinks)  # a task that is not a part may write them
+    with pytest.raises(ValueError, match=r"exactly one terminal part.*2 \(parts 2, 3\)"):
+        schemas.parts_check(two_sinks, one_terminal=True)
+    chain = [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1, 2])]
+    schemas.parts_check(chain, one_terminal=True)
+
+
+def test_the_plan_check_asks_for_one_terminal_part_only_of_a_part():
+    data = _split(
+        400.0, 90, [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1])], **ZERO_SIZE
+    )
+    schemas.plan_check_for(_history(1, []), 0.0)(data)
+    with pytest.raises(ValueError, match="exactly one terminal part"):
+        schemas.plan_check_for(_history(1, []), 0.0, part_of=("GH-1", 1, 1))(data)
