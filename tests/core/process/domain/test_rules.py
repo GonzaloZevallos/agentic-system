@@ -4694,3 +4694,64 @@ def test_a_part_below_the_cap_reads_the_slicing_rules_without_retyping_the_budge
     assert rules.SLICING_RULES in text and "kind: migration" in text
     assert "exactly one terminal part" in text
     assert "15" not in text and "400" not in text and "600" not in text
+
+
+# --- GH-616: a run stopped by a signal is retaken; no owed task is skipped silently ---
+
+
+def test_an_unmarked_dead_same_boot_lock_is_retaken_and_a_marked_one_is_not():
+    assert _interrupted(lock=SAME_BOOT) == "retake"
+    assert _interrupted(lock=STOPPED) == "none"
+
+
+def test_orphaned_and_not_interrupted_statuses_partition_every_status():
+    every = set(get_args(task.Status))
+    orphaned = set(rules.ORPHANED_STATUSES)
+    not_interrupted = set(rules._NOT_INTERRUPTED_STATUSES)
+    assert orphaned | not_interrupted == every
+    assert not orphaned & not_interrupted
+    assert not_interrupted == {
+        "ready_for_review",
+        "discarded",
+        "split",
+        "tracker_only",
+        "evaluated",
+        "waiting_on_human",
+    }
+
+
+_OWED = {
+    "in_tray": True,
+    "blocked": False,
+    "alive": False,
+    "taken": False,
+    "already_reported": False,
+}
+
+
+@pytest.mark.parametrize("status", get_args(task.Status))
+def test_owed_a_line_is_true_only_for_an_orphaned_status_with_every_flag_clear(status):
+    raw = {"status": status}
+    assert rules.owed_a_run(raw) is (status in rules.ORPHANED_STATUSES)
+    assert rules.owed_a_line(raw, **_OWED) is (status in rules.ORPHANED_STATUSES)
+
+
+@pytest.mark.parametrize("flag", ["blocked", "alive", "taken", "already_reported"])
+def test_owed_a_line_is_false_when_any_flag_is_set_alone(flag):
+    assert not rules.owed_a_line({"status": "open"}, **{**_OWED, flag: True})
+
+
+def test_owed_a_line_is_false_outside_the_tray_or_with_a_closing_field():
+    assert not rules.owed_a_line({"status": "open"}, **{**_OWED, "in_tray": False})
+    for field in ("closed_at", "escalated", "pull_request"):
+        assert not rules.owed_a_run({"status": "open", field: "x"})
+    assert not rules.owed_a_run({})
+
+
+def test_orphaned_line_names_a_stopped_and_an_unaccounted_task():
+    assert rules.orphaned_line(7, "stopped") == (
+        "agentic: poll: #7 stopped on purpose (agentic stop): not retaken; agentic resume --issue 7"
+    )
+    assert rules.orphaned_line(7, "unaccounted", "spent") == (
+        "agentic: poll: #7 owed a run, not taken this round (spent); agentic resume --issue 7"
+    )

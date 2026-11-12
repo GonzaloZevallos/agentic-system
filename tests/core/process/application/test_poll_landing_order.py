@@ -485,3 +485,24 @@ def test_the_poller_anchors_the_head_once_and_never_a_waiting_task():
     ports.documents.record_closure("GH-7", {"head_since_at": "2026-11-10T11:00:00+00:00"})
     _merges(ports)
     assert ports.documents.load("GH-7")["head_since_at"] == "2026-11-10T11:00:00+00:00"
+
+
+def _dead(task_id: str, **more):
+    from agentic.core.process.application.ports import LockRecord
+
+    return {
+        task_id: LockRecord(777, "h", "2026-11-10T07:00:00Z", "agentic run", "boot-old", **more)
+    }
+
+
+def test_a_delivered_task_whose_run_was_cut_by_a_signal_still_leads_the_order():
+    # GH-616: a dead lock with no mark is not a hold; only `agentic stop` writes one.
+    found, _ = _merges(_three(), lock=_Locks(_dead("GH-7")))
+
+    assert found == [7]
+
+
+def test_a_delivered_task_stopped_by_agentic_stop_waits_and_the_next_one_leads():
+    found, _ = _merges(_three(), lock=_Locks(_dead("GH-7", stopped_deliberately=True)))
+
+    assert found == [5]
