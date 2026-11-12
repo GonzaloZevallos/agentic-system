@@ -57,6 +57,7 @@ def relative_path(task_id: str, *, subdir: Path = TASKS_SUBDIR) -> Path:
 # is data, and renaming its keys would make a paused task resume with an empty count
 # (`resume.from_document` reads the frontmatter back into the state). The same rule the
 # metrics follow (ADR-0008, addendum; ADR-0018, and issue #53). State field -> key.
+TASK_PATH_KEYS = ("initial_path", "path", "path_cause", "path_label", "promotion")
 RECORDED_AS = {"changes_requested": "returns", "change_history": "return_history"}
 SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # The keys whose block value `record_closure` may replace: the system's own record of a
@@ -325,6 +326,9 @@ def render(
         # document of any other task is byte-identical to one written before it. Parsed
         # back under the same name by `parse`.
         **({"plan_route": routed} if (routed := state.get("plan_route")) else {}),
+        # The path the task takes (GH-591, `task_path`), written only when classify set it, so a
+        # document of a task from before it is byte-identical. Parsed back under the same names.
+        **{key: value for key in TASK_PATH_KEYS if (value := state.get(key))},
         # Marks an evaluation run (GH-470), written only when set, so a real task's document
         # is byte-identical to one written before it. Parsed back under the same name.
         **({"evaluation": evaluated} if (evaluated := state.get("evaluation")) else {}),

@@ -16,6 +16,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__SchemaGuard["SchemaGuard"]
     class ports__Scratch["Scratch"]
     class ports__SentEntry["SentEntry"]
     class ports__SentMemory["SentMemory"]
@@ -30,7 +31,6 @@ classDiagram
     class ports__TrackerUnreachable["TrackerUnreachable"]
     class ports__UnstageablePath["UnstageablePath"]
     class ports__Upstream["Upstream"]
-    class ports__UpstreamMerge["UpstreamMerge"]
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
     ports__TrackerTimedOut --|> ports__TrackerCallFailed
     ports__TrackerTransient --|> ports__TrackerCallFailed
@@ -48,3 +48,5 @@ classDiagram
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
+- [application: support (parte 6)](classes-process-application-support-6.md)
+  - `run_role.GuardChain` agrega a `ports.SchemaGuard`

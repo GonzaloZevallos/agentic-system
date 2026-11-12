@@ -122,6 +122,21 @@ La secuencia de roles que recorre una tarea según su tipo, solo de ida. Adónde
 _Avoid_: flujo, pipeline
 _Campo_: workflow — estándar (Microsoft Agent Framework, OpenAI, Google ADK, Temporal, CrewAI Flows); graph, con node y edge, en LangGraph
 
+**Tamaño**:
+Cuánto es la tarea según PjM al clasificarla: `small`, `normal` o `large`. Una pantalla nueva o un flujo nuevo nunca es `small`. Se guarda en el documento de la tarea (GH-591) y, junto con los riesgos y la etiqueta del dueño, decide el camino inicial; la parte 1 sólo lo registra y nada rutea por él todavía. Un tamaño ausente se lee como `full`, nunca como pequeño.
+_Avoid_: complejidad, estimación (la estimación es dinero y archivos, de Tech Lead)
+_Campo_: sin término de arte; en SWE-bench la dificultad es una etiqueta de la tarea
+
+**Riesgo**:
+Un id de una lista cerrada que PjM marca cuando la tarea toca una zona delicada. Son seis y el sistema los trae: `data-migration`, `money-rounding`, `authn-authz-sessions`, `tenant-isolation`, `user-data-deletion` y `public-api-break`; el producto suma los suyos como áreas de riesgo (glosario de Conocimiento) y la comparación es exacta. Un riesgo ausente, un id desconocido o un stack ilegible dan siempre `full`: una lista vacía de riesgos es un hecho que PjM afirma, nunca lo que queda cuando no se pudo mirar. Un riesgo marcado y válido hace `full` el camino salvo que el dueño ponga `path:light`.
+_Avoid_: peligro, alerta
+_Campo_: risk flag en los esquemas de revisión de cambios; sin definición compartida
+
+**Promoción**:
+El único cambio de `path` después de clasificar, y sólo de `light` a `full`: `task_path.promote` lo hace, una vez, y guarda de qué rol vino, por qué (`plan_over_cap`, `risk_area`, `owner` o `role`, más una línea de hasta 240 caracteres) y cuándo. No es una devolución ni un escalado: no toca ningún contador. Bajo la etiqueta del dueño `path:light` no aplica nada y lo dice. `initial_path` queda siempre junto a `path`, y `path_cause` explica sólo el camino inicial, nunca la promoción. No confundir `path` (el camino de la tarea, `light` o `full`) con el **Camino** de arriba (la secuencia de roles según el tipo).
+_Avoid_: escalado, devolución, degradación
+_Campo_: sin término de arte
+
 **Etapa de definición**:
 Tramo del camino de feature entre Product Analyst y el PRD. Estrictamente secuencial.
 _Campo_: sin término de arte

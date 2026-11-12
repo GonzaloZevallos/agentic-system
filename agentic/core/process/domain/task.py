@@ -35,6 +35,8 @@ from .ci_push import PushKind
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
+from .task_path import Path as TaskPath
+from .task_path import PathCause, PathLabel, Promotion
 
 Status = Literal[
     "open",
@@ -1728,6 +1730,16 @@ class TaskState(TaskInput, total=False):
     # The route the plan took (GH-472): written when the sizer ran, omitted from the document
     # otherwise. Written once by the plan node, so no reducer.
     plan_route: PlanRoute
+    # The path the task takes and how it got there (GH-591, `domain/task_path.py`): recorded at
+    # classify and read by nothing yet. `initial_path` is what `decide` said and never changes;
+    # `path` only ever goes `light` -> `full`, through `task_path.promote`. `path_cause` explains
+    # the initial path, `path_label` is the owner label's fact and `promotion` the one move.
+    # Written by `task_path` alone; a document without them reads as `full` / `none` / `unknown`.
+    initial_path: TaskPath
+    path: TaskPath
+    path_cause: PathCause
+    path_label: PathLabel
+    promotion: Promotion
     # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
     # Written once when the run starts, from the frozen entry, so no reducer; omitted from
     # the document when absent.

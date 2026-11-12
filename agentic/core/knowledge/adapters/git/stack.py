@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from ....process.application.ports import RiskArea
 from ....process.domain.design import Design
 from ....process.domain.docs import Docs
 from ....process.domain.performance import Scenario
@@ -94,6 +95,13 @@ class GitStack:
         if not isinstance(data, dict) or any(key not in stack.KEYS for key in data):
             return ()
         return stack.merge_inert(data, source)
+
+    def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
+        data, source = self._declaration(revision)
+        return tuple(
+            RiskArea(area.id, area.description, area.paths)
+            for area in stack.risk_areas(data, source)
+        )
 
     def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
         data, source = self._declaration(revision)
