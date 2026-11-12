@@ -15,9 +15,10 @@ from typing import assert_never
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, landing, presubmit, rules
-from ..domain.pull_request import BoundedBody, bounded_body
+from ..domain.pull_request import BoundedBody, bounded_body, with_required_lines
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
+from . import api_break
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed
 from .preflight import over_cap
@@ -132,7 +133,15 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     reopened = state.get("landing")
     if reopened:
         state = {**state, "landing": _closed_landing(reopened, state, task.path, ports)}
-    body = _bounded(state, relative, preface=preface)
+    try:
+        step = "api break line read failed"
+        required = api_break.required_line(ports, task_base(state, ports), state)
+    except ValueError as failed:
+        return _ended(state, _undelivered(step, failed, state, replaced, at=ports.now()), ports)
+    # The room the line takes is read off the one function that writes it, minus the separator
+    # `bounded_body` reserves on its own.
+    line = with_required_lines("", *required).rstrip() if required else ""
+    body = _bounded(state, relative, preface=preface, required=line)
     try:
         step = "task document save failed"
         if body.bounded or replaced:
@@ -144,13 +153,25 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         # nothing is committed after it (GH-216), so the CI the push starts is of this sha.
         step = "head read failed"
         pushed_head = ports.workspace.full_head(task.path)
+        existing = state.get("pull_request")
+        if required and existing:
+            # The edit goes before the push: the push's `synchronize` is the fresh run that reads
+            # the body, so it never needs a rerun of the old event (GH-610).
+            step = "pr body failed"
+            current = ports.tracker.pull_request_body(existing)
+            mended = with_required_lines(current, *required)
+            if mended != current:
+                ports.tracker.update_pull_request_body(
+                    api_break.pull_request_number(existing), mended
+                )
         step = "push failed"
         ports.workspace.push(task.branch, lease=plan.old_sha if plan.kind == "replace" else None)
         pushed_at = datetime.now(UTC).isoformat(timespec="seconds")
         step = "gh pr create failed"
         # A pull request the task already has is kept: the push alone re-delivers it.
-        url = state.get("pull_request") or ports.tracker.open_pull_request(
-            state["id"], task.branch, state["title"], body.text, closes_issue=True
+        text = with_required_lines(body.text, *required) if required else body.text
+        url = existing or ports.tracker.open_pull_request(
+            state["id"], task.branch, state["title"], text, closes_issue=True
         )
     except (GitError, ValueError) as failed:
         return _ended(
@@ -417,7 +438,7 @@ def _undelivered(
     )
 
 
-def _bounded(state: TaskState, relative: str, *, preface: str) -> BoundedBody:
+def _bounded(state: TaskState, relative: str, *, preface: str, required: str = "") -> BoundedBody:
     def pointer(omitted: tuple[str, ...]) -> str:
         named = ", ".join(omitted)
         return (
@@ -425,7 +446,7 @@ def _bounded(state: TaskState, relative: str, *, preface: str) -> BoundedBody:
             f"`{relative}`; the system does not version it."
         )
 
-    return bounded_body(_parts(state), state["title"], pointer, preface=preface)
+    return bounded_body(_parts(state), state["title"], pointer, preface=preface, required=required)
 
 
 def _parts(state: TaskState) -> list[tuple[str, str]]:

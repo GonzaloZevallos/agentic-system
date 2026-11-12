@@ -495,6 +495,8 @@ class MemoryStack:
         # None is a product with no `ci_dispatch` (GH-462): an untrusted head runs locally. A
         # test sets it.
         self.declared_ci_dispatch: CiDispatch | None = None
+        # None is a product with no `api_break_line` (GH-610): no body is touched.
+        self.declared_api_break_line: ApiBreakLine | None = None
         # GH-531: the declaration at one revision wins over the one above, and a revision in
         # `stack_error_at` makes `ci` and `ci_dispatch` raise `ValueError` with that text, the
         # way a malformed key at that commit does. The names per revision are `declared_ci`.
@@ -567,6 +569,10 @@ class MemoryStack:
         if revision in self.stack_error_at:
             raise ValueError(self.stack_error_at[revision])
         return self.declared_ci_dispatch_at.get(revision, self.declared_ci_dispatch)
+
+    def api_break_line(self, revision: str) -> ApiBreakLine | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_api_break_line
 
     def check_budgets(self, revision: str) -> dict[str, float]:
         # Not tracked in `revisions` either, `witness`'s own reason.

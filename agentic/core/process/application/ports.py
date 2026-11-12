@@ -564,6 +564,13 @@ class ProductStack(Protocol):
         or declared without `ci`."""
         ...
 
+    def api_break_line(self, revision: str) -> ApiBreakLine | None:
+        """The line a pull request body carries for an approved API break, the CI check that
+        fails without it and that check's step (`core.knowledge`, GH-610), as the commit
+        `revision` declares them. `None` when the product declares none: no body is touched and
+        no landing step is added. Raises `ValueError` when the key is malformed."""
+        ...
+
     def check_budgets(self, revision: str) -> dict[str, float]:
         """Check name -> the seconds it may take on the `full_checks` run (`core.knowledge`,
         GH-365), as the commit `revision` declares them. Empty when the product declares none,
@@ -1644,7 +1651,12 @@ class Tracker(Protocol):
         may have answered a truncated page: a failed lookup is never an empty list."""
         ...
 
-    def update_pull_request_body(self, number: int, body: str) -> None: ...
+    def update_pull_request_body(self, number: int, body: str) -> None:
+        """Replaces the body of pull request `number` with `body` whole (`gh pr edit`). A change
+        of the body starts no CI run by itself: a check that reads it reads it on the next
+        `pull_request` event (a push, or a close and reopen). Raises `ValueError` when the
+        platform refuses."""
+        ...
 
     def pull_request_body(self, reference: str) -> str:
         """The body of the pull request at `reference` as it is now (GH-610): what the landing
