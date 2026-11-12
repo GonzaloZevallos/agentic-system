@@ -68,6 +68,7 @@ from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
 from ...application.review import review
+from ...application.risk_net import risk_net
 from ...application.schedule import run_subtasks
 from ...application.split import split
 from ...application.tracker_only import tracker_only
@@ -314,7 +315,12 @@ def _pipeline(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     # patch (the 58% of spend the request opens with, all labelled `tech_lead`).
     branch.add_node("review", _node(review, TECH_LEAD_REVIEWER, ports_of, telemetry, arm_for))
     branch.add_conditional_edges(START, rules.pipeline_entry, ["develop", "review"])
-    branch.add_conditional_edges("develop", _in_branch(rules.after_develop), ["review", END])
+    # The system's `risk_hits` net sits between a delivery and its review (GH-591): no model.
+    branch.add_node("risk_net", _system_node(risk_net, ports_of))
+    branch.add_conditional_edges(
+        "develop", _in_branch(rules.after_develop), {"review": "risk_net", END: END}
+    )
+    branch.add_edge("risk_net", "review")
     branch.add_edge("review", END)
     return branch.compile(checkpointer=False)
 
