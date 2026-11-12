@@ -1504,3 +1504,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-11T18:52:23.958+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan names one function as the only definition of a rule, route every input through it and never rewrite its result afterward. Test each edge case (unreadable, escalated, released) against that single call.
+  confidence: medium
+  seen_in:
+  - GH-588
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T01:57:21.098+00:00'
