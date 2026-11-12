@@ -115,6 +115,24 @@ def test_a_fix_is_chosen_once_per_head_and_then_waits_for_its_fresh_run():
     )
 
 
+def test_a_released_base_red_with_the_body_as_cause_never_reruns_the_old_event():
+    _, spent = gh686_body_only()
+    released = replace(spent, ci_release_due=True, head_has_upstream=True)
+    assert step_of(reason_recorded=True, spent=released).kind == "fix_pr_body"
+    assert step_of(spent=released).kind == "escalate_api_break"
+    # Not the body: the released base is still the one rerun for the pair, as before.
+    code = landing.landing_step(
+        "ci_failed",
+        gh686_body_only()[0],
+        released,
+        (),
+        turn="head",
+        slicing="no_clean_slice",
+        non_code=NonCodeState(cause=None, runs_completed=True),
+    )
+    assert code.kind == "rerun"
+
+
 @pytest.mark.parametrize("completed", [False, None])
 def test_live_or_unknown_runs_are_a_wait_never_a_fix_or_a_question(completed):
     facts, spent = gh686_body_only()

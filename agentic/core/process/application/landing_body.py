@@ -9,17 +9,14 @@ the old event would fail again."""
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 
 from ..domain import escalation_prompts, pull_request
 from ..domain import landing as landing_rules
-from . import landing_fix, landing_plan, landing_sync
+from . import api_break, landing_fix, landing_plan, landing_sync
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .resume import state_from
-
-_NUMBER = re.compile(r"/pull/(\d+)$")
 
 _REFUSED = (
     "Your last answer was not taken ({reason}): the reason must be one line of at most 240 "
@@ -69,13 +66,15 @@ def fix_pr_body(context: LandingContext) -> None:
         line = ports.stack.api_break_line(task_base(raw, ports))
     except (ValueError, OSError):
         line = None
-    found = _NUMBER.search(reference)
-    if line is None or reason is None or found is None:
+    try:
+        number = api_break.pull_request_number(reference)
+    except ValueError:
+        number = None
+    if line is None or reason is None or number is None:
         landing_fix.escalate_landing(
             context, "the pull request body cannot be fixed: no line, reason or pull request"
         )
         return
-    number = int(found.group(1))
     closed_at: str | None = None
     try:
         current = tracker.pull_request(reference)

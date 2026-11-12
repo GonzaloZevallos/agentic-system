@@ -547,7 +547,8 @@ def landing_step(
                     return step("wait")
                 if spent.head_has_upstream is False:
                     return _sync(step, exhausted, spent, conflicting=False)
-                return step("rerun")
+                # A red the body causes is never rerun: the old event would read the old body.
+                return pr_body_step() if state.cause == "pr_body" else step("rerun")
             if _red_on_base_only(facts):
                 return step("escalate")
             if state.cause == "pr_body":
