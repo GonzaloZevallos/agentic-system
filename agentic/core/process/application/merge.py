@@ -199,7 +199,7 @@ def merge_task(
             replace(
                 base_facts,
                 adr_collision=collision,
-                adr_naming=_adr_naming(collision),
+                adr_naming=adr_collision.naming_of(collision),
                 conflicts=github,
                 github_conflicting=rules.github_conflicting(pull_request, head),
             ),
@@ -1370,15 +1370,6 @@ def _fresh_run_evidence(reason: str, facts: rules.MergeFacts | None, cause: CiCa
     if cause is None:
         return "GitHub gave no verdict for the head merged with master within the check timeout."
     return f"GitHub gave no verdict for the head merged with master ({cause})."
-
-
-def _adr_naming(collision: object) -> Literal["numbered", "dated"] | None:
-    """GH-611: how the product names its ADRs, only when a collision was found. The one read of
-    the stack is `adr_collision`'s: `Undated` is its answer on a dated product, so no second
-    read is made here."""
-    if collision is None:
-        return None
-    return "dated" if isinstance(collision, Undated) else "numbered"
 
 
 def _adr_evidence(facts: rules.MergeFacts) -> str:

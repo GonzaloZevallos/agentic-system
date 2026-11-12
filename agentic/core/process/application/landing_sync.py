@@ -619,8 +619,25 @@ def _renamed_by_date(
                 for n in workspace.tree_names(head, adr_numbers.ADR_DIR)
                 if n not in own_names and n not in master_names
             ]
+            numbers = sorted(
+                {n for a in found.own if (n := adr_numbers.number_of(a.path.rsplit("/", 1)[-1]))}
+            )
+            lines = [
+                adr_numbers.OwnLine(x.path, x.commit, x.text)
+                for x in workspace.added_lines(sha, head, numbers)
+            ]
+            trees = {
+                commit: workspace.tree_names(commit, adr_numbers.ADR_DIR)
+                for commit in sorted({x.commit for x in lines})
+            }
             result = adr_dated.rename(
-                found.own, first, texts, master_names=master_names, kept_names=kept
+                found.own,
+                first,
+                texts,
+                master_names=master_names,
+                kept_names=kept,
+                lines=lines,
+                trees=trees,
             )
         except GitError as failed:
             context.log(f"agentic: land: {task}: renumber: unreadable: {failed}")

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from ..domain import adr_numbers
 from ..domain.adr_dated import Undated
@@ -137,6 +138,15 @@ def _undated(ports: Ports, master: str, head: str, added: Sequence[AddedAdr]) ->
 
 def _numbered(path: str) -> bool:
     return adr_numbers.number_of(path.rsplit("/", 1)[-1]) is not None
+
+
+def naming_of(collision: object) -> Literal["numbered", "dated"] | None:
+    """GH-611: how the product names its ADRs, only when a collision was found. The one read
+    of the stack is `adr_collision`'s: `Undated` is its answer on a dated product, so no
+    second read is made here."""
+    if collision is None:
+        return None
+    return "dated" if isinstance(collision, Undated) else "numbered"
 
 
 def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous | Undated | None:
