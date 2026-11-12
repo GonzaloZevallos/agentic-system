@@ -72,9 +72,10 @@ def world(tmp_path: Path) -> World:
 
 def _approved_state(world: World) -> dict:
     return {
+        "id": "GH-9",
         "subtasks": {
             "api": {"id": "api", "status": "approved", "branch": "agentic/GH-9.api"},
-        }
+        },
     }
 
 
