@@ -15,6 +15,7 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
 
 ```mermaid
 graph TD
+    g_application__build["build (grupo)"]
     g_application__checks["checks (grupo)"]
     g_application__landing["landing (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
@@ -37,6 +38,7 @@ graph TD
     m_application__ci_push --> m_application__ports
     m_application__ci_trust --> g_pkg__domain
     m_application__ci_trust --> m_application__ports
+    m_application__landing_body --> g_application__build
     m_application__landing_body --> g_application__landing
     m_application__landing_body --> g_application__lifecycle
     m_application__landing_body --> g_pkg__domain
