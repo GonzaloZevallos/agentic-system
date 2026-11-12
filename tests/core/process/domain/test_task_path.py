@@ -102,8 +102,19 @@ def test_the_path_fields_round_trip_through_the_document():
     state.update(promote(state, "Developer", "role", "2026-11-11T00:00:00Z")[0])
     assert state["path"] == "light"  # owner label: nothing applied
     parsed = document.parse(document.render(state, {}, "abc"))
-    for key in ("initial_path", "path", "path_cause", "path_label"):
+    for key in ("initial_path", "path", "path_cause", "path_label", "path_routed"):
         assert parsed[key] == state[key]
+
+
+def test_classification_patch_marks_the_document_as_routed():
+    patch = task_path.classification_patch(task_path.PathDecision("full", "not_small"), "none")
+    assert patch == {
+        "initial_path": "full",
+        "path": "full",
+        "path_cause": "not_small",
+        "path_label": "none",
+        "path_routed": True,
+    }
 
 
 def light_state(label="none"):

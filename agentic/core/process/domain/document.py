@@ -58,7 +58,14 @@ def relative_path(task_id: str, *, subdir: Path = TASKS_SUBDIR) -> Path:
 # is data, and renaming its keys would make a paused task resume with an empty count
 # (`resume.from_document` reads the frontmatter back into the state). The same rule the
 # metrics follow (ADR-0008, addendum; ADR-0018, and issue #53). State field -> key.
-TASK_PATH_KEYS = ("initial_path", "path", "path_cause", "path_label", "promotion")
+TASK_PATH_KEYS = (
+    "initial_path",
+    "path",
+    "path_cause",
+    "path_label",
+    "promotion",
+    "path_routed",
+)
 RECORDED_AS = {"changes_requested": "returns", "change_history": "return_history"}
 SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # The keys whose block value `record_closure` may replace: the system's own record of a
@@ -94,6 +101,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "flake_comments",
         "flakes",
         "tracker_failures",
+        "lead_time",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
@@ -108,6 +116,7 @@ _FLOW_KEYS = (
     "merge_refusal",
     "flakes",
     "tracker_failures",
+    "lead_time",
 )
 
 
@@ -241,6 +250,9 @@ def render(
         **({"merge_conflict": _LANDING_PLACEHOLDER} if state.get("merge_conflict") else {}),
         # The refusal the merge verb wrote nothing else for (GH-500): one flow line, replaced whole.
         **({"merge_refusal": _LANDING_PLACEHOLDER} if state.get("merge_refusal") else {}),
+        # The lead time a closed task keeps (GH-599, `lead_time`): one flow line, so a later merge
+        # replaces `{unknown: no_merge}` in place through `record_closure`.
+        **({"lead_time": _LANDING_PLACEHOLDER} if state.get("lead_time") else {}),
         # The flakes the gates observed (ADR-0066) and the flake issues already commented on:
         # each written only when non-empty, `flakes` as one flow line like the records above.
         **({"flakes": _LANDING_PLACEHOLDER} if state.get("flakes") else {}),

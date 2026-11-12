@@ -50,6 +50,7 @@ def test_reducers_are_read_from_the_annotations():
         "merge_ci",
         "merge_conflict",
         "merge_refusal",
+        "lead_time",
         "status",
         "current_role",
         "escalated",

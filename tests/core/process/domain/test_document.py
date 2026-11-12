@@ -1748,3 +1748,48 @@ def test_required_paths_revisions_round_trip_and_are_omitted_when_absent():
     assert "required_paths_revisions" not in document.render(state)
     with_revision = {**state, "required_paths_revisions": [revision]}
     assert document.parse(document.render(with_revision))["required_paths_revisions"] == [revision]
+
+
+def _base_state(**extra):
+    return {"id": "T-1", "title": "t", "description": "d", **extra}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"labeled_at": "2026-11-01T10:00:00Z", "merged_at": "2026-11-02T10:00:00Z"},
+        {"unknown": "no_merge"},
+        {"unknown": "unreadable"},
+    ],
+)
+def test_lead_time_round_trips_through_render_and_record_closure(value):
+    rendered = document.render(_base_state(lead_time=value))
+    assert document.parse(rendered)["lead_time"] == value
+    # render -> parse -> render -> parse is stable
+    again = document.render(_base_state(**{"lead_time": document.parse(rendered)["lead_time"]}))
+    assert document.parse(again)["lead_time"] == value
+    # the same value written by record_closure into a document with no key
+    bare = document.render(_base_state())
+    closed = document.record_closure(bare, {"lead_time": value})
+    assert document.parse(closed)["lead_time"] == value
+    assert closed.count("\nlead_time:") == 1
+
+
+def test_a_document_without_lead_time_renders_byte_identically():
+    assert document.render(_base_state()) == document.render(_base_state(lead_time={}))
+    assert "lead_time" not in document.render(_base_state())
+
+
+def test_record_closure_replaces_a_lead_time_written_in_block_style():
+    block = (
+        "---\nid: T-1\nlead_time:\n  unknown: no_merge\nstatus: x\n---\n\n# t\n\n"
+        "## Original request\n\nd\n"
+    )
+    out = document.record_closure(block, {"lead_time": {"labeled_at": "a", "merged_at": "b"}})
+    assert document.parse(out)["lead_time"] == {"labeled_at": "a", "merged_at": "b"}
+    assert "unknown" not in out and "status: x" in out
+
+
+def test_path_routed_is_written_only_when_set_and_parsed_back():
+    assert "path_routed" not in document.render(_base_state())
+    assert document.parse(document.render(_base_state(path_routed=True)))["path_routed"] is True
