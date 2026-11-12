@@ -1257,6 +1257,12 @@ class LandingEntry(TypedDict, total=False):
     bounds: int
     out_of_bounds_lines: list[OutOfBoundsLine]
     out_of_bounds_more: int
+    # GH-610, `escalate_api_break` entries: the reason the owner's answer gave
+    # (`api_break_decided`), why an answer was refused (`rejected`, a closed
+    # `pull_request.RejectReason`) and how many times the question was published again (`reasks`).
+    api_break_decided: str
+    rejected: str
+    reasks: int
 
 
 class OutOfBoundsLine(TypedDict):

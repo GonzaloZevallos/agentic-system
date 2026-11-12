@@ -615,5 +615,9 @@ def _dispatch(context: LandingContext) -> None:
             landing_adr.apply_adr_decision(context)
         case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
+        case "fix_pr_body" | "escalate_api_break":
+            # GH-610: `landing_step` answers these only to a caller that hands it a `NonCodeState`;
+            # none does until the `landing-apply` subtask wires its executors.
+            context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: not wired")
         case _:
             assert_never(kind)

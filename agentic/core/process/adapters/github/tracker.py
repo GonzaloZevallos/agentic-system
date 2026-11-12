@@ -29,7 +29,6 @@ from ...application.ports import (
     TrackerTransient,
     TrackerUnreachable,
 )
-from ...domain import ci
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from ...domain.task import (
     PullRequest,
@@ -286,8 +285,8 @@ def _dispatched_job(job: object) -> CiCheck:
 
 def _failed_step_of(steps: object) -> str | None:
     """The name of the first step of a job whose conclusion is failure (GH-504; `CiCheck`
-    derives its stage with `ci.failed_stage`). `None` when there is no failing step or `steps` cannot be
-    read: the job then reads red as before, and is never made unreadable by its steps."""
+    derives its stage with `ci.failed_stage`). `None` when there is no failing step or `steps`
+    cannot be read: the job then reads red as before, and is never made unreadable by its steps."""
     if not isinstance(steps, list):
         return None
     for step in steps:

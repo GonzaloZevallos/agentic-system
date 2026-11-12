@@ -179,8 +179,8 @@ from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.presubmit import (
     FAILED_IDS_TOKEN,
-    CiCover,
     ApiBreakLine,
+    CiCover,
     CiDispatch,
     RerunForm,
 )

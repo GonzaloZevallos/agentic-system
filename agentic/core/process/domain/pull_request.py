@@ -51,13 +51,18 @@ def is_reject_reason(value: str) -> bool:
     return value in get_args(RejectReason)
 
 
-def declares(body: str, prefix: str) -> bool:
-    """Whether `body` carries the required line: `\r\n` read as `\n`, then a line that starts with
-    `prefix`, optional blanks and a non-empty reason (the rule of apostrophe's
-    `scripts/docs/api_breaks.py`, ADR-0066, copied here). The only place a body is read for it."""
-    normalized = body.replace("\r\n", "\n")
+def declared_reason(body: str, prefix: str) -> str | None:
+    """The reason of the first line of `body` that starts with `prefix`, optional blanks and a
+    non-empty reason, else `None`: `\r\n` read as `\n`, the rule of apostrophe's
+    `scripts/docs/api_breaks.py` (ADR-0066), copied here. The only place a body is read for it."""
     pattern = rf"^{re.escape(prefix)}[ \t]*(\S.*?)[ \t]*$"
-    return re.search(pattern, normalized, re.MULTILINE) is not None
+    found = re.search(pattern, body.replace("\r\n", "\n"), re.MULTILINE)
+    return found.group(1) if found else None
+
+
+def declares(body: str, prefix: str) -> bool:
+    """Whether `body` carries the required line (`declared_reason`)."""
+    return declared_reason(body, prefix) is not None
 
 
 def with_required_lines(body: str, prefix: str, reason: str) -> str:

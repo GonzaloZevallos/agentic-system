@@ -24,6 +24,8 @@ NOT_REOPENING = (
     "escalate_ledger",
     "escalate_adr",
     "apply_adr_decision",
+    "fix_pr_body",
+    "escalate_api_break",
     "escalate",
     "none",
 )

@@ -3259,6 +3259,17 @@ def entry_closed(entry: Mapping[str, object]) -> bool:
     )
 
 
+def closed_for_body_fix(state: Mapping[str, object], head: str | None) -> bool:
+    """Whether a pull request seen closed is the system's own close of a body fix (GH-610): the
+    live `landing` list holds a `fix_pr_body` entry of `head` that is not finished, written before
+    the close and finished after the reopen. Such a closed PR is not a `closed` result, and every
+    reader of the PR's state and the order's head asks this one predicate."""
+    return head is not None and any(
+        entry.get("step") == "fix_pr_body" and entry.get("head") == head and not entry_closed(entry)
+        for entry in live_landing(state)
+    )
+
+
 def before_pr(entry: Mapping[str, object]) -> bool:
     """Whether a `landing` entry was written before the pull request existed (the pre-PR
     important pass, GH-354): it says nothing about a pull request. The only place the key
