@@ -32,11 +32,11 @@ classDiagram
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
     class task__ReleasePatch["ReleasePatch"]
+    class task__RestartPending["RestartPending"]
+    class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
     class task__ReviewScopeRecord["ReviewScopeRecord"]
-    class task__RoleRun["RoleRun"]
-    class task__SettledRow["SettledRow"]
 ```
 
 ## Relaciones con otras páginas

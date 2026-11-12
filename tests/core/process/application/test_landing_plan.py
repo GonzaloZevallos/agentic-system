@@ -345,12 +345,52 @@ def _adr_step(raw: dict) -> landing.LandingStep:
     return landing_plan.step_for(raw, "adr_number_taken", _adr_facts(), turn="head")
 
 
-def test_step_for_asks_until_the_escalation_is_resolved_then_waits():
+def test_step_for_asks_until_the_escalation_is_resolved_then_waits(monkeypatch):
+    monkeypatch.setattr(landing, "ADR_AUTO_APPLY", False)  # the owner's chain; the rule's below
     assert _adr_step({}).kind == "escalate_adr"
     assert _adr_step({"landing": [_asked("escalate_adr")]}).kind == "escalate_adr"
     assert _adr_step({"landing": [_asked("escalate_adr", resolved_at="t")]}).kind == "none"
     other_head = _asked("escalate_adr", head="c" * 40, resolved_at="t")
     assert _adr_step({"landing": [other_head]}).kind == "escalate_adr"
+
+
+def test_d_be76583a_a_collision_the_rule_settles_is_applied_with_no_question():
+    assert _adr_step({}).kind == "apply_adr_decision"
+
+
+@pytest.mark.parametrize(
+    "collision",
+    [
+        adr_numbers.Ambiguous("duplicate_own_number", "0049 twice", (("a", "b"),)),
+        adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0054", ()),
+        adr_numbers.Renaming((("a", "b"),), {}),
+    ],
+    ids=["duplicate_own_number", "no_moves", "renaming"],
+)
+def test_d_be76583a_a_collision_the_rule_cannot_settle_is_still_asked(collision):
+    step = landing_plan.step_for({}, "adr_number_taken", _adr_facts(collision), turn="head")
+    assert step.kind != "apply_adr_decision"
+
+
+def test_d_be76583a_a_question_already_asked_on_the_head_is_never_replaced_by_the_rule():
+    raw = {"landing": [_asked("escalate_adr", resolved_at="t")]}
+    assert _adr_step(raw).kind == "none"
+    unresolved = {"landing": [_asked("escalate_adr")]}
+    assert _adr_step(unresolved).kind == "escalate_adr"
+
+
+def test_d_be76583a_a_spent_cap_asks_as_before():
+    spent = [
+        {"head": HEAD, "step": "apply_adr_decision", "outcome": "checks_red", "gate_tier": "all"}
+        | {"bounds": landing.ADR_EDIT_BOUNDS, "decided_by": "rule"}
+        for _ in range(landing.LANDING_ADR_DECISIONS_MAX)
+    ]
+    assert _adr_step({"landing": spent}).kind == "escalate_adr"
+
+
+def test_d_be76583a_the_off_switch_asks_as_before(monkeypatch):
+    monkeypatch.setattr(landing, "ADR_AUTO_APPLY", False)
+    assert _adr_step({}).kind == "escalate_adr"
 
 
 # --- GH-544: an owner's decision on an `escalate_adr` question releases it ---
@@ -712,7 +752,11 @@ def test_red_names_on_base_compared_with_a_head_keeps_only_the_names_red_on_both
 # --- GH-588: the turn in the landing order ---
 
 
-def test_a_waiting_task_is_left_alone_by_the_plan_and_reads_no_slice_inputs():
+def test_a_waiting_task_is_left_alone_by_the_plan_and_reads_no_slice_inputs(monkeypatch):
+    monkeypatch.setattr(
+        landing, "ADR_AUTO_APPLY", False
+    )  # the owner's chain; the rule's is tested above
+
     def provider():
         raise AssertionError("a waiting task must not read the slice inputs")
 
@@ -725,6 +769,24 @@ def test_a_waiting_task_is_left_alone_by_the_plan_and_reads_no_slice_inputs():
     assert ask.kind == "wait"
     assert landing_plan.step_for({}, "pr_not_open", _adr_facts(), turn="waiting").kind == "none"
     assert _adr_step({}).kind == "escalate_adr"  # the head's table is as it was
+
+
+def test_d_be76583a_with_the_rule_on_the_head_applies_and_a_waiting_task_still_waits():
+    """GH-588 x D-be76583a: the turn decides first. The head of the order applies the renumbering
+    the rule settles; a task waiting for its turn waits on it, however the collision reads."""
+    settled = adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0054", (("a", "b"),))
+    asked = adr_numbers.Ambiguous("duplicate_own_number", "0049 twice", (("a", "b"),))
+    assert landing.ADR_AUTO_APPLY is True
+
+    head = landing_plan.step_for({}, "adr_number_taken", _adr_facts(settled), turn="head")
+    waiting = landing_plan.step_for({}, "adr_number_taken", _adr_facts(settled), turn="waiting")
+    head_asked = landing_plan.step_for({}, "adr_number_taken", _adr_facts(asked), turn="head")
+    waiting_asked = landing_plan.step_for({}, "adr_number_taken", _adr_facts(asked), turn="waiting")
+
+    assert head.kind == "apply_adr_decision"
+    assert waiting.kind == "wait"
+    assert head_asked.kind == "escalate_adr"  # what the rule cannot settle is still asked
+    assert waiting_asked.kind == "wait"
 
 
 def test_a_waiting_task_is_never_worth_a_land_child_nor_a_released_step():

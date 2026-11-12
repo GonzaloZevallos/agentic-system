@@ -316,6 +316,21 @@ async def test_the_pair_limit_escalates_with_the_table_and_the_close_the_pr_sent
     assert "re-filing the issue" in after["escalated"] and "| list_ms |" in after["escalated"]
 
 
+async def test_the_pair_limit_asks_the_decision_and_an_approved_subtask_never_restarts(monkeypatch):
+    spent = {roles.PAIR_QA_PERFORMANCE_TECH_LEAD.key: 2}
+    state = state_of(changes_requested=spent)
+    state["subtasks"][INTEGRATION]["approved_once"] = True
+    after, *_ = await go(state, measured(150))
+    assert after["escalation_class"] == "returns" and after["status"] == "waiting_on_human"
+    assert "restarts" not in after and "restart_pending" not in after
+    assert after["changes_requested"] == spent
+    asked = []
+    monkeypatch.setattr(rules, "on_return_limit", lambda *a, **k: asked.append(a[1]) or "escalate")
+    fresh, *_ = await go(state_of(), measured(150))
+    assert fresh["escalation_class"] == "returns"
+    assert asked == [roles.PAIR_QA_PERFORMANCE_TECH_LEAD]
+
+
 def reviewable(convened: bool, section: bool = True) -> dict:
     state = state_of(performance=[PLAN] if convened else [])
     state["subtasks"][INTEGRATION]["status"] = "delivered"

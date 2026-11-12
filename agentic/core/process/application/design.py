@@ -91,7 +91,6 @@ async def _lead_walk(
     design_block = ports.stack.design(task_base(state, ports))
     widened = replace(role, allowed=role.allowed + design_rules(design_block))
     limit = cfg.max_changes_requested_per_pair
-    remaining = rules.remaining_changes(state, pair, limit)
     facts = "\n\n".join(filter(None, [design_facts(design_block), compare_facts(design_block)]))
     prompt = with_context(state, widened, ports, task.path, facts) if facts else None
     output, patch = await run_role(state, widened, cfg, ports, cwd=task.path, prompt=prompt)
@@ -108,7 +107,7 @@ async def _lead_walk(
             role.name: f"{rules.system_note(NO_DESIGN_NOTE)}\n\n{patch['sections'][role.name]}",
         }
     if data["verdict"] == "returned":
-        if remaining > 0:
+        if rules.on_return_limit(state, pair, limit) == "count":
             patch["changes_requested"] = rules.record_return(state, pair)
             patch["change_history"] = [rules.change_entry(pair, rules.PRD_RETURN, data["reason"])]
         else:
@@ -164,7 +163,7 @@ async def consolidate(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
             )
             patch = rules.logged(patch, at=ports.now())
             patch["status"] = WAITING_ON_HUMAN
-    elif remaining > 0:
+    elif rules.on_return_limit(state, PAIR_PM_PA, limit) == "count":
         patch["changes_requested"] = rules.record_return(state, PAIR_PM_PA)
         patch["change_history"] = [rules.change_entry(PAIR_PM_PA, rules.PRD_RETURN, data["reason"])]
         patch["status"] = "returned"
