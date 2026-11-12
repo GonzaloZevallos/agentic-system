@@ -346,7 +346,7 @@ Esto exige que Tech Lead informe a PjM el mapa de subtareas y Developers al crea
 
 ### Tamaño de la tarea y partición (GH-592)
 
-Una tarea se dimensiona para integrarse en horas (ADR-0090, que enmienda ADR-0054). El plan
+Una tarea se dimensiona para integrarse en horas (ADR-0093, que enmienda ADR-0054). El plan
 declara como mucho **15 archivos escritos a mano que no sean tests** y **400 líneas agregadas a
 mano que no sean tests**; los tests se cuentan y se informan aparte, con su propio tope de **600
 líneas agregadas**. Los números viven solo en `size_budget`, que los rinde a los prompts y a las

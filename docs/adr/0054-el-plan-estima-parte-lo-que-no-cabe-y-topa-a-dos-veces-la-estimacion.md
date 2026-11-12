@@ -206,7 +206,7 @@ rechazar.
 ## Adenda (2026-11-11): el presupuesto de tamaño reemplaza la construcción entera y la línea de 40 archivos (GH-592)
 
 La parte 24 de 37 de apostrophe (GH-407) declaró 175 archivos y llegó a 263 archivos y 8.400
-líneas. El ADR-0090 cambia lo que esta decisión dice sobre el tamaño de una parte:
+líneas. El ADR-0093 cambia lo que esta decisión dice sobre el tamaño de una parte:
 
 - **Reemplazada: la profundidad máxima 1.** Una parte que no cabe se parte de nuevo, hasta
   profundidad 2; pasada esa, escala con la clase `estimate`, con su plan.

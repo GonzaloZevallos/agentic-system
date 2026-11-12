@@ -98,10 +98,10 @@ Origen: issue #431, semilla con las reglas dadas entre 2026-10-02 y 2026-10-28
 Una tarea se dimensiona para integrarse en horas: el presupuesto de tamaño cuenta los archivos y las líneas escritos a mano, los archivos generados nunca cuentan, y la línea de costo de 150 USD queda como chequeo secundario.
 Origen: issue #592, «Owner's rule: a task is sized to merge within hours. The size budget counts hand-written files and lines; generated files never count.» y «The cost line stays as a secondary check.»
 Reemplaza: D-d3cd64da
-Rozan: ADR-0054, ADR-0090
+Rozan: ADR-0054, ADR-0093
 
 ### D-70f943b6 · 2026-11-11
 Una parte que sigue por encima del presupuesto se parte de nuevo; construir entera una parte demasiado grande ya no es una opción.
 Origen: issue #592, «Owner's rule: a part that is still over budget splits again. Building an oversized part whole is no longer an option.»
 Reemplaza: D-99072874
-Rozan: ADR-0054, ADR-0090
+Rozan: ADR-0054, ADR-0093
