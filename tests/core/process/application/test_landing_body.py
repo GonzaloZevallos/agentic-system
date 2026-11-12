@@ -7,13 +7,16 @@ from __future__ import annotations
 
 import dataclasses
 
+from agentic.core.process.application import landing_plan, poll
 from agentic.core.process.application.ports import IssueComment, IssueState, RawResult
+from agentic.core.process.application.resume import state_from
 from agentic.core.process.domain import pull_request
 from agentic.core.process.domain.ci import CiCheck
+from agentic.core.process.domain.landing import LandingStep
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from tests.core.process.application.test_landing_fix import NOW, _doc, _land
 from tests.core.process.application.test_merge_ci import _report
-from tests.core.process.application.test_poll_merge import HEAD, URL, _ports
+from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _ports, _pr
 from tests.core.process.landing_fixtures import API_BREAK_LINE
 from tests.fakes import FakeLauncher, MemoryStack, ScriptedRunner
 
@@ -207,3 +210,83 @@ def test_the_owners_valid_answer_is_recorded_and_the_body_is_then_fixed(tmp_path
     assert result.step == "fix_pr_body"
     assert "The field was removed on purpose." in ports.tracker.bodies[URL.format(5)]
     assert NOW  # the clock is the landing's own
+
+
+def _open_fix(ports, step="fix_pr_body"):
+    ports.documents.record_closure(
+        "GH-5",
+        {"landing": [*_spent(), {"head": HEAD, "step": step, "refusal": "ci_failed", "at": NOW}]},
+    )
+
+
+def test_a_close_left_without_a_reopen_is_taken_again_from_what_is_observed(tmp_path):
+    ports = _world()
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    _open_fix(ports)
+
+    result, _ = _land(ports, tmp_path, FakeLauncher())
+
+    assert result.step == "fix_pr_body"
+    assert "close_pull_request" not in ports.tracker.events  # already closed: only reopens
+    assert "reopen_pull_request" in ports.tracker.events
+    assert pull_request.declares(ports.tracker.bodies[URL.format(5)], "Breaking-API:")
+    (entry,) = _entries(ports, "fix_pr_body")
+    assert entry["resolved_at"]
+
+
+def test_a_pull_request_closed_by_an_open_fix_is_not_an_abandoned_result(tmp_path):
+    ports = _world()
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    raw = state_from(_doc(ports))
+    assert isinstance(poll.assess_merge(ports, "GH-5", raw, 5, None, MASTER), poll.Abandoned)
+
+    _open_fix(ports)
+    raw = state_from(_doc(ports))
+    found = poll.assess_merge(ports, "GH-5", raw, 5, None, MASTER)
+
+    assert not isinstance(found, poll.Abandoned)
+    assert found.facts.pr_state == "OPEN"
+
+
+def _invalid(tmp_path, answer):
+    ports = _asked(tmp_path, answer)
+    return ports, [text for _, text in ports.tracker.comments if "Breaking-API:" in text]
+
+
+def test_an_invalid_owner_answer_is_asked_again_once_with_the_reason(tmp_path):
+    ports, before = _invalid(tmp_path, "Breaking-API: has a `backtick` in it")
+    assert len(before) == 1
+
+    first, _ = _land(ports, tmp_path, FakeLauncher())
+    asked = [text for _, text in ports.tracker.comments if "Breaking-API:" in text]
+
+    assert first.kind == "dispatched" and len(asked) == 2
+    assert "not taken" in asked[1]
+    assert ports.tracker.updated_bodies == []
+
+    ports.tracker.timestamped["GH-5"] = [
+        *ports.tracker.timestamped["GH-5"],
+        IssueComment("Breaking-API: still `bad`", "2026-10-14T02:00:00+00:00"),
+    ]
+    _land(ports, tmp_path, FakeLauncher())
+    again = [text for _, text in ports.tracker.comments if "Breaking-API:" in text]
+    assert len(again) == 2  # the re-ask is spent: nothing more is published
+    assert ports.tracker.updated_bodies == []
+
+
+def test_a_diagnosis_on_a_body_failure_escalates_and_never_restarts(tmp_path, monkeypatch):
+    ports = _code_failure(_world())
+    # A diagnosis dispatched before the cause was read (or resumed after it appeared): the
+    # verdict `unlandable` must not turn into a restart that closes the pull request.
+    monkeypatch.setattr(
+        landing_plan,
+        "step_for",
+        lambda raw, refusal, *a, **k: LandingStep("diagnose", refusal),
+    )
+
+    result, _ = _land(ports, tmp_path, FakeLauncher())
+
+    assert result.step == "diagnose"
+    assert _doc(ports)["escalation_class"] is not None
+    assert "close_pull_request" not in ports.tracker.events
+    assert ports.tracker.updated_bodies == []

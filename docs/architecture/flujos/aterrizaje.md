@@ -165,6 +165,20 @@ sequenceDiagram
    `agentic/core/process/domain/landing.py:after_diagnosis` lo convierte en una sincronización
    más (`sync_master`), un reinicio (`restart`) o un escalado (`escalate`). El reinicio es el
    último recurso: avisa en el issue con el motivo y el costo hasta ese momento.
+   Una falla que no es código (GH-610) no llega a ninguno de los tres: con la causa `pr_body` (el
+   check declarado por el stack falló en su paso `api_breaks` y el cuerpo del pull request no
+   tiene la línea del producto) o `ci_not_run` (el CI no corrió y la cabeza no toca su definición),
+   `exhausted()` no devuelve `diagnose` ni `land_slice`, y `after_diagnosis` no devuelve `restart`;
+   la causa se decide por el nombre del check y del paso, nunca por el texto de un log
+   (`agentic/core/process/application/landing_plan.py:non_code_state`). Con `pr_body`, el paso es
+   `wait` mientras haya corridas vivas; con las corridas completas y el motivo registrado, es
+   `fix_pr_body` (sin modelo: escribe la línea con `pull_request.with_required_lines`, cierra y
+   reabre el pull request para que corra un evento nuevo; una vez por cabeza, y la reapertura la
+   falla como `system_delivery`); sin motivo registrado, es `escalate_api_break` (clase
+   `questions`, una vez por cabeza: el dueño contesta con una línea que empieza con el prefijo del
+   stack, y una respuesta inválida se vuelve a preguntar una sola vez con la razón). Con
+   `ci_not_run`, el paso es `escalate`. Un pull request cerrado con un `fix_pr_body` sin terminar
+   no es un resultado cerrado (`rules.closed_for_body_fix`).
    El rechazo `adr_number_taken` no pasa por `exhausted()`: es, en este orden:
    `renumber` cuando la regla decide la colisión y quedan renumeraciones
    (`LANDING_RENUMBERS_MAX`); `apply_adr_decision` por su cuenta (D-be76583a) cuando la regla
