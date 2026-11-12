@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 
-from . import ci_workflow, plan_view
+from . import ci_workflow, plan_view, size_budget
 from .ci_workflow import WorkflowNames
 from .cost_history import History, Raise, bucket_median, raised_estimate, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
@@ -338,6 +338,9 @@ class Subtask(BaseModel):
     )
 
 
+PartKind = Literal["change", "migration"]
+
+
 class Part(BaseModel):
     title: str = Field(description="One line: the title of the issue this part becomes")
     body: str = Field(
@@ -349,6 +352,33 @@ class Part(BaseModel):
         default_factory=list,
         description="Numbers of the EARLIER parts that must be merged before this one starts "
         "(1 is the first part). Empty when it can start at once",
+    )
+    hand_files: int = Field(
+        ge=0,
+        description="The hand-written non-test files this part changes: at most "
+        f"{size_budget.HAND_FILES}. What counts as hand-written is the size budget in your "
+        "prompt",
+    )
+    hand_lines: int = Field(
+        ge=0,
+        description="The hand-written non-test lines this part adds: at most "
+        f"{size_budget.HAND_LINES}. What counts as hand-written is the size budget in your "
+        "prompt",
+    )
+    test_lines: int = Field(
+        ge=0,
+        description=f"The test lines this part adds: at most {size_budget.TEST_LINES}. The size "
+        "budget in your prompt names what a test is",
+    )
+    kind: PartKind = Field(
+        description="`migration` for a part that converts or moves existing data, and only "
+        "for that: it is always a part of its own, ordered next to the part it depends on or "
+        "the part that depends on it. `change` for everything else"
+    )
+    guard: str = Field(
+        description="Empty when this part leaves no user-visible behaviour unfinished. "
+        "Otherwise how it stays unreachable until the last part that finishes it: out of the "
+        "navigation, or behind a flag, and where"
     )
 
 
@@ -558,6 +588,23 @@ class TechPlan(RoleOutput):
     estimated_files: int = Field(
         description="The files the pull request will show as changed (its `changedFiles`): "
         "code, tests, ADRs, the glossary, lockfiles and generated files all count"
+    )
+    hand_files: int = Field(
+        ge=0,
+        description="The hand-written non-test files the pull request will change: a task may "
+        f"declare at most {size_budget.HAND_FILES}. What counts as hand-written is the size "
+        "budget in your prompt",
+    )
+    hand_lines: int = Field(
+        ge=0,
+        description="The hand-written non-test lines the pull request will add: a task may "
+        f"declare at most {size_budget.HAND_LINES}. What counts as hand-written is the size "
+        "budget in your prompt",
+    )
+    test_lines: int = Field(
+        ge=0,
+        description=f"The test lines the pull request will add: at most {size_budget.TEST_LINES}. "
+        "A path is a test by the directory or the file name the size budget in your prompt names",
     )
     subtasks: list[Subtask] = Field(
         default_factory=list,
@@ -969,9 +1016,21 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def parts_check(parts: list[dict[str, Any]]) -> None:
+def parts_check(
+    parts: list[dict[str, Any]],
+    ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
+    *,
+    one_terminal: bool = False,
+) -> None:
     """The structure of a split: at least two parts, each with a title and a body, each
-    depending only on earlier parts, once. Earlier-only is what keeps the chain acyclic."""
+    depending only on earlier parts, once. Earlier-only is what keeps the chain acyclic.
+
+    A part that declares its size (GH-592) is judged on it times `ratio`, the same floor the
+    plan is judged with, and must fit the size budget: a part is a task of its own. A part
+    of kind `migration` has a neighbour in `depends_on`, before it or after it, so a data
+    conversion never stands alone. With `one_terminal`, set when the plan is written by a part,
+    exactly one part is depended on by none: its pull request closes the parent part's issue,
+    and every other part reaches it."""
     if len(parts) < 2:
         raise ValueError(
             f"a split needs at least two parts, this one has {len(parts)}: "
@@ -991,6 +1050,49 @@ def parts_check(parts: list[dict[str, Any]]) -> None:
                 raise ValueError(
                     f"part {number} depends on part {dep}: a part depends only on earlier parts"
                 )
+        _part_size_check(number, part, ratio)
+    _migration_check(parts)
+    if one_terminal:
+        _terminal_check(parts)
+
+
+def _part_size_check(number: int, part: dict[str, Any], ratio: size_budget.Ratio) -> None:
+    size = declared_size(part)
+    if size is None:
+        return
+    # The fit is decided where every fit is (invariant 1): `rules.estimate_fits`, imported
+    # where it is used because `rules` imports this module. A part declares no cost of its
+    # own, so only its size is judged; `crossed` only names the limits in the refusal.
+    from .rules import estimate_fits
+
+    if not estimate_fits(0.0, 0, None, size, ratio):
+        over = size_budget.crossed(size_budget.judged(size, ratio))
+        raise ValueError(
+            f"part {number} does not fit the size budget ({', '.join(over)} judged over its "
+            "cap): split it into smaller parts, each a task of its own"
+        )
+
+
+def _migration_check(parts: list[dict[str, Any]]) -> None:
+    listed = {dep for part in parts for dep in part["depends_on"]}
+    for number, part in enumerate(parts, 1):
+        if part.get("kind") == "migration" and not part["depends_on"] and number not in listed:
+            raise ValueError(
+                f"part {number} is a migration with no neighbour: it must depend on the part "
+                "that writes both shapes, or be depended on by the part that reads the new one"
+            )
+
+
+def _terminal_check(parts: list[dict[str, Any]]) -> None:
+    listed = {dep for part in parts for dep in part["depends_on"]}
+    sinks = [number for number in range(1, len(parts) + 1) if number not in listed]
+    if len(sinks) != 1:
+        found = ", ".join(str(number) for number in sinks)
+        raise ValueError(
+            "a part that splits needs exactly one terminal part, the one no other part depends "
+            f"on, so that its pull request closes this part's issue; this plan has {len(sinks)} "
+            f"(parts {found}): make the last part depend on the others"
+        )
 
 
 def _tracker_only_check(data: dict[str, Any]) -> None:
@@ -1031,12 +1133,29 @@ def _words(
 class FitDecision:
     """Whether a plan's estimate fits one task, with the figures the decision used: the
     declared cost and files and the history's reference, so a text about the decision
-    quotes what was decided on and never recomputes it (ADR-0054)."""
+    quotes what was decided on and never recomputes it (ADR-0054). A plan that declares its
+    hand-written size (GH-592) also carries it as declared (`size`) and as judged after the
+    floor (`judged_size`), and the fields of the size budget the judged figures crossed;
+    all three are empty for a plan written before the size fields."""
 
     fits: bool
     cost_usd: float
     files: int
     reference_usd: float | None
+    size: size_budget.PlanSize | None = None
+    judged_size: size_budget.PlanSize | None = None
+    crossed: tuple[str, ...] = ()
+
+
+def declared_size(data: dict[str, Any]) -> size_budget.PlanSize | None:
+    """The size a plan declares, or `None` for a plan written before the size fields: that
+    one is judged by its cost and its total files alone."""
+    hand_files = data.get(size_budget.HAND_FILES_FIELD)
+    hand_lines = data.get(size_budget.HAND_LINES_FIELD)
+    test_lines = data.get(size_budget.TEST_LINES_FIELD)
+    if isinstance(hand_files, int) and isinstance(hand_lines, int) and isinstance(test_lines, int):
+        return size_budget.PlanSize(hand_files, hand_lines, test_lines)
+    return None
 
 
 # What a refusal of a plan that does not fit says after the action, once: the split is the
@@ -1069,13 +1188,19 @@ class FitBucket:
 
 
 def plan_fits(
-    data: dict[str, Any], history: History, bucket: FitBucket | None = None
+    data: dict[str, Any],
+    history: History,
+    bucket: FitBucket | None = None,
+    size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
 ) -> FitDecision:
     """The one place that decides whether a plan's estimate fits one task: the larger of
     the declared cost and the history's reference for the plan's own size (its parts, else
     its subtasks) against the limits `rules.estimate_fits` holds. With a `bucket`, the size
     is the run's pinned one (`FitBucket.size`); subtasks still answer to the reference of
-    their own count, so the pin never makes a plan fit that its own bucket refuses."""
+    their own count, so the pin never makes a plan fit that its own bucket refuses.
+
+    A plan that declares its hand-written size is judged on it times `size_ratio`, the floor
+    factor (GH-592); one that does not is judged on its total files, as before."""
 
     # `rules` imports this module for `TaskType`, so the one function that decides the fit
     # is imported where it is used, never copied here (ADR-0054).
@@ -1091,7 +1216,19 @@ def plan_fits(
             references.append(reference_usd(history, own))
         known = [value for value in references if value is not None]
         reference = max(known) if known else None
-    return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
+    size = declared_size(data)
+    if size is None:
+        return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
+    judged = size_budget.judged(size, size_ratio)
+    return FitDecision(
+        estimate_fits(cost, files, reference, size, size_ratio),
+        cost,
+        files,
+        reference,
+        size,
+        judged,
+        size_budget.crossed(judged),
+    )
 
 
 def _single_check(subtasks: Sequence[Any], integration: str) -> None:
@@ -1169,13 +1306,14 @@ def plan_check_for(
     spent_usd: float,
     *,
     fit_waived: bool = False,
-    part_of: tuple[str, int] | None = None,
+    part_of: tuple[str, int, int] | None = None,
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
     plan_shape: str = DEFAULT_PLAN_SHAPE,
     existing_ids: Sequence[str] = (),
     path: str = "full",
     path_label: str = "none",
+    size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1192,10 +1330,12 @@ def plan_check_for(
     nothing here: its items were checked one by one when the plan was read, and next to parts
     the split posts it on the issue (GH-350).
 
-    A task that is itself a part (`part_of`, the `(task id, part)` of its marker) is never
-    split again: any `parts` is refused first, with the rule and no remedy that names
-    parts, and subtasks over the line are not refused here -- the plan stage asks the human
-    once instead (`plan_fits` decides, ADR-0054).
+    A task that is itself a part (`part_of`, the `(task id, part, depth)` of its marker)
+    splits again like any task while its depth is under `rules.MAX_SPLIT_DEPTH` (GH-592):
+    subtasks over the line are refused and `parts` are asked for. At the cap, any `parts` is
+    refused first, with the rule and no remedy that names parts, and subtasks over the line
+    are not refused here -- the plan stage asks the human once instead (`plan_fits` decides,
+    ADR-0054).
 
     A `ci_required` name the base's workflows (`workflow`, `None` when there is none to
     read) prove no check run carries is refused with the names to use instead, unless the
@@ -1213,10 +1353,15 @@ def plan_check_for(
 
     Under `path` `light` (GH-591) a plan that convenes `performance` is refused, and under the
     owner label `path:light` (`path_label` `light`) so is a plan of more than two subtasks. A
-    light plan over the cap without the label is not refused: the plan node promotes the task."""
+    light plan over the cap without the label is not refused: the plan node promotes the task.
+
+    A plan that declares its hand-written size (GH-592) is judged on it times `size_ratio`,
+    the floor factor of the size budget; a plan with no size fields is judged as before."""
 
     # `rules` imports this module, so the one text is imported where it is used.
-    from .rules import TRACKER_WITH_PARTS
+    from .rules import MAX_SPLIT_DEPTH, TRACKER_WITH_PARTS
+
+    at_cap = part_of is not None and part_of[2] >= MAX_SPLIT_DEPTH
 
     bucket = FitBucket()
 
@@ -1224,10 +1369,11 @@ def plan_check_for(
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
         _ci_names_check(data, workflow, stack_ci)
-        if parts and part_of is not None:
+        if parts and part_of is not None and at_cap:
             raise ValueError(
-                f"this task is part {part_of[1]} of {part_of[0]}; a part is never split "
-                "again: write subtasks only, and drop `parts`"
+                f"this task is part {part_of[1]} of {part_of[0]}, at split depth {part_of[2]}; "
+                f"a split goes at most {MAX_SPLIT_DEPTH} levels deep: write subtasks only, "
+                "and drop `parts`"
             )
         if parts and subtasks:
             raise ValueError(
@@ -1239,7 +1385,7 @@ def plan_check_for(
             _tracker_only_check(data)
             return
         if parts:
-            parts_check(parts)
+            parts_check(parts, size_ratio, one_terminal=part_of is not None)
         else:
             plan_check(data)
             _revision_check(existing_ids, subtasks)
@@ -1256,7 +1402,7 @@ def plan_check_for(
         words = _words(declared, raised, files, (spent_usd, median))
         if subtasks:
             bucket.observe(len(subtasks))
-        fits = plan_fits(judged, history, bucket).fits
+        fits = plan_fits(judged, history, bucket, size_ratio).fits
         if parts:
             if fit_waived:
                 raise ValueError(
@@ -1269,7 +1415,7 @@ def plan_check_for(
                     "and no parts; a task is split only when it does not fit"
                 )
             return
-        if not fits and not fit_waived and part_of is None:
+        if not fits and not fit_waived and not at_cap:
             raise ValueError(
                 f"{words} does not fit one task "
                 "(or the history's reference for this size does not): write parts, "

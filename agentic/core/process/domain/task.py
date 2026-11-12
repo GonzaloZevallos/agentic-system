@@ -35,6 +35,7 @@ from .ci_push import PushKind
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
+from .size_budget import ActualSize, PlanSize
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 
@@ -1329,11 +1330,19 @@ class TrackerPosted(TypedDict):
 
 class PartRecord(TypedDict):
     """One part of a split plan as the document keeps it (ADR-0054): the issue the
-    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
+    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts.
+    `depth` is how deep the part sits in the split (GH-592): 1 for a part of a task that is
+    not a part, 2 for a part of a part. Absent on a record written before parts could split
+    again, which reads as 1. `kind` (`change` or `migration`) and `guard` (how unfinished
+    behaviour stays unreachable, empty for none) are absent on a record written before them
+    (GH-592)."""
 
     title: str
     body: str
     depends_on: list[int]
+    depth: NotRequired[int]
+    kind: NotRequired[Literal["change", "migration"]]
+    guard: NotRequired[str]
 
 
 # Why a `full_checks` run that wanted GitHub CI ran the local full tier instead (GH-376): a
@@ -1650,6 +1659,11 @@ class TaskState(TaskInput, total=False):
     fit_question: Annotated[bool, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
+    # The size the plan declared and the size the delivery measured (GH-592), as the records
+    # `size_budget` defines; the document writes them under `size_budget`'s own keys. Absent
+    # on a document from before them, which reads as "no size", never as zero.
+    planned_size: Annotated[PlanSize, last]
+    actual_size: Annotated[ActualSize, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
     # Rules of the plan every subtask honours (issue #42): the one channel between

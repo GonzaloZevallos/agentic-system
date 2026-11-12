@@ -23,6 +23,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class size_budget__PlanSize["PlanSize"]
+    class task__ArmAssignment["ArmAssignment"]
     class task__Carried["Carried"]
     class task__ChangesRequested["ChangesRequested"]
     class task__CheckRun["CheckRun"]
@@ -35,5 +37,9 @@ classDiagram
     class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]
     class task__EscalationPatch["EscalationPatch"]
-    class task__EscalationPauseEntry["EscalationPauseEntry"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
+  - `task.TaskState` se asocia con `task.ArmAssignment`

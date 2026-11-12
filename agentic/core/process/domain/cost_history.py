@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 
+from . import size_budget
 from .experiment import plan_shape_of
 from .task import INTEGRATION
 
@@ -68,6 +69,8 @@ class Pair:
 class History:
     buckets: dict[int, Bucket]
     pairs: tuple[Pair, ...]
+    # The planned and the actual size of every closed task that recorded both (GH-592).
+    sizes: tuple[tuple[size_budget.PlanSize, size_budget.ActualSize], ...] = ()
 
     def text(self) -> str:
         return render(self)
@@ -88,8 +91,15 @@ def build(documents: Sequence[Mapping[str, Any]]) -> History:
     not the free shape's, and the reference a plan is judged against must not move with them."""
     costs: dict[int, list[float]] = {}
     pairs: list[Pair] = []
+    sizes: list[tuple[size_budget.PlanSize, size_budget.ActualSize]] = []
     for document in documents:
-        if document.get("cost_usd") is None or plan_shape_of(document) != FREE:
+        if plan_shape_of(document) != FREE:
+            continue
+        planned = size_budget.PlanSize.from_frontmatter(document)
+        actual = size_budget.ActualSize.from_frontmatter(document)
+        if planned is not None and actual is not None:
+            sizes.append((planned, actual))
+        if document.get("cost_usd") is None:
             continue
         cost = float(document["cost_usd"])
         count = len([sid for sid in document.get("subtasks") or {} if sid != INTEGRATION])
@@ -109,7 +119,25 @@ def build(documents: Sequence[Mapping[str, Any]]) -> History:
         key: Bucket(len(values), statistics.median(values), _p90(sorted(values)))
         for key, values in sorted(costs.items())
     }
-    return History(buckets, tuple(pairs[-PAIRS:]))
+    return History(buckets, tuple(pairs[-PAIRS:]), tuple(sizes))
+
+
+def size_ratio(history: History) -> tuple[float, float] | None:
+    """The floor on the declared hand-written size once the history proves it (GH-592): the
+    p90 of the actual over the planned size, as `(files, lines)`, each at least 1.0. `None`
+    while fewer than `size_budget.PROVEN_PAIRS` tasks recorded both sizes -- the caller then
+    uses `size_budget.UNPROVEN_RATIO` for both. A task that planned no hand-written file or
+    no line has no ratio and is skipped."""
+    usable = [
+        (planned, actual)
+        for planned, actual in history.sizes
+        if planned.hand_files > 0 and planned.hand_lines > 0
+    ]
+    if len(usable) < size_budget.PROVEN_PAIRS:
+        return None
+    files = sorted(actual.hand_files / planned.hand_files for planned, actual in usable)
+    lines = sorted(actual.hand_lines / planned.hand_lines for planned, actual in usable)
+    return max(1.0, _p90(files)), max(1.0, _p90(lines))
 
 
 def reference_usd(history: History, n_subtasks: int) -> float | None:
@@ -179,4 +207,20 @@ def render(history: History) -> str:
                 f"- estimated {pair.estimated_usd:.2f} USD / {pair.estimated_files} files, "
                 f"actual {pair.actual_usd:.2f} USD / {files} files"
             )
+    if history.sizes:
+        lines.append("Latest planned hand-written size against the actual:")
+        for planned, actual in history.sizes[-PAIRS:]:
+            gap = size_budget.divergence(planned, actual)
+            files, written = divergence_text(gap.hand_files), divergence_text(gap.hand_lines)
+            lines.append(
+                f"- planned {planned.hand_files} files / {planned.hand_lines} lines, "
+                f"actual {actual.hand_files} files / {actual.hand_lines} lines "
+                f"(files {files}, lines {written})"
+            )
     return "\n".join(lines)
+
+
+def divergence_text(ratio: float | None) -> str:
+    """One divergence figure as the history and the scorecard print it: `x1.2`, or `?` when
+    the plan said 0 and there is no ratio."""
+    return "?" if ratio is None else f"x{ratio:.2f}"

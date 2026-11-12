@@ -1,6 +1,6 @@
 """The `split` node (ADR-0054) with a fake tracker and a fake inbox: a plan that does not
 fit becomes chained, labelled issues and the task ends `split`; a cut `gh` resumes without
-duplicating; a task that is itself a part never splits again."""
+duplicating; a part splits again up to depth 2 and no further."""
 
 from datetime import datetime
 
@@ -8,7 +8,7 @@ import pytest
 
 from agentic.core.process.application.split import SPLIT, split
 from agentic.core.process.application.tracker_only import TRACKER_WORK
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import pull_request, rules
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
@@ -48,7 +48,7 @@ async def test_a_plan_that_does_not_fit_opens_chained_labelled_issues_and_ends_s
     # The syntax the poller already reads, on the first line, one line naming every blocker.
     assert [rules.blockers_from_body(b) for b in bodies] == [(), (101,), (101,), (102, 103)]
     for number, body in enumerate(bodies, 1):
-        assert rules.split_part_of(body) == ("GH-53", number)
+        assert rules.split_part_of(body) == ("GH-53", number, 1)
         assert "1. No string is hard coded.\n2. Every part ships alone." in body
         assert ".agentic/tasks/GH-53.md" in body and "agentic/GH-53" in body
     assert patch["current_role"] == "PjM"
@@ -78,7 +78,7 @@ async def test_a_retry_after_a_cut_at_part_two_opens_only_what_is_missing(tmp_pa
     second.tracker.issue_numbers_from = 103
     part_two = (
         "https://github.com/o/r/issues/102",
-        f"Blocked by: #101\n\nbody\n\n{rules.split_marker('GH-53', 2)}",
+        f"Blocked by: #101\n\nbody\n\n{rules.split_marker('GH-53', 2, 1)}",
     )
     second.inbox._open_issues = [part_two]
     resumed = apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00"))
@@ -93,26 +93,55 @@ async def test_a_retry_after_a_cut_at_part_two_opens_only_what_is_missing(tmp_pa
     assert rules.blockers_from_body(second.tracker.opened_issues[1][1]) == (102, 103)
 
 
-async def test_a_part_of_a_partition_never_splits_again_and_escalates_estimate(tmp_path):
+async def test_a_part_at_the_depth_cap_does_not_split_and_escalates_estimate(tmp_path):
     ports = ports_with_numbered_issues()
     part = {
         **STATE,
         "type": "platform_enhancement",
-        "description": f"Blocked by: #5\n\nBuild it.\n\n{rules.split_marker('GH-9', 2)}",
+        "description": f"Blocked by: #5\n\nBuild it.\n\n{rules.split_marker('GH-9', 2, 2)}",
     }
     patch = await split(part, Configuration(product_dir=tmp_path), ports)
 
     assert ports.tracker.opened_issues == [] and ports.tracker.comments == []
     assert patch["escalation_class"] == "estimate" and patch["status"] == "waiting_on_human"
-    assert "never split again" in patch["escalated"]
+    assert "cannot split again" in patch["escalated"]
     # The same pause the plan stage raises (`rules.part_over_line`), figures unknown.
     assert patch["fit_question"] is True and "not known" in patch["escalated"]
     assert "proposed_estimate" not in patch
-    # A human decision waives the fit and the plan is made again, whole.
+    assert "Build it whole" not in patch["escalated"]
+    # A resume waives nothing: the plan is made again.
     paused = apply(part, patch)
-    resumption = rules.resumed(paused, "Build it whole.", at="2026-11-06T12:00:00+00:00")
-    assert resumption["fit_waived"] is True and resumption["parts"] == []
+    resumption = rules.resumed(paused, "Cut the emails.", at="2026-11-06T12:00:00+00:00")
+    assert "fit_waived" not in resumption and resumption["parts"] == []
     assert rules.resume_target(apply(paused, resumption)) == "plan"
+
+
+async def test_a_part_at_depth_one_splits_into_parts_at_depth_two_naming_itself(tmp_path):
+    ports = ports_with_numbered_issues()
+    part = {
+        **STATE,
+        "id": "GH-60",
+        "description": f"Build it.\n\n{rules.split_marker('GH-53', 3, 1)}",
+    }
+    patch = await split(part, Configuration(product_dir=tmp_path), ports)
+
+    assert patch["status"] == "split"
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert len(bodies) == 4
+    for number, body in enumerate(bodies, 1):
+        assert rules.split_part_of(body) == ("GH-60", number, 2)
+
+
+async def test_a_retry_finds_the_part_opened_with_a_marker_that_has_no_depth(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    ports = ports_with_numbered_issues()
+    ports.inbox._open_issues = [
+        ("https://github.com/o/r/issues/101", "Old\n\n<!-- agentic-split: GH-53 part 1 -->")
+    ]
+    await split(STATE, cfg, ports)
+
+    assert len(ports.tracker.opened_issues) == 3
+    assert ports.documents.saved[-1]["split_issues"]["1"] == "https://github.com/o/r/issues/101"
 
 
 @pytest.mark.parametrize("failing", ["open_issues", "comment"])
@@ -310,3 +339,43 @@ async def test_a_resume_that_lost_the_posted_record_finds_the_marker_and_posts_n
     assert again.documents.saved[-1]["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
         paused["tracker_checklist"]
     )
+
+
+# GH-592: the body says the kind and the guard of its part, and the one terminal child of a
+# part that split also closes the part's issue.
+
+GUARDED = [
+    {**PARTS[0], "kind": "change", "guard": "Behind the `payment_methods` flag."},
+    {**PARTS[1], "kind": "migration", "guard": "", "depends_on": [1]},
+    {**PARTS[3], "kind": "change", "guard": "", "depends_on": [1, 2]},
+]
+
+
+async def test_each_body_names_its_kind_and_its_guard(tmp_path):
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": GUARDED}, Configuration(product_dir=tmp_path), ports)
+
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert "Kind: change" in bodies[0] and "Guard: Behind the `payment_methods` flag." in bodies[0]
+    assert "Kind: migration" in bodies[1] and "Guard:" not in bodies[1]
+    assert all(rules.split_part_of(body) is not None for body in bodies)
+
+
+async def test_only_the_terminal_child_of_a_part_closes_the_parts_issue(tmp_path):
+    ports = ports_with_numbered_issues()
+    part = {
+        **STATE,
+        "id": "GH-60",
+        "parts": GUARDED,
+        "description": f"Build it.\n\n{rules.split_marker('GH-53', 3, 1)}",
+    }
+    await split(part, Configuration(product_dir=tmp_path), ports)
+
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert [pull_request.closes_line(body) for body in bodies] == ["", "", "Closes #60"]
+
+
+async def test_a_task_that_is_not_a_part_writes_no_closes_marker(tmp_path):
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": GUARDED}, Configuration(product_dir=tmp_path), ports)
+    assert all("agentic-closes" not in body for _, body in ports.tracker.opened_issues)

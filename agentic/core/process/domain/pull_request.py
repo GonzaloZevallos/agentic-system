@@ -8,6 +8,7 @@ text is the caller's, because only the caller knows where the document is."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -27,6 +28,24 @@ class BoundedBody:
     bounded: bool
     # The headings left out or trimmed, in order.
     omitted: tuple[str, ...]
+
+
+# The marker the system writes in the body of the one terminal child of a part that split
+# (GH-592): that child's pull request closes the parent part's issue too, which releases the
+# issues blocked by it. An HTML comment, invisible once rendered.
+_CLOSES_MARKER = re.compile(r"<!-- agentic-closes: #(\d+) -->")
+
+
+def closes_marker(issue: int) -> str:
+    """The marker that tells a child's delivery to close issue `issue` as well."""
+    return f"<!-- agentic-closes: #{issue} -->"
+
+
+def closes_line(description: str) -> str:
+    """The `Closes #N` line a task's pull request carries for the parent part its issue body
+    names, or `""` for a task that names none."""
+    match = _CLOSES_MARKER.search(description)
+    return f"Closes #{match.group(1)}" if match else ""
 
 
 def github_length(text: str) -> int:

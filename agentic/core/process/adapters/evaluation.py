@@ -166,6 +166,7 @@ class EvaluationWorkspace:
             "merge_keeping_conflicts",
             "merge_resolution",
             "merge_upstream_into",
+            "numstat",
             "overlay",
             "paths_naming",
             "prune",

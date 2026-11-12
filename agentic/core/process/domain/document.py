@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 
+from . import size_budget
 from .legacy_names import rename_legacy_roles
 from .task import RoleRun
 
@@ -129,6 +130,18 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             sid: {subtask_inverse.get(k, k): v for k, v in sub.items()}
             for sid, sub in subtasks.items()
         }
+    # The size records come back as `size_budget`'s own types; one that is not whole is
+    # dropped, so a document older than the fields reads as "no size", never as zero.
+    for key, record in (
+        (size_budget.PLANNED_KEY, size_budget.PlanSize),
+        (size_budget.ACTUAL_KEY, size_budget.ActualSize),
+    ):
+        if key in state:
+            read = record.from_frontmatter(state)
+            if read is None:
+                del state[key]
+            else:
+                state[key] = read
     return rename_legacy_roles(state, source)
 
 
@@ -305,6 +318,10 @@ def render(
         **({"estimate_revisions": e} if (e := state.get("estimate_revisions")) else {}),
         **({"proposed_estimate": e} if (e := state.get("proposed_estimate")) else {}),
         **({"actual_files": n} if (n := state.get("actual_files")) is not None else {}),
+        # The planned and the measured size (GH-592): `size_budget` defines the keys and the
+        # shape, and only they are written, so a document without them is byte-identical.
+        **(planned.to_frontmatter() if (planned := state.get("planned_size")) else {}),
+        **(measured.to_frontmatter() if (measured := state.get("actual_size")) else {}),
         # The partition of a plan that did not fit (ADR-0054), written only when set.
         **({"parts": e} if (e := state.get("parts")) else {}),
         **({"split_issues": e} if (e := state.get("split_issues")) else {}),

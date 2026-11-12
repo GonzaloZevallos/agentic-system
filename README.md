@@ -378,6 +378,37 @@ arreglaban solas.
 
 Esto exige que Tech Lead informe a PjM el mapa de subtareas y Developers al crearlo.
 
+### Tamaño de la tarea y partición (GH-592)
+
+Una tarea se dimensiona para integrarse en horas (ADR-0093, que enmienda ADR-0054). El plan
+declara como mucho **15 archivos escritos a mano que no sean tests** y **400 líneas agregadas a
+mano que no sean tests**; los tests se cuentan y se informan aparte, con su propio tope de **600
+líneas agregadas**. Los números viven solo en `size_budget`, que los rinde a los prompts y a las
+descripciones del esquema; `rules.estimate_fits` es la única puerta y la línea de 150 USD queda
+como chequeo secundario.
+
+- **Lo generado nunca cuenta.** Es generado un camino cuyo nombre es un lockfile (lista cerrada
+  del sistema), uno que cubre `docs.paths` del stack o uno que encaja con su clave opcional
+  `generated:`, todo leído del commit base de la tarea: la diferencia de la tarea no agrega al
+  conjunto contra el que se la juzga. Documentación, ADRs, README y prompts son escritos a mano.
+- **Piso.** Los archivos y las líneas a mano declarados se juzgan por 1,5 (redondeado hacia
+  arriba) hasta que 10 tareas cerradas tengan plan y medida; desde entonces, por el p90 del
+  cociente real. Un plan anterior, sin campos de tamaño, se juzga como antes (línea de costo y
+  40 archivos).
+- **Medida.** Al entregar, el sistema mide la diferencia con detección de renombres y base de
+  tres puntos (`Workspace.numstat`) y guarda `planned_size` y `actual_size`; el historial y
+  `eval compare` muestran cuánto divergen.
+- **Una parte que sigue sobre el presupuesto se parte de nuevo**, hasta profundidad 2; no existe
+  construirla entera. Pasada la profundidad 2, la tarea escala con la clase `estimate`, con su
+  plan. Una parte que se parte tiene exactamente una parte terminal, cuyo pull request cierra
+  también el issue de la parte padre y libera a las que dependían de ella; una tarea de
+  profundidad 0 que se parte conserva su lista para el humano.
+- **Rebanadas verticales.** Cada parte se mergea sola y deja master verde. Lo visible que aún no
+  está terminado queda inalcanzable hasta su última rebanada (fuera de la navegación o detrás de
+  una bandera): cada parte declara un `guard`. Una migración que convierte o mueve datos
+  existentes (`kind: migration`) es siempre una parte propia, con otra parte antes o después en
+  `depends_on`: dual-write, convertir, cambiar los lectores, quitar lo viejo.
+
 ### Cierre
 
 | Caso | Aprobaciones necesarias |

@@ -93,6 +93,14 @@ checks:
 # merge_inert:
 #   - "docs/assets/**"
 #
+# `generated`: optional (GH-592). The globs of the paths the product generates, besides its
+# lockfiles and the `docs` paths. They never count against a task's size budget (15 hand-written
+# files, 400 added hand-written lines). A glob that matches everything (`*`, `**`), an absolute
+# path or a `..` segment is refused.
+#
+# generated:
+#   - "web/src/api/*.ts"
+#
 # `risk_areas`: optional (GH-591). The areas of risk this product adds to the six the system
 # ships, for the PjM's classification. Each has an `id` (a lowercase kebab-case slug, unique,
 # never a built-in id), a one-line `description` and, optional, `paths`: fnmatch globs, read
