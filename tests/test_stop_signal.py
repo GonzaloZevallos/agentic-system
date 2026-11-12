@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.process.adapters.filesystem.lock import FilesystemRunLock
 from agentic.core.process.domain.document import TASKS_SUBDIR
 
 REPO = Path(__file__).resolve().parent.parent
@@ -158,14 +159,15 @@ def _snapshot(product: Path) -> dict[str, str]:
     }
 
 
-def _assert_marked_stopped(made: Child) -> None:
-    """The signal that is not a shutdown keeps the run's own record, marked, so the poller
-    does not retake it as an orphan: same pid, a deliberate stop, no shutdown or crash mark."""
+def _assert_kept_unmarked(made: Child, *, deliberately: bool = False) -> None:
+    """The signal that is not a shutdown keeps the run's own record as it is (GH-616), so the
+    poller retakes the dead run: same pid, no shutdown or crash mark, and no deliberate-stop
+    mark unless `agentic stop` wrote it first (`deliberately`)."""
     path = made.product / ".agentic" / "runs" / f"{TASK}.lock"
-    assert path.exists(), "the record of a deliberate stop was released"
+    assert path.exists(), "the record of the stopped run was released"
     record = json.loads(path.read_text())
     assert record["pid"] == made.process.pid
-    assert record["stopped_deliberately"] is True
+    assert record.get("stopped_deliberately", False) is deliberately
     assert "stopped_at_shutdown" not in record
     assert "crashed_version" not in record
 
@@ -175,7 +177,7 @@ def _assert_left_nothing(made: Child, before: dict[str, str]) -> None:
     after = _snapshot(product)
     assert after["head"] == before["head"]
     assert after["document"] == DOCUMENT
-    _assert_marked_stopped(made)
+    _assert_kept_unmarked(made)
     checkout = product / ".agentic" / "worktrees" / TASK
     if checkout.exists():
         assert _git(checkout, "status", "--porcelain") == ""
@@ -311,13 +313,14 @@ def test_a_signal_during_qa_performance_stops_the_measure_and_leaves_no_worktree
 
 
 @pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP, signal.SIGINT])
-def test_a_term_hup_or_int_outside_a_shutdown_keeps_the_record_marked_as_a_deliberate_stop(
+def test_a_term_hup_or_int_outside_a_shutdown_keeps_the_record_unmarked_so_the_run_is_retaken(
     child, product, signum
 ):
     before = _snapshot(product)
     made = child("gate")
     made.pin("check")
-    started = json.loads((product / ".agentic" / "runs" / f"{TASK}.lock").read_text())
+    runs = product / ".agentic" / "runs"
+    started = json.loads((runs / f"{TASK}.lock").read_text())
 
     code, seconds = _stop(made, signum)
 
@@ -325,6 +328,29 @@ def test_a_term_hup_or_int_outside_a_shutdown_keeps_the_record_marked_as_a_delib
     assert seconds < PROMPT_S
     assert _gone(made.pins["check"])
     _assert_left_nothing(made, before)
-    kept = json.loads((product / ".agentic" / "runs" / f"{TASK}.lock").read_text())
+    kept = json.loads((runs / f"{TASK}.lock").read_text())
     for kept_field in ("pid", "host", "boot_id", "starttime", "started_at", "command"):
         assert kept[kept_field] == started[kept_field]
+    assert "stopped_deliberately" not in kept
+    assert "crashed_version" not in kept
+    # What the poller's retake does first: a later run takes the dead record over.
+    taken_over = FilesystemRunLock(runs).acquire(TASK, "agentic resume")
+    assert taken_over is not None
+    assert taken_over.pid == made.process.pid
+    assert taken_over.stopped_deliberately is False
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP, signal.SIGINT])
+def test_agentic_stop_marks_before_the_signal_and_the_mark_survives_the_run_unwinding(
+    child, product, signum
+):
+    made = child("gate")
+    made.pin("check")
+    runs = product / ".agentic" / "runs"
+    # What `stop.stop` writes before it signals.
+    FilesystemRunLock(runs).keep_stopped(TASK, made.process.pid)
+
+    code, _ = _stop(made, signum)
+
+    assert code == 1
+    _assert_kept_unmarked(made, deliberately=True)

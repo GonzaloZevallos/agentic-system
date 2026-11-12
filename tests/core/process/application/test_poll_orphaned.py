@@ -457,3 +457,76 @@ def test_a_spent_orphan_is_announced_once_and_a_posted_notice_silences_later_rou
     lines, launcher = _go(ports)
     assert launcher.spawned == [] and len(ports.tracker.comments) == 1
     assert not any("budget spent" in line for line in lines)
+
+
+# --- GH-616: a run stopped by a signal is retaken, and no owed task is skipped silently ---------
+
+
+def _open_with_dead_lock(**mark):
+    """The state seen on 2026-11-12: a `status: open` document with only its first sections,
+    a dead lock record of this boot, and a free slot."""
+    ports = _ports("open", touched={"GH-7"})
+    return ports, _Locks(_dead_lock("GH-7", boot_id="boot-now", **mark))
+
+
+def test_an_open_document_with_a_dead_unmarked_lock_is_resumed_in_that_round():
+    ports, lock = _open_with_dead_lock()
+    lines, launcher = _go(ports, lock=lock)
+    assert len(launcher.spawned) == 1 and launcher.spawned[0][:4] == [
+        "agentic",
+        "resume",
+        "--issue",
+        "7",
+    ]
+    assert not any("nothing to do" in line for line in lines)
+
+
+def test_the_same_state_with_the_deliberate_mark_is_not_retaken_and_says_so():
+    ports, lock = _open_with_dead_lock(stopped_deliberately=True)
+    lines, launcher = _go(ports, lock=lock)
+    assert launcher.spawned == []
+    assert lines == [rules.orphaned_line(7, "stopped")]
+
+
+def test_a_live_run_gets_no_line():
+    ports, lock = _open_with_dead_lock(stopped_deliberately=True)
+    lock.alive.add("GH-7")
+    lines, launcher = _go(ports, lock=lock)
+    assert launcher.spawned == [] and lines == ["agentic: poll: nothing to do this round"]
+
+
+def test_an_interrupted_retake_waiting_on_its_calendar_gets_exactly_one_calendar_line():
+    ports, lock = _open_with_dead_lock()
+    ports.tracker.timestamped["GH-7"] = [
+        _comment("Retaken with no lock: retake 1 of 3", NOW - timedelta(minutes=1))
+    ]
+    lines, launcher = _go(ports, lock=lock)
+    assert launcher.spawned == []
+    mentioning = [line for line in lines if "#7" in line]
+    assert len(mentioning) == 1 and "interrupted (lock kept): retake due at" in mentioning[0]
+    assert "no lock" not in mentioning[0]
+    assert "nothing to do" not in " ".join(lines)
+
+
+def test_a_spent_notice_issue_gets_no_extra_unaccounted_line():
+    ports, lock = _open_with_dead_lock()
+    ports.tracker.timestamped["GH-7"] = [
+        _comment(f"Retaken with no lock: retake {n} of 3", NOW - timedelta(hours=5 - n))
+        for n in (1, 2, 3)
+    ]
+    lines, launcher = _go(ports, lock=lock)
+    assert launcher.spawned == [] and len(ports.tracker.comments) == 1
+    assert not any("owed a run" in line for line in lines)
+
+
+def test_a_posted_spent_notice_is_accounted_for_and_later_rounds_say_nothing_to_do():
+    ports, lock = _open_with_dead_lock()
+    ports.tracker.timestamped["GH-7"] = [
+        _comment(f"Retaken with no lock: retake {n} of 3", NOW - timedelta(hours=5 - n))
+        for n in (1, 2, 3)
+    ]
+    _go(ports, lock=lock)
+    ports.tracker.timestamped["GH-7"].append(_comment(ports.tracker.comments[0][1], NOW))
+    lines, launcher = _go(ports, lock=lock)
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: nothing to do this round"]

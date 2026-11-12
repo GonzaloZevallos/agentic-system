@@ -24,7 +24,7 @@ import functools
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
@@ -1308,6 +1308,16 @@ class CrashRetake:
 
 
 @dataclass(frozen=True)
+class Seen:
+    """What `gather_retakes` decided about one task with a lock record (GH-616): the verdict of
+    `rules.interrupted_run`, and whether the record carries the `agentic stop` mark. The round
+    reads it to word the one line an owed task gets when nothing else names it."""
+
+    verdict: rules.RetakeVerdict
+    stopped: bool
+
+
+@dataclass(frozen=True)
 class RetakesSpent:
     """What `gather_retakes` or `gather_orphans` read once about a task whose retake budget is
     spent (or whose dead lock went stale) and that nobody was told about yet, handed to `execute`
@@ -1372,6 +1382,8 @@ def gather_retakes(
     crash: dict[int, CrashRetake] | None = None,
     now: datetime | None = None,
     spent: dict[int, RetakesSpent] | None = None,
+    seen: dict[int, Seen] | None = None,
+    reported: set[int] | None = None,
 ) -> tuple[list[int], list[str]]:
     """Every open task in the tray whose run is gone (`rules.interrupted_run`, one budget for
     every shape, GH-466), and the lines for the ones left to the human. A task whose budget is
@@ -1393,11 +1405,15 @@ def gather_retakes(
     asked of the lock itself, the one place that knows the boot id (`liveness.is_alive`),
     so this decision and `acquire` cannot disagree; a lock of another host reads as
     alive, as `acquire` reads it. The comments are fetched only for a task the first,
-    cheap verdict did not already rule out."""
+    cheap verdict did not already rule out. `seen` (GH-616) is filled with the verdict of every
+    task that has a lock record, and `reported` with the issues this function printed a line
+    for, so the round can say why an owed task was left alone (`rules.owed_a_line`)."""
     retakes: list[int] = []
     lines: list[str] = []
     crashes = crash if crash is not None else {}
     notices = spent if spent is not None else {}
+    verdicts = seen if seen is not None else {}
+    said = reported if reported is not None else set()
     read_version = functools.cache(system_version)
     moment = now if now is not None else datetime.now(UTC)
     tray = functools.cache(lambda: frozenset(ports.tracker.queue()))
@@ -1431,6 +1447,7 @@ def gather_retakes(
             in_tray=in_tray,
             document_written_at=written_at,
         )
+        verdicts[number] = Seen(first, record.stopped_deliberately)
         if first in ("none", "running"):
             continue
         comments = ports.tracker.timestamped_comments(task_id)
@@ -1438,6 +1455,7 @@ def gather_retakes(
         decision = rules.interrupted_run(
             raw, facts, used, moment, in_tray=in_tray, document_written_at=written_at
         )
+        verdicts[number] = Seen(decision, record.stopped_deliberately)
         match decision:
             case "retake":
                 retakes.append(number)
@@ -1446,10 +1464,18 @@ def gather_retakes(
                 key = rules.crash_version_key(read_version()) or "unknown"
                 crashes[number] = CrashRetake(used.used, record.crashed_version, key)
             case "calendar":
-                continue  # a retake is made, and the next one is only waiting for its time
+                # A retake is made, and the next one is only waiting for its time: said, not silent.
+                due = retake_rules.due(used, written_at, timedelta(0)).astimezone(UTC)
+                lines.append(
+                    rules.orphaned_line(number, "retake_calendar", due.strftime("%H:%M UTC"))
+                )
+                said.add(number)
             case "human":
                 lines.append(_human_line(number, record, other_boot))
+                said.add(number)
             case "spent" | "stale":
+                # Told to the human on the issue (now or by an earlier round): accounted for.
+                said.add(number)
                 if _notice_pending(comments):
                     notices[number] = RetakesSpent(
                         number,
@@ -1724,6 +1750,7 @@ def gather_orphans(
     reports: list[rules.BlockerReport],
     by_issue: dict[int, rules.BlockerReport],
     spent: dict[int, RetakesSpent] | None = None,
+    reported: set[int] | None = None,
 ) -> tuple[dict[int, int], list[str]]:
     """The orphan retakes of this round (GH-403, `rules.orphaned_run`) and the lines for the
     orphans it cannot retake now. `documents` is `queue_documents`' answer, so only an issue in
@@ -1738,10 +1765,12 @@ def gather_orphans(
     round) and, only for what is left, the issue's comments.
     Returns `{issue: counted}` in issue order, `counted` being the retakes of the shared budget
     already made (`retakes.budget`). A spent budget is a `RetakesSpent` fact of shape `orphan`
-    in `spent` unless the notice is already on the issue; it adds no line here."""
+    in `spent` unless the notice is already on the issue; it adds no line here. `reported`
+    (GH-616) gets the issue of every line this function returns."""
     orphans: dict[int, int] = {}
     notices = spent if spent is not None else {}
     lines: list[str] = []
+    said = reported if reported is not None else set()
     touched: set[str] | None = None
     for number in sorted(documents):
         raw = documents[number]
@@ -1761,6 +1790,7 @@ def gather_orphans(
             lines.append(
                 rules.orphaned_line(number, "lock_unreadable", str(exc) or type(exc).__name__)
             )
+            said.add(number)
             continue
         if record is not None:
             continue
@@ -1774,6 +1804,7 @@ def gather_orphans(
         if task_id in touched:
             minutes = int(rules.ORPHANED_QUIET.total_seconds() // 60)
             lines.append(rules.orphaned_line(number, "quiet", f"{minutes} min"))
+            said.add(number)
             continue
         comments = ports.tracker.timestamped_comments(task_id)
         used = _retake_budget(comments)
@@ -1791,6 +1822,7 @@ def gather_orphans(
             case "calendar":
                 due = retake_rules.due(used, now, rules.ORPHANED_QUIET).astimezone(UTC)
                 lines.append(rules.orphaned_line(number, "calendar", due.strftime("%H:%M UTC")))
+                said.add(number)
             case "cap_spent":
                 if _notice_pending(comments):
                     notices[number] = RetakesSpent(
@@ -1801,6 +1833,47 @@ def gather_orphans(
             case _:
                 assert_never(verdict)
     return orphans, lines
+
+
+def unaccounted_lines(
+    ports: Ports,
+    lock: RunLock,
+    documents: Mapping[int, TaskState | None],
+    busy: Collection[str],
+    taken: Collection[int],
+    reported: Collection[int],
+    seen: Mapping[int, Seen],
+    by_issue: Mapping[int, rules.BlockerReport],
+) -> list[str]:
+    """The one line each task the round owes a run (`rules.owed_a_line`, GH-616, the owner's
+    rule) gets when nothing else named it: `stopped` when its lock record carries the `agentic
+    stop` mark, `unaccounted` otherwise, with the verdict `gather_retakes` reached (`no_lock` for
+    a task with no lock record). `taken` are the issues the round starts something for,
+    `reported` those another line already names; blockers are the ones the round read."""
+    lines: list[str] = []
+    for number in sorted(documents):
+        raw = documents[number]
+        if raw is None or not rules.owed_a_run(raw):  # cheapest first: no lock read for the rest
+            continue
+        task_id = ports.inbox.task_id(number)
+        report = by_issue.get(number)
+        if not rules.owed_a_line(
+            raw,
+            in_tray=True,  # `documents` is the bandeja
+            blocked=bool(report),
+            alive=task_id in busy or lock.refusal(task_id) is not None,
+            taken=number in taken,
+            already_reported=number in reported,
+        ):
+            continue
+        fact = seen.get(number)
+        if fact is not None and fact.stopped:
+            lines.append(rules.orphaned_line(number, "stopped"))
+        else:
+            lines.append(
+                rules.orphaned_line(number, "unaccounted", fact.verdict if fact else "no_lock")
+            )
+    return lines
 
 
 def reflect_lines(cfg: Configuration, ports: Ports, launcher: Launcher, argv0: str) -> list[str]:
@@ -2333,6 +2406,8 @@ def run_once(
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}
     spent_notices: dict[int, RetakesSpent] = {}
+    seen: dict[int, Seen] = {}
+    reported: set[int] = set()
     retakes, human_lines = gather_retakes(
         ports,
         lock,
@@ -2341,6 +2416,8 @@ def run_once(
         crash=crash_retakes,
         now=now,
         spent=spent_notices,
+        seen=seen,
+        reported=reported,
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
@@ -2444,6 +2521,7 @@ def run_once(
                 blocker_reports,
                 blockers_by_issue,
                 spent_notices,
+                reported,
             )
             ranks.update({n: rules.closeness(raw) for n in orphans if (raw := queued[n])})
         tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
@@ -2575,6 +2653,18 @@ def run_once(
         orphan_lines += [
             rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"
         ]
+        reported |= {d.issue for d in plan.deferred if d.kind == "orphan"}
+        if not held:  # a held round starts nothing and its hold lines already say why
+            orphan_lines += unaccounted_lines(
+                ports,
+                lock,
+                queued,
+                busy,
+                {a.issue for a in plan.actions},
+                reported,
+                seen,
+                blockers_by_issue,
+            )
     # GH-375: the board mirror, outside the exclusive section (it takes no slot and a Project
     # call may be slow). Its notes go with the others, so `nothing to do` is unaffected.
     notes += board_sync.mirror(

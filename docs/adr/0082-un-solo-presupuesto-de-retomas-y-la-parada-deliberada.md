@@ -156,3 +156,40 @@ tarea, después de comprobar que el id de arranque y el starttime coinciden.
   criterio de "progreso" que nadie ha medido, y el aviso ya muestra el lapso.
 - **Distinguir un `kill -9` de un OOM.** El sistema no tiene cómo; por decisión del dueño no
   hace falta.
+
+## Adenda GH-616 (2026-11-12)
+
+Regla del dueño (issue #616), textual: «an `agentic` issue that is open, not blocked and not
+running is always either launched or resumed by the poller. It is never silently skipped.»
+
+GH-697 (apostrophe) y GH-601 (este repo) quedaron sin retomar unas 21 h porque un SIGINT de una
+rotación de stage0 las cortó y `settle_lock` marcó el lock `stopped_deliberately`. La regla del
+dueño es posterior a este ADR y gana sobre él. Lo que cambia:
+
+- **Punto 6, primera viñeta.** Una señal que no es un apagado (SIGTERM, SIGHUP, SIGINT) ya no es
+  una parada deliberada: `settle_lock` no escribe nada, el lock queda sin marca y el poller lo
+  retoma por `interrupted_run`. La única parada deliberada es `agentic stop`, que marca antes de
+  señalar (punto 7); `stop.py` es el único escritor de `stopped_deliberately`.
+- **Punto 8, última oración.** Ya no hay una excepción para la señal: toda muerte sin marca se
+  retoma, la señal incluida.
+- **Comportamientos que cambian.** La señal que no es un apagado deja de producir una corrida que
+  el poller no toca; su retoma gasta el presupuesto común de 3.
+- **Riesgos aceptados.** El SIGHUP de una terminal cerrada ahora se retoma, ya no se respeta como
+  parada.
+
+Además:
+
+- **Nunca callada.** Toda tarea de la bandeja, desbloqueada, sin corrida viva, con un documento
+  anterior a la entrega y que la vuelta no lanza, reanuda ni retoma recibe una línea por vuelta
+  (`rules.owed_a_line`, `rules.orphaned_line`): `stopped` si lleva la marca de `agentic stop`,
+  `unaccounted` con el nombre del veredicto en cualquier otro caso, y `calendar` para una retoma
+  que espera su hora. Mientras exista una de ellas no se imprime `nothing to do this round`.
+- **Rotaciones de stage0 seguidas.** Pueden gastar las 3 retomas y terminar en `Retakes spent: ` con
+  `needs-human`. Se acepta, sin demora de asentamiento: es visible, no silencioso.
+- **Orden de aterrizaje (ADR-0090).** Un hijo de aterrizaje cortado por una señal ya no retiene su
+  pull request fuera del orden; solo la marca de `agentic stop` lo hace.
+- **Transición.** No se limpian marcas viejas. Los locks de apostrophe GH-563, GH-582 y GH-686
+  llevan una marca que no se distingue de la de un `agentic stop` y reciben la línea `stopped` en
+  cada vuelta hasta que el dueño decida (`agentic resume --issue N`).
+- **Pendiente.** La entrada en `docs/decisiones-del-dueño.md` queda por registrar y no se edita
+  aquí.
