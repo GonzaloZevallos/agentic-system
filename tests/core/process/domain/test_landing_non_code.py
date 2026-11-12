@@ -1,6 +1,7 @@
 """A head that fails for something outside its code is never restarted (GH-610): the pull request
-body that lacks the product's `Breaking-API:` line, a CI that did not run. Seams: `non_code_failure`,
-`landing_step`, `after_diagnosis` and `api_break_answer`. Pure: facts in, a step out."""
+body that lacks the product's `Breaking-API:` line, a CI that did not run. Seams:
+`non_code_failure`, `landing_step`, `after_diagnosis` and `api_break_answer`. Pure: facts in, a
+step out."""
 
 from dataclasses import dataclass, replace
 from typing import get_args
