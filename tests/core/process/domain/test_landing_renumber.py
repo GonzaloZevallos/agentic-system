@@ -49,6 +49,7 @@ def _step(collision, spent=None, *, adr_escalated=False) -> LandingStep:
         spent or _spent(),
         (),
         adr_escalated=adr_escalated,
+        turn="head",
     )
 
 

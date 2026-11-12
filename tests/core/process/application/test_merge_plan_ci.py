@@ -71,7 +71,7 @@ def _step(ports) -> str:
     assessed = assess_merge(ports, "GH-5", raw, 5, frozenset(), MASTER)
     assert isinstance(assessed, MergeAssessment)
     assert assessed.decision == rules.MergeDecision("refuse", "ci_failed")
-    return landing_plan.step_for(raw, "ci_failed", assessed.facts).kind
+    return landing_plan.step_for(raw, "ci_failed", assessed.facts, turn="head").kind
 
 
 def test_a_plan_required_check_red_on_the_head_and_the_base_is_refused_and_lands_as_escalate(

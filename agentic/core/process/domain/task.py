@@ -1689,6 +1689,14 @@ class TaskState(TaskInput, total=False):
     followups_filed: bool
     landing_restarts: int
     landing_cost_carried: float
+    # The landing order's keys (GH-588), ISO UTC strings and a full sha, read with `.get`.
+    # `landing_queued_at`: when the delivered task joined its product's order (`deliver`, if
+    # absent, and `restore`; removed only by the landing restart). `head_since_at` and
+    # `head_since_head`: when the poller first saw `head_since_head` as the pull request's head
+    # while it led the order (written only by the poller's second phase).
+    landing_queued_at: NotRequired[str]
+    head_since_at: NotRequired[str]
+    head_since_head: NotRequired[str]
     # The slices the landing merged ahead of the task's pull request (GH-297, ADR-0048):
     # one record per slice, appended whole through `record_closure`. Optional, read with `.get`.
     landed_slices: list[LandedSlice]

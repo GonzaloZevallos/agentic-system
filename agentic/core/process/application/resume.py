@@ -366,6 +366,7 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
         facts,
         lambda: landing_plan.slice_inputs(state, cfg, ports, master, head),
         landing_plan.head_ancestry(ports, cfg, head, master),
+        turn="head",
     )
     if (
         step.kind == "escalate"

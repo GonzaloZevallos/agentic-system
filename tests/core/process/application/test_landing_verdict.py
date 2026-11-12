@@ -88,6 +88,7 @@ def _land(ports, tmp_path, launcher):
         clock=lambda: NOW,
         launcher=launcher,
         argv0="agentic",
+        turn="head",
     )
     return result, lines
 
@@ -207,7 +208,9 @@ def test_the_saved_document_reads_as_a_sync_step_for_the_step_table(monkeypatch,
     ports = _diagnoser(_world(monkeypatch), VERDICT_SYNC)
     _land(ports, tmp_path, FakeLauncher())
 
-    step = landing_plan.step_for(_doc(ports), "merge_conflict", facts, gh320_slice_inputs)
+    step = landing_plan.step_for(
+        _doc(ports), "merge_conflict", facts, gh320_slice_inputs, turn="head"
+    )
 
     assert step.kind == "sync_master"
 

@@ -33,5 +33,6 @@ classDiagram
     class landing__Slice["Slice"]
     class landing__SliceInputs["SliceInputs"]
     class landing__SliceUnit["SliceUnit"]
+    class landing_order__Member["Member"]
     class pull_request__BoundedBody["BoundedBody"]
 ```

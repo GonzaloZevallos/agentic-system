@@ -370,7 +370,13 @@ def test_the_other_escalations_keep_todays_answer_and_read_nothing(landing_entri
 def _release_view(raw, ports, ancestry):
     release = _ci_release(ports, raw)
     return landing_plan.released_step(
-        raw, release, gh374.facts(), "ci_failed", at=gh374.RELEASED_AT, ancestry=lambda: ancestry
+        raw,
+        release,
+        gh374.facts(),
+        "ci_failed",
+        at=gh374.RELEASED_AT,
+        ancestry=lambda: ancestry,
+        turn="head",
     )
 
 
@@ -380,7 +386,7 @@ def _release_view(raw, ports, ancestry):
 )
 def test_the_released_step_of_the_deadlock_is_the_tables_and_never_a_diagnose(ancestry, kind):
     raw = gh374.document()
-    before = landing_plan.step_for(raw, "ci_failed", gh374.facts())
+    before = landing_plan.step_for(raw, "ci_failed", gh374.facts(), turn="head")
     step = _release_view(raw, _ci_world(_green()), ancestry)
     assert (before.kind, step.kind) == ("diagnose", kind)
     assert landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS) is (kind != "wait")
@@ -390,7 +396,7 @@ def test_the_released_step_of_an_unreleased_document_is_the_plain_table():
     raw = gh374.document()
     ports = _ci_world(gh374.report(gh374.web("FAILURE")))
     step = _release_view(raw, ports, True)
-    assert step == landing_plan.step_for(raw, "ci_failed", gh374.facts())
+    assert step == landing_plan.step_for(raw, "ci_failed", gh374.facts(), turn="head")
 
 
 def test_the_released_step_after_an_owner_comment_applies_the_human_release():
@@ -399,7 +405,7 @@ def test_the_released_step_after_an_owner_comment_applies_the_human_release():
     raw = gh374.document(cost_usd=10.0)
     release = _ci_release(ports, raw)
     step = landing_plan.released_step(
-        raw, release, gh374.facts(), "ci_failed", at=gh374.RELEASED_AT
+        raw, release, gh374.facts(), "ci_failed", at=gh374.RELEASED_AT, turn="head"
     )
     assert release.decision == "go on" and step.kind == "diagnose"
     view = apply(raw, landing_rules.released(raw, "go on", gh374.RELEASED_AT))
@@ -480,7 +486,10 @@ def test_land_releases_a_ci_escalation_once_the_base_is_green_and_takes_the_tabl
     before = poll.assess_merge(ports, "GH-5", _doc(ports), 5, frozenset(), MERGE_MASTER)
     assert before.decision.reason == "ci_failed" and before.facts.conflicts is not True
     assert before.facts.ci_red_on_base == ()
-    assert landing_plan.step_for(_doc(ports), "ci_failed", before.facts).kind == "diagnose"
+    assert (
+        landing_plan.step_for(_doc(ports), "ci_failed", before.facts, turn="head").kind
+        == "diagnose"
+    )
 
     result, lines = _land(ports, tmp_path)
 
@@ -546,6 +555,7 @@ def test_land_refuses_a_released_step_the_registered_run_kind_does_not_admit(tmp
         clock=lambda: "2026-10-29T09:00:00+00:00",
         run_kind="land_free",
         argv0="agentic",
+        turn="head",
     )
 
     assert (result.kind, result.reason) == ("skipped", "run_kind_mismatch")
@@ -849,6 +859,7 @@ def _land_as(ports, tmp_path, run_kind=None):
         clock=lambda: "2026-10-14T00:00:00+00:00",
         argv0="agentic",
         **kwargs,
+        turn="head",
     )
     return result, lines
 

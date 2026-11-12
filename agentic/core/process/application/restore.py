@@ -264,7 +264,8 @@ def _restored(archived: TaskState, seen: _Seen, prefix: str, at: str) -> TaskSta
         "landing_cut": len(state.get("landing", [])),
     }
     restored = apply(state, state_from({"restorations": [row]}))
-    patch: dict[str, object] = {}
+    # GH-588: a restored task joins the landing order afresh, behind those already waiting.
+    patch: dict[str, object] = {"landing_queued_at": at}
     if restarts:
         patch["landing_restarts"] = restarts
     if carried:

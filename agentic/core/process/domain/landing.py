@@ -20,6 +20,7 @@ from typing import Any, Literal, Protocol, get_args
 from . import ci, merge_ci, presubmit, rules
 from .adr_numbers import Ambiguous, Renaming
 from .document import HUMAN
+from .landing_order import Turn
 from .roles import LANDING_DIAGNOSER
 from .task import (
     UPSTREAM_KEY,
@@ -98,6 +99,21 @@ it to tell a follow-up task from an original one)."""
 
 CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "merge_conflict")
 """The refusals under which a recorded `sync_master` was a conflicting one, hence a model pass."""
+
+HUMAN_OWNED_REFUSALS: frozenset[rules.MergeRefusal] = frozenset(
+    {
+        "pr_not_open",
+        "eval_set",
+        "perf_unverified",
+        "criteria_over_cap",
+        "criteria_unreadable",
+        "ci_untrusted_no_dispatch",
+    }
+)
+"""The refusals that leave the task to a person (GH-588): `landing_step` answers `none` to each,
+whatever the budgets, and `waits_on_human` reads the same set, so a task under one is never the
+head of its product's landing order. The only list of them; `not_ready` is `none` too but is not
+here: the task is not yet at the landing, and nobody has anything to decide."""
 
 
 def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None) -> rules.RunKind:
@@ -280,6 +296,7 @@ def landing_step(
     spent: LandingSpent,
     blocking_owners: tuple[str, ...],
     *,
+    turn: Turn,
     important_units: tuple[str, ...] = (),
     slicing: Slice | RestartWhy | Callable[[], SliceInputs] | None = None,
     ledger_only: bool = False,
@@ -310,7 +327,10 @@ def landing_step(
     provider of the `SliceInputs` that is called, and handed to `slice_or_restart`, only when a
     budget has run out, so a healthy landing reads no git for it. This is the only place
     `slice_or_restart`
-    is called."""
+    is called. `turn` (GH-588, required) is whether the task leads its product's landing order
+    (`head`: everything above) or waits for its turn (`waiting`): a waiting task is left as it
+    is, `none` where the head would be `none` (a person's, or not yet at the landing) and `wait`
+    for every other refusal, so it never reaches a budget, a pass, a slice or a restart."""
 
     # Whatever the caller computed, only this refusal is ledger state (invariant: every other
     # refusal keeps its output).
@@ -337,6 +357,10 @@ def landing_step(
 
     if spent.unlandable:
         return step("none")
+    if turn == "waiting":
+        # GH-588: only the head of the order is integrated and landed. Placed before the
+        # planning defect below, which escalates, and a waiting task escalates nothing.
+        return step("none") if refusal in HUMAN_OWNED_REFUSALS | {"not_ready"} else step("wait")
     if refusal == "ci_unknown_names":
         # GH-485: a planning defect, never a failed check. One `escalate` per (head, names)
         # (`names_escalated`), then nothing; it spends no budget and never goes to
@@ -347,15 +371,10 @@ def landing_step(
         return LandingStep("escalate", refusal, names=tuple(sorted(facts.ci_unreported)))
     if spent.verdict_sync_due:
         return _verdict_sync(step, exhausted, spent)
+    if refusal in HUMAN_OWNED_REFUSALS:
+        return step("none")
     match refusal:
-        case (
-            "not_ready"
-            | "pr_not_open"
-            | "eval_set"
-            | "perf_unverified"
-            | "criteria_over_cap"
-            | "criteria_unreadable"
-        ):
+        case "not_ready":
             return step("none")
         case "eval_set_unreadable" | "ci_missing" | "ci_unreadable":
             waited = spent.waited_s
@@ -369,10 +388,6 @@ def landing_step(
             if spent.conflict_ci_syncs_on_pair >= 1:
                 return exhausted()
             return _sync(step, exhausted, spent, conflicting=False)
-        case "ci_untrusted_no_dispatch":
-            # GH-463: no workflow of the base can judge this head and the local suite no longer
-            # runs for a `ci:` product: left to the human at once.
-            return step("none")
         case "ci_stale_exhausted":
             # GH-463: master overtook the fresh runs of this head; it takes master in instead.
             return _sync(step, exhausted, spent, conflicting=False)
@@ -434,6 +449,10 @@ def landing_step(
             return exhausted()
         case "master_moved":
             return step("wait")
+        case _:
+            # Only a refusal of `HUMAN_OWNED_REFUSALS` gets here (answered above); a new refusal
+            # that is neither listed nor given a case fails `test_every_none_refusal_is_owned`.
+            return step("none")
 
 
 def _red_on_base_only(facts: rules.MergeFacts) -> bool:
@@ -1250,6 +1269,39 @@ def landing_pass(state: TaskState) -> rules.LandingPass | None:
 def landing_pass_live(state: TaskState) -> bool:
     """A landing pass a run must continue (`rules.landing_pass_live`, GH-450)."""
     return rules.landing_pass_live(state)
+
+
+_ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger")
+"""The steps that ask a person once and leave the task to them until it is released."""
+
+
+def waits_on_human(
+    state: TaskState,
+    head: str | None,
+    refusal: rules.MergeRefusal | None,
+    *,
+    spent: LandingSpent,
+    stopped: bool,
+    needs_human: bool,
+    stranded: bool,
+) -> bool:
+    """Whether the task belongs to a person (GH-588): the one definition, so the landing order
+    never makes such a task its head, whatever its stamp or an open landing pass. True when the
+    caller says the run `stopped`, `needs_human` or is `stranded`; the `refusal` is one of
+    `HUMAN_OWNED_REFUSALS`; the document is `escalated` (a release clears it); `spent` says
+    `unlandable` (the latest delivered diagnosis names no sync); or the last live `escalate`,
+    `escalate_adr` or `escalate_ledger` entry of `head` carries no `released_at`. `spent` is the
+    caller's `LandingSpent` of `head`: the diagnoses' reading is not repeated here. Pure."""
+    if stopped or needs_human or stranded:
+        return True
+    if refusal in HUMAN_OWNED_REFUSALS or state.get("escalated") or spent.unlandable:
+        return True
+    asked = [
+        entry
+        for entry in live_entries(state)
+        if entry.get("step") in _ESCALATING_STEPS and entry.get("head") == head
+    ]
+    return head is not None and bool(asked) and not asked[-1].get("released_at")
 
 
 def entry_of(raw: Mapping[str, object]) -> LandingEntry:

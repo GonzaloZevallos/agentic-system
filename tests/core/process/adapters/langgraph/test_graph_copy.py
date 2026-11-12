@@ -278,6 +278,7 @@ def _land(ports, tmp_path, launcher):
         clock=lambda: NOW,
         launcher=launcher,
         argv0="agentic",
+        turn="head",
     )
     return result
 

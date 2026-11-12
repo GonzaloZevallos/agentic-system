@@ -56,7 +56,7 @@ def _spent(**over) -> LandingSpent:
 
 
 def _step(refusal, spent=None, owners=(), **facts) -> LandingStep:
-    return landing.landing_step(refusal, _facts(**facts), spent or _spent(), owners)
+    return landing.landing_step(refusal, _facts(**facts), spent or _spent(), owners, turn="head")
 
 
 EXPECTED = {
@@ -1181,6 +1181,7 @@ def _important(spent=None, units=("api",), **facts) -> LandingStep:
         spent or _spent(),
         (),
         important_units=units,
+        turn="head",
     )
 
 

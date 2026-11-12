@@ -1418,7 +1418,7 @@ def _refuse(
         # Only a refusal the landing has nothing to do about is left to the human
         # (GH-239); any other names the step it takes (`Landing:` below).
         step = (
-            landing_plan.step_for(ports.documents.load(task_id) or {}, reason, facts)
+            landing_plan.step_for(ports.documents.load(task_id) or {}, reason, facts, turn="head")
             if facts is not None
             else None
         )

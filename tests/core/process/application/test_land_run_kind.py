@@ -50,6 +50,7 @@ def _land(ports, tmp_path, run_kind, launcher, resume=None):
         resume=resume,
         argv0="agentic",
         run_kind=run_kind,
+        turn="head",
     )
     return result, lines
 
@@ -186,6 +187,7 @@ def test_a_checks_child_does_not_respawn_a_reopened_pass_whose_child_is_gone():
         clock=clock,
         resume=spawner,
         run_kind="land_checks",
+        turn="head",
     )
 
     assert result == landing.LandResult("skipped", "run_kind_mismatch")
@@ -220,6 +222,7 @@ def _stranded(ports, tmp_path, launcher):
         launcher=launcher,
         argv0="agentic",
         run_kind="land_checks",
+        turn="head",
     )
 
 
