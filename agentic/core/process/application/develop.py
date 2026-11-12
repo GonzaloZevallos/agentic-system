@@ -13,15 +13,17 @@ failure, retried once like any other: the backstop."""
 
 from __future__ import annotations
 
+import anyio
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import check_results as reuse_rules
-from ..domain import check_runs, coverage, presubmit, rules
+from ..domain import check_runs, coverage, presubmit, restart, rules
 from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from . import ci_flakes, promotion
+from . import archive, ci_flakes, promotion
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
@@ -34,6 +36,15 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     subtask_id = state["subtask_id"]
     subtask = state["subtasks"][subtask_id]
     role = DEVELOPER_INTEGRATOR if subtask_id == INTEGRATION else DEVELOPER
+    # A clean restart (GH-593) is finished here, before any checkout: the archived attempt is
+    # committed and its branch renamed (`archive_subtask`, idempotent), so the checkout below is
+    # made anew from the subtask's base by the dispatch's own function. The patch this node
+    # writes clears `restart_pending`.
+    pending = state.get("restart_pending")
+    restarting = pending is not None and pending["subtask"] == subtask_id
+    spent: TaskState = {"restart_pending": None} if restarting else {}
+    if restarting:
+        await anyio.to_thread.run_sync(archive.archive_subtask, state["id"], subtask_id, ports)
     try:
         checkout = await subtask_checkout_in_thread(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
@@ -68,7 +79,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                     patch = rules.logged(
                         rules.unmergeable(subtask_id, dep, outcome.reason or ""), at=ports.now()
                     )
-                    return finish(state, patch, ports)
+                    return finish(state, {**patch, **spent}, ports)
                 paths = list(outcome.conflicted_paths)
             else:  # "hand_over": a merge already in progress, from a resume
                 paths = list(dep_state.marked_paths)
@@ -179,7 +190,13 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             raise ValueError(reason)
 
     section = rules.developer_section(subtask_id)
-    extra_sections = (section, *rules.return_sections(state, subtask_id))
+    # A restarted attempt reads the rewritten brief alone: neither the archived Developer's
+    # section nor the review that returned it (invariant 4).
+    extra_sections = (
+        rules.return_sections(state, subtask_id)
+        if restart.restarted_fresh(subtask)
+        else (section, *rules.return_sections(state, subtask_id))
+    )
     # A return goes back to the same Developer, over the session that wrote this
     # section, with only what the return added as its new input (README.md, 3; ADR-0004,
     # sixth addendum): the session already holds everything else. `role.name`, not
@@ -327,7 +344,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     patch["subtasks"] = {subtask_id: subtask_patch}
     if verified:
         patch["status"] = "developing"
-    return finish(state, patch, ports)
+    return finish(state, {**patch, **spent}, ports)
 
 
 def _branches(state: TaskState) -> str:

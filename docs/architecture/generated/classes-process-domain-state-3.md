@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 6, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 7, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -19,9 +19,14 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
+  - [domain: state (parte 7)](classes-process-domain-state-7.md)
 
 ```mermaid
 classDiagram
+    class task__Carried["Carried"]
+    class task__ChangesRequested["ChangesRequested"]
+    class task__CheckRun["CheckRun"]
+    class task__CiCancelRerun["CiCancelRerun"]
     class task__CiJobTiming["CiJobTiming"]
     class task__CiLogRecord["CiLogRecord"]
     class task__CiSpeculation["CiSpeculation"]
@@ -31,17 +36,4 @@ classDiagram
     class task__DesignItemRecord["DesignItemRecord"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
-    class task__EstimateRecord["EstimateRecord"]
-    class task__EstimateRevision["EstimateRevision"]
-    class task__EvaluatedPatch["EvaluatedPatch"]
-    class task__EvaluationRef["EvaluationRef"]
-    class task__Failure["Failure"]
-    class task__FailurePauseEntry["FailurePauseEntry"]
 ```
-
-## Relaciones con otras páginas
-
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`

@@ -246,11 +246,24 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 - Cada devolución queda en el historial con su par, su **categoría de devolución**, de una
   lista cerrada, y el motivo en texto (ADR-0016). La categoría es lo que hace computable
   "el mismo motivo"; el corte anticipado todavía no está construido.
-- Acción al cortar: **escalar al humano, siempre**. PjM entrega la tarea, el historial de
-  devoluciones y el motivo de cada una.
+- Acción al cortar el par Tech Lead→Developer de una subtarea nunca aprobada, sin pull
+  request y devuelta solo por la revisión: **reinicio limpio**, una sola vez. El sistema
+  archiva el intento y arranca un Developer nuevo, sin sesión, desde la base de la subtarea
+  con un brief reescrito (el brief original, los hallazgos de las dos pasadas y una nota breve
+  de qué no funcionó). El intento reiniciado tiene su propio contador y **escala recién si
+  llega otra vez al límite** (ADR-0092).
+- Los pares que siguen escalando al llegar al límite, siempre: PM→Product Analyst, UX Lead,
+  UI Lead, PM→Tech Lead, QA Performance→Tech Lead, la integración y el par de los chequeos
+  completos. PjM entrega la tarea, el historial de devoluciones y el motivo de cada una.
+- Al humano se le pregunta solo lo que es de **juicio** (qué construir, un compromiso, aceptar
+  un riesgo). Lo **mecánico** se retoma solo, hasta 3 retomas por tarea (`MECHANICAL_RETAKE_MAX`, contadas desde el último comentario del humano): la red o el DNS, los errores
+  transitorios de GitHub, el CI sin veredicto, una colisión de número de ADR. Gastado el tope,
+  escala con la evidencia adjunta.
+- Cada escalado trae una sola pregunta, la respuesta recomendada y las opciones, cada una un
+  comando del CLI.
 - Mientras espera, la tarea queda en pausa. PjM no re-enruta.
 - Cuando el humano responde, la tarea vuelve a PjM, que re-enruta aplicando esa decisión,
-  y el contador de ese par se resetea.
+  y el contador de ese par se resetea (no el reinicio ya gastado).
 - Si el par que llega al límite es Tech Lead→Developer, se corta esa subtarea. El resto
   sigue, salvo lo que dependa de ella.
 

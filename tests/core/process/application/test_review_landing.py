@@ -214,6 +214,7 @@ GOLDEN = {
                 "reviewed_head": "base",
                 "seams": ["s"],
                 "status": "approved",
+                "approved_once": True,
                 "title": "api",
             }
         },
@@ -283,6 +284,7 @@ GOLDEN = {
                 "reviewed_head": "base",
                 "seams": ["s"],
                 "status": "approved",
+                "approved_once": True,
                 "title": "api",
             }
         },
@@ -333,6 +335,7 @@ GOLDEN = {
                 "reviewed_head": "base",
                 "seams": ["s"],
                 "status": "approved",
+                "approved_once": True,
                 "title": "api",
             }
         },

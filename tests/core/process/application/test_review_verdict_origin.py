@@ -24,6 +24,8 @@ REQUIRED = "docs/adr/0099-x.md"
 SECTION = "Tech Lead: review api"
 CLAIM = "the integrated diff touches none of the plan's required paths"
 APPROVING = "All checks green and the previous item is done."
+# The limit escalates only once the subtask has used its one clean restart (GH-593).
+RESTARTED = {"Tech Lead→Developer:api": 1}
 
 
 class FullIdWorkspace(MemoryWorkspace):
@@ -97,7 +99,10 @@ async def test_a_backed_in_scope_blocking_row_returns_and_counts():
 
 async def test_a_system_row_over_an_approving_reviewer_returns_with_the_rows_own_reason():
     patch = await run(
-        reviewed(reason=APPROVING, findings=[]), remaining=0, required_paths=[REQUIRED]
+        reviewed(reason=APPROVING, findings=[]),
+        remaining=0,
+        required_paths=[REQUIRED],
+        restarts=RESTARTED,
     )
     expected = f"{CLAIM} ({REQUIRED})"
     assert patch["subtasks"]["api"]["status"] == "returned"
@@ -120,6 +125,7 @@ async def test_a_reviewer_block_first_keeps_its_reason_and_the_system_row_is_lis
         reviewed("returned", reason="the test is missing"),
         remaining=0,
         required_paths=[REQUIRED],
+        restarts=RESTARTED,
     )
     section = patch["sections"][SECTION]
     assert patch["subtasks"]["api"]["reason"] == "the test is missing"

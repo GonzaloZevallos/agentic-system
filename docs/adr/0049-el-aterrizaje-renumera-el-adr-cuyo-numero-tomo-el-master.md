@@ -366,3 +366,36 @@ la colisión quedaba muerta aunque todos los tests mostrados pasaran.
   cabeza renombrada es un `ci_failed` (primero `rerun`, luego un `fix` de `LANDING_PASSES_MAX`),
   como la cabeza de un `sync_master`. Las invalidaciones cruzadas `stale_moves` entre GH-407,
   GH-651 y GH-652 no se arreglan aquí.
+
+## Adenda (D-be76583a)
+
+En apostrophe GH-407, 15 de las 24 escalaciones fueron colisiones de número de ADR, y la respuesta
+del dueño fue siempre la misma: «aceptá el número que eligió la regla». Pedirla es esperar horas por
+una decisión que la regla ya tomó. Desde ahora esa colisión se aplica sola (regla del dueño: se le
+pregunta solo lo que es un juicio).
+
+- **Cuándo.** `landing.adr_auto_due`: la colisión es un `Ambiguous` con `moves`, su motivo no es
+  `duplicate_own_number`, nunca se registró un `escalate_adr` para esa cabeza (sobre todas las
+  entradas, así que una restauración no devuelve el intento) y el cupo de la colisión no está
+  gastado. `landing_step` da entonces `apply_adr_decision` en vez de `escalate_adr`. El interruptor
+  es `ADR_AUTO_APPLY`.
+- **Cómo.** Es el mismo paso acotado de GH-544: pase del Developer sobre los `spots`, testigo de
+  rutas, chequeos de entrega, `outside_bounds`, `adr_collision` y push con lease; sin `spots`, la
+  ruta mecánica de GH-582. Al Developer se le dice una decisión sintetizada («conservar los `moves`
+  de la regla», `AUTO_DECISION`), nunca un número a elegir. La entrada lleva `decided_by: rule` y
+  ningún `decision_at`; es el campo cerrado `AdrDecidedBy`. Con `decided_by` la entrada se toma una
+  sola vez por cabeza (`already_dispatched`).
+- **Mismo tope.** Gasta un cupo de `LANDING_ADR_DECISIONS_MAX` con la clave `(cabeza, moves)`, por
+  `adr_decisions_spent`, que cuenta la entrada sin `decision_at` contra toda colisión de su cabeza.
+  Tras un intento automático que falla, el dueño conserva el cupo que quede.
+- **Si falla, la pregunta de hoy, sin reintentar.** Con cualquier resultado distinto de `applied`
+  (`out_of_bounds`, `checks_red`, `stale_moves`, `checks_timeout`, `role_failed`, …) `_finish`
+  registra el `escalate_adr` de siempre; como ya existe uno para la cabeza, la regla no vuelve a
+  intentarlo. El texto dice que la regla lo intentó sola (`automatic`), no «tu decisión».
+- **Más `spots` que la cota.** `ADR_AUTO_SPOTS_MAX` (10): se mide donde se recalcula la colisión
+  (`landing_adr._apply`), antes de escribir nada; el resultado es `ambiguous`, que no gasta cupo, y
+  la pregunta sale como hoy. `ADR_EDIT_BOUNDS` es la versión del conjunto de líneas editables, no
+  un conteo, así que no sirve de cota.
+- **No cambia.** `duplicate_own_number` (sin `moves`) y un `Renaming` pasado su tope de
+  `renumber` siguen siendo pregunta. El comentario de la pregunta y su liberación por el dueño
+  (GH-544) no cambian.

@@ -1434,8 +1434,14 @@ async def test_a_subtask_at_its_limit_resumes_with_the_decision_and_the_pair_res
     fakes = Fakes()
     script = script_for(
         **technical(
-            developer=[delivered("v1"), delivered("v2")],
-            tech_lead_review=[reviewed("returned", "no header row"), reviewed("approved")],
+            developer=[delivered("v1"), delivered("v2"), delivered("v3")],
+            # The first limit restarts the subtask clean (GH-593); the restarted attempt's
+            # own limit is the one that escalates.
+            tech_lead_review=[
+                reviewed("returned", "wrong first try"),
+                reviewed("returned", "no header row"),
+                reviewed("approved"),
+            ],
         )
     )
     app = compiled(script, fakes=fakes)

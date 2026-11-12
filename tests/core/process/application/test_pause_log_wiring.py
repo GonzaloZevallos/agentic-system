@@ -92,6 +92,8 @@ async def test_review_logs_its_own_returns_escalation_with_no_failure(cfg):
         **TASK,
         "subtasks": {"api": sub("api", "delivered", branch="b", base="x"), "b": sub("b")},
         "changes_requested": {"Tech Lead→Developer:api": 2},
+        # The first limit restarts (GH-593); the escalation is the restarted attempt's.
+        "restarts": {"Tech Lead→Developer:api": 1},
         "subtask_id": "api",
     }
     patch = await review(

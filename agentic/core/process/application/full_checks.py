@@ -810,7 +810,7 @@ async def _speculated_wait(
     has_run = (
         isinstance(first, CiReport)
         and rules.same_commit(first.head_sha, head)
-        and any(ci.runs_of(first.checks, names).values())
+        and any(ci.runs_of(ci.current_runs(first), names).values())
     )
     if speculation.event_lost(pushed_at, now(), cfg.ci_start_grace_s, has_run):
         return None, first, 0.0
@@ -1090,7 +1090,8 @@ def _ci_record(
 def _link(report: CiReport, name: str) -> str:
     """The link of the first run the declared `name` claims that has one (GH-535)."""
     return next(
-        (check.link for check in ci.runs_of(report.checks, (name,))[name] if check.link), ""
+        (check.link for check in ci.runs_of(ci.current_runs(report), (name,))[name] if check.link),
+        "",
     )
 
 

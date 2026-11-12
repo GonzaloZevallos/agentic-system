@@ -35,6 +35,7 @@ graph TD
     g_application__build --> g_application__checks
     g_application__build --> g_application__definition
     g_application__build --> g_application__landing
+    g_application__build --> g_application__lifecycle
     g_application__build --> g_application__reflection
     g_application__build --> g_application__support
     g_application__checks --> g_application__definition
