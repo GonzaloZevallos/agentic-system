@@ -3090,7 +3090,7 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
         elif fit.cost_usd > SPLIT_COST_USD:
             crossed.append(f"the declared cost is over the {SPLIT_COST_USD} USD limit")
         if fit.size is None:
-            if fit.files > LEGACY_FILES:
+            if not size_budget.legacy_fits(fit.files):
                 crossed.append(f"the declared files are over the {LEGACY_FILES} file limit")
         else:
             limits = (
@@ -5945,7 +5945,7 @@ def estimate_fits(
     if cost > SPLIT_COST_USD:
         return False
     if size is None:
-        return files <= LEGACY_FILES
+        return size_budget.legacy_fits(files)
     return size_budget.fits(size_budget.judged(size, ratio))
 
 

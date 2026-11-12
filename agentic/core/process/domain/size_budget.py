@@ -198,6 +198,11 @@ def fits(size: PlanSize) -> bool:
     return not crossed(size)
 
 
+def legacy_fits(files: int) -> bool:
+    """Whether a plan with no size fields is within the one file limit it is judged by."""
+    return files <= LEGACY_FILES
+
+
 def divergence(planned: PlanSize, actual: ActualSize) -> Divergence:
     """How far the delivery went from the plan, per field, as actual / planned."""
     return Divergence(

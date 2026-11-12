@@ -3150,6 +3150,8 @@ def test_a_plan_with_no_size_is_judged_by_the_cost_line_and_the_legacy_file_limi
     # The shape of a plan or document written before the size fields (invariant 3).
     assert rules.estimate_fits(150, size_budget.LEGACY_FILES, None, None)
     assert not rules.estimate_fits(150, size_budget.LEGACY_FILES + 1, None, None)
+    assert size_budget.legacy_fits(size_budget.LEGACY_FILES)
+    assert not size_budget.legacy_fits(size_budget.LEGACY_FILES + 1)
     assert not rules.estimate_fits(150.01, 1, None, None)
 
 
