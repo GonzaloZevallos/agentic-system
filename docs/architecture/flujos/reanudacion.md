@@ -85,7 +85,9 @@ sequenceDiagram
    salvo con `--yes`.
 5. **Retomar.** La CLI invoca el grafo con `Command(resume=...)`. `pause` devuelve el patch
    de reanudación (`agentic/core/process/domain/rules.py:resumed`) y el ruteo va a donde el
-   estado dice que se frenó (`agentic/core/process/domain/rules.py:resume_target`).
+   estado dice que se frenó (`agentic/core/process/domain/rules.py:resume_target`): una tarea
+   ligera sin plan sigue a `plan` y no a `define`, y una promoción pendiente la manda primero a
+   `define` o `diagnose` (`agentic/core/process/domain/rules.py:promotion_route`).
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`

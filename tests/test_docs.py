@@ -1485,3 +1485,52 @@ def test_generate_refuses_a_class_page_over_budget_naming_its_path(
     with pytest.raises(generate.GenerateError, match=re.escape(path)) as raised:
         generate.generate(tmp_path, {"knowledge": ("domain",)})
     assert "classes" in str(raised.value)
+
+
+def _stale_repo(tmp_path: Path, mode_line: str, generate: str) -> Path:
+    (tmp_path / ".agentic").mkdir()
+    (tmp_path / ".agentic" / "stack.yaml").write_text(
+        "product: demo\n"
+        "checks:\n  tests: 'true'\n"
+        "docs:\n"
+        f"  generate: {generate}\n"
+        f"{mode_line}"
+        '  paths: ["out/**"]\n'
+    )
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "page.txt").write_text("stale\n")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    return tmp_path
+
+
+def _check(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS / "check.py"), "--root", str(root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_check_in_validate_mode_passes_on_a_stale_generated_file_and_restores_the_tree(
+    tmp_path: Path,
+) -> None:
+    root = _stale_repo(tmp_path, "  mode: validate\n", "printf 'fresh\\n' > out/page.txt")
+    done = _check(root)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert stack.DOCS_STALE not in done.stdout
+    assert (root / "out" / "page.txt").read_text() == "stale\n"
+
+
+def test_check_in_validate_mode_fails_a_broken_generator_and_says_nothing_is_to_commit(
+    tmp_path: Path,
+) -> None:
+    root = _stale_repo(tmp_path, "  mode: validate\n", "exit 4")
+    done = _check(root)
+    assert done.returncode == 1
+    assert "docs generate exited 4" in done.stdout
+    assert "scripts/docs/generate.py" not in done.stdout
+    assert "generation failed" in done.stdout
+    assert "nothing to commit" in done.stdout

@@ -233,7 +233,10 @@ Record each finding with:
     total that counts a subscription twice.
   - `spec-missing-test`: a declared seam or acceptance criterion with no test.
   - `spec-scope`: something the brief asked for is missing, or the diff builds what
-    the brief did not ask.
+    the brief did not ask. When the task is a part of a split and its issue body says
+    `Kind: change`, a diff that converts or moves existing data is `blocking`,
+    `scope: subtask`: that is a `migration` part of its own. A part whose issue body names a
+    `Guard:` must keep the unfinished behaviour unreachable as the guard says.
   - `process-uncommitted`: the branch does not hold what was tested, e.g. a fix left in
     the working tree.
   - `process-suite-red`: a product check fails on the head, e.g. `### Checks` in the
@@ -287,5 +290,8 @@ Everything goes in the structured output, in one call:
 - `reason`: one line, why: on `returned`, what the Developer must fix first; on an
   approval what you verified. Not the verdict itself; the system writes it.
 - `findings`: every finding, most severe first; an empty list if none.
+- `promote`: leave it out unless the task turned out not small, or it touches a risk area of the
+  product: then one line, at most 240 characters, saying why it needs the full path. The system
+  applies it once; a refusal, noted in your section, is final for this task: do not ask again.
 - `markdown`: the full section above, in Markdown.
 </Output>

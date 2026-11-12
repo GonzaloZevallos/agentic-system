@@ -2,7 +2,7 @@
 
 import pytest
 
-from agentic.core.process.domain import cost_history, rules
+from agentic.core.process.domain import cost_history, rules, size_budget
 
 
 def doc(n_subtasks, cost, **more):
@@ -174,3 +174,75 @@ def test_the_pairs_read_the_declared_figure_when_the_system_raised_it():
     raised = {"cost_usd": 16.0, "declared_usd": 6.0, "files": 3}
     pairs = cost_history.build([doc(1, 9.0, estimate=raised)]).pairs
     assert pairs[0].estimated_usd == 6.0
+
+
+def sized(planned_files, planned_lines, actual_files, actual_lines, cost=10, **more):
+    """A closed document with both size records, built through the records themselves."""
+    planned = size_budget.PlanSize(planned_files, planned_lines, 0).to_frontmatter()
+    actual = size_budget.ActualSize(actual_files, actual_lines, 0, 0).to_frontmatter()
+    return doc(1, cost, **planned, **actual, **more)
+
+
+def test_nine_sized_tasks_are_not_a_ratio():
+    history = cost_history.build([sized(10, 100, 12, 150)] * (size_budget.PROVEN_PAIRS - 1))
+    assert cost_history.size_ratio(history) is None
+
+
+def test_ten_sized_tasks_give_the_p90_of_the_ratio_per_field():
+    # Ratios 1.1 .. 2.0 on files, 3.0 .. 12.0 on lines: the p90 of ten is the ninth.
+    documents = [sized(10, 100, 10 + i, 100 * (i + 2)) for i in range(1, 11)]
+    files, lines = cost_history.size_ratio(cost_history.build(documents)) or (0, 0)
+    assert files == pytest.approx(1.9)
+    assert lines == pytest.approx(11.0)
+
+
+def test_a_ratio_below_one_is_clamped_to_one():
+    history = cost_history.build([sized(10, 100, 5, 50)] * size_budget.PROVEN_PAIRS)
+    assert cost_history.size_ratio(history) == (1.0, 1.0)
+
+
+def test_a_task_that_planned_zero_in_either_field_is_skipped_and_counts_no_pair():
+    with_zero = [sized(0, 0, 3, 30)] * size_budget.PROVEN_PAIRS
+    assert cost_history.size_ratio(cost_history.build(with_zero)) is None
+    mixed = [sized(0, 100, 3, 200)] * 5 + [sized(10, 100, 20, 100)] * 5
+    assert cost_history.size_ratio(cost_history.build(mixed)) is None
+
+
+def test_documents_without_both_records_are_ignored():
+    planned_only = doc(1, 10, **size_budget.PlanSize(10, 100, 0).to_frontmatter())
+    old = [doc(1, 10)] * 20 + [planned_only] * 20
+    assert cost_history.size_ratio(cost_history.build(old)) is None
+    ten = [sized(10, 100, 20, 200)] * size_budget.PROVEN_PAIRS
+    assert cost_history.size_ratio(cost_history.build(old + ten)) == (2.0, 2.0)
+
+
+def test_a_document_of_another_plan_shape_does_not_move_the_ratio():
+    other = sized(10, 100, 40, 400, experiment={"plan_shape": "single"})
+    history = cost_history.build([other] * 20 + [sized(10, 100, 15, 150)] * 10)
+    assert cost_history.size_ratio(history) == (1.5, 1.5)
+
+
+def _sized(planned, actual, **more):
+    document = doc(1, 5.0, **more)
+    document.update(size_budget.PlanSize(*planned).to_frontmatter())
+    document.update(size_budget.ActualSize(*actual).to_frontmatter())
+    return document
+
+
+def test_the_history_table_shows_the_planned_size_against_the_actual_with_the_divergence():
+    text = cost_history.render(cost_history.build([_sized((10, 200, 100), (12, 300, 90, 0))]))
+
+    assert "planned 10 files / 200 lines, actual 12 files / 300 lines" in text
+    assert "(files x1.20, lines x1.50)" in text
+
+
+def test_a_plan_that_declared_nothing_shows_a_question_mark_for_that_divergence():
+    text = cost_history.render(cost_history.build([_sized((0, 0, 0), (3, 40, 0, 0))]))
+
+    assert "(files ?, lines ?)" in text
+
+
+def test_a_history_without_sizes_prints_no_size_block():
+    text = cost_history.render(cost_history.build([doc(1, 5.0)]))
+
+    assert "planned hand-written size" not in text

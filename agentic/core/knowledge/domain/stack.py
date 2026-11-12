@@ -128,6 +128,11 @@ metric's name ends with its unit's suffix). Read only by `agentic perf`: it neve
 `checks`, the presubmit, `affected_checks`, `ci` or the merge gate. Absent it reads as `{}`;
 present and empty, or any shape that is not that, fails at load like `design`.
 
+**`generated`**: optional (GH-592). A non-empty list of path globs the product generates, which
+never count against a task's size budget, besides the lockfiles and the `docs.paths`. Each entry
+goes through the same refusal as a `docs` path, so a glob that matches every path is refused at
+load. Absent it reads as `()`.
+
 **`merge_inert`**: optional. A non-empty list of path globs the product promises none of its
 checks reads: master's gain since a recorded check pass that touches only those paths cannot
 change the pass, and the merge reuses it (ADR-0045, amendment). Each entry goes through
@@ -151,6 +156,11 @@ no `..` or `.` segment, not starting with `:`, a non-empty literal prefix (the t
 first `*?[`), and no overlap, in either direction, with `docs/adr`, `.agentic` or `.git`. With
 `parallel_checks: true`, no declared command may name an owned path's literal prefix. The command
 is built here and nowhere else (`docs_command`). Absent it reads as `None`: every answer as before.
+`docs.mode` is `commit` (the default, all of the above) or `validate` (GH-603): the check then only
+fails when `generate` exits non-zero, restores the owned paths on every exit and never prints
+`DOCS_STALE`, while the system keeps those paths out of every feature branch. Any other value, or
+a non-string, fails at load. Like the rest of the stack it is read at the task's base: a branch
+that adds `mode: validate` stays in `commit` until the next task.
 
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
@@ -213,6 +223,7 @@ KEYS = (
     "merge_inert",
     "risk_areas",
     "docs",
+    "generated",
     "verifications",
     "check_timeouts",
     "not_ready_exit",
@@ -234,7 +245,9 @@ RISK_ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
 DOCS_CHECK = "docs"
 # Every sub-key `docs` may declare, and the roots no owned path may overlap: the written
 # ADRs, the system's own files and git's.
-DOCS_KEYS = ("generate", "paths")
+DOCS_KEYS = ("generate", "paths", "mode")
+# The two values of `docs.mode`; the first is the default (ADR-0066, amendment).
+DOCS_MODES = ("commit", "validate")
 DOCS_PROTECTED_ROOTS = ("docs/adr", ".agentic", ".git")
 GLOB_CHARACTERS = "*?["
 # The line the docs check prints before the files a regeneration changed.
@@ -317,9 +330,10 @@ def docs(data: object, source: object) -> Docs | None:
     generated doc artifact and the `paths` it owns, validated at load.
 
     Absent is `None`, a product that declares no generated docs. Present, it is a mapping of
-    exactly `generate` and `paths`; every owned path goes through `_path_refusal`, because the
-    docs check removes and restores what it matches, and `parallel_checks` is refused when a
-    declared command reads an owned path, which the restore could race with."""
+    `generate` and `paths` and optionally `mode`; every owned path goes through
+    `_path_refusal`, because the docs check removes and restores what it matches, and
+    `parallel_checks` is refused when a declared command reads an owned path, which the
+    restore could race with."""
     declared = _declared(data, source)
     if "docs" not in declared:
         return None
@@ -337,6 +351,11 @@ def docs(data: object, source: object) -> Docs | None:
             f"{source}: expected `generate` under `docs`, a non-blank one-line command"
         )
     _misplaced_failed_ids(generate, "docs", source)
+    mode = found.get("mode", "commit")
+    if not isinstance(mode, str) or mode not in DOCS_MODES:
+        raise ValueError(
+            f"{source}: expected `mode` under `docs` to be one of {DOCS_MODES}, got {mode!r}"
+        )
     entries = found.get("paths")
     if not isinstance(entries, list) or not entries:
         raise ValueError(f"{source}: expected `paths` under `docs`, a non-empty list of globs")
@@ -348,7 +367,37 @@ def docs(data: object, source: object) -> Docs | None:
             raise ValueError(f"{source}: {path!r} under `docs` `paths` is refused: {reason}")
     if parallel_checks(data, source):
         _refuse_readers_of(paths, declared, source)
-    return Docs(generate=generate.strip(), paths=paths)
+    return Docs(
+        generate=generate.strip(), paths=paths, mode="validate" if mode == "validate" else "commit"
+    )
+
+
+def docs_pathspecs(block: Docs) -> tuple[str, ...]:
+    """The owned paths as git `:(glob)` pathspecs, in declaration order: the one place that
+    spells them, so every git command built from `docs.paths` shares the same semantics as
+    the matcher `core.process.domain.docs.owned`."""
+    return tuple(f":(glob){path}" for path in block.paths)
+
+
+def generated(data: object, source: object) -> tuple[str, ...]:
+    """The globs of the paths the product generates, besides `docs.paths` and the lockfiles:
+    they never count against a task's size budget (`size_budget`, GH-592). Absent is `()`.
+    Present, it is a non-empty list of non-blank globs, each through `_path_refusal` like a
+    `docs` path, so a glob that matches every path (`*`, `**`, `**/*`) fails at load: it would
+    exclude the whole tree from the budget."""
+    declared = _declared(data, source)
+    if "generated" not in declared:
+        return ()
+    found = _declared_nonempty(declared, source, "generated")
+    if not isinstance(found, list) or not all(
+        isinstance(glob, str) and glob.strip() for glob in found
+    ):
+        raise ValueError(f"{source}: expected `generated` to be a list of non-blank glob strings")
+    globs = tuple(glob.strip() for glob in found)
+    for glob in globs:
+        if reason := _path_refusal(glob):
+            raise ValueError(f"{source}: {glob!r} under `generated` is refused: {reason}")
+    return globs
 
 
 def docs_command(block: Docs) -> str:
@@ -359,11 +408,26 @@ def docs_command(block: Docs) -> str:
     and then puts those paths back as HEAD has them, on every exit: unstaged, tracked files
     restored one pathspec at a time (a pathspec that matches no tracked file yet is not an
     error), untracked files removed. It exits 1 when `generate` failed or anything under the
-    owned paths changed or appeared, printing `DOCS_STALE` and the porcelain lines."""
-    specs = " ".join(shlex.quote(f":(glob){path}") for path in block.paths)
+    owned paths changed or appeared, printing `DOCS_STALE` and the porcelain lines.
+
+    In `validate` mode the status is never read: the same restore runs on every exit and the
+    command exits 1 only when `generate` did, printing `docs generate exited N`."""
+    pathspecs = docs_pathspecs(block)
+    specs = " ".join(shlex.quote(spec) for spec in pathspecs)
     restores = "\n".join(
-        f"git checkout -q -- {shlex.quote(f':(glob){path}')} 2>/dev/null" for path in block.paths
+        f"git checkout -q -- {shlex.quote(spec)} 2>/dev/null" for spec in pathspecs
     )
+    if block.mode == "validate":
+        return f"""(
+{block.generate}
+)
+generated=$?
+git reset -q HEAD -- {specs} 2>/dev/null
+{restores}
+git clean -fdq -- {specs}
+if [ "$generated" -ne 0 ]; then echo "docs generate exited $generated"; exit 1; fi
+exit 0
+"""
     return f"""(
 {block.generate}
 )
@@ -1405,8 +1469,17 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         docs,
         DOCS_KEYS,
         Disabled(),
-        "mapping of `generate` and `paths`: the command that rewrites generated docs and the "
-        "globs it owns",
+        "mapping of `generate` and `paths` and optionally `mode` (`commit` or `validate`): the "
+        "command that rewrites generated docs, the globs it owns and whether a branch commits "
+        "the output",
+    ),
+    KeyReference(
+        "generated",
+        generated,
+        (),
+        Computed(),
+        "list of path globs the product generates, besides `docs.paths` and the lockfiles: they "
+        "never count against a task's size budget",
     ),
     KeyReference(
         "verifications",

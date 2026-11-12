@@ -46,7 +46,7 @@ async def classify(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     return finish(state, patch, ports)
 
 
-def _owner_labels(state: TaskState, ports: Ports) -> tuple[str, ...] | None:
+def owner_labels(state: TaskState, ports: Ports) -> tuple[str, ...] | None:
     """The issue's labels, `None` when the task has no issue or they could not be read: an
     unread label set is never "no label" (`IssueState.labels`)."""
     try:
@@ -67,7 +67,7 @@ def _record_path(
 ) -> None:
     """Decide the path from PjM's size and risks and the owner label, store it, and say so in
     the PjM section. Records only: nothing reads `path` yet."""
-    labels = _owner_labels(state, ports)
+    labels = owner_labels(state, ports)
     known = None if areas is None else frozenset(identifier for identifier, _ in areas)
     size, risk = data.get("size"), data.get("risk")
     decision = task_path.decide(patch["type"], size, risk, labels, known)

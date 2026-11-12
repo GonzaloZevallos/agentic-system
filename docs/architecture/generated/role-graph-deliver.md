@@ -5,10 +5,10 @@ Esta página muestra los nodos de la fase `deliver` del grafo de roles y las ari
   - [build](role-graph-build.md)
   - [classify](role-graph-classify.md)
   - [define](role-graph-define.md)
+  - [design](role-graph-design.md)
   - [Escalado y reanudación](role-graph-escalation.md)
   - [land](role-graph-land.md)
   - [plan](role-graph-plan.md)
-  - [review](role-graph-review.md)
 
 ```mermaid
 graph TD
