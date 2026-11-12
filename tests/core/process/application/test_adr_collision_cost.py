@@ -370,3 +370,21 @@ def test_gh_611_an_own_adr_a_later_commit_removed_is_not_undated():
     )
     assert first != head
     assert adr_collision.adr_collision(ports, ports.workspace.master_sha, head) is None
+
+
+def test_gh_611_an_adr_naming_value_the_domain_refuses_reads_numbered_not_an_error(monkeypatch):
+    ports = memory_ports(tracker=MemoryTracker())
+    base = ports.workspace.master_sha
+    ports.workspace.advance_master(THEIRS)
+    head = ports.workspace.add_branch_commit(adds=(MINE,), master=base)
+    ports.workspace.files[(head, MINE)] = "# ADR-0049: mine\n"
+
+    def refused(revision):
+        raise ValueError("expected `adr_naming` to be one of ('numbered', 'dated'), not 'dates'")
+
+    monkeypatch.setattr(ports.stack, "adr_naming", refused)
+
+    result = adr_collision.adr_collision(ports, ports.workspace.master_sha, head)
+
+    assert not isinstance(result, Undated)
+    assert result is not None  # the numeric collision is still found

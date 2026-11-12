@@ -151,6 +151,16 @@ def naming_of(
     return "dated" if isinstance(collision, Undated) else "numbered"
 
 
+def _dated_at(ports: Ports, master: str) -> bool:
+    """Whether master's stack declares `adr_naming: dated`. A value the domain refuses (a bad
+    push to master after preflight) reads `numbered`, as every unreadable stack does: it must not
+    stop the landing of every branch that added an `NNNN-` ADR."""
+    try:
+        return ports.stack.adr_naming(master) == "dated"
+    except ValueError:
+        return False
+
+
 def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous | Undated | None:
     """What the branch at `head` has to renumber to land on `master`, `Ambiguous` when that
     cannot be decided mechanically, `None` when no own ADR takes a number master holds. On a
@@ -165,7 +175,7 @@ def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous 
     whole has it, so `{}` there is `None` for any head, after one tree read. That result only
     filters, it is never returned: the answer is computed on the ADRs still at `head`."""
     added = ports.workspace.added_adrs(master, head)
-    if any(_numbered(a.path) for a in added) and ports.stack.adr_naming(master) == "dated":
+    if any(_numbered(a.path) for a in added) and _dated_at(ports, master):
         return _undated(ports, master, head, added)
     read = _inputs(ports, master, head, added=added)
     if not isinstance(read, _Inputs):
