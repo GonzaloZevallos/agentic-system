@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 from ..domain import ci, merge_ci, plan_settlement, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous, DecidedRenaming, Renaming
 from ..domain.copy import copy_location_parts
 from ..domain.roles import LANDING_DIAGNOSER
@@ -665,6 +666,37 @@ def _spots_text(spots: Sequence[tuple[str, int]]) -> str:
     return f"{text}\nand {left} more" if shown and left else text if shown else f"and {left} more"
 
 
+_DATED_CAUSES: dict[str, str] = {
+    "slug_taken": (
+        "the slug after the date is already another ADR's, on master or on this branch"
+    ),
+    "unrewritable": (
+        "a reference to the old number is a list, a range or a form the rule does not rewrite, "
+        "and it cannot be changed without guessing"
+    ),
+    "generate_failed": "the product's `docs.generate` failed or timed out on the renamed tree",
+    "unreadable": "git could not be read while the rename was made",
+}
+
+
+def dated_reason(cause: str | None, cap: int) -> str:
+    """The question of the `escalate_adr` step on a product that names its ADRs by date (GH-611):
+    the rename to `<yyyymmdd>-<slug>.md` the landing makes on its own could not be made. It names
+    the cause (`cause`, the closed `RenumberCause`; `None` is the cap `cap` spent by retries) and
+    offers no numeric `Decision:`, because none could be applied: a decision is not asked for."""
+    why = (
+        _DATED_CAUSES.get(cause, "the rename ended without a cause")
+        if cause is not None
+        else f"{cap} attempts were spent and each ended in a transient failure"
+    )
+    return (
+        "The branch has a numbered ADR and the product names its ADRs by date, so the landing "
+        f"renames it to `docs/adr/<yyyymmdd>-<slug>.md`; it could not: {why}. No model was run "
+        f"and the task was not restarted. To go on, {WAY_OUT_ADR}. A new head goes through the "
+        "landing table again; a reply without a new head does not ask again."
+    )
+
+
 def escalate_adr(context: LandingContext) -> None:
     """The one question the landing asks about an ADR collision `renumber` cannot settle
     (GH-412, ADR-0049): class `questions`, never a restart. The entry is resolved only after
@@ -676,6 +708,33 @@ def escalate_adr(context: LandingContext) -> None:
         return
     cap = landing_rules.LANDING_RENUMBERS_MAX
     before = context.ports.documents.load(context.task_id) or {}
+    if isinstance(found, Undated):
+        declined = [
+            entry
+            for entry in landing_plan.all_entries(before)
+            if entry.get("step") == "renumber"
+            and entry.get("head") == context.head
+            and entry.get("outcome") == "declined"
+        ]
+        cause = declined[-1].get("cause") if declined else None
+        _escalate(
+            context,
+            "ADR rename to the dated form the landing could not make",
+            "questions",
+            [dated_reason(cause if isinstance(cause, str) else None, cap)],
+        )
+        document = context.ports.documents.load(context.task_id)
+        if document is None:
+            return
+        cost = document.get("cost_usd", 0.0)
+        resolved = landing_rules.resolve_open(
+            landing_plan.all_entries(document),
+            (context.clock or _now)(),
+            cost if isinstance(cost, int | float) else 0.0,
+        )
+        context.ports.documents.save({**state_from(document), "landing": resolved})
+        landing_sync.record_landing(context, resolved)
+        return
     applied = [
         entry
         for entry in landing_plan.all_entries(before)

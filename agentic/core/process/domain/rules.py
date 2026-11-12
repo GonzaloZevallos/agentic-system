@@ -18,6 +18,7 @@ from agentic.shared.configuration import DEFAULT_PLAN_SHAPE, ReviewMode
 from agentic.shared.owner_decisions import OWNER_DECISIONS
 
 from . import (
+    adr_dated,
     adr_numbers,
     ci,
     escalation_prompts,
@@ -5287,7 +5288,10 @@ class MergeFacts:
     ci_dispatched: bool | None = None
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
-    adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
+    adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | adr_dated.Undated | None = None
+    # GH-611: how the product names its ADRs, read at the round's master by the same read that
+    # found the collision; `None` when there is none.
+    adr_naming: Literal["numbered", "dated"] | None = None
     masters_covered: bool | None = None
     conflicts: bool | None = None
     open_outside: int = 0

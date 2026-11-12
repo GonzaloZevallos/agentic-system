@@ -1131,6 +1131,16 @@ class PlanSettledRow(TypedDict):
     by: Literal["approved", "superseded"]
 
 
+RenumberMode = Literal["number", "dated"]
+RenumberOutcome = Literal["renamed", "declined", "retry"]
+RenumberCause = Literal["slug_taken", "unrewritable", "generate_failed", "unreadable"]
+"""How a `renumber` entry ended on a product that names its ADRs by date (GH-611), closed:
+`mode` says which rename it was (`number` is the renumbering of always). `renamed` made the
+rename; `declined` is final on that head (`slug_taken`: a slug is already an ADR's;
+`unrewritable`: a reference cannot be rewritten without guessing) and the next round asks the
+owner; `retry` is transient (`generate_failed`, `unreadable`): it counts toward the renumber cap
+but the next round tries again."""
+
 AdrDecisionOutcome = Literal[
     "applied",
     "stale_moves",
@@ -1203,7 +1213,13 @@ class LandingEntry(TypedDict, total=False):
     ci_released: str
     # GH-463, `escalate` entries answering `ci_no_verdict`: why GitHub gave no verdict, from the
     # closed `CiCause`; absent when the cause could not be read.
-    cause: CiCause
+    cause: CiCause | RenumberCause
+    # GH-611, `renumber` entries: which rename it was and how it ended (`RenumberOutcome`, stored
+    # in `outcome` beside the `AdrDecisionOutcome`s); `escalate_adr` entries: the upstream sha at
+    # which a numeric question was released because the product names its ADRs by date
+    # (`landing.released_by_naming`), with `released_at` its time.
+    mode: RenumberMode
+    naming_released: str
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
     # entry it is the master sha the diagnosis was made against.
@@ -1237,7 +1253,7 @@ class LandingEntry(TypedDict, total=False):
     decision_at: str
     # D-be76583a, an `apply_adr_decision` entry the system took on its own (no `decision_at`).
     decided_by: AdrDecidedBy
-    outcome: AdrDecisionOutcome
+    outcome: AdrDecisionOutcome | RenumberOutcome
     moves: list[list[str]]
     head_after: str
     # GH-570, an `apply_adr_decision` entry that ended `checks_red`, both optional: which checks
