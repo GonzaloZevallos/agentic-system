@@ -190,7 +190,9 @@ PREFIX = "Breaking-API:"
 )
 def test_declares_follows_the_products_rule(body, expected):
     assert declares(body, PREFIX) is expected
-    assert (re.search(PRODUCT_DECLARATION, body.replace("\r\n", "\n"), re.M) is not None) is expected
+    assert (
+        re.search(PRODUCT_DECLARATION, body.replace("\r\n", "\n"), re.M) is not None
+    ) is expected
 
 
 def test_declares_agrees_with_the_product_rule_on_random_bodies():

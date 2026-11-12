@@ -247,7 +247,7 @@ def test_red_beside_a_pending_expansion_is_red() -> None:
 def test_the_failing_returns_carry_the_declared_names() -> None:
     cancelled = _verdict([_matrix("CANCELLED", "SUCCESS")], names=("pytest",))
     assert (cancelled.cause, cancelled.red_names) == ("not_started", ("pytest",))
-    job = CiCheck(PY[0], "COMPLETED", "FAILURE", "l", failed_stage="checkout")
+    job = CiCheck(PY[0], "COMPLETED", "FAILURE", "l", failed_step="Run actions/checkout@v7")
     checkout = _verdict([_run(jobs=(job, _job(PY[1])))], names=("pytest",))
     assert (checkout.cause, checkout.red_names) == ("checkout_failed", ("pytest",))
     assert _verdict([_matrix("SUCCESS", "SUCCESS")], names=("pytest",)).red == ()

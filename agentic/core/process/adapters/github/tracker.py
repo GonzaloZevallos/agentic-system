@@ -278,15 +278,15 @@ def _dispatched_job(job: object) -> CiCheck:
         status=_text(job["status"]).upper(),
         conclusion=conclusion.upper() if isinstance(conclusion, str) and conclusion else None,
         link=job.get("url") or "",
-        failed_stage=_failed_stage_of(job.get("steps")),
+        failed_step=_failed_step_of(job.get("steps")),
         started_at=_instant(job.get("startedAt")),
         completed_at=_instant(job.get("completedAt")),
     )
 
 
-def _failed_stage_of(steps: object) -> ci.FailedStage | None:
-    """The stage of the first step of a job whose conclusion is failure (GH-504), by the step's
-    name through `ci.failed_stage`. `None` when there is no failing step or `steps` cannot be
+def _failed_step_of(steps: object) -> str | None:
+    """The name of the first step of a job whose conclusion is failure (GH-504; `CiCheck`
+    derives its stage with `ci.failed_stage`). `None` when there is no failing step or `steps` cannot be
     read: the job then reads red as before, and is never made unreadable by its steps."""
     if not isinstance(steps, list):
         return None
@@ -294,7 +294,7 @@ def _failed_stage_of(steps: object) -> ci.FailedStage | None:
         if not isinstance(step, dict) or str(step.get("conclusion", "")).lower() != "failure":
             continue
         name = step.get("name")
-        return ci.failed_stage(name) if isinstance(name, str) else None
+        return name if isinstance(name, str) else None
     return None
 
 

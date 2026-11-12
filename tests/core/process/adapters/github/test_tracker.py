@@ -1817,7 +1817,8 @@ def test_a_failed_step_of_a_dispatched_job_gives_the_stage_of_the_first_failure(
         _step("Complete job", "skipped"),
     ]
     (job,) = _dispatched_jobs(_job_with_steps("check", "failure", steps))
-    assert job == CiCheck("check", "COMPLETED", "FAILURE", "u/check", stage)
+    assert job == CiCheck("check", "COMPLETED", "FAILURE", "u/check", failing_step)
+    assert job.failed_stage == stage
 
 
 def test_the_first_failing_step_decides_even_when_a_later_one_failed_too():

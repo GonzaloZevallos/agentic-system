@@ -788,7 +788,9 @@ def api_break_line(data: object, source: object) -> ApiBreakLine | None:
             raise ValueError(f"{source}: expected a non-empty `{key}` under `api_break_line`")
     prefix = found["prefix"].strip()
     if not prefix.endswith(":"):
-        raise ValueError(f"{source}: `prefix` under `api_break_line` must end in `:`; got {prefix!r}")
+        raise ValueError(
+            f"{source}: `prefix` under `api_break_line` must end in `:`; got {prefix!r}"
+        )
     return ApiBreakLine(prefix=prefix, check=found["check"].strip(), step=found["step"].strip())
 
 
