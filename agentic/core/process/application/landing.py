@@ -418,6 +418,7 @@ _WAITING_ON: dict[landing_plan.ReleaseWhy, tuple[str, str]] = {
     ),
     "released": ("escalated_waiting_on_human", ""),
     "released_by_ci": ("escalated_waiting_on_human", ""),
+    "released_by_naming": ("escalated_waiting_on_human", ""),
     "released_no_verdict": ("escalated_waiting_on_human", ""),
     "waiting_on_upstream": (
         "escalated_waiting_on_upstream",

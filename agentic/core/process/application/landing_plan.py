@@ -16,6 +16,7 @@ from typing import Literal, Protocol
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, landing, plan_settlement, rules
+from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.landing_order import Turn
@@ -228,6 +229,13 @@ def spent(
         and landing.no_verdict_released(live, _merge_ci_records(raw), head),
         adr_review_owed=landing.adr_review_owed(done),
         verdict_in_force=in_force,
+        declined_on_head=count_live(
+            lambda e: (
+                e.get("step") == "renumber"
+                and e.get("head") == head
+                and e.get("outcome") == "declined"
+            )
+        ),
     )
 
 
@@ -288,6 +296,8 @@ def step_for(
     CI release is waiting for its step."""
     budgets = spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master, ancestry)
     head = facts.pr_head
+    # GH-611: the numeric readers never see a dated product's collision.
+    numeric = None if isinstance(facts.adr_collision, Undated) else facts.adr_collision
     return landing.landing_step(
         refusal,
         facts,
@@ -308,11 +318,8 @@ def step_for(
             raw, facts.pr_head, refusal, "escalate", names=sorted(facts.ci_unreported)
         ),
         adr_decision_due=head is not None
-        and landing.adr_decision_due(
-            live_entries(raw), head, facts.adr_collision, all_entries(raw)
-        ),
-        adr_auto_due=head is not None
-        and landing.adr_auto_due(head, facts.adr_collision, all_entries(raw)),
+        and landing.adr_decision_due(live_entries(raw), head, numeric, all_entries(raw)),
+        adr_auto_due=head is not None and landing.adr_auto_due(head, numeric, all_entries(raw)),
     )
 
 
@@ -454,6 +461,7 @@ def stranded_now(ports: Ports, task_id: str, raw: Mapping[str, object]) -> bool:
 ReleaseWhy = Literal[
     "released",
     "released_by_ci",
+    "released_by_naming",
     "released_no_verdict",
     "waiting_on_human",
     "waiting_on_base_ci",
@@ -462,7 +470,9 @@ ReleaseWhy = Literal[
     "task_cap",
 ]
 """Why an escalated landing is or is not released (GH-328, GH-442): a human's decision released
-it (`released`), the base's CI went green and released a CI escalation (`released_by_ci`), it
+it (`released`), the base's CI went green and released a CI escalation (`released_by_ci`), the
+stack declares `adr_naming: dated` and released a numeric ADR question (`released_by_naming`,
+GH-611), it
 waits for a human (or for the label to go, or for an open issue), a CI escalation waits for the
 base's CI or an owner comment (`waiting_on_base_ci`), a `ci_no_verdict` escalation (GH-463) is
 released by a new upstream sha (`released_no_verdict`) or waits for one or for an owner comment
@@ -575,6 +585,11 @@ def _adr_release_asked(raw: Mapping[str, object], facts: rules.MergeFacts) -> bo
     the collision is an `Ambiguous` with moves to apply and the decision cap is not spent."""
     entry = landing.adr_escalation_entry(raw)
     collision = facts.adr_collision
+    if facts.adr_naming == "dated" and collision is not None:
+        # GH-611: the dated question is released by the rule (a numeric one) or by an owner.
+        return (
+            entry is not None and facts.pr_head is not None and entry.get("head") == facts.pr_head
+        )
     return (
         entry is not None
         and facts.pr_head is not None
@@ -618,12 +633,33 @@ def release(
     if shape is not None and head in (None, shape) and landing.ci_no_verdict_entry(raw, shape):
         return _no_verdict_release(ports, cfg, task_id, raw, number, shape, upstream)
     adr = landing.adr_escalation_entry(raw)
+    if adr is not None and head in (None, adr.get("head")) and landing.numeric_adr_question(raw):
+        named = _naming_release(ports, raw, upstream)
+        if named is not None:
+            return named
     if adr is not None and head in (None, adr.get("head")):
         # GH-544: an `escalate_adr` question is answered on the issue, whatever its class.
         return _owner_release(ports, cfg, task_id, raw, number)
     if raw.get("escalation_class") != "failure" or not landing.diagnose_attempts(raw):
         return _unreleased("needs_restart")
     return _owner_release(ports, cfg, task_id, raw, number)
+
+
+def _naming_release(ports: Ports, raw: TaskState, upstream: str | None) -> Release | None:
+    """GH-611: the release of an unanswered numeric `escalate_adr` question once the stack at
+    `upstream` declares `adr_naming: dated`, once per (head, upstream) pair. `None` when it does
+    not (or the stack at that sha cannot be read as dated): the owner's route is then the only
+    one. Nobody decided, so `decision` is `None`."""
+    if upstream is None:
+        upstream = ports.workspace.upstream().sha
+    question = landing.numeric_adr_question(raw)
+    if upstream is None or question is None or landing.naming_released_for(question, upstream):
+        return None
+    try:
+        dated = ports.stack.adr_naming(upstream) == "dated"
+    except ValueError:
+        return None
+    return Release(None, "released_by_naming", True) if dated else None
 
 
 def _ci_release(
@@ -718,6 +754,8 @@ def release_patch(raw: TaskState, outcome: Release, upstream: str | None, at: st
         return landing.released_no_verdict(raw, upstream, at, outcome.decision)
     if outcome.decision is not None:
         return landing.released(raw, outcome.decision, at)
+    if outcome.why == "released_by_naming":
+        return landing.released_by_naming(raw, upstream, at) if upstream is not None else {}
     return landing.released_by_ci(raw, upstream, at) if upstream is not None else {}
 
 

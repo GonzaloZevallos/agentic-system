@@ -178,3 +178,27 @@ def test_a_resolved_land_slice_leaves_the_unlandable_reading_as_it_was():
 
     assert spent.last_verdict is None and spent.diagnoses > 0
     assert spent.unlandable is True and spent.verdict_in_force is True
+
+
+def test_the_release_the_landing_writes_frees_the_verdict_it_answered():
+    """`released_at` on a later diagnose that was never delivered, then the `resumed` entry, on a
+    task that is not escalated."""
+    stamped = _diagnose(delivered=False, at=RESUMED_AT, released_at=RESUMED_AT)
+    log = [*_escalated_log(), rules.resumed_entry(at=RESUMED_AT)]
+    raw = {"landing": [_diagnose(), stamped], "pause_log": log}
+
+    spent = landing_plan.spent(raw, HEAD, None, MASTER)
+
+    assert spent.diagnoses == 1 and spent.unlandable is False
+
+
+def test_a_sync_verdict_that_reads_as_unlandable_is_freed_by_the_release_too():
+    """The second `sync` for the same sha reads as `unlandable`: it is the entry that binds."""
+    syncs = [
+        _diagnose(verdict="sync", upstream=MASTER, at=f"2026-10-23T09:0{n}:00+00:00") for n in "12"
+    ]
+    held = {"landing": syncs, "pause_log": _escalated_log(), "escalated": REASON}
+    freed = {"landing": syncs, "pause_log": [*_escalated_log(), rules.resumed_entry(at=RESUMED_AT)]}
+
+    assert landing_plan.spent(held, HEAD, None, MASTER).unlandable is True
+    assert landing_plan.spent(freed, HEAD, None, MASTER).unlandable is False

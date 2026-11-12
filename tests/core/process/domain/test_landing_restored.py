@@ -147,6 +147,7 @@ READERS = {
     "domain/landing.py": {
         "released",
         "released_by_ci",
+        "released_by_naming",
         "released_no_verdict",
         "migration",
         "resume_owed",

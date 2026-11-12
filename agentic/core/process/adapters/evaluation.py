@@ -122,9 +122,10 @@ class EvaluationWorkspace:
     ALLOWED = frozenset(
         {
             "abort_merge",
-            "ancestry",
             "added_adrs",
             "added_lines",
+            "adr_first_date",
+            "ancestry",
             "base_of",
             "branch_head",
             "branches",

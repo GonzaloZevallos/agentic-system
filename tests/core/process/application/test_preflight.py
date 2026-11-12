@@ -226,6 +226,20 @@ def test_a_broken_parallel_checks_refuses_before_spending(stage0):
         )
 
 
+class BrokenAdrNamingStack(MemoryStack):
+    """A stack whose `adr_naming` is no known value: `declared_stack` must surface it at
+    load, not when landing asks which names an ADR takes."""
+
+    def adr_naming(self, revision: str) -> str:
+        raise ValueError("stack.yaml: expected `adr_naming` to be numbered or dated")
+
+
+def test_a_broken_adr_naming_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="expected `adr_naming`"):
+        preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenAdrNamingStack()))
+
+
 def test_a_stack_without_parallel_checks_passes_and_keeps_its_setup_as_the_answer(stage0):
     """Absent is serial, never an error; and the validation call does not move what
     `declared_stack` returns."""
