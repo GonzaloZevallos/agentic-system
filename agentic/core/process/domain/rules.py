@@ -381,7 +381,11 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     reviewer's `settled_findings` closes an open row by location, first and for good;
     and an open row an approval covers closes only when *every* open record of its key is
     covered, record by record (`_covered`), so a later regression, a sister's re-raise or
-    an `important` at the same key keeps it open, whatever order they were appended in."""
+    an `important` at the same key keeps it open, whatever order they were appended in.
+
+    A row only a clean restart closed (`restart_settled`, GH-593) reads `dismissed`, never
+    `fixed`: the attempt was thrown away, nobody fixed anything, and the findings report
+    must not credit a fix."""
     # A reviewer's word never closes a `full_checks:` row: only `full_checks_settles` does.
     settled = {
         norm
