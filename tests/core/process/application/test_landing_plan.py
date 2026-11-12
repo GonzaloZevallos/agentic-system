@@ -771,6 +771,24 @@ def test_a_waiting_task_is_left_alone_by_the_plan_and_reads_no_slice_inputs(monk
     assert _adr_step({}).kind == "escalate_adr"  # the head's table is as it was
 
 
+def test_d_be76583a_with_the_rule_on_the_head_applies_and_a_waiting_task_still_waits():
+    """GH-588 x D-be76583a: the turn decides first. The head of the order applies the renumbering
+    the rule settles; a task waiting for its turn waits on it, however the collision reads."""
+    settled = adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0054", (("a", "b"),))
+    asked = adr_numbers.Ambiguous("duplicate_own_number", "0049 twice", (("a", "b"),))
+    assert landing.ADR_AUTO_APPLY is True
+
+    head = landing_plan.step_for({}, "adr_number_taken", _adr_facts(settled), turn="head")
+    waiting = landing_plan.step_for({}, "adr_number_taken", _adr_facts(settled), turn="waiting")
+    head_asked = landing_plan.step_for({}, "adr_number_taken", _adr_facts(asked), turn="head")
+    waiting_asked = landing_plan.step_for({}, "adr_number_taken", _adr_facts(asked), turn="waiting")
+
+    assert head.kind == "apply_adr_decision"
+    assert waiting.kind == "wait"
+    assert head_asked.kind == "escalate_adr"  # what the rule cannot settle is still asked
+    assert waiting_asked.kind == "wait"
+
+
 def test_a_waiting_task_is_never_worth_a_land_child_nor_a_released_step():
     live = landing_plan.LIVE_STEPS
     now = datetime.fromisoformat("2026-10-23T07:00:00+00:00")

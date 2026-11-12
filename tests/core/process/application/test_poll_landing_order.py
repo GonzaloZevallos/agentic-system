@@ -383,6 +383,19 @@ def test_an_ambiguous_adr_collision_on_the_head_escalates(monkeypatch):
     assert lands == [rules.LandCandidate(7, "land_checks")]
 
 
+def test_an_ambiguous_adr_collision_the_rule_settles_is_applied_on_the_head_only(monkeypatch):
+    """GH-588 x D-be76583a: with the rule on, the head of the order is asked to apply the
+    renumbering and the task behind it is not asked anything."""
+    ports = _three()
+    settled = adr_numbers.Ambiguous("unclassified_token", "app/main.py:228", (("a", "b"),))
+    _collide(monkeypatch, settled, "GH-7", "GH-5")
+    asked = _steps(monkeypatch)
+
+    _round(ports, now=NOW)
+
+    assert asked == ["apply_adr_decision"]  # the head's only
+
+
 def test_a_head_that_escalated_an_adr_collision_does_not_block_the_next(monkeypatch):
     ports = _three()
     entry = {
