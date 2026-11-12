@@ -1523,3 +1523,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-12T05:02:42.464+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your diff changes a flow, a module dependency or a documented behaviour, update the hand-written docs under docs/architecture and any comment that states the old behaviour, in the same change.
+  confidence: medium
+  seen_in:
+  - GH-593
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T10:39:44.956+00:00'
