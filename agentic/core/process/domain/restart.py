@@ -176,6 +176,12 @@ def restart_patch(
     }
 
 
+def archive_ref(branch: str, used: int, system_commit: str) -> str:
+    """Where a restart parks the archived attempt's branch: `archive/restart<k>-<commit>/<branch>`.
+    Not under `archive/run<N>-`, so `rules.next_archive_run` never counts it as a `--fresh` run."""
+    return f"archive/restart{used}-{system_commit}/{branch}"
+
+
 def restarted_fresh(subtask: Mapping[str, Any]) -> bool:
     """Whether the subtask's current attempt was born from a restart and has not delivered yet:
     the Developer it starts is built from the `Restart <subtask>` section alone."""

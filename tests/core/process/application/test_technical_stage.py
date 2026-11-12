@@ -837,6 +837,7 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
         **TASK,
         "subtasks": {"api": sub("api", "delivered", branch="b", base="x"), "b": sub("b")},
         "changes_requested": {"Tech Lead→Developer:api": 2},
+        "restarts": {"Tech Lead→Developer:api": 1},
         "subtask_id": "api",
     }
     patch = await review(

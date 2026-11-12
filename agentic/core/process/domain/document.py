@@ -262,6 +262,14 @@ def render(
         ),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
+        # The clean restarts of a task (GH-593): the count per pair, the restart still owed to the
+        # dispatch, the run floor of each restarted section and the findings the restart closed.
+        # Each written only when set, so a task that never restarted is byte-identical to one
+        # written before; parsed back under the same names, which is how a resume sees them.
+        **({"restarts": r} if (r := state.get("restarts")) else {}),
+        **({"restart_pending": r} if (r := state.get("restart_pending")) else {}),
+        **({"session_floor": r} if (r := state.get("session_floor")) else {}),
+        **({"restart_settled": r} if (r := state.get("restart_settled")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "invariants": state.get("invariants", []),
         "integration_brief": state.get("integration_brief", ""),
