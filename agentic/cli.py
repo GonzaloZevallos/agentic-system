@@ -1141,18 +1141,23 @@ class StopCause:
     def settle_lock(self, lock: RunLock, task_id: str) -> None:
         """Keep the lock record or release it, once: whoever gets here second finds it done.
         Kept marked for the shutdown, marked as crashed when the graph raised with no signal,
-        and marked as a deliberate stop for any other signal (SIGTERM, SIGHUP, SIGINT):
-        the poller never retakes that run. Released otherwise."""
+        and kept untouched for any other signal (SIGTERM, SIGHUP, SIGINT): the record stays
+        as it is, with no mark, so the poller retakes the dead run. Only `agentic stop` marks
+        a deliberate stop (`application/stop.py`, before it signals). Released otherwise."""
         with self.settle:
             if self.lock_settled:
                 return
             self.lock_settled = True
             if self.at_shutdown:
                 lock.keep_at_shutdown(task_id)
-            elif self.crashed and not self.signalled:
-                lock.keep_crashed(task_id, telemetry.system_version())
             elif self.signalled:
-                lock.keep_stopped(task_id, os.getpid())
+                # A signal outside a shutdown writes nothing: no `keep_stopped` (that mark is
+                # `agentic stop`'s alone), no `release` (the poller needs the dead record to
+                # retake the run) and no `keep_crashed`, even if the graph also raised, so the
+                # poller reports `retake` rather than `retake_crash`.
+                pass
+            elif self.crashed:
+                lock.keep_crashed(task_id, telemetry.system_version())
             else:
                 lock.release(task_id)
 
@@ -1488,13 +1493,14 @@ def _locked(
 ) -> Iterator[LockRecord | None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
     releases whether the invocation delivers, escalates or raises -- except three cases where
-    the record stays, marked, and exactly one action runs (`keep_at_shutdown`,
-    `keep_crashed`, `keep_stopped`, `release`, in that priority): the system shutdown stopped
-    it (`stop.at_shutdown`), so the next boot can retake the run; the graph itself raised
-    (`stop.crashed`, set only by `_invoke`) with no signal, so the poller can retake it
-    -- the dying process's own memoised system version is the right one, it is a fresh
-    process; or any other signal stopped it (`stop.signalled`), a deliberate stop the poller
-    never retakes. A `CannotStart` or an exception outside `app.ainvoke` releases.
+    the record stays, and exactly one action runs (`keep_at_shutdown`, nothing, `keep_crashed`,
+    `release`, in that priority): the system shutdown stopped it (`stop.at_shutdown`), so the
+    next boot can retake the run; any other signal stopped it (`stop.signalled`), so the
+    record stays unmarked and the poller retakes it (only `agentic stop` marks a deliberate
+    stop); or the graph itself raised (`stop.crashed`, set only by `_invoke`) with no signal,
+    so the poller can retake it -- the dying process's own memoised system version is the
+    right one, it is a fresh process. A `CannotStart` or an exception outside `app.ainvoke`
+    releases.
     Yields the record of the dead run it took over, if any
     (`RunLock.acquire` only ever hands back a record of this host's own, never probing
     another host's)."""

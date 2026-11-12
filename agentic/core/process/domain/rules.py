@@ -4225,8 +4225,8 @@ class LockFacts:
     # The version the run recorded when it raised under the graph (`RunLock.keep_crashed`);
     # `None` for a record with no crash mark.
     crashed_version: str | None = None
-    # The record says the run was stopped on purpose (a signal outside a shutdown, `agentic
-    # stop`): never retaken, whatever else the record says.
+    # The record says a person stopped the run (`agentic stop`, the only writer): never
+    # retaken, whatever else the record says. A signal outside a shutdown leaves no mark.
     stopped_deliberately: bool = False
 
 
@@ -4234,16 +4234,45 @@ RetakeVerdict = Literal[
     "none", "running", "retake", "retake_crash", "calendar", "spent", "stale", "human"
 ]
 
+# The statuses of a task that has not been delivered, escalated or ended: the only ones a run
+# can still be missing from. The one hand-written list of the statuses that decide a retake or
+# a skipped-line (`owed_a_run`, `interrupted_run`, `orphaned_run`).
+ORPHANED_STATUSES = ("open", "defined", "returned", "definition_ready", "planned", "developing")
+
 # The statuses where a run has nothing left to retake: the work is delivered, ruled
-# out, or waiting on a human's answer.
-_NOT_INTERRUPTED_STATUSES = (
-    "ready_for_review",
-    "discarded",
-    "split",
-    "tracker_only",
-    "evaluated",
-    "waiting_on_human",
-)
+# out, or waiting on a human's answer. Derived: every status that is not an orphaned one.
+_NOT_INTERRUPTED_STATUSES = tuple(s for s in get_args(Status) if s not in ORPHANED_STATUSES)
+
+
+def owed_a_run(raw: TaskState) -> bool:
+    """Whether the document says a run is still owed (GH-616): no truthy `closed_at`,
+    `escalated` or `pull_request`, and a `status` in `ORPHANED_STATUSES`."""
+    if raw.get("closed_at") or raw.get("escalated") or raw.get("pull_request"):
+        return False
+    return raw.get("status") in ORPHANED_STATUSES
+
+
+def owed_a_line(
+    raw: TaskState,
+    *,
+    in_tray: bool,
+    blocked: bool,
+    alive: bool,
+    taken: bool,
+    already_reported: bool,
+) -> bool:
+    """Whether a task in the poll round is owed one line saying why it was skipped
+    (GH-616, owner's rule): a run is owed (`owed_a_run`), the issue is in the tray and not
+    blocked, no run is alive on it, the round did not launch, resume or retake it, and no
+    other line of the round already names it."""
+    return (
+        owed_a_run(raw)
+        and in_tray
+        and not blocked
+        and not alive
+        and not taken
+        and not already_reported
+    )
 
 
 def crash_version_key(version: str | None) -> str | None:
@@ -4314,9 +4343,10 @@ def interrupted_run(
 
 
 # --- GH-403: Corrida huérfana --------------------------------------------------------
-# A task in the tray with a pre-delivery document and no lock record at all: a run stopped
-# by a signal that is not a shutdown releases its lock (cli.py), so `interrupted_run` never
-# sees it and the launch path skips it for having a document. Everything this rule decides
+# A task in the tray with a pre-delivery document and no lock record at all (a run whose lock
+# was released, e.g. by a `CannotStart`, so `interrupted_run` never sees it and the launch path
+# skips it for having a document). A run stopped by a signal outside a shutdown keeps its
+# lock unmarked (cli.py, GH-616) and is `interrupted_run`'s. Everything this rule decides
 # is here; the poller only collects the facts.
 
 # How long the document must have gone unwritten before an orphan is retaken: a run that is
@@ -4324,12 +4354,10 @@ def interrupted_run(
 # to write its first line.
 ORPHANED_QUIET = timedelta(hours=1)
 
-# The statuses of a task that has not been delivered, escalated or ended: the only ones a run
-# can still be missing from.
-ORPHANED_STATUSES = ("open", "defined", "returned", "definition_ready", "planned", "developing")
-
 OrphanVerdict = Literal["retake", "none", "quiet", "calendar", "cap_spent"]
-OrphanWhy = Literal["quiet", "calendar", "no_slot", "cap_spent", "lock_unreadable"]
+OrphanWhy = Literal[
+    "quiet", "calendar", "no_slot", "cap_spent", "lock_unreadable", "stopped", "unaccounted"
+]
 
 
 def orphaned_run(
@@ -4371,9 +4399,16 @@ def orphaned_line(number: int, why: OrphanWhy, detail: str = "") -> str:
     of the text: the quiet window in minutes (`quiet`), the time the next retake is due
     (`calendar`), the retakes spent (`cap_spent`) or the error (`lock_unreadable`); `no_slot`
     takes none. A held orphan says how to stop the retake, a spent or unreadable one says
-    what the human runs."""
+    what the human runs. `stopped` (GH-616): `agentic stop` stopped the run, so the poller does
+    not retake it; `unaccounted`: the round reached the task and did nothing with it, `detail`
+    is the verdict name."""
     hold = "remove the agentic label to hold it"
     human = f"left to the human: agentic resume --issue {number} --from-document"
+    resume = f"agentic resume --issue {number}"
+    if why == "stopped":
+        return f"agentic: poll: #{number} stopped on purpose (agentic stop): not retaken; {resume}"
+    if why == "unaccounted":
+        return f"agentic: poll: #{number} owed a run, not taken this round ({detail}); {resume}"
     text, advice = {
         "quiet": (f"not quiet yet (document written within {detail})", hold),
         "calendar": (f"due at {detail}", hold),
