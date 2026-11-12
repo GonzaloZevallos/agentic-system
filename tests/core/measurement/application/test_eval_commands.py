@@ -90,6 +90,8 @@ TODAYS_SCORECARDS = (
     "  time to merge known for 0 of 1 judged deliveries\n"
     "actual/estimate cost:  n/a (median, n=0, 1 excluded)\n"
     "actual/estimate files: n/a (median, n=0, 1 excluded)\n"
+    "hand files/plan:       n/a (median, n=0, 1 excluded)\n"
+    "hand lines/plan:       n/a (median, n=0, 1 excluded)\n"
     "-- product / bl-b --\n"
     "autonomy:          n/a (0 judged, 1 excluded)\n"
     "own failures/task: 0.0000 (1 terminated, 0 excluded)\n" + CAVEAT + "  by reason: {}\n"
@@ -98,6 +100,8 @@ TODAYS_SCORECARDS = (
     "  time to merge known for 0 of 0 judged deliveries\n"
     "actual/estimate cost:  n/a (median, n=0, 1 excluded)\n"
     "actual/estimate files: n/a (median, n=0, 1 excluded)\n"
+    "hand files/plan:       n/a (median, n=0, 1 excluded)\n"
+    "hand lines/plan:       n/a (median, n=0, 1 excluded)\n"
 )
 
 # The GH-467 rows, in print order. The fixtures hold no `failures`, `ci_timing` or `pause_log`,

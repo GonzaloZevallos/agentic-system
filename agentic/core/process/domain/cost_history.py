@@ -207,4 +207,20 @@ def render(history: History) -> str:
                 f"- estimated {pair.estimated_usd:.2f} USD / {pair.estimated_files} files, "
                 f"actual {pair.actual_usd:.2f} USD / {files} files"
             )
+    if history.sizes:
+        lines.append("Latest planned hand-written size against the actual:")
+        for planned, actual in history.sizes[-PAIRS:]:
+            gap = size_budget.divergence(planned, actual)
+            files, written = divergence_text(gap.hand_files), divergence_text(gap.hand_lines)
+            lines.append(
+                f"- planned {planned.hand_files} files / {planned.hand_lines} lines, "
+                f"actual {actual.hand_files} files / {actual.hand_lines} lines "
+                f"(files {files}, lines {written})"
+            )
     return "\n".join(lines)
+
+
+def divergence_text(ratio: float | None) -> str:
+    """One divergence figure as the history and the scorecard print it: `x1.2`, or `?` when
+    the plan said 0 and there is no ratio."""
+    return "?" if ratio is None else f"x{ratio:.2f}"

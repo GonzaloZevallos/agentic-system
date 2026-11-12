@@ -220,3 +220,29 @@ def test_a_document_of_another_plan_shape_does_not_move_the_ratio():
     other = sized(10, 100, 40, 400, experiment={"plan_shape": "single"})
     history = cost_history.build([other] * 20 + [sized(10, 100, 15, 150)] * 10)
     assert cost_history.size_ratio(history) == (1.5, 1.5)
+
+
+def _sized(planned, actual, **more):
+    document = doc(1, 5.0, **more)
+    document.update(size_budget.PlanSize(*planned).to_frontmatter())
+    document.update(size_budget.ActualSize(*actual).to_frontmatter())
+    return document
+
+
+def test_the_history_table_shows_the_planned_size_against_the_actual_with_the_divergence():
+    text = cost_history.render(cost_history.build([_sized((10, 200, 100), (12, 300, 90, 0))]))
+
+    assert "planned 10 files / 200 lines, actual 12 files / 300 lines" in text
+    assert "(files x1.20, lines x1.50)" in text
+
+
+def test_a_plan_that_declared_nothing_shows_a_question_mark_for_that_divergence():
+    text = cost_history.render(cost_history.build([_sized((0, 0, 0), (3, 40, 0, 0))]))
+
+    assert "(files ?, lines ?)" in text
+
+
+def test_a_history_without_sizes_prints_no_size_block():
+    text = cost_history.render(cost_history.build([doc(1, 5.0)]))
+
+    assert "planned hand-written size" not in text

@@ -22,6 +22,7 @@ from agentic.core.process.application import landing_plan
 from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import MergeCallFailed, TrackerUnreachable, Upstream
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.size_budget import ActualSize
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryTracker, eval_set_yaml, memory_ports, real_commands
@@ -641,3 +642,12 @@ def test_an_auto_merge_whose_file_count_is_unreadable_still_merges_without_actua
     doc = world.doc()
     assert doc["delivery_outcome"] == "auto_merged"
     assert "actual_files" not in doc
+
+
+def test_an_auto_merge_records_the_hand_written_size_it_added_over_master(world):
+    world.merge()
+
+    # `feature.txt` is the branch's one file; `upstream.txt`, what master gained, is not counted.
+    assert world.doc()["actual_size"] == ActualSize(
+        hand_files=1, hand_lines=1, test_lines=0, generated_files=0
+    )

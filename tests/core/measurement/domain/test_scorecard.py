@@ -660,3 +660,34 @@ def test_the_ratio_reads_the_declared_figure_when_the_system_raised_the_estimate
     assert raised.estimate_cost_usd == 10.0
     assert scorecard.build([raised]).cost_over_estimate.value == 2.0
     assert _closed(estimate=_plan(40.0, 5)).estimate_cost_usd == 40.0
+
+
+def _sizes(planned, actual):
+    from agentic.core.process.domain import size_budget
+
+    return {
+        **size_budget.PlanSize(*planned).to_frontmatter(),
+        **size_budget.ActualSize(*actual).to_frontmatter(),
+    }
+
+
+def test_the_scorecard_reports_the_median_divergence_of_the_hand_written_size_outside_the_verdict():
+    card = scorecard.build(
+        [
+            _closed(**_sizes((10, 100, 0), (20, 100, 0, 0))),
+            _closed(**_sizes((10, 100, 0), (10, 300, 0, 0))),
+            _closed(**_sizes((0, 0, 0), (4, 50, 0, 0))),  # planned nothing: no ratio, excluded
+            _closed(),  # a document from before the keys
+        ]
+    )
+
+    assert (card.hand_files_over_plan.value, card.hand_files_over_plan.denominator) == (1.5, 2)
+    assert (card.hand_lines_over_plan.value, card.hand_lines_over_plan.denominator) == (2.0, 2)
+    assert card.hand_files_over_plan.excluded == 2
+
+
+def test_a_document_without_the_size_keys_reads_none_and_leaves_the_figure_empty():
+    figures = scorecard.task_figures(doc())
+
+    assert (figures.planned_size, figures.actual_size) == (None, None)
+    assert scorecard.build([_closed()]).hand_lines_over_plan.value is None

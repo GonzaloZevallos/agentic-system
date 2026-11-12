@@ -24,7 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from agentic.core.process.domain import cost_history
+from agentic.core.process.domain import cost_history, size_budget
 from agentic.core.process.domain.task import RoleRun, TaskState
 
 from . import cycle, metrics, planning
@@ -110,6 +110,10 @@ class TaskFigures:
     estimate_cost_usd: float | None = None
     estimate_files: int | None = None
     actual_files: int | None = None
+    # The planned and the measured hand-written size (GH-592), read through `size_budget`;
+    # `None` for a document from before the keys or one not delivered yet.
+    planned_size: size_budget.PlanSize | None = None
+    actual_size: size_budget.ActualSize | None = None
     # The arm the task ran under (`metrics.arm_of`, never the arm's name), the experiment its
     # assignment names, and its time: `cycle_class` decides whether the task enters
     # `cycle_h`/`active_h` at all, the seconds are `None` when a bound is missing.
@@ -160,6 +164,8 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         estimate_cost_usd=cost_history.declared_estimate(plan) if plan else None,
         estimate_files=int(plan["files"]) if plan else None,
         actual_files=int(actual_files) if actual_files is not None else None,
+        planned_size=size_budget.PlanSize.from_frontmatter(document),
+        actual_size=size_budget.ActualSize.from_frontmatter(document),
         arm=metrics.arm_of(document),
         experiment_id=assignment.get("experiment") if assignment else None,
         cycle_class=cycle.cycle_class(document),
@@ -279,6 +285,11 @@ class Scorecard:
     # each; `n/a` when none does.
     cost_over_estimate: Figure = Figure(None, 0, 0)
     files_over_estimate: Figure = Figure(None, 0, 0)
+    # Informative only (GH-592), enters no verdict: the median of the measured over the planned
+    # hand-written files and lines (`size_budget.divergence`), over the closed documents that
+    # carry both records and planned more than 0 of it; `n/a` when none does.
+    hand_files_over_plan: Figure = Figure(None, 0, 0)
+    hand_lines_over_plan: Figure = Figure(None, 0, 0)
     # Informative only (GH-470), enter no verdict: the medians, in hours, of the cycle and of
     # the active time over the tasks `cycle.cycle_class` lets in and whose bound is known;
     # `cycle_closed`/`cycle_open` split the cycle's `n` by how its end was found.
@@ -350,6 +361,13 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
     ]
     cost_over_estimate = _median(cost_ratios, excluded=total - len(cost_ratios))
     files_over_estimate = _median(files_ratios, excluded=total - len(files_ratios))
+    gaps = [
+        size_budget.divergence(f.planned_size, f.actual_size)
+        for f in figures
+        if f.closed_at is not None and f.planned_size is not None and f.actual_size is not None
+    ]
+    hand_files = [g.hand_files for g in gaps if g.hand_files is not None]
+    hand_lines = [g.hand_lines for g in gaps if g.hand_lines is not None]
     cycled = [f for f in figures if f.cycle_class != "excluded" and f.cycle_s is not None]
     actives = [f for f in figures if f.cycle_class != "excluded" and f.active_s is not None]
     cycle_h = _median([(f.cycle_s or 0.0) / 3600 for f in cycled], excluded=total - len(cycled))
@@ -368,6 +386,8 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
         judged=len(judged),
         cost_over_estimate=cost_over_estimate,
         files_over_estimate=files_over_estimate,
+        hand_files_over_plan=_median(hand_files, excluded=total - len(hand_files)),
+        hand_lines_over_plan=_median(hand_lines, excluded=total - len(hand_lines)),
         cycle_h=cycle_h,
         active_h=active_h,
         failed_h=_hours(figures, lambda f: f.failed_s),
