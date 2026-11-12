@@ -1444,6 +1444,8 @@ def gather_retakes(
                 lines.append(_human_line(number, record, other_boot))
                 said.add(number)
             case "spent" | "stale":
+                # Told to the human on the issue (now or by an earlier round): accounted for.
+                said.add(number)
                 if _notice_pending(comments):
                     notices[number] = RetakesSpent(
                         number,

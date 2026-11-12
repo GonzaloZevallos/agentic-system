@@ -518,7 +518,7 @@ def test_a_spent_notice_issue_gets_no_extra_unaccounted_line():
     assert not any("owed a run" in line for line in lines)
 
 
-def test_a_posted_spent_notice_leaves_the_task_with_one_unaccounted_line_naming_the_verdict():
+def test_a_posted_spent_notice_is_accounted_for_and_later_rounds_say_nothing_to_do():
     ports, lock = _open_with_dead_lock()
     ports.tracker.timestamped["GH-7"] = [
         _comment(f"Retaken with no lock: retake {n} of 3", NOW - timedelta(hours=5 - n))
@@ -528,4 +528,4 @@ def test_a_posted_spent_notice_leaves_the_task_with_one_unaccounted_line_naming_
     ports.tracker.timestamped["GH-7"].append(_comment(ports.tracker.comments[0][1], NOW))
     lines, launcher = _go(ports, lock=lock)
     assert launcher.spawned == []
-    assert lines == [rules.orphaned_line(7, "unaccounted", "spent")]
+    assert lines == ["agentic: poll: nothing to do this round"]
