@@ -39,6 +39,7 @@ from ..domain.task import (
     TaskState,
     add_review_scopes,
 )
+from . import docs_settlement
 from . import resume as resuming
 from .adr_collision import adr_collision
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout
@@ -350,10 +351,19 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
             if conflicted := _bring_in(context, state, checkout, merges):
                 return _conflict_reason(conflicted, context.head, _docs(context, state)), "returned"
             merged = merges.merge_in(sha)
+            if not merged.clean:
+                # GH-603: in `validate` docs mode a conflict in the generated paths is settled
+                # from the upstream's side; the merge is concluded here when nothing else
+                # conflicted, and only the other paths go to a Developer.
+                docs = _docs(context, state)
+                left = docs_settlement.settle_open_merge(
+                    ports.workspace, checkout.path, docs, merged.conflicted, sha, master=sha
+                )
+                if left is None or left:
+                    return _conflict_reason(left or merged.conflicted, sha, docs), "returned"
+                merged = UpstreamMerge(True, (), ports.workspace.full_head(checkout.path))
         except GitError as failed:
             return _failed_reason(f"syncing {sha} failed", failed, sha), "returned"
-        if not merged.clean:
-            return _conflict_reason(merged.conflicted, sha, _docs(context, state)), "returned"
         if not _sync_carries(context, state, reviewed, merged):
             return f"Master ({sha}) was merged into the branch; review the result as it is.", (
                 "delivered"

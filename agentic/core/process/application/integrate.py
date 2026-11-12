@@ -40,7 +40,7 @@ from ..domain import rules
 from ..domain.docs import Docs
 from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
-from . import pre_pr_fix, promotion
+from . import docs_settlement, pre_pr_fix, promotion
 from .checkouts import SetupFailed, subtask_checkout, task_base, task_checkout
 from .ports import Checkout, Ports
 from .run_role import finish
@@ -150,6 +150,18 @@ def _merge_approved(state: TaskState, task_path: Path, ports: Ports) -> list[str
         branch = subtask.get("branch")
         if subtask_id == INTEGRATION or subtask.get("status") != "approved" or not branch:
             continue
-        if ports.workspace.merge(task_path, branch) is not None:
+        if not _merged(state, task_path, branch, ports):
             conflicts.append(branch)
     return conflicts
+
+
+def _merged(state: TaskState, task_path: Path, branch: str, ports: Ports) -> bool:
+    """Whether `branch` is in the task branch. A product in `validate` docs mode (GH-603) has
+    a conflict confined to its generated paths settled from master's side instead of left to
+    the integrator; the block is read, at the base, only after `merge` refused."""
+    workspace = ports.workspace
+    refusal = workspace.merge(task_path, branch)
+    if refusal is None:
+        return True
+    docs = ports.stack.docs(task_base(state, ports))
+    return docs_settlement.settle_refused_merge(workspace, task_path, branch, docs, refusal)

@@ -105,3 +105,31 @@ código, prosa revisada para el resto, y una puerta que falla cuando la doc est�
   `.md` que dice en español qué muestra y lista a su padre y a sus hermanas. `plan_text` lo pide
   al Tech Lead y `review_text` marca el exceso como hallazgo `important`, con los nodos,
   aristas y clases contados como evidencia.
+
+## Addendum (GH-603): lo generado no se compromete en una rama
+
+Regla del dueño: «generated docs are never committed in a feature pull request. Master
+regenerates them after each merge; a branch only proves that generation still works.» El modo
+`docs.mode: validate` (ver el addendum GH-603 de ADR-0066) la hace cumplir; con `commit`, o sin
+`mode`, nada de lo que sigue corre.
+
+- **La puerta restaura.** En `validate`, la Puerta de entrega, tras comprobar el commit y el árbol
+  limpio, lee `remote_tip(master)`, pide `owned_drift` y, si hay rutas que la rama cambió bajo
+  `docs.paths`, las restaura (`restore_owned`) como las tiene `merge-base(head, master)` y
+  commitea la restauración con un mensaje fijo. Después relee HEAD antes del testigo, los chequeos
+  y la clave del resultado reutilizable. Cualquier `GitError` o un master ilegible deja el árbol
+  como estaba, escribe una línea en la sección del Developer y la entrega pasa: nunca aborta.
+- **Un conflicto sólo en `docs.paths` se resuelve desde un único `source`.** En la integración
+  incremental, el merge de dependencias y el sync del aterrizaje, el sistema toma el más nuevo de
+  `merge-base(ours, master)` y `merge-base(theirs, master)` (`settle_source`) y restaura esas rutas
+  desde él; en el sync, master es el sha del upstream. Si hay conflictos fuera de `docs.paths`, sólo
+  esos van al integrador o al Developer. Una fuente ilegible deja todo como antes.
+- **Regla de lectura en el base.** Toda lectura que compara una cabeza con master recibe master como
+  sha explícito (de `remote_tip` o del upstream del sync), nunca un nombre de rama; la decisión de
+  qué ruta es del dominio de `docs` pasa por el único `docs.owned`, y los pathspecs git salen de
+  `stack.docs_pathspecs`.
+- **Supuesto.** Master sólo avanza, sin force-push. Si `merge-base` no da un ancestro, el sistema
+  no actúa.
+- **Diferido.** El punto 4 del pedido, `docs.inputs` (que el nivel rápido omita el chequeo cuando la
+  entrega no toca nada que alimente la generación), no entra: es la única pieza que puede dejar
+  pasar un generador roto. Queda como trabajo aparte.

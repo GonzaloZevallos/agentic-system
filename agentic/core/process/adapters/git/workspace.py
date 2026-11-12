@@ -57,6 +57,7 @@ from ...application.ports import GitError as GitError  # re-exported: see ports.
 from ...application.ports import UnstageablePath as UnstageablePath
 from ...domain import rules
 from ...domain.ci import Containment
+from ...domain.docs import Ancestry
 from ...domain.scratch import KEPT_DIR, LEGACY_SCRATCH_DIR
 from ...domain.size_budget import NumstatRow
 from ...domain.task import DependencyState, MergeOutcome
@@ -353,6 +354,102 @@ class GitWorkspace:
             conflicted=outcome.conflicted_paths,
             head=self.full_head(checkout),
         )
+
+    def owned_drift(
+        self, path: Path, head: str, master_sha: str, pathspecs: Sequence[str]
+    ) -> tuple[str, ...]:
+        if not pathspecs:
+            return ()
+        base = self._run("merge-base", head, master_sha, cwd=path)
+        if base.returncode != 0 or not base.stdout.strip():
+            raise GitError(f"git merge-base {head} {master_sha} failed: {base.stderr.strip()}")
+        out = self._git(
+            "diff", "--name-only", "--no-renames", "-z", base.stdout.strip(), head, "--",
+            *pathspecs, cwd=path,
+        )  # fmt: skip
+        return tuple(name for name in out.split("\0") if name)
+
+    def restore_owned(self, path: Path, source: str, paths: Sequence[str], message: str) -> str:
+        if not self.is_clean(path):
+            raise GitError(f"the tree at {path} is not clean: nothing is restored over it")
+        original = self.full_head(path)
+        try:
+            self._resolve_from(path, paths, source)
+            if self._has_staged_changes(path):
+                self._git("commit", "-q", "-m", message, cwd=path)
+            return self.full_head(path)
+        except GitError:
+            self.reset_hard(path, original)
+            raise
+
+    def settle_owned(self, path: Path, paths: Sequence[str], source: str) -> None:
+        self._resolve_from(path, paths, source)
+
+    def merge_settling(
+        self, path: Path, branch: str, paths: Sequence[str], source: str
+    ) -> MergeRefusal | None:
+        """The merge is concluded only when every path it left unmerged is one of `paths`;
+        in every other case it is undone, down to a `reset --hard` of the head it started at
+        when the abort itself fails, so no merge is ever left open (GH-603)."""
+        original = self.full_head(path)
+        result = self._run_locked("merge", "--no-edit", "-q", branch, cwd=path)
+        if result.returncode == 0:
+            return None
+        status = self._run("status", "--porcelain", cwd=path)
+        unmerged = tuple(
+            line[3:] for line in status.stdout.splitlines() if line[:2] in UNMERGED_CODES
+        )
+        reason = (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
+        if not unmerged:
+            self._undo_merge(path, original)
+            return MergeFailed(reason)
+        if not set(unmerged) <= set(paths):
+            self._undo_merge(path, original)
+            return MergeConflict(unmerged, reason)
+        try:
+            self._resolve_from(path, unmerged, source)
+            if self._git("diff", "--name-only", "--diff-filter=U", cwd=path):
+                raise GitError("paths are still unmerged after settling")
+            self._git("commit", "-q", "--no-edit", cwd=path)
+        except GitError as error:
+            self._undo_merge(path, original)
+            return MergeFailed(str(error))
+        return None
+
+    def _undo_merge(self, path: Path, original: str) -> None:
+        if self.merge_head(path) is None:
+            return
+        self._run("merge", "--abort", cwd=path)
+        if self.merge_head(path) is not None:
+            self.reset_hard(path, original)
+
+    def _resolve_from(self, path: Path, paths: Sequence[str], source: str) -> None:
+        """Each of `paths` as the commit `source` has it, staged; removed when `source` lacks
+        it. Literal pathspecs, so a name with a glob character is itself and nothing else."""
+        if self._run("cat-file", "-e", f"{source}^{{commit}}", cwd=path).returncode != 0:
+            raise GitError(f"{source} is not a commit this checkout has")
+        for relative in paths:
+            spec = f":(literal){relative}"
+            if self._run("cat-file", "-e", f"{source}:{relative}", cwd=path).returncode == 0:
+                self._git("checkout", source, "--", spec, cwd=path)
+            elif self._run("ls-files", "--error-unmatch", "--", spec, cwd=path).returncode == 0:
+                self._git("rm", "-q", "-f", "--", spec, cwd=path)
+            else:
+                (path / relative).unlink(missing_ok=True)
+
+    def ancestry(self, path: Path, ours: str, theirs: str) -> Ancestry:
+        older = self._run("merge-base", "--is-ancestor", ours, theirs, cwd=path)
+        newer = self._run("merge-base", "--is-ancestor", theirs, ours, cwd=path)
+        for result in (older, newer):
+            if result.returncode not in (0, 1):
+                raise GitError(
+                    f"git merge-base --is-ancestor {ours} {theirs} failed: {result.stderr.strip()}"
+                )
+        if older.returncode == 0 and newer.returncode == 0:
+            return "same"
+        if older.returncode == 0:
+            return "ours-older"
+        return "theirs-older" if newer.returncode == 0 else "diverged"
 
     def merge_head(self, path: Path) -> str | None:
         found = self._run("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=path)

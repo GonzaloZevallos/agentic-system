@@ -994,6 +994,20 @@ def test_a_docs_block_of_the_wrong_shape_fails_at_load(block):
         stack.docs(docs_data(block), "stack.yaml")
 
 
+def test_the_docs_mode_defaults_to_commit_and_accepts_the_two_values():
+    assert stack.docs(docs_data(), "x").mode == "commit"
+    block = {"generate": "x", "paths": [GENERATED]}
+    assert stack.docs(docs_data({**block, "mode": "commit"}), "x").mode == "commit"
+    assert stack.docs(docs_data({**block, "mode": "validate"}), "x").mode == "validate"
+
+
+@pytest.mark.parametrize("mode", ["bogus", "Validate", "", None, 3, ["validate"], True])
+def test_a_docs_mode_that_is_not_one_of_the_two_values_fails_at_load(mode):
+    block = {"generate": "x", "paths": [GENERATED], "mode": mode}
+    with pytest.raises(ValueError, match="stack.yaml: expected `mode` under `docs`"):
+        stack.docs(docs_data(block), "stack.yaml")
+
+
 @pytest.mark.parametrize("empty", [None, {}])
 def test_a_docs_block_declared_empty_says_to_leave_the_key_out(empty):
     data = {"checks": {"tests": "pytest"}, "docs": empty}

@@ -85,7 +85,7 @@ from agentic.core.process.domain.ci import (
     JobLog,
 )
 from agentic.core.process.domain.design import Design, NotReady
-from agentic.core.process.domain.docs import Docs
+from agentic.core.process.domain.docs import Ancestry, Docs
 from agentic.core.process.domain.exempt_queue import ExemptAttempt, ExemptCandidate, ExemptWait
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.performance import Run, Scenario
@@ -618,6 +618,10 @@ class MemoryStack:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_docs
 
+    def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
+        # The real spelling, `core.knowledge`'s own: the fake agrees with the adapter.
+        return tuple(f":(glob){path}" for path in block.paths)
+
     def generated(self, revision: str) -> tuple[str, ...]:
         return self.declared_generated
 
@@ -902,6 +906,28 @@ class MemoryWorkspace:
         self.merge_bases: dict[tuple[str, str], str] = {}
         self.merge_base_asks: list[tuple[str, str]] = []
         self.merge_base_error: str | None = None
+        # GH-603: `owned_drift`'s answer per `(head, master_sha)` (nothing when unscripted),
+        # its asks `(head, master_sha, pathspecs)`, and a text that makes it raise `GitError`.
+        self.owned_drifts: dict[tuple[str, str], tuple[str, ...]] = {}
+        self.owned_drift_asks: list[tuple[str, str, tuple[str, ...]]] = []
+        self.owned_drift_error: str | None = None
+        # GH-603: each `restore_owned` call `(path, source, paths, message)`, the head it
+        # answers, and a text that makes it raise `GitError`.
+        self.restore_owned_calls: list[tuple[Path, str, tuple[str, ...], str]] = []
+        self.restored_head = "restored"
+        self.restore_owned_error: str | None = None
+        # GH-603: each `settle_owned` call `(path, paths, source)` and its `GitError` text.
+        self.settle_owned_calls: list[tuple[Path, tuple[str, ...], str]] = []
+        self.settle_owned_error: str | None = None
+        # GH-603: each `merge_settling` call `(path, branch, paths, source)` and the refusal
+        # scripted per branch (a clean merge when absent).
+        self.merge_settling_calls: list[tuple[Path, str, tuple[str, ...], str]] = []
+        self.settling_refusals: dict[str, MergeConflict | MergeFailed] = {}
+        # GH-603: `ancestry`'s answer per `(ours, theirs)` (`diverged` when unscripted), its
+        # asks, and a text that makes it raise `GitError`.
+        self.ancestries: dict[tuple[str, str], Ancestry] = {}
+        self.ancestry_asks: list[tuple[str, str]] = []
+        self.ancestry_error: str | None = None
         # The `lease` every `push` received, in order (the failed ones too); `remote_tips`
         # is what `remote_tip` answers per branch (absent is `None`, the remote has none),
         # `remote_tip_error` makes it raise `GitError`, and `remote_tip_calls` is each ask.
@@ -1157,6 +1183,37 @@ class MemoryWorkspace:
             paths = self.conflict_paths.get(branch, ("x.py",))
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
+
+    def owned_drift(
+        self, path: Path, head: str, master_sha: str, pathspecs: Sequence[str]
+    ) -> tuple[str, ...]:
+        self.owned_drift_asks.append((head, master_sha, tuple(pathspecs)))
+        if self.owned_drift_error is not None:
+            raise GitError(self.owned_drift_error)
+        return self.owned_drifts.get((head, master_sha), ())
+
+    def restore_owned(self, path: Path, source: str, paths: Sequence[str], message: str) -> str:
+        self.restore_owned_calls.append((path, source, tuple(paths), message))
+        if self.restore_owned_error is not None:
+            raise GitError(self.restore_owned_error)
+        return self.restored_head
+
+    def settle_owned(self, path: Path, paths: Sequence[str], source: str) -> None:
+        self.settle_owned_calls.append((path, tuple(paths), source))
+        if self.settle_owned_error is not None:
+            raise GitError(self.settle_owned_error)
+
+    def merge_settling(
+        self, path: Path, branch: str, paths: Sequence[str], source: str
+    ) -> MergeConflict | MergeFailed | None:
+        self.merge_settling_calls.append((path, branch, tuple(paths), source))
+        return self.settling_refusals.get(branch)
+
+    def ancestry(self, path: Path, ours: str, theirs: str) -> Ancestry:
+        self.ancestry_asks.append((ours, theirs))
+        if self.ancestry_error is not None:
+            raise GitError(self.ancestry_error)
+        return self.ancestries.get((ours, theirs), "diverged")
 
     def merge_in_progress(self, path: Path) -> bool:
         self.merge_in_progress_asks.append(path)
