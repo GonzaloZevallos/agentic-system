@@ -1014,8 +1014,13 @@ def _part_size_check(number: int, part: dict[str, Any], ratio: size_budget.Ratio
     size = declared_size(part)
     if size is None:
         return
-    over = size_budget.crossed(size_budget.judged(size, ratio))
-    if over:
+    # The fit is decided where every fit is (invariant 1): `rules.estimate_fits`, imported
+    # where it is used because `rules` imports this module. A part declares no cost of its
+    # own, so only its size is judged; `crossed` only names the limits in the refusal.
+    from .rules import estimate_fits
+
+    if not estimate_fits(0.0, 0, None, size, ratio):
+        over = size_budget.crossed(size_budget.judged(size, ratio))
         raise ValueError(
             f"part {number} does not fit the size budget ({', '.join(over)} judged over its "
             "cap): split it into smaller parts, each a task of its own"

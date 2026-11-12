@@ -2705,6 +2705,63 @@ def test_close_happy_path_writes_the_five_keys_with_no_sample_emitted(
     assert doc["status"] == "ready_for_review"  # no new `Status` value is added
 
 
+def _close_for_size(monkeypatch, root, ports, **task):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    reference = "https://github.com/o/r/pull/7"
+    ports.tracker.prs[reference] = close_pull_request()
+    ports.documents.save(close_task(pull_request=reference, **task))
+    telemetry.configure()
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    return ports.documents.load("GH-9")
+
+
+def test_close_records_the_measured_size_of_a_pull_request_a_person_merged(monkeypatch, tmp_path):
+    """GH-592: the merge commit's first parent is the upstream of the three-dot count."""
+    from agentic.core.process.domain.size_budget import ActualSize, NumstatRow
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.workspace.numstat_rows = (
+        NumstatRow("agentic/new.py", 30, 2),
+        NumstatRow("uv.lock", 900, 300),
+        NumstatRow("tests/test_new.py", 50, 0),
+    )
+    doc = _close_for_size(monkeypatch, root, ports)
+    assert ports.workspace.numstat_reads == [("c0ffee^1", "c0ffee")]
+    assert doc["actual_size"] == ActualSize(1, 30, 50, 1)
+
+
+def test_close_keeps_the_size_the_auto_merge_already_recorded(monkeypatch, tmp_path):
+    from agentic.core.process.domain.size_budget import ActualSize
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    recorded = ActualSize(2, 20, 10, 0)
+    doc = _close_for_size(monkeypatch, root, ports, actual_size=recorded)
+    assert ports.workspace.numstat_reads == []
+    assert doc["actual_size"] == recorded
+
+
+def test_close_leaves_the_size_out_when_the_diff_cannot_be_read(monkeypatch, tmp_path, capsys):
+    from agentic.core.process.application.ports import GitError
+
+    def unreadable(upstream, head):
+        raise GitError("bad revision")
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    monkeypatch.setattr(ports.workspace, "numstat", unreadable)
+    doc = _close_for_size(monkeypatch, root, ports)
+    assert doc["closed_at"]
+    assert "actual_size" not in doc
+    assert "actual_size omitted" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("extra", "expected"),
     [
