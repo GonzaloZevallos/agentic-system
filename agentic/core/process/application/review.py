@@ -41,7 +41,7 @@ from agentic.shared.configuration import Configuration, ReviewMode, experiment_s
 from ..domain import ci, docs, landing, presubmit, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from . import ci_push, ci_trust, review_scope, shadow_review
+from . import ci_push, ci_trust, promotion, review_scope, shadow_review
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Checkout, GitError, Ports
@@ -222,7 +222,9 @@ async def review(
         head,
         ports.now(),
     )
-    subtask = subtasks[subtask_id]
+    # A promotion this review asks for (GH-591): stored on the unit it reviewed, whatever the
+    # verdict, and only applied by the serialized code that reads it (`task_path.promote`).
+    subtask = promotion.requested(subtasks[subtask_id], section, output.data.get("promote"))
     # The landing lowering is first (GH-441): a finding that asks for what only the pull
     # request's CI can give is an observation before any other rule reads its severity.
     findings, landed = rules.lower_landing_blocks(output.data["findings"])

@@ -32,6 +32,7 @@ from ..domain.roles import (
 from ..domain.task import PlanRoute, Subtask, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
+from . import promotion
 from .ports import GitError, Ports
 from .reflect_run import closed_documents
 from .run_role import Check, Output, finish, run_role
@@ -571,6 +572,9 @@ def _delivered(
                 f"{written['sections'][section].rstrip()}\n\n{floored.line}"
             )
         written["status"] = "planned"
+        # A promotion the Tech Lead asks for (GH-591): stored, never applied here; the plan
+        # node's serialized system step applies it after the model ran.
+        written.update(promotion.plan_requested(written, section, output.data.get("promote")))
         if output.data.get("tracker_checklist"):
             # What the human must do on the tracker (GH-336); it may sit next to subtasks.
             written["tracker_checklist"] = list(output.data["tracker_checklist"])
