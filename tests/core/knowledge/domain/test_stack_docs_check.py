@@ -186,23 +186,30 @@ PINNED_COMMAND = (
     ")\n"
     "generated=$?\n"
     "stale=$(git status --porcelain --untracked-files=all -- ':(glob)docs/a"
-    "rchitecture/generated/**' ':(glob)docs/api/*.md')\n"
+    "rchitecture/generated/**' ':(glob)docs/architecture/generated/*.mmd')\n"
     "inspected=$?\n"
     "git reset -q HEAD -- ':(glob)docs/architecture/generated/**' ':(glob)d"
-    "ocs/api/*.md' 2>/dev/null\n"
-    "git checkout -q -- ':(glob)docs/architecture/generated/**' 2>/dev/null\n"
-    "git checkout -q -- ':(glob)docs/api/*.md' 2>/dev/null\n"
-    "git clean -fdq -- ':(glob)docs/architecture/generated/**' ':(glob)docs/api/*.md'\n"
-    'if [ "$generated" -ne 0 ]; then echo "docs generate exited $generated"; fi\n'
+    "ocs/architecture/generated/*.mmd' 2>/dev/null\n"
+    "git checkout -q -- ':(glob)docs/architecture/generated/**' 2>/dev/null"
+    "\n"
+    "git checkout -q -- ':(glob)docs/architecture/generated/*.mmd' 2>/dev/n"
+    "ull\n"
+    "git clean -fdq -- ':(glob)docs/architecture/generated/**' ':(glob)docs"
+    "/architecture/generated/*.mmd'\n"
+    'if [ "$generated" -ne 0 ]; then echo "docs generate exited $generated"'
+    "; fi\n"
     'if [ "$inspected" -ne 0 ]; then echo "docs: git status failed"; fi\n'
-    'if [ -n "$stale" ]; then echo \'docs stale: commit these\'; echo "$stale"; fi\n'
-    'if [ "$generated" -ne 0 ] || [ "$inspected" -ne 0 ] || [ -n "$stale" ]; then exit 1; fi\n'
+    'if [ -n "$stale" ]; then echo \'docs stale: commit these\'; echo "$stale'
+    '"; fi\n'
+    'if [ "$generated" -ne 0 ] || [ "$inspected" -ne 0 ] || [ -n "$stale" ]'
+    "; then exit 1; fi\n"
     "exit 0\n"
 )
 
 
 PINNED_DOCS = Docs(
-    "uv run python tools/diagrams.py", ("docs/architecture/generated/**", "docs/api/*.md")
+    "uv run python tools/diagrams.py",
+    ("docs/architecture/generated/**", "docs/architecture/generated/*.mmd"),
 )
 
 
@@ -216,7 +223,7 @@ def test_commit_mode_and_an_absent_mode_build_the_command_byte_for_byte_as_befor
 def test_docs_pathspecs_are_the_glob_pathspecs_of_the_owned_paths_in_order():
     assert stack.docs_pathspecs(PINNED_DOCS) == (
         ":(glob)docs/architecture/generated/**",
-        ":(glob)docs/api/*.md",
+        ":(glob)docs/architecture/generated/*.mmd",
     )
 
 

@@ -291,44 +291,44 @@ def test_the_validate_texts_are_still_empty_for_a_product_without_docs():
 
 
 SAMPLE_FILES = (
-    "top.md",
-    "a/b.md",
-    "a/c/d.md",
-    "a/c/e/f.md",
-    "docs/api/x.md",
-    "docs/api/y.txt",
-    "docs/api/sub/z.md",
-    "docs/architecture/generated/g.mmd",
-    "docs/architecture/generated/deep/h.mmd",
-    "docs/architecture/written.md",
-    "with space/x.md",
-    "with space/sub dir/y.md",
-    "[odd]/q.md",
+    "top.txt",
+    "a/b.txt",
+    "a/c/d.txt",
+    "a/c/e/f.txt",
+    "site/api/x.txt",
+    "site/api/y.txt",
+    "site/api/sub/z.txt",
+    "site/architecture/generated/g.mmd",
+    "site/architecture/generated/deep/h.mmd",
+    "site/architecture/written.txt",
+    "with space/x.txt",
+    "with space/sub dir/y.txt",
+    "[odd]/q.txt",
 )
 GLOB_CASES = (
-    "docs/architecture/generated/**",
-    "docs/**",
-    "**/*.md",
-    "**/x.md",
-    "docs/api/*.md",
-    "docs/api/*",
-    "docs/*/x.md",
-    "docs/**/z.md",
-    "docs/**/h.mmd",
-    "a/**/d.md",
-    "a/**/b.md",
-    "a/*/d.md",
+    "site/architecture/generated/**",
+    "site/**",
+    "**/*.txt",
+    "**/x.txt",
+    "site/api/*.txt",
+    "site/api/*",
+    "site/*/x.txt",
+    "site/**/z.txt",
+    "site/**/h.mmd",
+    "a/**/d.txt",
+    "a/**/b.txt",
+    "a/*/d.txt",
     "a/*",
     "a",
-    "docs/api",
-    "docs/ap?/x.md",
-    "docs/api/[xy].md",
-    "docs/api/[!x].md",
+    "site/api",
+    "site/ap?/x.txt",
+    "site/api/[xy].txt",
+    "site/api/[!x].txt",
     "with space/*",
     "with space/**",
-    "docs/architecture/generated/**/*.mmd",
+    "site/architecture/generated/**/*.mmd",
     "nothing/**",
-    "docs/api/x.md",
+    "site/api/x.txt",
 )
 
 
@@ -359,9 +359,9 @@ def test_owned_agrees_with_git_glob_pathspecs_on_a_sample_tree(sample_repo, patt
 
 
 def test_owned_is_true_when_any_of_the_paths_matches_and_false_for_none():
-    block = Docs("true", ("docs/api/*.md", "docs/architecture/generated/**"))
-    assert owned(block, "docs/api/x.md")
-    assert owned(block, "docs/architecture/generated/deep/h.mmd")
-    assert not owned(block, "docs/api/sub/z.md")
-    assert not owned(block, "docs/architecture/written.md")
+    block = Docs("true", ("site/api/*.txt", "site/architecture/generated/**"))
+    assert owned(block, "site/api/x.txt")
+    assert owned(block, "site/architecture/generated/deep/h.mmd")
+    assert not owned(block, "site/api/sub/z.txt")
+    assert not owned(block, "site/architecture/written.txt")
     assert not owned(block, "src/app.py")
