@@ -51,6 +51,9 @@ from .run_role import Output, finish, run_role
 SYSTEM_APPROVAL = "approved by the system: review_mode single"
 
 
+PRD_RECHECK_LINE = "PRD written after this work was approved; review it against the PRD."
+
+
 async def run_reviewer(
     state: TaskState,
     subtask_id: str,
@@ -165,12 +168,23 @@ async def review(
     if evidence is not None:
         reading = {**state, "sections": {**state.get("sections", {}), CI_SECTION: evidence.section}}
 
+    # A unit whose approved work met a PRD written after it (GH-591, `plan_revision.revise`) gets a
+    # full review from its base, not an incremental one, and its brief says why. Only the reading
+    # copy changes; the document's brief stays.
+    rechecking = bool(subtask.get("prd_recheck"))
+    scoped = state
+    if rechecking:
+        fresh = {k: v for k, v in subtask.items() if k != "reviewed_head"}
+        briefed = {**fresh, "brief": f"{subtask['brief']}\n\n{PRD_RECHECK_LINE}"}
+        scoped = {**state, "subtasks": {**state["subtasks"], subtask_id: fresh}}
+        reading = {**reading, "subtasks": {**reading["subtasks"], subtask_id: briefed}}
+
     # What this pass covers (GH-589, ADR-0089): `landing.review_scope` decides it from the
     # facts `review_scope.scope_of` reads. Only a `resolution` changes the call -- its text
     # as a system section, and the diff starting at the accepted tip; every other scope is
     # today's call. A `carried` verdict (a Developer's clean merge with nothing after) still
     # reviews, from the tip; the sync is what records `carried`, here it is `full`/`clean`.
-    verdict, tip = review_scope.scope_of(state, subtask_id, head, checkout.path, ports)
+    verdict, tip = review_scope.scope_of(scoped, subtask_id, head, checkout.path, ports)
     resolving = verdict.scope == "resolution"
     if resolving:
         reading = {
@@ -218,13 +232,17 @@ async def review(
         subtask_id,
         recorded_scope,
         verdict.cause,
-        from_base or subtask.get("reviewed_head") or checkout.base,
+        checkout.base if rechecking else from_base or subtask.get("reviewed_head") or checkout.base,
         head,
         ports.now(),
     )
     # A promotion this review asks for (GH-591): stored on the unit it reviewed, whatever the
     # verdict, and only applied by the serialized code that reads it (`task_path.promote`).
-    subtask = promotion.requested(subtasks[subtask_id], section, output.data.get("promote"))
+    subtask = promotion.requested(
+        {k: v for k, v in subtasks[subtask_id].items() if k != "prd_recheck"},
+        section,
+        output.data.get("promote"),
+    )
     # The landing lowering is first (GH-441): a finding that asks for what only the pull
     # request's CI can give is an observation before any other rule reads its severity.
     findings, landed = rules.lower_landing_blocks(output.data["findings"])
