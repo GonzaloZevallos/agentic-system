@@ -844,3 +844,13 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-612
+  GH-610@review:
+    cost_usd: 0.1417
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-610

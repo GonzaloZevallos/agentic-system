@@ -1583,3 +1583,22 @@ candidates:
   - finding
   - return
   added_at: '2026-11-12T20:47:24.349+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each plan invariant, grep the whole repo for every caller and every hand-built form of what it names, in every subtask layer, and route them through the single function it designates before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-610
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T22:42:40.058+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change alters a flow's behaviour or wiring, update the hand-written flow page in docs/architecture in the same change. Regenerated pages alone do not count.
+  confidence: medium
+  seen_in:
+  - GH-610
+  sources:
+  - finding
+  added_at: '2026-11-12T22:42:40.058+00:00'
