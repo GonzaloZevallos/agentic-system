@@ -185,17 +185,13 @@ PINNED_COMMAND = (
     "uv run python tools/diagrams.py\n"
     ")\n"
     "generated=$?\n"
-    "stale=$(git status --porcelain --untracked-files=all -- ':(glob)docs/a"
-    "rchitecture/generated/**' ':(glob)docs/architecture/generated/*.mmd')\n"
+    "stale=$(git status --porcelain --untracked-files=all -- "
+    "':(glob)out/gen/**' ':(glob)out/gen/*.mmd')\n"
     "inspected=$?\n"
-    "git reset -q HEAD -- ':(glob)docs/architecture/generated/**' ':(glob)d"
-    "ocs/architecture/generated/*.mmd' 2>/dev/null\n"
-    "git checkout -q -- ':(glob)docs/architecture/generated/**' 2>/dev/null"
-    "\n"
-    "git checkout -q -- ':(glob)docs/architecture/generated/*.mmd' 2>/dev/n"
-    "ull\n"
-    "git clean -fdq -- ':(glob)docs/architecture/generated/**' ':(glob)docs"
-    "/architecture/generated/*.mmd'\n"
+    "git reset -q HEAD -- ':(glob)out/gen/**' ':(glob)out/gen/*.mmd' 2>/dev/null\n"
+    "git checkout -q -- ':(glob)out/gen/**' 2>/dev/null\n"
+    "git checkout -q -- ':(glob)out/gen/*.mmd' 2>/dev/null\n"
+    "git clean -fdq -- ':(glob)out/gen/**' ':(glob)out/gen/*.mmd'\n"
     'if [ "$generated" -ne 0 ]; then echo "docs generate exited $generated"'
     "; fi\n"
     'if [ "$inspected" -ne 0 ]; then echo "docs: git status failed"; fi\n'
@@ -207,10 +203,8 @@ PINNED_COMMAND = (
 )
 
 
-PINNED_DOCS = Docs(
-    "uv run python tools/diagrams.py",
-    ("docs/architecture/generated/**", "docs/architecture/generated/*.mmd"),
-)
+# Paths that are not repo paths: the pin proves the bytes, it reads no file.
+PINNED_DOCS = Docs("uv run python tools/diagrams.py", ("out/gen/**", "out/gen/*.mmd"))
 
 
 def test_commit_mode_and_an_absent_mode_build_the_command_byte_for_byte_as_before():
@@ -222,8 +216,8 @@ def test_commit_mode_and_an_absent_mode_build_the_command_byte_for_byte_as_befor
 
 def test_docs_pathspecs_are_the_glob_pathspecs_of_the_owned_paths_in_order():
     assert stack.docs_pathspecs(PINNED_DOCS) == (
-        ":(glob)docs/architecture/generated/**",
-        ":(glob)docs/architecture/generated/*.mmd",
+        ":(glob)out/gen/**",
+        ":(glob)out/gen/*.mmd",
     )
 
 

@@ -3,7 +3,8 @@
 `uv run python scripts/docs/check.py [--root DIR]` reads `.agentic/stack.yaml` of `DIR` (by
 default the repository this file lives in), builds the command of the reserved `docs` check
 with `stack.docs_command` and runs it with `sh -c` from `DIR`. That command regenerates the
-owned docs, exits 1 naming what changed (`DOCS_STALE`) and puts the tree back as HEAD has it.
+owned docs and puts the tree back as HEAD has it. In `commit` mode it exits 1 naming what
+changed (`DOCS_STALE`); in `validate` mode it exits non-zero only when generation itself failed.
 The command is built only by the stack module: no owned path is written here.
 """
 

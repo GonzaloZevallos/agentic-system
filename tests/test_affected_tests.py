@@ -438,11 +438,6 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "names the owned glob as a string of a `docs:` block; it never reads the files",
     ),
     Allowance(
-        "tests/core/knowledge/domain/test_stack_docs_check.py",
-        "docs/architecture/generated/*",
-        "names the owned glob as a string of a `docs:` block; it never reads the files",
-    ),
-    Allowance(
         "tests/core/knowledge/domain/test_stack.py",
         "docs/architecture/generated/*",
         "names the owned glob as a string of a `docs:` block; it never reads the files",
