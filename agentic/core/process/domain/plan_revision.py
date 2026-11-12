@@ -68,12 +68,15 @@ def _changed(before: Subtask, item: Mapping[str, Any]) -> bool:
 
 
 def _reopened(before: Subtask, item: Mapping[str, Any]) -> Subtask:
-    """The subtask whole, back to `pending` with the new plan's fields. `screens` and
-    `prd_recheck` are dropped first: the plan's own fields replace the former and a
-    reopened subtask is not rechecked."""
+    """The subtask whole, back to `pending` with the new plan's fields. `screens`,
+    `prd_recheck` and `attempt` are dropped first: the plan's own fields replace the first, a
+    reopened subtask is not rechecked, and it starts over on the new brief, so it is not read
+    as a clean restart's fresh attempt (GH-593, `restart.restarted_fresh`) with a stale
+    `Restart <subtask>` section."""
     kept = Subtask(**before)
     kept.pop("screens", None)
     kept.pop("prd_recheck", None)
+    kept.pop("attempt", None)
     return Subtask(**{**kept, **pending(item)})
 
 

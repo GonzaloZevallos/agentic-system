@@ -1219,7 +1219,12 @@ def test_a_review_without_a_revision_validates_and_a_cited_one_needs_a_one_line_
 def test_promote_is_optional_one_line_of_at_most_240_characters(schema):
     """GH-591: the plan, the review and the Developer may ask for a promotion; one line."""
     bases = {
-        TechPlan: {**_plan("x", "api"), "estimated_cost_usd": 5.0, "estimated_files": 3},
+        TechPlan: {
+            **_plan("x", "api"),
+            "estimated_cost_usd": 5.0,
+            "estimated_files": 3,
+            **ZERO_SIZE,
+        },
         schemas.Review: {"markdown": "x", "reason": "r", "findings": []},
         schemas.Delivery: {"markdown": "x", "summary": "s", "assumptions": []},
     }

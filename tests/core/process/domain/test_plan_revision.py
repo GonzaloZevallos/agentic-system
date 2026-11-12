@@ -1,7 +1,7 @@
 """The plan revision (GH-591 part 2): a re-plan after a promotion revises the existing
 subtasks, it does not redo them. Pure decisions at `revise`."""
 
-from agentic.core.process.domain import plan_revision
+from agentic.core.process.domain import plan_revision, restart
 
 
 def _item(sid, brief="do it", seams=("s",), depends_on=(), screens=()):
@@ -42,6 +42,21 @@ def test_a_changed_brief_goes_back_to_pending_on_its_branch_keeping_its_head():
     assert patch["a"]["base"] == "b0"
     assert patch["a"]["reviewed_head"] == "h-a"
     assert "prd_recheck" not in patch["a"]
+
+
+def test_a_restarted_then_reopened_subtask_is_not_read_as_a_fresh_restart():
+    """GH-593 with GH-591: a subtask a clean restart gave attempt 2, reopened by a revised
+    plan, starts over on the new brief; it must not read the stale `Restart <sid>` section."""
+    restarted = {**_old("a", status="pending"), "attempt": 2}
+    assert restart.restarted_fresh(restarted)
+    patch = plan_revision.revise(
+        {"a": restarted, "b": _old("b")}, [_item("a", brief="new"), _item("b")], approved_work=False
+    )
+    assert patch["a"]["status"] == "pending" and patch["a"]["brief"] == "new"
+    assert "attempt" not in patch["a"]
+    assert not restart.restarted_fresh(patch["a"])
+    # The unchanged one is not touched, so a restart that is still in progress stays one.
+    assert "b" not in patch
 
 
 def test_only_depends_on_changed_counts_as_changed():
