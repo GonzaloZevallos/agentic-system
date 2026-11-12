@@ -37,9 +37,7 @@ def restarted() -> dict:
         "type": "feature",
         "sections": {"PM": "x"},
         "subtasks": {"api": unit("api")},
-        "runs": [
-            {"role": "Developer", "section": "Developer: api", "version": 1, "cost_usd": 0.1}
-        ],
+        "runs": [{"role": "Developer", "section": "Developer: api", "version": 1, "cost_usd": 0.1}],
     }
     return apply(before, restart.restart_patch(before, "api", PAIR, "REWRITTEN", HEAD))
 
