@@ -139,7 +139,14 @@ def test_failed_stage_names_only_the_exact_setup_and_the_checkout_prefix(
 
 
 def _staged(stage: FailedStage | None, name: str = "check") -> CiCheck:
-    return CiCheck(name, "COMPLETED", "FAILURE", f"https://x/job/{name}", stage)
+    step = {"setup": "Set up job", "checkout": "Run actions/checkout@v7", "suite": "Run pytest"}
+    return CiCheck(
+        name,
+        "COMPLETED",
+        "FAILURE",
+        f"https://x/job/{name}",
+        None if stage is None else step[stage],
+    )
 
 
 def test_a_ci_check_without_a_failed_stage_keeps_the_graphql_shape() -> None:
