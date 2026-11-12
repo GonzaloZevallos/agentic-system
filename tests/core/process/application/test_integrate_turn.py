@@ -140,3 +140,55 @@ def test_a_resumed_turn_on_an_all_approved_task_with_an_open_fix_changes_nothing
     assert _git("rev-parse", "agentic/GH-12", cwd=tmp_path) == head  # nothing new on the branch
     assert "landing" not in patch  # the open entry is neither closed nor rewritten
     assert apply(killed, patch)["landing"] == [open_fix]
+
+
+def asked(sid: str, kind: str, text: str) -> dict:
+    return {
+        **approved(sid),
+        "promote_request": {"kind": kind, "from_role": f"Developer: {sid}", "text": text},
+    }
+
+
+LIGHT = {"path": "light", "initial_path": "light", "path_label": "none"}
+
+
+def test_the_turn_applies_the_selected_request_once_and_clears_every_request(cfg):
+    """GH-591: a risk_area request beats a role one; both are cleared in the same patch."""
+    state = {
+        **TASK,
+        **LIGHT,
+        "subtasks": {
+            "api": asked("api", "role", "bigger than it looked"),
+            "domain": asked("domain", "risk_area", "data-migration"),
+        },
+    }
+    patch = integrate_turn(state, cfg, memory_ports(ScriptedRunner()))
+
+    assert patch["path"] == "full"
+    assert (patch["promotion"]["kind"], patch["promotion"]["text"]) == (
+        "risk_area",
+        "data-migration",
+    )
+    assert all("promote_request" not in s for s in patch["subtasks"].values())
+    assert apply(state, patch)["path"] == "full"
+
+
+def test_under_the_owner_label_the_requests_are_cleared_and_the_notice_written(cfg):
+    state = {
+        **TASK,
+        **LIGHT,
+        "path_label": "light",
+        "sections": {"Developer: api": "done"},
+        "subtasks": {"api": asked("api", "role", "bigger")},
+    }
+    patch = integrate_turn(state, cfg, memory_ports(ScriptedRunner()))
+
+    assert patch.get("path") is None and "promotion" not in patch
+    assert "promote_request" not in patch["subtasks"]["api"]
+    assert "path:light" in patch["sections"]["Developer: api"]
+
+
+def test_a_turn_with_nothing_asked_changes_no_path(cfg):
+    state = {**TASK, **LIGHT, "subtasks": {"api": approved("api")}}
+    patch = integrate_turn(state, cfg, memory_ports(ScriptedRunner()))
+    assert "path" not in patch and "promotion" not in patch

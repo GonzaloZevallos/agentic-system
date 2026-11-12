@@ -1751,8 +1751,9 @@ class TaskState(TaskInput, total=False):
     promotion: Promotion
     # A promotion the plan node asked for (GH-591): the role's `promote` or `plan_over_cap`. The
     # plan node is serialized, so the key needs no reducer; the system step after the model
-    # applies it through `task_path.promote` and clears it. Absent when nothing is pending.
-    plan_promote_request: PromoteRequest
+    # applies it through `task_path.promote` and clears it (sets `None`). Absent or `None` when
+    # nothing is pending.
+    plan_promote_request: PromoteRequest | None
     # Set when the task is an evaluation run (GH-470): the issue and base it re-runs from.
     # Written once when the run starts, from the frozen entry, so no reducer; omitted from
     # the document when absent.
