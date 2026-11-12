@@ -9,6 +9,7 @@ Read at the task's base, like `checks` and `design`, never at the branch's HEAD.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -98,6 +99,28 @@ def owned(docs: Docs, path: str) -> bool:
         if _segments_match(entry.split("/"), segments):
             return True
     return False
+
+
+Ancestry = Literal["same", "ours-older", "theirs-older", "diverged"]
+
+
+def split_conflicts(docs: Docs, paths: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`paths` (conflicted ones, in the order given) split into `(owned, others)` by the one
+    matcher `owned`. A conflict confined to the owned paths has no `others`."""
+    mine = tuple(path for path in paths if owned(docs, path))
+    return mine, tuple(path for path in paths if path not in mine)
+
+
+def settle_source(ours_base: str, theirs_base: str, ancestry: Ancestry) -> str | None:
+    """The one commit a conflict confined to the owned paths is restored from: the newer of
+    the two merge-bases with master, `ours_base` and `theirs_base`. `ancestry` says how the
+    two compare: `same`, one `ours-older`/`theirs-older` than the other, or `diverged`, where
+    neither is newer and the answer is `None` (the system then does not act)."""
+    if ancestry in ("same", "theirs-older"):
+        return ours_base
+    if ancestry == "ours-older":
+        return theirs_base
+    return None
 
 
 def _budget_plan_sentence() -> str:

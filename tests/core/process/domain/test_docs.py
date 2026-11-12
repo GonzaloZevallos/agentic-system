@@ -16,6 +16,8 @@ from agentic.core.process.domain.docs import (
     owned,
     plan_text,
     review_text,
+    settle_source,
+    split_conflicts,
 )
 
 DOCS = Docs(
@@ -365,3 +367,32 @@ def test_owned_is_true_when_any_of_the_paths_matches_and_false_for_none():
     assert not owned(block, "site/api/sub/z.txt")
     assert not owned(block, "site/architecture/written.txt")
     assert not owned(block, "src/app.py")
+
+
+def test_split_conflicts_separates_the_owned_paths_with_the_matcher_alone():
+    owned_paths, others = split_conflicts(
+        DOCS,
+        ("docs/api/a.md", "app/main.py", "docs/architecture/generated/x/y.md", "docs/api/a/b.md"),
+    )
+    assert owned_paths == ("docs/api/a.md", "docs/architecture/generated/x/y.md")
+    assert others == ("app/main.py", "docs/api/a/b.md")
+
+
+def test_split_conflicts_of_nothing_is_nothing():
+    assert split_conflicts(DOCS, ()) == ((), ())
+
+
+@pytest.mark.parametrize(
+    ("ancestry", "expected"),
+    [
+        ("same", "ours"),
+        ("ours-older", "theirs"),
+        ("theirs-older", "ours"),
+    ],
+)
+def test_settle_source_is_the_newer_of_the_two_master_bases(ancestry, expected):
+    assert settle_source("ours", "theirs", ancestry) == expected
+
+
+def test_settle_source_is_none_for_bases_that_are_not_comparable():
+    assert settle_source("ours", "theirs", "diverged") is None
