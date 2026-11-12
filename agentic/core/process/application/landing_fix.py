@@ -490,6 +490,7 @@ def adr_collision_reason(
     spots: Sequence[tuple[str, int]] = (),
     rewrites: Sequence[tuple[str, int]] = (),
     timeout_s: float | None = None,
+    automatic: bool = False,
 ) -> str:
     """The question of the `escalate_adr` step (GH-412): an ADR collision with master that the
     numbering rule cannot settle, said so a person can act on it. An `Ambiguous` with no moves
@@ -542,7 +543,12 @@ def adr_collision_reason(
             f"{cap} renumbers were spent and master still holds the numbers they chose. "
             f"The moves that kept losing to master:\n{_moves_lines(found.moves)}"
         )
-    if failed is not None:
+    if failed is not None and automatic:  # D-be76583a: nobody decided, the rule tried alone
+        what += (
+            f"\nThe rule tried to apply the renumbering on its own and it ended `{failed}`; "
+            "nothing was pushed, and it will not try again on this head."
+        )
+    elif failed is not None:
         what += f"\nThe last attempt to apply your decision ended `{failed}`; nothing was pushed."
         if failed == "git_failed":
             what += "\nA git operation failed (the log names it); a new `Decision:` retries it."
@@ -709,6 +715,7 @@ def escalate_adr(context: LandingContext) -> None:
                 rewrites=rewrites,
                 red_checks=detail,
                 timeout_s=context.cfg.check_timeout_s,
+                automatic=bool(applied) and applied[-1].get("decided_by") == "rule",
                 red_more=more if isinstance(more, int) and more > 0 else 0,
                 out_of_bounds_lines=(
                     [item for item in rows if isinstance(item, dict)]
@@ -959,7 +966,16 @@ def diagnose(context: LandingContext) -> None:
     # Only after the close: a close that failed leaves the task as it was, not marked restarted.
     carried = saved.get("cost_usd", 0.0) + saved.get("landing_cost_carried", 0.0)
     context.ports.documents.record_closure(
-        context.task_id, {"landing_restarts": 1, "landing_cost_carried": carried}
+        context.task_id,
+        {
+            "landing_restarts": 1,
+            "landing_cost_carried": carried,
+            # GH-588: the fresh run takes its place in the landing order again; a null is read
+            # as absent (`state_from` drops it).
+            "landing_queued_at": None,
+            "head_since_at": None,
+            "head_since_head": None,
+        },
     )
     notice = _restart_notice(saved, reason, carried)
     try:

@@ -58,6 +58,7 @@ from agentic.core.process.application.ports import (
     Prompts,
     RawResult,
     RemergeDiffUnsupported,
+    RiskArea,
     RoleRunner,
     RunRegistration,
     RunStopped,
@@ -438,6 +439,7 @@ class MemoryStack:
         verifications: dict[str, Verification] | None = None,
         check_timeouts: dict[str, float] | None = None,
         not_ready_exit: dict[str, int] | None = None,
+        risk_areas: tuple[RiskArea, ...] = (),
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -505,6 +507,10 @@ class MemoryStack:
         self.declared_merge_inert = merge_inert
         # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
         self.merge_inert_error: str | None = None
+        # Empty is a product that declares no `risk_areas`: PjM sees the built-in menu only. A
+        # text makes `risk_areas` raise it as a `ValueError`, the way a broken key does.
+        self.declared_risk_areas = risk_areas
+        self.risk_areas_error: str | None = None
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -579,6 +585,12 @@ class MemoryStack:
         if self.merge_inert_error is not None:
             raise ValueError(self.merge_inert_error)
         return self.declared_merge_inert
+
+    def risk_areas(self, revision: str) -> tuple[RiskArea, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        if self.risk_areas_error is not None:
+            raise ValueError(self.risk_areas_error)
+        return self.declared_risk_areas
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1633,6 +1645,8 @@ class MemoryTracker:
         # The body of every `open_pull_request` call, the failed ones too.
         self.attempted_bodies: list[str] = []
         self.open_error = "gh pr create failed: Body is too long"
+        # The class `open_pull_request` raises (a `TrackerCallFailed` is a transport failure).
+        self.open_error_type: type[ValueError] = ValueError
         self.comment_failures = 0
         # `drop_label` returns a refused failure instead of unlabelling, this many times (GH-389).
         self.drop_label_failures = 0
@@ -1711,7 +1725,7 @@ class MemoryTracker:
         self.closes_issue_calls.append(closes_issue)
         if self.open_failures > 0:
             self.open_failures -= 1
-            raise ValueError(self.open_error)
+            raise self.open_error_type(self.open_error)
         self.pull_requests.append((branch, title, body))
         return self.url
 
@@ -1856,9 +1870,13 @@ class MemoryTracker:
         self.closed_issues.append(task_id)
 
     def issue_state(self, number: int) -> IssueState:
-        if number in self.state_errors:
+        # An issue nobody scripted reads like one `gh` could not read: a `ValueError`, the
+        # real adapter's failure, not a `KeyError` no caller catches.
+        if number in self.state_errors or number not in self.states:
             raise ValueError(f"gh issue view {number} failed: scripted")
-        return self.states[number]
+        # GH-588: the landing order reads the labels of every delivered task's issue; one a
+        # test did not script is open and carries none.
+        return self.states.get(number, IssueState("OPEN", "", None, None, ()))
 
 
 class MemoryCheckResults:

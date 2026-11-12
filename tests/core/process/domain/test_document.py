@@ -1318,7 +1318,16 @@ def test_landed_slices_written_twice_through_record_closure_replace_in_place():
 
 # The keys the landing writes through `record_closure` that are not lists: every other key
 # of those calls must be in `RECORD_KEYS`, or a second write of its block value raises.
-_LANDING_SCALAR_KEYS = frozenset({"followups_filed", "landing_restarts", "landing_cost_carried"})
+_LANDING_SCALAR_KEYS = frozenset(
+    {
+        "followups_filed",
+        "landing_restarts",
+        "landing_cost_carried",
+        "landing_queued_at",
+        "head_since_at",
+        "head_since_head",
+    }
+)
 _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
 # A `record_closure` whose values are not a dict literal is checked through the keys its
 # producer builds, never skipped: the expression as written -> a sample of what it returns.

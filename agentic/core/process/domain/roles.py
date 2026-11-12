@@ -892,6 +892,11 @@ PAIR_PM_TECH_LEAD = Pair(by=PM, to=TECH_LEAD)
 PAIR_QA_PERFORMANCE_TECH_LEAD = Pair(by=QA_PERFORMANCE, to=TECH_LEAD)
 
 
+def developer_section(subtask_id: str) -> str:
+    """The section a subtask's Developer writes; the session and the restart both key on it."""
+    return f"Developer: {subtask_id}"
+
+
 def pair_for(subtask_id: str) -> Pair:
     """Tech Lead returns to the Developer of that subtask, never to another one."""
     return Pair(by=TECH_LEAD, to=DEVELOPER, subtask=subtask_id)

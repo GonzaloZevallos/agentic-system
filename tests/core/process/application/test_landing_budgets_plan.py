@@ -171,10 +171,15 @@ def test_the_document_before_verdicts_gets_the_step_it_got():
     )
     legacy = {"id": "GH-9", "title": "", "description": ""}
     diagnosed = {**legacy, "landing": [_diagnose()]}
-    assert landing_plan.step_for(diagnosed, "merge_conflict", facts).kind == "none"
+    assert landing_plan.step_for(diagnosed, "merge_conflict", facts, turn="head").kind == "none"
     syncing = {**legacy, "landing": [_sync(None)]}
-    assert landing_plan.step_for(syncing, "merge_conflict", facts).kind == "sync_master"
-    assert landing_plan.pending(syncing, "merge_conflict", facts, landing_plan.LIVE_STEPS) is None
+    assert (
+        landing_plan.step_for(syncing, "merge_conflict", facts, turn="head").kind == "sync_master"
+    )
+    assert (
+        landing_plan.pending(syncing, "merge_conflict", facts, landing_plan.LIVE_STEPS, turn="head")
+        is None
+    )
 
 
 def test_the_gh320_shape_is_a_diagnose_for_no_clean_slice_until_a_sync_verdict_is_due():
@@ -189,9 +194,9 @@ def test_the_gh320_shape_is_a_diagnose_for_no_clean_slice_until_a_sync_verdict_i
     assert spent.conflicting_syncs_for_upstream == landing.LANDING_CONFLICT_SYNCS_MAX
     assert spent.passes == 0
     step = landing_plan.step_for(
-        document, "merge_conflict", facts, inputs_slicing := "no_clean_slice"
+        document, "merge_conflict", facts, inputs_slicing := "no_clean_slice", turn="head"
     )
     assert (step.kind, step.restart_why) == ("diagnose", inputs_slicing)
     due = {**document, "landing": [*document["landing"], _diagnose(VERDICT_SYNC, MASTER)]}
-    step = landing_plan.step_for(due, "merge_conflict", facts, "no_clean_slice")
+    step = landing_plan.step_for(due, "merge_conflict", facts, "no_clean_slice", turn="head")
     assert step.kind == "sync_master"

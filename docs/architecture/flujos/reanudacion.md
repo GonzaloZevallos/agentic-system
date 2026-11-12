@@ -22,7 +22,7 @@ sequenceDiagram
     alt the pause needs a decision
         Owner->>GitHub: answers in a comment
         Owner->>Resume: agentic resume --issue N
-    else external cut (role failure, account limit, full disk)
+    else mechanical cut (role failure, account limit, full disk, CI without a verdict, transient delivery)
         Poller->>Resume: spawn resume --issue N --yes --detach --by-poller
         Poller->>GitHub: Auto-resumed comment, once the spawn returned a pid
         Resume->>GitHub: Resumed by the poller comment, which does not reset the retake budget
@@ -49,11 +49,18 @@ sequenceDiagram
    pagar el rol y dentro de `escalate` volvería a comentar el issue. La corrida termina con
    su estado en el checkpoint (`agentic/composition.py:checkpointer`).
 3. **Quién reanuda.**
-   - Si hace falta una decisión (preguntas abiertas, un par en su límite, una estimación que
-     no cabe), la toma el dueño: comenta en el issue y corre `agentic resume --issue N`
-     (`agentic/cli.py:_resume`).
-   - Si el corte fue externo (un rol que falló por algo ajeno a la tarea, el límite de la
-     cuenta, un disco lleno), el poller la retoma por su calendario:
+   - Si hace falta una decisión (preguntas abiertas, un par en su límite que ya no puede
+     reiniciar, una estimación que no cabe), la toma el dueño: comenta en el issue y corre
+     `agentic resume --issue N` (`agentic/cli.py:_resume`). Un reinicio limpio pendiente
+     (`restart_pending`) no es una decisión ni un desacuerdo: si la corrida se cortó entre el
+     reinicio y el `develop` que lo termina, la rama de la subtarea puede faltar o haberse
+     movido y la reanudación no lo lee como problema
+     (`agentic/core/process/application/resume.py:disagreements`).
+   - Si el corte fue mecánico (un rol que falló por algo ajeno a la tarea, el límite de la
+     cuenta, un disco lleno, o una escalación con una `MechanicalCause` como un CI sin
+     veredicto o una entrega transitoria del sistema), el poller la retoma por su calendario,
+     con el tope de `agentic/core/process/domain/rules.py:auto_resume_limit` (tres retomas
+     para una causa mecánica, `agentic/core/process/domain/rules.py:schedule_for`):
      `agentic/core/process/application/poll.py:gather_resumes` evalúa cada pausa con
      `agentic/core/process/domain/rules.py:auto_resumable` y
      `agentic/core/process/domain/rules.py:next_attempt_at`, y `execute` lanza el hijo y,

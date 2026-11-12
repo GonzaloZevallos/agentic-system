@@ -54,6 +54,7 @@ def _land(ports, tmp_path, lines=None):
         clock=lambda: "2026-10-15T00:00:00+00:00",
         live=LIVE,
         resume=lambda number: 777,
+        turn="head",
     )
 
 
@@ -86,6 +87,7 @@ def test_a_refusal_ahead_of_the_conflict_makes_no_probe_in_the_poller_or_land(re
         eval_set,
         lambda line: None,
         live=LIVE,
+        turn="head",
     )
 
     assert lines == [f"agentic: poll: auto-merge #5 -> left to the human: {refusal}"]

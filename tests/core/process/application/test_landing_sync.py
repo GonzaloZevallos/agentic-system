@@ -85,6 +85,7 @@ class _World(FakeLauncher):
                     live=LIVE,
                     resume=self.resume,
                     await_resume=self.await_resume,
+                    turn="head",
                 )
             )
         elif argv[1] == "merge":

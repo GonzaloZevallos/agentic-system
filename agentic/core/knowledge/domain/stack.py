@@ -134,6 +134,13 @@ change the pass, and the merge reuses it (ADR-0045, amendment). Each entry goes 
 `master_gain.glob_refusal` at load, which refuses a glob that would whitelist everything. Absent
 it reads as `()`: the merge gate of today. Present and empty, or a wrong shape, fails at load.
 
+**`risk_areas`**: optional (GH-591). A non-empty list of `{id, description, paths?}`: the areas of
+risk the product adds to the built-in ones for the PjM's classification. `id` is a lowercase
+kebab-case slug, unique in the list and never one of the six built-in ids (`BUILTIN_RISK_IDS`);
+`description` a non-empty single line; `paths` an optional non-empty list of non-empty fnmatch
+globs, parsed and returned and matched by nothing yet. Absent it reads as `()`. Present and empty,
+or any invalid shape, fails at load, so the Puerta de arranque refuses it before anything is spent.
+
 **`docs`**: optional. A mapping of `generate`, the one-line command that rewrites every generated
 doc artifact, and `paths`, the non-empty list of globs it owns. With it the system adds one check,
 `docs`, last in `checks` (and in `delivery_checks` when that is declared): it runs `generate`,
@@ -204,12 +211,25 @@ KEYS = (
     "ci_dispatch",
     "check_budgets",
     "merge_inert",
+    "risk_areas",
     "docs",
     "generated",
     "verifications",
     "check_timeouts",
     "not_ready_exit",
 )
+# The six risk ids every product has (GH-591). The process side defines its own `BUILTIN_RISKS`
+# and a test pins the two equal: this tuple is only here so `risk_areas` can refuse a repeat.
+BUILTIN_RISK_IDS = (
+    "data-migration",
+    "money-rounding",
+    "authn-authz-sessions",
+    "tenant-isolation",
+    "user-data-deletion",
+    "public-api-break",
+)
+RISK_AREA_KEYS = ("id", "description", "paths")
+RISK_ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
 # The reserved name of the check a `docs` block adds to `checks`: no other module builds it.
 DOCS_CHECK = "docs"
 # Every sub-key `docs` may declare, and the roots no owned path may overlap: the written
@@ -533,6 +553,56 @@ def merge_inert(data: object, source: object) -> tuple[str, ...]:
         if reason := master_gain.glob_refusal(glob):
             raise ValueError(f"{source}: {glob!r} under `merge_inert` is refused: {reason}")
     return globs
+
+
+def risk_areas(data: object, source: object) -> tuple[DeclaredRiskArea, ...]:
+    """The areas of risk the product declares, in file order. Absent is `()`. Present, a
+    non-empty list of mappings of `id`, `description` and optionally `paths`; any other shape
+    fails at load naming `risk_areas` and the offending entry."""
+    declared = _declared(data, source)
+    if "risk_areas" not in declared:
+        return ()
+    found = _declared_nonempty(declared, source, "risk_areas")
+    if not isinstance(found, list):
+        raise ValueError(f"{source}: expected `risk_areas` to be a list of areas of risk")
+    areas: list[DeclaredRiskArea] = []
+    for entry in found:
+        area = _risk_area(entry, source)
+        if any(area.id == earlier.id for earlier in areas):
+            raise ValueError(f"{source}: {area.id!r} under `risk_areas` is declared twice")
+        areas.append(area)
+    return tuple(areas)
+
+
+def _risk_area(entry: object, source: object) -> DeclaredRiskArea:
+    where = f"{source}: {entry!r} under `risk_areas`"
+    if not isinstance(entry, dict):
+        raise ValueError(f"{where} is not a mapping of `id`, `description` and `paths`")
+    if unknown := [key for key in entry if key not in RISK_AREA_KEYS]:
+        raise ValueError(
+            f"{where} has unknown key(s) {', '.join(sorted(map(str, unknown)))}; "
+            f"expected {RISK_AREA_KEYS}"
+        )
+    identifier = entry.get("id")
+    if not isinstance(identifier, str) or not RISK_ID.fullmatch(identifier):
+        raise ValueError(f"{where} needs an `id` that is a lowercase kebab-case slug")
+    where = f"{source}: {identifier!r} under `risk_areas`"
+    if identifier in BUILTIN_RISK_IDS:
+        raise ValueError(f"{where} is a built-in risk id; declare another")
+    description = entry.get("description")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError(f"{where} needs a non-empty `description`")
+    if "\n" in description.strip() or "\r" in description:
+        raise ValueError(f"{where} needs a one-line `description`")
+    paths: tuple[str, ...] = ()
+    if "paths" in entry:
+        globs = entry["paths"]
+        if not isinstance(globs, list) or not globs:
+            raise ValueError(f"{where} needs `paths` to be a non-empty list of globs")
+        if not all(isinstance(glob, str) and glob.strip() for glob in globs):
+            raise ValueError(f"{where} needs every glob under `paths` to be a non-empty string")
+        paths = tuple(glob.strip() for glob in globs)
+    return DeclaredRiskArea(identifier, description.strip(), paths)
 
 
 def affected_checks(data: object, source: object) -> dict[str, str]:
@@ -1140,6 +1210,16 @@ def _mapping(data: object, source: object, key: str | None = None) -> dict[str, 
 
 
 @dataclass(frozen=True)
+class DeclaredRiskArea:
+    """One entry of `risk_areas`: the slug, the one-line description and the globs, kept as
+    declared and matched by nothing yet."""
+
+    id: str
+    description: str
+    paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Computed:
     """A key whose absence is a value the reader computes itself (`{}`, `()`, `False`)."""
 
@@ -1312,6 +1392,15 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         (),
         Computed(),
         "list of path globs none of the checks reads, so master's gain there keeps a check pass",
+    ),
+    KeyReference(
+        "risk_areas",
+        risk_areas,
+        (),
+        Computed(),
+        "list of mappings of `id` (a kebab-case slug, never a built-in risk id), `description` "
+        "(one line) and optionally `paths` (fnmatch globs, not matched yet): the areas of risk "
+        "the PjM classifies against besides the built-in ones",
     ),
     KeyReference(
         "docs",

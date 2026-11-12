@@ -1302,3 +1302,89 @@ def test_a_generated_glob_that_matches_everything_or_overlaps_a_protected_root_i
 def test_a_generated_that_is_not_a_non_empty_list_of_globs_is_an_error(value):
     with pytest.raises(ValueError, match=r"`generated`"):
         stack.generated({"generated": value}, "stack.yaml")
+
+
+BUILTIN_RISK_IDS = (
+    "data-migration",
+    "money-rounding",
+    "authn-authz-sessions",
+    "tenant-isolation",
+    "user-data-deletion",
+    "public-api-break",
+)
+
+
+def test_a_product_that_declares_no_risk_areas_has_none():
+    assert stack.risk_areas({"checks": {"tests": "pytest"}}, "x") == ()
+
+
+def test_risk_areas_keep_the_file_order_with_and_without_paths():
+    data = {
+        "risk_areas": [
+            {
+                "id": "billing",
+                "description": "Invoices and payouts",
+                "paths": ["app/billing/**", "*.sql"],
+            },
+            {"id": "search-index", "description": "  The search index  "},
+        ]
+    }
+    assert stack.risk_areas(data, "x") == (
+        stack.DeclaredRiskArea("billing", "Invoices and payouts", ("app/billing/**", "*.sql")),
+        stack.DeclaredRiskArea("search-index", "The search index", ()),
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        [],
+        "billing",
+        {"id": "billing", "description": "x"},
+        ["billing"],
+        [{"description": "no id"}],
+        [{"id": "", "description": "empty id"}],
+        [{"id": 3, "description": "not a string"}],
+        [{"id": "Billing", "description": "uppercase"}],
+        [{"id": "billing_area", "description": "underscore"}],
+        [{"id": "-billing", "description": "leading dash"}],
+        [{"id": "billing--area", "description": "double dash"}],
+        [{"id": "billing area", "description": "space"}],
+        [{"id": "billing"}],
+        [{"id": "billing", "description": ""}],
+        [{"id": "billing", "description": "   "}],
+        [{"id": "billing", "description": 4}],
+        [{"id": "billing", "description": "two\nlines"}],
+        [{"id": "billing", "description": "x", "paths": "app/**"}],
+        [{"id": "billing", "description": "x", "paths": []}],
+        [{"id": "billing", "description": "x", "paths": [""]}],
+        [{"id": "billing", "description": "x", "paths": ["  "]}],
+        [{"id": "billing", "description": "x", "paths": [3]}],
+        [{"id": "billing", "description": "x", "owner": "me"}],
+        [{"id": "billing", "description": "a"}, {"id": "billing", "description": "b"}],
+    ],
+)
+def test_a_risk_areas_declaration_of_the_wrong_shape_is_refused_naming_the_key(value):
+    with pytest.raises(ValueError, match=r"`risk_areas`"):
+        stack.risk_areas({"risk_areas": value}, "stack.yaml")
+
+
+@pytest.mark.parametrize("builtin", BUILTIN_RISK_IDS)
+def test_a_risk_area_may_not_reuse_a_built_in_risk_id(builtin):
+    data = {"risk_areas": [{"id": builtin, "description": "again"}]}
+    with pytest.raises(ValueError, match=rf"{builtin}.*under `risk_areas`.*built-in"):
+        stack.risk_areas(data, "stack.yaml")
+
+
+def test_a_risk_area_error_names_the_offending_entry():
+    data = {
+        "risk_areas": [{"id": "ok", "description": "fine"}, {"id": "bad id", "description": "x"}]
+    }
+    with pytest.raises(ValueError, match=r"'bad id'"):
+        stack.risk_areas(data, "stack.yaml")
+
+
+def test_risk_areas_is_a_key_the_stack_knows_and_documents():
+    assert "risk_areas" in stack.KEYS
+    assert [ref.name for ref in stack.KEY_REFERENCE] == list(stack.KEYS)

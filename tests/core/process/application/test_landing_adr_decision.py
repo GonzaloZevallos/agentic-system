@@ -53,6 +53,13 @@ DECIDED = "2026-10-14T01:00:00+00:00"
 DECISION = "renumber to the next free number and point app/main.py to it"
 
 
+@pytest.fixture(autouse=True)
+def _owner_decides(monkeypatch):
+    """The chain below is the owner's: the question is asked first. The rule's own apply
+    (D-be76583a) is switched on only by the tests that exercise it."""
+    monkeypatch.setattr(landing_rules, "ADR_AUTO_APPLY", False)
+
+
 class StubDeveloper(ScriptedRunner):
     """The Developer of the landing: records the prompt it was given, then runs `edit` in the
     checkout (a write and a commit), as the model would, and delivers."""
@@ -119,6 +126,7 @@ def _round(tmp_path, ports, live=LIVE, paths=(MINE, NOTES, CODE)):
         lines.append,
         clock=lambda: ASKED,
         live=live,
+        turn="head",
     )
     return result, lines
 
@@ -428,7 +436,7 @@ def test_gh_407_a_fresh_decision_after_the_second_escalation_is_due(tmp_path):
     raw = _gh_407_document(_gh_407_entries())
     facts = _gh_407_facts()
 
-    step = landing_plan.step_for(raw, "adr_number_taken", facts)
+    step = landing_plan.step_for(raw, "adr_number_taken", facts, turn="head")
 
     assert step.kind == "apply_adr_decision"
 
@@ -457,7 +465,10 @@ def test_gh_407_one_more_spent_apply_on_the_same_key_is_not_due(tmp_path):
     raw = _gh_407_document(entries)
     facts = _gh_407_facts()
 
-    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"
+    assert (
+        landing_plan.step_for(raw, "adr_number_taken", facts, turn="head").kind
+        != "apply_adr_decision"
+    )
     assert not landing_plan.release_asked(
         raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
     )
@@ -1359,7 +1370,10 @@ def test_gh_585_the_gh_652_slots_spent_on_the_whole_suite_are_given_back(tmp_pat
         raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
     )
     assert not landing_rules.adr_decision_due(entries[-1:], G652_HEAD, facts.adr_collision, entries)
-    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"
+    assert (
+        landing_plan.step_for(raw, "adr_number_taken", facts, turn="head").kind
+        != "apply_adr_decision"
+    )
 
 
 def test_gh_585_a_new_owner_comment_after_the_refund_makes_the_decision_due(tmp_path):
@@ -1367,7 +1381,7 @@ def test_gh_585_a_new_owner_comment_after_the_refund_makes_the_decision_due(tmp_
     facts = _g652_facts()
 
     assert landing_rules.adr_decision_due(entries[-1:], G652_HEAD, facts.adr_collision, entries)
-    step = landing_plan.step_for(_g652_raw(entries), "adr_number_taken", facts)
+    step = landing_plan.step_for(_g652_raw(entries), "adr_number_taken", facts, turn="head")
     assert step.kind == "apply_adr_decision"
 
 
@@ -1380,4 +1394,124 @@ def test_gh_585_the_same_document_with_a_gate_tier_keeps_both_slots_spent(tmp_pa
     assert not landing_plan.release_asked(
         raw, "apply_adr_decision", refusal="adr_number_taken", facts=facts
     )
-    assert landing_plan.step_for(raw, "adr_number_taken", facts).kind != "apply_adr_decision"
+    assert (
+        landing_plan.step_for(raw, "adr_number_taken", facts, turn="head").kind
+        != "apply_adr_decision"
+    )
+
+
+# --- D-be76583a: the rule applies a collision it settles, with no question ------------------
+
+
+@pytest.fixture
+def _rule_decides(monkeypatch):
+    monkeypatch.setattr(landing_rules, "ADR_AUTO_APPLY", True)
+
+
+def _unasked(tmp_path, edit=_point_at_the_new_number):
+    """The collision of `_asked`, before anybody was asked: the first round is the rule's."""
+    ports, head = _world(tmp_path, extra=((CODE, CITES_CODE),))
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, edit))
+    (tmp_path / "GH-5" / "app").mkdir(parents=True)
+    ports.documents.record_closure("GH-5", {"title": "t", "description": "d"})
+    return ports, head
+
+
+def test_d_be76583a_a_collision_with_spots_in_bounds_is_applied_without_asking(
+    tmp_path, _rule_decides
+):
+    ports, head = _unasked(tmp_path)
+
+    result, lines = _round(tmp_path, ports)
+
+    assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
+    assert ports.workspace.pushes == [(BRANCH, head)]
+    [applied] = _entries(ports)
+    assert applied["outcome"] == "applied" and applied["decided_by"] == "rule"
+    assert "decision_at" not in applied
+    [prompt] = ports.runner.prompts("developer")
+    assert landing_adr.AUTO_DECISION in prompt and "Never choose an ADR number" in prompt
+    document = ports.documents.load("GH-5")
+    assert not document.get("escalated")
+    # The slot is the owner's too: one spent for this (head, moves).
+    entries = landing_plan.all_entries(document)
+    assert landing_rules.adr_decisions_spent(entries, head, [(MINE, "docs/adr/0050-mine.md")]) == 1
+
+
+def test_d_be76583a_an_out_of_bounds_result_goes_back_to_the_question_and_is_not_retried(
+    tmp_path, _rule_decides
+):
+    ports, head = _unasked(tmp_path, _edit_elsewhere)  # out of bounds
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == []
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)] == [
+        ("apply_adr_decision", "out_of_bounds"),
+        ("escalate_adr", None),
+    ]
+    document = ports.documents.load("GH-5")
+    assert document["escalated"] and document["escalation_class"] == "questions"
+    assert "tried to apply the renumbering on its own" in document["questions_for_human"][0]
+    developer_runs = len(ports.runner.calls)
+
+    again, _ = _round(tmp_path, ports)
+
+    assert again.step != "apply_adr_decision" and len(ports.runner.calls) == developer_runs
+    assert [e["step"] for e in _entries(ports)].count("apply_adr_decision") == 1
+
+
+def test_d_be76583a_more_spots_than_the_rule_applies_are_asked_with_no_model_run(
+    tmp_path, _rule_decides, monkeypatch
+):
+    monkeypatch.setattr(landing_rules, "ADR_AUTO_SPOTS_MAX", 0)
+    ports, head = _unasked(tmp_path)
+
+    _round(tmp_path, ports)
+
+    assert ports.workspace.pushes == [] and ports.runner.calls == []
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)] == [
+        ("apply_adr_decision", "ambiguous"),
+        ("escalate_adr", None),
+    ]
+    entries = landing_plan.all_entries(ports.documents.load("GH-5"))
+    assert landing_rules.adr_decisions_spent(entries, head, [(MINE, "docs/adr/0050-mine.md")]) == 0
+
+
+def test_d_be76583a_a_checks_red_result_goes_back_to_the_question_and_is_not_retried(
+    tmp_path, _rule_decides
+):
+    ports, head = _unasked(tmp_path)
+    ports = dataclasses.replace(
+        ports,
+        stack=MemoryStack(checks={"tests": "run tests", "lint": "run lint"}),
+        commands=MemoryCommands(
+            **{"run tests": [CommandResult(1, "collected 3\nFAILED test_a - boom\n")] * 5}
+        ),
+    )
+    ports = dataclasses.replace(ports, runner=StubDeveloper(ports, _point_at_the_new_number))
+
+    result, _ = _round(tmp_path, ports)
+
+    assert result.step == "apply_adr_decision"
+    assert ports.workspace.pushes == []
+    assert [(e["step"], e.get("outcome")) for e in _entries(ports)] == [
+        ("apply_adr_decision", "checks_red"),
+        ("escalate_adr", None),
+    ]
+    assert _entries(ports)[0]["decided_by"] == "rule"
+    document = ports.documents.load("GH-5")
+    assert document["escalated"] and document["escalation_class"] == "questions"
+    question = document["questions_for_human"][0]
+    assert "tried to apply the renumbering on its own and it ended `checks_red`" in question
+    assert "FAILED test_a - boom" in question
+    # A checks_red judged on a gate tier spends the slot, the owner's included.
+    entries = landing_plan.all_entries(document)
+    assert landing_rules.adr_decisions_spent(entries, head, [(MINE, "docs/adr/0050-mine.md")]) == 1
+    developer_runs = len(ports.runner.calls)
+
+    again, _ = _round(tmp_path, ports)
+
+    assert again.step != "apply_adr_decision" and len(ports.runner.calls) == developer_runs
+    assert [e["step"] for e in _entries(ports)].count("apply_adr_decision") == 1

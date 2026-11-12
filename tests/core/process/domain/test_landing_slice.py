@@ -347,40 +347,44 @@ EXHAUSTED: list[tuple[Any, dict[str, Any]]] = [
 
 @pytest.mark.parametrize(("refusal", "spent"), EXHAUSTED)
 def test_every_exhaustion_site_lands_the_slice_when_one_was_found(refusal, spent):
-    step = landing.landing_step(refusal, _facts(), _spent(**spent), (), slicing=SLICE)
+    step = landing.landing_step(refusal, _facts(), _spent(**spent), (), slicing=SLICE, turn="head")
     assert step == LandingStep("land_slice", refusal, ("a", "b"))
 
 
 @pytest.mark.parametrize(("refusal", "spent"), EXHAUSTED)
 @pytest.mark.parametrize("why", get_args(landing.RestartWhy))
 def test_every_exhaustion_site_is_a_diagnose_carrying_the_reason_otherwise(refusal, spent, why):
-    step = landing.landing_step(refusal, _facts(), _spent(**spent), (), slicing=why)
+    step = landing.landing_step(refusal, _facts(), _spent(**spent), (), slicing=why, turn="head")
     assert step == LandingStep("diagnose", refusal, (), restart_why=why)
 
 
 @pytest.mark.parametrize(("refusal", "spent"), EXHAUSTED)
 def test_without_slicing_the_exhaustion_is_the_diagnose_it_always_was(refusal, spent):
-    step = landing.landing_step(refusal, _facts(), _spent(**spent), ())
+    step = landing.landing_step(refusal, _facts(), _spent(**spent), (), turn="head")
     assert step == LandingStep("diagnose", refusal, ())
     assert step.restart_why is None
 
 
 def test_the_adr_collision_that_cannot_be_renamed_never_slices_or_restarts():
     facts = _facts(adr_collision=Ambiguous("duplicate_own_number", "docs/adr/0001-x.md"))
-    step = landing.landing_step("adr_number_taken", facts, _spent(), (), slicing=SLICE)
+    step = landing.landing_step("adr_number_taken", facts, _spent(), (), slicing=SLICE, turn="head")
     assert step == LandingStep("escalate_adr", "adr_number_taken")
 
 
 def test_a_step_with_budget_left_is_not_touched_by_slicing():
-    step = landing.landing_step("not_approved", _facts(), _spent(), (), slicing=SLICE)
+    step = landing.landing_step("not_approved", _facts(), _spent(), (), slicing=SLICE, turn="head")
     assert step.kind == "re_review"
-    step = landing.landing_step("merge_conflict", _facts(), _spent(), (), slicing="single_unit")
+    step = landing.landing_step(
+        "merge_conflict", _facts(), _spent(), (), slicing="single_unit", turn="head"
+    )
     assert step.kind == "sync_master"
     assert step.restart_why is None
 
 
 def test_a_diagnosed_task_has_no_step_left_whatever_the_slicing():
-    step = landing.landing_step("merge_failed", _facts(), _spent(diagnoses=1), (), slicing=SLICE)
+    step = landing.landing_step(
+        "merge_failed", _facts(), _spent(diagnoses=1), (), slicing=SLICE, turn="head"
+    )
     assert step.kind == "none"
 
 

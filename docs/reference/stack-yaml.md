@@ -143,6 +143,14 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Qué es**: list of path globs none of the checks reads, so master's gain there keeps a check pass
 - **Lector**: `agentic.core.knowledge.domain.stack.merge_inert`
 
+## `risk_areas`
+
+- **Presencia**: opcional
+- **Se lee como**: `tuple[DeclaredRiskArea, ...]`
+- **Si falta**: lista vacía (`()`)
+- **Qué es**: list of mappings of `id` (a kebab-case slug, never a built-in risk id), `description` (one line) and optionally `paths` (fnmatch globs, not matched yet): the areas of risk the PjM classifies against besides the built-in ones
+- **Lector**: `agentic.core.knowledge.domain.stack.risk_areas`
+
 ## `docs`
 
 - **Presencia**: opcional

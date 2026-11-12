@@ -191,7 +191,12 @@ def assert_escalated_ci(patch, ports, state=None, *, timed=True):
     # else: `timed=False` is for a call where nothing was pushed (a failed first publish) or no
     # CI wait ended (a planning defect), which has no wait to measure and so no `ci` key.
     timing = entry.pop("ci", None)
+    # GH-593: only a GitHub that could not be reached or read, or a run that never ended, carries a
+    # mechanical cause (the poller retakes it); every other cause is a judgment pause.
+    cause = entry.pop("cause", None)
     assert entry == {"kind": "escalation", "value": "ci"}
+    assert patch["escalation_cause"] == cause
+    assert cause in (None, "ci_gh_unavailable", "ci_gh_unreadable", "ci_run_unfinished")
     if not timed:
         assert timing is None
     else:
@@ -207,7 +212,7 @@ def assert_escalated_ci(patch, ports, state=None, *, timed=True):
         assert timing["run_started_at"] is None and timing["run_ended_at"] is None
         assert timing["pushed_at"] and timing["node_started_at"]
     if state is not None:
-        assert rules.auto_resumable(apply(state, patch)) is None
+        assert rules.auto_resumable(apply(state, patch)) == cause
 
 
 async def test_a_report_of_another_head_is_never_accepted_and_escalates_as_no_run():

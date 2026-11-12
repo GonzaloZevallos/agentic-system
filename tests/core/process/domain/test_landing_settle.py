@@ -84,6 +84,7 @@ def step_for(s, f=None, refusal=REFUSAL, spent_=None, escalated=False, slicing=N
         ledger_only=plan_settlement.ledger_only(refusal, f, s),
         pending=plan_settlement.pending(s),
         escalated=escalated,
+        turn="head",
     )
 
 
@@ -187,7 +188,12 @@ def test_other_exhausted_refusals_on_an_approved_green_head_keep_their_outputs(
 def test_a_ledger_only_flag_on_another_refusal_changes_nothing():
     f = facts(failed_step="conflict")
     got = landing.landing_step(
-        "merge_conflict", f, spent(syncs=landing.LANDING_SYNCS_MAX), (), ledger_only=True
+        "merge_conflict",
+        f,
+        spent(syncs=landing.LANDING_SYNCS_MAX),
+        (),
+        ledger_only=True,
+        turn="head",
     )
     assert got.kind == "diagnose"
 

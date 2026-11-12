@@ -3,7 +3,8 @@ Esta página muestra las clases públicas de los módulos del grupo `reports` de
 - Padre: [Clases de domain](classes-measurement-domain.md)
 - Hermanas:
   - [domain: langfuse](classes-measurement-domain-langfuse.md)
-  - [domain: scorecard](classes-measurement-domain-scorecard.md)
+  - [domain: scorecard (parte 1)](classes-measurement-domain-scorecard-1.md)
+  - [domain: scorecard (parte 2)](classes-measurement-domain-scorecard-2.md)
 
 ```mermaid
 classDiagram

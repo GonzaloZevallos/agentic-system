@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
+  - [domain: state (parte 7)](classes-process-domain-state-7.md)
 
 ```mermaid
 classDiagram
@@ -33,5 +34,6 @@ classDiagram
     class landing__Slice["Slice"]
     class landing__SliceInputs["SliceInputs"]
     class landing__SliceUnit["SliceUnit"]
+    class landing_order__Member["Member"]
     class pull_request__BoundedBody["BoundedBody"]
 ```

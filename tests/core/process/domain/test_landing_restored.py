@@ -57,7 +57,9 @@ def test_spent_passes_carry_over_a_restoration_and_end_in_a_diagnose_then_an_esc
     spent = landing_plan.spent(state, HEAD, None, NEW_MASTER)
     assert spent.passes == landing.LANDING_PASSES_MAX
     assert spent.diagnoses == 0
-    step = landing_plan.step_for(state, refusal, facts(state, merge_failures=rules.MERGE_CALLS_MAX))
+    step = landing_plan.step_for(
+        state, refusal, facts(state, merge_failures=rules.MERGE_CALLS_MAX), turn="head"
+    )
     assert step == LandingStep("diagnose", "merge_failed")
     assert landing.after_diagnosis(None, spent, 0, restored=rules.restored(state)) == "escalate"
 
@@ -77,10 +79,13 @@ def test_the_pending_step_of_a_restored_task_is_not_held_back_by_the_archived_sy
     state["findings"] = []
     f = facts(state)
     assert _refusal(state) == "merge_conflict"
-    pending = landing_plan.pending(state, "merge_conflict", f, landing_plan.LIVE_STEPS)
+    pending = landing_plan.pending(state, "merge_conflict", f, landing_plan.LIVE_STEPS, turn="head")
     assert pending == LandingStep("sync_master", "merge_conflict")
     unrestored = {k: v for k, v in state.items() if k != "restorations"}
-    assert landing_plan.pending(unrestored, "merge_conflict", f, landing_plan.LIVE_STEPS) is None
+    assert (
+        landing_plan.pending(unrestored, "merge_conflict", f, landing_plan.LIVE_STEPS, turn="head")
+        is None
+    )
 
 
 def test_the_diagnose_readers_ignore_the_archived_attempts():

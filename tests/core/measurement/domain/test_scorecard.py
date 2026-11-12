@@ -114,11 +114,11 @@ def test_task_figures_defaults_absent_closure_fields_to_none_not_zero():
     assert figures.system_baseline is None
 
 
-# --- EXTERNAL_FAILURE_REASONS: the one enumeration in this diff, with a rejecting case ---
+# --- the external reasons (`rules.EXTERNAL_REASONS`), with a rejecting case ---
 
 
-def test_external_failure_reasons_excludes_account_limit_upstream_network_and_disk_full():
-    assert set(scorecard.EXTERNAL_FAILURE_REASONS) == {
+def test_external_reasons_exclude_account_limit_upstream_network_and_disk_full():
+    assert set(scorecard.EXTERNAL_REASONS) == {
         "account_limit",
         "upstream",
         "network",
@@ -128,7 +128,7 @@ def test_external_failure_reasons_excludes_account_limit_upstream_network_and_di
 
 def test_own_failures_excludes_the_external_reasons_but_keeps_limit_and_sdk():
     # `limit` is our own per-attempt cap (ADR-0029), never external; a scorecard build
-    # that folded it into `EXTERNAL_FAILURE_REASONS` is exactly the input this test
+    # that folded it into `EXTERNAL_REASONS` is exactly the input this test
     # rejects.
     figures = scorecard.task_figures(
         doc(
@@ -691,3 +691,53 @@ def test_a_document_without_the_size_keys_reads_none_and_leaves_the_figure_empty
 
     assert (figures.planned_size, figures.actual_size) == (None, None)
     assert scorecard.build([_closed()]).hand_lines_over_plan.value is None
+
+
+# --- the pause classification (GH-593): `rules.pause_kind` decides, the scorecard only reads ---
+
+
+def _escalation_pause(*, cause=None, cls="ci"):
+    entry = {"kind": "escalation", "value": cls, "at": _at("11:30:00")}
+    if cause is not None:
+        entry["cause"] = cause
+    resumed = {"kind": "resumed", "value": "resumed", "at": _at("12:30:00")}
+    return scorecard.task_figures(_timed_document(pause_log=[entry, resumed], full_checks={}))
+
+
+def test_a_pause_of_a_mechanical_ci_escalation_is_external():
+    figures = _escalation_pause(cause="ci_run_unfinished")
+
+    assert figures.paused_external_s == pytest.approx(3600)
+    assert figures.paused_human_s == pytest.approx(0)
+
+
+def test_a_pause_of_a_ci_escalation_with_no_cause_is_human():
+    # The input the old reading and the new one must tell apart: the same class, no cause.
+    figures = _escalation_pause(cause=None)
+
+    assert figures.paused_human_s == pytest.approx(3600)
+    assert figures.paused_external_s == pytest.approx(0)
+
+
+def test_a_pause_of_a_judgment_escalation_is_human_even_with_a_mechanical_one_before_it():
+    mechanical = {
+        "kind": "escalation",
+        "value": "ci",
+        "cause": "ci_gh_unavailable",
+        "at": _at("11:30:00"),
+    }
+    judgment = {"kind": "escalation", "value": "returns", "at": _at("11:30:00")}
+    resumed = {"kind": "resumed", "value": "resumed", "at": _at("12:30:00")}
+    figures = scorecard.task_figures(
+        _timed_document(pause_log=[mechanical, judgment, resumed], full_checks={})
+    )
+
+    assert figures.paused_human_s == pytest.approx(3600)
+    assert figures.paused_external_s == pytest.approx(0)
+
+
+def test_the_scorecard_keeps_no_list_of_external_failure_reasons_of_its_own():
+    from agentic.core.process.domain import rules
+
+    assert not hasattr(scorecard, "EXTERNAL_FAILURE_REASONS")
+    assert scorecard.EXTERNAL_REASONS is rules.EXTERNAL_REASONS

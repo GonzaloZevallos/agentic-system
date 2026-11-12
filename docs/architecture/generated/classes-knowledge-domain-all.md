@@ -9,6 +9,7 @@ classDiagram
     class owner_rules__OwnerRule["OwnerRule"]
     class owner_rules__Rejected["Rejected"]
     class stack__Computed["Computed"]
+    class stack__DeclaredRiskArea["DeclaredRiskArea"]
     class stack__DependsOn["DependsOn"]
     class stack__Disabled["Disabled"]
     class stack__KeyReference["KeyReference"]

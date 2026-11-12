@@ -58,6 +58,7 @@ def relative_path(task_id: str, *, subdir: Path = TASKS_SUBDIR) -> Path:
 # is data, and renaming its keys would make a paused task resume with an empty count
 # (`resume.from_document` reads the frontmatter back into the state). The same rule the
 # metrics follow (ADR-0008, addendum; ADR-0018, and issue #53). State field -> key.
+TASK_PATH_KEYS = ("initial_path", "path", "path_cause", "path_label", "promotion")
 RECORDED_AS = {"changes_requested": "returns", "change_history": "return_history"}
 SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # The keys whose block value `record_closure` may replace: the system's own record of a
@@ -273,8 +274,20 @@ def render(
             if (waited := state.get("shadow_wait_s")) is not None
             else {}
         ),
+        # The landing order's stamp and the head's anchor (GH-588), written only when set.
+        **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
+        **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
+        **({"head_since_head": q} if (q := state.get("head_since_head")) else {}),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
+        # The clean restarts of a task (GH-593): the count per pair, the restart still owed to the
+        # dispatch, the run floor of each restarted section and the findings the restart closed.
+        # Each written only when set, so a task that never restarted is byte-identical to one
+        # written before; parsed back under the same names, which is how a resume sees them.
+        **({"restarts": r} if (r := state.get("restarts")) else {}),
+        **({"restart_pending": r} if (r := state.get("restart_pending")) else {}),
+        **({"session_floor": r} if (r := state.get("session_floor")) else {}),
+        **({"restart_settled": r} if (r := state.get("restart_settled")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "invariants": state.get("invariants", []),
         "integration_brief": state.get("integration_brief", ""),
@@ -338,6 +351,9 @@ def render(
         # document of any other task is byte-identical to one written before it. Parsed
         # back under the same name by `parse`.
         **({"plan_route": routed} if (routed := state.get("plan_route")) else {}),
+        # The path the task takes (GH-591, `task_path`), written only when classify set it, so a
+        # document of a task from before it is byte-identical. Parsed back under the same names.
+        **{key: value for key in TASK_PATH_KEYS if (value := state.get(key))},
         # Marks an evaluation run (GH-470), written only when set, so a real task's document
         # is byte-identical to one written before it. Parsed back under the same name.
         **({"evaluation": evaluated} if (evaluated := state.get("evaluation")) else {}),

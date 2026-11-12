@@ -20,11 +20,13 @@ from typing import Any, Literal, Protocol, get_args
 from . import ci, merge_ci, presubmit, rules
 from .adr_numbers import Ambiguous, Renaming
 from .document import HUMAN
+from .landing_order import Turn
 from .roles import LANDING_DIAGNOSER
 from .task import (
     UPSTREAM_KEY,
     VERDICT_KEY,
     VERDICT_SYNC,
+    AdrDecidedBy,
     AdrDecisionOutcome,
     Carried,
     CiLogRecord,
@@ -98,6 +100,21 @@ it to tell a follow-up task from an original one)."""
 
 CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "merge_conflict")
 """The refusals under which a recorded `sync_master` was a conflicting one, hence a model pass."""
+
+HUMAN_OWNED_REFUSALS: frozenset[rules.MergeRefusal] = frozenset(
+    {
+        "pr_not_open",
+        "eval_set",
+        "perf_unverified",
+        "criteria_over_cap",
+        "criteria_unreadable",
+        "ci_untrusted_no_dispatch",
+    }
+)
+"""The refusals that leave the task to a person (GH-588): `landing_step` answers `none` to each,
+whatever the budgets, and `waits_on_human` reads the same set, so a task under one is never the
+head of its product's landing order. The only list of them; `not_ready` is `none` too but is not
+here: the task is not yet at the landing, and nobody has anything to decide."""
 
 
 def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None) -> rules.RunKind:
@@ -176,6 +193,16 @@ records it as `bounds`, one without it is version 1, and `adr_decisions_spent` c
 entries of this version. Any change that widens or narrows that set
 (`adr_numbers.DecidedRenaming.spots` and `bound`, rule (d) among them) raises it in the same diff,
 and raising it is the only way to give decision slots back. Declared, not measured."""
+
+ADR_AUTO_APPLY = True
+"""Whether the landing applies a renumbering the rule settles on its own (D-be76583a), without
+asking the owner: the off switch of `adr_auto_due`. Declared, not measured."""
+
+ADR_AUTO_SPOTS_MAX = 10
+"""The most `spots` (own lines the grammar cannot decide) a collision may have for the system to
+apply it without an owner (D-be76583a); `landing_adr` checks it once the collision is recomputed,
+and more spots end the attempt `ambiguous`, which spends no slot and asks the question as before.
+Declared, not measured."""
 
 OUT_OF_BOUNDS_SHOWN_MAX = 5
 """The most `{path, line}` rows of an `out_of_bounds` apply a landing entry keeps (GH-576); the
@@ -280,6 +307,7 @@ def landing_step(
     spent: LandingSpent,
     blocking_owners: tuple[str, ...],
     *,
+    turn: Turn,
     important_units: tuple[str, ...] = (),
     slicing: Slice | RestartWhy | Callable[[], SliceInputs] | None = None,
     ledger_only: bool = False,
@@ -288,6 +316,7 @@ def landing_step(
     adr_escalated: bool = False,
     names_escalated: bool = False,
     adr_decision_due: bool = False,
+    adr_auto_due: bool = False,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
     (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
@@ -297,7 +326,9 @@ def landing_step(
     (a *resolved* `escalate_adr` entry for this head and refusal is recorded) does the same for
     an `adr_number_taken` the renumbering cannot settle: one `escalate_adr`, then `none`, and
     never `exhausted()`, so no diagnose, slice or restart. `adr_decision_due` (`adr_decision_due`:
-    the owner decided on that question and a slot is free) makes it `apply_adr_decision`, GH-544.
+    the owner decided on that question and a slot is free) makes it `apply_adr_decision`, GH-544;
+    so does `adr_auto_due` (D-be76583a: the rule settles it and no question was ever asked), with
+    no owner.
     A model pass or a
     sync past its budget is the exhaustion: the `land_slice` when `slicing` is a `Slice`, else
     the `diagnose` carrying `slicing` as its `restart_why` (`None`: as before GH-297). A task
@@ -310,7 +341,10 @@ def landing_step(
     provider of the `SliceInputs` that is called, and handed to `slice_or_restart`, only when a
     budget has run out, so a healthy landing reads no git for it. This is the only place
     `slice_or_restart`
-    is called."""
+    is called. `turn` (GH-588, required) is whether the task leads its product's landing order
+    (`head`: everything above) or waits for its turn (`waiting`): a waiting task is left as it
+    is, `none` where the head would be `none` (a person's, or not yet at the landing) and `wait`
+    for every other refusal, so it never reaches a budget, a pass, a slice or a restart."""
 
     # Whatever the caller computed, only this refusal is ledger state (invariant: every other
     # refusal keeps its output).
@@ -337,6 +371,10 @@ def landing_step(
 
     if spent.unlandable:
         return step("none")
+    if turn == "waiting":
+        # GH-588: only the head of the order is integrated and landed. Placed before the
+        # planning defect below, which escalates, and a waiting task escalates nothing.
+        return step("none") if refusal in HUMAN_OWNED_REFUSALS | {"not_ready"} else step("wait")
     if refusal == "ci_unknown_names":
         # GH-485: a planning defect, never a failed check. One `escalate` per (head, names)
         # (`names_escalated`), then nothing; it spends no budget and never goes to
@@ -347,15 +385,10 @@ def landing_step(
         return LandingStep("escalate", refusal, names=tuple(sorted(facts.ci_unreported)))
     if spent.verdict_sync_due:
         return _verdict_sync(step, exhausted, spent)
+    if refusal in HUMAN_OWNED_REFUSALS:
+        return step("none")
     match refusal:
-        case (
-            "not_ready"
-            | "pr_not_open"
-            | "eval_set"
-            | "perf_unverified"
-            | "criteria_over_cap"
-            | "criteria_unreadable"
-        ):
+        case "not_ready":
             return step("none")
         case "eval_set_unreadable" | "ci_missing" | "ci_unreadable":
             waited = spent.waited_s
@@ -369,10 +402,6 @@ def landing_step(
             if spent.conflict_ci_syncs_on_pair >= 1:
                 return exhausted()
             return _sync(step, exhausted, spent, conflicting=False)
-        case "ci_untrusted_no_dispatch":
-            # GH-463: no workflow of the base can judge this head and the local suite no longer
-            # runs for a `ci:` product: left to the human at once.
-            return step("none")
         case "ci_stale_exhausted":
             # GH-463: master overtook the fresh runs of this head; it takes master in instead.
             return _sync(step, exhausted, spent, conflicting=False)
@@ -427,13 +456,17 @@ def landing_step(
                 spent.renumbers < LANDING_RENUMBERS_MAX
             ):
                 return step("renumber")
-            if adr_decision_due:
+            if adr_decision_due or adr_auto_due:
                 return step("apply_adr_decision")
             return step("none") if adr_escalated else step("escalate_adr")
         case "merge_failed":
             return exhausted()
         case "master_moved":
             return step("wait")
+        case _:
+            # Only a refusal of `HUMAN_OWNED_REFUSALS` gets here (answered above); a new refusal
+            # that is neither listed nor given a case fails `test_every_none_refusal_is_owned`.
+            return step("none")
 
 
 def _red_on_base_only(facts: rules.MergeFacts) -> bool:
@@ -1026,7 +1059,8 @@ def already_dispatched(
     again on the same entry. An `escalate` asked with `names` (GH-485) is taken only by an entry
     that recorded the same names, so a new set of wrong names is asked again on the same head. An
     `escalate_adr` is taken as `adr_asked` says (GH-544), and an `apply_adr_decision` only by an
-    entry of the same head recorded for the same `decision_at`."""
+    entry of the same head recorded for the same `decision_at`, or, with no `decision_at`, by the
+    rule's own (`decided_by: rule`, D-be76583a)."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
@@ -1051,7 +1085,9 @@ def already_dispatched(
             refusal = entry.get("refusal")
             return adr_asked(landing, head, refusal if isinstance(refusal, str) else None)
         if step == "apply_adr_decision":
-            return decision_at is not None and entry.get("decision_at") == decision_at
+            if decision_at is None:  # D-be76583a: the rule's own try, once per head
+                return entry.get("decided_by") == "rule"
+            return entry.get("decision_at") == decision_at
         if step == "escalate" and names:
             return entry.get("names") == list(names)
         if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
@@ -1219,6 +1255,27 @@ def adr_decision_due(
     )
 
 
+def adr_auto_due(
+    head: str,
+    collision: Ambiguous | Renaming | None,
+    every: Sequence[Mapping[str, object]],
+) -> bool:
+    """Whether the rule applies the renumbering of `head` on its own (D-be76583a): `ADR_AUTO_APPLY`
+    is on, `collision` is an `Ambiguous` with moves whose reason is not `duplicate_own_number`, no
+    `escalate_adr` question was ever recorded for `head` (over `every` entry, so a restoration does
+    not give the automatic try back: once the owner was asked, or the try ended and asked, the
+    owner decides) and the slots of that collision on `head` are not spent
+    (`adr_decisions_spent`, the same cap as an owner's decision). Whether the `spots` fit
+    `ADR_AUTO_SPOTS_MAX` is read where the collision is recomputed, `landing_adr`."""
+    if not ADR_AUTO_APPLY or not isinstance(collision, Ambiguous) or not collision.moves:
+        return False
+    if collision.reason == "duplicate_own_number":
+        return False
+    if any(entry.get("step") == "escalate_adr" and entry.get("head") == head for entry in every):
+        return False
+    return adr_decisions_spent(every, head, collision.moves) < LANDING_ADR_DECISIONS_MAX
+
+
 def adr_review_owed(entries: Sequence[Mapping[str, object]]) -> bool:
     """Whether the review an applied decision owes is still to be recorded (GH-544): the last
     `apply_adr_decision` with `outcome: applied` has no `re_review` entry after it, on any head,
@@ -1250,6 +1307,39 @@ def landing_pass(state: TaskState) -> rules.LandingPass | None:
 def landing_pass_live(state: TaskState) -> bool:
     """A landing pass a run must continue (`rules.landing_pass_live`, GH-450)."""
     return rules.landing_pass_live(state)
+
+
+_ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger")
+"""The steps that ask a person once and leave the task to them until it is released."""
+
+
+def waits_on_human(
+    state: TaskState,
+    head: str | None,
+    refusal: rules.MergeRefusal | None,
+    *,
+    spent: LandingSpent,
+    stopped: bool,
+    needs_human: bool,
+    stranded: bool,
+) -> bool:
+    """Whether the task belongs to a person (GH-588): the one definition, so the landing order
+    never makes such a task its head, whatever its stamp or an open landing pass. True when the
+    caller says the run `stopped`, `needs_human` or is `stranded`; the `refusal` is one of
+    `HUMAN_OWNED_REFUSALS`; the document is `escalated` (a release clears it); `spent` says
+    `unlandable` (the latest delivered diagnosis names no sync); or the last live `escalate`,
+    `escalate_adr` or `escalate_ledger` entry of `head` carries no `released_at`. `spent` is the
+    caller's `LandingSpent` of `head`: the diagnoses' reading is not repeated here. Pure."""
+    if stopped or needs_human or stranded:
+        return True
+    if refusal in HUMAN_OWNED_REFUSALS or state.get("escalated") or spent.unlandable:
+        return True
+    asked = [
+        entry
+        for entry in live_entries(state)
+        if entry.get("step") in _ESCALATING_STEPS and entry.get("head") == head
+    ]
+    return head is not None and bool(asked) and not asked[-1].get("released_at")
 
 
 def entry_of(raw: Mapping[str, object]) -> LandingEntry:
@@ -1311,6 +1401,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     for outcome in get_args(AdrDecisionOutcome):
         if raw.get("outcome") == outcome:
             out["outcome"] = outcome
+    if raw.get("decided_by") in get_args(AdrDecidedBy):
+        out["decided_by"] = "rule"
     if (moves := _moves_of(raw.get("moves"))) is not None:
         out["moves"] = moves
     # GH-570, an `apply_adr_decision` that ended `checks_red`: shaped here, never sanitized

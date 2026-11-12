@@ -40,6 +40,7 @@ from .task import (
     FindingScope,
     Severity,
 )
+from .task_path import Size
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -57,6 +58,16 @@ class Classification(RoleOutput):
     # Low confidence escalates to the human; PjM never guesses (README.md, 4).
     confidence: Literal["high", "low"]
     reason: str = Field(description="One line")
+    # Optional so a fake or an older output still validates; a missing one makes the path
+    # `full` (`task_path.decide`). Shape only: which ids are valid is `decide`'s call.
+    size: Size | None = Field(
+        default=None,
+        description="small, normal or large. A new screen or a new flow is never small",
+    )
+    risk: list[str] | None = Field(
+        default=None,
+        description="Ids from the risk menu only, [] when none applies",
+    )
 
 
 class PRD(RoleOutput):

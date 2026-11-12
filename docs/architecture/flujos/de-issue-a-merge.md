@@ -69,6 +69,17 @@ sequenceDiagram
    `rules.approval_patch`): la única revisión del Tech Lead es la de la integración, con como
    mucho 2 rondas de arreglo, y la revisión de hoy corre en paralelo como sombra que no
    decide nada (`agentic/core/process/application/shadow_review.py`).
+   Cuando el par Tech Lead→Developer de una subtarea llega a su tope de devoluciones, la
+   primera vez no escala: `agentic/core/process/application/review.py:review` pregunta a
+   `agentic/core/process/domain/restart.py:on_return_limit` y, si la subtarea nunca se
+   aprobó y no hay pull request, la reinicia limpia con un brief reescrito
+   (`agentic/core/process/domain/restart.py:restart_patch`, que deja `restart_pending`).
+   El siguiente `develop` termina el reinicio: archiva el intento en
+   `archive/restart<k>-<commit>/<rama>`
+   (`agentic/core/process/application/archive.py:archive_subtask`), recrea la rama desde
+   la base y arma el prompt del Developer solo con la sección `Restart <subtarea>`, sin
+   sesión previa (`agentic/core/process/application/develop.py:develop`). El intento
+   reiniciado tiene su propio contador y, si también llega al tope, escala.
 6. **Integración y entrega.** `integrate` une las ramas de las subtareas; `owner_rules` y el pase
    de `fix_important` corren en serie y mueven la cabeza; después `verify` corre juntos, sobre
    esa cabeza, los verificadores que el plan convoca (`final_validation`, `copy_review`,
@@ -86,6 +97,8 @@ sequenceDiagram
 ## Cuando algo no sigue
 
 - Si un rol, un par o el tope no pueden seguir, la tarea se escala y se pausa: ver
-  [reanudación](reanudacion.md).
+  [reanudación](reanudacion.md). Un par en su tope solo escala cuando no puede reiniciar
+  (`agentic/core/process/domain/restart.py:eligible`): la subtarea ya se aprobó, ya hay pull
+  request, otro rol la devolvió o ya gastó su reinicio.
 - Si `auto_merge_decision` rechaza el merge de un pull request aprobado, el sistema lo
   aterriza solo: ver [aterrizaje](aterrizaje.md).

@@ -311,12 +311,14 @@ def test_a_real_red_with_cancelled_siblings_alone_and_the_suite_failed_is_red() 
     assert ci.ci_state(report(*old), ("docs", "pytest")).state == "red"
 
 
-def test_a_red_run_without_any_cancelled_check_stays_red_beside_a_newer_green_one() -> None:
+def test_a_red_run_without_any_cancelled_check_is_superseded_by_a_newer_green_one() -> None:
+    """GH-606, the owner's rule: the latest run of each name decides; a superseded run, whatever
+    its conclusion, never blocks. (Before GH-606 this stayed red.)"""
     old = (job("pytest", "FAILURE", OLD), job("docs", "SUCCESS", OLD))
     checks = old + (job("pytest", "SUCCESS", NEW), job("docs", "SUCCESS", NEW))
     verdict = ci.ci_state(report(*checks), ("pytest", "docs"))
-    assert verdict.state == "red"
-    assert [check.name for check in verdict.failing] == ["pytest"]
+    assert verdict == CiVerdict("green", (), ())
+    assert ci.red_checks(report(*checks)) == ()
 
 
 def test_the_newer_run_is_compared_as_an_integer_not_as_text() -> None:
@@ -400,3 +402,124 @@ def test_a_cancelled_matrix_shard_without_a_newer_run_stays_red_and_names_the_id
     assert verdict.state == "red"
     assert verdict.red_names == ("e2e-shard",)
     assert verdict.cancelled == ()
+
+
+# GH-606: the verdict of a head is the latest run of each full check name.
+def _at(check: CiCheck, started: str | None = None, completed: str | None = None) -> CiCheck:
+    return CiCheck(check.name, check.status, check.conclusion, check.link, None, started, completed)
+
+
+def _verdicts(*checks: CiCheck, declared: tuple[str, ...] = ("docs", "ci-ok")) -> tuple[str, int]:
+    read = report(*checks)
+    return ci.ci_state(read, declared).state, len(ci.red_checks(read))
+
+
+def test_gh_407_shape_old_red_and_new_green_of_the_same_head_is_green() -> None:
+    """The GH-407 case: `docs` and `ci-ok` red in the old run, green in the new one."""
+    old = (job("docs", "FAILURE", OLD), job("ci-ok", "FAILURE", OLD))
+    new = (job("docs", "SUCCESS", NEW), job("ci-ok", "SUCCESS", NEW))
+    assert _verdicts(*old, *new) == ("green", 0)
+    # Rejected: the same two runs with the newer one red are red, and only the newer one.
+    newer_red = (job("docs", "FAILURE", NEW), job("ci-ok", "SUCCESS", NEW))
+    read = report(*old, *newer_red)
+    assert ci.ci_state(read, ("docs", "ci-ok")).failing == (newer_red[0],)
+
+
+def test_an_old_red_with_a_newer_run_not_decided_is_pending_and_never_failing() -> None:
+    old = (job("docs", "FAILURE", OLD),)
+    verdict = ci.ci_state(report(*old, job("docs", None, NEW, "IN_PROGRESS")), ("docs",))
+    assert (verdict.state, verdict.failing, verdict.red) == ("pending", (), ())
+    assert ci.pending_names(report(*old, job("docs", None, NEW, "QUEUED")), ("docs",)) == ("docs",)
+
+
+def test_the_same_run_id_twice_is_decided_by_the_later_started_at() -> None:
+    first = _at(job("docs", "FAILURE", NEW), "2026-11-12T05:00:00Z", "2026-11-12T05:03:00Z")
+    rerun = _at(job("docs", "SUCCESS", NEW), "2026-11-12T06:00:00Z", "2026-11-12T06:02:00Z")
+    assert _verdicts(first, rerun, declared=("docs",)) == ("green", 0)
+    assert _verdicts(rerun, first, declared=("docs",)) == ("green", 0)
+    # Rejected: the later attempt red decides red, even listed first.
+    late_red = _at(job("docs", "FAILURE", NEW), "2026-11-12T07:00:00Z")
+    early_green = _at(job("docs", "SUCCESS", NEW), "2026-11-12T05:00:00Z")
+    assert _verdicts(late_red, early_green, declared=("docs",)) == ("red", 1)
+
+
+def test_the_same_run_id_falls_back_to_completed_at_and_keeps_both_when_nothing_decides() -> None:
+    red = _at(job("docs", "FAILURE", NEW), None, "2026-11-12T05:00:00Z")
+    green = _at(job("docs", "SUCCESS", NEW), None, "2026-11-12T06:00:00Z")
+    assert ci.current_runs(report(red, green)) == (green,)
+    bare_red, bare_green = job("docs", "FAILURE", NEW), job("docs", "SUCCESS", NEW)
+    assert ci.current_runs(report(bare_red, bare_green)) == (bare_red, bare_green)
+    assert _verdicts(bare_red, bare_green, declared=("docs",)) == ("red", 1)
+
+
+def test_a_check_with_no_readable_run_id_is_never_discarded_nor_discards() -> None:
+    status = CiCheck("docs", "COMPLETED", "FAILURE", "https://github.com/o/r/runs/docs")
+    green = job("docs", "SUCCESS", NEW)
+    assert ci.current_runs(report(status, green)) == (status, green)
+    assert _verdicts(status, green, declared=("docs",)) == ("red", 1)
+
+
+def test_run_ids_are_compared_as_integers_in_current_runs() -> None:
+    older, newer = job("docs", "FAILURE", 99), job("docs", "SUCCESS", 100)
+    assert ci.current_runs(report(older, newer)) == (newer,)
+    assert ci.current_runs(report(newer, older)) == (newer,)
+
+
+def test_two_shards_are_two_names_and_a_red_one_stays_red_beside_a_green_other() -> None:
+    red, green = job("pytest (a)", "FAILURE", OLD), job("pytest (b)", "SUCCESS", NEW)
+    read = CiReport(FULL, None, None, None, (red, green), True)
+    assert ci.current_runs(read) == (red, green)
+    verdict = ci.ci_state(read, ("pytest",))
+    assert (verdict.state, verdict.red_names) == ("red", ("pytest",))
+    assert ci.red_checks(read) == (red,)
+
+
+def test_an_old_green_with_a_newer_cancelled_run_stays_green_and_old_red_stays_red() -> None:
+    cancelled = CiReport(
+        FULL,
+        None,
+        None,
+        None,
+        (job("docs", "SUCCESS", OLD), job("docs", "CANCELLED", NEW)),
+        True,
+        frozenset({str(NEW)}),
+    )
+    assert ci.ci_state(cancelled, ("docs",)) == CiVerdict("green", (), ())
+    red_then_cancelled = CiReport(
+        FULL,
+        None,
+        None,
+        None,
+        (job("docs", "FAILURE", OLD), job("docs", "CANCELLED", NEW)),
+        True,
+        frozenset({str(NEW)}),
+    )
+    verdict = ci.ci_state(red_then_cancelled, ("docs",))
+    assert (verdict.state, [check.link for check in verdict.failing]) == (
+        "red",
+        [job("docs", "FAILURE", OLD).link],
+    )
+
+
+def test_a_name_with_only_cancelled_runs_is_pending_and_names_them() -> None:
+    only = CiReport(
+        FULL, None, None, None, (job("docs", "CANCELLED", NEW),), True, frozenset({str(NEW)})
+    )
+    verdict = ci.ci_state(only, ("docs",))
+    assert (verdict.state, verdict.failing) == ("pending", ())
+    assert verdict.cancelled == (job("docs", "CANCELLED", NEW),)
+    assert ci.current_runs(only) == only.checks
+
+
+def test_the_same_name_in_two_workflows_is_decided_by_the_greater_run_id() -> None:
+    """The known limit of ADR-0080 (GH-606): the key ignores the workflow."""
+    other_workflow = job("capture", "FAILURE", 500)
+    this_workflow = job("capture", "SUCCESS", 400)
+    assert ci.current_runs(report(this_workflow, other_workflow)) == (other_workflow,)
+
+
+def test_current_runs_keeps_report_order_and_the_full_name_not_the_declared_one() -> None:
+    a_old, a_new = job("pytest (a)", "FAILURE", OLD), job("pytest (a)", "SUCCESS", NEW)
+    b_new = job("pytest (b...", "SUCCESS", NEW)
+    assert ci.current_runs(report(a_old, b_new, a_new)) == (b_new, a_new)
+    assert ci.current_runs(report()) == ()

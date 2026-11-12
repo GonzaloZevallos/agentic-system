@@ -19,6 +19,7 @@ Esta página muestra las clases públicas de los módulos del grupo `playbook` d
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
+  - [domain: state (parte 7)](classes-process-domain-state-7.md)
 
 ```mermaid
 classDiagram

@@ -6,6 +6,7 @@ order (nothing removed before it is committed)."""
 from pathlib import Path
 
 from agentic.core.process.application import archive
+from agentic.core.process.domain import rules
 from tests.fakes import FakeReaper, MemoryDocuments, MemoryWorkspace, memory_ports
 
 
@@ -326,3 +327,92 @@ def test_over_a_real_repo_the_document_lands_on_the_archived_ref_and_on_no_live_
     assert git("rev-list", "--count", f"{ref}~1..{ref}") == "1"
     archive.archive_previous_run("GH-1", ports)
     assert git("rev-list", "--count", f"{ref}~1..{ref}") == "1"
+
+
+# -- archive_subtask (GH-593): a clean restart archives one subtask, never the task -------------
+
+SUBTASK_PAIR = "Tech Lead→Developer:api"
+
+
+def restart_document(branch: str = "agentic/GH-1.api", **more) -> dict:
+    return {
+        "id": "GH-1",
+        "system_commit": "abc1234",
+        "restarts": {SUBTASK_PAIR: 1},
+        "subtasks": {"api": {"id": "api", "branch": branch}},
+        **more,
+    }
+
+
+def test_a_subtask_is_committed_taken_out_and_its_branch_renamed_under_the_restart_prefix():
+    ports = memory_ports()
+    ports.documents.save(restart_document())
+    ports.workspace.existing_branches.update(
+        {
+            "agentic/GH-1": ("h0", "b0"),
+            "agentic/GH-1.api": ("h2", "b1"),
+            "agentic/GH-1.db": ("h3", "b1"),
+        }
+    )
+    api = MemoryWorkspace.ROOT / "GH-1.api"
+    ports.workspace.checkouts = [
+        MemoryWorkspace.ROOT / "GH-1",
+        api,
+        MemoryWorkspace.ROOT / "GH-1.db",
+    ]
+
+    ref = archive.archive_subtask("GH-1", "api", ports)
+
+    assert ref == "archive/restart1-abc1234/agentic/GH-1.api"
+    assert ports.workspace.commits == [(api, "Archive restart 1 of GH-1: GH-1.api")]
+    assert ports.workspace.discarded == [api]
+    assert ports.workspace.renamed == [("agentic/GH-1.api", ref)]
+    # The task branch and the sister subtask are untouched.
+    assert {"agentic/GH-1", "agentic/GH-1.db"} <= set(ports.workspace.existing_branches)
+
+
+def test_the_task_of_a_single_subtask_archives_the_task_branch_and_its_checkout():
+    ports = memory_ports()
+    ports.documents.save(restart_document(branch="agentic/GH-1"))
+    ports.workspace.existing_branches["agentic/GH-1"] = ("h0", "b0")
+    task = MemoryWorkspace.ROOT / "GH-1"
+    ports.workspace.checkouts = [task]
+
+    ref = archive.archive_subtask("GH-1", "api", ports)
+
+    assert ref == "archive/restart1-abc1234/agentic/GH-1"
+    assert ports.workspace.discarded == [task]
+    assert ports.workspace.renamed == [("agentic/GH-1", ref)]
+
+
+def test_a_second_call_after_the_rename_moves_nothing_again():
+    ports = memory_ports()
+    ports.documents.save(restart_document())
+    ports.workspace.existing_branches["agentic/GH-1.api"] = ("h2", "b1")
+    archive.archive_subtask("GH-1", "api", ports)
+    ports.workspace.commits.clear()
+    ports.workspace.renamed.clear()
+
+    again = archive.archive_subtask("GH-1", "api", ports)
+
+    assert again == "archive/restart1-abc1234/agentic/GH-1.api"
+    assert ports.workspace.commits == [] and ports.workspace.renamed == []
+
+
+def test_an_archive_cut_before_the_rename_is_finished_by_its_retry():
+    ports = memory_ports()
+    ports.documents.save(restart_document())
+    ports.workspace.existing_branches["agentic/GH-1.api"] = ("h2", "b1")
+    # The worktree was already taken out by the first attempt; only the rename is left.
+    ports.workspace.checkouts = []
+
+    ref = archive.archive_subtask("GH-1", "api", ports)
+
+    assert ports.workspace.renamed == [("agentic/GH-1.api", ref)]
+    assert ports.workspace.discarded == []
+
+
+def test_a_restart_ref_is_not_a_run_of_the_task_archive():
+    refs = ["archive/restart1-abc1234/agentic/GH-1.api"]
+    assert rules.next_archive_run(refs, ["agentic/GH-1"], "GH-1") == 1
+    assert rules.branches_of_task(refs, "GH-1") == []

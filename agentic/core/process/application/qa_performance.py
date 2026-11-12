@@ -294,7 +294,7 @@ def _return(
     ]
     pair = PAIR_QA_PERFORMANCE_TECH_LEAD
     limit = cfg.max_changes_requested_per_pair
-    if rules.remaining_changes(state, pair, limit) > 0:
+    if rules.on_return_limit(state, pair, limit) == "count":
         patch["changes_requested"] = rules.record_return(state, pair)
         patch["change_history"] = [rules.change_entry(pair, "standard-other", reason)]
     else:

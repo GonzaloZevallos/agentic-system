@@ -13,6 +13,7 @@ from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.presubmit import RedCheck
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import (
+    AdrDecidedBy,
     AdrDecisionOutcome,
     Carried,
     CiCause,
@@ -56,7 +57,7 @@ def _spent(**over) -> LandingSpent:
 
 
 def _step(refusal, spent=None, owners=(), **facts) -> LandingStep:
-    return landing.landing_step(refusal, _facts(**facts), spent or _spent(), owners)
+    return landing.landing_step(refusal, _facts(**facts), spent or _spent(), owners, turn="head")
 
 
 EXPECTED = {
@@ -483,6 +484,7 @@ _SAMPLE: dict[object, object] = {
     DiagnosisVerdict: "sync",
     CiCause: "no_run",
     AdrDecisionOutcome: "applied",
+    AdrDecidedBy: "rule",
     list[list[str]]: [["a", "b"]],
     list[RedCheck]: [{"name": "tests", "tail": ["a"], "recovered": False, "timed_out": False}],
     list[OutOfBoundsLine]: [{"path": "docs/a.md", "line": 3}],
@@ -1181,6 +1183,7 @@ def _important(spent=None, units=("api",), **facts) -> LandingStep:
         spent or _spent(),
         (),
         important_units=units,
+        turn="head",
     )
 
 

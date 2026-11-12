@@ -66,6 +66,7 @@ def test_escalation_carries_the_reason_and_its_class_together():
     assert rules.escalation("cap", "PjM stopped by the task cap") == {
         "escalated": "PjM stopped by the task cap",
         "escalation_class": "cap",
+        "escalation_cause": None,
     }
 
 

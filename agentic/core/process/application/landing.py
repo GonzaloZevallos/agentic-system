@@ -20,13 +20,14 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing as landing_rules
 from ..domain import merge_ci
 from ..domain.landing import LandingStepKind
+from ..domain.landing_order import Turn
 from ..domain.rules import RunKind
 from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_adr, landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .escalate import NEEDS_HUMAN
 from .landing_plan import LandingContext
-from .poll import Abandoned, StackUnreadable, assess_merge
+from .poll import Abandoned, StackUnreadable, assess_merge, evaluate_landing_order
 from .ports import GitError, Launcher, Ports, RunLock, Upstream
 from .resume import state_from
 
@@ -63,6 +64,7 @@ def land(
     role_span: landing_plan.RoleSpanOpener | None = None,
     run_kind: RunKind = "land_model",
     await_resume: Callable[[str], bool] | None = None,
+    turn: Turn,
 ) -> LandResult:
     """Takes `task_id`'s run lock (`LockHeld` if another process holds it) and releases it
     on the way out, whatever happens. `run_kind` is the kind this process registered under
@@ -73,6 +75,7 @@ def land(
 
     lock.acquire(task_id, "land")
     try:
+        _note_order(task_id, cfg, ports, lock, upstream, eval_set, log)
         return _land(
             task_id,
             cfg,
@@ -88,9 +91,34 @@ def land(
             role_span,
             run_kind,
             _after_releasing(lock, await_resume),
+            turn,
         )
     finally:
         lock.release(task_id)
+
+
+def _note_order(
+    task_id: str,
+    cfg: Configuration,
+    ports: Ports,
+    lock: RunLock,
+    upstream: Upstream,
+    eval_set: frozenset[int] | None,
+    log: Callable[[str], None],
+) -> None:
+    """GH-588: a `land` of a task that is not the head of the landing order runs anyway (it is
+    the owner's call) and says so once. The order is the poller's own (`evaluate_landing_order`);
+    nothing is decided from it here."""
+    number = ports.inbox.issue_of(task_id)
+    if number is None or upstream.sha is None:
+        return
+    # The task itself is ours: it is at work, and a task at work is a member. The other tasks'
+    # run locks are read as the poller reads them, so the Head is the same one.
+    head = evaluate_landing_order(
+        ports, eval_set, upstream.sha, lock, frozenset({task_id}), cfg
+    ).head
+    if head is not None and head != number:
+        log("not the head of the landing order: run by the owner")
 
 
 def _after_releasing(
@@ -123,6 +151,7 @@ def _land(
     role_span: landing_plan.RoleSpanOpener | None,
     run_kind: RunKind,
     await_resume: Callable[[str], bool] | None,
+    turn: Turn,
 ) -> LandResult:
     # The port answers a bare `dict`: the document carries keys beyond the state, and every
     # reader below takes it as the state (`.get` for the keys that may be absent).
@@ -178,6 +207,7 @@ def _land(
             facts,
             slice_inputs,
             landing_plan.head_ancestry(ports, cfg, head, master),
+            turn=turn,
         )
     try:
         now: datetime | None = datetime.fromisoformat(clock())
@@ -204,6 +234,7 @@ def _land(
             at=at,
             slicing=slice_inputs,
             ancestry=landing_plan.head_ancestry(ports, cfg, head, master),
+            turn=turn,
         )
     if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
         return _refused(task_id, raw, run_kind, step.kind, head, log)
@@ -297,6 +328,8 @@ def _land(
                 entry["cause"] = pair["cause"]
     if decision_at is not None:
         entry["decision_at"] = decision_at
+    elif step.kind == "apply_adr_decision":
+        entry["decided_by"] = "rule"  # D-be76583a: nobody decided, the rule did
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:

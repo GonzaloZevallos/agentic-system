@@ -581,13 +581,54 @@ def _imports_rules(node):
     return isinstance(node, ast.Import) and any(a.name.endswith("rules") for a in node.names)
 
 
-def test_the_time_split_modules_import_nothing_from_process_rules():
+def only_pause_kind_violations(source):
+    """Where `source` reaches `core.process.domain.rules` other than by exactly one
+    `from ...rules import pause_kind` with no alias; a missing import is a violation too."""
+    nodes = [n for n in ast.walk(ast.parse(source)) if _imports_rules(n)]
+    found = [
+        f"line {n.lineno}"
+        for n in nodes
+        if not isinstance(n, ast.ImportFrom)
+        or [(a.name, a.asname) for a in n.names] != [("pause_kind", None)]
+    ]
+    if len(nodes) != 1:
+        found.append(f"{len(nodes)} imports of rules, exactly one expected")
+    return found
+
+
+PAUSE_KIND_IMPORT = "from agentic.core.process.domain.rules import pause_kind\n"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from agentic.core.process.domain.rules import pause_kind, EXTERNAL_REASONS\n",
+        "from agentic.core.process.domain.rules import pause_kind as k\n",
+        "from agentic.core.process.domain.rules import EXTERNAL_REASONS\n",
+        "from agentic.core.process.domain import rules\n",
+        "import agentic.core.process.domain.rules\n",
+        PAUSE_KIND_IMPORT + "from agentic.core.process.domain.rules import EXTERNAL_REASONS\n",
+        PAUSE_KIND_IMPORT * 2,
+        "import os\n",
+    ],
+)
+def test_the_pause_kind_guard_rejects_anything_but_one_plain_import_of_pause_kind(source):
+    assert only_pause_kind_violations(source) != []
+
+
+def test_the_pause_kind_guard_accepts_exactly_one_plain_import_of_pause_kind():
+    assert only_pause_kind_violations(PAUSE_KIND_IMPORT + "import os\n") == []
+
+
+def test_the_time_split_modules_import_only_pause_kind_from_process_rules():
     from pathlib import Path
 
     def source(name):
         return Path(cycle.__file__).with_name(f"{name}.py").read_text()
 
-    assert rules_violations(source("cycle")) == []
+    # GH-593: whether a pause is mechanical is `rules.pause_kind`'s call alone, so `cycle` takes
+    # that one name and nothing else from `rules`.
+    assert only_pause_kind_violations(source("cycle")) == []
     # parallel_factor keeps its older `rules` import; only the new helpers must not reach it.
     assert rules_violations(source("parallel_factor"), {"clip", "difference"}) == []
 

@@ -7,6 +7,7 @@ import pytest
 
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.application.ports import RiskArea
 from agentic.core.process.domain.docs import Docs
 
 
@@ -281,3 +282,31 @@ def test_a_match_all_generated_glob_at_the_base_is_an_error_naming_the_key(produ
     base = commit_stack(product, "checks:\n  tests: pytest\ngenerated:\n  - '**'\n")
     with pytest.raises(ValueError, match=r"stack.yaml: .*`generated`"):
         GitStack(product).generated(base)
+
+
+def test_risk_areas_come_back_as_the_process_type_from_the_revision_asked(product):
+    with_key = commit_stack(
+        product,
+        "checks:\n  tests: pytest\nrisk_areas:\n"
+        "  - id: billing\n    description: Invoices\n    paths: [app/billing/**]\n"
+        "  - id: search\n    description: The index\n",
+    )
+    without = commit_stack(product, "checks:\n  tests: pytest\n")
+
+    found = GitStack(product).risk_areas(with_key)
+
+    assert found == (
+        RiskArea("billing", "Invoices", ("app/billing/**",)),
+        RiskArea("search", "The index", ()),
+    )
+    assert all(type(area) is RiskArea for area in found)
+    assert GitStack(product).risk_areas(without) == ()
+
+
+def test_an_invalid_risk_area_is_an_error_naming_the_key(product):
+    base = commit_stack(
+        product,
+        "checks:\n  tests: pytest\nrisk_areas:\n  - id: data-migration\n    description: x\n",
+    )
+    with pytest.raises(ValueError, match=r"stack.yaml: .*`risk_areas`"):
+        GitStack(product).risk_areas(base)

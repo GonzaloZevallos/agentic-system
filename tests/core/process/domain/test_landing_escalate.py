@@ -25,7 +25,7 @@ def _step(on_base: tuple[str, ...], failing: tuple[str, ...], **spent):
     facts = _facts(
         ci_required=("web", "e2e"), ci_verdict=_verdict(*failing), ci_red_on_base=on_base
     )
-    return landing.landing_step("ci_failed", facts, _spent(**spent), ("api",))
+    return landing.landing_step("ci_failed", facts, _spent(**spent), ("api",), turn="head")
 
 
 def test_every_failing_name_red_on_the_base_escalates():
@@ -54,7 +54,7 @@ def test_nothing_red_on_the_base_goes_the_old_way(spent, expected):
 
 def test_a_red_on_the_base_without_a_verdict_to_cover_goes_the_old_way():
     facts = _facts(ci_required=("web",), ci_red_on_base=("web",))
-    assert landing.landing_step("ci_failed", facts, _spent(), ()).kind == "rerun"
+    assert landing.landing_step("ci_failed", facts, _spent(), (), turn="head").kind == "rerun"
 
 
 def _matrix_verdict(expansion: str, declared: str) -> ci.CiVerdict:
@@ -69,7 +69,7 @@ def test_a_matrix_red_on_the_head_and_its_id_red_on_the_base_escalates():
         ci_red_on_base=("pytest",),
     )
 
-    step = landing.landing_step("ci_failed", facts, _spent(), ("api",))
+    step = landing.landing_step("ci_failed", facts, _spent(), ("api",), turn="head")
 
     assert step.kind == "escalate"
 
@@ -81,7 +81,7 @@ def test_an_expanded_run_name_on_the_base_list_is_not_the_declared_name():
         ci_red_on_base=("pytest (a)",),
     )
 
-    assert landing.landing_step("ci_failed", facts, _spent(), ("api",)).kind == "rerun"
+    assert landing.landing_step("ci_failed", facts, _spent(), ("api",), turn="head").kind == "rerun"
 
 
 def test_the_escalation_spends_no_model_and_its_child_is_a_checks_one():
@@ -154,7 +154,7 @@ def _applied(outcome="applied", head=H1, decision_at=T2, **over) -> dict:
 
 def _adr_step(collision=AMBIGUOUS, spent=None, **keywords):
     facts = _facts(adr_collision=collision)
-    return landing.landing_step(REFUSAL, facts, spent or _spent(), (), **keywords)
+    return landing.landing_step(REFUSAL, facts, spent or _spent(), (), **keywords, turn="head")
 
 
 def test_the_step_is_a_model_step_that_a_checks_child_does_not_admit():

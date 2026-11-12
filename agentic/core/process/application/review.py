@@ -38,9 +38,9 @@ import anyio
 
 from agentic.shared.configuration import Configuration, ReviewMode, experiment_snapshot
 
-from ..domain import ci, docs, landing, presubmit, rules, speculation
+from ..domain import ci, docs, landing, presubmit, restart, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
-from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
+from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, FindingRecord, TaskState, apply
 from . import ci_push, ci_trust, review_scope, shadow_review
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
@@ -139,7 +139,6 @@ async def review(
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(TECH_LEAD), ports)
     pair = pair_for(subtask_id)
-    remaining = rules.remaining_changes(state, pair, cfg.max_changes_requested_per_pair)
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
@@ -306,14 +305,33 @@ async def review(
         # A return discards the pushed run (GH-465): the head will move, and the record that
         # named the old one must not stand for the next.
         patch = apply(patch, {"ci_speculation": None})
-    if remaining > 0:
+    # The one decision of what a return does at the pair's limit (GH-593): count it, restart the
+    # subtask clean, or escalate. Nothing here compares the counter with the limit.
+    decision = rules.on_return_limit(state, pair, cfg.max_changes_requested_per_pair, subtask_id)
+    if decision == "count":
         patch = apply(
             patch,
             {
                 "changes_requested": rules.record_return(state, pair),
-                "change_history": [rules.change_entry(pair, category, reason)],
+                "change_history": [
+                    rules.change_entry(pair, category, reason, restart.attempt(state, pair))
+                ],
             },
         )
+    elif decision == "restart":
+        # The pair is at its limit for the first time: the attempt is archived and the subtask
+        # starts again from a clean context with a rewritten brief. Built over the state that
+        # already holds this review's rows, so they are discarded with the attempt's.
+        after = apply(state, patch)
+        rows = _rows_of(after, subtask_id)
+        first = rows[0]["version"] if rows else 0
+        text = restart.brief(
+            subtask.get("brief", ""),
+            [r for r in rows if r["version"] == first],
+            [r for r in rows if r["version"] != first],
+            [h for h in state.get("change_history", []) if h["pair"] == pair.key],
+        )
+        patch = apply(patch, restart.restart_patch(after, subtask_id, pair, text, head))
     else:
         # Returned as well, without counting: the limit is spent. The human's answer
         # resets the pair and the resume sends the subtask back to its Developer.
@@ -323,6 +341,15 @@ async def review(
         patch = rules.logged(patch, at=ports.now())
         patch["status"] = WAITING_ON_HUMAN
     return done(patch)
+
+
+def _rows_of(state: TaskState, subtask_id: str) -> list[FindingRecord]:
+    """The findings `subtask_id`'s reviews raised, oldest pass first: the material of a rewritten
+    brief. The first pass is the earliest version that raised any, the second is the rest."""
+    return sorted(
+        (f for f in state.get("findings", []) if f["subtask"] == subtask_id),
+        key=lambda f: f["version"],
+    )
 
 
 async def _push_speculatively(

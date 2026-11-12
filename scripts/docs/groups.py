@@ -146,10 +146,12 @@ CLUSTERS: Mapping[str, str] = {
     "domain.design": "roles",
     "domain.docs": "roles",
     "domain.document": "state",
+    "domain.escalation_prompts": "state",
     "domain.exempt_queue": "machine",
     "domain.experiment": "state",
     "domain.finding_location": "state",
     "domain.landing": "landing",
+    "domain.landing_order": "landing",
     "domain.legacy_names": "state",
     "domain.master_gain": "checks",
     "domain.merge_ci": "checks",
@@ -163,6 +165,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.presubmit": "checks",
     "domain.pull_request": "landing",
     "domain.reaping": "machine",
+    "domain.restart": "state",
     "domain.retakes": "machine",
     "domain.returns": "state",
     "domain.roles": "roles",
@@ -180,6 +183,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.suppressions": "checks",
     "domain.system_lessons": "playbook",
     "domain.task": "state",
+    "domain.task_path": "state",
     "domain.turn_notice": "roles",
 }
 

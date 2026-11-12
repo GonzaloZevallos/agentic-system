@@ -106,6 +106,7 @@ def _land(ports, launcher=None):
         clock=lambda: NOW,
         launcher=launcher,
         resume=lambda number: 777,
+        turn="head",
     )
 
 
@@ -240,6 +241,7 @@ def test_a_slice_whose_master_moved_after_opening_is_closed_and_its_entry_refuse
         clock=lambda: NOW,
         launcher=None,
         resume=lambda number: 777,
+        turn="head",
     )
 
     entry = _doc(ports)["landing"][-1]
@@ -405,6 +407,7 @@ def test_a_flake_record_that_cannot_be_written_never_refuses_the_slice():
         clock=lambda: NOW,
         launcher=FakeLauncher(),
         resume=lambda number: 777,
+        turn="head",
     )
 
     assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]

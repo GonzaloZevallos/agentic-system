@@ -2371,6 +2371,7 @@ async def _land(
                 role_span=lambda role: telemetry.role_span(role.name, role.slug, product, arm=arm),
                 run_kind=run_kind,
                 await_resume=await_resume,
+                turn="head",
             )
         except LockHeld as exc:
             raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc

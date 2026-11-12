@@ -297,3 +297,33 @@ async def test_compare_by_baseline_ignores_the_evaluation_documents(root, capsys
     await compare(root, "bl-a", "bl-b", capsys)
     with pytest.raises(CannotStart, match="bl-c: unknown baseline"):
         await compare(root, "bl-a", "bl-c", capsys)
+
+
+def _escalated(cause_or_class, resumed_at="12:30:00", *, cause=None):
+    """A `pause_log` of one escalation at 11:30 that a resume closed at `resumed_at`."""
+    entry = {"kind": "escalation", "value": cause_or_class, "at": "2026-10-20T11:30:00.000Z"}
+    if cause is not None:
+        entry["cause"] = cause
+    resumed = {"kind": "resumed", "value": "resumed", "at": f"2026-10-20T{resumed_at}.000Z"}
+    return [entry, resumed]
+
+
+@pytest.mark.anyio
+async def test_compare_prints_the_escalations_by_cause_and_the_human_wait_by_cause(root, capsys):
+    done = {"closed_at": "2026-10-20T14:00:00.000Z"}
+    write(root, "GH-1", "bl-a", pause_log=_escalated("returns"), **done)
+    write(root, "GH-2", "bl-a", pause_log=_escalated("returns", "13:30:00"), **done)
+    write(root, "GH-3", "bl-a", pause_log=_escalated("ci", cause="ci_run_unfinished"), **done)
+    write(root, "GH-4", "bl-a", **done)
+    write(root, "GH-5", "bl-b")
+    out = await compare(root, "bl-a", "bl-b", capsys)
+
+    first = out.split("-- product / bl-b --")[0]
+    # Per cause and kind: the escalations, over how many of the bucket's tasks.
+    assert "escalations [judgment] returns: 2 in 2 of 4 tasks" in first
+    assert "escalations [mechanical] ci_run_unfinished: 1 in 1 of 4 tasks" in first
+    # Only a judgment call is a human's wait: the median of 1 h and 2 h, never the CI one.
+    assert "human_wait_h [returns]: 1.5000 (median, n=2 of 4 tasks)" in first
+    assert "human_wait_h [ci_run_unfinished]" not in first
+    # A bucket with none prints none of it.
+    assert "escalations [" not in out.split("-- product / bl-b --")[1]
