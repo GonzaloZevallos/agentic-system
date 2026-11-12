@@ -207,7 +207,7 @@ sequenceDiagram
    una `Decision:` numérica. Una pregunta numérica sin respuesta se libera sola
    (`landing.released_by_naming`, vía `landing_plan.release`) cuando el stack en el upstream
    declara `dated`: una vez por (cabeza, upstream), sin texto de `Human`; un stack numérico o
-   ilegible no libera nada (ADR-0093, que enmienda el ADR-0049).
+   ilegible no libera nada (ADR-0094, que enmienda el ADR-0049).
    El rechazo `ci_unknown_names` (GH-485) tampoco pasa por `exhausted()`: un nombre exigido que
    ninguna corrida de chequeo de la cabeza lleva, con todas las corridas de workflow completadas,
    es un defecto de planificación y no un CI lento. `landing_step` lo manda a un solo `escalate`
