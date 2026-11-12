@@ -122,6 +122,9 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.docs(data, source)
 
+    def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
+        return stack.docs_pathspecs(block)
+
     def performance(self, revision: str) -> dict[str, Scenario]:
         data, source = self._declaration(revision)
         return stack.performance(data, source)

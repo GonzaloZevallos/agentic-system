@@ -21,7 +21,7 @@ from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from . import ci_flakes
+from . import ci_flakes, docs_settlement
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
@@ -70,6 +70,20 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                     )
                     return finish(state, patch, ports)
                 paths = list(outcome.conflicted_paths)
+                # GH-603: in `validate` docs mode the generated paths of a conflict are the
+                # system's, settled from master's side; what is left is the Developer's, and
+                # nothing left concludes the merge with no Developer.
+                left = docs_settlement.settle_open_merge(
+                    ports.workspace,
+                    checkout.path,
+                    ports.stack.docs(task_base(state, ports)),
+                    outcome.conflicted_paths,
+                    branch,
+                )
+                if left is not None:
+                    if not left:
+                        continue
+                    paths = list(left)
             else:  # "hand_over": a merge already in progress, from a resume
                 paths = list(dep_state.marked_paths)
             handled_deps.append((dep, branch))
@@ -121,6 +135,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         rerun_forms=ports.stack.rerun_checks(base),
         flake_gate="delivery",
         readiness=readiness_of(ports, base, cfg.check_cores),
+        docs=ports.stack.docs(base),
     )
     # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
     # presubmit of its own that shares the gate's checkout, witness, budget and `Reuse`, so

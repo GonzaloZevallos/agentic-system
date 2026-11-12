@@ -615,6 +615,10 @@ class MemoryStack:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_docs
 
+    def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
+        # The real spelling, `core.knowledge`'s own: the fake agrees with the adapter.
+        return tuple(f":(glob){path}" for path in block.paths)
+
 
 class MemoryCommands:
     """Answers each command from its queue, green when the queue is empty or missing;

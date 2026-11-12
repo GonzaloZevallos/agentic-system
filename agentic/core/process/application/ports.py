@@ -640,6 +640,12 @@ class ProductStack(Protocol):
         check is already in `checks`; this is the block itself, for the prompts."""
         ...
 
+    def docs_pathspecs(self, block: Docs) -> tuple[str, ...]:
+        """The owned paths of `block` as git `:(glob)` pathspecs (`core.knowledge`'s
+        `docs_pathspecs`, GH-603): the one place that spells them, so a git read the
+        application makes over `docs.paths` agrees with the matcher `domain.docs.owned`."""
+        ...
+
     def performance(self, revision: str) -> dict[str, Scenario]:
         """Scenario name -> its `seed`, `measure`, volume and limits (`core.knowledge`,
         GH-318, ADR-0059), as the commit `revision` declares them, in file order. Empty when
