@@ -67,6 +67,7 @@ from ...application.ports import Checkout, Ports, ProductKnowledge, Prompts
 from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
+from ...application.relabel import relabelled
 from ...application.review import review
 from ...application.risk_net import risk_net
 from ...application.schedule import run_subtasks
@@ -94,7 +95,7 @@ from ...domain.roles import (
     UX_LEAD,
     Role,
 )
-from ...domain.task import TaskInput, TaskState
+from ...domain.task import TaskInput, TaskState, apply
 from ..telemetry import NoTelemetry, Telemetry
 
 UseCase = Callable[[TaskState, Configuration, Ports], Awaitable[TaskState]]
@@ -273,12 +274,12 @@ def _pause_node(ports_of: PortsOf):
             }
         )
         answer = answer or {}
-        return rules.resumed(
-            state,
-            answer.get("decision"),
-            answer.get("estimate"),
-            at=ports_of(cfg, config).now(),
+        ports = ports_of(cfg, config)
+        resumed = rules.resumed(
+            state, answer.get("decision"), answer.get("estimate"), at=ports.now()
         )
+        # The owner's labels as they are now (GH-591): `path:full` promotes, nothing demotes.
+        return apply(resumed, relabelled(state, ports))
 
     return pause
 
