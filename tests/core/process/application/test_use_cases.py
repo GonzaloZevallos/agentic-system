@@ -354,12 +354,14 @@ async def test_classify_records_a_small_task_without_risk_as_light(cfg):
     assert patch["initial_path"] == patch["path"] == "light"
     assert (patch["path_cause"], patch["path_label"]) == ("small_no_risk", "none")
     assert "path `light` (small_no_risk)" in patch["sections"]["PjM"]
+    assert patch["size"] == "small"
 
 
 async def test_classify_with_no_size_or_risk_records_full(cfg):
     ports = no_labels(memory_ports(ScriptedRunner(pjm=[classified()])))
     patch = await classify(ISSUE_TASK, cfg, ports)
     assert patch["path"] == "full" and patch["path_cause"] == "missing_size"
+    assert "size" not in patch
 
 
 async def test_classify_lets_the_owner_label_light_win_over_a_risk_and_says_so(cfg):

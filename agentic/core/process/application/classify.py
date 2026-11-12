@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import get_args
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules, task_path
@@ -73,6 +75,8 @@ def _record_path(
     decision = task_path.decide(patch["type"], size, risk, labels, known)
     label = task_path.owner_label(labels)
     patch.update(task_path.classification_patch(decision, label))
+    if size in get_args(task_path.Size):
+        patch["size"] = size  # a closed value only, read by `metrics.task_size_value`
     line = f"Size `{size}`, risks {_ids(risk)}, path `{decision.path}` ({decision.cause})."
     if risk and known is not None and (unknown := task_path.unknown_risks(risk, known)):
         line += f" Unknown risk ids: {_ids(unknown)}."

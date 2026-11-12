@@ -39,6 +39,7 @@ from .reaping import ReapedProcess
 from .size_budget import ActualSize, PlanSize
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
+from .task_path import Size as TaskSize
 
 Status = Literal[
     "open",
@@ -1843,6 +1844,9 @@ class TaskState(TaskInput, total=False):
     # the marker `cycle.path_recorded` reads, so a document the router never classified is not
     # counted as one that ran a path.
     path_routed: bool
+    # The size PjM declared (GH-599), one of `task_path.Size`; omitted when PjM gave none or an
+    # unknown value. Read only by `metrics.task_size_value`.
+    size: TaskSize
     # The lead time of a closed task (GH-599, `domain/lead_time.py`): `{labeled_at, merged_at}` or
     # `{unknown: no_merge | unreadable}`, written once by a close or a merge and never again, except
     # that a later merge replaces `no_merge`. Replaced whole (`last`); read with `.get`.

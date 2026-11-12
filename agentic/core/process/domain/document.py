@@ -65,6 +65,7 @@ TASK_PATH_KEYS = (
     "path_label",
     "promotion",
     "path_routed",
+    "size",
 )
 RECORDED_AS = {"changes_requested": "returns", "change_history": "return_history"}
 SUBTASK_RECORDED_AS = {"change_category": "return_category"}

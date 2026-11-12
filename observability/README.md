@@ -76,6 +76,9 @@ marcada en ningún lado hace fallar el chequeo con su propio nombre.
 | `agentic.task.duration` | — | — | Sin atributo nuevo: el span de tarea ya tiene su propio inicio y fin; se lee vía la API de Langfuse |
 | `agentic.task.finished` | `task.status` | tarea | Terminada si el valor ∈ `scorecard.TERMINATED_STATUSES`; ya viajaba en el span, no hacía falta un atributo aparte |
 | `agentic.task.returns` | `agentic.task.returns` | tarea | Devoluciones por categoría: ahora un array `"categoría=conteo"` en vez de una muestra por categoría |
+| `agentic.task.path` | `agentic.task.path` | tarea | La ruta inicial de la tarea: `light`, `full` o `unrecorded` (un documento que el enrutador no clasificó) |
+| `agentic.task.size` | `agentic.task.size` | tarea | El tamaño que PjM declaró: `small`, `normal`, `large` o `unknown` |
+| `agentic.task.promoted` | `agentic.task.promoted` | tarea | `true` si la tarea tuvo una promoción de `light` a `full`; nunca el texto ni el tipo |
 | `agentic.role.cost_usd` | `agentic.role.cost_usd` | rol | Costo de la patch entera, un único valor en vez de una muestra por corrida más una residual; el desglose por corrida sigue en el span de corrida, con su propio `agentic.role.cost_usd` |
 | `agentic.role.duration` | — | — | Sin atributo nuevo: el span de rol ya tiene su propio inicio y fin; se lee vía la API de Langfuse |
 | `agentic.role.run_duration` | — | — | Sin atributo: el span de corrida ya tiene su propio inicio y fin (`RoleRun.started_at`/`.ended_at`); se lee vía la API de Langfuse |

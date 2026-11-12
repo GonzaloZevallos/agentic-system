@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from agentic.core.measurement.adapters.otel import semconv, telemetry
+from agentic.core.measurement.domain import metrics
 from agentic.shared.stage0 import CHECKOUT
 from tests.readme_metrics import Family, _documented
 
@@ -574,6 +575,9 @@ TASK_ALWAYS = {
     "task.runs",
     "task.escalated",
     "agentic.task.returns",
+    "agentic.task.path",
+    "agentic.task.size",
+    "agentic.task.promoted",
 }
 INVOCATION_ALWAYS = {
     "agentic.invocation.kind",
@@ -1193,3 +1197,30 @@ def test_role_finish_reads_a_full_checks_record_run_on_ci_that_has_no_gate(spans
         run.finish({**patch, "full_checks": record})
     span = spans.get_finished_spans()[-1]
     assert not any("gate" in key for key in span.attributes)
+
+
+def test_the_path_attributes_are_closed_values_and_carry_no_risk_id_or_promotion_text(spans):
+    final = {
+        "type": "feature",
+        "status": "ready_for_review",
+        "initial_path": "light",
+        "path": "full",
+        "path_routed": True,
+        "size": "small",
+        "risk": ["money-rounding"],
+        "promotion": {
+            "from_role": "Developer",
+            "kind": "risk_area",
+            "text": "touches money-rounding in billing",
+            "at": "2026-11-11T00:00:00Z",
+        },
+    }
+    with telemetry.task_span("T-1", "t", "gym-saas", arm="default") as run:
+        run.finish(final)
+    (span,) = spans.get_finished_spans()
+    assert span.attributes["agentic.task.path"] in metrics.TASK_PATHS
+    assert span.attributes["agentic.task.size"] in metrics.TASK_SIZES
+    assert span.attributes["agentic.task.promoted"] is True
+    assert span.attributes["agentic.task.path"] == "light"
+    rendered = repr(dict(span.attributes))
+    assert "money-rounding" not in rendered and "billing" not in rendered

@@ -92,6 +92,11 @@ El ciclo menos el tiempo activo recortado al ciclo, el fallido, el de espera y e
 _Avoid_: tiempo muerto, resto, tiempo perdido
 _Campo_: sin término de arte — es el residuo de una partición del tiempo de ciclo
 
+**Tiempo de entrega** (lead time):
+Los segundos entre la última vez que se agregó la etiqueta `agentic` al issue y el `mergedAt` del pull request. Se guarda en el documento como `lead_time`: `{labeled_at, merged_at}` o `{unknown: no_merge | unreadable}` (sin pull request o cerrado sin fusionar, o una lectura que falló). Se agrupa por `initial_path` sólo en los documentos donde `cycle.path_recorded` vale (tienen `initial_path` y la marca `path_routed`); el resto es `unrecorded` y queda fuera de las medianas, porque corrió la ruta completa aunque dijera `light`. Un valor negativo, ilegible o ausente es desconocido, nunca 0. Sesgos conocidos: una tarea reetiquetada cuenta desde la última etiqueta, y una parte de una tarea dividida incluye el tiempo que esperó bloqueada. `eval compare` lo imprime por ruta con su `n` de `m` tareas, las promociones por tipo y las exclusiones por motivo, fuera del veredicto del scorecard.
+_Avoid_: duración, tiempo de ciclo (el ciclo va de la primera corrida al cierre), tiempo hasta el merge (`time_to_merge_seconds` va de la apertura del PR al merge)
+_Campo_: lead time (DORA, del commit al despliegue); aquí, del buzón al merge
+
 **Brazo**:
 La configuración de experimento bajo la que corrió una tarea: el valor de cada interruptor
 declarado (`review_mode`, `skip_ephemeral`, `plan_review`, `reviewer_model` y `plan_shape`, este

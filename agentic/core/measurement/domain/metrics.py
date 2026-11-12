@@ -17,9 +17,9 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import rules, task_path
 from agentic.core.process.domain.returns import is_return
 from agentic.core.process.domain.task import (
     ChangesRequested,
@@ -31,6 +31,8 @@ from agentic.core.process.domain.task import (
     TaskState,
 )
 from agentic.shared.configuration import ARM_SWITCHES, Configuration
+
+from . import cycle
 
 # The `Configuration` switches `arm_label` joins, in the order every writer uses:
 # `shared.configuration.ARM_SWITCHES`, the single source (GH-470), a subsequence of
@@ -377,3 +379,32 @@ def prompts_fingerprint(state: TaskState) -> str:
         return ""
     joined = ",".join(f"{slug}:{prompts[slug]}" for slug in sorted(prompts))
     return hashlib.sha256(joined.encode()).hexdigest()[:8]
+
+
+# The task span's path attributes (GH-599). Each is a closed set: the values of
+# `task_path.Path` and `task_path.Size` plus the one value a document with no record reads as.
+# No risk id and no promotion text reaches an attribute: these functions are the only source.
+TASK_PATHS: tuple[str, ...] = (*get_args(task_path.Path), "unrecorded")
+TASK_SIZES: tuple[str, ...] = (*get_args(task_path.Size), "unknown")
+
+
+def task_path_value(document: Mapping[str, Any]) -> str:
+    """`agentic.task.path`: the initial path, `unrecorded` for a document the router never
+    classified (`cycle.path_recorded`)."""
+    initial = document.get("initial_path")
+    if cycle.path_recorded(document) and initial in get_args(task_path.Path):
+        return str(initial)
+    return "unrecorded"
+
+
+def task_size_value(document: Mapping[str, Any]) -> str:
+    """`agentic.task.size`: the size PjM declared, `unknown` when there is none or it is not
+    one of the closed set; a missing size is never read as `small`."""
+    size = document.get("size")
+    return str(size) if size in get_args(task_path.Size) else "unknown"
+
+
+def task_promoted(document: Mapping[str, Any]) -> bool:
+    """`agentic.task.promoted`: whether a promotion was recorded. Only the fact, never its
+    text or kind."""
+    return bool(document.get("promotion"))
