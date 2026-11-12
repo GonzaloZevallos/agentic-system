@@ -699,6 +699,12 @@ class Delivery(RoleOutput):
         "always empty on the integration subtask",
         json_schema_extra={"lines_required": True},
     )
+    promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def _promote_is_one_line(self) -> Delivery:
+        self.promote = _promote_text(self.promote)
+        return self
 
 
 CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
