@@ -2800,7 +2800,7 @@ def full_checks_return(
         ],
     }
     pair = full_checks_pair(target, mode)
-    if remaining_changes(state, pair, limit) > 0:
+    if on_return_limit(state, pair, limit) == "count":
         patch["changes_requested"] = record_return(state, pair)
         patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]
     else:

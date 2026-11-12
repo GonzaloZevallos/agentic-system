@@ -290,8 +290,7 @@ def _verdict_patch(
     if superseded := plan_settlement.on_return(state, version, data["blocking"]):
         patch["plan_settled"] = superseded
     limit = cfg.max_changes_requested_per_pair
-    remaining = rules.remaining_changes(state, PAIR_PM_TECH_LEAD, limit)
-    if remaining > 0:
+    if rules.on_return_limit(state, PAIR_PM_TECH_LEAD, limit) == "count":
         patch["changes_requested"] = rules.record_return(state, PAIR_PM_TECH_LEAD)
         patch["change_history"] = [
             rules.change_entry(PAIR_PM_TECH_LEAD, "spec-behaviour", data["reason"])
