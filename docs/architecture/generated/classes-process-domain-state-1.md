@@ -26,6 +26,8 @@ classDiagram
     class experiment__Arm["Arm"]
     class experiment__Experiment["Experiment"]
     class experiment__InvalidExperiment["InvalidExperiment"]
+    class lead_time__Known["Known"]
+    class lead_time__Unreadable["Unreadable"]
     class rules__BlockerReport["BlockerReport"]
     class rules__CiGate["CiGate"]
     class rules__Commit["Commit"]
@@ -35,6 +37,4 @@ classDiagram
     class rules__InterviewProgress["InterviewProgress"]
     class rules__LandCandidate["LandCandidate"]
     class rules__LandWait["LandWait"]
-    class rules__LaunchCandidate["LaunchCandidate"]
-    class rules__LockFacts["LockFacts"]
 ```

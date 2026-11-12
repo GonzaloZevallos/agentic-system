@@ -23,6 +23,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__PendingCloseDocs["PendingCloseDocs"]
+    class task__PlanRoute["PlanRoute"]
     class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
@@ -35,11 +37,9 @@ classDiagram
     class task__RoleRun["RoleRun"]
     class task__SettledRow["SettledRow"]
     class task__ShadowRecord["ShadowRecord"]
-    class task__SlicesClosedPatch["SlicesClosedPatch"]
-    class task__Subtask["Subtask"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 7)](classes-process-domain-state-7.md)
-  - `task.Subtask` se asocia con `task_path.PromoteRequest`
+  - `task.TaskState` se asocia con `task.PlanRoute`
