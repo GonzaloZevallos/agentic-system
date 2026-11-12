@@ -53,7 +53,7 @@ def _world(tmp_path, *, number="0079", commands=None, cite="see ADR-0079 for why
     return ports, head, mine
 
 
-def _land(tmp_path, ports):
+def _land(tmp_path, ports, live=frozenset({"renumber"})):
     workspace = ports.workspace
     return landing.land(
         "GH-5",
@@ -64,7 +64,7 @@ def _land(tmp_path, ports):
         frozenset(),
         lambda line: None,
         clock=lambda: "2026-11-12T00:00:00+00:00",
-        live=frozenset({"renumber"}),
+        live=live,
         turn="head",
     )
 
@@ -87,6 +87,7 @@ def test_a_head_holding_0079_is_renamed_to_the_dated_form_and_pushed_once(tmp_pa
     entry = document["landing"][-1]
     assert (entry["step"], entry["mode"], entry["outcome"]) == ("renumber", "dated", "renamed")
     assert not any(e["step"] == "escalate_adr" for e in document["landing"])
+    assert record["carried"] is True  # every reference is under docs/
 
 
 def test_a_head_holding_0085_after_an_applied_decision_is_renamed_without_a_question(tmp_path):
@@ -171,6 +172,24 @@ def test_a_slug_master_already_holds_is_declined_and_pushes_nothing(tmp_path):
     assert (entry["outcome"], entry["cause"]) == ("declined", "slug_taken")
 
 
+def test_a_declined_rename_is_asked_once_with_its_cause_and_no_numeric_decision(tmp_path):
+    ports, _head, _mine = _world(tmp_path)
+    ports.workspace.advance_master("docs/adr/20260101-mine.md")
+    live = frozenset({"renumber", "escalate_adr"})
+    _land(tmp_path, ports, live)
+
+    asked = _land(tmp_path, ports, live)
+    again = _land(tmp_path, ports, live)
+
+    assert asked.step == "escalate_adr"
+    document = ports.documents.load("GH-5")
+    [question] = [e for e in document["landing"] if e["step"] == "escalate_adr"]
+    assert "moves" not in question and document["escalation_class"] == "questions"
+    [(_, body)] = ports.tracker.comments
+    assert "slug after the date" in body and "an owner's `Decision:`" not in body
+    assert again.step != "escalate_adr"
+
+
 def test_the_first_commit_date_names_an_adr_without_a_date_line(tmp_path):
     ports, _head, mine = _world(tmp_path)
     head = ports.workspace.branch_commits[-1].sha
@@ -181,3 +200,18 @@ def test_the_first_commit_date_names_an_adr_without_a_date_line(tmp_path):
 
     [(_, relatives, _message)] = ports.workspace.path_commits
     assert "docs/adr/20261103-mine.md" in relatives
+
+
+def test_a_generate_that_times_out_pushes_nothing_and_records_a_retry(tmp_path):
+    commands = MemoryCommands(**{"make docs": [CommandResult(0, "", timed_out=True)]})
+    ports, _head, _mine = _world(tmp_path, commands=commands)
+
+    _land(tmp_path, ports)
+
+    assert ports.workspace.pushes == [] and ports.workspace.path_commits == []
+    entry = ports.documents.load("GH-5")["landing"][-1]
+    assert (entry["step"], entry["outcome"], entry["cause"]) == (
+        "renumber",
+        "retry",
+        "generate_failed",
+    )

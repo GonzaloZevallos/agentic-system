@@ -25,6 +25,7 @@ from ..domain.task import (
     EscalationClass,
     FindingRecord,
     PlanSettledRow,
+    RenumberCause,
     TaskState,
     add_merge_ci,
     apply,
@@ -666,7 +667,7 @@ def _spots_text(spots: Sequence[tuple[str, int]]) -> str:
     return f"{text}\nand {left} more" if shown and left else text if shown else f"and {left} more"
 
 
-_DATED_CAUSES: dict[str, str] = {
+_DATED_CAUSES: dict[RenumberCause, str] = {
     "slug_taken": ("the slug after the date is already another ADR's, on master or on this branch"),
     "unrewritable": (
         "a reference to the old number is a list, a range or a form the rule does not rewrite, "
@@ -677,7 +678,7 @@ _DATED_CAUSES: dict[str, str] = {
 }
 
 
-def dated_reason(cause: str | None, cap: int) -> str:
+def dated_reason(cause: RenumberCause | None, cap: int) -> str:
     """The question of the `escalate_adr` step on a product that names its ADRs by date (GH-611):
     the rename to `<yyyymmdd>-<slug>.md` the landing makes on its own could not be made. It names
     the cause (`cause`, the closed `RenumberCause`; `None` is the cap `cap` spent by retries) and
@@ -714,12 +715,13 @@ def escalate_adr(context: LandingContext) -> None:
             and entry.get("head") == context.head
             and entry.get("outcome") == "declined"
         ]
-        cause = declined[-1].get("cause") if declined else None
+        recorded = declined[-1].get("cause") if declined else None
+        cause = next((known for known in _DATED_CAUSES if known == recorded), None)
         _escalate(
             context,
             "ADR rename to the dated form the landing could not make",
             "questions",
-            [dated_reason(cause if isinstance(cause, str) else None, cap)],
+            [dated_reason(cause, cap)],
         )
         document = context.ports.documents.load(context.task_id)
         if document is None:

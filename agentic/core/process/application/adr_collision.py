@@ -140,7 +140,9 @@ def _numbered(path: str) -> bool:
     return adr_numbers.number_of(path.rsplit("/", 1)[-1]) is not None
 
 
-def naming_of(collision: object) -> Literal["numbered", "dated"] | None:
+def naming_of(
+    collision: Renaming | Ambiguous | Undated | None,
+) -> Literal["numbered", "dated"] | None:
     """GH-611: how the product names its ADRs, only when a collision was found. The one read
     of the stack is `adr_collision`'s: `Undated` is its answer on a dated product, so no
     second read is made here."""
