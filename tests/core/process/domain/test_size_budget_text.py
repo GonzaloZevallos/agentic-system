@@ -92,11 +92,11 @@ def test_a_number_that_only_contains_a_limit_is_not_reported():
 
 
 def test_a_description_that_writes_a_limit_in_its_fixed_text_is_reported():
-    source = '''
+    source = """
 class Part:
     hand_files: int = Field(description="at most 15 files")
     hand_lines: int = Field(description=f"at most {size_budget.HAND_LINES}, not 400 more")
     test_lines: int = Field(description=f"at most {size_budget.TEST_LINES}")
     other: int = Field(description="600 is fine on a field that is no size")
-'''
+"""
     assert description_problems(source) == ["Part.hand_files: 15", "Part.hand_lines: 400"]
