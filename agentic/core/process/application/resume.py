@@ -522,7 +522,7 @@ def prepare(
         )
     if estimate is not None and paused.get("fit_question"):
         raise ValueError(
-            f"{task_id} is paused asking whether to build the part whole, not for an "
+            f"{task_id} is paused asking whether to narrow the part, not for an "
             "estimate: --estimate does not apply; comment on the issue and resume"
         )
     decision = None
@@ -631,7 +631,11 @@ def _fit_question(task_id: str, paused: TaskState) -> str:
     `rules.fit_question_text` wrote; rebuilt from the marker if the state lost it."""
     if asked := paused.get("escalated"):
         return asked
-    part_of = rules.split_part_of(paused.get("description", "")) or (task_id, 0)
+    part_of = rules.split_part_of(paused.get("description", "")) or (
+        task_id,
+        0,
+        rules.MAX_SPLIT_DEPTH,
+    )
     return rules.fit_question_text(task_id, part_of, None)
 
 

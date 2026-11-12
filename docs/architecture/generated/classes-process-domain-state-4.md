@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 4 de 6, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 4 de 7, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -19,30 +19,27 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
+  - [domain: state (parte 7)](classes-process-domain-state-7.md)
 
 ```mermaid
 classDiagram
+    class task__DependencyState["DependencyState"]
+    class task__DesignItemRecord["DesignItemRecord"]
+    class task__EscalationPatch["EscalationPatch"]
+    class task__EscalationPauseEntry["EscalationPauseEntry"]
+    class task__EstimateRecord["EstimateRecord"]
+    class task__EstimateRevision["EstimateRevision"]
+    class task__EvaluatedPatch["EvaluatedPatch"]
+    class task__EvaluationRef["EvaluationRef"]
+    class task__Failure["Failure"]
+    class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
-    class task__FullCheckEntry["FullCheckEntry"]
-    class task__FullChecksRecord["FullChecksRecord"]
-    class task__GateRecord["GateRecord"]
-    class task__InterviewStats["InterviewStats"]
-    class task__LandedSlice["LandedSlice"]
-    class task__LandedSliceRef["LandedSliceRef"]
-    class task__LandingEntry["LandingEntry"]
-    class task__LapsePauseEntry["LapsePauseEntry"]
-    class task__MergeCiRecord["MergeCiRecord"]
-    class task__MergeConflictRecord["MergeConflictRecord"]
-    class task__MergeOutcome["MergeOutcome"]
-    class task__MergeRefusalRecord["MergeRefusalRecord"]
+    task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 3)](classes-process-domain-state-3.md)
-  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
-  - `task.TaskState` se asocia con `task.InterviewStats`
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
+  - `task.TaskState` se asocia con `task.EvaluationRef`

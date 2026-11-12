@@ -75,7 +75,7 @@ from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application import stop as stopmod
-from .core.process.application.delivered import files_patch
+from .core.process.application.delivered import files_patch, size_patch
 from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
@@ -112,7 +112,14 @@ from .core.process.application.restore import restore_task
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
-from .core.process.domain import experiment, legacy_names, reaping, rules, stack_signals
+from .core.process.domain import (
+    experiment,
+    legacy_names,
+    reaping,
+    rules,
+    size_budget,
+    stack_signals,
+)
 from .core.process.domain import landing as landing_rules
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
@@ -2090,9 +2097,14 @@ def _close_document(
         values["merge_commit"] = pull_request.merge_commit
     # ADR-0054: the files the pull request changed, next to the estimate; a pull request that
     # never merged still has a count, and an unreadable one leaves the key out.
-    path = ports.documents.record_closure(
-        task_id, {**values, **files_patch(reference, ports, _warn)}
-    )
+    patch: dict[str, object] = {**values, **files_patch(reference, ports, _warn)}
+    # GH-592: a pull request a person merged has no `actual_size` yet (the auto-merge records
+    # it when it merges). The merge commit's first parent is the three-dot upstream there;
+    # an unreadable diff leaves the key out, as `actual_files` does.
+    if pull_request.merge_commit and size_budget.ACTUAL_KEY not in raw:
+        merge = pull_request.merge_commit
+        patch.update(size_patch(task_id, f"{merge}^1", merge, ports, _warn))
+    path = ports.documents.record_closure(task_id, patch)
     _score_closed(task_id, ports, pull_request, scorer)
     return _ClosureOutcome(
         "closed",

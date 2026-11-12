@@ -36,6 +36,7 @@ from ..domain.scratch import (
     SpaceReading,
     SweepDecision,
 )
+from ..domain.size_budget import NumstatRow
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -638,6 +639,13 @@ class ProductStack(Protocol):
         commit `revision` declares them. `None` when the product declares none, which is
         every product until it adopts generated docs -- never an error. Its reserved
         check is already in `checks`; this is the block itself, for the prompts."""
+        ...
+
+    def generated(self, revision: str) -> tuple[str, ...]:
+        """The globs of the paths the product generates (`core.knowledge`, GH-592), as the
+        commit `revision` declares them: besides its lockfiles and `docs.paths`, what never
+        counts against a task's size budget. Empty when the key is absent. Raises `ValueError`
+        when the key is there but broken."""
         ...
 
     def performance(self, revision: str) -> dict[str, Scenario]:
@@ -1329,6 +1337,14 @@ class Workspace(Protocol):
         """The lines added plus the lines deleted between `base` and `head`
         (`git diff --numstat --no-renames <base>...<head>`, GH-473): how big a subtask's
         change is. A binary file counts as 0. Raises `GitError`."""
+        ...
+
+    def numstat(self, upstream: str, head: str) -> tuple[NumstatRow, ...]:
+        """The size of what `head` adds over `upstream` (`git diff --numstat -M -z
+        <upstream>...<head>`, GH-592): one row per path, under its new name for a rename. The
+        three-dot base keeps what the upstream gained since the branch point out of the count;
+        rename detection makes a pure move cost 0/0. A binary file counts 0/0. Raises
+        `GitError`."""
         ...
 
     def introduced_paths(

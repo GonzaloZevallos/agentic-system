@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentic.core.process.domain import rules, schemas
+from agentic.core.process.domain import rules, schemas, size_budget
 from agentic.core.process.domain.schemas import (
     PRD,
     Answers,
@@ -12,7 +12,9 @@ from agentic.core.process.domain.schemas import (
     TechPlan,
     Verdict,
 )
+from tests.fakes import PART_DEFAULTS
 
+ZERO_SIZE = {"hand_files": 0, "hand_lines": 0, "test_lines": 0}
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
 
@@ -440,8 +442,8 @@ def test_plan_check_for_looks_at_the_bucket_of_the_plans_own_subtask_count():
 
 def _split(cost, files, parts=None, **more):
     two = [
-        {"title": "One", "body": "First slice.", "depends_on": []},
-        {"title": "Two", "body": "Second slice.", "depends_on": [1]},
+        {**PART_DEFAULTS, "title": "One", "body": "First slice.", "depends_on": []},
+        {**PART_DEFAULTS, "title": "Two", "body": "Second slice.", "depends_on": [1]},
     ]
     data = _plan("### Solution", "a")
     return {
@@ -455,7 +457,7 @@ def _split(cost, files, parts=None, **more):
 
 
 def _part(depends_on=(), title="T", body="B"):
-    return {"title": title, "body": body, "depends_on": list(depends_on)}
+    return {**PART_DEFAULTS, "title": title, "body": body, "depends_on": list(depends_on)}
 
 
 def test_a_plan_that_does_not_fit_and_builds_whole_is_refused_with_the_split_reason():
@@ -609,9 +611,12 @@ def test_parts_with_a_checklist_still_answer_to_the_cost_and_file_rules():
 def test_a_bad_checklist_item_next_to_parts_is_refused():
     plan = _split(400.0, 90, tracker_checklist=["Post the verdict\nand close it"])
     with pytest.raises(ValueError, match="one non-empty line"):
-        schemas.validate(schemas.TechPlan, plan, {})
+        schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})
     good = _split(400.0, 90, tracker_checklist=CHECKLIST)
-    assert schemas.validate(schemas.TechPlan, good, {})["tracker_checklist"] == CHECKLIST
+    assert (
+        schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **good}, {})["tracker_checklist"]
+        == CHECKLIST
+    )
 
 
 def test_a_plan_with_no_subtasks_no_parts_and_no_checklist_is_still_refused():
@@ -637,6 +642,7 @@ def test_a_checklist_item_must_be_one_line():
                     "markdown": "m",
                     "estimated_cost_usd": 1,
                     "estimated_files": 0,
+                    **ZERO_SIZE,
                     "ci_required": [],
                     "ci_none_reason": "The work is on the tracker.",
                     "tracker_checklist": [bad],
@@ -686,9 +692,9 @@ def test_an_old_plan_without_performance_parses_with_it_empty():
     old = _plan("m", "api")
     assert "performance" not in old
     assert (
-        schemas.validate(TechPlan, {**old, "estimated_cost_usd": 3, "estimated_files": 4}, {})[
-            "performance"
-        ]
+        schemas.validate(
+            TechPlan, {**old, "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}, {}
+        )["performance"]
         == []
     )
 
@@ -712,6 +718,7 @@ def test_a_convened_plan_round_trips_through_validate():
         **_plan("m", "perf"),
         "estimated_cost_usd": 3,
         "estimated_files": 4,
+        **ZERO_SIZE,
         "performance": [_scenario()],
     }
     data = schemas.validate(TechPlan, raw, {})
@@ -740,13 +747,13 @@ def test_a_convened_plan_round_trips_through_validate():
     ],
 )
 def test_a_scenario_with_a_bad_unit_source_volume_or_basis_is_refused(bad):
-    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}
     with pytest.raises(ValueError):
         schemas.validate(TechPlan, {**raw, "performance": [_scenario(**bad)]}, {})
 
 
 def test_a_plan_cannot_name_a_scenario_or_a_metric_twice():
-    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}
     with pytest.raises(ValueError, match="twice"):
         schemas.validate(TechPlan, {**raw, "performance": [_scenario(), _scenario()]}, {})
     budget = _scenario()["budgets"][0]
@@ -794,7 +801,7 @@ def _budget(**over) -> dict:
     ],
 )
 def test_the_budget_and_scenario_checks_refuse_what_they_guard(scenario, message):
-    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE}
     with pytest.raises(ValueError, match=message):
         schemas.validate(TechPlan, {**raw, "performance": [scenario]}, {})
 
@@ -812,6 +819,7 @@ def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_t
             **_plan("m", "perf"),
             "estimated_cost_usd": 3,
             "estimated_files": 4,
+            **ZERO_SIZE,
             "performance": [_scenario()],
         },
         {},
@@ -826,7 +834,8 @@ def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_t
 # first with the rule and no remedy that names parts, and an over-the-line subtask plan is
 # left to the plan stage, which asks the human once.
 
-PART_OF = ("GH-316", 2)
+PART_OF = ("GH-316", 2, 2)
+PART_AT_DEPTH_ONE = ("GH-316", 2, 1)
 # Median 10, p90 200: a declared 20 USD is over the line by the reference alone.
 HIGH_REFERENCE = [10, 10, 10, 10, 200, 200, 200]
 
@@ -834,13 +843,24 @@ HIGH_REFERENCE = [10, 10, 10, 10, 200, 200, 200]
 def test_a_part_that_writes_parts_and_a_checklist_is_told_to_write_subtasks_only():
     # The GH-346 shape: the checklist refusal is never reached.
     check = schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_OF)
-    with pytest.raises(ValueError, match="part 2 of GH-316.*never split again.*subtasks only") as e:
+    with pytest.raises(
+        ValueError, match="part 2 of GH-316.*depth 2.*at most 2 levels.*subtasks only"
+    ) as e:
         check(_split(400.0, 90, tracker_checklist=CHECKLIST))
     assert "write parts" not in str(e.value)
     with pytest.raises(ValueError, match="subtasks only"):
         check(_split(20.0, 3))  # parts that would fit too: refused all the same
     with pytest.raises(ValueError, match="subtasks only"):
         check({**_estimated(20.0, 3), "parts": _split(20.0, 3)["parts"]})  # both shapes
+
+
+def test_a_part_at_depth_one_splits_again_like_any_task():
+    check = schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_AT_DEPTH_ONE)
+    check(_split(400.0, 90))  # parts over the line are accepted
+    with pytest.raises(ValueError, match="does not fit.*write parts"):
+        check(_estimated(400.0, 90))  # subtasks over the line are refused, as for a task
+    with pytest.raises(ValueError, match="fits: write subtasks"):
+        check(_split(20.0, 3))  # parts that would fit are refused, as for a task
 
 
 def test_a_part_with_subtasks_over_the_line_by_the_reference_alone_passes_the_check():
@@ -893,7 +913,7 @@ def _ci_plan(**more):
         for key, value in _plan("m", "api").items()
         if key not in ("ci_required", "ci_none_reason")
     }
-    return {**base, "estimated_cost_usd": 3, "estimated_files": 4, **more}
+    return {**base, "estimated_cost_usd": 3, "estimated_files": 4, **ZERO_SIZE, **more}
 
 
 def test_a_plan_with_checks_and_no_reason_is_valid():
@@ -1067,7 +1087,9 @@ def _finding(**more):
 
 def test_a_plan_size_is_a_non_negative_cost_and_file_count():
     ok = schemas.validate(
-        schemas.PlanSize, {"markdown": "", "estimated_cost_usd": 12.5, "estimated_files": 4}, {}
+        schemas.PlanSize,
+        {"markdown": "", "estimated_cost_usd": 12.5, "estimated_files": 4, **ZERO_SIZE},
+        {},
     )
     assert ok["estimated_cost_usd"] == 12.5 and ok["estimated_files"] == 4
     for bad in (
@@ -1113,6 +1135,7 @@ def _requiring(*paths: str) -> dict:
         "markdown": "m",
         "estimated_cost_usd": 1,
         "estimated_files": 0,
+        **ZERO_SIZE,
         "ci_required": [],
         "ci_none_reason": "The work is on the tracker.",
         "tracker_checklist": ["Post the verdict"],
@@ -1190,3 +1213,142 @@ def test_a_review_without_a_revision_validates_and_a_cited_one_needs_a_one_line_
     ):
         with pytest.raises(ValueError):
             schemas.Review.model_validate(_review(**bad))
+
+
+# The size budget in the plan check (GH-592): a plan that declares its hand-written size is
+# judged on it, through `rules.estimate_fits`; one written before the fields is judged as before.
+
+
+def _sized(cost, hand_files, hand_lines, test_lines=0, files=3):
+    return {
+        **_estimated(cost, files),
+        "hand_files": hand_files,
+        "hand_lines": hand_lines,
+        "test_lines": test_lines,
+    }
+
+
+def test_a_plan_with_no_size_fields_fits_and_is_refused_exactly_as_before():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    check(_estimated(150.0, size_budget.LEGACY_FILES))
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_estimated(150.0, size_budget.LEGACY_FILES + 1))
+    assert schemas.declared_size(_estimated(20.0, 3)) is None
+
+
+def test_a_declared_size_is_judged_times_the_floor_and_the_total_files_no_longer_count():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    check(_sized(20.0, 10, 100, files=90))  # 10 x 1.5 = 15 hand-written files: on the cap
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_sized(20.0, 11, 100))  # 11 x 1.5 = 16.5, judged 17
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_sized(20.0, 5, 267))  # 267 x 1.5 = 400.5, judged 401
+    check(_sized(20.0, 5, 266))
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_sized(20.0, 5, 100, size_budget.TEST_LINES + 1))
+
+
+def test_the_floor_factor_is_a_parameter_of_the_check():
+    check = schemas.plan_check_for(_history(1, []), 0.0, size_ratio=1.0)
+    check(_sized(20.0, 15, 400, size_budget.TEST_LINES))
+
+
+def test_a_waived_fit_still_lets_an_oversized_plan_build_whole():
+    check = schemas.plan_check_for(_history(1, []), 0.0, fit_waived=True)
+    check(_sized(20.0, 30, 900))
+
+
+def test_plan_fits_reports_the_declared_and_the_judged_size_and_what_was_crossed():
+    fit = schemas.plan_fits(_sized(20.0, 11, 100, 700), _history(1, []))
+    assert not fit.fits
+    assert fit.size == size_budget.PlanSize(11, 100, 700)
+    assert fit.judged_size == size_budget.PlanSize(17, 150, 700)
+    assert fit.crossed == ("hand_files", "test_lines")
+    old = schemas.plan_fits(_estimated(20.0, 3), _history(1, []))
+    assert (old.size, old.judged_size, old.crossed) == (None, None, ())
+
+
+def test_a_fresh_plan_output_without_the_size_fields_is_refused_by_the_schema():
+    sized = _sized(20.0, 3, 50)
+    good = {**sized, "invariants": [], "integration": "", "markdown": "### Solution"}
+    assert schemas.validate(TechPlan, good, {})["hand_files"] == 3
+    for field in ("hand_files", "hand_lines", "test_lines"):
+        without = {k: v for k, v in good.items() if k != field}
+        with pytest.raises(ValueError, match=field):
+            schemas.validate(TechPlan, without, {})
+    with pytest.raises(ValueError, match="hand_lines"):
+        schemas.validate(TechPlan, {**good, "hand_lines": -1}, {})
+
+
+def test_the_size_field_descriptions_are_rendered_from_the_budget():
+    fields = schemas.TechPlan.model_fields
+    assert str(size_budget.HAND_FILES) in (fields["hand_files"].description or "")
+    assert str(size_budget.HAND_LINES) in (fields["hand_lines"].description or "")
+    assert str(size_budget.TEST_LINES) in (fields["test_lines"].description or "")
+
+
+def test_a_size_field_description_does_not_retype_the_classification_rule():
+    # The rule of what counts (tests, generated paths, lockfiles, docs) lives in
+    # `size_budget.budget_text`; a description that spells it out is a second copy.
+    rule = ("generated", "lockfile", "readme", "adr", "docs", *size_budget.LOCKFILES)
+    for name in ("hand_files", "hand_lines", "test_lines"):
+        description = (schemas.TechPlan.model_fields[name].description or "").lower()
+        assert [word for word in rule if word.lower() in description] == [], name
+
+
+# The parts of a split carry a size, a kind and a guard (GH-592).
+
+
+def _piece(hand_files=1, hand_lines=10, test_lines=10, kind="change", depends_on=(), title="T"):
+    return {
+        **_part(depends_on, title=title),
+        "hand_files": hand_files,
+        "hand_lines": hand_lines,
+        "test_lines": test_lines,
+        "kind": kind,
+    }
+
+
+def test_a_part_over_the_size_budget_is_refused_by_name_and_field():
+    parts = [_piece(), _piece(hand_files=11, depends_on=[1])]  # 11 x 1.5 files is over 15
+    with pytest.raises(ValueError, match=r"part 2 does not fit.*hand_files"):
+        schemas.parts_check(parts)
+
+
+def test_the_floor_ratio_judges_a_part_as_it_judges_the_plan():
+    parts = [_piece(), _piece(hand_files=6, depends_on=[1])]
+    schemas.parts_check(parts)  # 6 x 1.5 is 9, within 15
+    with pytest.raises(ValueError, match="part 2 does not fit"):
+        schemas.parts_check(parts, 3.0)  # 6 x 3 is 18
+
+
+def test_a_part_with_no_declared_size_is_judged_as_before():
+    schemas.parts_check([_part(), _part([1])])
+
+
+def test_a_migration_with_no_neighbour_is_refused_and_one_with_a_neighbour_is_not():
+    alone = [_piece(), _piece(kind="migration"), _piece(depends_on=[1])]
+    with pytest.raises(ValueError, match="part 2 is a migration with no neighbour"):
+        schemas.parts_check(alone)
+    after = [_piece(), _piece(kind="migration", depends_on=[1])]
+    schemas.parts_check(after)
+    before = [_piece(kind="migration"), _piece(depends_on=[1])]
+    schemas.parts_check(before)
+
+
+def test_a_part_that_splits_needs_exactly_one_terminal_part():
+    two_sinks = [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1])]
+    schemas.parts_check(two_sinks)  # a task that is not a part may write them
+    with pytest.raises(ValueError, match=r"exactly one terminal part.*2 \(parts 2, 3\)"):
+        schemas.parts_check(two_sinks, one_terminal=True)
+    chain = [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1, 2])]
+    schemas.parts_check(chain, one_terminal=True)
+
+
+def test_the_plan_check_asks_for_one_terminal_part_only_of_a_part():
+    data = _split(
+        400.0, 90, [_piece(), _piece(depends_on=[1]), _piece(depends_on=[1])], **ZERO_SIZE
+    )
+    schemas.plan_check_for(_history(1, []), 0.0)(data)
+    with pytest.raises(ValueError, match="exactly one terminal part"):
+        schemas.plan_check_for(_history(1, []), 0.0, part_of=("GH-1", 1, 1))(data)

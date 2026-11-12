@@ -92,9 +92,15 @@ def test_the_seed_has_the_system_rules():
     assert len(parse_entries(DECISIONS.read_text(encoding="utf-8"))) >= 18
 
 
-def test_the_seed_is_in_force_whole():
+def test_the_seed_is_in_force_except_the_entries_a_later_one_replaced():
     text = DECISIONS.read_text(encoding="utf-8")
-    assert owner_rules.live(text) == text
+    entries = parse_entries(text)
+    in_force = owner_rules.live(text)
+    struck = [e for e in entries if e.struck]
+    assert struck
+    assert all(f"### {e.id} " not in in_force and e.text not in in_force for e in struck)
+    assert all(f"### {e.id} " in in_force for e in entries if not e.struck)
+    assert owner_rules.live(in_force) == in_force
 
 
 def test_a_wrong_id_a_dangling_reemplaza_and_a_template_marker_are_each_reported():
@@ -128,9 +134,8 @@ def test_every_rozan_names_an_adr_in_force():
 
 # The entry that states each number the code enforces, and the constant it must equal.
 STATED = {
-    "D-d3cd64da": (("150", rules.SPLIT_COST_USD), ("40", rules.SPLIT_FILES)),
-    "D-99072874": (("300", rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD),),
-    "D-5c088d42": (("300", rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD),),
+    "D-973ac74f": (("150", rules.SPLIT_COST_USD),),
+    "D-5c088d42": (("300", rules.ESTIMATE_CAP_FACTOR * rules.SPLIT_COST_USD),),
 }
 STATED_BY_TEXT = (
     ("Los pull requests de lecciones del playbook", "240", playbook.LESSON_MAX_CHARS),
@@ -298,7 +303,7 @@ def test_the_seed_in_the_context_reaches_the_roles_whole_and_the_prompts_still_r
     built = knowledge_index.build_index(
         {}, {}, {}, None, None, owner={knowledge.OWNER_DECISIONS[1]: seed}
     )
-    first = parse_entries(seed)[0]
+    first = next(e for e in parse_entries(seed) if not e.struck)
     assert first.id in built.text and first.text in built.text
     for role in (roles.PM, roles.TECH_LEAD):
         assert rendered(role, tmp_path)
@@ -318,7 +323,8 @@ def test_the_real_orchestration_file_is_indexed_and_the_decisions_file_goes_whol
     )
     assert knowledge.ORCHESTRATION in "".join(built.files.values())
     assert knowledge.OWNER_DECISIONS[1] in built.text
-    assert parse_entries(DECISIONS.read_text(encoding="utf-8"))[0].id in built.text
+    first = next(e for e in parse_entries(DECISIONS.read_text(encoding="utf-8")) if not e.struck)
+    assert first.id in built.text
 
 
 def test_the_orchestration_file_declares_the_pjm_and_the_tech_lead_as_its_readers():
