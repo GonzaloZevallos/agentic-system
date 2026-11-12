@@ -133,8 +133,9 @@ def archive_subtask(task_id: str, subtask_id: str, ports: Ports) -> str | None:
         return None
     used = raw.get("restarts", {}).get(pair_for(subtask_id).key, 1)
     ref = restart.archive_ref(branch, used, raw.get("system_commit") or "unknown")
-    if workspace.branch_head(branch) is None:
-        return ref  # renamed by an earlier call
+    if workspace.branch_head(branch) is None or ref in workspace.branches(ref):
+        # Renamed by an earlier call: a branch live now is the restarted attempt's, not ours.
+        return ref
     own = task_id if branch == rules.task_branch(task_id) else f"{task_id}.{subtask_id}"
     for worktree in workspace.worktrees(task_id):
         if worktree.name != own:
