@@ -24,6 +24,7 @@ from agentic.core.process.domain import legacy_names
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import ENV_PREFIX, Configuration
 from tests.fakes import (
+    FakeLabelTimeline,
     MemoryKnowledge,
     MemoryStack,
     MemoryTracker,
@@ -6196,18 +6197,6 @@ async def test_restore_of_a_task_whose_lock_is_held_refuses_task_live(tmp_path):
         lock.release("GH-374")
 
 
-class FakeLabelTimeline:
-    """The `LabelTimeline` port: a canned answer, with the calls it was asked."""
-
-    def __init__(self, read: str | None = "2026-08-31T22:00:00Z"):
-        self.read = read
-        self.calls: list[tuple[int, str]] = []
-
-    def label_added_at(self, issue: int, label: str) -> str | None:
-        self.calls.append((issue, label))
-        return self.read
-
-
 def _lead_time_close(tmp_path, pull_request, timeline, closure=None, **task):
     from agentic.shared.configuration import Configuration
 
@@ -6223,7 +6212,7 @@ def _lead_time_close(tmp_path, pull_request, timeline, closure=None, **task):
 
 
 def test_close_records_the_label_and_the_pull_requests_own_merged_at(tmp_path):
-    timeline = FakeLabelTimeline()
+    timeline = FakeLabelTimeline("2026-08-31T22:00:00Z")
     result, doc, _ = _lead_time_close(tmp_path, close_pull_request(), timeline)
     assert result.status == "closed"
     assert doc["lead_time"] == {
@@ -6246,7 +6235,7 @@ def test_close_without_a_port_records_unreadable(tmp_path):
 def test_close_of_a_pull_request_closed_without_merging_records_no_merge_and_reads_nothing(
     tmp_path,
 ):
-    timeline = FakeLabelTimeline()
+    timeline = FakeLabelTimeline("2026-08-31T22:00:00Z")
     pull_request = close_pull_request(state="CLOSED", merged=False)
     _, doc, _ = _lead_time_close(tmp_path, pull_request, timeline)
     assert doc["lead_time"] == {"unknown": "no_merge"} and timeline.calls == []
@@ -6256,7 +6245,7 @@ def test_close_never_rewrites_a_lead_time_already_on_the_document(tmp_path):
     from agentic.core.process.domain import document as doc_module
 
     existing = {"labeled_at": "2026-01-01T00:00:00Z", "merged_at": "2026-01-02T00:00:00Z"}
-    timeline = FakeLabelTimeline()
+    timeline = FakeLabelTimeline("2026-08-31T22:00:00Z")
     _, doc, root = _lead_time_close(tmp_path, close_pull_request(), timeline, lead_time=existing)
     assert doc["lead_time"] == existing and timeline.calls == []
     # also over a block-style key: the bytes of that key stay as written
@@ -6278,7 +6267,7 @@ def test_backfill_replaces_only_no_merge_and_only_for_a_merged_pull_request(tmp_
         "closed_at": "2026-09-01T00:30:00Z",
         "delivery_outcome": "merged",
     }
-    timeline = FakeLabelTimeline()
+    timeline = FakeLabelTimeline("2026-08-31T22:00:00Z")
     result, doc, _ = _lead_time_close(
         tmp_path, close_pull_request(), timeline, closed, lead_time={"unknown": "no_merge"}
     )
@@ -6288,7 +6277,7 @@ def test_backfill_replaces_only_no_merge_and_only_for_a_merged_pull_request(tmp_
         "merged_at": "2026-09-01T01:00:00+00:00",
     }
     for kept in ({"unknown": "unreadable"}, {"labeled_at": "a", "merged_at": "b"}):
-        timeline = FakeLabelTimeline()
+        timeline = FakeLabelTimeline("2026-08-31T22:00:00Z")
         _, doc, _ = _lead_time_close(
             tmp_path / kept.get("unknown", "known"),
             close_pull_request(),

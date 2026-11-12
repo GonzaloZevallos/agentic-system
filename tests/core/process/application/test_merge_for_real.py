@@ -25,7 +25,7 @@ from agentic.core.process.domain import rules
 from agentic.core.process.domain.size_budget import ActualSize
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryTracker, eval_set_yaml, memory_ports, real_commands
+from tests.fakes import FakeLabelTimeline, MemoryTracker, eval_set_yaml, memory_ports, real_commands
 
 GREEN = "test -f feature.txt && test -f upstream.txt"
 # stderr carries one CSI escape and one tab. No single quote, so `World`'s `{checks!r}`
@@ -653,16 +653,6 @@ def test_an_auto_merge_records_the_hand_written_size_it_added_over_master(world)
     )
 
 
-class FakeLabelTimeline:
-    def __init__(self, read: str | None = "2026-10-05T12:00:00Z"):
-        self.read = read
-        self.calls: list[tuple[int, str]] = []
-
-    def label_added_at(self, issue: int, label: str) -> str | None:
-        self.calls.append((issue, label))
-        return self.read
-
-
 def test_the_system_merge_records_the_label_and_the_pull_requests_own_merged_at(world):
     timeline = FakeLabelTimeline()
 
@@ -691,6 +681,7 @@ def test_a_pull_request_read_that_raises_after_the_merge_is_unreadable_not_a_fai
     real = world.tracker.pull_request
 
     def read(reference: str):
+        pull_request_number(reference)
         if world.tracker.merge_calls:
             raise OSError("gh vanished")
         return real(reference)
@@ -705,6 +696,7 @@ def test_a_pull_request_read_that_raises_after_the_merge_is_unreadable_not_a_fai
 
 def test_a_merge_that_failed_but_landed_records_the_lead_time_from_the_pull_request(world):
     def landed(reference: str, head: str) -> str:
+        pull_request_number(reference)
         world.tracker.prs[URL] = dataclasses.replace(
             world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
         )
