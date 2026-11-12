@@ -1018,6 +1018,10 @@ class Subtask(TypedDict, total=False):
     # touched, and on every document written before this task existed — every read is
     # `.get("conflicted_paths", [])`.
     conflicted_paths: list[str]
+    # Set by `plan_revision.revise` on a final unit whose work was approved before a
+    # promotion re-planned the task and whose brief did not change: its review is a full
+    # one against the new PRD. Absent everywhere else.
+    prd_recheck: bool
 
 
 # One entry of `TaskState.pause_log` (issue #137): the append-only register the

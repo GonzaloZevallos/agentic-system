@@ -41,3 +41,10 @@ def sizes(assignment: Mapping[str, Any] | None, plan_review: str) -> bool:
     if isinstance(switches, Mapping):
         return "plan_review" in switches
     return plan_review == "critic"
+
+
+def after_promotion(has_interview_section: bool) -> Literal["resume", "critic"]:
+    """The planning stage of a task re-planned after a promotion (GH-591): the interview
+    session that already exists resumes (with two rounds of margin), or the critic runs once.
+    Never a new interview: a promotion revises the plan, it does not redo it."""
+    return "resume" if has_interview_section else "critic"
