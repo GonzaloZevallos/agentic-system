@@ -235,7 +235,7 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
   UI Lead, PM→Tech Lead, QA Performance→Tech Lead, la integración y el par de los chequeos
   completos. PjM entrega la tarea, el historial de devoluciones y el motivo de cada una.
 - Al humano se le pregunta solo lo que es de **juicio** (qué construir, un compromiso, aceptar
-  un riesgo). Lo **mecánico** se retoma solo, con tope por causa: la red o el DNS, los errores
+  un riesgo). Lo **mecánico** se retoma solo, hasta 3 retomas por tarea (`MECHANICAL_RETAKE_MAX`, contadas desde el último comentario del humano): la red o el DNS, los errores
   transitorios de GitHub, el CI sin veredicto, una colisión de número de ADR. Gastado el tope,
   escala con la evidencia adjunta.
 - Cada escalado trae una sola pregunta, la respuesta recomendada y las opciones, cada una un

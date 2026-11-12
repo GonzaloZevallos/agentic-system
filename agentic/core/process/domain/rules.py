@@ -3658,11 +3658,9 @@ def increment_patch(state: TaskState) -> dict[str, Any]:
 
 # The four `FailureReason`s a pause never needed a human for (ADR-0029, extended by
 # issue #137's own `network` and GH-391's `disk_full`): the account's own quota, the
-# provider's own server, the network down, or the disk full. `rules.auto_resumable` is the
-# only reader of this tuple; the scorecard's own exclusion (`core.measurement.domain.
-# scorecard.EXTERNAL_FAILURE_REASONS`) is a separate copy of the same literals --
-# hexagonal keeps `core.process.domain` from importing `core.measurement`, so nothing
-# here imports it.
+# provider's own server, the network down, or the disk full. `rules.auto_resumable` reads this
+# tuple, and so does the measurement (`core.measurement.domain.scorecard`, for its own failures),
+# which imports it rather than keeping a copy; `rules.pause_kind` is the one classifier of a pause.
 EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network", "disk_full")
 
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's

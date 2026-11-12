@@ -64,10 +64,27 @@ def test_the_questions_class_lists_the_roles_questions_one_per_line(cfg):
 
 
 def test_a_restarted_attempt_that_returned_again_asks_for_a_change_to_the_brief(cfg):
-    again = state("returned twice", "returns", restarts={"tech_lead_developer": 1})
+    again = state(
+        "Tech Lead→Developer (a) hit 2 returns: x",
+        "returns",
+        restarts={"Tech Lead→Developer (a)": 1},
+    )
     text = escalate.comment(again, cfg, memory_ports())
 
     assert "Which change to the brief should it try?" in text
+
+
+def test_another_pair_that_never_restarted_keeps_the_plain_returns_question(cfg):
+    # The input the prompt must not misread: some other pair restarted, this one did not.
+    other = state(
+        "Tech Lead→Developer (b) hit 2 returns: x",
+        "returns",
+        restarts={"Tech Lead→Developer (a)": 1},
+    )
+    text = escalate.comment(other, cfg, memory_ports())
+
+    assert "Which change to the brief" not in text
+    assert "The pair kept returning the same work. What should change?" in text
 
 
 def test_a_state_with_no_class_keeps_the_comment_it_had(cfg):

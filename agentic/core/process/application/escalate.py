@@ -81,10 +81,11 @@ def _prompt_block(
 ) -> list[str]:
     """The one-word block (GH-593): a question, the recommended answer and the options, from
     `escalation_prompts` and closed by the escalation's class and cause. A `returns` escalation of
-    a restarted attempt asks what to change in the brief. For `questions`, the role's questions are
-    the question, one per line, and answering them in free text is the recommended option.
+    a pair whose subtask restarted asks what to change in the brief. For `questions`, the role's
+    questions are the question, one per line, and answering them in free text is recommended.
     Presentation only: nothing here decides what happens next."""
-    if cls == "returns" and any(state.get("restarts", {}).values()):
+    pair = rules.returns_pair(state)
+    if cls == "returns" and pair is not None and state.get("restarts", {}).get(pair, 0) > 0:
         question, recommended, options = escalation_prompts.restarted_returns_prompt()
     else:
         question, recommended, options = escalation_prompts.prompt_for(
