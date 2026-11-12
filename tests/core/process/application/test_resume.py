@@ -684,43 +684,46 @@ def test_decision_since_is_none_without_a_human_comment_after_the_escalation():
     assert resume.decision_since([], "Escalated: ") is None
 
 
-# A part whose plan is over the line asked "build it whole or stop" (ADR-0054): the pause is
-# the plan stage's `rules.part_over_line`, kept with its subtasks, and a resume builds it whole.
+# A part at the depth cap whose plan is over the line asked "narrow it or stop" (GH-592): the
+# pause is the plan stage's `rules.part_over_line`, with no subtasks queued, and a resume
+# plans the task again.
 
 
-def asked_to_build_whole():
+def asked_to_narrow():
     figures = schemas.FitDecision(False, 20.0, 5, 300.0)
     return {
         "id": "GH-338",
         "title": "Second half",
-        "description": f"Second half.\n\n{rules.split_marker('GH-316', 2)}",
-        "type": "feature",
+        "description": f"Second half.\n\n{rules.split_marker('GH-316', 2, 2)}",
+        "type": "platform_enhancement",
         "cost_usd": 3.0,
         "estimate": {"cost_usd": 20.0, "files": 5},
-        "subtasks": {"api": sub("api", "pending", None, None)},
-        **rules.part_over_line("GH-338", ("GH-316", 2), figures, at="2026-11-06T12:00:00+00:00"),
+        **rules.part_over_line("GH-338", ("GH-316", 2, 2), figures, at="2026-11-06T12:00:00+00:00"),
     }
 
 
-def test_a_comment_on_the_part_over_the_line_builds_it_whole_through_the_fan_in(cfg):
+def test_a_comment_on_the_part_over_the_line_plans_it_again_and_waives_nothing(cfg):
     r = resume.prepare(
         "GH-338",
-        asked_to_build_whole(),
+        asked_to_narrow(),
         "checkpoint",
         cfg,
-        decided("Build it whole."),
+        decided("Cut the export."),
     )
-    assert r.target == "integrate"
-    assert r.resumed["fit_waived"] is True and r.resumed["fit_question"] is False
+    assert r.target == "plan"
+    assert "fit_waived" not in r.resumed and r.resumed["fit_question"] is False
+    assert "Cut the export." in r.resumed["sections"]["Human"]
     assert r.resumed.get("estimate_revisions") is None
     assert r.resumed["estimate"] == {"cost_usd": 20.0, "files": 5}
 
 
 def test_the_estimate_flag_on_the_part_over_the_line_is_refused(cfg):
-    with pytest.raises(ValueError, match="build the part whole.*comment on the issue and resume"):
+    with pytest.raises(
+        ValueError, match="asking whether to narrow the part.*comment on the issue and resume"
+    ):
         resume.prepare(
             "GH-338",
-            asked_to_build_whole(),
+            asked_to_narrow(),
             "checkpoint",
             cfg,
             decided("Build it whole."),
@@ -729,7 +732,7 @@ def test_the_estimate_flag_on_the_part_over_the_line_is_refused(cfg):
 
 
 def test_no_comment_on_the_part_over_the_line_repeats_the_question_and_never_resumes(cfg):
-    state = asked_to_build_whole()
+    state = asked_to_narrow()
     with pytest.raises(resume.WaitingOnHuman) as asked:
         resume.prepare("GH-338", state, "checkpoint", cfg, decided())
     message = str(asked.value)

@@ -842,7 +842,9 @@ HIGH_REFERENCE = [10, 10, 10, 10, 200, 200, 200]
 def test_a_part_that_writes_parts_and_a_checklist_is_told_to_write_subtasks_only():
     # The GH-346 shape: the checklist refusal is never reached.
     check = schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_OF)
-    with pytest.raises(ValueError, match="part 2 of GH-316.*depth 2.*at most 2 levels.*subtasks only") as e:
+    with pytest.raises(
+        ValueError, match="part 2 of GH-316.*depth 2.*at most 2 levels.*subtasks only"
+    ) as e:
         check(_split(400.0, 90, tracker_checklist=CHECKLIST))
     assert "write parts" not in str(e.value)
     with pytest.raises(ValueError, match="subtasks only"):

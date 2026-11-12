@@ -1279,11 +1279,15 @@ class TrackerPosted(TypedDict):
 
 class PartRecord(TypedDict):
     """One part of a split plan as the document keeps it (ADR-0054): the issue the
-    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
+    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts.
+    `depth` is how deep the part sits in the split (GH-592): 1 for a part of a task that is
+    not a part, 2 for a part of a part. Absent on a record written before parts could split
+    again, which reads as 1."""
 
     title: str
     body: str
     depends_on: list[int]
+    depth: NotRequired[int]
 
 
 # Why a `full_checks` run that wanted GitHub CI ran the local full tier instead (GH-376): a
