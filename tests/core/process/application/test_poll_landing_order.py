@@ -338,7 +338,8 @@ def test_an_owned_task_that_is_not_the_head_is_not_anchored():
 
 
 COLLISION = adr_numbers.Renaming((("docs/adr/0001-a.md", "docs/adr/0002-a.md"),), {})
-AMBIGUOUS = adr_numbers.Ambiguous("unclassified_token", "app/main.py:228", (("a", "b"),))
+# A collision the rule cannot settle (D-be76583a: `duplicate_own_number` is always asked).
+AMBIGUOUS = adr_numbers.Ambiguous("duplicate_own_number", "0049 twice", (("a", "b"),))
 
 
 def _collide(monkeypatch, collision, *colliding: str) -> None:

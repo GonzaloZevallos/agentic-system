@@ -368,7 +368,7 @@ def test_d_be76583a_a_collision_the_rule_settles_is_applied_with_no_question():
     ids=["duplicate_own_number", "no_moves", "renaming"],
 )
 def test_d_be76583a_a_collision_the_rule_cannot_settle_is_still_asked(collision):
-    step = landing_plan.step_for({}, "adr_number_taken", _adr_facts(collision))
+    step = landing_plan.step_for({}, "adr_number_taken", _adr_facts(collision), turn="head")
     assert step.kind != "apply_adr_decision"
 
 
@@ -752,7 +752,11 @@ def test_red_names_on_base_compared_with_a_head_keeps_only_the_names_red_on_both
 # --- GH-588: the turn in the landing order ---
 
 
-def test_a_waiting_task_is_left_alone_by_the_plan_and_reads_no_slice_inputs():
+def test_a_waiting_task_is_left_alone_by_the_plan_and_reads_no_slice_inputs(monkeypatch):
+    monkeypatch.setattr(
+        landing, "ADR_AUTO_APPLY", False
+    )  # the owner's chain; the rule's is tested above
+
     def provider():
         raise AssertionError("a waiting task must not read the slice inputs")
 
