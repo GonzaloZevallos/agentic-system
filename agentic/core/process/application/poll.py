@@ -304,7 +304,14 @@ def _merge_facts(
         open_important=sum(len(rows) for rows in partition.owned.values()) + len(partition.plan),
         open_outside=len(partition.outside),
         important_pass_done=rules.important_pass_spent(raw, resolved_only=True),
-        pr_state=pull_request.state if pull_request is not None else None,
+        # GH-610: the system's own close of a body fix is not a `closed` result.
+        pr_state=(
+            None
+            if pull_request is None
+            else "OPEN"
+            if rules.closed_for_body_fix(raw, pull_request.head_oid)
+            else pull_request.state
+        ),
         pr_head=pr_head,
         in_eval_set=None if eval_set is None else number in eval_set,
         touched_paths=None,
@@ -421,9 +428,15 @@ def _landing_step(
     tracker is read only for the CI shape or a failure with attempts); when it is released the
     step is the one `landing_plan.released_step` gives on the released view, the one `land`
     recomputes, so the child registers under the run kind of the step it will take."""
+    if facts.pr_head is not None and landing_plan.open_fix(
+        landing_plan.live_entries(raw), facts.pr_head
+    ):
+        # GH-610: a body fix left open (the pull request may be closed) is taken again.
+        return landing_rules.LandingStep("fix_pr_body", refusal)
+    non_code = landing_plan.non_code_state(ports, raw, refusal, facts)
     waiting = cfg is not None and landing_plan.release_asked(
         raw,
-        landing_plan.step_for(raw, refusal, facts, turn=turn).kind,
+        landing_plan.step_for(raw, refusal, facts, turn=turn, non_code=non_code).kind,
         refusal=refusal,
         facts=facts,
     )
@@ -435,18 +448,27 @@ def _landing_step(
         else None
     )
     if outcome is None or not outcome.released or cfg is None or facts.pr_head is None:
-        return landing_plan.pending(raw, refusal, facts, live, now, False, turn=turn)
+        return landing_plan.pending(
+            raw, refusal, facts, live, now, False, turn=turn, non_code=non_code
+        )
     at = now.isoformat()
     ancestry = (
         landing_plan.head_ancestry(ports, cfg, facts.pr_head, facts.current_master)
         if facts.current_master is not None
         else None
     )
-    step = landing_plan.released_step(
-        raw, outcome, facts, refusal, at=at, ancestry=ancestry, turn=turn
-    )
     patch = landing_plan.release_patch(raw, outcome, facts.current_master, at)
     view = apply(raw, patch) if patch else raw
+    step = landing_plan.released_step(
+        raw,
+        outcome,
+        facts,
+        refusal,
+        at=at,
+        ancestry=ancestry,
+        turn=turn,
+        non_code=landing_plan.non_code_state(ports, view, refusal, facts),
+    )
     if step.kind == "wait" and patch and refusal == "ci_no_verdict":
         # GH-463: the release of a `ci_no_verdict` escalation is persisted by a `land` child.
         return step
@@ -646,7 +668,11 @@ def assess_merge(
         pull_request = ports.tracker.pull_request(reference) if reference else None
     except (ValueError, OSError):
         pull_request = None  # reads as not open: refused by the decision, with its line
-    if pull_request is not None and rules.pr_abandoned(pull_request.state):
+    if (
+        pull_request is not None
+        and rules.pr_abandoned(pull_request.state)
+        and not rules.closed_for_body_fix(raw, pull_request.head_oid)
+    ):
         return Abandoned(pull_request)
     facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
     # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this

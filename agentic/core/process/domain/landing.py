@@ -1883,7 +1883,7 @@ class ApiBreakAnswer:
     with that reason; `rejected` that the re-ask was spent and nothing is posted."""
 
     outcome: AnswerOutcome
-    patch: ReleasePatch | dict[str, Any]
+    patch: ReleasePatch
     reason: pull_request.RejectReason | None = None
 
 
