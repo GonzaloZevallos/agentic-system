@@ -464,4 +464,44 @@ un verde posterior para exactamente ese par nunca se mergeó. Dos defectos, un m
   `check_timeout_s` sigue fuera de la espera declarada. Una relectura en espera cuesta una lectura
   GraphQL por vuelta del poller y por tarea, solo hasta ese tope.
 
+## Adenda GH-606: la última corrida de cada nombre decide
+
+apostrophe GH-407 (cabeza `cb6259a`) tenía dos corridas `pull_request` de `ci.yml`: en la vieja
+(`43156637045`) `docs` y `ci-ok` fallaron porque el cuerpo del PR no tenía `Breaking-API:`; en la
+nueva (`43165741456`, tras cerrar y reabrir el PR) todo pasó. `agentic merge` rechazaba `ci_failed`
+y citaba el `docs` viejo, porque `ci.ci_state` contaba todas las corridas de un nombre y un rojo viejo
+ganaba. Un re-run no ayuda: un re-run de `pull_request` repite el payload original.
+
+La regla del dueño (Owner's rule): *el veredicto de CI de una cabeza es la última corrida de cada
+nombre de check en esa cabeza; una corrida superada nunca bloquea un merge.*
+
+- **Una sola función.** `ci.current_runs(report)` devuelve, en el orden del reporte, la última
+  corrida de cada **nombre completo** de check (la expansión de matriz o la forma truncada tal como
+  GitHub la reportó, nunca el nombre declarado). `runs_of` ya no recibe `report.checks` sino
+  `current_runs(report)`: `ci_state`, `covering_state`, `pending_names`, `unreported`, `red_checks`,
+  `ci_findings`, `full_tier_verdict`, `dispatch_verdict`, `red_on_base` y `base_green` la heredan, y
+  la puerta de merge, el aterrizaje, la revisión de CI y la lectura de logs la llaman antes de
+  tocar los checks.
+- **Orden.** El run id del link (`run_id_of_link`) comparado como entero; mayor gana. Con el mismo run
+  id (un re-run) gana el `started_at` mayor, y si falta, el `completed_at`. Lo que no se puede ordenar
+  (run id ilegible, instantes iguales o ausentes) se conserva entero: es el veredicto de antes, nunca
+  una conjetura.
+- **Canceladas.** Una corrida cuyo run id está en `cancelled_runs` nunca es candidata a «la última»:
+  no desplaza a una anterior ya decidida. Un nombre que solo tiene de esas las conserva, queda
+  pendiente y sus checks van en `CiVerdict.cancelled`.
+- **Una más nueva sin decidir** deja el nombre `pending`; el rojo viejo no aparece en `failing`, ni en
+  `red`, ni en la evidencia de `Auto-merge refused`.
+- **Reemplaza** la viñeta «Cambio deliberado» y el «Límite conocido» de la adenda GH-539: una corrida
+  roja sin ningún `CANCELLED` ya no sigue roja junto a una más nueva, y una corrida superada se
+  descarta sea cual sea la conclusión de su suite. El texto de GH-539 queda como historia.
+- **Renombre.** `ci.superseded_or_cancelled` pasa a `ci.cancelled_run`, que conserva solo la regla
+  (b) de GH-539 (el run id en `cancelled_runs`); la regla (a) es ahora `current_runs`.
+  `CiVerdict.cancelled` y el estado `cancelled` de `FullTierVerdict` siguen saliendo solo de (b).
+- **Límites conocidos.**
+  - La clave ignora el workflow: dos workflows con un job del mismo nombre se tapan y gana el run id
+    mayor. Hoy solo pasa con `capture` en apostrophe, que ningún `ci:` declara.
+  - Un shard de matriz que solo existió en una corrida vieja sigue decidiendo si fue rojo: ninguna
+    corrida más nueva tiene su nombre.
+  - El orden supone run ids crecientes en el tiempo, que es como GitHub los asigna al crear la corrida.
+
 **Adenda 2026-11-11 (GH-593).** La entrega transitoria se retoma sola. Cuando abrir el pull request falla con un error de transporte (`timed_out`, `unreachable`, `transient` o `rate_limited`, la misma clasificación cerrada de la nota al tracker, decidida por la clase del error y nunca por su texto), `deliver` escala con la clase `system_delivery` y la causa `delivery_transient`, y el poller la retoma hasta 3 veces. Una negativa (`refused`), un error de git y el doble rechazo de `full_checks_heal` siguen siendo de juicio.

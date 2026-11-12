@@ -22,6 +22,7 @@ from ...domain.ci import (
     CiUnreadable,
     JobLog,
     JobLogCause,
+    current_runs,
     red_checks,
     runs_of,
 )
@@ -129,8 +130,9 @@ class GhCiLogs:
             return report
         if not rules.same_commit(report.head_sha, head):
             return CiUnreadable("gh_unreadable")
-        claimed = {c for runs in runs_of(report.checks, jobs).values() for c in runs}
-        wanted = [c for c in report.checks if c in claimed and c.status == "COMPLETED"]
+        current = current_runs(report)
+        claimed = {c for runs in runs_of(current, jobs).values() for c in runs}
+        wanted = [c for c in current if c in claimed and c.status == "COMPLETED"]
         found: list[tuple[str, list[str]]] = []
         for check in wanted:
             lines = self._read_flake_lines(check)
