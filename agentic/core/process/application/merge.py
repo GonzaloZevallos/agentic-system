@@ -20,7 +20,16 @@ from typing import Literal, assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import adr_numbers, ci, master_gain, merge_ci, merge_conflict, presubmit, rules
+from ..domain import (
+    adr_numbers,
+    ci,
+    lead_time,
+    master_gain,
+    merge_ci,
+    merge_conflict,
+    presubmit,
+    rules,
+)
 from ..domain import landing as landing_rules
 from ..domain.adr_dated import Undated
 from ..domain.check_schedule import CheckPriority
@@ -52,6 +61,7 @@ from .poll import (
 from .ports import (
     CommandResult,
     GitError,
+    LabelTimeline,
     MergeCallFailed,
     MergeConflict,
     MergeFailed,
@@ -124,6 +134,7 @@ def merge_task(
     clock: Callable[[], str] = _now,
     sleep: Callable[[float], None] = time.sleep,
     registry: RunRegistry | None = None,
+    label_timeline: LabelTimeline | None = None,
 ) -> MergeResult:
     raw = ports.documents.load(task_id)
     reference = raw.get("pull_request") if raw else None
@@ -332,6 +343,7 @@ def merge_task(
         bool(names),
         pull_request,
         inert_from,
+        label_timeline,
     )
 
 
@@ -1139,6 +1151,7 @@ def _merge(
     ci_declared: bool = False,
     pull_request: PullRequest | None = None,
     inert_from: list[str] | None = None,
+    label_timeline: LabelTimeline | None = None,
 ) -> MergeResult:
     """`relied` is the CI links a merge on the CI rested on (None: it rested on the local
     checks); `ci_declared` says the product declares its CI, which is the only case that
@@ -1200,10 +1213,12 @@ def _merge(
         )
         return MergeResult("stopped", "unreachable")
     except MergeCallFailed as exc:
-        return _after_failure(task_id, reference, head, facts, exc.failure, str(exc), ports, log)
+        return _after_failure(
+            task_id, reference, head, facts, exc.failure, str(exc), ports, log, label_timeline
+        )
     except ValueError as exc:
         return _after_failure(
-            task_id, reference, head, facts, "gh_unreadable", str(exc), ports, log
+            task_id, reference, head, facts, "gh_unreadable", str(exc), ports, log, label_timeline
         )
     ports.documents.record_closure(
         task_id,
@@ -1212,6 +1227,7 @@ def _merge(
             "auto_merge_method": method,
             **files_patch(reference, ports, log),
             **size_patch(task_id, master, head, ports, log),
+            **_lead_time_patch(task_id, reference, ports, label_timeline, merged=None),
         },
     )
     text = f"{AUTO_MERGED}{head} via {method}"
@@ -1225,6 +1241,37 @@ def _merge(
         text += "\n\nAccepted without a fix:\n" + accepted
     _note(task_id, text, ports)
     return MergeResult("merged", method=method)
+
+
+def _lead_time_patch(
+    task_id: str,
+    reference: str,
+    ports: Ports,
+    label_timeline: LabelTimeline | None,
+    *,
+    merged: PullRequest | None,
+) -> dict[str, object]:
+    """The `lead_time` a merge records (GH-599), only when the document has none: the last
+    addition of `agentic` to the issue and the pull request's own `mergedAt`, read after the
+    merge (`merged` is the pull request when the caller just read it). A read that fails, a
+    task with no issue or an empty `mergedAt` is `unreadable`; the local clock is never used
+    and nothing here fails the merge."""
+    if lead_time.LEAD_TIME_KEY in (ports.documents.load(task_id) or {}):
+        return {}
+    pull_request = merged
+    if pull_request is None:
+        try:
+            pull_request = ports.tracker.pull_request(reference)
+        except (ValueError, OSError):
+            pull_request = None
+    issue = ports.inbox.issue_of(task_id)
+    started = (
+        label_timeline.label_added_at(issue, lead_time.START_LABEL)
+        if label_timeline is not None and issue is not None
+        else None
+    )
+    ended = pull_request.merged_at if pull_request is not None else None
+    return {lead_time.LEAD_TIME_KEY: lead_time.from_read(started, ended)}
 
 
 def _note(task_id: str, text: str, ports: Ports) -> None:
@@ -1260,6 +1307,7 @@ def _after_failure(
     error: str,
     ports: Ports,
     log: Callable[[str], None],
+    label_timeline: LabelTimeline | None = None,
 ) -> MergeResult:
     """`Tracker.merge` raised (GH-196). The failed call is counted first, before anything
     else is read: a terminal class spends the whole budget, any other one call of it. The
@@ -1298,6 +1346,11 @@ def _after_failure(
         )
         return MergeResult("refused", "merge_failed")
     if current is not None and current.state == "MERGED":
+        # GH-599: it landed after all, so the lead time is read off the pull request just read.
+        ports.documents.record_closure(
+            task_id,
+            _lead_time_patch(task_id, reference, ports, label_timeline, merged=current),
+        )
         return MergeResult("merged", failure)
     log(
         f"agentic: merge: {task_id}: merge failed ({failure}: {error}), "

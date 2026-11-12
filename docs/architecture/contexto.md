@@ -36,6 +36,8 @@ C4Context
   comenta, etiqueta y mergea, lee el CI y despacha el workflow de la rama base con el sha de
   una cabeza que toca `.github/` o cuyos pushes no reciben corrida, GH-531 (`agentic/core/process/adapters/github/tracker.py:GhTracker.dispatch_ci`
   y `GhTracker.dispatched_ci`, GH-462)
+  `GhLabelTimeline` lee cuándo se agregó por última vez una etiqueta a un issue
+  (`agentic/core/process/adapters/github/label_timeline.py:GhLabelTimeline`, GH-599)
   y `GhBoard` espeja el estado en el Project
   (`agentic/core/process/adapters/github/board.py:GhBoard`, ADR-0073). Todos usan el
   binario `gh`.

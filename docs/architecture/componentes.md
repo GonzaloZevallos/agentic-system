@@ -83,6 +83,14 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 (`agentic/core/process/adapters/telemetry.py:Telemetry`) que la composición le pasa a
 `build_graph`, y lo cumple `core/measurement` (ver abajo).
 
+`LabelTimeline` tampoco es un campo de `Ports`: es una lectura estrecha, aparte de `Tracker`
+(`agentic/core/process/application/ports.py:LabelTimeline`), que la composición le pasa solo
+al cierre (`agentic/cli.py:_close_document`) y al merge del sistema
+(`agentic/core/process/application/merge.py:merge_task`). Pide la última vez que se agregó una
+etiqueta a un issue, y arranca el tiempo de entrega; la cumple
+`agentic/core/process/adapters/github/label_timeline.py:GhLabelTimeline`, que ante cualquier
+falla devuelve `None`.
+
 ## `core/knowledge`
 
 Lo destilado y vigente sobre el producto. Provee al proceso lo que el proceso le pide

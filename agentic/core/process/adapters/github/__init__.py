@@ -2,6 +2,7 @@
 where the human is told about a delivery or an escalation (ADR-0011)."""
 
 from .inbox import GhInbox
+from .label_timeline import GhLabelTimeline
 from .tracker import GhTracker
 
-__all__ = ["GhInbox", "GhTracker"]
+__all__ = ["GhInbox", "GhLabelTimeline", "GhTracker"]

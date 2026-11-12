@@ -1827,6 +1827,16 @@ class Tracker(Protocol):
         ...
 
 
+class LabelTimeline(Protocol):
+    """When a label was last added to an issue (GH-599). Narrow on purpose and apart from
+    `Tracker`: only the close and the system merge read it, to record a task's lead time."""
+
+    def label_added_at(self, issue: int, label: str) -> str | None:
+        """The ISO instant of the last addition of `label` to issue `issue`, or `None` when
+        there is none or the read failed. Never raises: a failed read is not a failed close."""
+        ...
+
+
 @dataclass(frozen=True)
 class LockRecord:
     """What `.agentic/runs/<task>.lock` holds: who is running this task's thread right

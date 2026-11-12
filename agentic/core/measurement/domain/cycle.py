@@ -8,12 +8,13 @@ figure enters `scorecard.verdict`. A task missing a bound is `excluded`, never z
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, cast
+from statistics import median
+from typing import Any, Literal, cast, get_args
 
-from agentic.core.process.domain import ci
+from agentic.core.process.domain import ci, task_path
 from agentic.core.process.domain.rules import pause_kind
 from agentic.core.process.domain.task import PauseEntry, RoleRun, Status
 
@@ -395,3 +396,140 @@ def human_wait_seconds(document: Mapping[str, Any]) -> dict[str, float] | None:
                 waited.get(pause.cause, 0.0) + (pause.end - pause.start).total_seconds()
             )
     return waited
+
+
+# The lead time and the path a closed task took (GH-599). `lead_time` is written once, by the
+# process (`process.domain.lead_time`); this section only reads it. Nothing here enters
+# `scorecard.verdict`.
+
+LeadTimeClass = Literal["known", "unrecorded", "no_merge", "unreadable", "negative", "missing"]
+# The reasons a closed task leaves the medians, in the order they are printed and tested: the
+# first that applies wins, so a task is counted once.
+EXCLUSION_ORDER: tuple[LeadTimeClass, ...] = (
+    "unrecorded",
+    "no_merge",
+    "unreadable",
+    "negative",
+    "missing",
+)
+OTHER_KIND = "other"
+
+
+def path_recorded(document: Mapping[str, Any]) -> bool:
+    """Whether the router classified the document: it has an `initial_path` and the
+    `path_routed` marker `task_path.classification_patch` writes. The one cut-off for every
+    per-path figure: a document from before the router ran the full path even when it says
+    `light`, so it is `unrecorded`. Nothing compares commits or reads `system_version`."""
+    return bool(document.get("initial_path")) and document.get("path_routed") is True
+
+
+def _ended(document: Mapping[str, Any]) -> bool:
+    """Whether the task has an ending the report counts: a human close, a system merge, or an
+    end with no pull request (discarded, split, tracker only)."""
+    return bool(
+        document.get("closed_at")
+        or document.get("auto_merged_at")
+        or document.get("status") in NO_DELIVERY
+    )
+
+
+def _lead_class(value: object) -> tuple[LeadTimeClass, float | None]:
+    if not isinstance(value, Mapping):
+        return "missing", None
+    if "unknown" in value:
+        reason = value["unknown"]
+        return (reason, None) if reason in ("no_merge", "unreadable") else ("missing", None)
+    labeled, merged = _moment(value.get("labeled_at")), _moment(value.get("merged_at"))
+    if labeled is None or merged is None:
+        return "missing", None
+    seconds = (merged - labeled).total_seconds()
+    return ("known", seconds) if seconds >= 0 else ("negative", None)
+
+
+def lead_time_seconds(document: Mapping[str, Any]) -> float | None:
+    """From the last addition of `agentic` to the pull request's `mergedAt`. `None`, never 0,
+    when the key is missing or `{unknown: ...}`, a timestamp does not parse or is missing, or
+    the difference is negative."""
+    if "lead_time" not in document:
+        return None
+    return _lead_class(document["lead_time"])[1]
+
+
+def lead_time_class(document: Mapping[str, Any]) -> LeadTimeClass:
+    """Why a task's lead time is, or is not, in the medians. A document without the key, or
+    one `path_recorded` does not hold for, is `unrecorded`; a malformed value is `missing`."""
+    if "lead_time" not in document or not path_recorded(document):
+        return "unrecorded"
+    return _lead_class(document["lead_time"])[0]
+
+
+@dataclass(frozen=True)
+class PathFacts:
+    """What the report reads off one task, carried on `scorecard.TaskFigures`: whether it ended,
+    the bucket (`initial_path` when recorded), its lead time class and seconds, and its promotion
+    kind (`None` for none)."""
+
+    ended: bool = False
+    initial_path: str | None = None
+    lead_class: LeadTimeClass = "unrecorded"
+    lead_s: float | None = None
+    promotion_kind: str | None = None
+
+
+def path_facts(document: Mapping[str, Any]) -> PathFacts:
+    recorded = path_recorded(document)
+    promotion = document.get("promotion")
+    kind: str | None = None
+    if recorded and promotion:
+        found = promotion.get("kind") if isinstance(promotion, Mapping) else None
+        kind = found if found in get_args(task_path.PromotionKind) else OTHER_KIND
+    return PathFacts(
+        ended=_ended(document),
+        initial_path=str(document["initial_path"]) if recorded else None,
+        lead_class=lead_time_class(document),
+        lead_s=lead_time_seconds(document) if recorded else None,
+        promotion_kind=kind,
+    )
+
+
+@dataclass(frozen=True)
+class PathLeadTime:
+    """One `initial_path` bucket: the median lead time over the `n` tasks with a known one,
+    of the `m` closed recorded tasks in the bucket. `median_s` is `None` when `n` is 0."""
+
+    median_s: float | None
+    n: int
+    m: int
+
+
+@dataclass(frozen=True)
+class PathReport:
+    """The informative block of `eval compare`: lead time per `initial_path`, the excluded
+    counts by reason (global, in `EXCLUSION_ORDER`) and the promotions by kind among the
+    recorded tasks."""
+
+    paths: Mapping[str, PathLeadTime]
+    exclusions: tuple[tuple[LeadTimeClass, int], ...]
+    promotions: Mapping[str, int]
+
+
+def path_report(facts: Iterable[PathFacts]) -> PathReport:
+    """The report over the tasks that ended; an open task is in no figure."""
+    ended = [f for f in facts if f.ended]
+    buckets: dict[str, list[PathFacts]] = {}
+    for f in ended:
+        if f.initial_path is not None:
+            buckets.setdefault(f.initial_path, []).append(f)
+    paths = {}
+    for name, members in sorted(buckets.items()):
+        known = [m.lead_s for m in members if m.lead_class == "known" and m.lead_s is not None]
+        paths[name] = PathLeadTime(median(known) if known else None, len(known), len(members))
+    kinds = (*get_args(task_path.PromotionKind), OTHER_KIND)
+    promotions = dict.fromkeys(kinds, 0)
+    for f in ended:
+        if f.promotion_kind is not None:
+            promotions[f.promotion_kind] += 1
+    exclusions = tuple(
+        (reason, sum(1 for f in ended if f.lead_class == reason)) for reason in EXCLUSION_ORDER
+    )
+    return PathReport(paths, exclusions, promotions)

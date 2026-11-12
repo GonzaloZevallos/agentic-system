@@ -2542,6 +2542,18 @@ class FakeBoard:
         return BoardWritten(frozenset(w.issue for w in writes) - self.unwritten, self.complete)
 
 
+class FakeLabelTimeline:
+    """GH-599: the `LabelTimeline` port with a canned answer, and the calls it was asked."""
+
+    def __init__(self, read: str | None = "2026-10-05T12:00:00Z") -> None:
+        self.read = read
+        self.calls: list[tuple[int, str]] = []
+
+    def label_added_at(self, issue: int, label: str) -> str | None:
+        self.calls.append((issue, label))
+        return self.read
+
+
 class FakeBoardSent:
     """GH-375: the mirror's memory, in memory. `saved` keeps every memory it was given."""
 

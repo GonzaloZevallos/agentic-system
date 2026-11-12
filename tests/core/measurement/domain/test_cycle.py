@@ -8,6 +8,7 @@ from typing import get_args
 import pytest
 
 from agentic.core.measurement.domain import cycle, scorecard
+from agentic.core.process.domain import task_path
 from agentic.core.process.domain.task import Status
 
 START = "2026-10-20T10:00:00.000Z"
@@ -734,3 +735,169 @@ def test_the_classes_and_the_remainder_add_up_to_the_cycle():
         assert all(part >= 0 for part in parts)
         assert sum(parts) == pytest.approx(cycle_s)
     assert known >= 200
+
+
+# --- Lead time and the per-path report (GH-599) ---------------------------------------------
+
+LABELED = "2026-10-20T10:00:00Z"
+MERGED = "2026-10-20T12:00:00Z"
+KNOWN = {"labeled_at": LABELED, "merged_at": MERGED}
+
+
+def routed(initial="full", **over):
+    """A closed document the router classified (the `path_recorded` cut-off holds)."""
+    return {
+        "status": "ready_for_review",
+        "closed_at": CLOSED,
+        "initial_path": initial,
+        "path": initial,
+        "path_routed": True,
+        "lead_time": dict(KNOWN),
+        **over,
+    }
+
+
+def test_lead_time_seconds_is_the_difference_of_the_two_instants():
+    assert cycle.lead_time_seconds(routed()) == 7200.0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        {"unknown": "no_merge"},
+        {"unknown": "unreadable"},
+        {"labeled_at": LABELED},
+        {"labeled_at": "not a time", "merged_at": MERGED},
+        {"labeled_at": MERGED, "merged_at": LABELED},
+        "garbage",
+    ],
+)
+def test_lead_time_seconds_is_unknown_never_zero(value):
+    document = routed()
+    document["lead_time"] = value
+    assert cycle.lead_time_seconds(document) is None
+    del document["lead_time"]
+    assert cycle.lead_time_seconds(document) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (dict(KNOWN), "known"),
+        ({"unknown": "no_merge"}, "no_merge"),
+        ({"unknown": "unreadable"}, "unreadable"),
+        ({"labeled_at": MERGED, "merged_at": LABELED}, "negative"),
+        ({"labeled_at": "x", "merged_at": MERGED}, "missing"),
+        ({"unknown": "something else"}, "missing"),
+        ("garbage", "missing"),
+    ],
+)
+def test_lead_time_class_of_every_shape(value, expected):
+    assert cycle.lead_time_class(routed(lead_time=value)) == expected
+
+
+def test_a_closed_document_without_the_key_or_not_routed_is_unrecorded():
+    without_key = routed()
+    del without_key["lead_time"]
+    not_routed = routed()
+    del not_routed["path_routed"]
+    assert cycle.lead_time_class(without_key) == "unrecorded"
+    assert cycle.lead_time_class(not_routed) == "unrecorded"
+
+
+def test_path_recorded_needs_both_the_initial_path_and_the_marker():
+    assert cycle.path_recorded(routed())
+    assert not cycle.path_recorded({"initial_path": "light", "path": "light"})
+    assert not cycle.path_recorded({"path_routed": True})
+    assert not cycle.path_recorded({})
+
+
+def lead_at(hours, initial="light", **over):
+    return routed(
+        initial,
+        lead_time={"labeled_at": LABELED, "merged_at": f"2026-10-20T{10 + hours:02d}:00:00Z"},
+        **over,
+    )
+
+
+def report(*documents):
+    return cycle.path_report([cycle.path_facts(d) for d in documents])
+
+
+def test_the_median_is_per_initial_path_with_n_of_m():
+    result = report(
+        lead_at(1),
+        lead_at(3),
+        lead_at(5, "full"),
+        routed("light", lead_time={"unknown": "unreadable"}),
+        # promoted light -> full: still in the light bucket, by its initial path
+        lead_at(2, "light", path="full", promotion={"kind": "owner", "text": "t"}),
+    )
+    light, full = result.paths["light"], result.paths["full"]
+    assert (light.median_s, light.n, light.m) == (2 * 3600.0, 3, 4)
+    assert (full.median_s, full.n, full.m) == (5 * 3600.0, 1, 1)
+
+
+def test_an_unrecorded_document_is_outside_every_median_and_counted():
+    old = {"status": "ready_for_review", "closed_at": CLOSED, "initial_path": "light"}
+    result = report(old, lead_at(1), {"status": "ready_for_review", "closed_at": CLOSED})
+    assert result.paths["light"].m == 1
+    assert dict(result.exclusions)["unrecorded"] == 2
+
+
+def test_open_documents_are_not_in_the_report():
+    result = report({"status": "developing", "initial_path": "full", "path_routed": True})
+    assert result.paths == {} and not any(result.promotions.values())
+    assert all(count == 0 for _, count in result.exclusions)
+
+
+def test_exclusions_are_global_by_reason_in_a_fixed_order():
+    result = report(
+        lead_at(1),
+        routed(lead_time={"unknown": "no_merge"}),
+        routed(lead_time={"unknown": "no_merge"}),
+        routed(lead_time={"unknown": "unreadable"}),
+        routed(lead_time={"labeled_at": MERGED, "merged_at": LABELED}),
+        routed(lead_time="garbage"),
+        {"status": "discarded", "initial_path": "full", "path_routed": True},
+    )
+    assert result.exclusions == (
+        ("unrecorded", 1),
+        ("no_merge", 2),
+        ("unreadable", 1),
+        ("negative", 1),
+        ("missing", 1),
+    )
+
+
+def test_no_delivery_endings_are_closed_documents():
+    ended = routed(status="discarded", lead_time={"unknown": "no_merge"})
+    del ended["closed_at"]
+    result = report(ended)
+    assert dict(result.exclusions)["no_merge"] == 1 and result.paths["full"].m == 1
+
+
+def test_promotions_are_counted_by_kind_among_recorded_tasks_only():
+    promoted = {"from_role": "Developer", "at": "x"}
+    old = {"status": "ready_for_review", "closed_at": CLOSED, "initial_path": "light"}
+    result = report(
+        lead_at(1, promotion={**promoted, "kind": "risk_area", "text": "t"}),
+        lead_at(1, promotion={**promoted, "kind": "risk_area", "text": "t"}),
+        lead_at(1, promotion={**promoted, "kind": "owner", "text": None}),
+        lead_at(1, promotion={**promoted, "kind": "made-up"}),
+        lead_at(1, promotion="garbage"),
+        {**old, "promotion": {**promoted, "kind": "role"}},
+        lead_at(1),
+    )
+    assert result.promotions == {
+        "plan_over_cap": 0,
+        "risk_area": 2,
+        "owner": 1,
+        "role": 0,
+        "other": 2,
+    }
+
+
+def test_the_report_has_every_kind_even_with_no_promotion():
+    assert tuple(report().promotions) == (*get_args(task_path.PromotionKind), "other")

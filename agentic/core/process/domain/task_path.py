@@ -161,12 +161,14 @@ def path_cause_of(state: Mapping[str, Any]) -> str:
 
 
 def classification_patch(decision: PathDecision, label: PathLabel) -> dict[str, Any]:
-    """What classify stores. The only writer of these four keys."""
+    """What classify stores. The only writer of these five keys; `path_routed` marks a document
+    the router classified (GH-599), the cut-off `cycle.path_recorded` reads."""
     return {
         "initial_path": decision.path,
         "path": decision.path,
         "path_cause": decision.cause,
         "path_label": label,
+        "path_routed": True,
     }
 
 

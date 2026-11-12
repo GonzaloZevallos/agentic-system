@@ -30,6 +30,7 @@ graph TD
     m_domain__findings_report --> g_pkg__agentic__core__process
     m_domain__metrics --> g_pkg__agentic__core__process
     m_domain__metrics --> g_pkg__agentic__shared
+    m_domain__metrics --> m_domain__cycle
     m_domain__parallel_factor --> g_pkg__agentic__core__process
     m_domain__planning --> g_pkg__agentic__core__process
     m_domain__planning --> m_domain__metrics

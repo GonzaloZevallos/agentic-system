@@ -32,12 +32,14 @@ from typing import (
 )
 
 from .ci_push import PushKind
+from .lead_time import LeadTime
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
 from .size_budget import ActualSize, PlanSize
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
+from .task_path import Size as TaskSize
 
 Status = Literal[
     "open",
@@ -1863,6 +1865,17 @@ class TaskState(TaskInput, total=False):
     path_cause: PathCause
     path_label: PathLabel
     promotion: Promotion
+    # Set with the classification and by nothing else (GH-599, `task_path.classification_patch`):
+    # the marker `cycle.path_recorded` reads, so a document the router never classified is not
+    # counted as one that ran a path.
+    path_routed: bool
+    # The size PjM declared (GH-599), one of `task_path.Size`; omitted when PjM gave none or an
+    # unknown value. Read only by `metrics.task_size_value`.
+    size: TaskSize
+    # The lead time of a closed task (GH-599, `domain/lead_time.py`): `{labeled_at, merged_at}` or
+    # `{unknown: no_merge | unreadable}`, written once by a close or a merge and never again, except
+    # that a later merge replaces `no_merge`. Replaced whole (`last`); read with `.get`.
+    lead_time: Annotated[LeadTime, last]
     # A promotion the plan node asked for (GH-591): the role's `promote` or `plan_over_cap`. The
     # plan node is serialized, so the key needs no reducer; the system step after the model
     # applies it through `task_path.promote` and clears it (sets `None`). Absent or `None` when

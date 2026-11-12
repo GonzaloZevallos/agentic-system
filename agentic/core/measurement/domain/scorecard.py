@@ -118,6 +118,8 @@ class TaskFigures:
     unattributed_s: float | None = None
     # What planning cost and returned, for `eval compare`'s planning block (GH-472).
     planning_facts: planning.TaskPlanning | None = None
+    # What the informative per-path block reads (GH-599); no scorecard figure reads it.
+    path_facts: cycle.PathFacts = cycle.PathFacts()
     # The task's escalations by cause and the seconds it waited on a human per cause (GH-593);
     # `None` when a pause is open or unreadable.
     escalations: tuple[cycle.Escalation, ...] = ()
@@ -168,6 +170,7 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         paused_s=None if None in paused_parts else sum(p or 0.0 for p in paused_parts),
         unattributed_s=split.unattributed_s,
         planning_facts=planning.task_planning(document),
+        path_facts=cycle.path_facts(document),
         escalations=cycle.escalations(document),
         human_wait_s=cycle.human_wait_seconds(document),
     )

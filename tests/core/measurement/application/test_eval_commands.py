@@ -327,3 +327,54 @@ async def test_compare_prints_the_escalations_by_cause_and_the_human_wait_by_cau
     assert "human_wait_h [ci_run_unfinished]" not in first
     # A bucket with none prints none of it.
     assert "escalations [" not in out.split("-- product / bl-b --")[1]
+
+
+PATH_BLOCK = "-- lead time by path --"
+ROUTED = {"initial_path": "light", "path": "full", "path_routed": True}
+
+
+def _lead(hours):
+    return {"labeled_at": "2026-10-20T09:00:00Z", "merged_at": f"2026-10-20T{9 + hours:02d}:00:00Z"}
+
+
+@pytest.mark.anyio
+async def test_compare_prints_the_path_block_after_the_verdict_and_leaves_the_scorecard_alone(
+    root, capsys
+):
+    done = {"closed_at": "2026-10-20T14:00:00.000Z"}
+    promotion = {"from_role": "Developer", "kind": "risk_area", "text": "x", "at": "t"}
+    for task in ("GH-1", "GH-2"):
+        write(root, task, "bl-a", **done)
+    write(root, "GH-5", "bl-b", **done)
+    plain = await compare(root, "bl-a", "bl-b", capsys)
+
+    for task, hours in (("GH-1", 1), ("GH-2", 3)):
+        write(root, task, "bl-a", lead_time=_lead(hours), promotion=promotion, **ROUTED, **done)
+    write(root, "GH-3", "bl-a", lead_time={"unknown": "no_merge"}, **ROUTED, **done)
+    write(root, "GH-5", "bl-b", **done)
+    keyed = await compare(root, "bl-a", "bl-b", capsys)
+
+    # The scorecard and verdict are those of the same fixture without the keys, but for the
+    # task GH-3 that is new here: compare only the verdict line and the block's place.
+    assert keyed.index("verdict:") < keyed.index(PATH_BLOCK)
+    assert "lead_time_h [light]: 2.0000 (median, n=2 of 3 tasks)" in keyed
+    assert "promoted: plan_over_cap=0, risk_area=2, owner=0, role=0, other=0" in keyed
+    assert "excluded: unrecorded=0, no_merge=1, unreadable=0, negative=0, missing=0" in keyed
+    assert plain.split(PATH_BLOCK)[0].count("verdict:") == keyed.split(PATH_BLOCK)[0].count(
+        "verdict:"
+    )
+
+
+@pytest.mark.anyio
+async def test_the_scorecard_section_is_identical_with_and_without_the_new_keys(root, capsys):
+    done = {"closed_at": "2026-10-20T14:00:00.000Z"}
+    for task in ("GH-1", "GH-2"):
+        write(root, task, "bl-a", **done)
+    write(root, "GH-5", "bl-b", **done)
+    plain = await compare(root, "bl-a", "bl-b", capsys)
+    for task in ("GH-1", "GH-2"):
+        write(root, task, "bl-a", lead_time=_lead(2), **ROUTED, **done)
+    keyed = await compare(root, "bl-a", "bl-b", capsys)
+    assert plain != keyed
+    assert plain.split(PATH_BLOCK)[0] == keyed.split(PATH_BLOCK)[0]
+    assert "unrecorded=2" in plain and "unrecorded=0" in keyed

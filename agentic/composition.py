@@ -48,7 +48,7 @@ from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
-from .core.process.adapters.github import GhInbox, GhTracker
+from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker
 from .core.process.adapters.github.board import (
     BOARD_WRITE_ATTEMPTS,
     BOARD_WRITE_BACKOFF_S,
@@ -71,7 +71,7 @@ from .core.process.adapters.shell import (
     ShellSampleApp,
 )
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
-from .core.process.application.ports import Inbox, Ports, StopFlag
+from .core.process.application.ports import Inbox, LabelTimeline, Ports, StopFlag
 from .core.process.application.preflight import (
     refuse_its_own_checkout,
     refuse_scratch_in_a_repository,
@@ -180,6 +180,12 @@ def default_ports(
     refuse_its_own_checkout(cfg, ports)
     refuse_scratch_in_a_repository(cfg, ports)
     return ports
+
+
+def label_timeline(cfg: Configuration) -> LabelTimeline:
+    """The one reader of when a label was last added (GH-599). Built apart from `Ports` and
+    handed only to the close and the system merge, the two that record a lead time."""
+    return GhLabelTimeline(cfg.product_dir)
 
 
 def ci_reader(tracker: GhTracker) -> Callable[[str], CiReport | CiUnreadable]:

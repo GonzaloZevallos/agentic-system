@@ -648,3 +648,35 @@ def test_arm_of_an_assignment_with_plan_review_critic_names_it():
     assigned = {"assignment": {"experiment": "e", "arm": "critic", "switches": critic}}
     assert "plan_review=critic" in metrics.arm_of(assigned)
     assert metrics.arm_of({"experiment": critic}) == metrics.arm_of(assigned)
+
+
+# --- The closed sets of the task span's path attributes (GH-599) ----------------------------
+
+
+def test_every_path_and_size_value_is_in_its_closed_set():
+    from typing import get_args
+
+    from agentic.core.process.domain import task_path
+
+    assert set(get_args(task_path.Path)) < set(metrics.TASK_PATHS)
+    assert set(get_args(task_path.Size)) < set(metrics.TASK_SIZES)
+    assert "unrecorded" in metrics.TASK_PATHS and "unknown" in metrics.TASK_SIZES
+
+
+def test_task_path_value_is_the_initial_path_of_a_routed_document_else_unrecorded():
+    routed = {"initial_path": "light", "path": "full", "path_routed": True}
+    assert metrics.task_path_value(routed) == "light"
+    assert metrics.task_path_value({"initial_path": "light"}) == "unrecorded"
+    assert metrics.task_path_value({}) == "unrecorded"
+    assert metrics.task_path_value({**routed, "initial_path": "made-up"}) == "unrecorded"
+
+
+def test_task_size_value_never_reads_a_missing_or_foreign_size_as_small():
+    assert metrics.task_size_value({"size": "large"}) == "large"
+    assert metrics.task_size_value({}) == "unknown"
+    assert metrics.task_size_value({"size": "R-17 money-rounding"}) == "unknown"
+
+
+def test_task_promoted_is_true_only_when_a_promotion_was_recorded():
+    assert metrics.task_promoted({"promotion": {"kind": "owner", "text": "x"}}) is True
+    assert metrics.task_promoted({}) is False

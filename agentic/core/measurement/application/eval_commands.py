@@ -27,7 +27,7 @@ from ...process.application.ports import Ports, RunRegistry
 from ...process.application.registration import REGISTER_WAIT_S, await_registration
 from ...process.domain import document as task_document
 from ...process.domain import experiment, rules
-from ..domain import evaluation, parallel_factor, planning, role_usage, scorecard
+from ..domain import cycle, evaluation, parallel_factor, planning, role_usage, scorecard
 from .ports import EvalChild, EvalRoots, EvalSpawn
 
 # The one string that spells an unknown `system_version` wherever a task is scored: absent,
@@ -575,6 +575,23 @@ def _print_planning(
         print(line)
 
 
+def _print_path_report(
+    product: str, baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]
+) -> None:
+    """Lead time per `initial_path`, the promotions by kind and the excluded tasks by reason
+    (GH-599). Informative: printed after the verdict, read by nothing that decides it. The
+    figures come from `cycle.path_report`; this only formats them."""
+    report = cycle.path_report(figures.path_facts for _, figures in tasks)
+    print(f"-- lead time by path -- {product} / {baseline} --")
+    for name, row in report.paths.items():
+        median = "n/a" if row.median_s is None else f"{row.median_s / 3600:.4f}"
+        print(f"lead_time_h [{name}]: {median} (median, n={row.n} of {row.m} tasks)")
+    if not report.paths:
+        print("lead_time_h: n/a (no closed task with a recorded path)")
+    print("promoted: " + ", ".join(f"{kind}={count}" for kind, count in report.promotions.items()))
+    print("excluded: " + ", ".join(f"{why}={count}" for why, count in report.exclusions))
+
+
 ArmGroup = tuple[str, str, list[tuple[str, scorecard.TaskFigures]]]
 """One printed block: its heading name, its arm label and its tasks."""
 
@@ -660,6 +677,8 @@ async def _eval_compare(
         _print_role_usage(product, name, tasks)
     for name, _, tasks in (*frm_groups, *to_groups):
         _print_planning(product, name, tasks)
+    for name, _, tasks in (*frm_groups, *to_groups):
+        _print_path_report(product, name, tasks)
 
     # The eval-set declaration is read on a warning path (ADR-0025's `no_brief`/
     # `brief_refusal` asymmetry): absent or malformed says so plainly and the

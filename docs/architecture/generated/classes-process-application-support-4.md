@@ -16,6 +16,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__Presubmit["Presubmit"]
     class ports__ProcessReaper["ProcessReaper"]
     class ports__ProductKnowledge["ProductKnowledge"]
     class ports__ProductStack["ProductStack"]
@@ -30,7 +31,6 @@ classDiagram
     class ports__RunRegistry["RunRegistry"]
     class ports__RunStopped["RunStopped"]
     class ports__SampleApp["SampleApp"]
-    class ports__SampleAppHandle["SampleAppHandle"]
 ```
 
 ## Relaciones con otras páginas

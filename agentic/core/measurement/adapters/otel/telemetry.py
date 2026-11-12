@@ -394,6 +394,9 @@ class TaskRun(Run):
                 "task.runs": len(final.get("runs", [])),
                 "task.escalated": bool(final.get("escalated")),
                 "agentic.task.returns": _counts(by_category),
+                "agentic.task.path": system_metrics.task_path_value(final),
+                "agentic.task.size": system_metrics.task_size_value(final),
+                "agentic.task.promoted": system_metrics.task_promoted(final),
             }
         )
 
