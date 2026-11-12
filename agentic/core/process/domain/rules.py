@@ -3417,8 +3417,11 @@ def approved_head(state: TaskState) -> str | None:
 def publication_candidate(state: TaskState) -> str | None:
     """The head a stopped run may still owe (GH-373): `approved_head` of a task that has a
     pull request, no landing pass in flight, no escalation, every unit approved and nothing
-    left for the full tier. `None` otherwise."""
+    left for the full tier. `None` otherwise, and while a clean restart (GH-593) is still owed
+    to the dispatch: the head a restart archived is not one to publish."""
     if not state.get("pull_request") or landing_open(state) or state.get("escalated"):
+        return None
+    if state.get("restart_pending"):
         return None
     if not all_approved(state) or full_checks_due(state):
         return None
