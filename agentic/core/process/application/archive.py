@@ -23,10 +23,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..domain import document, rules
+from ..domain import document, restart, rules
 from ..domain.reaping import ReapedProcess
+from ..domain.roles import pair_for
 from .ports import GitError, Ports
-from .release import release_task
+from .release import release_checkout, release_task
 
 # How the system's comment on a `--fresh` archive starts: a resume looks past it, the
 # same as it does `escalate.ESCALATED`, `deliver.READY` and `discard.DISCARDED`.
@@ -112,6 +113,38 @@ def archive_previous_run(task_id: str, ports: Ports) -> ArchiveResult:
         workspace.rename_branch(branch, rules.archive_ref(branch, n, system_commit))
 
     return ArchiveResult(prefix=prefix, written=written, document_kept=document_kept, reaped=reaped)
+
+
+def archive_subtask(task_id: str, subtask_id: str, ports: Ports) -> str | None:
+    """Archive the attempt of `subtask_id` a clean restart (GH-593) is leaving behind: commit what
+    its checkout holds, take the checkout out, and rename its branch to
+    `archive/restart<k>-<system_commit>/<branch>`. The task branch and the sister subtasks are
+    untouched, except in a task of one subtask, whose branch *is* the task branch. Idempotent like
+    `archive_previous_run`: a retry after a cut finds the branch already renamed (or the checkout
+    already gone) and does only what is left. The ref it archived to, or `None` when the document
+    does not say which branch the subtask had."""
+    workspace = ports.workspace
+    try:
+        raw = ports.documents.load(task_id) or {}
+    except (ValueError, OSError):
+        raw = {}
+    branch = (raw.get("subtasks", {}).get(subtask_id) or {}).get("branch")
+    if not branch:
+        return None
+    used = raw.get("restarts", {}).get(pair_for(subtask_id).key, 1)
+    ref = restart.archive_ref(branch, used, raw.get("system_commit") or "unknown")
+    if workspace.branch_head(branch) is None:
+        return ref  # renamed by an earlier call
+    own = task_id if branch == rules.task_branch(task_id) else f"{task_id}.{subtask_id}"
+    for worktree in workspace.worktrees(task_id):
+        if worktree.name != own:
+            continue
+        workspace.commit_all(worktree, f"Archive restart {used} of {task_id}: {worktree.name}")
+        release_checkout(ports, worktree)
+        workspace.discard(worktree)
+    workspace.prune()
+    workspace.rename_branch(branch, ref)
+    return ref
 
 
 def _earlier_task_ref(archived_refs: list[str], task_id: str, n: int) -> str | None:
