@@ -698,6 +698,8 @@ _Campo_: sin término de arte
 
 Desde GH-588 el aterrizaje actúa solo sobre la Cabeza del orden de aterrizaje: un pull request que espera su turno solo recibe `wait` o `none` (ADR-0090).
 
+Desde GH-611, si el producto nombra sus ADR por fecha (`adr_naming: dated`), el paso `renumber` renombra el ADR numerado que choca a `<aaaammdd>-<slug>.md` y regenera los documentos, sin preguntar ni nunca `apply_adr_decision` (ADR-0093, que enmienda el ADR-0049).
+
 **Tramo aterrizado**:
 Un prefijo estricto, en orden topológico y cerrado bajo `depends_on`, de las subtareas aprobadas de una tarea cuyo aterrizaje se agotó, que el sistema arma desde master y mergea en un pull request propio (`closes_issue=False`, fuera de `pull_request`) antes de reiniciar (ADR-0048, addenda GH-297). Cada unidad del tramo cumple `review_carries` contra lo que master cambió y ninguna toca las rutas del trabajo del integrador; lo que queda sigue en el pull request principal. Si ningún tramo es posible, el reinicio dice por qué con un motivo cerrado (`single_unit`, `no_clean_slice`, `slice_refused`, `unreadable`).
 _Avoid_: parte, partida
