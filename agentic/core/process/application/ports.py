@@ -619,13 +619,6 @@ class ProductStack(Protocol):
         `setup`'s absence already has."""
         ...
 
-    def api_break_line(self, revision: str) -> ApiBreakLine | None:
-        """The line a pull request body must carry for an approved API break, the CI check that
-        fails without it and the step of that check (`api_break_line` of the stack, GH-610), as
-        the commit `revision` declares it. `None` when the key is absent: the system writes no
-        such line. Raises `ValueError` when the key is malformed."""
-        ...
-
     def ci(self, revision: str) -> tuple[str, ...]:
         """The check-run names the product declares as its GitHub CI merge gate
         (`core.knowledge`, GH-216, ADR-0045), as the commit `revision` declares them.

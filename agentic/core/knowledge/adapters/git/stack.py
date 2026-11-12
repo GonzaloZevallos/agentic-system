@@ -70,10 +70,6 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.ci_dispatch(data, source)
 
-    def api_break_line(self, revision: str) -> ApiBreakLine | None:
-        data, source = self._declaration(revision)
-        return stack.api_break_line(data, source)
-
     def check_budgets(self, revision: str) -> dict[str, float]:
         data, source = self._declaration(revision)
         return stack.check_budgets(data, source)

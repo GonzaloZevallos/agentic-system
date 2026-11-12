@@ -564,9 +564,6 @@ def _delivered(
         # Always written, an empty list included: a re-plan replaces the list it found
         # (GH-538). `document.render` omits an empty one.
         written["required_paths"] = list(output.data.get("required_paths") or [])
-        # The approved API break (GH-610): the schema sanitized it; a re-plan replaces it, an
-        # empty one clears the earlier line. `document.render` omits an empty one.
-        written["api_break"] = str(output.data.get("api_break") or "")
         written["estimate"] = {
             "cost_usd": output.data["estimated_cost_usd"],
             "files": output.data["estimated_files"],

@@ -474,7 +474,6 @@ class MemoryStack:
         # merge and review tests need; a dict declares them per revision.
         self.declared_ci: dict[str, tuple[str, ...]] = {}
         self.declared_ci_all: tuple[str, ...] = ()
-        self.declared_api_break_line: ApiBreakLine | None = None
         if isinstance(ci, tuple):
             self.declared_ci_all = ci
         elif ci is not None:
@@ -569,10 +568,6 @@ class MemoryStack:
         if revision in self.stack_error_at:
             raise ValueError(self.stack_error_at[revision])
         return self.declared_ci_dispatch_at.get(revision, self.declared_ci_dispatch)
-
-    def api_break_line(self, revision: str) -> ApiBreakLine | None:
-        # Not tracked in `revisions` either, `witness`'s own reason.
-        return self.declared_api_break_line
 
     def check_budgets(self, revision: str) -> dict[str, float]:
         # Not tracked in `revisions` either, `witness`'s own reason.
