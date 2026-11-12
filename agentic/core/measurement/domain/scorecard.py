@@ -25,24 +25,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agentic.core.process.domain import cost_history
+from agentic.core.process.domain.rules import EXTERNAL_REASONS
 from agentic.core.process.domain.task import RoleRun, TaskState
 
 from . import cycle, metrics, planning
-
-# The three failure reasons a scorecard's "own failures" excludes (ADR-0029, extended
-# by issue #137's own `network`), read here and nowhere else in this diff: every other
-# module that needs the exclusion imports this constant rather than spelling the three
-# strings again -- the drift the `Scorecard` entry of `agentic/core/measurement/
-# CONTEXT.md` names when it says "quedan afuera los motivos externos (`account_limit`,
-# el límite de la cuenta del proveedor; `upstream`, su caída; y `network`, la red del
-# lado del sistema caída, nunca leída de la prosa del error) y quedan adentro los
-# nuestros, el tope por intento (`limit`) incluido". That entry is the statement this
-# tuple is a copy of; nothing here restates its reasoning, only its members. A
-# separate copy from `core.process.domain.rules.EXTERNAL_REASONS`, never imported: the
-# two tuples read the same literals on purpose, so a document's own `FailureReason`
-# string decides each independently, with no import between the two contexts' rule
-# modules.
-EXTERNAL_FAILURE_REASONS = ("account_limit", "upstream", "network", "disk_full")
 
 # "Tareas terminadas" (ADR-0008, 2026-09-18 second addendum): a Corrida that reached a
 # terminal status, whether or not a human has judged its pull request yet. Own failures
@@ -176,12 +162,12 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
 
 
 def _own_failures(figures: TaskFigures) -> int:
-    """This task's own failed attempts: every reason `EXTERNAL_FAILURE_REASONS`
+    """This task's own failed attempts: every reason `rules.EXTERNAL_REASONS`
     does not name, `limit` included (ADR-0029; the `Scorecard` glossary entry)."""
     return sum(
         count
         for reason, count in figures.failures_by_reason.items()
-        if reason not in EXTERNAL_FAILURE_REASONS
+        if reason not in EXTERNAL_REASONS
     )
 
 

@@ -8,13 +8,14 @@ figure enters `scorecard.verdict`. A task missing a bound is `excluded`, never z
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from agentic.core.process.domain import ci
-from agentic.core.process.domain.task import RoleRun, Status
+from agentic.core.process.domain.rules import pause_kind
+from agentic.core.process.domain.task import PauseEntry, RoleRun, Status
 
 from . import parallel_factor
 
@@ -107,6 +108,9 @@ class Pause:
     start: datetime
     end: datetime
     kind: PauseClass
+    # What the pause waited on: the last escalation's cause, else its class, `failure` for an
+    # epoch with no escalation (GH-593).
+    cause: str = "failure"
 
 
 @dataclass(frozen=True)
@@ -208,8 +212,8 @@ def pause_intervals(document: Mapping[str, Any]) -> Pauses:
     only `lapse` entries is no pause. Its start is the latest `Failure.ended_at` that matches
     one of its failure entries (same `section` and `reason`, ended after the previous
     `resumed` and no later than that entry), else the opening entry's `at`. It is `external`
-    when it has a failure entry, every one an external reason, and no escalation of another
-    class; `human` otherwise (`ci` is human)."""
+    when `rules.pause_kind` (the only name taken from `rules`) says so (every failure an external reason, every escalation a
+    `failure` one or carrying a `MechanicalCause`), `human` otherwise."""
     closed: list[Pause] = []
     complete = True
     lower: datetime | None = None
@@ -241,8 +245,6 @@ def _epoch_pause(
     lower_unreadable: bool,
     end: datetime | None,
 ) -> Pause | None:
-    from . import scorecard  # lazy: `scorecard` imports this module
-
     opening = next(e for e in epoch if e["kind"] != "lapse")
     failure_entries = [e for e in epoch if e["kind"] == "failure"]
     # A previous `resumed` with no readable `at` leaves no floor: no failure is trusted.
@@ -253,12 +255,15 @@ def _epoch_pause(
         start = _moment(opening.get("at"))
     if start is None or end is None or end < start:
         return None
-    external = (
-        bool(failure_entries)
-        and all(e["value"] in scorecard.EXTERNAL_FAILURE_REASONS for e in failure_entries)
-        and all(e["value"] == "failure" for e in epoch if e["kind"] == "escalation")
+    return Pause(start, end, pause_kind(cast(Sequence[PauseEntry], epoch)), _cause(epoch))
+
+
+def _cause(epoch: list[Mapping[str, Any]]) -> str:
+    """The cause label of an epoch: its last escalation's `cause`, else that entry's class."""
+    escalations = [e for e in epoch if e["kind"] == "escalation"]
+    return (
+        str(escalations[-1].get("cause") or escalations[-1]["value"]) if escalations else "failure"
     )
-    return Pause(start, end, "external" if external else "human")
 
 
 def _failure_start(

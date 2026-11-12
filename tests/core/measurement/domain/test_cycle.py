@@ -581,13 +581,17 @@ def _imports_rules(node):
     return isinstance(node, ast.Import) and any(a.name.endswith("rules") for a in node.names)
 
 
-def test_the_time_split_modules_import_nothing_from_process_rules():
+def test_the_time_split_modules_import_only_pause_kind_from_process_rules():
     from pathlib import Path
 
     def source(name):
         return Path(cycle.__file__).with_name(f"{name}.py").read_text()
 
-    assert rules_violations(source("cycle")) == []
+    # GH-593: whether a pause is mechanical is `rules.pause_kind`'s call alone, so `cycle` takes
+    # that one name and nothing else from `rules`.
+    cycle_source = source("cycle")
+    (reached,) = rules_violations(cycle_source)
+    assert "import pause_kind" in cycle_source.splitlines()[int(reached.split()[1]) - 1]
     # parallel_factor keeps its older `rules` import; only the new helpers must not reach it.
     assert rules_violations(source("parallel_factor"), {"clip", "difference"}) == []
 
