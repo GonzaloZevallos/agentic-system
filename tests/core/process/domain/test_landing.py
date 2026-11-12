@@ -13,6 +13,7 @@ from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.presubmit import RedCheck
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import (
+    AdrDecidedBy,
     AdrDecisionOutcome,
     Carried,
     CiCause,
@@ -483,6 +484,7 @@ _SAMPLE: dict[object, object] = {
     DiagnosisVerdict: "sync",
     CiCause: "no_run",
     AdrDecisionOutcome: "applied",
+    AdrDecidedBy: "rule",
     list[list[str]]: [["a", "b"]],
     list[RedCheck]: [{"name": "tests", "tail": ["a"], "recovered": False, "timed_out": False}],
     list[OutOfBoundsLine]: [{"path": "docs/a.md", "line": 3}],

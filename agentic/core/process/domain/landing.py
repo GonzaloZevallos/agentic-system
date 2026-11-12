@@ -25,6 +25,7 @@ from .task import (
     UPSTREAM_KEY,
     VERDICT_KEY,
     VERDICT_SYNC,
+    AdrDecidedBy,
     AdrDecisionOutcome,
     Carried,
     CiLogRecord,
@@ -177,6 +178,16 @@ entries of this version. Any change that widens or narrows that set
 (`adr_numbers.DecidedRenaming.spots` and `bound`, rule (d) among them) raises it in the same diff,
 and raising it is the only way to give decision slots back. Declared, not measured."""
 
+ADR_AUTO_APPLY = True
+"""Whether the landing applies a renumbering the rule settles on its own (D-be76583a), without
+asking the owner: the off switch of `adr_auto_due`. Declared, not measured."""
+
+ADR_AUTO_SPOTS_MAX = 10
+"""The most `spots` (own lines the grammar cannot decide) a collision may have for the system to
+apply it without an owner (D-be76583a); `landing_adr` checks it once the collision is recomputed,
+and more spots end the attempt `ambiguous`, which spends no slot and asks the question as before.
+Declared, not measured."""
+
 OUT_OF_BOUNDS_SHOWN_MAX = 5
 """The most `{path, line}` rows of an `out_of_bounds` apply a landing entry keeps (GH-576); the
 rest are counted in `out_of_bounds_more`."""
@@ -288,6 +299,7 @@ def landing_step(
     adr_escalated: bool = False,
     names_escalated: bool = False,
     adr_decision_due: bool = False,
+    adr_auto_due: bool = False,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
     (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
@@ -297,7 +309,9 @@ def landing_step(
     (a *resolved* `escalate_adr` entry for this head and refusal is recorded) does the same for
     an `adr_number_taken` the renumbering cannot settle: one `escalate_adr`, then `none`, and
     never `exhausted()`, so no diagnose, slice or restart. `adr_decision_due` (`adr_decision_due`:
-    the owner decided on that question and a slot is free) makes it `apply_adr_decision`, GH-544.
+    the owner decided on that question and a slot is free) makes it `apply_adr_decision`, GH-544;
+    so does `adr_auto_due` (D-be76583a: the rule settles it and no question was ever asked), with
+    no owner.
     A model pass or a
     sync past its budget is the exhaustion: the `land_slice` when `slicing` is a `Slice`, else
     the `diagnose` carrying `slicing` as its `restart_why` (`None`: as before GH-297). A task
@@ -427,7 +441,7 @@ def landing_step(
                 spent.renumbers < LANDING_RENUMBERS_MAX
             ):
                 return step("renumber")
-            if adr_decision_due:
+            if adr_decision_due or adr_auto_due:
                 return step("apply_adr_decision")
             return step("none") if adr_escalated else step("escalate_adr")
         case "merge_failed":
@@ -1026,7 +1040,8 @@ def already_dispatched(
     again on the same entry. An `escalate` asked with `names` (GH-485) is taken only by an entry
     that recorded the same names, so a new set of wrong names is asked again on the same head. An
     `escalate_adr` is taken as `adr_asked` says (GH-544), and an `apply_adr_decision` only by an
-    entry of the same head recorded for the same `decision_at`."""
+    entry of the same head recorded for the same `decision_at`, or, with no `decision_at`, by the
+    rule's own (`decided_by: rule`, D-be76583a)."""
 
     stamped = _release_time(landing, head) if step == "rerun" else None
 
@@ -1051,7 +1066,9 @@ def already_dispatched(
             refusal = entry.get("refusal")
             return adr_asked(landing, head, refusal if isinstance(refusal, str) else None)
         if step == "apply_adr_decision":
-            return decision_at is not None and entry.get("decision_at") == decision_at
+            if decision_at is None:  # D-be76583a: the rule's own try, once per head
+                return entry.get("decided_by") == "rule"
+            return entry.get("decision_at") == decision_at
         if step == "escalate" and names:
             return entry.get("names") == list(names)
         if step == "escalate" and entry.get("refusal") == "ci_no_verdict":
@@ -1219,6 +1236,27 @@ def adr_decision_due(
     )
 
 
+def adr_auto_due(
+    head: str,
+    collision: Ambiguous | Renaming | None,
+    every: Sequence[Mapping[str, object]],
+) -> bool:
+    """Whether the rule applies the renumbering of `head` on its own (D-be76583a): `ADR_AUTO_APPLY`
+    is on, `collision` is an `Ambiguous` with moves whose reason is not `duplicate_own_number`, no
+    `escalate_adr` question was ever recorded for `head` (over `every` entry, so a restoration does
+    not give the automatic try back: once the owner was asked, or the try ended and asked, the
+    owner decides) and the slots of that collision on `head` are not spent
+    (`adr_decisions_spent`, the same cap as an owner's decision). Whether the `spots` fit
+    `ADR_AUTO_SPOTS_MAX` is read where the collision is recomputed, `landing_adr`."""
+    if not ADR_AUTO_APPLY or not isinstance(collision, Ambiguous) or not collision.moves:
+        return False
+    if collision.reason == "duplicate_own_number":
+        return False
+    if any(entry.get("step") == "escalate_adr" and entry.get("head") == head for entry in every):
+        return False
+    return adr_decisions_spent(every, head, collision.moves) < LANDING_ADR_DECISIONS_MAX
+
+
 def adr_review_owed(entries: Sequence[Mapping[str, object]]) -> bool:
     """Whether the review an applied decision owes is still to be recorded (GH-544): the last
     `apply_adr_decision` with `outcome: applied` has no `re_review` entry after it, on any head,
@@ -1311,6 +1349,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     for outcome in get_args(AdrDecisionOutcome):
         if raw.get("outcome") == outcome:
             out["outcome"] = outcome
+    if raw.get("decided_by") in get_args(AdrDecidedBy):
+        out["decided_by"] = "rule"
     if (moves := _moves_of(raw.get("moves"))) is not None:
         out["moves"] = moves
     # GH-570, an `apply_adr_decision` that ended `checks_red`: shaped here, never sanitized

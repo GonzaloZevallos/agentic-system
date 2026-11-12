@@ -299,6 +299,8 @@ def step_for(
         and landing.adr_decision_due(
             live_entries(raw), head, facts.adr_collision, all_entries(raw)
         ),
+        adr_auto_due=head is not None
+        and landing.adr_auto_due(head, facts.adr_collision, all_entries(raw)),
     )
 
 
