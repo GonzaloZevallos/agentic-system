@@ -11,8 +11,7 @@ Esta página muestra los módulos del grupo `checks` de `application` y los impo
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support (parte 1)](packages-process-application-support-1.md)
-  - [application: support (parte 2)](packages-process-application-support-2.md)
+  - [application: support](packages-process-application-support.md)
 
 ```mermaid
 graph TD
@@ -21,6 +20,7 @@ graph TD
     g_application__support["support (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
+    m_application__api_break["application.api_break"]
     m_application__ci_flakes["application.ci_flakes"]
     m_application__ci_ref_sweep["application.ci_ref_sweep"]
     m_application__ci_review["application.ci_review"]
@@ -31,6 +31,8 @@ graph TD
     m_application__run_check["application.run_check"]
     m_application__schema_guard["application.schema_guard"]
     m_application__verifiers["application.verifiers"]
+    m_application__api_break --> g_application__support
+    m_application__api_break --> g_pkg__domain
     m_application__ci_flakes --> g_application__support
     m_application__ci_flakes --> g_pkg__domain
     m_application__ci_ref_sweep --> g_application__lifecycle
