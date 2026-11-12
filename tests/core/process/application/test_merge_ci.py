@@ -179,6 +179,44 @@ def test_a_red_ci_is_refused_naming_the_job_and_its_link_and_is_commented_once(t
     assert "```" not in comment
 
 
+def test_gh_407_an_old_red_run_beside_a_newer_green_one_of_the_head_merges(tmp_path):
+    """The apostrophe GH-407 case (GH-606): run 43156637045 failed `docs` and `ci-ok`, run
+    43165741456 of the same head passed both. The owner's rule: the latest run of each name is
+    the verdict, so the gate merges and no comment or record quotes the superseded run."""
+    old, new = 43156637045, 43165741456
+    both = (
+        _check("docs", "FAILURE", run=old),
+        _check("ci-ok", "FAILURE", run=old),
+        _check("docs", "SUCCESS", run=new),
+        _check("ci-ok", "SUCCESS", run=new),
+    )
+    ports = _world(_matrix_report(*both, completed=True), declared=("docs", "ci-ok"))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged" and ports.commands.ran == []
+    assert ports.tracker.comments == [] or all(
+        str(old) not in comment for _, comment in ports.tracker.comments
+    )
+    assert str(old) not in repr(_doc(ports)) and str(new) in repr(_doc(ports))
+
+
+def test_a_newer_run_that_is_red_still_refuses_and_cites_only_the_newer_run(tmp_path):
+    """The input it must reject: the old run green, the newer one red, is `ci_failed`."""
+    old, new = 41, 42
+    both = (
+        _check("docs", "SUCCESS", run=old),
+        _check("docs", "FAILURE", run=new),
+    )
+    ports = _world(_matrix_report(*both, completed=True), declared=("docs",))
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result == merge.MergeResult("refused", "ci_failed")
+    [(_, comment)] = ports.tracker.comments
+    assert RUN.format(new) in comment and RUN.format(old) not in comment
+
+
 def _matrix_report(*checks: CiCheck, completed: bool | None):
     return dataclasses.replace(_report(*checks), runs_completed=completed)
 

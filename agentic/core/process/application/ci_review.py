@@ -32,7 +32,7 @@ def _line(report: ci.CiReport, name: str) -> str:
     if ci.unreported(report, (name,), True):
         return "not a check-run name on this head (workflow runs completed)"
     verdict = ci.ci_state(report, (name,))
-    runs = ci.runs_of(report.checks, (name,))[name]
+    runs = ci.runs_of(ci.current_runs(report), (name,))[name]
     link = (verdict.failing or tuple(runs))[0].link if runs else None
     return f"{verdict.state}" + (f" {link}" if link else "")
 
