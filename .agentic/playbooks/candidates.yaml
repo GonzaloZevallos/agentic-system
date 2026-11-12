@@ -1514,3 +1514,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-12T01:57:21.098+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: Check each test the brief asks for at the level and with the inputs it names (for example two items, not one, at render level). A test at a lower level or with fewer cases does not satisfy it.
+  confidence: medium
+  seen_in:
+  - GH-597
+  sources:
+  - finding
+  added_at: '2026-11-12T05:02:42.464+00:00'
