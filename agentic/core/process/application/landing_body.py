@@ -37,13 +37,14 @@ def _resolve(context: LandingContext, closed_at: str | None) -> None:
     document = context.ports.documents.load(context.task_id)
     if document is None:
         return
-    entries = [dict(entry) for entry in landing_plan.all_entries(document)]
-    if entries and closed_at is not None:
-        entries[-1]["closed_at"] = closed_at
     cost = document.get("cost_usd", 0.0)
     resolved = landing_rules.resolve_open(
-        entries, (context.clock or _now)(), cost if isinstance(cost, int | float) else 0.0
+        landing_plan.all_entries(document),
+        (context.clock or _now)(),
+        cost if isinstance(cost, int | float) else 0.0,
     )
+    if resolved and closed_at is not None:
+        resolved[-1]["closed_at"] = closed_at
     context.ports.documents.save({**state_from(document), "landing": resolved})
     landing_sync.record_landing(context, resolved)
 
