@@ -1262,7 +1262,7 @@ async def test_composition_wires_the_real_telemetry(config, tmp_path):
         script = ScriptedRunner(pjm=[AttemptFailed("429", reason="account_limit")] * 2)
         real = composition.ClaudeSdkRunner, composition.GhTracker
         composition.ClaudeSdkRunner = lambda **_: script
-        composition.GhTracker = lambda *_: MemoryTracker()
+        composition.GhTracker = lambda *_, **__: MemoryTracker()
         try:
             await composition.graph.compile().ainvoke(TASK, config=config)
         finally:
