@@ -93,6 +93,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.interview": "definition",
     "application.landing": "landing",
     "application.landing_adr": "landing",
+    "application.landing_body": "support",
     "application.landing_fix": "landing",
     "application.landing_flakes": "landing",
     "application.landing_plan": "landing",

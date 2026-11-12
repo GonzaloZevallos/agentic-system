@@ -712,3 +712,13 @@ _Campo_: sin término de arte
 Un paso `sync_master` del aterrizaje cuya entrega volvió con un head que no contiene el sha del upstream para el que se despachó. Se cierra (`closed_at`, con su costo) y dice qué le faltó (`lacks`), pero no queda resuelta: `resolved_at` lo lleva solo una sincronización cuyo head contiene ese sha. Cuenta, por sha de upstream, contra su propio tope; agotado, el paso es el diagnóstico. Una sincronización con conflicto cuenta además, por sha de upstream, contra su propio tope (nunca contra los pases del modelo); la que sigue a un veredicto `sync` está exenta de ese tope, pero no del de sincronizaciones no logradas.
 _Avoid_: sincronización resuelta, reintento
 _Campo_: sin término de arte
+
+**Falla que no es código**:
+La causa de un rechazo de aterrizaje que ningún cambio de código arregla: `pr_body` (el check declarado por el stack falló en su paso `api_breaks` y el cuerpo del pull request no tiene la línea del producto) o `ci_not_run` (el CI no corrió y la cabeza no toca su definición). Se decide por el nombre del check y del paso, nunca por el texto de un log; con una causa así el aterrizaje no diagnostica, no parte en tramos ni reinicia la tarea.
+_Avoid_: fallo de CI, flaky
+_Campo_: sin término de arte
+
+**fix_pr_body**:
+El paso del aterrizaje, sin modelo, que escribe en el cuerpo del pull request la línea que el producto exige, lo cierra y lo reabre para que CI corra con el cuerpo nuevo. Una vez por cabeza y solo con las corridas completas; `resolved_at` es la reapertura.
+_Avoid_: arreglo del PR, re-run
+_Campo_: sin término de arte

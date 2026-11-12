@@ -38,3 +38,8 @@ classDiagram
     class landing__ApiBreakAnswer["ApiBreakAnswer"]
     adr_numbers__DecidedRenaming --> adr_numbers__Renaming
 ```
+
+## Relaciones con otras páginas
+
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`

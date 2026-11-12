@@ -121,3 +121,8 @@ _Campo_: setup — estándar; la clave se llama igual en el archivo
 Las reglas generales que el dueño dio al contestar un escalado o por mensaje, guardadas como criterio en un archivo por alcance: `docs/product/decisiones-del-dueño.md` en cada producto y `docs/decisiones-del-dueño.md` en agentic-system. Todo rol las lee enteras, solo las vigentes, antes que el resto del conocimiento. Una regla vigente decide la pregunta que cubre sin escalar; contra un ADR que toca, gana la fechada después. Cada entrada tiene un id por contenido, solo se agrega al final y corregir es reemplazar.
 _Avoid_: memoria del orquestador, preferencias
 _Campo_: decision log — estándar en ingeniería (ADR); acá es del dueño y se lee entero, no se busca
+
+**Línea de ruptura de API**:
+La línea que el stack de un producto declara (`Stack.api_break_line`: prefijo, check y paso) y que el cuerpo del pull request debe llevar con el motivo de la ruptura cuando el check falla en ese paso. Solo `pull_request.with_required_lines` la escribe y solo `pull_request.declares` decide si está.
+_Avoid_: etiqueta de breaking change
+_Campo_: sin término de arte

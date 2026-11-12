@@ -17,11 +17,13 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
 graph TD
     g_application__checks["checks (grupo)"]
     g_application__landing["landing (grupo)"]
+    g_application__lifecycle["lifecycle (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
     m_application__checkouts["application.checkouts"]
     m_application__ci_push["application.ci_push"]
     m_application__ci_trust["application.ci_trust"]
+    m_application__landing_body["application.landing_body"]
     m_application__limits["application.limits"]
     m_application__ports["application.ports"]
     m_application__preflight["application.preflight"]
@@ -35,6 +37,10 @@ graph TD
     m_application__ci_push --> m_application__ports
     m_application__ci_trust --> g_pkg__domain
     m_application__ci_trust --> m_application__ports
+    m_application__landing_body --> g_application__landing
+    m_application__landing_body --> g_application__lifecycle
+    m_application__landing_body --> g_pkg__domain
+    m_application__landing_body --> m_application__checkouts
     m_application__ports --> g_pkg__domain
     m_application__ports --> m_application__limits
     m_application__preflight --> g_pkg__agentic__shared
