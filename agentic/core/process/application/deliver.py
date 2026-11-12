@@ -138,7 +138,9 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         required = api_break.required_line(ports, task_base(state, ports), state)
     except ValueError as failed:
         return _ended(state, _undelivered(step, failed, state, replaced, at=ports.now()), ports)
-    line = f"{required[0]} {required[1]}" if required else ""
+    # The room the line takes is read off the one function that writes it, minus the separator
+    # `bounded_body` reserves on its own.
+    line = with_required_lines("", *required).rstrip() if required else ""
     body = _bounded(state, relative, preface=preface, required=line)
     try:
         step = "task document save failed"
