@@ -1424,7 +1424,7 @@ async def test_a_signal_at_system_shutdown_keeps_the_lock_record_marked(monkeypa
 
 
 @pytest.mark.anyio
-async def test_a_signal_outside_a_shutdown_keeps_the_lock_record_as_a_deliberate_stop(
+async def test_a_signal_outside_a_shutdown_keeps_the_lock_record_without_any_mark(
     monkeypatch, tmp_path
 ):
     from agentic.core.process.adapters.filesystem import FilesystemRunLock
@@ -1434,8 +1434,9 @@ async def test_a_signal_outside_a_shutdown_keeps_the_lock_record_as_a_deliberate
     assert stop.at_shutdown is False
     record = lock.read("T-9")
     assert record is not None
-    assert record.stopped_deliberately is True
+    assert record.stopped_deliberately is False  # only `agentic stop` marks (GH-616)
     assert record.stopped_at_shutdown is False
+    assert record.crashed_version is None
     assert (record.pid, record.boot_id) == (os.getpid(), "boot-1")
 
 
@@ -1480,13 +1481,11 @@ async def _signalled_then_raising_run(monkeypatch, tmp_path, lock, probe):
 
 
 @pytest.mark.anyio
-async def test_a_signal_followed_by_a_graph_exception_keeps_the_stop_mark_not_the_crash_mark(
-    monkeypatch, tmp_path
-):
+async def test_a_signal_followed_by_a_graph_exception_writes_neither_mark(monkeypatch, tmp_path):
     lock = FakeLock()
     stop = await _signalled_then_raising_run(monkeypatch, tmp_path, lock, lambda: False)
     assert (stop.signalled, stop.crashed, stop.at_shutdown) == (True, True, False)
-    assert lock.kept_stopped == [("T-9", os.getpid())]
+    assert lock.kept_stopped == []
     assert lock.released == []
     assert lock.kept_crashed == []
     assert lock.kept == []
@@ -5716,8 +5715,9 @@ async def test_the_deadline_reaps_roles_releases_the_lock_once_and_exits_once():
         ("run", "check", pid, None),
         ("run", "perf", pid, None),
     ]
-    # The deadline kept it as a deliberate stop; `_locked`'s finally did not touch it again.
-    assert (lock.kept_stopped, lock.released) == ([("T-9", pid)], [])
+    # The deadline settled it once and wrote nothing (a signal leaves the record as it is);
+    # `_locked`'s finally did not release it.
+    assert (lock.kept_stopped, lock.kept_crashed, lock.released) == ([], [], [])
     assert (exits, flushed) == ([1], [1])
 
 
@@ -5765,7 +5765,7 @@ async def test_a_run_stopped_that_reaches_the_guard_is_the_cancellation_not_a_tr
 
 
 @pytest.mark.anyio
-async def test_a_stopped_run_marks_its_lock_a_deliberate_stop_once_and_never_crashed():
+async def test_a_stopped_run_leaves_its_lock_record_unmarked_and_never_crashed():
     lock = FakeLock()
     stop = cli.StopCause()
 
@@ -5779,7 +5779,45 @@ async def test_a_stopped_run_marks_its_lock_a_deliberate_stop_once_and_never_cra
     with pytest.raises(SystemExit):
         await cli._signal_guarded(work, stop)
     assert (lock.released, lock.kept, lock.kept_crashed) == ([], [], [])
-    assert lock.kept_stopped == [("T-9", os.getpid())]
+    assert lock.kept_stopped == []
+
+
+def _nothing_written(lock):
+    return (lock.released, lock.kept, lock.kept_crashed, lock.kept_stopped) == ([], [], [], [])
+
+
+def test_settle_lock_for_a_signal_writes_nothing():
+    lock = FakeLock()
+    stop = cli.StopCause(signalled=True)
+    stop.settle_lock(lock, "T-9")
+    assert _nothing_written(lock)
+    assert stop.lock_settled is True
+
+
+def test_settle_lock_for_a_signal_and_a_crash_writes_nothing():
+    lock = FakeLock()
+    stop = cli.StopCause(signalled=True, crashed=True)
+    stop.settle_lock(lock, "T-9")
+    assert _nothing_written(lock)
+
+
+def test_settle_lock_after_a_settled_run_ignores_a_later_signal():
+    lock = FakeLock()
+    stop = cli.StopCause()
+    stop.settle_lock(lock, "T-9")  # the run ended: released
+    stop.signalled = True
+    stop.settle_lock(lock, "T-9")
+    assert (lock.released, lock.kept_stopped, lock.kept_crashed) == (["T-9"], [], [])
+
+
+def test_settle_lock_keeps_the_shutdown_and_crash_marks_and_releases_otherwise():
+    shutdown, crashed, plain = FakeLock(), FakeLock(), FakeLock()
+    cli.StopCause(at_shutdown=True, signalled=True).settle_lock(shutdown, "T-9")
+    cli.StopCause(crashed=True).settle_lock(crashed, "T-9")
+    cli.StopCause().settle_lock(plain, "T-9")
+    assert shutdown.kept == ["T-9"]
+    assert [c[0] for c in crashed.kept_crashed] == ["T-9"]
+    assert plain.released == ["T-9"]
 
 
 # `build_parser()` (GH-400, subtask `entry-points`): the command line as a tree the docs
