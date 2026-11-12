@@ -91,6 +91,7 @@ async def test_a_light_task_promoted_after_an_approved_commit_keeps_the_commit_a
     # the end), and the single subtask's work stays on the task branch it was delivered on.
     assert fakes.workspace.resets == []
     assert fakes.workspace.discarded == []
+    assert fakes.workspace.renamed == []
     assert api["reviewed_head"]
 
 
@@ -145,6 +146,8 @@ async def test_a_promotion_keeps_an_approved_subtask_branch_and_the_head_approve
     assert fakes.workspace.resets == []
     assert fakes.workspace.discarded == []
     assert fakes.workspace.archived_documents == {}
+    # A branch is archived by renaming it: none was.
+    assert fakes.workspace.renamed == []
 
 
 async def test_a_diff_under_a_declared_risk_glob_ends_on_the_full_path(config):
@@ -180,3 +183,4 @@ async def test_a_diff_under_a_declared_risk_glob_ends_on_the_full_path(config):
     assert final["promotion"]["text"] == "data-migration"
     assert final["status"] == "ready_for_review"
     assert fakes.workspace.resets == []
+    assert fakes.workspace.renamed == []
