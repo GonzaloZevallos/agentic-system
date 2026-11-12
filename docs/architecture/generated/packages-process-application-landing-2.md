@@ -35,6 +35,7 @@ graph TD
     m_application__landing_plan --> g_application__support
     m_application__landing_plan --> g_pkg__agentic__shared
     m_application__landing_plan --> g_pkg__domain
+    m_application__landing_slice --> g_application__build
     m_application__landing_slice --> g_application__checks
     m_application__landing_slice --> g_application__lifecycle
     m_application__landing_slice --> g_application__support

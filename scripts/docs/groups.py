@@ -65,6 +65,7 @@ ESCALATION_TITLE = "Escalado y reanudación"
 # fails the generator by name, with the line to paste; there is no default cluster (ADR-0076).
 CLUSTERS: Mapping[str, str] = {
     "application.adr_collision": "landing",
+    "application.api_break": "build",
     "application.archive": "lifecycle",
     "application.board_sync": "lifecycle",
     "application.checkouts": "support",
