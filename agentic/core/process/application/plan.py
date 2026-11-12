@@ -40,7 +40,7 @@ from ..domain.roles import (
     TECH_LEAD_REVIEWER,
     Interview,
 )
-from ..domain.task import PlanRoute, Subtask, TaskState, apply
+from ..domain.task import INTEGRATION, PlanRoute, Subtask, TaskState, apply
 from . import promotion
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
@@ -286,7 +286,10 @@ def _estimate_check(
         workflow=ci_workflow.check_run_names(_workflow_texts(ports, base)),
         stack_ci=_stack_ci(ports, base),
         plan_shape=cfg.plan_shape,
-        existing_ids=tuple(state["subtasks"]) if _revising(state) else (),
+        # The integration unit is the system's, not the model's: a plan never lists it.
+        existing_ids=(
+            tuple(i for i in state["subtasks"] if i != INTEGRATION) if _revising(state) else ()
+        ),
         path=task_path.path_of(state),
         path_label=task_path.path_label_of(state),
     )
