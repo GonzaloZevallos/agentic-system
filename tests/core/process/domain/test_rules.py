@@ -4686,3 +4686,10 @@ def test_auto_resumable_answers_the_same_with_and_without_at():
     assert rules.auto_resumable(bare) == rules.auto_resumable(stamped) == "account_limit"
     mixed = {"pause_log": [*bare["pause_log"], {"kind": "resumed", "at": _AT}]}
     assert rules.auto_resumable(mixed) is None
+
+
+def test_a_part_below_the_cap_reads_the_slicing_rules_without_retyping_the_budget():
+    text = rules.split_part_text(("GH-1", 2, 1))
+    assert rules.SLICING_RULES in text and "kind: migration" in text
+    assert "exactly one terminal part" in text
+    assert "15" not in text and "400" not in text and "600" not in text

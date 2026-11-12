@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules
+from ..domain import document, pull_request, rules
 from ..domain.roles import PJM
 from ..domain.task import WAITING_ON_HUMAN, PartRecord, TaskState, apply
 from .ports import Ports
@@ -66,8 +66,12 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         open_bodies = list(ports.inbox.open_issues())
     except (ValueError, OSError) as exc:
         return _stopped(current, "reading the open issues", exc, ports, _LEFT_PARTS)
+    # A part that splits: the one terminal child's pull request closes this part's issue too.
+    terminal = rules.last_part_numbers(parts)
+    parent = ports.inbox.issue_of(task_id) if part_of is not None else None
     for number, part in enumerate(parts, 1):
         key = str(number)
+        closes = parent if parent is not None and terminal == [number] else None
         if key in current.get("split_issues", {}):
             continue
         # Found by what the marker names, not by its text: an old marker has no depth.
@@ -76,7 +80,7 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
             (found for found, body in open_bodies if rules.split_part_of(body) == wanted), None
         )
         if url is None:
-            body = _body(current, number, part, len(parts), depth)
+            body = _body(current, number, part, len(parts), depth, closes)
             try:
                 url = ports.tracker.open_issue(part["title"], body, label=PART_LABEL)
             except (ValueError, OSError) as exc:
@@ -158,7 +162,9 @@ def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports, left: st
     return finish(state, patch, ports)
 
 
-def _body(state: TaskState, number: int, part: PartRecord, total: int, depth: int) -> str:
+def _body(
+    state: TaskState, number: int, part: PartRecord, total: int, depth: int, closes: int | None
+) -> str:
     task_id = state["id"]
     issues = state.get("split_issues", {})
     blockers = ", ".join(f"#{_issue_number(issues[str(dep)])}" for dep in part["depends_on"])
@@ -169,13 +175,24 @@ def _body(state: TaskState, number: int, part: PartRecord, total: int, depth: in
         # no longer matters. See `test_the_reader_of_blockers_unites_every_blocked_by_line`.
         *([f"Blocked by: {blockers}"] if blockers else []),
         part["body"].strip(),
+        *_kind_lines(part),
         *([f"## Invariants\n\n{invariants}"] if invariants else []),
         f"Part {number} of {total} of {task_id}. The plan and its interview are in "
         f"`{document.relative_path(task_id)}`; the original task branch "
         f"`{rules.task_branch(task_id)}` is context for reading, nothing to bring in.",
         rules.split_marker(task_id, number, depth),
+        *([pull_request.closes_marker(closes)] if closes is not None else []),
     ]
     return "\n\n".join(sections)
+
+
+def _kind_lines(part: PartRecord) -> list[str]:
+    """What the issue says of the part's kind and, when it has one, its guard (GH-592): the
+    reviewer of the part's pull request reads them from the issue."""
+    lines = [f"Kind: {part['kind']}"] if "kind" in part else []
+    if part.get("guard"):
+        lines.append(f"Guard: {part['guard']}")
+    return ["\n".join(lines)] if lines else []
 
 
 def _issue_number(url: str) -> int:

@@ -9,8 +9,7 @@ import pytest
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.ports import BranchPullRequest, GitError
-from agentic.core.process.domain import document, rules
-from agentic.core.process.domain import pull_request
+from agentic.core.process.domain import document, pull_request, rules
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeReaper, MemoryStack, memory_ports, unstamped

@@ -5976,6 +5976,19 @@ def split_part_of(body: str) -> tuple[str, int, int] | None:
     return match.group(1), int(match.group(2)), int(match.group(3) or 1)
 
 
+# How a part is sliced (GH-592): the rules every slice of a split answers to. No number of the
+# size budget is repeated here; the budget is `size_budget.budget_text`.
+SLICING_RULES = (
+    "Slice vertically: every part is independently mergeable and master stays green and "
+    "shippable after each one. User-visible behaviour that is not finished stays unreachable "
+    "until its last part (out of the navigation, or behind a flag), and each part's `guard` "
+    "says how. A migration that converts or moves existing data is a part of its own, "
+    "`kind: migration`, idempotent or after a part that writes both shapes (dual-write); "
+    "readers switch after it and the removal of the old shape comes later. Parts you write "
+    "end in exactly one terminal part, the one no other part depends on."
+)
+
+
 def split_part_text(part_of: tuple[str, int, int] | None) -> str:
     """What the planning Tech Lead is told about its task being a part of a partition
     (ADR-0054, GH-592): empty for a task that is not one. A part at depth 1 that is over the
@@ -5990,7 +6003,8 @@ def split_part_text(part_of: tuple[str, int, int] | None) -> str:
         return (
             f"{head}If it does not fit the size budget, write `parts` as a task does: a part "
             f"splits again, up to depth {MAX_SPLIT_DEPTH}. Otherwise write subtasks. In both "
-            "cases estimate honestly; do not shrink the estimate or inflate it to pick a path."
+            "cases estimate honestly; do not shrink the estimate or inflate it to pick a path. "
+            f"{SLICING_RULES}"
         )
     return (
         f"{head}This is the deepest a split goes: write subtasks only and never `parts`. If "

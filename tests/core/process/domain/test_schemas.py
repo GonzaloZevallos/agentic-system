@@ -12,7 +12,6 @@ from agentic.core.process.domain.schemas import (
     TechPlan,
     Verdict,
 )
-
 from tests.fakes import PART_DEFAULTS
 
 ZERO_SIZE = {"hand_files": 0, "hand_lines": 0, "test_lines": 0}

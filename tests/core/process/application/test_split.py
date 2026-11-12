@@ -8,7 +8,7 @@ import pytest
 
 from agentic.core.process.application.split import SPLIT, split
 from agentic.core.process.application.tracker_only import TRACKER_WORK
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import pull_request, rules
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
@@ -339,3 +339,43 @@ async def test_a_resume_that_lost_the_posted_record_finds_the_marker_and_posts_n
     assert again.documents.saved[-1]["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
         paused["tracker_checklist"]
     )
+
+
+# GH-592: the body says the kind and the guard of its part, and the one terminal child of a
+# part that split also closes the part's issue.
+
+GUARDED = [
+    {**PARTS[0], "kind": "change", "guard": "Behind the `payment_methods` flag."},
+    {**PARTS[1], "kind": "migration", "guard": "", "depends_on": [1]},
+    {**PARTS[3], "kind": "change", "guard": "", "depends_on": [1, 2]},
+]
+
+
+async def test_each_body_names_its_kind_and_its_guard(tmp_path):
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": GUARDED}, Configuration(product_dir=tmp_path), ports)
+
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert "Kind: change" in bodies[0] and "Guard: Behind the `payment_methods` flag." in bodies[0]
+    assert "Kind: migration" in bodies[1] and "Guard:" not in bodies[1]
+    assert all(rules.split_part_of(body) is not None for body in bodies)
+
+
+async def test_only_the_terminal_child_of_a_part_closes_the_parts_issue(tmp_path):
+    ports = ports_with_numbered_issues()
+    part = {
+        **STATE,
+        "id": "GH-60",
+        "parts": GUARDED,
+        "description": f"Build it.\n\n{rules.split_marker('GH-53', 3, 1)}",
+    }
+    await split(part, Configuration(product_dir=tmp_path), ports)
+
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert [pull_request.closes_line(body) for body in bodies] == ["", "", "Closes #60"]
+
+
+async def test_a_task_that_is_not_a_part_writes_no_closes_marker(tmp_path):
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": GUARDED}, Configuration(product_dir=tmp_path), ports)
+    assert all("agentic-closes" not in body for _, body in ports.tracker.opened_issues)
