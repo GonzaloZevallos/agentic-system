@@ -369,7 +369,7 @@ def escalations(document: Mapping[str, Any]) -> tuple[Escalation, ...]:
     pause it opened. An entry with no `cause` reads as a judgment one, as before GH-593."""
     found: list[Escalation] = []
     for epoch in _epochs(document):
-        kind = (
+        kind: Literal["mechanical", "judgment"] = (
             "mechanical"
             if pause_kind(cast(Sequence[PauseEntry], epoch)) == "external"
             else "judgment"
