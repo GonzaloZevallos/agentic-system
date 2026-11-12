@@ -1533,3 +1533,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-12T10:39:44.956+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, check each plan invariant against your diff with a grep. When you move a limit or rule, delete the old copy. Decide and word it only through the single owning module's helper.
+  confidence: medium
+  seen_in:
+  - GH-592
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T11:58:10.458+00:00'
