@@ -2036,11 +2036,6 @@ def _warn(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-# The label whose last addition starts a task's lead time (GH-599): the one that hands it to the
-# system.
-LEAD_TIME_LABEL = "agentic"
-
-
 def _read_lead_time(
     task_id: str,
     ports: Ports,
@@ -2052,7 +2047,7 @@ def _read_lead_time(
     that gives nothing is `unreadable`; the read never fails a close."""
     issue = ports.inbox.issue_of(task_id)
     read = (
-        label_timeline.label_added_at(issue, LEAD_TIME_LABEL)
+        label_timeline.label_added_at(issue, lead_time.START_LABEL)
         if label_timeline is not None and issue is not None
         else None
     )

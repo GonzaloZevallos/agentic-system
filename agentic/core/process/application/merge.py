@@ -94,8 +94,6 @@ COMMENTED: tuple[str, ...] = (
 )
 
 LEFT_TO_HUMAN = "Left for the human to merge."
-# The label whose last addition starts a lead time (GH-599).
-LEAD_TIME_LABEL = "agentic"
 
 # Nothing was committed before the merge worktree existed: every head differs from it, so
 # `CheckoutPresubmit` runs the checks even when the upstream was already in the head.
@@ -1266,7 +1264,7 @@ def _lead_time_patch(
             pull_request = None
     issue = ports.inbox.issue_of(task_id)
     started = (
-        label_timeline.label_added_at(issue, LEAD_TIME_LABEL)
+        label_timeline.label_added_at(issue, lead_time.START_LABEL)
         if label_timeline is not None and issue is not None
         else None
     )

@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from typing import Final, Literal, TypedDict
 
 LEAD_TIME_KEY: Final = "lead_time"
+# The label whose last addition starts a lead time: the one that hands the task to the system.
+START_LABEL: Final = "agentic"
 Unknown = Literal["no_merge", "unreadable"]
 
 
