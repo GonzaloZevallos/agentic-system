@@ -1060,7 +1060,7 @@ def plan_fits(
     data: dict[str, Any],
     history: History,
     bucket: FitBucket | None = None,
-    size_ratio: float = size_budget.UNPROVEN_RATIO,
+    size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
 ) -> FitDecision:
     """The one place that decides whether a plan's estimate fits one task: the larger of
     the declared cost and the history's reference for the plan's own size (its parts, else
@@ -1146,7 +1146,7 @@ def plan_check_for(
     workflow: WorkflowNames | None = None,
     stack_ci: Sequence[str] = (),
     plan_shape: str = DEFAULT_PLAN_SHAPE,
-    size_ratio: float = size_budget.UNPROVEN_RATIO,
+    size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived

@@ -134,3 +134,15 @@ def test_budget_text_states_every_constant_and_the_excluded_paths():
 def test_budget_text_with_a_ratio_says_how_the_declared_figures_are_judged():
     assert "judged x 1.5, rounded up" in budget.budget_text(budget.UNPROVEN_RATIO)
     assert "judged x 1.2" in budget.budget_text(1.2)
+
+
+def test_a_pair_of_ratios_judges_files_and_lines_each_by_its_own():
+    judged = budget.judged(PlanSize(10, 100, 7), (1.2, 2.0))
+    assert (judged.hand_files, judged.hand_lines, judged.test_lines) == (12, 200, 7)
+    assert budget.judged(PlanSize(10, 100, 7), 1.5) == budget.judged(
+        PlanSize(10, 100, 7), (1.5, 1.5)
+    )
+
+
+def test_budget_text_with_a_pair_of_ratios_names_each():
+    assert "judged x 1.2 files and x 2 lines, rounded up" in budget.budget_text((1.2, 2.0))

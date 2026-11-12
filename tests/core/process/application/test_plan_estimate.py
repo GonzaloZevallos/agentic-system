@@ -7,6 +7,7 @@ import pytest
 from agentic.core.process.application.plan import PART_BUILT_WHOLE, plan
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.schemas import FitDecision
+from agentic.core.process.domain.size_budget import PROVEN_PAIRS, ActualSize, PlanSize
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_preflight import ORIGINAL_PARTS_WORDING
@@ -520,3 +521,56 @@ async def test_the_free_default_accepts_two_subtasks_and_says_nothing_of_the_sha
     assert len(patch["subtasks"]) == 2
     assert "exactly one subtask" not in runner.calls[0]["system_prompt"]
     assert "plan_shape" not in patch.get("experiment", {})
+
+
+# The floor on the declared hand-written size (GH-592): 1.5 until ten closed tasks recorded both
+# sizes, then the p90 of what they really were, in the prompt and in the fit.
+
+
+def sized_closed(count, *, planned_files=2, actual_files=6):
+    planned_size = PlanSize(planned_files, 20, 0).to_frontmatter()
+    actual_size = ActualSize(actual_files, 100, 0, 0).to_frontmatter()
+    return [closed(f"SZ-{i}", 10.0, **planned_size, **actual_size) for i in range(count)]
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_proven_ratio_judges_the_declared_files_and_tells_the_planner(arm, tmp_path):
+    scripted = [planned(hand_files=6), planned_parts()]
+    if arm == "cold":
+        runner, cfg = ScriptedRunner(tech_lead=scripted), cold(tmp_path)
+    else:
+        runner, cfg = interview_runner(*scripted), interviewed(tmp_path)
+    ports = memory_ports(runner)
+    ports.documents.saved.extend(sized_closed(PROVEN_PAIRS))
+    patch = await plan(TASK, cfg, ports)
+
+    # 6 declared files x 3.0 is 18, over the 15 cap: refused as subtasks, retried as parts.
+    assert runner.slugs.count("tech_lead") == 2 and "parts" in patch
+    assert "does not fit" in patch["failures"][0]["error"]
+    told = " ".join(runner.calls[-2]["system_prompt"].split())
+    assert "judged x 3 files and x 5 lines" in told
+
+
+async def test_an_unproven_ratio_is_the_fixed_factor(tmp_path):
+    runner = ScriptedRunner(tech_lead=[planned(hand_files=6)])
+    ports = memory_ports(runner)
+    ports.documents.saved.extend(sized_closed(PROVEN_PAIRS - 1))
+    patch = await plan(TASK, cold(tmp_path), ports)
+
+    # 6 x 1.5 is 9, within the cap: one attempt, delivered as subtasks.
+    assert runner.slugs == ["tech_lead"] and not patch.get("failures") and "parts" not in patch
+    assert "judged x 1.5, rounded up" in " ".join(runner.calls[0]["system_prompt"].split())
+
+
+async def test_a_part_is_judged_with_the_proven_ratio_too(tmp_path):
+    # The verdict on a part is seen in what the system does with a part that does not fit
+    # (it says so on the issue); a part that fits leaves the issue alone.
+    unproven, proven = (
+        memory_ports(ScriptedRunner(tech_lead=[planned(hand_files=6)])) for _ in "ab"
+    )
+    proven.documents.saved.extend(sized_closed(PROVEN_PAIRS))
+    await plan(PART, cold(tmp_path), unproven)
+    await plan(PART, cold(tmp_path), proven)
+
+    assert unproven.tracker.comments == []
+    assert [task_id for task_id, _ in proven.tracker.comments] == ["GH-346"]

@@ -119,7 +119,7 @@ async def _interview_and_plan(
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
-        size_budget=size_budget.budget_text(size_budget.UNPROVEN_RATIO),
+        size_budget=size_budget.budget_text(_size_ratio(history)),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),
@@ -220,7 +220,15 @@ def _estimate_check(
         workflow=ci_workflow.check_run_names(_workflow_texts(ports, base)),
         stack_ci=_stack_ci(ports, base),
         plan_shape=cfg.plan_shape,
+        size_ratio=_size_ratio(history),
     )
+
+
+def _size_ratio(history: cost_history.History) -> size_budget.Ratio:
+    """The floor on the declared hand-written size in force: the history's p90 ratio once it
+    proves one, else the fixed `UNPROVEN_RATIO`. The one figure the prompt, the plan check and
+    the part's fit all read (GH-592)."""
+    return cost_history.size_ratio(history) or size_budget.UNPROVEN_RATIO
 
 
 def _spent(state: TaskState) -> float:
@@ -315,7 +323,7 @@ def _after_delivery(
     `schemas.plan_fits` decides, so the text quotes the figures the check used."""
     if output is None or part_of is None or state.get("fit_waived") or not patch.get("subtasks"):
         return patch, None
-    fit = schemas.plan_fits(output.data, history)
+    fit = schemas.plan_fits(output.data, history, size_ratio=_size_ratio(history))
     if fit.fits:
         return patch, None
     if rules.part_builds_whole(fit):
@@ -408,7 +416,7 @@ async def _cold_draft(
         proposed_invariants=proposed_invariants,
         cost_history=history.text(),
         plan_shape_rule=rules.plan_shape_text(cfg.plan_shape),
-        size_budget=size_budget.budget_text(size_budget.UNPROVEN_RATIO),
+        size_budget=size_budget.budget_text(_size_ratio(history)),
         split_part=rules.split_part_text(part_of),
         docs_plan=docs.plan_text(ports.stack.docs(task_base(state, ports))),
         parts_remedy=rules.parts_remedy_text(part_of),

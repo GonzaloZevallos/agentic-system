@@ -5931,7 +5931,7 @@ def estimate_fits(
     files: int,
     reference_usd: float | None,
     size: PlanSize | None = None,
-    ratio: float = UNPROVEN_RATIO,
+    ratio: size_budget.Ratio = UNPROVEN_RATIO,
 ) -> bool:
     """Whether a plan's estimate is small enough to build as one task. It decides on the
     larger of the declared cost and the history's reference (the p90 of the bucket, when
