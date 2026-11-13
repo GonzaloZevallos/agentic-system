@@ -18,6 +18,7 @@ from agentic.core.process.domain.stage0_rotation import (
     Unreadable,
     WindowEntry,
     expected_pollers,
+    partial_name,
     prunable,
     reexec_due,
     rollback_due,
@@ -95,6 +96,26 @@ def test_target(
     expected: Target | Keep,
 ) -> None:
     assert target(window, current, pin, rejected) == expected
+
+
+def test_partial_name() -> None:
+    assert partial_name(A) == A + ".partial"
+
+
+@pytest.mark.parametrize("pin", [None, "", "zz", A[:7], B])
+@pytest.mark.parametrize(
+    "window",
+    [
+        [],
+        [WindowEntry(B, "green", True)],
+        [WindowEntry(B, "red", True), WindowEntry(C, "green", None)],
+        [WindowEntry(B, "green", False)],
+    ],
+)
+def test_target_never_returns_unavailable(window: list[WindowEntry], pin: str | None) -> None:
+    for rejected in (frozenset(), frozenset({B})):
+        result = target(window, A, pin, rejected)
+        assert result != Keep("unavailable")
 
 
 T0 = datetime(2026, 11, 1, tzinfo=UTC)

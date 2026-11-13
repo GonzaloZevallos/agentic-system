@@ -25,10 +25,12 @@ Esta página muestra las clases públicas de los módulos del grupo `machine` de
 
 ```mermaid
 classDiagram
-    class scratch__TaskFolder["TaskFolder"]
-    class stage0_rotation__Heartbeat["Heartbeat"]
-    class stage0_rotation__Keep["Keep"]
+    class stage0_rotation__Prepared["Prepared"]
+    class stage0_rotation__Proceed["Proceed"]
+    class stage0_rotation__Red["Red"]
+    class stage0_rotation__Stop["Stop"]
     class stage0_rotation__Target["Target"]
+    class stage0_rotation__Unavailable["Unavailable"]
     class stage0_rotation__Unreadable["Unreadable"]
     class stage0_rotation__WindowEntry["WindowEntry"]
     class stall__ChildActivity["ChildActivity"]
@@ -36,3 +38,8 @@ classDiagram
     class stall__StallSnapshot["StallSnapshot"]
     class stall__Verdict["Verdict"]
 ```
+
+## Relaciones con otras páginas
+
+- [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - `stage0_rotation.Proceed` se asocia con `stage0_rotation.Green`

@@ -36,4 +36,6 @@ classDiagram
     class retakes__Budget["Budget"]
     class scratch__KeptFolder["KeptFolder"]
     class scratch__Leftover["Leftover"]
+    class scratch__Orphans["Orphans"]
+    class scratch__Owner["Owner"]
 ```
