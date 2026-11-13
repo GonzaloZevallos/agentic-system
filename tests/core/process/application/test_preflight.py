@@ -723,7 +723,7 @@ def test_both_tech_lead_prompts_render_the_one_text_on_tracker_work_with_parts(
     ).text
     assert "{{" not in text
     assert rules.TRACKER_WITH_PARTS in text
-    assert "so do\n   not write those items" in text
+    assert "do not write those items" in text.replace("\n   ", " ")
     assert "re-point" not in text.replace(rules.TRACKER_WITH_PARTS, "")
 
 
