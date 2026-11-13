@@ -767,20 +767,22 @@ def escalation(
     is not a `MechanicalCause`: the pause stays a human's. It is refused with another class or
     with a `cause`, so a mechanical pause never carries a human's items.
 
-    `spec` (GH-594) is the task's `state.get("spec")`; every call site that can raise a
+    `spec` (GH-594) is the task's `state.get("spec")`; the graph's empty default (`{}`) is no
+    spec, like `None`. Every call site that can raise a
     `questions` about the spec's behaviour passes it. With a spec, a `questions` escalation
     needs a `spec_cause` (`contradiction`, `conflict` or `data_loss`), still under class
     `questions`: it is no new class and no `MechanicalCause`. The key `spec_cause` is written
-    only when `spec` is given (`None` for any other pause, so a cause cannot outlive its
+    only when a spec is given (`None` for any other pause, so a cause cannot outlive its
     pause); without a spec the patch is exactly the four keys above. `spec_cause` is refused
     with another class, with a `cause`, or without a spec: a programming error, `ValueError`."""
-    if spec is not None and cls == "questions" and spec_cause is None:
+    has_spec = bool(spec)
+    if has_spec and cls == "questions" and spec_cause is None:
         raise ValueError("a spec delivery's questions escalation needs a spec_cause")
     if spec_cause is not None and cls != "questions":
         raise ValueError(f"spec_cause belongs to a questions escalation, not {cls!r}")
     if spec_cause is not None and cause is not None:
         raise ValueError("spec_cause is a human's pause: it takes no mechanical cause")
-    if spec_cause is not None and spec is None:
+    if spec_cause is not None and not has_spec:
         raise ValueError("spec_cause belongs to a spec delivery: there is no spec")
     if tracker_human and cls != "questions":
         raise ValueError(f"tracker_human belongs to a questions escalation, not {cls!r}")
@@ -792,7 +794,7 @@ def escalation(
         "escalation_cause": cause,
         "tracker_human": list(tracker_human),
     }
-    if spec is not None:
+    if has_spec:
         patch["spec_cause"] = spec_cause
     return patch
 
@@ -3364,7 +3366,7 @@ def resumed(
         # counts toward what the poller may retry on its own next time.
         "pause_log": [resumed_entry(at=at)],
     }
-    if "spec" in state:
+    if state.get("spec"):
         patch["spec_cause"] = None
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}

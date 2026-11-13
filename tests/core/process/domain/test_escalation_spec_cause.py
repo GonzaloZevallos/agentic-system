@@ -3,7 +3,7 @@ pause of a spec delivery carries a closed `spec_cause`, and without a spec nothi
 
 from __future__ import annotations
 
-from typing import get_args
+from typing import cast, get_args
 
 import pytest
 
@@ -74,3 +74,10 @@ def test_resuming_a_spec_task_clears_the_cause():
 
 def test_resuming_a_task_without_a_spec_writes_no_cause():
     assert "spec_cause" not in rules.resumed({"escalated": "x"}, None, at="2026-11-13T00:00:00Z")
+
+
+def test_the_graphs_empty_default_spec_is_no_spec():
+    empty = cast(SpecContract, {})
+    assert rules.escalation("questions", "why", spec=empty) == rules.escalation("questions", "why")
+    state: TaskState = {"spec": empty, "escalated": "x"}
+    assert "spec_cause" not in rules.resumed(state, None, at="2026-11-13T00:00:00Z")
