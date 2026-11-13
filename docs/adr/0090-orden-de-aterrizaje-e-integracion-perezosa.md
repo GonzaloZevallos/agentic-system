@@ -86,7 +86,8 @@ Mientras la Cabeza mantiene el turno con un hijo vivo que integra (`land_model` 
 - **Sin red nueva**: una lectura `tracker.pull_request` de la Cabeza por ronda; el resto es git local (`is_ancestor`, `touched_paths`). No se usan `fetch_commit`, `contains`, `changed_paths` ni `pushed_head`.
 - **Costo**: rondas × miembros listos en llamadas locales de git (una o dos por candidato), más una lectura del pull request por ronda. Sin Cabeza que integre no se lee nada.
 - **Presupuesto**: el carril se abre solo si a la Cabeza le quedan al menos `LANE_SYNCS_MIN` = 2 sincronizaciones (`LANDING_SYNCS_MAX` menos las `sync_master` de la época, por tarea y no por sha): cada merge del carril le cuesta una `sync_master`, y otra queda para su propio movimiento.
-- **No escribe**: ninguna clave de un documento y nada se agrega a `landing`; `_record_turn` recibe lo mismo que antes.
+- **No escribe la decisión**: ninguna clave de un documento y nada se agrega a `landing`; `_record_turn` recibe lo mismo que antes.
+- **Registro informativo (parte 2)**: el poller anota la admisión (`lane_admitted`) en el documento del miembro y, cuando el miembro se mergea por el verbo de merge sobre el mismo `pr_head` y `master` (`auto_merged_at` posterior a la admisión), el merge en `lane_merges` del documento de la Cabeza (`lane_recorded` marca al miembro). Vive fuera de `landing` porque `rules.landing_pass` lee la última entrada de esa lista y `landing_order.unproductive_steps` cuenta sus entradas: una entrada más cambiaría decisiones. Ninguna decisión lee estas claves. `not_lane` significa «no demostrablemente un merge del carril» (otro sha, o el master se movió entre la admisión y el merge) y nunca es un conteo de merges de la Cabeza. Solo se anota un merge cuyo documento se escribió en los últimos 7 días (`LANE_RECORD_WINDOW`); la Cabeza o el miembro con un hijo vivo no se escriben y quedan para otra ronda.
 
 Riesgos conocidos:
 

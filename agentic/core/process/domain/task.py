@@ -440,6 +440,32 @@ def add_head_yield(existing: list[HeadYield], new: HeadYield) -> list[HeadYield]
     return [*existing, new][-HEAD_YIELDS_MAX:]
 
 
+NOT_LANE = "not_lane"
+"""The `lane_recorded` value of a member whose merge is not provably a fast-lane merge."""
+
+
+class LaneAdmitted(TypedDict):
+    """The record on a member's own document that the poller let it merge beside the busy head
+    `head_issue` (GH-681, informative): the pull request head `pr_head`, the `master` it held and
+    when (`at`). No decision reads it."""
+
+    head_issue: int
+    pr_head: str
+    master: str
+    at: str
+
+
+class LaneMerge(TypedDict):
+    """One fast-lane merge recorded in the head's document (`lane_merges`): the member `issue`,
+    the `pr_head` and `master` it was admitted on, and when it merged (`merged_at`, its
+    `auto_merged_at` as stored)."""
+
+    issue: int
+    pr_head: str
+    master: str
+    merged_at: str
+
+
 class TrackerActionDone(TypedDict):
     """The record of one typed tracker item, keyed by `tracker_items.item_hash` (GH-620): `at`
     when it was raised, `url` where (when it has one) and `answered` when the human did."""

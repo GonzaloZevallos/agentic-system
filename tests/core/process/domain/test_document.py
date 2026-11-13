@@ -1332,6 +1332,7 @@ _LANDING_SCALAR_KEYS = frozenset(
         "head_charged_s",
         "head_seen_at",
         "head_yielded_at",
+        "lane_recorded",
     }
 )
 _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
@@ -2003,3 +2004,98 @@ def test_a_hand_edited_document_loads_without_its_bad_assumption_rows():
         1,
     )
     assert document.parse(edited)["assumptions"] == [{"role": "Developer", "text": "keep me"}]
+
+
+# --- GH-681 part 2: the fast lane's keys -----------------------------------------------------
+
+_LANE_ADMITTED = {
+    "head_issue": 7,
+    "pr_head": "a" * 40,
+    "master": "b" * 40,
+    "at": "2026-11-12T10:00:00+00:00",
+}
+
+
+def _lane_merge(n: int = 1, **over):
+    return {
+        "issue": n,
+        "pr_head": f"{n:040x}",
+        "master": "b" * 40,
+        "merged_at": "2026-11-12T10:05:00+00:00",
+        **over,
+    }
+
+
+def _lane_roundtrip(**lane):
+    return document.parse(document.render(golden_state(**lane)))
+
+
+def test_the_lane_keys_round_trip_as_the_normalized_state():
+    lane = {
+        "lane_admitted": _LANE_ADMITTED,
+        "lane_recorded": "2026-11-12T10:06:00+00:00",
+        "lane_merges": [_lane_merge(1), _lane_merge(2)],
+    }
+    parsed = _lane_roundtrip(**lane)
+    assert {k: parsed[k] for k in lane} == lane
+    assert _lane_roundtrip(lane_recorded="not_lane")["lane_recorded"] == "not_lane"
+
+
+def test_a_document_without_lane_keys_renders_byte_identically_and_adds_none():
+    rendered = document.render(golden_state())
+    assert "lane_" not in rendered
+    assert not {"lane_admitted", "lane_recorded", "lane_merges"} & set(document.parse(rendered))
+
+
+@pytest.mark.parametrize(
+    ("key", "bad"),
+    [
+        ("lane_admitted", "x"),
+        ("lane_admitted", {**_LANE_ADMITTED, "head_issue": True}),
+        ("lane_admitted", {**_LANE_ADMITTED, "head_issue": "7"}),
+        ("lane_admitted", {**_LANE_ADMITTED, "at": "2026-11-12T10:00:00"}),
+        ("lane_admitted", {**_LANE_ADMITTED, "pr_head": 5}),
+        ("lane_admitted", {k: v for k, v in _LANE_ADMITTED.items() if k != "master"}),
+        ("lane_recorded", "yes"),
+        ("lane_recorded", "2026-11-12T10:00:00"),
+        ("lane_recorded", 5),
+        ("lane_merges", "x"),
+        ("lane_merges", [_lane_merge(merged_at="soon")]),
+    ],
+)
+def test_a_malformed_lane_value_is_dropped_without_raising(key, bad):
+    assert key not in _lane_roundtrip(**{key: bad})
+
+
+def test_a_lane_merge_that_is_not_whole_is_dropped_and_the_others_stay():
+    kept = [_lane_merge(1), _lane_merge(2)]
+    bad = [_lane_merge(3, issue="3"), "x", _lane_merge(4, pr_head="")]
+    assert _lane_roundtrip(lane_merges=[kept[0], *bad, kept[1]])["lane_merges"] == kept
+
+
+def test_lane_merges_keep_the_last_twenty():
+    merges = [_lane_merge(n) for n in range(1, 22)]
+    assert _lane_roundtrip(lane_merges=merges)["lane_merges"] == merges[1:]
+
+
+def test_the_lane_keys_render_as_flow_lines_that_record_closure_replaces():
+    rendered = document.render(
+        golden_state(lane_admitted=_LANE_ADMITTED, lane_merges=[_lane_merge(1)])
+    )
+    for key in ("lane_admitted", "lane_merges"):
+        lines = [line for line in rendered.split("\n") if line.startswith(f"{key}:")]
+        assert len(lines) == 1
+    rewritten = document.record_closure(
+        rendered, {"lane_merges": [_lane_merge(2)], "lane_recorded": "not_lane"}
+    )
+    parsed = document.parse(rewritten)
+    assert parsed["lane_merges"] == [_lane_merge(2)]
+    assert parsed["lane_recorded"] == "not_lane"
+    assert rewritten.count("lane_merges:") == 1
+
+
+def test_a_cleared_admission_reads_as_absent():
+    rendered = document.render(golden_state(lane_admitted=_LANE_ADMITTED))
+    cleared = document.record_closure(rendered, {"lane_admitted": None})
+    assert "lane_admitted: null" in cleared
+    assert "lane_admitted" not in document.parse(cleared)

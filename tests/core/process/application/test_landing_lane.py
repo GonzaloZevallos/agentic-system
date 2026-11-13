@@ -5,14 +5,17 @@ A read that fails is `None`, never `False`, `0` or an empty set."""
 from __future__ import annotations
 
 import dataclasses
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from agentic.core.process.application import landing_lane
 from agentic.core.process.application.landing_lane import LaneHead, lane_facts
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain import landing_order
 from agentic.core.process.domain.task import PullRequest
-from tests.fakes import MemoryTracker, memory_ports
+from tests.fakes import MemoryDocuments, MemoryTracker, memory_ports
 
 PRODUCT = Path("/p")
 MASTER = "b" * 40
@@ -245,3 +248,235 @@ def test_the_result_is_a_copy_in_the_order_given():
         paths=frozenset(),
         head_syncs_left=landing_rules.LANDING_SYNCS_MAX,
     )
+
+
+# --- GH-681 part 2: the informative record (admit, record_lane_merges, clear_admissions) ------
+
+NOW = datetime(2026, 11, 12, 10, 0, tzinfo=UTC)
+LATER = NOW + timedelta(minutes=5)
+MERGED = (NOW + timedelta(minutes=2)).isoformat()
+
+
+class _Documents(MemoryDocuments):
+    """`MemoryDocuments` that counts loads and can refuse the write of some documents."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.loaded: list[str] = []
+        self.refuse: set[str] = set()
+
+    def load(self, task_id):
+        self.loaded.append(task_id)
+        return super().load(task_id)
+
+    def record_closure(self, task_id, values):
+        if task_id in self.refuse:
+            raise OSError("disk full")
+        return super().record_closure(task_id, values)
+
+
+def _lane_ports(*issues: int):
+    ports = memory_ports(documents=_Documents())
+    for issue in issues:
+        ports.documents.save({"id": f"GH-{issue}", "title": "t"})
+    return ports
+
+
+def _work(*busy: str):
+    return lambda task_id: task_id in busy
+
+
+def _admit(ports, now=NOW, busy=(), out=None, pr_head=MEMBER_HEAD):
+    landing_lane.admit(
+        ports,
+        "GH-5",
+        ports.documents.load("GH-5"),
+        7,
+        pr_head,
+        MASTER,
+        now,
+        _work(*busy),
+        [] if out is None else out,
+    )
+
+
+def _merged(ports, head=MEMBER_HEAD, master=MASTER, at=MERGED):
+    ports.documents.record_closure(
+        "GH-5", {"auto_merge_head": head, "auto_merge_master": master, "auto_merged_at": at}
+    )
+
+
+def _record(ports, busy=(), open_ids=("GH-5", "GH-7"), now=LATER):
+    out: list[str] = []
+    landing_lane.record_lane_merges(ports, open_ids, now, _work(*busy), out)
+    return out
+
+
+def _admission(ports):
+    return ports.documents.load("GH-5").get("lane_admitted")
+
+
+def test_an_admission_is_written_once_and_keeps_its_instant_on_the_same_sha():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    assert _admission(ports) == {
+        "head_issue": 7,
+        "pr_head": MEMBER_HEAD,
+        "master": MASTER,
+        "at": NOW.isoformat(),
+    }
+    _admit(ports, now=LATER)
+    assert _admission(ports)["at"] == NOW.isoformat()
+    _admit(ports, now=LATER, pr_head=OTHER_OID)
+    assert _admission(ports)["at"] == LATER.isoformat()
+
+
+def test_an_admission_is_not_written_while_the_member_is_at_work():
+    ports = _lane_ports(5, 7)
+    _admit(ports, busy=("GH-5",))
+    assert _admission(ports) is None
+
+
+def test_a_failed_admission_write_is_one_line_and_never_an_error():
+    ports = _lane_ports(5, 7)
+    ports.documents.refuse.add("GH-5")
+    out: list[str] = []
+    _admit(ports, out=out)
+    assert len(out) == 1 and "GH-5" in out[0]
+
+
+def test_an_admission_is_cleared_when_the_member_is_no_longer_the_lane():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    out: list[str] = []
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work("GH-5"), out)
+    assert _admission(ports) is not None  # at work: not written
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work(), out)
+    assert _admission(ports) is None and out == []
+
+
+def test_a_member_that_is_still_the_lane_keeps_its_admission_and_the_head_is_untouched():
+    """The round's lane is read from the decisions: a member that is still `lane` (whatever its
+    child is doing) is never cleared, and clearing never writes the head's document."""
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    before = (_admission(ports), dict(ports.documents.closures))
+    out: list[str] = []
+    landing_lane.clear_admissions(ports, [("GH-5", 5), ("GH-7", 7)], 5, _work(), out)
+    assert (_admission(ports), dict(ports.documents.closures)) == before
+    assert out == []
+
+
+def test_clearing_never_takes_an_admission_a_merge_followed():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports)
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work(), [])
+    assert _admission(ports) is not None
+
+
+def test_a_cleared_admission_is_never_credited_when_the_member_later_merges_as_head():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work(), [])
+    _merged(ports)
+    assert _record(ports) == []
+    assert "lane_merges" not in ports.documents.load("GH-7")
+    assert "lane_recorded" not in ports.documents.load("GH-5")
+
+
+def test_a_merge_on_the_admitted_sha_is_appended_once_and_then_marks_the_member():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports)
+    assert _record(ports) == []
+    merge = {"issue": 5, "pr_head": MEMBER_HEAD, "master": MASTER, "merged_at": MERGED}
+    assert ports.documents.load("GH-7")["lane_merges"] == [merge]
+    assert ports.documents.load("GH-5")["lane_recorded"] == LATER.isoformat()
+    _record(ports)
+    assert ports.documents.load("GH-7")["lane_merges"] == [merge]
+
+
+def test_a_lost_mark_is_finished_without_a_second_entry_on_the_head():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports)
+    _record(ports)
+    ports.documents.record_closure("GH-5", {"lane_recorded": None})
+    _record(ports)
+    assert len(ports.documents.load("GH-7")["lane_merges"]) == 1
+    assert ports.documents.load("GH-5")["lane_recorded"] is not None
+
+
+def test_a_merge_on_another_sha_marks_not_lane_and_writes_nothing_on_the_head():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports, head=OTHER_OID)
+    _record(ports)
+    assert ports.documents.load("GH-5")["lane_recorded"] == "not_lane"
+    assert "lane_merges" not in ports.documents.load("GH-7")
+
+
+def test_a_merge_made_by_hand_on_github_writes_nothing():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    ports.documents.record_closure("GH-5", {"closed_at": MERGED})  # no `auto_merged_at`
+    assert _record(ports) == []
+    assert "lane_recorded" not in ports.documents.load("GH-5")
+    assert "lane_merges" not in ports.documents.load("GH-7")
+
+
+@pytest.mark.parametrize("busy", [("GH-7",), ("GH-5",)])
+def test_a_head_or_member_at_work_is_left_for_a_later_round_without_a_line(busy):
+    """`at_work` is `busy` or a run lock that refuses: the poller builds one predicate."""
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports)
+    assert _record(ports, busy=busy) == []
+    assert "lane_merges" not in ports.documents.load("GH-7")
+    assert "lane_recorded" not in ports.documents.load("GH-5")
+    _record(ports)
+    assert len(ports.documents.load("GH-7")["lane_merges"]) == 1
+
+
+def test_a_head_write_that_fails_leaves_the_member_unmarked_and_says_one_line_each_round():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports)
+    ports.documents.refuse.add("GH-7")
+    for _ in range(2):
+        out = _record(ports)
+        assert len(out) == 1 and "#7" in out[0]
+    assert "lane_recorded" not in ports.documents.load("GH-5")
+    ports.documents.refuse.clear()
+    assert _record(ports) == []
+    assert len(ports.documents.load("GH-7")["lane_merges"]) == 1
+
+
+def test_an_absent_head_document_marks_not_lane_with_one_line():
+    ports = _lane_ports(5)
+    _admit(ports)
+    _merged(ports)
+    out = _record(ports, open_ids=("GH-5",))
+    assert len(out) == 1 and "#7" in out[0]
+    assert ports.documents.load("GH-5")["lane_recorded"] == "not_lane"
+
+
+def test_a_closed_member_is_still_recorded_from_the_documents_touched_in_the_window():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports)
+    ports.documents.record_closure("GH-5", {"closed_at": MERGED})
+    _record(ports, open_ids=("GH-7",))
+    assert len(ports.documents.load("GH-7")["lane_merges"]) == 1
+
+
+def test_a_member_document_older_than_the_window_is_not_loaded():
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    _merged(ports)
+    ports.documents.untouched.add("GH-5")
+    ports.documents.loaded.clear()
+    _record(ports, open_ids=("GH-7",))
+    assert "GH-5" not in ports.documents.loaded
+    assert "lane_merges" not in ports.documents.load("GH-7")

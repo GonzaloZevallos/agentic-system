@@ -70,7 +70,14 @@ sequenceDiagram
    (el predicado y las razones son de `landing_order.py:lane_ready` y `lane_reason`). A lo sumo
    un miembro, `lane`, entra en `found` junto a la Cabeza con la línea
    `fast lane behind busy #H` y sigue el camino normal de merge; un miembro limpio sin carril
-   dice la razón en su línea: `waiting (clean, <texto>) behind #H`. Luego
+   dice la razón en su línea: `waiting (clean, <texto>) behind #H`. Fuera de las decisiones,
+   en una ronda no retenida `agentic/core/process/application/landing_lane.py` deja un registro
+   informativo que ninguna decisión lee (ADR-0090, adenda GH-681, parte 2): `admit` escribe
+   `lane_admitted` en el documento del miembro del carril, `record_lane_merges` agrega el merge a
+   `lane_merges` del documento de la Cabeza y marca `lane_recorded` en el del miembro, y
+   `clear_admissions` borra la admisión de quien dejó de ser el carril. Ninguno escribe el
+   documento de una tarea con un hijo vivo o un lock, ni una clave `head_*`, ni la lista
+   `landing`. Luego
    `agentic/core/process/application/poll.py:execute` lanza `agentic land --issue N`. El
    verbo es `agentic/cli.py:_land`; corre bajo el lock de la tarea y registrado con el tipo
    de corrida con que se lo lanzó (`land_checks` si no gasta modelo, `land_model` si sí).

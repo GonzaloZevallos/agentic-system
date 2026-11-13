@@ -31,6 +31,8 @@ classDiagram
     class task__LandedSlice["LandedSlice"]
     class task__LandedSliceRef["LandedSliceRef"]
     class task__LandingEntry["LandingEntry"]
+    class task__LaneAdmitted["LaneAdmitted"]
+    class task__LaneMerge["LaneMerge"]
     class task__LapsePauseEntry["LapsePauseEntry"]
     class task__MergeCiRecord["MergeCiRecord"]
     class task__MergeConflictRecord["MergeConflictRecord"]
@@ -38,8 +40,6 @@ classDiagram
     class task__MergeRefusalRecord["MergeRefusalRecord"]
     class task__OutOfBoundsLine["OutOfBoundsLine"]
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
-    class task__PartRecord["PartRecord"]
-    class task__PathRevision["PathRevision"]
 ```
 
 ## Relaciones con otras páginas
