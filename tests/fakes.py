@@ -1723,6 +1723,10 @@ class MemoryTracker:
         # `(number, body)` of each body update.
         self.listed: list[ListedPullRequest] = []
         self.updated_bodies: list[tuple[int, str]] = []
+        # GH-619: the issue numbers whose `update_issue_body` raises, and the inbox it
+        # writes through to (none: it only records).
+        self.body_errors: set[int] = set()
+        self.inbox: MemoryInbox | None = None
         # GH-610: the body `pull_request_body` answers per reference (an edit writes it), and
         # the `ValueError` text that makes the read fail.
         self.bodies: dict[str, str] = {}
@@ -1947,6 +1951,31 @@ class MemoryTracker:
         if self.on_lookup is not None:
             self.on_lookup(branch)
         return list(self.on_branch.get(branch, []))
+
+    def update_issue_body(self, number: int, body: str) -> None:
+        """GH-619: a number in `body_errors` raises `ValueError`, `gh`'s own failure shape,
+        recording nothing. Otherwise `(number, body)` joins `updated_bodies` (shared with
+        `update_pull_request_body`; the `events` entry tells them apart) and, when `inbox`
+        is wired, the issue's description, its `open_issue_refs` entry and its
+        `open_issues` pair all answer the new body."""
+        if number in self.body_errors:
+            raise ValueError(f"gh issue edit failed: scripted for #{number}")
+        self.events.append("update_issue_body")
+        self.updated_bodies.append((number, body))
+        inbox = self.inbox
+        if inbox is None:
+            return
+        suffix = f"/{number}"
+        if str(number) in inbox.issues:
+            inbox.issues[str(number)]["description"] = body
+        if inbox.refs is not None:
+            inbox.refs = [
+                IssueRef(ref.url, ref.title, body) if ref.url.endswith(suffix) else ref
+                for ref in inbox.refs
+            ]
+        inbox._open_issues = [
+            (url, body) if url.endswith(suffix) else (url, text) for url, text in inbox._open_issues
+        ]
 
     def update_pull_request_body(self, number: int, body: str) -> None:
         self.events.append("update_pull_request_body")
