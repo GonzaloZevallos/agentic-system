@@ -1629,3 +1629,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-13T04:24:48.312+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Never loosen a guard test (a cap, count or threshold) outside your declared seams to make a change pass; keep the limit, and if it cannot hold, record the evidence and escalate for a decision.
+  confidence: medium
+  seen_in:
+  - GH-636
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T06:02:59.480+00:00'
