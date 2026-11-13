@@ -87,11 +87,11 @@ def parse(raw: object) -> list[TrackerItem]:
 def _parse_item(entry: object) -> TrackerItem:
     if not isinstance(entry, Mapping):
         raise ValueError(f"a tracker item must be a mapping, not {entry!r}; {_WRITE_AS_HUMAN}")
+    if extra := sorted(str(key) for key in entry if key not in ("kind", *_FIELDS)):
+        raise ValueError(f"a tracker item has no key {', '.join(extra)}; {_WRITE_AS_HUMAN}")
     kind = entry.get("kind")
     if not isinstance(kind, str) or kind not in KINDS:
         raise ValueError(f"unknown tracker item kind {kind!r}; {_WRITE_AS_HUMAN}")
-    if extra := sorted(str(key) for key in entry if key not in ("kind", *_FIELDS)):
-        raise ValueError(f"a tracker item has no key {', '.join(extra)}; {_WRITE_AS_HUMAN}")
     texts: dict[str, str] = {}
     for field in _FIELDS:
         value = entry.get(field)

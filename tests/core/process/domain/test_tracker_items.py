@@ -25,6 +25,12 @@ def test_parse_refuses_a_key_outside_the_three_and_names_it():
     assert WAY_OUT in str(error.value)
 
 
+def test_parse_names_the_extra_key_before_it_judges_the_kind():
+    with pytest.raises(ValueError, match="urgent") as error:
+        tracker_items.parse([{**ITEM, "kind": "close", "urgent": "yes"}])
+    assert WAY_OUT in str(error.value)
+
+
 def test_parse_returns_the_stripped_strings_so_the_hash_and_the_line_agree():
     padded = {"kind": "human", "question": "  Ship it?  ", "recommendation": " Yes, ship.\t"}
     assert tracker_items.parse([padded]) == [ITEM]
