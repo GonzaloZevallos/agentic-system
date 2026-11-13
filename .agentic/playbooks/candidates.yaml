@@ -1743,3 +1743,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-13T15:58:10.395+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change ports, modules or use cases, update the architecture docs that list them (e.g. the ports listing) in the same change, including entries nothing calls yet.
+  confidence: medium
+  seen_in:
+  - GH-692
+  sources:
+  - finding
+  added_at: '2026-11-13T18:52:47.163+00:00'
