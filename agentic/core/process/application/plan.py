@@ -194,8 +194,7 @@ async def _interview_and_plan(
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
-        tracker_items_max=tracker_items.MAX_ITEMS,
-        tracker_field_max=tracker_items.MAX_FIELD_CHARS,
+        tracker_item_kinds=tracker_items.kinds_text(),
     )
     output, floored = _floored(output, interviewed, history)
     delivered = apply(
@@ -480,8 +479,7 @@ async def _cold_draft(
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
-        tracker_items_max=tracker_items.MAX_ITEMS,
-        tracker_field_max=tracker_items.MAX_FIELD_CHARS,
+        tracker_item_kinds=tracker_items.kinds_text(),
     )
 
 

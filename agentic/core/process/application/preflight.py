@@ -44,8 +44,7 @@ PLACEHOLDERS = {
     "parts_step": rules.parts_step_text(None),
     "parts_field": rules.parts_field_text(None),
     "tracker_with_parts": rules.TRACKER_WITH_PARTS,
-    "tracker_items_max": tracker_items.MAX_ITEMS,
-    "tracker_field_max": tracker_items.MAX_FIELD_CHARS,
+    "tracker_item_kinds": tracker_items.kinds_text(),
     # The names of the CI gate in a subtask review; a product with no CI reads this.
     "landing_gate": rules.NO_LANDING_GATE,
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
