@@ -26,6 +26,7 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_application__archive["application.archive"]
     m_application__board_sync["application.board_sync"]
+    m_application__dry_run["application.dry_run"]
     m_application__poll["application.poll"]
     m_application__registration["application.registration"]
     m_application__relabel["application.relabel"]
@@ -34,6 +35,7 @@ graph TD
     m_application__archive --> g_pkg__domain
     m_application__board_sync --> g_application__support
     m_application__board_sync --> g_pkg__domain
+    m_application__dry_run --> g_application__support
     m_application__poll --> g_application__build
     m_application__poll --> g_application__checks
     m_application__poll --> g_application__landing

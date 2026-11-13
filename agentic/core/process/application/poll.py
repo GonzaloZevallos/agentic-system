@@ -2513,6 +2513,10 @@ def _starvation_lines(
     return found
 
 
+# The sweeps a dry round skips (GH-622), named as its `dry-run: skipped <name>` lines say them.
+DRY_RUN_SKIPPED = ("close_issues", "split", "scratch", "ci_refs", "board")
+
+
 def run_once(
     cfg: Configuration,
     ports: Ports,
@@ -2528,6 +2532,7 @@ def run_once(
     eval_set: frozenset[int] | None = frozenset(),
     live_steps: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
     system_version: Callable[[], str | None] = lambda: None,
+    dry_run: bool = False,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -2555,28 +2560,36 @@ def run_once(
     record carries a crash mark. The GH-344 issue sweep (`close_issues.sweep`) runs first,
     right after the closes are gathered and outside `registry.exclusive()`: its `issue
     closed` lines open the round's output, and a failed close or unreadable queue says
-    nothing (the next round retries)."""
+    nothing (the next round retries). `dry_run` (GH-622) is a round over read-only ports
+    (`dry_run.read_only_ports`): the five sweeps, `execute` and `reflect_lines` do not run, each
+    sweep says `dry-run: skipped <name>` at the head of the output, and each action in the plan
+    says `would <kind> issue <N>` where `execute`'s lines would stand."""
     closes = gather_closes(ports)
-    # GH-348: before the launches, so a dependent sees its blocker CLOSED this same round;
-    # outside the exclusive section, since it takes no slot. Only the closes are said.
-    swept = close_issues.sweep(ports, report_failures=False)
+    swept: list[str] = []
+    dry_skipped = [f"dry-run: skipped {name}" for name in DRY_RUN_SKIPPED] if dry_run else []
+    if not dry_run:
+        # GH-348: before the launches, so a dependent sees its blocker CLOSED this same round;
+        # outside the exclusive section, since it takes no slot. Only the closes are said.
+        swept = close_issues.sweep(ports, report_failures=False)
     # GH-627: the queue is read once per round, here and outside the lock, because the split
     # sweep needs it before the launches; the same dict feeds `gather_launches` and the orphan
-    # pass inside the lock (launch dedup rests on `registry.launch_attempts`, read there).
+    # pass inside the lock (launch dedup rests on `registry.launch_attempts`, read there). A
+    # read, so a dry round makes it too.
     queued = queue_documents(ports)
-    # The sweep's own memoised upstream (at most one fetch, and only when it has a merge commit
-    # to judge); the one `registry.exclusive()` builds below is not shared with it.
-    sweep_upstream = functools.cache(ports.workspace.upstream)
-    part_verdict = functools.partial(_part_verdict, cfg, ports, sweep_upstream)
-    swept = [
-        *split_sweep.sweep(ports, queued, verdict=part_verdict, report_failures=False),
-        *swept,
-    ]
-    # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
-    # read, so a round that frees room starts its children in the same round.
-    swept = [*scratch_sweep.sweep(ports, now), *swept]
-    # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
-    swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
+    if not dry_run:
+        # The sweep's own memoised upstream (at most one fetch, and only when it has a merge
+        # commit to judge); the one `registry.exclusive()` builds below is not shared with it.
+        sweep_upstream = functools.cache(ports.workspace.upstream)
+        part_verdict = functools.partial(_part_verdict, cfg, ports, sweep_upstream)
+        swept = [
+            *split_sweep.sweep(ports, queued, verdict=part_verdict, report_failures=False),
+            *swept,
+        ]
+        # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
+        # read, so a round that frees room starts its children in the same round.
+        swept = [*scratch_sweep.sweep(ports, now), *swept]
+        # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
+        swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}
@@ -2728,6 +2741,7 @@ def run_once(
         others_landing = bool(others)
         previous = next((w.since for w in waits if w.root_key == own_key), None)
         notes = [
+            *dry_skipped,
             *experiment_notes,
             *spend_notes,
             *wait_notes,
@@ -2808,21 +2822,25 @@ def run_once(
             rules.land_wait_since(previous, bool(waiting_lands), now),
             now,
         )
-        lines = execute(
-            plan.actions,
-            cfg,
-            ports,
-            registry,
-            launcher,
-            now,
-            argv0,
-            register_timeout_s,
-            sleep,
-            {c.issue: c.kind for c in lands},
-            crash_retakes,
-            frozenset(reruns),
-            orphans,
-            spent_notices,
+        lines = (
+            [f"would {a.kind} issue {a.issue}" for a in plan.actions]
+            if dry_run
+            else execute(
+                plan.actions,
+                cfg,
+                ports,
+                registry,
+                launcher,
+                now,
+                argv0,
+                register_timeout_s,
+                sleep,
+                {c.issue: c.kind for c in lands},
+                crash_retakes,
+                frozenset(reruns),
+                orphans,
+                spent_notices,
+            )
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
         deferral_lines += starvation
@@ -2843,17 +2861,18 @@ def run_once(
             )
     # GH-375: the board mirror, outside the exclusive section (it takes no slot and a Project
     # call may be slow). Its notes go with the others, so `nothing to do` is unaffected.
-    notes += board_sync.mirror(
-        ports,
-        now,
-        live_issues=_live_issues(ports, registry, plan.actions),
-        blockers=blockers_by_issue,
-        eval_set=eval_set,
-    )
+    if not dry_run:
+        notes += board_sync.mirror(
+            ports,
+            now,
+            live_issues=_live_issues(ports, registry, plan.actions),
+            blockers=blockers_by_issue,
+            eval_set=eval_set,
+        )
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
     # A held round starts no child at all, and the reflect child is one.
-    if not held:
+    if not held and not dry_run:
         lines += reflect_lines(cfg, ports, launcher, argv0)
     lines = [*swept, *hold_lines, *human_lines, *merge_lines, *lines, *deferral_lines]
     blocked = rules.queue_blocked_line(blocker_reports)

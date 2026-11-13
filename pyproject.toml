@@ -81,6 +81,7 @@ files = [
     "agentic/core/process/application/release.py",
     "agentic/core/process/application/evaluated.py",
     "agentic/core/process/application/close_issues.py",
+    "agentic/core/process/application/dry_run.py",
     "agentic/core/process/application/board_sync.py",
     "agentic/core/process/application/landing.py",
     "agentic/core/process/application/landing_plan.py",
