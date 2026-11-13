@@ -1649,3 +1649,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-13T06:47:48.022+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When code reports or logs a failure, use the concrete exception or value actually caught, not its base class or a generic label, and add a test that asserts the reported text for a subclass case.
+  confidence: low
+  seen_in:
+  - GH-627
+  sources:
+  - finding
+  added_at: '2026-11-13T08:54:14.623+00:00'
