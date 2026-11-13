@@ -33,13 +33,13 @@ classDiagram
     class task__ChangesRequested["ChangesRequested"]
     class task__CheckRun["CheckRun"]
     class task__CiCancelRerun["CiCancelRerun"]
+    class task__CiGhostDispatch["CiGhostDispatch"]
     class task__CiJobTiming["CiJobTiming"]
     class task__CiLogRecord["CiLogRecord"]
     class task__CiSpeculation["CiSpeculation"]
     class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
     class task__DependencyState["DependencyState"]
-    class task__DesignItemRecord["DesignItemRecord"]
 ```
 
 ## Relaciones con otras páginas
