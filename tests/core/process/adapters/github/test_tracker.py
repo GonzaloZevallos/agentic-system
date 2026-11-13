@@ -190,6 +190,47 @@ def test_comment_on_issue_raises_value_error_when_gh_fails_and_removes_its_file(
     assert not Path(seen["path"]).exists()
 
 
+def test_update_issue_body_sends_the_body_in_a_file_and_removes_it():
+    written = {}
+
+    class RecordingRun(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            path = args[args.index("--body-file") + 1]
+            written["path"] = path
+            written["body"] = Path(path).read_bytes().decode("utf-8")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+    run = RecordingRun()
+    body = "Blocked by: #7, #9\n\nnaïve 😀\r\nend\n"
+    GhTracker(Path("/p"), run).update_issue_body(12, body)
+    [call] = run.calls
+    assert call == ["gh", "issue", "edit", "12", "--body-file", written["path"]]
+    assert "-" not in call and "--body" not in call
+    assert written["body"] == body
+    assert not Path(written["path"]).exists()
+
+
+@pytest.mark.parametrize("body", ["", "   ", "\n\t \r\n"])
+def test_update_issue_body_refuses_an_empty_body_before_any_gh_call(body):
+    run = Recorder()
+    with pytest.raises(ValueError, match="empty body"):
+        GhTracker(Path("/p"), run).update_issue_body(12, body)
+    assert run.calls == []
+
+
+def test_update_issue_body_raises_value_error_when_gh_fails_and_removes_its_file():
+    seen = {}
+
+    def run(args, cwd, capture_output, text, check):
+        seen["path"] = args[args.index("--body-file") + 1]
+        raise subprocess.CalledProcessError(1, args, stderr="issue not found")
+
+    with pytest.raises(ValueError, match="gh issue edit failed: issue not found"):
+        GhTracker(Path("/p"), run).update_issue_body(12, "x")
+    assert not Path(seen["path"]).exists()
+
+
 def test_a_task_without_an_issue_writes_nothing_to_the_issue():
     run = Recorder()
     tracker = GhTracker(Path("/p"), run)
@@ -1466,6 +1507,7 @@ def _policy():
         lambda t: t.label("GH-12", "x"),
         lambda t: t.unlabel("GH-12", "x"),
         lambda t: t.comment_on_issue("12", "hi"),
+        lambda t: t.update_issue_body(12, "body"),
         lambda t: t.update_pull_request_body(3, "body"),
         lambda t: t.queue(),
         lambda t: t.issue_created_at("GH-12"),

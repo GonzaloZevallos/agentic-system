@@ -1655,6 +1655,14 @@ class Tracker(Protocol):
         `ValueError` when the platform refuses or cannot be reached, as `open_issue`."""
         ...
 
+    def update_issue_body(self, number: int, body: str) -> None:
+        """Replaces the whole body of issue `number` with `body` (GH-619: the split
+        re-points the `Blocked by:` lines of its dependents). Raises `ValueError` for an
+        empty or whitespace-only body or when the platform refuses it, and `OSError` when
+        the body cannot be staged or the platform cannot be reached, like the other
+        verbs."""
+        ...
+
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """Re-runs the failed CI runs of commit `head` of the pull request at `reference`
         (GH-239) and returns the URL of each run it asked to re-run, none when no run on
