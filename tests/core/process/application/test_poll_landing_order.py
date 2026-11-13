@@ -671,6 +671,12 @@ class TestFastLane:
 
         assert round_.lane is None
         assert set(round_.lane_reasons.values()) == {"head_sync_budget"}
+        found, lines = _lane_round(ports, tmp_path)
+        assert found == []
+        assert lines == [
+            "agentic: poll: auto-merge #5 -> waiting (clean, head sync budget) behind #7",
+            "agentic: poll: auto-merge #6 -> waiting (clean, head sync budget) behind #7",
+        ]
 
     def test_a_head_first_seen_in_this_round_opens_the_lane_in_the_next(self, tmp_path):
         ports = _lane_ports()
@@ -722,7 +728,8 @@ class TestFastLane:
             assert "landing" not in with_lane.documents.load(f"GH-{number}")
 
     @pytest.mark.parametrize(
-        ("kind", "opens"), [("land_model", True), ("role", True), ("merge", False)]
+        ("kind", "opens"),
+        [("land_model", True), ("role", True), ("merge", False), ("land_checks", False)],
     )
     def test_a_live_child_of_the_product_on_the_head_decides_through_the_poller(
         self, tmp_path, kind, opens
