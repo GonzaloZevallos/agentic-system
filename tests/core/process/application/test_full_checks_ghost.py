@@ -13,7 +13,7 @@ import pytest
 from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from agentic.core.process.domain.presubmit import CiDispatch
-from agentic.core.process.domain.task import INTEGRATION, apply
+from agentic.core.process.domain.task import INTEGRATION
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryCommands,
@@ -34,7 +34,8 @@ REF = "agentic-ci/GH-1"
 LINK = "https://github.com/o/r/actions/runs/7"
 DISPATCH = CiDispatch(workflow="ci.yml", sha_input="sha")
 PUSHED = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
-OLD_DISPATCH_AT = "2026-11-13T10:00:00+00:00"
+YOUNG_AT = "2026-11-06T11:58:00+00:00"  # 2 min before the fake `ports.now`
+OLD_AT = "2026-11-06T09:00:00+00:00"
 
 
 class FullHead(MemoryWorkspace):
@@ -118,7 +119,7 @@ GREEN_RUN = (dispatched_run(job("unit"), job("web")),)
 QUEUED_RUN = (dispatched_run(status="queued"),)
 
 
-def fact(head=FULL, *, escalated=False, ids=("9",), at=OLD_DISPATCH_AT):
+def fact(head=FULL, *, escalated=False, ids=("9",), at=YOUNG_AT):
     return {"head": head, "ghost_run_ids": list(ids), "dispatched_at": at, "escalated": escalated}
 
 
@@ -178,6 +179,11 @@ def ghost_from(start):
 def fact_saves(ports):
     """The documents saved with a ghost-dispatch fact: the node saves others for its own reasons."""
     return [s for s in ports.documents.saved if "ci_ghost_dispatch" in s]
+
+
+def new_facts(ports, old):
+    """The facts saved that differ from `old`, the one the state already held."""
+    return [s["ci_ghost_dispatch"] for s in fact_saves(ports) if s["ci_ghost_dispatch"] != old]
 
 
 def listed_after_a_dispatch(tracker):
@@ -289,7 +295,7 @@ async def test_reentry_with_a_fact_of_the_same_head_and_a_listed_run_dispatches_
     assert ports.tracker.dispatch_calls == []
     assert ports.workspace.ci_ref_calls == [] and ports.tracker.watched_reads == []
     assert all(s["ci_ghost_dispatch"] == fact() for s in fact_saves(ports))  # no new fact
-    assert ports.tracker.dispatched_reads == [("ci.yml", "2026-11-13T09:58:00Z")]
+    assert ports.tracker.dispatched_reads == [("ci.yml", "2026-11-06T11:56:00Z")]
     record = patch["full_checks"]
     assert record["passed"] is True and record["dispatch_cause"] == "ghost"
     assert patch["ci_ghost_dispatch"] == fact()
@@ -301,23 +307,20 @@ async def test_reentry_with_the_fact_and_no_listed_run_dispatches_once_and_keeps
     patch = await run(state_of(ci_ghost_dispatch=fact(ids=("4", "5"))), ports, clock)
     assert len(ports.tracker.dispatch_calls) == 1
     saved = patch["ci_ghost_dispatch"]
-    assert saved["ghost_run_ids"] == ["4", "5"] and saved["dispatched_at"] != OLD_DISPATCH_AT
+    assert saved["ghost_run_ids"] == ["4", "5"] and saved["dispatched_at"] != YOUNG_AT
     assert fact_saves(ports)[0]["ci_ghost_dispatch"] == saved
     assert "full_checks" not in fact_saves(ports)[0]
     assert patch["full_checks"]["passed"] is True
 
 
-@pytest.mark.parametrize(
-    "stale", [fact(head=OTHER), fact(escalated=True)], ids=["another-head", "escalated"]
-)
-async def test_a_fact_that_is_not_in_force_is_ignored_and_overwritten_by_the_next_dispatch(stale):
+async def test_a_fact_of_another_head_is_ignored_and_overwritten_by_the_next_dispatch():
     clock = Clock()
     ports = ports_of(clock, lambda t: ghost())
-    patch = await run(state_of(ci_ghost_dispatch=stale), ports, clock)
+    patch = await run(state_of(ci_ghost_dispatch=fact(head=OTHER)), ports, clock)
     assert ("publish", REF) in ports.workspace.ci_ref_calls  # today's push path ran
     assert len(ports.tracker.dispatch_calls) == 1
     assert patch["ci_ghost_dispatch"]["head"] == FULL
-    assert patch["ci_ghost_dispatch"]["dispatched_at"] != OLD_DISPATCH_AT
+    assert patch["ci_ghost_dispatch"]["dispatched_at"] != YOUNG_AT
     assert fact_saves(ports)[0]["ci_ghost_dispatch"]["head"] == FULL
 
 
@@ -340,29 +343,129 @@ async def test_a_refused_dispatch_saves_no_fact():
     assert fact_saves(ports) == [] and "ci_ghost_dispatch" not in patch
 
 
-async def test_a_dispatched_run_that_is_also_a_ghost_is_run_unfinished_never_red_or_redispatched():
+def ghost_dispatches(tracker):
+    """Each dispatch lists a new run, queued with no job: ids 11, 12, ..."""
+    return (dispatched_run(status="queued", run_id=10 + len(tracker.dispatch_calls)),)
+
+
+class Distrusted(FullHead):
+    """A head whose diff touches the CI definition, so only a dispatched run can judge it."""
+
+    def changed_paths(self, base, head):
+        return (".github/workflows/ci.yml",)
+
+
+def untrusted_ports(clock, listing):
+    workspace = Distrusted()
+    workspace.merge_bases[(FULL, UPSTREAM)] = "e" * 40
+    ports = ports_of(clock, lambda t: ghost(), listing=listing)
+    ports.workspace.merge_bases = workspace.merge_bases
+    ports.workspace.changed_paths = workspace.changed_paths
+    return ports
+
+
+def assert_ghost_run(patch, ports, ids):
+    """The `ghost_run` escalation: a human's pause, never a record, its fact `escalated` and its
+    text naming the first id, the last and the count."""
+    assert patch["escalation_class"] == "ci" and "(ghost_run)" in patch["escalated"]
+    assert "full_checks" not in patch and "subtasks" not in patch and ports.commands.ran == []
+    escalated = patch["ci_ghost_dispatch"]
+    assert escalated["escalated"] is True and escalated["ghost_run_ids"] == ids
+    named = f"runs {ids[0]} … {ids[-1]} ({len(ids)} recorded)" if len(ids) > 1 else f"run {ids[0]}"
+    assert named in patch["escalated"]
+
+
+async def test_a_pushed_ghost_then_two_dispatched_ghosts_escalate_ghost_run_with_the_three_ids():
     clock = Clock()
-    # Each dispatched read costs 1.5 s of the clock, so the 20th read ends at exactly 600 s into
-    # the wait: the run is a ghost then only if the first read is counted from the wait's start
-    # (600 s old), and not if it is counted from the end of that read (598.5 s old).
-    ports = ports_of(clock, lambda t: ghost(), listing=QUEUED_RUN, step=1.5)
+    ports = ports_of(clock, ghost_from(0), listing=ghost_dispatches)
     patch = await run(state_of(), ports, clock)
-    assert_run_unfinished(patch, ports)
-    assert len(ports.tracker.dispatch_calls) == 1
-    assert patch["ci_ghost_dispatch"]["ghost_run_ids"] == ["9"]
-    unescalated = [s for s in fact_saves(ports) if "escalation_cause" not in s]
-    assert len(unescalated) == 1  # the one save after the dispatch; the rest is the escalation
+    assert_ghost_run(patch, ports, ["9", "11", "12"])
+    assert ports.tracker.dispatch_times == [600.0, 1200.0]
+    assert len(ports.tracker.watched_reads) == 21 and len(ports.tracker.dispatched_reads) == 42
+    unescalated = [s for s in fact_saves(ports) if "escalated" not in s]
+    assert [s["ci_ghost_dispatch"]["ghost_run_ids"] for s in unescalated] == [["9"], ["9", "11"]]
+    assert all(s["ci_ghost_dispatch"]["escalated"] is False for s in unescalated)
 
 
-async def test_a_resume_from_the_state_of_a_run_unfinished_after_a_dispatch_dispatches_nothing():
+async def test_an_untrusted_head_whose_dispatched_runs_are_ghosts_dispatches_twice_and_escalates():
     clock = Clock()
-    ports = ports_of(clock, lambda t: ghost(), listing=QUEUED_RUN, step=1.5)
-    first = await run(state_of(), ports, clock)
-    assert_run_unfinished(first, ports)
-    resumed = apply(state_of(), first)
+    ports = untrusted_ports(clock, ghost_dispatches)
+    patch = await run(state_of(), ports, clock)
+    assert_ghost_run(patch, ports, ["11", "12"])
+    assert len(ports.tracker.dispatch_calls) == 2 and ports.tracker.watched_reads == []
+    assert len(ports.tracker.dispatched_reads) == 42  # two waits of 600 s, one read per 30 s
+    assert [s["ci_ghost_dispatch"]["ghost_run_ids"] for s in fact_saves(ports)[:1]] == [["11"]]
+
+
+@pytest.mark.parametrize("order", [("ghost", "none"), ("none", "ghost")])
+async def test_a_ghost_and_a_run_that_never_came_end_ghost_run_in_either_order(order):
     clock = Clock()
-    again = ports_of(clock, lambda t: ghost(), listing=QUEUED_RUN, step=1.5)
-    patch = await run(resumed, again, clock)
-    assert again.tracker.dispatch_calls == [] and again.workspace.ci_ref_calls == []
-    assert_run_unfinished(patch, again)
-    assert patch["ci_ghost_dispatch"] == first["ci_ghost_dispatch"]
+
+    def listing(tracker):
+        return () if order[len(tracker.dispatch_calls) - 1] == "none" else ghost_dispatches(tracker)
+
+    ports = untrusted_ports(clock, listing)
+    patch = await run(state_of(), ports, clock)
+    assert_ghost_run(patch, ports, ["11"] if order[0] == "ghost" else ["12"])
+    assert len(ports.tracker.dispatch_calls) == 2
+    assert len(ports.tracker.dispatched_reads) == 21 + 11  # a ghost wait of 600 s, a grace of 300 s
+
+
+async def test_reentry_with_an_escalated_fact_dispatches_at_once_and_escalates_on_two_new_ghosts():
+    clock = Clock()
+    ports = ports_of(clock, ghost_from(0), listing=ghost_dispatches)
+    patch = await run(
+        state_of(ci_ghost_dispatch=fact(escalated=True, ids=("5", "6", "7"))), ports, clock
+    )
+    assert_ghost_run(patch, ports, ["5", "6", "7", "11", "12"])
+    assert ports.tracker.dispatch_times == [0.0, 600.0] and ports.tracker.watched_reads == []
+    assert ports.workspace.ci_ref_calls == [("publish_dispatch", "GH-1")] * 2  # no push, no wait
+    first = fact_saves(ports)[0]["ci_ghost_dispatch"]  # replaced before the first wait
+    assert first["escalated"] is False and first["ghost_run_ids"] == ["5", "6", "7"]
+    assert first["dispatched_at"] != YOUNG_AT and ports.tracker.saved_when_listed[0] == 1
+    assert len(ports.tracker.dispatched_reads) == 42
+
+
+async def test_reentry_with_an_old_fact_and_a_refused_dispatch_leaves_the_fact_untouched():
+    clock = Clock()
+    ports = ports_of(clock, ghost_from(0))
+    ports.tracker.dispatch_result = CiUnreadable("gh_unreadable")
+    patch = await run(state_of(ci_ghost_dispatch=fact(at=OLD_AT)), ports, clock)
+    assert patch["escalation_class"] == "ci" and "(gh_unreadable)" in patch["escalated"]
+    assert new_facts(ports, fact(at=OLD_AT)) == [] and "ci_ghost_dispatch" not in patch
+    assert len(ports.tracker.dispatch_calls) == 1 and ports.tracker.dispatched_reads == []
+
+
+@pytest.mark.parametrize(("at", "dispatches"), [(YOUNG_AT, 0), (OLD_AT, 1)], ids=["young", "old"])
+async def test_a_young_fact_is_waited_on_and_an_old_one_is_dispatched_once_with_the_fact_rewritten(
+    at, dispatches
+):
+    clock = Clock()
+    ports = ports_of(clock, ghost_from(0))
+    patch = await run(state_of(ci_ghost_dispatch=fact(at=at, ids=("4", "5"))), ports, clock)
+    assert (
+        len(ports.tracker.dispatch_calls) == dispatches and len(ports.tracker.dispatched_reads) == 1
+    )
+    assert patch["full_checks"]["passed"] is True and ports.tracker.watched_reads == []
+    kept = patch["ci_ghost_dispatch"]
+    assert kept["ghost_run_ids"] == ["4", "5"] and kept["escalated"] is False
+    assert (kept["dispatched_at"] != at) is bool(dispatches)
+    assert bool(new_facts(ports, fact(at=at, ids=("4", "5")))) is bool(dispatches)
+    if dispatches:
+        assert ports.tracker.saved_when_listed == [1]  # saved after the dispatch, before the wait
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [fact(escalated=True, ids=("4", "5", "6")), fact(ids=("4", "5", "6"))],
+    ids=["escalated", "young"],
+)
+async def test_reentry_with_no_fallback_escalates_ghost_run_on_the_stored_fact_untouched(stored):
+    clock = Clock()
+    ports = ports_of(clock, ghost_from(0), declared=None)
+    patch = await run(state_of(ci_ghost_dispatch=stored), ports, clock)
+    assert patch["escalation_class"] == "ci" and "(ghost_run)" in patch["escalated"]
+    assert patch["ci_ghost_dispatch"] == stored and "full_checks" not in patch
+    assert "runs 4 … 6 (3 recorded)" in patch["escalated"]
+    assert ports.tracker.dispatch_calls == [] and new_facts(ports, stored) == []
+    assert ports.tracker.dispatched_reads == [] and ports.tracker.watched_reads == []

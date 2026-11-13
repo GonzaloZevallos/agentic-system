@@ -1,6 +1,7 @@
 """The pure rules of GH-601 part 2: how a maturing ghost extends the full tier's wait, when a
-timed-out push is a dispatch candidate, when a recorded dispatch stands, and when a dispatched run
-is itself a ghost. One row per input and the answer it must give, rejections beside acceptances."""
+timed-out push is a dispatch candidate, when a recorded dispatch stands, and how a dispatched run
+that is itself a ghost ends. One row per input and the answer it must give, rejections beside
+acceptances."""
 
 from __future__ import annotations
 
@@ -138,52 +139,27 @@ def _fact(head=HEAD, escalated=False):
     }
 
 
-@pytest.mark.parametrize(
-    ("fact", "head", "expected"),
-    [
-        (_fact(), HEAD, True),
-        (_fact(head=HEAD[:12]), HEAD, True),  # the same commit, short or whole
-        (_fact(escalated=True), HEAD, False),
-        (_fact(head=OTHER), HEAD, False),
-        (None, HEAD, False),
-    ],
-)
-def test_ghost_fact_in_force(fact, head, expected):
-    assert ci.ghost_fact_in_force(fact, head) is expected
-
-
-# -- dispatched_ghost --
-
-
-def _run(run_id=7, title=f"ci {HEAD}", created_at="2026-11-13T10:00:00Z"):
-    return DispatchedRun(run_id, "workflow_dispatch", title, "queued", created_at, "u", ())
+NOW = "2026-11-13T10:05:00+00:00"  # 300 s after the fact's dispatched_at, of a bound of 600 s
 
 
 @pytest.mark.parametrize(
-    ("verdict", "runs", "ghosts", "expected"),
+    ("fact", "head", "now", "expected"),
     [
-        (_TIMED_OUT, (_run(7),), frozenset({"7"}), True),
-        (_TIMED_OUT, [_run(7)], frozenset({"7"}), True),
-        (_TIMED_OUT, (_run(7),), frozenset({"8"}), False),
-        (_TIMED_OUT, (_run(7),), frozenset(), False),
-        (_TIMED_OUT, (_run(7, title="ci other"),), frozenset({"7"}), False),  # not this head
-        # The newest run judges: the ghost is ignored once a newer run exists.
-        (
-            _TIMED_OUT,
-            (
-                _run(7, created_at="2026-11-13T10:00:00Z"),
-                _run(8, created_at="2026-11-13T10:05:00Z"),
-            ),
-            frozenset({"7"}),
-            False,
-        ),
-        (_TIMED_OUT, CiUnreadable("gh_unreadable"), frozenset({"7"}), False),
-        (FullTierVerdict("waiting", (), (), None), (_run(7),), frozenset({"7"}), False),
-        (FullTierVerdict("green", (), (), None), (_run(7),), frozenset({"7"}), False),
+        (_fact(), HEAD, NOW, True),  # young
+        (_fact(head=HEAD[:12]), HEAD, NOW, True),  # the same commit, short or whole
+        (_fact(), HEAD, "2026-11-13T10:09:59+00:00", True),  # a second under the bound
+        (_fact(), HEAD, "2026-11-13T10:10:00+00:00", False),  # exactly at the bound
+        (_fact(), HEAD, "2026-11-13T12:00:00+00:00", False),  # old
+        (_fact(), HEAD, "2026-11-13T09:00:00+00:00", True),  # a clock that went back is young
+        (_fact(escalated=True), HEAD, NOW, False),
+        (_fact(head=OTHER), HEAD, NOW, False),
+        ({**_fact(), "dispatched_at": "not an instant"}, HEAD, NOW, False),
+        (_fact(), HEAD, "not an instant", False),
+        (None, HEAD, NOW, False),
     ],
 )
-def test_dispatched_ghost(verdict, runs, ghosts, expected):
-    assert ci.dispatched_ghost(verdict, runs, HEAD, ghosts) is expected
+def test_ghost_fact_in_force(fact, head, now, expected):
+    assert ci.ghost_fact_in_force(fact, head, now, BOUND) is expected
 
 
 # -- dispatch_verdict with ghosts and maturing (GH-652) --
