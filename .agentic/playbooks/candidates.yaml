@@ -1695,3 +1695,23 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-13T14:23:08.539+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When you add a branch to a test helper or checker, add a test that feeds it a value it must reject and one it must accept, so a branch that accepts everything fails.
+  confidence: medium
+  seen_in:
+  - GH-638
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T15:22:44.994+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters a documented flow, lock, dependency or CLI mode, update the architecture docs that describe it in the same change, and check the docs diff is not empty.
+  confidence: medium
+  seen_in:
+  - GH-638
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T15:22:44.994+00:00'
