@@ -19,7 +19,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import check_results as reuse_rules
 from ..domain import check_runs, coverage, presubmit, restart, rules
-from ..domain.check_schedule import CheckPriority
+from ..domain.gate_priority import gate_priority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
@@ -130,13 +130,16 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         if affected_commands
         else None
     )
+    # One priority per attempt (GH-680): the delivery gate and the `run_check` presubmit ask
+    # the same, decided by the step (a live landing pass, the integration, a plain subtask).
+    priority = gate_priority(subtask_id, rules.landing_pass_live(state))
     delivery_presubmit = CheckoutPresubmit(
         ports,
         checkout.path,
         before,
         fast,
         cfg.check_timeout_s,
-        priority=CheckPriority.SUBTASK,
+        priority=priority,
         wait_max_s=cfg.check_wait_max_s,
         witness=ports.stack.witness(task_base(state, ports)),
         parallel=ports.stack.parallel_checks(task_base(state, ports)),
@@ -173,7 +176,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 before,
                 checks,
                 cfg.check_timeout_s,
-                priority=CheckPriority.SUBTASK,
+                priority=priority,
                 wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 reuse=reuse,
