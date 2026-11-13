@@ -1328,6 +1328,10 @@ _LANDING_SCALAR_KEYS = frozenset(
         "landing_queued_at",
         "head_since_at",
         "head_since_head",
+        "head_turn_at",
+        "head_charged_s",
+        "head_seen_at",
+        "head_yielded_at",
     }
 )
 _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
