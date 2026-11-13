@@ -193,3 +193,34 @@ coherente con sus propios splits.
   en silencio, cada vuelta. Un dependiente que empieza a nombrar al padre después de escrito el
   registro no se reapunta nunca; la parte 3 (cerrar el padre) lo acota. Las líneas nuevas son
   salida del poller, no una métrica (estándar 7).
+
+- **Cierre y escalación (parte 3):** el barrido de partidas también cierra al padre. Cuando
+  todas las partes están `CLOSED`/`COMPLETED` y su veredicto de bloqueo es `resolved`
+  (`rules.split_parent_state` lee primero `state_reason`: una parte `NOT_PLANNED` nunca cuenta
+  como hecha aunque su veredicto lea `resolved`), reapunta una vez más, registra
+  `split_closed_at` con `Documents.record_closure` y solo entonces llama a
+  `Tracker.close_issue(task_id, comment=…)`, que cierra con el comentario en una sola llamada
+  de `gh`. Un registro que falla significa que no hay cierre; con el registro escrito y el
+  issue abierto (un corte), la vuelta siguiente solo reapunta y cierra. Si una parte está
+  `NOT_PLANNED`, el barrido publica un comentario en el padre, terminado en
+  `<!-- agentic-split-abandoned: <id> part <k> -->`, y registra `split_abandoned_at`: una
+  escalación por padre, sin etiqueta, sin ítem de lista para el humano. A diferencia de lo
+  pedido, el padre escalado no pasa a leer solo sus partes abandonadas: sigue leyendo todas
+  (2 a 5 lecturas por vuelta), porque registrar cuáles quedan exigiría un valor estructurado
+  que `record_closure` no escribe, y así una parte reabierta y fusionada todavía lo lleva a
+  cerrarse. Ambas claves son cadenas ISO UTC; no se añade ninguna clave nueva.
+- **El reapunte previo al cierre es por prolijidad, no por corrección:** `poll._blocker_verdict`
+  resuelve a un bloqueante cuyo documento es `status: split` y lleva `split_closed_at`, y solo
+  con el issue ya `CLOSED`/`COMPLETED` (un registro sobre un issue abierto no afirma nada), de
+  modo que un dependiente que aún nombra al padre cerrado también se desbloquea.
+- **Estándar 8 (costo):** el sistema cierra solo issues que él mismo partió (el documento es
+  `status: split` con todas las partes registradas); un padre anidado sigue cerrándolo el
+  `Closes` de su hija terminal (GH-592), sin cambio. La primera vuelta en producción hace unas
+  35 escrituras (reapuntes, registros y cierres de los padres abiertos cuyas partes ya se
+  fusionaron), sin tope, y se detiene ante un error de límite de tasa, de tracker inalcanzable o
+  de tiempo agotado; la vuelta siguiente termina lo que quedó. En régimen estable: cero llamadas
+  por padre con alguna parte en la cola; una lectura de `issue_state` por parte y vuelta para los
+  padres juzgados, memoizada por número dentro de la vuelta; como mucho un `fetch` por vuelta
+  (el `upstream` propio del barrido, solo si hay un commit de fusión que juzgar). Crece
+  linealmente con la cantidad de padres `split` abiertos. Un padre que sigue `waiting` aparece
+  como "Necesita humano" en el tablero: hallazgo externo, no se cambia acá.

@@ -1660,17 +1660,16 @@ def _merge_commit_for(ports: Ports, blocker: int, closing_merge_commit: str | No
     return closing_merge_commit
 
 
-_Verdict = Literal["resolved", "open", "unknown"] | rules.BlockerReason
-
-
 def _blocker_verdict(
     cfg: Configuration, ports: Ports, blocker: int, upstream: Callable[[], Upstream]
-) -> _Verdict:
+) -> rules.BlockerVerdict:
     """How one blocker stands. Every resolution path sits behind `state == "CLOSED"`: an
     open issue never resolves. A `COMPLETED` issue resolves on a merge commit in the
     upstream, or (GH-344, no merge commit of its own) on a status the system recorded:
     `closed_by_slices` with every unit's `reviewed_head` an ancestor of the upstream, or
-    `tracker_only`, where there was no pull request and nothing to merge. Never prose."""
+    `tracker_only`, where there was no pull request and nothing to merge; or (GH-619) a
+    split parent the split sweep recorded closed (`split_closed_at`), whose parts landed.
+    The record only counts behind `CLOSED`: on an open issue it claims nothing. Never prose."""
     state = ports.tracker.issue_state(blocker)
     if state.state != "CLOSED":
         return "open"
@@ -1693,6 +1692,8 @@ def _blocker_verdict(
     document = ports.documents.load(ports.inbox.task_id(blocker)) or {}
     if document.get("status") == "tracker_only":
         return "resolved"  # COMPLETED here: the stateReason triage above already ran
+    if document.get("status") == "split" and document.get("split_closed_at"):
+        return "resolved"  # the sweep recorded it only after every part had merged
     heads = rules.slices_landed_heads(document)
     if heads is None:
         return "no_merge_recorded"
@@ -1700,6 +1701,18 @@ def _blocker_verdict(
     if all(ports.workspace.is_ancestor(cfg.product_dir, h, ref=tip or "HEAD") for h in heads):
         return "resolved"
     return "slices_not_in_upstream" if tip else "unknown"
+
+
+def _part_verdict(
+    cfg: Configuration, ports: Ports, upstream: Callable[[], Upstream], number: int
+) -> rules.BlockerVerdict:
+    """How one part of a split parent stands, for `split_sweep.sweep` (GH-619): the blocker
+    verdict, with any doubt (`ValueError`/`OSError`/`KeyError`, a real `GitError`) read as
+    `unknown`, so the parent waits and the sweep never sees an exception from git."""
+    try:
+        return _blocker_verdict(cfg, ports, number, upstream)
+    except (ValueError, OSError, KeyError, GitError):
+        return "unknown"
 
 
 def _blocked(
@@ -2551,7 +2564,14 @@ def run_once(
     # sweep needs it before the launches; the same dict feeds `gather_launches` and the orphan
     # pass inside the lock (launch dedup rests on `registry.launch_attempts`, read there).
     queued = queue_documents(ports)
-    swept = [*split_sweep.sweep(ports, queued, report_failures=False), *swept]
+    # The sweep's own memoised upstream (at most one fetch, and only when it has a merge commit
+    # to judge); the one `registry.exclusive()` builds below is not shared with it.
+    sweep_upstream = functools.cache(ports.workspace.upstream)
+    part_verdict = functools.partial(_part_verdict, cfg, ports, sweep_upstream)
+    swept = [
+        *split_sweep.sweep(ports, queued, verdict=part_verdict, report_failures=False),
+        *swept,
+    ]
     # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
     # read, so a round that frees room starts its children in the same round.
     swept = [*scratch_sweep.sweep(ports, now), *swept]
