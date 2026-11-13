@@ -93,3 +93,19 @@ sequenceDiagram
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`
    acabara de correr.
+7. **Una pausa sobre ítems de tracker (GH-620).** Los ítems `human` que el plan deja al dueño
+   los levanta el sistema tras la entrega como un escalado `questions` con `needs-human`
+   (`agentic/core/process/domain/tracker_items.py:escalate_human`), y `tracker_human` guarda
+   sus hashes. Mientras `agentic/core/process/domain/rules.py:tracker_item_pause` valga:
+   - Una decisión en blanco no reanuda. El nodo `pause`
+     (`agentic/core/process/adapters/langgraph/graph.py:_pause_node`) vuelve a llamar a
+     `interrupt()` con el mismo contenido, y `agentic/core/process/application/resume.py:prepare`
+     espera con el mensaje de preguntas abiertas.
+   - Una tarea con pull request y una decisión no escrita en blanco se resuelve sin ningún nodo
+     del grafo: `prepare` devuelve una `Resumption` con `settled`, y
+     `agentic/cli.py:_resume` llama a `agentic/core/process/application/resume.py:settle`, que
+     guarda el patch de `agentic/core/process/domain/rules.py:resumed` (la única función que
+     escribe `answered` en `tracker_actions_done`) y quita `needs-human`. El poller no la retoma:
+     es una pausa humana.
+   - `agentic/core/process/application/landing_plan.py:release` no libera la tarea mientras
+     `tracker_human` no esté vacío, aunque haya un escalado de CI en el mismo head.

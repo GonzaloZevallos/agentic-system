@@ -808,8 +808,20 @@ def test_a_waiting_task_with_a_planning_defect_waits_and_the_head_escalates():
     assert landing_plan.step_for({}, "ci_unknown_names", facts, turn="waiting").kind == "wait"
 
 
-def test_release_does_not_release_a_task_paused_on_tracker_items():
-    ports = _world()
-    found = _release(ports, {**_escalated(), "tracker_human": ["abc123abc123"]})
-    assert (found.decision, found.why) == (None, "waiting_on_human")
+def test_release_does_not_release_a_task_paused_on_tracker_items_even_with_a_ci_escalation():
+    """A CI landing escalation on the same head with a green base releases (GH-442); with
+    `tracker_human` it does not, and the tracker is not read."""
+    from tests.core.process.application.test_landing_escalate import _ci_release, _ci_world, _green
+
+    raw = gh374.document()
+    ports = _ci_world(_green())
+    assert _ci_release(ports, raw, head=gh374.HEAD, upstream=gh374.NEW_MASTER).released
+    ports = _ci_world(_green())
+    held = _ci_release(
+        ports,
+        {**raw, "tracker_human": ["abc123abc123"]},
+        head=gh374.HEAD,
+        upstream=gh374.NEW_MASTER,
+    )
+    assert (held.released, held.why, held.decision) == (False, "waiting_on_human", None)
     assert ports.tracker.reads == []

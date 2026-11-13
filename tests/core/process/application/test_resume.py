@@ -1090,3 +1090,20 @@ def test_a_pause_on_tracker_items_without_a_real_decision_waits(cfg, answer):
     ports.tracker.earlier = ["Escalated: the plan leaves 1 decision(s)", *answer]
     with pytest.raises(resume.WaitingOnHuman):
         resume.prepare("GH-12", _held_pr(), "checkpoint", cfg, ports)
+
+
+def test_a_ci_escalation_on_top_of_a_tracker_pause_is_settled_the_same_way_by_a_decision(cfg):
+    ci_on_top = {
+        **_held_pr(),
+        "escalated": "CI check(s) `web` red on the head",
+        "escalation_class": "ci",
+        "landing": [{"head": "a" * 40, "step": "escalate", "refusal": "ci_failed"}],
+    }
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: CI check(s) `web` red", "Yes, ship it"]
+    r = resume.prepare("GH-12", ci_on_top, "checkpoint", cfg, ports)
+    assert r.settled and r.decision == "Yes, ship it"
+    settled = resume.settle(r, ports)
+    assert settled["tracker_human"] == [] and not settled.get("escalated")
+    assert settled["tracker_actions_done"]["abc123abc123"]["answered"]
+    assert ("GH-12", "needs-human") in ports.tracker.unlabeled

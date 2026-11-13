@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
-from agentic.core.process.application.deliver import deliver
+from agentic.core.process.application.deliver import READY, deliver
 from agentic.core.process.application.ports import (
     BranchPullRequest,
     GitError,
@@ -17,6 +17,7 @@ from agentic.core.process.application.ports import (
     TrackerTransient,
     TrackerUnreachable,
 )
+from agentic.core.process.application.tracker_only import TRACKER_WORK
 from agentic.core.process.domain import document, pull_request, rules
 from agentic.core.process.domain.presubmit import ApiBreakLine
 from agentic.core.process.domain.pull_request import github_length
@@ -1314,17 +1315,6 @@ def _held(**more):
     return {**TASK, "tracker_items": [ITEM], "_h": tracker_items.item_hash(ITEM), **more}
 
 
-async def test_a_state_with_no_tracker_items_leaves_comments_body_and_document_as_they_were(cfg):
-    ports = memory_ports()
-    patch = await deliver(TASK, cfg, ports)
-    assert patch["status"] == "ready_for_review"
-    assert "tracker_human" not in patch and "escalated" not in patch
-    assert [c for _, c in ports.tracker.comments][0].startswith("Ready for review: ")
-    assert (
-        ports.tracker.pull_requests[0][2] == "## PM\n\n### Consolidated definition\n\nSix numbers."
-    )
-
-
 async def test_deliver_with_a_human_item_ends_waiting_on_human(cfg):
     from agentic.core.process.application.escalate import escalate
     from agentic.core.process.domain import tracker_items
@@ -1360,3 +1350,99 @@ async def test_deliver_on_a_state_already_holding_the_hash_does_not_escalate_aga
     state["tracker_human"] = [_held()["_h"]]
     patch = await deliver(state, cfg, memory_ports())
     assert patch["status"] == "ready_for_review" and "escalation_class" not in patch
+
+
+_TODAY_PATCH_KEYS = {
+    "branch",
+    "current_role",
+    "landing_queued_at",
+    "pull_request",
+    "pushed_at",
+    "pushed_head",
+    "status",
+}
+
+
+async def test_a_state_with_no_tracker_items_gives_byte_identical_comments_body_and_document(cfg):
+    ports = memory_ports()
+    patch = await deliver(TASK, cfg, ports)
+
+    assert set(patch) == _TODAY_PATCH_KEYS
+    assert ports.tracker.comments == [
+        (
+            "GH-12",
+            "Ready for review: https://github.com/o/r/pull/7\n\n"
+            "Task document: `.agentic/tasks/GH-12.md`",
+        )
+    ]
+    assert ports.tracker.pull_requests == [
+        ("agentic/GH-12", "Dashboard", "## PM\n\n### Consolidated definition\n\nSix numbers.")
+    ]
+    saved = dict(ports.documents.last)
+    assert set(saved) == {*TASK, *_TODAY_PATCH_KEYS}
+    assert {k: v for k, v in saved.items() if k not in _TODAY_PATCH_KEYS} == TASK
+    assert saved["status"] == "ready_for_review"
+    assert ports.tracker.updated_bodies == []
+
+
+async def test_deliver_with_a_checklist_and_an_item_posts_the_checklist_and_escalates(cfg):
+    items = ["Post the verdict table on #307"]
+    state = {k: v for k, v in _held().items() if k != "_h"}
+    plain = memory_ports()
+    await deliver({**TASK, "tracker_checklist": items}, cfg, plain)
+    ports = memory_ports()
+    patch = await deliver({**state, "tracker_checklist": items}, cfg, ports)
+
+    legacy = [c for _, c in plain.tracker.comments if c.startswith(TRACKER_WORK)]
+    assert len(legacy) == 1 and legacy[0].endswith(rules.tracker_marker("GH-12", items))
+    assert [c for _, c in ports.tracker.comments if c.startswith(TRACKER_WORK)] == legacy
+    assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
+    assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(items)
+
+
+async def test_deliver_with_an_item_then_a_resume_opens_one_pull_request_and_one_ready_comment(cfg):
+    from agentic.core.process.application import resume
+    from agentic.core.process.application.escalate import escalate
+
+    state = {k: v for k, v in _held().items() if k != "_h"}
+    ports = memory_ports()
+    patch = await deliver(state, cfg, ports)
+    paused = {**state, **patch}
+    await escalate(paused, cfg, ports)
+    ports.tracker.comments.append(("GH-12", "Yes, ship the flag"))
+
+    r = resume.prepare("GH-12", paused, "checkpoint", cfg, ports)
+    settled = resume.settle(r, ports)
+
+    assert r.settled and settled["tracker_human"] == []
+    assert len(ports.tracker.pull_requests) == 1
+    assert len([c for _, c in ports.tracker.comments if c.startswith(READY)]) == 1
+    assert ports.tracker.updated_bodies == []
+
+
+async def test_the_document_deliver_leaves_with_an_item_is_refused_as_not_ready_and_needs_a_human(
+    cfg,
+):
+    state = {k: v for k, v in _held().items() if k != "_h"}
+    ports = memory_ports()
+    patch = await deliver(state, cfg, ports)
+    document = {**state, **patch}
+
+    facts = rules.MergeFacts(
+        task_id="GH-12",
+        status=document["status"],
+        reviewed_unit_approved=True,
+        reviewed_head="a" * 40,
+        open_blocking=0,
+        open_important=0,
+        pr_state="OPEN",
+        pr_head="a" * 40,
+        in_eval_set=False,
+        touched_paths=("agentic/x.py",),
+        attempts=0,
+        checks_head=None,
+        checks_master=None,
+        checks_passed=None,
+        current_master=None,
+    )
+    assert rules.auto_merge_decision(facts) == rules.MergeDecision("refuse", "not_ready")
