@@ -1796,7 +1796,11 @@ class MemoryTracker:
 
     def watched_branch_ci(self, branch: str) -> CiReport | CiUnreadable:
         self.watched_reads.append(branch)
-        return self.watched_reports.get(branch, CiUnreadable("gh_unreadable"))
+        if branch in self.watched_reports:
+            return self.watched_reports[branch]
+        # GH-601 part 2: the node reads this port, so a test that scripts `branch_ci` (or a
+        # subclass that overrides it) is answered by it, with nothing queued.
+        return self.branch_ci(branch)
 
     def dispatch_ci(
         self, workflow: str, ref: str, inputs: Mapping[str, str]

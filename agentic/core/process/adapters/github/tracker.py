@@ -304,10 +304,14 @@ def _suite_run_ids(commit: object) -> tuple[frozenset[str], frozenset[str]]:
 def _queued_empty_runs(commit: object) -> frozenset[str]:
     """The Actions run ids of a commit whose check suite is `QUEUED` with zero check runs
     (GH-601). Best effort, like `_suite_run_ids`: a missing or mistyped field adds nothing and is
-    never an unreadable CI."""
+    never an unreadable CI. A suites page that is cut (`hasNextPage` true) lists none: a suite
+    outside the page could be the live one, so no read of a cut page makes or extends a ghost."""
     suites = commit.get("checkSuites") if isinstance(commit, dict) else None
     nodes = suites.get("nodes") if isinstance(suites, dict) else None
     if not isinstance(nodes, list):
+        return frozenset()
+    page = suites.get("pageInfo") if isinstance(suites, dict) else None
+    if isinstance(page, dict) and page.get("hasNextPage") is True:
         return frozenset()
     found: set[str] = set()
     for node in nodes:

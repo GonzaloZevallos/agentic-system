@@ -1918,3 +1918,16 @@ def test_a_document_without_typed_tracker_keys_is_byte_identical_after_a_load():
     empties = {"tracker_items": [], "tracker_actions_done": {}, "tracker_human": []}
     assert document.render({**parsed, **empties}) == text
     assert document.render(document.parse(text)) == text
+
+
+def test_ci_ghost_dispatch_roundtrips_through_the_frontmatter_and_is_absent_when_unset():
+    # GH-601: `MemoryDocuments` never renders, so only this seam shows the key is serialised.
+    fact = {
+        "head": "a" * 40,
+        "ghost_run_ids": ["7", "8"],
+        "dispatched_at": "2026-11-13T17:00:00+00:00",
+        "escalated": False,
+    }
+    text = document.render(_speculative_state(ci_ghost_dispatch=fact))
+    assert document.parse(text)["ci_ghost_dispatch"] == fact
+    assert "ci_ghost_dispatch" not in document.render(_speculative_state())
