@@ -27,6 +27,13 @@ SPEC_FENCE = "=== spec data ==="
 SPEC_MAX_BYTES = 65536
 
 SpecCause = Literal["spec_invalid", "spec_unapproved", "slice_unknown", "slice_missing"]
+SpecReadRefusal = Literal["path", "commit", "missing", "not_blob", "oversize", "encoding", "git"]
+SpecReadCause = Literal["spec_unreadable"]
+
+# The forms a spec read accepts (GH-594): declared only here, always matched with `fullmatch`.
+SPEC_PATH = re.compile(r"docs/specs/[A-Za-z0-9][A-Za-z0-9._-]*\.md")
+SPEC_PATH_MAX_CHARS = 255
+SPEC_COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 _LOGIN = re.compile(r"[A-Za-z0-9]+(-[A-Za-z0-9]+)*")
 _AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
@@ -48,6 +55,16 @@ class SpecContract(TypedDict):
     risks: list[str]
     touches_ui: bool
     touches_copy: bool
+
+
+def spec_path_ok(path: str) -> bool:
+    """True only for a spec path in its one form (`SPEC_PATH`) of at most 255 characters."""
+    return len(path) <= SPEC_PATH_MAX_CHARS and SPEC_PATH.fullmatch(path) is not None
+
+
+def spec_commit_ok(commit: str) -> bool:
+    """True only for a full commit id: 40 or 64 lowercase hex characters."""
+    return SPEC_COMMIT.fullmatch(commit) is not None
 
 
 def split_front_matter(text: str) -> tuple[str, str] | None:

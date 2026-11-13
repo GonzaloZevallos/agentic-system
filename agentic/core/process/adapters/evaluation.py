@@ -59,6 +59,7 @@ class EvaluationTracker:
             "pull_request_body",
             "pull_requests_on",
             "queue",
+            "watched_branch_ci",
         }
     )
 
@@ -75,6 +76,7 @@ class EvaluationTracker:
             "open_issue",
             "open_pull_request",
             "reopen_pull_request",
+            "update_issue_body",
             "rerun_ci_run",
             "rerun_failed_ci",
             "update_pull_request_body",

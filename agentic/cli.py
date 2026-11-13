@@ -611,7 +611,7 @@ def build_parser() -> CommandTree:
         "--dry-run",
         action="store_true",
         help="with --once: one round from reads only, printing what it would do and writing "
-        "nothing; the upstream fetch is the one exception. The four sweeps are skipped, so a "
+        "nothing; the upstream fetch is the one exception. The five sweeps are skipped, so a "
         "blocker the live close sweep would close does not release its dependent (GH-348), "
         "and the first-seen exempt stamp is not recorded; exits 1 if a call was unclassified",
     )
@@ -2032,6 +2032,10 @@ async def _resume(
             _inhibited(f"{task_id}: resume"),
         ):
             _reap_dead_run(ports, task_id, taken_over)
+            if r.settled:
+                # GH-620: a pull request paused on its tracker items needs the decision only.
+                _report(resuming.settle(r, ports), task_id, ports)
+                return
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it

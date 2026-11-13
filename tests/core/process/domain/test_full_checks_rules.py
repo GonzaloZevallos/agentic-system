@@ -95,6 +95,7 @@ def test_ci_unavailable_escalates_with_class_ci_and_writes_no_record_and_no_retu
         ("not_started", None),
         ("jobs_missing", None),
         ("checkout_failed", None),
+        ("ghost_run", None),  # GH-652: a double ghost is the owner's case for a human
     ],
 )
 def test_ci_unavailable_is_mechanical_only_for_the_causes_a_retry_can_change(ci_cause, mechanical):

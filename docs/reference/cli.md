@@ -360,7 +360,7 @@ options:
   --detach              detach this poller (setsid), print the pid and the log path, and exit
   --interval SECONDS    how long to wait between rounds (default 60)
   --dry-run             with --once: one round from reads only, printing what it would do and
-                        writing nothing; the upstream fetch is the one exception. The four sweeps
+                        writing nothing; the upstream fetch is the one exception. The five sweeps
                         are skipped, so a blocker the live close sweep would close does not release
                         its dependent (GH-348), and the first-seen exempt stamp is not recorded;
                         exits 1 if a call was unclassified

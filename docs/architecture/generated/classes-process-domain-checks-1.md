@@ -38,8 +38,8 @@ classDiagram
     class ci__CiVerdict["CiVerdict"]
     class ci__DispatchedRun["DispatchedRun"]
     class ci__FullTierVerdict["FullTierVerdict"]
+    class ci__GhostWatch["GhostWatch"]
     class ci__JobLog["JobLog"]
-    class ci_workflow__WorkflowNames["WorkflowNames"]
     check_schedule__Entry --> check_schedule__CheckPriority
     check_schedule__Request --> check_schedule__CheckPriority
 ```

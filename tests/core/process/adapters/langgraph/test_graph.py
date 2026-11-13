@@ -321,26 +321,29 @@ async def test_a_plan_with_a_tracker_checklist_delivers_through_the_graph_with_a
 async def test_a_plan_with_parts_and_a_checklist_ends_in_a_split_that_posts_it(config):
     """GH-350, the apostrophe #378 shape: parts plus a Tech Lead checklist item, and an open
     issue that waits on this task. One Tech Lead run, no retry, no escalation; both parts
-    open; one checklist comment with the Tech Lead's item and the derived one; then `Split:`."""
+    open; the waiting issue re-pointed by the system; one checklist comment with the Tech Lead's
+    item only; then `Split:`."""
     plan = planned_parts()
     plan.structured_output["tracker_checklist"] = ["Close #12 as superseded"]
     blocked = ("https://github.com/o/r/issues/379", "Blocked by: #1\n\nThe next cut.")
     fakes = Fakes()
     fakes.tracker.issue_numbers_from = 101
     script = script_for(**technical(tech_lead=[plan]))
-    final = await run_graph(script, config, fakes=fakes, inbox=MemoryInbox(open_issues=[blocked]))
+    inbox = MemoryInbox(
+        open_issues=[blocked],
+        **{"379": {"id": "GH-379", "title": "Next", "description": blocked[1]}},
+    )
+    final = await run_graph(script, config, fakes=fakes, inbox=inbox)
 
     assert final["status"] == "split" and not final.get("escalated")
+    assert fakes.tracker.updated_bodies == [(379, "Blocked by: #102\n\nThe next cut.")]
     assert [title for title, _ in fakes.tracker.opened_issues] == ["Catalogue", "Screens"]
     assert len([c for c in script.calls if c["slug"] == "tech_lead"]) == 1
     comments = [text for _, text in fakes.tracker.comments]
     assert [c.split(":")[0] for c in comments] == ["Tracker work for you", "Split"]
     checklist = comments[0]
     assert "- [ ] Close #12 as superseded" in checklist
-    assert (
-        "- [ ] #379 is blocked by #1, which this split does not close: "
-        "close #1 or re-point #379 to #102"
-    ) in checklist
+    assert checklist.count("- [ ]") == 1 and "re-point" not in checklist
     assert final["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
         final["tracker_checklist"]
     )

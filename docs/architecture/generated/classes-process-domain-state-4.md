@@ -25,6 +25,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__DesignItemRecord["DesignItemRecord"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
@@ -39,13 +40,11 @@ classDiagram
     class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksRecord["FullChecksRecord"]
     class task__GateRecord["GateRecord"]
-    class task__InterviewStats["InterviewStats"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `task.TaskState` se asocia con `task.EvaluationRef`
   - `task.TaskState` se asocia con `task.FullChecksRecord`
-  - `task.TaskState` se asocia con `task.InterviewStats`

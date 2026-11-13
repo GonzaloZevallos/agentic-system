@@ -43,6 +43,7 @@ from agentic.core.process.application.ports import (
     RunStopped,
     SampleApp,
     Scratch,
+    SpecReader,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -62,6 +63,7 @@ from tests.fakes import (
     FakePerfLock,
     FakePerfRunner,
     FakeReaper,
+    FakeSpecReader,
     FakeStopFlag,
     MemoryCheckResults,
     MemoryCommands,
@@ -102,6 +104,7 @@ _scratch: Scratch = MemoryScratch()
 _free_space: FreeSpace = FakeFreeSpace()
 _ci_logs: CiLogs = FakeCiLogs()
 _experiment_file: ExperimentFile = FakeExperimentFile()
+_spec_reader: SpecReader = FakeSpecReader({})
 _stop_flag: StopFlag = FakeStopFlag()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
@@ -127,6 +130,7 @@ def ports_of_doubles() -> Ports:
         check_results=_check_results,
         scratch=_scratch,
         free_space=_free_space,
+        spec_reader=_spec_reader,
     )
 
 
@@ -155,6 +159,7 @@ COVERED: dict[str, type] = {
     "FreeSpace": FakeFreeSpace,
     "CiLogs": FakeCiLogs,
     "ExperimentFile": FakeExperimentFile,
+    "SpecReader": FakeSpecReader,
     "StopFlag": FakeStopFlag,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,

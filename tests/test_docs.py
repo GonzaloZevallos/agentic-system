@@ -1184,7 +1184,9 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
         found = {c for q, c in groups.CLUSTERS.items() if q.startswith(layer + ".")}
         assert 0 < len(found) <= most, (layer, found)
     pages = packages.build_pages(on_disk, imported, groups.CLUSTERS)
-    assert len(pages) <= 27
+    # 27 shipped. 28 once document.py imports landing_order (GH-621): domain.state has 31 edges
+    # against DIAGRAM_BUDGET.edges=30, so it splits in two; 27 again without that one import.
+    assert len(pages) <= 28
     texts = render.package_pages(pages)
     for path, text in texts.items():
         assert render.diagram_budget(text) == [], path

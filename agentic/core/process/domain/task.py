@@ -32,6 +32,7 @@ from typing import (
 )
 
 from .ci_push import PushKind
+from .landing_order import YieldReason
 from .lead_time import LeadTime
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
@@ -383,6 +384,24 @@ def add_tracker_failures(
     for record in (*existing, *new):
         joined.setdefault((record["target"], record["cls"]), record)
     return list(joined.values())[:TRACKER_FAILURES_MAX]
+
+
+HEAD_YIELDS_MAX = 10
+
+
+class HeadYield(TypedDict):
+    """One time a member gave up its turn as head (GH-621): when, on which pull request head
+    sha, and why."""
+
+    at: str
+    head: str
+    reason: YieldReason
+
+
+def add_head_yield(existing: list[HeadYield], new: HeadYield) -> list[HeadYield]:
+    """`existing` with `new` appended, at most `HEAD_YIELDS_MAX` rows. The opposite of
+    `add_tracker_failures`: the newest rows stay, the oldest are dropped."""
+    return [*existing, new][-HEAD_YIELDS_MAX:]
 
 
 class TrackerActionDone(TypedDict):
@@ -1419,6 +1438,7 @@ CiCause = Literal[
     "unknown_names",
     "checkout_failed",
     "run_unfinished",
+    "ghost_run",
 ]
 
 
@@ -1489,6 +1509,19 @@ class CiCancelRerun(TypedDict):
     rerun_at: str
 
 
+class CiGhostDispatch(TypedDict):
+    """The one fresh run `full_checks` dispatched because every live run of a head was a ghost
+    (GH-601): `head` the whole sha judged, `ghost_run_ids` the ghosts seen, `dispatched_at`
+    the ISO instant of the accepted dispatch and `escalated` whether the task already escalated
+    for it (set by a later part; a fact with it true never stops a new dispatch). One fact, never a
+    list. Carries no verdict."""
+
+    head: str
+    ghost_run_ids: list[str]
+    dispatched_at: str
+    escalated: bool
+
+
 OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
 """Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
 `owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
@@ -1536,7 +1569,7 @@ class FullChecksRecord(TypedDict):
     # workflow judged it; and the upstream revision whose `ci_dispatch` and `ci:` names that
     # verdict was read against. Only the no-run fallback writes them, with `ran_on:
     # "ci_dispatch"`, and nothing decides on them (`rules.ci_untrusted` stays from the paths).
-    dispatch_cause: NotRequired[Literal["no_run"]]
+    dispatch_cause: NotRequired[Literal["no_run", "ghost"]]
     stack_at: NotRequired[str]
     # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
     ci_fallback: NotRequired[FallbackCause]
@@ -1711,6 +1744,14 @@ class TaskState(TaskInput, total=False):
     # The issue URL of each part already opened, keyed by the part's number as text: written
     # part by part, so a `gh` cut in the middle resumes without opening a part twice.
     split_issues: Annotated[dict[str, str], merge]
+    # The split sweep's own record (GH-619), ISO UTC strings, read with `.get`. A `split`
+    # document is terminal and never goes back through `finish`, so the sweep writes these only
+    # through `Documents.record_closure`: `split_repointed_at` once every open dependent of the
+    # parent was re-pointed over one complete read; `split_closed_at` and `split_abandoned_at`
+    # belong to the part that closes the parent (not written by the re-point half).
+    split_repointed_at: NotRequired[str]
+    split_closed_at: NotRequired[str]
+    split_abandoned_at: NotRequired[str]
     # A human decided the task builds whole although its estimate does not fit; the plan
     # check then accepts a plan that does not fit and refuses a split one.
     fit_waived: Annotated[bool, last]
@@ -1832,6 +1873,10 @@ class TaskState(TaskInput, total=False):
     # it reruns, read only for that same head (`rules.same_commit`), written to the document only
     # when set, read with `.get`.
     ci_cancel_rerun: NotRequired[CiCancelRerun | None]
+    # The fresh run dispatched for a head whose live runs were all ghosts (GH-601): written by
+    # `full_checks` right after the dispatch is accepted, read only for that same head
+    # (`rules.same_commit`), written to the document only when set, read with `.get`.
+    ci_ghost_dispatch: NotRequired[CiGhostDispatch | None]
     # The processes a role left running that the release stopped when the task closed
     # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
     # and it is read with `.get`.
@@ -1860,6 +1905,16 @@ class TaskState(TaskInput, total=False):
     landing_queued_at: NotRequired[str]
     head_since_at: NotRequired[str]
     head_since_head: NotRequired[str]
+    # The head budget's facts (GH-621): the start of the member's current turn, the seconds it
+    # was already charged, when it was last seen as head, when it last yielded and its yields.
+    # The poller's writer writes them (GH-621 part 2); they are read only to build
+    # `landing_order.Member`. The scope is per member, not per sha. The landing restart clears
+    # them with a `None` patch, so there is no reducer on them.
+    head_turn_at: NotRequired[str]
+    head_charged_s: NotRequired[float]
+    head_seen_at: NotRequired[str]
+    head_yielded_at: NotRequired[str]
+    head_yields: NotRequired[list[HeadYield]]
     # The slices the landing merged ahead of the task's pull request (GH-297, ADR-0048):
     # one record per slice, appended whole through `record_closure`. Optional, read with `.get`.
     landed_slices: list[LandedSlice]

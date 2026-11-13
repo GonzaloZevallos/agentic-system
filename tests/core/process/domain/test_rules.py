@@ -12,7 +12,6 @@ from agentic.core.process.domain import (
     retakes,
     roles,
     rules,
-    schemas,
     size_budget,
     task,
 )
@@ -67,7 +66,6 @@ def test_escalation_carries_the_reason_and_its_class_together():
         "escalated": "PjM stopped by the task cap",
         "escalation_class": "cap",
         "escalation_cause": None,
-        "tracker_human": [],
     }
 
 
@@ -1788,6 +1786,75 @@ def test_auto_resumable_returns_the_most_recent_failures_reason():
     assert rules.auto_resumable(state) == "upstream"
 
 
+def test_auto_resumable_retakes_a_role_whose_retry_hit_the_account_limit_after_a_failed_check():
+    # GH-640: the Tech Lead's attempt 1 failed its check and was retried; only the retry's
+    # 429 ended the run, so that one decides.
+    log = [
+        _failure_entry("check", "Tech Lead"),
+        _failure_entry("account_limit", "Tech Lead"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) == "account_limit"
+    assert rules.pause_kind(log) == "external"
+
+
+def test_auto_resumable_is_none_when_the_last_failure_of_the_section_is_not_external():
+    # Rejected input: the reverse order, the check ended the run.
+    log = [
+        _failure_entry("account_limit", "Tech Lead"),
+        _failure_entry("check", "Tech Lead"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+    assert rules.pause_kind(log) == "human"
+
+
+def test_auto_resumable_is_none_when_sections_interleave():
+    # Rejected input: `Developer: a` check is the last of its section, whatever b did between.
+    log = [
+        _failure_entry("check", "Developer: a"),
+        _failure_entry("account_limit", "Developer: b"),
+        _failure_entry("check", "Developer: a"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+
+
+def test_auto_resumable_does_not_let_one_batch_supersede_another_branchs():
+    # Rejected input: two parallel branches log one batch each; B's external failure must not
+    # hide A's check, with distinct sections or the same bare one.
+    for a, b in (("Developer: a", "Developer: b"), ("Developer", "Developer")):
+        log = [
+            _failure_entry("check", a),
+            _failure_entry("check", a),
+            _escalation_entry("failure"),
+            _failure_entry("account_limit", b),
+            _escalation_entry("failure"),
+        ]
+        assert rules.auto_resumable({"pause_log": log}) is None
+
+
+def test_auto_resumable_never_supersedes_a_failure_with_an_empty_section():
+    # Rejected input: with no section there is no way to tell it was retried.
+    log = [
+        _failure_entry("check", ""),
+        _failure_entry("account_limit", ""),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+
+
+def test_auto_resumable_does_not_supersede_across_batches_without_a_resumed():
+    # Rejected input: the same section in two batches is two runs of the role, not a retry.
+    log = [
+        _failure_entry("check", "Developer: a"),
+        _escalation_entry("failure"),
+        _failure_entry("account_limit", "Developer: a"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+
+
 def test_auto_resumable_only_reads_the_current_epoch_after_the_last_resumed():
     # An old epoch's external failure must not leak into a fresh one that escalated on
     # `questions` after a human already resumed the task once.
@@ -2268,6 +2335,102 @@ def test_blockers_from_body_reads_a_crlf_body_and_an_indented_line():
 )
 def test_blockers_from_body_ignores_prose_quote_and_bold_mentions(body):
     assert rules.blockers_from_body(body) == ()
+
+
+# (body, parent, targets, rewritten body, indexes of the lines that change)
+_REPOINT_ROWS = {
+    "multi-blocker line": ("Blocked by: #5, #7", 5, (7, 9), "Blocked by: #7, #9", (0,)),
+    "parent in the middle": ("Blocked by: #1, #5, #8", 5, (7,), "Blocked by: #1, #7, #8", (0,)),
+    "five is not fifty": ("Blocked by: #50", 5, (7,), None, ()),
+    "fifty stays beside five": (
+        "Blocked by: #5, #50",
+        5,
+        (7, 9),
+        "Blocked by: #7, #9, #50",
+        (0,),
+    ),
+    "target already on the line": ("Blocked by: #7, #5", 5, (7, 9), "Blocked by: #7, #9", (0,)),
+    "duplicate target": ("Blocked by: #5", 5, (7, 7), "Blocked by: #7", (0,)),
+    "fenced line is kept": (
+        "```\nBlocked by: #5\n```\nBlocked by: #5\n",
+        5,
+        (7,),
+        "```\nBlocked by: #5\n```\nBlocked by: #7\n",
+        (3,),
+    ),
+    "only a fenced line": ("~~~\nBlocked by: #5\n~~~", 5, (7,), None, ()),
+    "markers are kept": (
+        "<!-- agentic-split: GH-9 part 1 depth 1 -->\nBlocked by: #5\n\nCloses #12\n",
+        5,
+        (7,),
+        "<!-- agentic-split: GH-9 part 1 depth 1 -->\nBlocked by: #7\n\nCloses #12\n",
+        (1,),
+    ),
+    "crlf endings": (
+        "intro\r\nBlocked by: #5\r\nend\r\n",
+        5,
+        (7,),
+        "intro\r\nBlocked by: #7\r\nend\r\n",
+        (1,),
+    ),
+    "unicode line separator": (
+        "a Blocked by: #5 b",
+        5,
+        (7,),
+        "a Blocked by: #7 b",
+        (1,),
+    ),
+    "form feed ending": ("a\x0cBlocked by: #5\x0cb", 5, (7,), "a\x0cBlocked by: #7\x0cb", (1,)),
+    "indentation and prefix kept": (
+        "  blocked BY:   #5 ,#8  ",
+        5,
+        (7,),
+        "  blocked BY:   #7, #8  ",
+        (0,),
+    ),
+    "trailing newline survives": ("Blocked by: #5\n", 5, (7,), "Blocked by: #7\n", (0,)),
+    "two lines": (
+        "Blocked by: #5\nx\nBlocked by: #5, #6\n",
+        5,
+        (7,),
+        "Blocked by: #7\nx\nBlocked by: #7, #6\n",
+        (0, 2),
+    ),
+    "no match": ("Blocked by: #6\nsee Blocked by: #5 here", 5, (7,), None, ()),
+    "target is the parent": ("Blocked by: #5", 5, (5,), None, ()),
+    "no targets": ("Blocked by: #5", 5, (), None, ()),
+    "empty body": ("", 5, (7,), None, ()),
+}
+
+
+@pytest.mark.parametrize("name", list(_REPOINT_ROWS))
+def test_repoint_blockers_table(name):
+    body, parent, targets, expected, rewritten = _REPOINT_ROWS[name]
+    new = rules.repoint_blockers(body, parent, targets)
+    assert new == expected
+    if new is None:
+        return
+    before, after = body.splitlines(keepends=True), new.splitlines(keepends=True)
+    assert len(before) == len(after)
+    assert (
+        tuple(i for i, (a, b) in enumerate(zip(before, after, strict=True)) if a != b) == rewritten
+    )
+    # oracle: the reader sees the old blockers with the parent replaced in place by the targets
+    expected_blockers: list[int] = []
+    for number in rules.blockers_from_body(body):
+        for replacement in targets if number == parent else (number,):
+            if replacement not in expected_blockers:
+                expected_blockers.append(replacement)
+    assert rules.blockers_from_body(new) == tuple(expected_blockers)
+    # a second pass finds nothing left to do
+    assert rules.repoint_blockers(new, parent, targets) is None
+
+
+def test_repoint_blockers_reads_blockers_as_the_reader_does():
+    body = "Blocked by: #5, #50\n```\nBlocked by: #5\n```\n"
+    new = rules.repoint_blockers(body, 5, (7, 9))
+    assert new is not None
+    assert rules.blockers_from_body(new) == (7, 9, 50)
 
 
 def test_blocker_numbers_reads_several_blockers_off_one_line():
@@ -3303,86 +3466,6 @@ def test_no_parts_wording_offers_to_build_a_task_whole():
             assert "built whole" not in text and "build this task whole" not in text
 
 
-def _issue(number: int, first_line: str) -> tuple[str, str]:
-    return (f"https://github.com/o/r/issues/{number}", f"{first_line}\n\nbody")
-
-
-SPLIT_PART_URLS = ["https://github.com/o/r/issues/101", "https://github.com/o/r/issues/102"]
-
-
-def test_split_tracker_items_is_empty_for_a_task_without_an_issue():
-    assert (
-        rules.split_tracker_items(None, [_issue(7, "Blocked by: #5")], SPLIT_PART_URLS, [2]) == []
-    )
-
-
-def test_split_tracker_items_is_empty_when_no_open_issue_is_blocked_by_the_task():
-    issues = [
-        _issue(7, "Blocked by: #6"),
-        _issue(8, "Fix the thing"),
-        _issue(9, "x\n```\nBlocked by: #5\n```"),
-    ]
-    assert rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2]) == []
-
-
-def test_split_tracker_items_lists_an_issue_whose_line_sits_below_other_text():
-    items = rules.split_tracker_items(5, [_issue(9, "x\nBlocked by: #5")], SPLIT_PART_URLS, [2])
-    assert len(items) == 1 and items[0].startswith("#9 is blocked by #5")
-
-
-def test_split_tracker_items_names_each_blocked_issue_and_the_last_part_ordered_by_number():
-    issues = [_issue(30, "Blocked by: #4, #5"), _issue(12, "Blocked by: #5"), _issue(8, "Other")]
-    assert rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2]) == [
-        "#12 is blocked by #5, which this split does not close: close #5 or re-point #12 to #102",
-        "#30 is blocked by #5, which this split does not close: close #5 or re-point #30 to #102",
-    ]
-
-
-def test_split_tracker_items_names_every_part_nothing_depends_on():
-    items = rules.split_tracker_items(5, [_issue(12, "Blocked by: #5")], SPLIT_PART_URLS, [1, 2])
-    assert items == [
-        "#12 is blocked by #5, which this split does not close: close #5 or re-point #12 "
-        "to #101, #102"
-    ]
-
-
-def test_split_tracker_items_leaves_out_the_parts_themselves():
-    # A part blocked by the task's own number is the system's issue, never the human's.
-    issues = [(SPLIT_PART_URLS[1], "Blocked by: #5\n\nbody"), _issue(12, "Blocked by: #5")]
-    items = rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2])
-    assert len(items) == 1 and items[0].startswith("#12 ")
-
-
-def test_split_tracker_items_caps_at_ten_and_counts_the_rest():
-    issues = [_issue(200 + n, "Blocked by: #5") for n in range(14)]
-    items = rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2])
-    assert len(items) == 11
-    assert [i.split()[0] for i in items[:10]] == [f"#{200 + n}" for n in range(10)]
-    assert (
-        items[10] == 'and 4 more issues blocked by #5: run gh issue list --search "Blocked by: #5"'
-    )
-    exactly = rules.split_tracker_items(5, issues[:10], SPLIT_PART_URLS, [2])
-    assert len(exactly) == 10 and not exactly[-1].startswith("and ")
-
-
-def test_split_tracker_items_pass_the_item_checks_of_a_tech_lead_item():
-    issues = [_issue(200 + n, "Blocked by: #5") for n in range(14)]
-    items = rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [1, 2])
-    plan = {
-        "markdown": "### Solution",
-        "estimated_cost_usd": 2.0,
-        "estimated_files": 0,
-        "hand_files": 0,
-        "hand_lines": 0,
-        "test_lines": 0,
-        "ci_required": [],
-        "ci_none_reason": "The work is on the tracker.",
-        "tracker_checklist": items,
-    }
-    assert schemas.validate(schemas.TechPlan, plan, {})["tracker_checklist"] == items
-    assert all("http" not in item for item in items)
-
-
 def test_the_last_parts_are_the_ones_no_other_part_depends_on():
     parts = [{"depends_on": []}, {"depends_on": [1]}, {"depends_on": [1]}, {"depends_on": [2, 3]}]
     assert rules.last_part_numbers(cast(Any, parts)) == [4]
@@ -3394,6 +3477,7 @@ def test_tracker_with_parts_states_where_the_work_goes():
     assert "tracker_checklist" in text and "Blocked by:" in text
     assert "do not write" in text and "part's own" in text
     assert "first line" not in text and "outside a code fence" in text
+    assert "re-points" in text and "close #" not in text
 
 
 def test_split_is_an_end_with_nothing_to_resume():
@@ -4765,6 +4849,88 @@ def test_orphaned_line_names_an_interrupted_retake_waiting_on_its_calendar():
     )
 
 
+# --- GH-621: task_account_paused ---------------------------------------------------------
+
+_TAP_NOW = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
+
+
+def _tap_state(*reasons: str, resets_at: datetime | None = None, **more: Any) -> dict:
+    failures = [
+        cast(
+            Any,
+            {"reason": r, "section": "Developer: api"}
+            | ({"resets_at": resets_at.isoformat()} if resets_at and r == "account_limit" else {}),
+        )
+        for r in reasons
+    ]
+    patch = rules.logged(
+        {"escalation_class": "failure"}, failures, at=(_TAP_NOW - timedelta(minutes=5)).isoformat()
+    )
+    return {"status": "open", "pause_log": patch["pause_log"], **more}
+
+
+def _tap_resumed(state: dict) -> dict:
+    entry = rules.resumed_entry(at=_TAP_NOW.isoformat())
+    return {**state, "pause_log": [*state["pause_log"], entry]}
+
+
+def test_an_open_account_limit_epoch_without_a_reset_is_paused():
+    assert rules.task_account_paused(cast(Any, _tap_state("account_limit")), _TAP_NOW)
+
+
+def test_a_reset_in_the_future_is_paused():
+    state = _tap_state("account_limit", resets_at=_TAP_NOW + timedelta(hours=1))
+    assert rules.task_account_paused(cast(Any, state), _TAP_NOW)
+
+
+def test_a_reset_in_the_past_is_not_paused():
+    state = _tap_state("account_limit", resets_at=_TAP_NOW - timedelta(minutes=1))
+    assert not rules.task_account_paused(cast(Any, state), _TAP_NOW)
+
+
+def test_an_epoch_closed_by_a_resume_is_not_paused():
+    state = _tap_resumed(_tap_state("account_limit"))
+    assert not rules.task_account_paused(cast(Any, state), _TAP_NOW)
+
+
+def test_a_failure_other_than_account_limit_is_not_paused():
+    assert not rules.task_account_paused(cast(Any, _tap_state("upstream")), _TAP_NOW)
+
+
+def test_a_delivered_task_is_paused_until_it_is_resumed():
+    state = _tap_state("account_limit", status="delivered")
+    assert rules.task_account_paused(cast(Any, state), _TAP_NOW)
+    assert not rules.task_account_paused(cast(Any, _tap_resumed(state)), _TAP_NOW)
+
+
+def test_a_mixed_epoch_is_paused_whatever_its_last_failure_keys_the_retake_by():
+    state = cast(Any, _tap_state("account_limit", "upstream"))
+    assert rules.task_account_paused(state, _TAP_NOW)
+    assert rules.auto_resumable(state) == "upstream"
+
+
+def test_the_task_and_the_poller_disagree_after_a_retake_with_a_passed_reset():
+    state = cast(Any, _tap_state("account_limit", resets_at=_TAP_NOW - timedelta(minutes=30)))
+    reset = rules.stated_reset(state)
+
+    def candidate(retaken: bool) -> rules.ResumeCandidate:
+        return rules.ResumeCandidate(
+            7,
+            "account_limit",
+            _TAP_NOW - timedelta(minutes=5),
+            0,
+            len(rules.ACCOUNT_LIMIT_SCHEDULE),
+            resets_at=reset,
+            retaken=retaken,
+        )
+
+    assert not rules.task_account_paused(state, _TAP_NOW)
+    # `retaken` is the lever: after a retake the calendar governs the poller's candidate, while
+    # the task's own stated reset has passed.
+    assert rules.account_paused([candidate(retaken=True)], _TAP_NOW)
+    assert not rules.account_paused([candidate(retaken=False)], _TAP_NOW)
+
+
 TRACKER_ITEMS = [{"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."}]
 
 
@@ -4787,12 +4953,12 @@ def test_tracker_hash_and_marker_keep_their_values():
     assert rules.tracker_marker("GH-1", ["a", "b"]) == "<!-- agentic-tracker: GH-1 7e18f737311b -->"
 
 
-def test_escalation_with_tracker_human_writes_the_hashes_and_other_escalations_clear_them():
+def test_escalation_with_tracker_human_writes_the_hashes_and_other_escalations_omit_the_key():
     patch = rules.escalation("questions", "Decide.", tracker_human=["aaa", "bbb"])
     assert patch["tracker_human"] == ["aaa", "bbb"]
     assert patch["escalation_cause"] is None
-    assert rules.escalation("questions", "Decide.")["tracker_human"] == []
-    assert rules.escalation("failure", "x", cause="delivery_transient")["tracker_human"] == []
+    assert "tracker_human" not in rules.escalation("questions", "Decide.")
+    assert "tracker_human" not in rules.escalation("failure", "x", cause="delivery_transient")
 
 
 def test_escalation_refuses_tracker_human_with_another_class_or_with_a_cause():
@@ -4837,3 +5003,41 @@ def test_delta_of_tracker_actions_round_trips_through_apply():
     after = {"tracker_actions_done": {"aaa": {"at": "t1", "answered": "t2"}, "bbb": {"at": "t3"}}}
     assert task.apply(before, task.delta(before, after)) == after
     assert task.delta(after, after) == {}
+
+
+def test_resumed_without_tracker_items_keeps_todays_patch():
+    patch = rules.resumed({"status": "waiting_on_human"}, "Yes.", at=_STAMP)
+    assert patch == {
+        "escalated": None,
+        "escalation_class": None,
+        "escalation_cause": None,
+        "tracker_human": [],
+        "status": rules.resumed_status({"status": "waiting_on_human"}),
+        "questions_for_human": [],
+        "pause_log": [rules.resumed_entry(at=_STAMP)],
+        "sections": patch["sections"],
+    }
+    assert "tracker_actions_done" not in patch
+
+
+def test_resumed_answers_every_tracker_hash():
+    state = {"tracker_human": ["aaa", "bbb"]}
+    patch = rules.resumed(state, "Yes to both.", at=_STAMP)
+    assert patch["tracker_human"] == []
+    assert patch["tracker_actions_done"] == {
+        "aaa": {"at": _STAMP, "answered": _STAMP},
+        "bbb": {"at": _STAMP, "answered": _STAMP},
+    }
+
+
+@pytest.mark.parametrize("decision", [None, "", "  \n "])
+def test_resumed_without_a_decision_leaves_the_pending_items_alone(decision):
+    patch = rules.resumed({"tracker_human": ["aaa"]}, decision, at=_STAMP)
+    assert "tracker_human" not in patch
+    assert "tracker_actions_done" not in patch
+
+
+def test_tracker_item_pause_is_true_only_with_pending_hashes():
+    assert rules.tracker_item_pause({"tracker_human": ["aaa"]})
+    assert not rules.tracker_item_pause({"tracker_human": []})
+    assert not rules.tracker_item_pause({})

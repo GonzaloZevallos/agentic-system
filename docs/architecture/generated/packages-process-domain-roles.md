@@ -6,7 +6,8 @@ Esta página muestra los módulos del grupo `roles` de `domain` y los imports qu
   - [domain: landing](packages-process-domain-landing.md)
   - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
-  - [domain: state](packages-process-domain-state.md)
+  - [domain: state (parte 1)](packages-process-domain-state-1.md)
+  - [domain: state (parte 2)](packages-process-domain-state-2.md)
 
 ```mermaid
 graph TD
@@ -37,6 +38,7 @@ graph TD
     m_domain__schemas --> g_domain__landing
     m_domain__schemas --> g_domain__state
     m_domain__schemas --> g_pkg__agentic__shared
+    m_domain__tracker_items --> g_domain__state
     m_domain__turn_notice --> g_domain__state
     m_domain__turn_notice --> m_domain__roles
 ```

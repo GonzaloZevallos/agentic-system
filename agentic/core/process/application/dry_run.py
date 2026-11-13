@@ -7,9 +7,9 @@ can never reach an effect. A port with no table at all is wrapped with empty tab
 is refused.
 
 What a dry round does differently from a live one (also in `agentic poll --help`):
-- The four sweeps (`close_issues.sweep`, `scratch_sweep.sweep`, `ci_ref_sweep.sweep`,
-  `board_sync.mirror`) are skipped (GH-348: a blocker the live close sweep would close this
-  round stays open, so its dependent is not launched).
+- The five sweeps (`close_issues.sweep`, `split_sweep.sweep`, `scratch_sweep.sweep`,
+  `ci_ref_sweep.sweep`, `board_sync.mirror`) are skipped (GH-348: a blocker the live close
+  sweep would close this round stays open, so its dependent is not launched).
 - No first-seen exempt stamp is recorded, so the exempt order can differ.
 - `publish_spend` returns `[]`: this product's own spend is not published.
 - The land and exempt waits the round would publish are not visible to other pollers.
@@ -107,7 +107,7 @@ READS = {
     "Tracker": _names(
         """branch_ci changed_files ci_report dispatched_ci issue_comments issue_created_at
         issue_state list_pull_requests pull_request pull_request_body pull_requests_on queue
-        timestamped_comments"""
+        timestamped_comments watched_branch_ci"""
     ),
     "TaskDocuments": _names("flakes_since ids ids_touched_since load path_for text"),
     "Workspace": _names(
@@ -139,7 +139,8 @@ READS = {
 NONE_WRITES = {
     "Tracker": _names(
         """close_issue close_pull_request comment comment_on_issue dispatch_ci drop_label
-        ensure_label label note reopen_pull_request rerun_ci_run unlabel update_pull_request_body"""
+        ensure_label label note reopen_pull_request rerun_ci_run unlabel update_issue_body
+        update_pull_request_body"""
     ),
     "TaskDocuments": _names("write_into"),
     "Workspace": _names(

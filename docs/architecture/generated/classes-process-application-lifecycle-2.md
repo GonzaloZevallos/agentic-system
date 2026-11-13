@@ -26,4 +26,5 @@ classDiagram
     class resume__Seed["Seed"]
     class resume__WaitingOnHuman["WaitingOnHuman"]
     class schedule__FoldingDocuments["FoldingDocuments"]
+    class split_sweep__RepointResult["RepointResult"]
 ```

@@ -115,7 +115,7 @@ def _note_order(
     # The task itself is ours: it is at work, and a task at work is a member. The other tasks'
     # run locks are read as the poller reads them, so the Head is the same one.
     head = evaluate_landing_order(
-        ports, eval_set, upstream.sha, lock, frozenset({task_id}), cfg
+        ports, eval_set, upstream.sha, lock, frozenset({task_id}), cfg, datetime.now(UTC)
     ).head
     if head is not None and head != number:
         log("not the head of the landing order: run by the owner")

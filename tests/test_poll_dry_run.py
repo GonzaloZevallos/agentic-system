@@ -24,7 +24,9 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryInbox, MemoryTracker, MemoryWorkspace, memory_ports
 
 BANNER = "dry-run: plan from reads only; effects of this round's own writes are not simulated"
-SKIPPED = [f"dry-run: skipped {name}" for name in ("close_issues", "scratch", "ci_refs", "board")]
+SKIPPED = [
+    f"dry-run: skipped {name}" for name in ("close_issues", "split", "scratch", "ci_refs", "board")
+]
 MERGED = {
     "delivery_outcome": "auto_merged",
     "merge_commit": "7a22ebfd" + "0" * 32,

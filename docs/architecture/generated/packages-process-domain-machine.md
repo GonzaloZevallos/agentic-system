@@ -6,7 +6,8 @@ Esta página muestra los módulos del grupo `machine` de `domain` y los imports 
   - [domain: landing](packages-process-domain-landing.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: roles](packages-process-domain-roles.md)
-  - [domain: state](packages-process-domain-state.md)
+  - [domain: state (parte 1)](packages-process-domain-state-1.md)
+  - [domain: state (parte 2)](packages-process-domain-state-2.md)
 
 ```mermaid
 graph TD

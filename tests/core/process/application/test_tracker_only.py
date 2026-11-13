@@ -175,3 +175,47 @@ async def test_the_node_with_an_empty_record_posts_and_ends_tracker_only(tmp_pat
     assert len(ports.tracker.comments) == 1
     assert patch["status"] == "tracker_only"
     assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(ITEMS)
+
+
+async def test_a_stored_legacy_checklist_posts_the_old_comment_byte_for_byte(tmp_path):
+    ports = memory_ports()
+    await tracker_only(STATE, cfg(tmp_path), ports)
+    ((_, text),) = ports.tracker.comments
+    assert text == (
+        f"{TRACKER_WORK}the system has no access to do this part, so it is yours.\n\n"
+        "- [ ] Post the verdict table on #307\n- [ ] Close the follow-ups that are done\n\n"
+        "Task document: `.agentic/tasks/GH-307.md`\n\n" + rules.tracker_marker("GH-307", ITEMS)
+    )
+
+
+_ITEM = {"kind": "human", "question": "Ship it?", "recommendation": "Yes"}
+
+
+async def test_unanswered_typed_items_escalate_and_post_nothing(tmp_path):
+    state = {k: v for k, v in STATE.items() if k != "tracker_checklist"}
+    ports = memory_ports()
+    patch = await tracker_only({**state, "tracker_items": [_ITEM]}, cfg(tmp_path), ports)
+    assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
+    assert ports.tracker.comments == []
+
+
+async def test_typed_items_all_answered_end_tracker_only_without_posting(tmp_path):
+    from agentic.core.process.domain import tracker_items
+
+    h = tracker_items.item_hash(_ITEM)
+    state = {k: v for k, v in STATE.items() if k != "tracker_checklist"}
+    state = {
+        **state,
+        "tracker_items": [_ITEM],
+        "tracker_actions_done": {h: {"at": "t", "answered": "t"}},
+    }
+    ports = memory_ports()
+    patch = await tracker_only(state, cfg(tmp_path), ports)
+    assert patch["status"] == "tracker_only" and ports.tracker.comments == []
+
+
+async def test_a_legacy_checklist_next_to_unanswered_typed_items_waits_for_the_decision(tmp_path):
+    ports = memory_ports()
+    patch = await tracker_only({**STATE, "tracker_items": [_ITEM]}, cfg(tmp_path), ports)
+    assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
+    assert not any(text.startswith(TRACKER_WORK) for _, text in ports.tracker.comments)

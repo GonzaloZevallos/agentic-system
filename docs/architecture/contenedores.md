@@ -76,8 +76,8 @@ no escribe nada. `--once` solo se acepta junto con `--dry-run`, y `--dry-run` se
 (`DryRunLog.writes`, la línea `would <puerto>.<método>`) y devuelve un valor neutro, y un
 nombre sin clasificar se anota en `DryRunLog.refused` y levanta `DryRunRefused`. La única
 excepción declarada es `Workspace.upstream()` (el fetch), que es una lectura.
-`run_once(dry_run=True)` no ejecuta los cuatro barridos (`close_issues.sweep`,
-`scratch_sweep.sweep`, `ci_ref_sweep.sweep`, `board_sync.mirror`: una línea
+`run_once(dry_run=True)` no ejecuta los cinco barridos (`close_issues.sweep`,
+`split_sweep.sweep`, `scratch_sweep.sweep`, `ci_ref_sweep.sweep`, `board_sync.mirror`: una línea
 `dry-run: skipped <barrido>` cada uno), ni `execute`, ni `reflect_lines`; en lugar de lanzar
 imprime `would <tipo> issue <N>` por cada acción del plan. Por eso un bloqueador que el barrido
 de cierre cerraría en esa ronda sigue abierto y su dependiente no se lanza (GH-348). La salida

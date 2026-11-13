@@ -10,10 +10,12 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_adapters__filesystem__flags["adapters.filesystem.flags"]
     m_adapters__filesystem__knowledge["adapters.filesystem.knowledge"]
+    m_adapters__git__spec_reader["adapters.git.spec_reader"]
     m_adapters__git__stack["adapters.git.stack"]
     m_adapters__filesystem__flags --> g_pkg__domain
     m_adapters__filesystem__knowledge --> g_pkg__agentic__core__process
     m_adapters__filesystem__knowledge --> g_pkg__domain
+    m_adapters__git__spec_reader --> g_pkg__agentic__core__process
     m_adapters__git__stack --> g_pkg__agentic__core__process
     m_adapters__git__stack --> g_pkg__domain
 ```
