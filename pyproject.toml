@@ -73,6 +73,7 @@ files = [
     "agentic/core/process/adapters/filesystem/file_inbox.py",
     "agentic/core/process/adapters/evaluation.py",
     "agentic/core/process/adapters/github/board.py",
+    "agentic/core/process/adapters/git/master_window.py",
     "agentic/core/process/adapters/filesystem/scratch.py",
     "agentic/core/process/adapters/filesystem/free_space.py",
     "agentic/core/process/adapters/filesystem/experiment_file.py",
