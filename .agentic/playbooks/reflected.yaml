@@ -994,3 +994,6 @@ tasks:
     cost_usd: 0.0413
   GH-701@review:
     cost_usd: 0.0418
+  GH-693@review:
+    cost_usd: 0.0
+    attempts: 1
