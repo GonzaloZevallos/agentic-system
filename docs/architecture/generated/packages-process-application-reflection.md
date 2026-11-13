@@ -27,6 +27,7 @@ graph TD
     m_application__reflect["application.reflect"]
     m_application__reflect_run["application.reflect_run"]
     m_application__stack_review["application.stack_review"]
+    m_application__stage0_failure["application.stage0_failure"]
     m_application__owner_rules --> g_application__support
     m_application__owner_rules --> g_domain__roles
     m_application__owner_rules --> g_domain__state
@@ -48,4 +49,7 @@ graph TD
     m_application__stack_review --> g_domain__roles
     m_application__stack_review --> g_domain__state
     m_application__stack_review --> g_pkg__agentic__shared
+    m_application__stage0_failure --> g_application__support
+    m_application__stage0_failure --> g_domain__machine
+    m_application__stage0_failure --> g_domain__state
 ```
