@@ -24,9 +24,9 @@ from typing import Any, get_args
 import yaml
 
 from . import size_budget, tracker_items
-from .landing_order import YieldReason, instant
+from .landing_order import LANE_MERGES_MAX, YieldReason, instant
 from .legacy_names import rename_legacy_roles
-from .task import HEAD_YIELDS_MAX, AssumptionRow, RoleRun, assumption_text
+from .task import HEAD_YIELDS_MAX, NOT_LANE, AssumptionRow, RoleRun, assumption_text
 
 TASKS_SUBDIR = Path(".agentic/tasks")
 # Where an evaluation run's document is kept once its root is gone (GH-470): outside
@@ -106,6 +106,8 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "tracker_failures",
         "lead_time",
         "head_yields",
+        "lane_admitted",
+        "lane_merges",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
@@ -122,6 +124,8 @@ _FLOW_KEYS = (
     "tracker_failures",
     "lead_time",
     "head_yields",
+    "lane_admitted",
+    "lane_merges",
 )
 
 
@@ -169,6 +173,55 @@ def _head_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+_LANE_KEYS = ("lane_admitted", "lane_recorded", "lane_merges")
+
+
+def _lane_entry(entry: object, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    """`entry` as `{key: value}` for `keys` (an `int` `issue` or `head_issue`, `str` shas, an
+    aware instant), `None` when it is not whole; a `bool` is not an issue."""
+    if not isinstance(entry, Mapping):
+        return None
+    out: dict[str, Any] = {}
+    for key in keys:
+        value = entry.get(key)
+        if key in ("issue", "head_issue"):
+            ok = isinstance(value, int) and not isinstance(value, bool)
+        elif key in ("at", "merged_at"):
+            ok = instant(value) is not None
+        else:
+            ok = isinstance(value, str) and bool(value)
+        if not ok:
+            return None
+        out[key] = value
+    return out
+
+
+def _lane_fields(source: Mapping[str, Any]) -> dict[str, Any]:
+    """The fast lane's keys (GH-681, informative) of `source` as the document keeps them, the only
+    place they are validated, called by `render` and by `from_frontmatter`. `lane_admitted` is
+    kept when it holds an `int` `head_issue`, `str` `pr_head` and `master` and an aware `at`;
+    `lane_recorded` when it is an aware instant or `not_lane`; `lane_merges` as its whole entries
+    only, the last `LANE_MERGES_MAX`, and omitted when none is left. `None` and anything malformed
+    read as absent. Never raises."""
+    out: dict[str, Any] = {}
+    admitted = _lane_entry(source.get("lane_admitted"), ("head_issue", "pr_head", "master", "at"))
+    if admitted is not None:
+        out["lane_admitted"] = admitted
+    recorded = source.get("lane_recorded")
+    if recorded == NOT_LANE or instant(recorded) is not None:
+        out["lane_recorded"] = recorded
+    merges = source.get("lane_merges")
+    if isinstance(merges, list):
+        kept = [
+            e
+            for item in merges
+            if (e := _lane_entry(item, ("issue", "pr_head", "master", "merged_at"))) is not None
+        ]
+        if kept:
+            out["lane_merges"] = kept[-LANE_MERGES_MAX:]
+    return out
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -201,6 +254,9 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
     for key in _HEAD_KEYS:
         state.pop(key, None)
     state.update(_head_fields(data))
+    for key in _LANE_KEYS:
+        state.pop(key, None)
+    state.update(_lane_fields(data))
     # The typed tracker items come back through their own parser, so a bad one fails the load
     # with its reason: nothing is dropped silently.
     if "tracker_items" in state:
@@ -246,6 +302,7 @@ def render(
     positionally to a reader and to mypy alike, and a swap here would write a baseline
     where the version belongs with nothing to catch it."""
     head = _head_fields(state)
+    lane = _lane_fields(state)
     frontmatter = {
         "id": state["id"],
         "title": state["title"],
@@ -368,6 +425,12 @@ def render(
             key: _LANDING_PLACEHOLDER if key == "head_yields" and value else value
             for key, value in head.items()
         },
+        # The fast lane's record (GH-681): the admission and the merges are flow lines, the mark
+        # a scalar; each written only when set and valid.
+        **{
+            key: _LANDING_PLACEHOLDER if key in ("lane_admitted", "lane_merges") else value
+            for key, value in lane.items()
+        },
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         # The clean restarts of a task (GH-593): the count per pair, the restart still owed to the
@@ -484,7 +547,8 @@ def render(
 
     dumped = yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()
     for key in _FLOW_KEYS:
-        if value := (head if key == "head_yields" else state).get(key):
+        source = head if key == "head_yields" else lane if key.startswith("lane_") else state
+        if value := source.get(key):
             placeholder = yaml.safe_dump({key: _LANDING_PLACEHOLDER}).strip()
             dumped = dumped.replace(placeholder, _flow_line(key, value), 1)
     parts = [

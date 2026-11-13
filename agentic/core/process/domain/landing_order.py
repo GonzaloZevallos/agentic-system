@@ -51,6 +51,12 @@ LANE_SYNCS_MIN = 2
 """The fewest syncs a head must have left for a lane to open: one the lane forces on the head
 (it syncs master over the member's merge), and one left for the head's own next move."""
 
+LANE_MERGES_MAX = 20
+"""How many `lane_merges` entries a head's document keeps: the newest."""
+
+LANE_RECORD_WINDOW = timedelta(days=7)
+"""How long after its last write a member's document is still looked at for a merge to record."""
+
 INTEGRATING_KINDS = frozenset({"land_model", "role"})
 """The kinds of child that integrate: `role` and `land_model` children run on the head's branch,
 and the head's landing then syncs master, paid from its sync budget. `merge` and `land_checks`
@@ -501,3 +507,29 @@ def head(members: Iterable[Member], now: datetime | None = None) -> int | None:
 def turn_of(issue: int, head_issue: int | None) -> Turn:
     """`head` when `issue` leads the order, else `waiting`."""
     return "head" if head_issue is not None and issue == head_issue else "waiting"
+
+
+def lane_merge_verdict(raw: Mapping[str, object]) -> Literal["record", "not_lane"] | None:
+    """What a member's document says of its fast-lane merge (GH-681, informative; no decision
+    reads it): `record` when `auto_merged_at` is later than `lane_admitted.at` (instants, never
+    strings) and the merge verb kept the admitted pull request head and master (`same_commit`),
+    `not_lane` when it merged after the admission on another sha or master (not provably a lane
+    merge), `None` for anything else: no admission, already marked, a merge not later than the
+    admission, or an instant that is missing or does not parse. It is not the lane predicate
+    (`lane_ready`, `lane_reason`)."""
+    from .rules import same_commit  # rules imports this module through `document`
+
+    admitted = raw.get("lane_admitted")
+    if not isinstance(admitted, Mapping) or raw.get("lane_recorded") is not None:
+        return None
+    admitted_at, merged_at = instant(admitted.get("at")), instant(raw.get("auto_merged_at"))
+    if admitted_at is None or merged_at is None or merged_at <= admitted_at:
+        return None
+    same = same_commit(
+        _text(raw.get("auto_merge_head")), _text(admitted.get("pr_head"))
+    ) and same_commit(_text(raw.get("auto_merge_master")), _text(admitted.get("master")))
+    return "record" if same else "not_lane"
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None

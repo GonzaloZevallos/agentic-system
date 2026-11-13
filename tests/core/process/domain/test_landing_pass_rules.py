@@ -170,3 +170,23 @@ def test_an_unstarted_pass_is_owed_to_land_and_is_not_taken():
     started = killed()["landing"]
     assert landing.already_dispatched(started, head, "fix", None) is True
     assert landing.already_dispatched(entries, "d" * 40, "fix", None, unstarted=True) is False
+
+
+def test_landing_pass_and_unproductive_steps_are_blind_to_lane_merges():
+    """GH-681 part 2: the fast lane's record lives outside `landing`, so a document that holds
+    `lane_merges` is read exactly as one without it."""
+    from agentic.core.process.domain.landing_order import unproductive_steps
+
+    plain = killed()
+    merges = [
+        {"issue": 9, "pr_head": "a" * 40, "master": "b" * 40, "merged_at": NOW.isoformat()},
+    ]
+    with_merges = {**plain, "lane_merges": merges, "lane_admitted": None}
+    head = plain["landing"][-1].get("head")
+    since = NOW - timedelta(days=365)
+    assert rules.landing_pass(with_merges) == rules.landing_pass(plain) == "unfinished"
+    assert rules.landing_pass_live(with_merges) is rules.landing_pass_live(plain)
+    assert rules.resume_target(with_merges) == rules.resume_target(plain)
+    assert unproductive_steps(with_merges["landing"], head, since) == unproductive_steps(
+        plain["landing"], head, since
+    )
