@@ -324,6 +324,56 @@ def rerun_restarted(read: CiReport | CiUnreadable, run_id: str) -> bool:
     return isinstance(read, CiReport) and run_id in read.running_runs
 
 
+NameState = Literal["green", "red", "pending", "cancelled"]
+
+
+@dataclass(frozen=True)
+class _Judged:
+    """What the CI says about one declared name: its `state`, the current `runs` it claims, the
+    `red` ones that count and the `dropped` ones `cancelled_run` discards."""
+
+    state: NameState
+    runs: tuple[CiCheck, ...]
+    red: tuple[CiCheck, ...]
+    dropped: tuple[CiCheck, ...]
+
+
+def _judge(report: CiReport, name: str, runs: tuple[CiCheck, ...]) -> _Judged:
+    if not runs:
+        return _Judged("pending", runs, (), ())
+    dropped = tuple(check for check in runs if cancelled_run(report, check))
+    red = tuple(check for check in runs if _is_red(check) and check not in dropped)
+    state: NameState
+    if red:
+        state = "red"
+    elif any(_pending(check) for check in runs) or _incomplete(report, name, runs):
+        state = "pending"
+    elif dropped and not any(_green(check) for check in runs):
+        state = "cancelled"
+    else:
+        state = "green"
+    return _Judged(state, runs, red, dropped)
+
+
+def _judged(report: CiReport, declared: Iterable[str]) -> dict[str, _Judged]:
+    """The one joint pass: every declared name resolved against `current_runs` at once by
+    `runs_of`, never one name at a time, then judged."""
+    return {
+        name: _judge(report, name, runs)
+        for name, runs in runs_of(current_runs(report), declared).items()
+    }
+
+
+def name_states(report: CiReport, declared: Iterable[str]) -> dict[str, NameState]:
+    """The state of each declared name, a key per name (deduplicated, declared order), from the
+    one pass `ci_state` is built on (GH-694): `red` for a red run `cancelled_run` does not
+    discard; `pending` for a name with no run, a pending run, or one resolved only through
+    expansion while `runs_completed` is not `True`; `cancelled` for a name whose only red runs
+    were discarded and that has no green one; `green` otherwise. `SKIPPED` is red, as in
+    `ci_state`."""
+    return {name: found.state for name, found in _judged(report, declared).items()}
+
+
 def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     """The verdict of `report` over the `declared` check names, resolved by `runs_of` over
     `current_runs` (a run a newer one of the same full name replaced never counts, GH-606): a name
@@ -341,25 +391,19 @@ def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     red_by_name: list[tuple[str, tuple[CiCheck, ...]]] = []
     missing: list[str] = []
     cancelled: list[CiCheck] = []
-    waiting = False
-    for name, runs in runs_of(current_runs(report), declared).items():
-        if not runs:
+    judged = _judged(report, declared)
+    for name, found in judged.items():
+        if not found.runs:
             missing.append(name)
-            waiting = True
-            continue
-        dropped = [check for check in runs if cancelled_run(report, check)]
-        red = tuple(check for check in runs if _is_red(check) and check not in dropped)
-        if red:
-            failing.extend(red)
-            red_by_name.append((name, red))
-        elif any(_pending(check) for check in runs) or _incomplete(report, name, runs):
-            waiting = True
-        elif dropped and not any(_green(check) for check in runs):
-            cancelled.extend(dropped)
-            waiting = True
+        elif found.state == "red":
+            failing.extend(found.red)
+            red_by_name.append((name, found.red))
+        elif found.state == "cancelled":
+            cancelled.extend(found.dropped)
+    states = {found.state for found in judged.values()}
     if failing:
         state: Literal["green", "red", "pending"] = "red"
-    elif waiting:
+    elif states & {"pending", "cancelled"}:
         state = "pending"
     else:
         state = "green"

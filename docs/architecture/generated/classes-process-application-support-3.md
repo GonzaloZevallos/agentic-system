@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__Grant["Grant"]
     class ports__Inbox["Inbox"]
     class ports__IssueComment["IssueComment"]
     class ports__IssueRow["IssueRow"]
@@ -31,7 +32,6 @@ classDiagram
     class ports__LockRecord["LockRecord"]
     class ports__MasterWindow["MasterWindow"]
     class ports__MergeCallFailed["MergeCallFailed"]
-    class ports__MergeConflict["MergeConflict"]
     ports__LockHeld o-- ports__LockRecord
 ```
 

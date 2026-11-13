@@ -2578,7 +2578,9 @@ class Stage0Store(Protocol):
     - `<root>/rejected`: the shas a human or a policy refused;
     - `<root>/escalations.json`: the issue the rotation escalated to;
     - `<root>/unavailable.json` `{sha, count, cause}`: how many times in a row `sha` was
-      unavailable, and why.
+      unavailable, and why;
+    - `<root>/.mirror` and `<root>/.mirror.clone`: the MasterWindow mirror, never a stage nor a
+      candidate.
 
     Every state method of every part is declared here, so later parts never change the port.
     A port raises only for an infrastructure fault (a disk that cannot be written), never to
@@ -2667,6 +2669,16 @@ class Stage0Users(Protocol):
 
     def users(self) -> frozenset[str] | Unreadable:
         """The stage names in use; `Unreadable` when it could not be read."""
+        ...
+
+
+class CommitCiReader(Protocol):
+    """The CI of one commit, read by its sha (GH-632, part 2c): what `MasterWindow` takes for
+    each commit of the window. Another task (#704) implements it."""
+
+    def read(self, oid: str) -> CiReport | CiUnreadable:
+        """The CI of the commit `oid`. Never raises: a read that failed or timed out is
+        `CiUnreadable`."""
         ...
 
 

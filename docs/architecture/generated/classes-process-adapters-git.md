@@ -10,5 +10,6 @@ Esta página muestra las clases públicas de los módulos del grupo `git` de `ag
 
 ```mermaid
 classDiagram
+    class git__master_window__GitMasterWindow["GitMasterWindow"]
     class git__workspace__GitWorkspace["GitWorkspace"]
 ```
