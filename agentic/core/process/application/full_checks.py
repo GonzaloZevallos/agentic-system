@@ -104,8 +104,7 @@ _CI_DETAIL: dict[CiCause, str] = {
     "unknown_names": "no check run carries a declared job name",
     "run_unfinished": "a workflow run of that head was still going after {min:g} min and had "
     "reported no declared job",
-    "ghost_run": "CI runs on {ref} for that head stayed queued with no job for {min:g} min "
-    "({ghosts})",
+    "ghost_run": "CI runs on {ref} for that head stayed queued with no job ({ghosts})",
 }
 # Every cause when the verdict was asked of a dispatched run (GH-504), none inherited from the CI
 # branch ref's table: `{ref}` is the workflow file, `{dispatch_ref}` the ref the head was
@@ -126,8 +125,7 @@ _DISPATCH_DETAIL: dict[CiCause, str] = {
     "{sha} had been published to {dispatch_ref}",
     "run_unfinished": "the dispatched {ref} was still going after {min:g} min and had reported no "
     "declared job",
-    "ghost_run": "the dispatched {ref} for that head stayed queued with no job for {min:g} min "
-    "({ghosts}), after the pushed runs had done the same",
+    "ghost_run": "the dispatched {ref} for that head stayed queued with no job ({ghosts})",
 }
 
 _LOG = logging.getLogger(__name__)

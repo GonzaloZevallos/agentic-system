@@ -392,6 +392,7 @@ async def test_an_untrusted_head_whose_dispatched_runs_are_ghosts_dispatches_twi
     ports = untrusted_ports(clock, ghost_dispatches)
     patch = await run(state_of(), ports, clock)
     assert_ghost_run(patch, ports, ["11", "12"])
+    assert "pushed" not in patch["escalated"]  # nothing was pushed on this path
     assert len(ports.tracker.dispatch_calls) == 2 and ports.tracker.watched_reads == []
     assert len(ports.tracker.dispatched_reads) == 42  # two waits of 600 s, one read per 30 s
     assert [s["ci_ghost_dispatch"]["ghost_run_ids"] for s in fact_saves(ports)[:1]] == [["11"]]
@@ -467,5 +468,6 @@ async def test_reentry_with_no_fallback_escalates_ghost_run_on_the_stored_fact_u
     assert patch["escalation_class"] == "ci" and "(ghost_run)" in patch["escalated"]
     assert patch["ci_ghost_dispatch"] == stored and "full_checks" not in patch
     assert "runs 4 … 6 (3 recorded)" in patch["escalated"]
+    assert " min" not in patch["escalated"]  # no wait happened on this entry
     assert ports.tracker.dispatch_calls == [] and new_facts(ports, stored) == []
     assert ports.tracker.dispatched_reads == [] and ports.tracker.watched_reads == []
