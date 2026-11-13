@@ -5004,3 +5004,29 @@ def test_delta_of_tracker_actions_round_trips_through_apply():
     after = {"tracker_actions_done": {"aaa": {"at": "t1", "answered": "t2"}, "bbb": {"at": "t3"}}}
     assert task.apply(before, task.delta(before, after)) == after
     assert task.delta(after, after) == {}
+
+
+# --- split_parent_state (GH-619 part 3): what the parts of a split parent come to ---
+
+_RESOLVED_PART = ("CLOSED", "COMPLETED", "resolved")
+
+
+@pytest.mark.parametrize(
+    ("parts", "expected"),
+    [
+        ([], "waiting"),
+        ([_RESOLVED_PART, _RESOLVED_PART], "done"),
+        ([_RESOLVED_PART, ("OPEN", None, "open")], "waiting"),
+        ([("CLOSED", "COMPLETED", "no_merge_recorded")], "waiting"),
+        ([("CLOSED", "COMPLETED", "merge_not_in_upstream")], "waiting"),
+        ([_RESOLVED_PART, ("CLOSED", "COMPLETED", "unknown")], "waiting"),
+        ([("CLOSED", None, "resolved")], "waiting"),
+        ([("CLOSED", "NOT_PLANNED", "resolved")], "abandoned"),
+        ([("CLOSED", "NOT_PLANNED", "unknown")], "abandoned"),
+        ([_RESOLVED_PART, ("CLOSED", "NOT_PLANNED", "resolved")], "abandoned"),
+        ([("OPEN", None, "open"), ("CLOSED", "NOT_PLANNED", "resolved")], "abandoned"),
+        ([("OPEN", "NOT_PLANNED", "resolved")], "waiting"),
+    ],
+)
+def test_split_parent_state_reads_state_reason_before_the_verdict(parts, expected):
+    assert rules.split_parent_state(parts) == expected

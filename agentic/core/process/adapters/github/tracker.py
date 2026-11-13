@@ -608,9 +608,10 @@ class GhTracker:
             return TrackerFailure(target=target, cls=cls, at=self._now())
         return None
 
-    def close_issue(self, task_id: str) -> None:
+    def close_issue(self, task_id: str, *, comment: str | None = None) -> None:
         if (number := issue_number(task_id)) is not None:
-            self._gh("issue", "close", str(number), "--reason", "completed")
+            extra = ["--comment", comment] if comment is not None else []
+            self._gh("issue", "close", str(number), "--reason", "completed", *extra)
 
     def label(self, task_id: str, label: str) -> None:
         if (number := issue_number(task_id)) is not None:

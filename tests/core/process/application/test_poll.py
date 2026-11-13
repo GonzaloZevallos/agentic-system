@@ -2158,9 +2158,9 @@ class _ClosingTracker(MemoryTracker):
         self.registry = registry
         self.entries_at_close: list[int] = []
 
-    def close_issue(self, task_id: str) -> None:
+    def close_issue(self, task_id: str, *, comment: str | None = None) -> None:
         self.entries_at_close.append(self.registry.exclusive_entries)
-        super().close_issue(task_id)
+        super().close_issue(task_id, comment=comment)
 
 
 def test_the_sweep_runs_before_the_registrys_exclusive_section(tmp_path):
@@ -2610,3 +2610,43 @@ def test_a_recorded_launch_attempt_with_no_document_is_not_relaunched_this_round
     lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
 
     assert launcher.spawned == [] and lines == ["agentic: poll: nothing to do this round"]
+
+
+# --- GH-619 part 3: a split parent closed by the split sweep resolves a blocker ---
+
+
+def _verdict(tmp_path, ports, number):
+    upstream = Upstream("origin/main", "tip", None)
+    return poll._blocker_verdict(_cfg(tmp_path), ports, number, lambda: upstream)
+
+
+def _split_parent(ports, number, state, reason, **record):
+    ports.tracker.states[number] = IssueState(state, reason, None, None)
+    ports.documents.save({"id": f"GH-{number}", "status": "split", **record})
+
+
+def test_a_split_parent_record_on_an_open_issue_claims_nothing(tmp_path):
+    ports = memory_ports()
+    _split_parent(ports, 9, "OPEN", "", split_closed_at="2026-11-13T10:00:00Z")
+    assert _verdict(tmp_path, ports, 9) == "open"
+
+
+def test_a_closed_split_parent_with_its_record_resolves(tmp_path):
+    ports = memory_ports()
+    _split_parent(ports, 9, "CLOSED", "COMPLETED", split_closed_at="2026-11-13T10:00:00Z")
+    assert _verdict(tmp_path, ports, 9) == "resolved"
+
+
+def test_a_completed_split_parent_without_the_record_has_no_merge_recorded(tmp_path):
+    ports = memory_ports()
+    _split_parent(ports, 9, "CLOSED", "COMPLETED")
+    assert _verdict(tmp_path, ports, 9) == "no_merge_recorded"
+
+
+def test_the_split_record_does_not_resolve_a_document_that_is_not_split(tmp_path):
+    ports = memory_ports()
+    ports.tracker.states[9] = IssueState("CLOSED", "COMPLETED", None, None)
+    ports.documents.save(
+        {"id": "GH-9", "status": "done", "split_closed_at": "2026-11-13T10:00:00Z"}
+    )
+    assert _verdict(tmp_path, ports, 9) == "no_merge_recorded"

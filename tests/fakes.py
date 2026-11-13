@@ -1705,6 +1705,8 @@ class MemoryTracker:
         self._queue: list[int] = []
         # GH-344: the task ids `close_issue` closed, and the exceptions it raises first.
         self.closed_issues: list[str] = []
+        # GH-619: the comment each `close_issue` carried, by task id (absent when none).
+        self.close_comments: dict[str, str] = {}
         self.close_issue_failures: list[Exception] = []
         self.queue_error: Exception | None = None
         self.states: dict[int, IssueState] = {}
@@ -2021,10 +2023,12 @@ class MemoryTracker:
             raise self.queue_error
         return sorted(self._queue)
 
-    def close_issue(self, task_id: str) -> None:
+    def close_issue(self, task_id: str, *, comment: str | None = None) -> None:
         if self.close_issue_failures:
             raise self.close_issue_failures.pop(0)
         self.closed_issues.append(task_id)
+        if comment is not None:
+            self.close_comments[task_id] = comment
 
     def issue_state(self, number: int) -> IssueState:
         # An issue nobody scripted reads like one `gh` could not read: a `ValueError`, the
