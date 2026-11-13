@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -4191,21 +4191,74 @@ def blockers_from_body(body: str) -> tuple[int, ...]:
     The result is the union of all matching lines, in order of first appearance and
     without duplicates. Empty when the body has no such line, or no body at all."""
     found: list[int] = []
+    for content, _ending, fenced in _body_lines(body):
+        if fenced:
+            continue
+        match = _BLOCKED_BY_LINE.match(content.strip())
+        if match:
+            found.extend(_issue_numbers(match.group(1)))
+    return tuple(dict.fromkeys(found))
+
+
+def _issue_numbers(listing: str) -> list[int]:
+    return [int(n) for n in re.findall(r"\d+", listing)]
+
+
+def _body_lines(body: str) -> Iterator[tuple[str, str, bool]]:
+    """The one fence-aware walk over an issue body, shared by `blockers_from_body` (the
+    reader) and `repoint_blockers` (the writer) so both agree about code fences. Yields
+    `(content, ending, fenced)` for every line of `body.splitlines(keepends=True)`:
+    the line without its ending, the ending token as written (`\\n`, `\\r\\n`, U+2028,
+    `\\x0c`, ... or `""` on the last line), and whether the line is fenced -- inside a
+    fence or one of its two delimiter lines. The fence rules are those documented on
+    `blockers_from_body`."""
     fence = ""
-    for line in body.splitlines():
-        stripped = line.strip()
+    for line in body.splitlines(keepends=True):
+        content = line.splitlines()[0]
+        ending = line[len(content) :]
+        stripped = content.strip()
         if fence:
             if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):
                 fence = ""
+            yield content, ending, True
             continue
         opener = _FENCE_OPENER.match(stripped)
         if opener:
             fence = opener.group(1)
+            yield content, ending, True
             continue
-        match = _BLOCKED_BY_LINE.match(stripped)
-        if match:
-            found.extend(int(n) for n in re.findall(r"\d+", match.group(1)))
-    return tuple(dict.fromkeys(found))
+        yield content, ending, False
+
+
+def repoint_blockers(body: str, parent: int, targets: Sequence[int]) -> str | None:
+    """`body` with `#parent` replaced by `targets` on every whole `Blocked by:` line
+    outside a code fence that names it (GH-619), or `None` when nothing changed.
+
+    A line is read exactly as `blockers_from_body` reads it (same walker). On a match
+    `parent` is replaced in place by `targets`, the numbers are de-duplicated in
+    first-appearance order (compared as integers, so `#5` never touches `#50`), and the
+    line is rebuilt from what it had: its leading whitespace and prefix up to the first
+    `#`, the list joined with `", "`, its trailing whitespace and its original ending.
+    Every other line keeps its bytes. No `targets` means nothing to point to: `None`."""
+    if not targets:
+        return None
+    rebuilt: list[str] = []
+    changed = False
+    for content, ending, fenced in _body_lines(body):
+        match = None if fenced else _BLOCKED_BY_LINE.match(content.strip())
+        numbers = _issue_numbers(match.group(1)) if match else []
+        if parent in numbers:
+            swapped: list[int] = []
+            for number in numbers:
+                swapped.extend(targets if number == parent else (number,))
+            unique = list(dict.fromkeys(swapped))
+            if unique != numbers:
+                prefix = content[: content.index("#")]
+                trailing = content[len(content.rstrip()) :]
+                content = prefix + ", ".join(f"#{n}" for n in unique) + trailing
+                changed = True
+        rebuilt.append(content + ending)
+    return "".join(rebuilt) if changed else None
 
 
 def blocker_numbers(native: tuple[int, ...] | None, body: Callable[[], str]) -> tuple[int, ...]:

@@ -2269,6 +2269,97 @@ def test_blockers_from_body_ignores_prose_quote_and_bold_mentions(body):
     assert rules.blockers_from_body(body) == ()
 
 
+# (body, parent, targets, rewritten body, indexes of the lines that change)
+_REPOINT_ROWS = {
+    "multi-blocker line": ("Blocked by: #5, #7", 5, (7, 9), "Blocked by: #7, #9", (0,)),
+    "parent in the middle": ("Blocked by: #1, #5, #8", 5, (7,), "Blocked by: #1, #7, #8", (0,)),
+    "five is not fifty": ("Blocked by: #50", 5, (7,), None, ()),
+    "fifty stays beside five": (
+        "Blocked by: #5, #50",
+        5,
+        (7, 9),
+        "Blocked by: #7, #9, #50",
+        (0,),
+    ),
+    "target already on the line": ("Blocked by: #7, #5", 5, (7, 9), "Blocked by: #7, #9", (0,)),
+    "duplicate target": ("Blocked by: #5", 5, (7, 7), "Blocked by: #7", (0,)),
+    "fenced line is kept": (
+        "```\nBlocked by: #5\n```\nBlocked by: #5\n",
+        5,
+        (7,),
+        "```\nBlocked by: #5\n```\nBlocked by: #7\n",
+        (3,),
+    ),
+    "only a fenced line": ("~~~\nBlocked by: #5\n~~~", 5, (7,), None, ()),
+    "markers are kept": (
+        "<!-- agentic-split: GH-9 part 1 depth 1 -->\nBlocked by: #5\n\nCloses #12\n",
+        5,
+        (7,),
+        "<!-- agentic-split: GH-9 part 1 depth 1 -->\nBlocked by: #7\n\nCloses #12\n",
+        (1,),
+    ),
+    "crlf endings": (
+        "intro\r\nBlocked by: #5\r\nend\r\n",
+        5,
+        (7,),
+        "intro\r\nBlocked by: #7\r\nend\r\n",
+        (1,),
+    ),
+    "unicode line separator": (
+        "a Blocked by: #5 b",
+        5,
+        (7,),
+        "a Blocked by: #7 b",
+        (1,),
+    ),
+    "form feed ending": ("a\x0cBlocked by: #5\x0cb", 5, (7,), "a\x0cBlocked by: #7\x0cb", (1,)),
+    "indentation and prefix kept": (
+        "  blocked BY:   #5 ,#8  ",
+        5,
+        (7,),
+        "  blocked BY:   #7, #8  ",
+        (0,),
+    ),
+    "trailing newline survives": ("Blocked by: #5\n", 5, (7,), "Blocked by: #7\n", (0,)),
+    "two lines": (
+        "Blocked by: #5\nx\nBlocked by: #5, #6\n",
+        5,
+        (7,),
+        "Blocked by: #7\nx\nBlocked by: #7, #6\n",
+        (0, 2),
+    ),
+    "no match": ("Blocked by: #6\nsee Blocked by: #5 here", 5, (7,), None, ()),
+    "target is the parent": ("Blocked by: #5", 5, (5,), None, ()),
+    "no targets": ("Blocked by: #5", 5, (), None, ()),
+    "empty body": ("", 5, (7,), None, ()),
+}
+
+
+@pytest.mark.parametrize("name", list(_REPOINT_ROWS))
+def test_repoint_blockers_table(name):
+    body, parent, targets, expected, rewritten = _REPOINT_ROWS[name]
+    new = rules.repoint_blockers(body, parent, targets)
+    assert new == expected
+    if new is None:
+        return
+    before, after = body.splitlines(keepends=True), new.splitlines(keepends=True)
+    assert len(before) == len(after)
+    assert (
+        tuple(i for i, (a, b) in enumerate(zip(before, after, strict=True)) if a != b) == rewritten
+    )
+    assert parent not in rules.blockers_from_body(new) or parent in targets
+    assert set(targets) <= set(rules.blockers_from_body(new))
+    # a second pass finds nothing left to do
+    assert rules.repoint_blockers(new, parent, targets) is None
+
+
+def test_repoint_blockers_reads_blockers_as_the_reader_does():
+    body = "Blocked by: #5, #50\n```\nBlocked by: #5\n```\n"
+    new = rules.repoint_blockers(body, 5, (7, 9))
+    assert new is not None
+    assert rules.blockers_from_body(new) == (7, 9, 50)
+
+
 def test_blocker_numbers_reads_several_blockers_off_one_line():
     assert rules.blocker_numbers((), lambda: "Blocked by: #7, #9") == (7, 9)
 
