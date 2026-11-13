@@ -703,6 +703,8 @@ def release(
     diagnose attempts is releasable, by a human's answer (`_owner_release`); every other one, the
     depth-1 escalation after a delivered diagnosis included, is the human's restart, and the
     tracker is not read for it."""
+    if rules.tracker_item_pause(raw):
+        return _unreleased("waiting_on_human")  # GH-620: only the owner's decision moves it
     shape = _escalated_head(raw)
     if shape is not None and head in (None, shape) and landing.ci_escalation(raw, shape):
         return _ci_release(ports, cfg, task_id, raw, number, shape, upstream)

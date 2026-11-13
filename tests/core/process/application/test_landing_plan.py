@@ -806,3 +806,10 @@ def test_a_waiting_task_with_a_planning_defect_waits_and_the_head_escalates():
     facts = rules.MergeFacts(**{**_adr_facts().__dict__, "ci_unreported": frozenset({"web"})})
     assert landing_plan.step_for({}, "ci_unknown_names", facts, turn="head").kind == "escalate"
     assert landing_plan.step_for({}, "ci_unknown_names", facts, turn="waiting").kind == "wait"
+
+
+def test_release_does_not_release_a_task_paused_on_tracker_items():
+    ports = _world()
+    found = _release(ports, {**_escalated(), "tracker_human": ["abc123abc123"]})
+    assert (found.decision, found.why) == (None, "waiting_on_human")
+    assert ports.tracker.reads == []

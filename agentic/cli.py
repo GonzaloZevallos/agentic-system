@@ -1963,6 +1963,10 @@ async def _resume(
             _inhibited(f"{task_id}: resume"),
         ):
             _reap_dead_run(ports, task_id, taken_over)
+            if r.settled:
+                # GH-620: a pull request paused on its tracker items needs the decision only.
+                _report(resuming.settle(r, ports), task_id, ports)
+                return
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it

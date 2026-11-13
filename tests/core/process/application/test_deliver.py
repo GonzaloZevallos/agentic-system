@@ -1303,3 +1303,60 @@ async def test_without_the_key_or_without_a_reason_nothing_new_is_called(cfg, de
     assert ports.tracker.updated_bodies == []
     first = await deliver(TASK, cfg, _breaking_ports(declared))
     assert first["status"] == "ready_for_review"
+
+
+ITEM = {"kind": "human", "question": "Ship the flag?", "recommendation": "Yes, behind a flag"}
+
+
+def _held(**more):
+    from agentic.core.process.domain import tracker_items
+
+    return {**TASK, "tracker_items": [ITEM], "_h": tracker_items.item_hash(ITEM), **more}
+
+
+async def test_a_state_with_no_tracker_items_leaves_comments_body_and_document_as_they_were(cfg):
+    ports = memory_ports()
+    patch = await deliver(TASK, cfg, ports)
+    assert patch["status"] == "ready_for_review"
+    assert "tracker_human" not in patch and "escalated" not in patch
+    assert [c for _, c in ports.tracker.comments][0].startswith("Ready for review: ")
+    assert (
+        ports.tracker.pull_requests[0][2] == "## PM\n\n### Consolidated definition\n\nSix numbers."
+    )
+
+
+async def test_deliver_with_a_human_item_ends_waiting_on_human(cfg):
+    from agentic.core.process.application.escalate import escalate
+    from agentic.core.process.domain import tracker_items
+
+    state = {k: v for k, v in _held().items() if k != "_h"}
+    h = tracker_items.item_hash(ITEM)
+    ports = memory_ports()
+    patch = await deliver(state, cfg, ports)
+
+    assert patch["status"] == "waiting_on_human"
+    assert patch["pull_request"] == "https://github.com/o/r/pull/7"
+    assert patch["escalation_class"] == "questions" and patch["tracker_human"] == [h]
+    assert patch.get("landing_queued_at")
+    assert [e["kind"] for e in patch["pause_log"]].count("escalation") == 1
+    await escalate({**state, **patch}, cfg, ports)
+    posted = ports.tracker.comments[-1][1]
+    assert "Ship the flag?" in posted and "Decision:" in posted
+    assert "gh issue close" not in posted
+    assert ("GH-12", "needs-human") in ports.tracker.labels
+
+
+async def test_deliver_with_an_item_and_a_failed_ready_comment_keeps_both_log_entries(cfg):
+    state = {k: v for k, v in _held().items() if k != "_h"}
+    ports = memory_ports()
+    ports.tracker.comment_failures = 1
+    patch = await deliver(state, cfg, ports)
+    kinds = [e["kind"] for e in patch["pause_log"]]
+    assert kinds.count("escalation") == 1 and kinds.count("lapse") == 1
+
+
+async def test_deliver_on_a_state_already_holding_the_hash_does_not_escalate_again(cfg):
+    state = {k: v for k, v in _held().items() if k != "_h"}
+    state["tracker_human"] = [_held()["_h"]]
+    patch = await deliver(state, cfg, memory_ports())
+    assert patch["status"] == "ready_for_review" and "escalation_class" not in patch

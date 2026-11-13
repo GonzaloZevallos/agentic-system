@@ -1059,3 +1059,34 @@ def test_the_task_cap_of_a_resume_leaves_the_shadow_reviews_cost_out(cfg):
             decided("Go on."),
             estimate=200.0,
         )
+
+
+def _held_pr():
+    return {
+        **paused(cost_usd=1.0, subtasks={}, runs=[]),
+        "pull_request": "https://github.com/o/r/pull/7",
+        "escalated": "the plan leaves 1 decision(s) to the owner",
+        "escalation_class": "questions",
+        "questions_for_human": ["Ship it? — Recommended: Yes"],
+        "tracker_human": ["abc123abc123"],
+    }
+
+
+def test_a_pull_request_paused_on_tracker_items_is_settled_by_the_decision_without_a_node(cfg):
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: the plan leaves 1 decision(s)", "Yes, ship it"]
+    r = resume.prepare("GH-12", _held_pr(), "checkpoint", cfg, ports)
+    assert r.settled and r.decision == "Yes, ship it"
+    settled = resume.settle(r, ports)
+    assert settled["tracker_human"] == [] and not settled.get("escalated")
+    assert settled["tracker_actions_done"]["abc123abc123"]["answered"]
+    assert ports.documents.saved[-1] == settled
+    assert ("GH-12", "needs-human") in ports.tracker.unlabeled
+
+
+@pytest.mark.parametrize("answer", [[], ["   "]])
+def test_a_pause_on_tracker_items_without_a_real_decision_waits(cfg, answer):
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: the plan leaves 1 decision(s)", *answer]
+    with pytest.raises(resume.WaitingOnHuman):
+        resume.prepare("GH-12", _held_pr(), "checkpoint", cfg, ports)
