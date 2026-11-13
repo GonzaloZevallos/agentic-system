@@ -1296,9 +1296,8 @@ def gather_merges(
             reading = (
                 "unread" if facts.conflicts is None else "conflicts" if facts.conflicts else "clean"
             )
-            out.append(
-                f"agentic: poll: auto-merge #{number} -> waiting ({reading}) behind #{round_.head}"
-            )
+            behind = f"behind #{round_.head}" if round_.head is not None else "with no head"
+            out.append(f"agentic: poll: auto-merge #{number} -> waiting ({reading}) {behind}")
             continue
         if assessed.conflict_unread:
             head = pull_request.head_oid if pull_request is not None else None
@@ -2631,6 +2630,7 @@ def run_once(
                 backed_off_merges,
                 backoff_ends,
                 bool(held),
+                resumes,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())

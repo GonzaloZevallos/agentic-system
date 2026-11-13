@@ -388,10 +388,22 @@ def test_a_land_waits_for_the_pending_account_limit_pause_of_its_product(tmp_pat
         )
     ]
 
-    lines, launcher, _ = _land_round(tmp_path, ports, [])
+    registry, launcher = MemoryRunRegistry([]), FakeLauncher()
+    every = _round(
+        _cfg(tmp_path, max_concurrent_runs=2),
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        live_steps=LIVE,
+    )
+    lines = [line for line in every if " land #" in line]
 
     assert launcher.spawned == []
-    assert lines == ["agentic: poll: land #5 waits: pause_waiting"]
+    # GH-621: the product's pause makes every pull request ineligible (`account_paused`), so no
+    # head is chosen and no land is owed; the round says why #5 does not move.
+    assert lines == []
+    assert "agentic: poll: auto-merge #5 -> waiting (clean) with no head" in every
 
 
 def test_the_gap_before_the_resume_registers_counts_the_land_and_defers_another(tmp_path):
