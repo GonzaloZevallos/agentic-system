@@ -309,6 +309,11 @@ Decisión que el dueño toma sobre lo que ni el pedido ni el conocimiento resuel
 _Avoid_: pregunta para el humano
 _Campo_: sin término de arte
 
+**Supuesto de entrega**:
+Duda sobre el comportamiento de una entrega de especificación que el rol resuelve solo y deja escrita, sin escalar: una fila `{role, text}` de `state["assumptions"]`, de a lo sumo 240 caracteres y sin salto de línea (`assumption_text`, agregada por `add_assumptions`). El cuerpo del pull request la muestra como línea `Assumption: <texto>`.
+_Avoid_: Supuesto
+_Campo_: sin término de arte
+
 **Decisión del humano**:
 Lo que el humano responde a un escalado: todo lo que comenta en el issue después del último aviso del sistema. Entra al documento de tarea, la lee todo rol y no se vuelve a preguntar: vale para toda la tarea y pesa sobre lo que contradiga.
 _Avoid_: respuesta, comentario

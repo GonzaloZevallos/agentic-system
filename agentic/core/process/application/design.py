@@ -160,6 +160,7 @@ async def consolidate(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
                 f"{PM_CONSOLIDATOR.name} could not complete the job without "
                 f"{len(data['questions_for_human'])} point(s) UX marked as impeding it; "
                 "see the questions",
+                spec=state.get("spec"),
             )
             patch = rules.logged(patch, at=ports.now())
             patch["status"] = WAITING_ON_HUMAN
