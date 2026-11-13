@@ -185,14 +185,17 @@ CLUSTERS: Mapping[str, str] = {
     "domain.scratch": "machine",
     "domain.signals": "state",
     "domain.size_budget": "state",
+    "domain.spec_delivery": "state",
     "domain.speculation": "checks",
     "domain.stack_review": "roles",
     "domain.stack_signals": "roles",
+    "domain.stage0_rotation": "machine",
     "domain.stall": "machine",
     "domain.suppressions": "checks",
     "domain.system_lessons": "playbook",
     "domain.task": "state",
     "domain.task_path": "state",
+    "domain.tracker_items": "roles",
     "domain.turn_notice": "roles",
 }
 

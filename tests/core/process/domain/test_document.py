@@ -1883,3 +1883,38 @@ def test_add_head_yield_keeps_the_newest_ten():
     for n in range(12):
         rows = task.add_head_yield(rows, _head_yield(n))
     assert [r["head"] for r in rows] == [f"sha{n}" for n in range(2, 12)]
+
+
+TRACKER_KEYS = {
+    "tracker_items": [{"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."}],
+    "tracker_actions_done": {"28383afe2b80": {"at": "2026-11-12T10:00:00+00:00", "url": "u"}},
+    "tracker_human": ["28383afe2b80"],
+}
+
+
+def test_the_typed_tracker_keys_round_trip_through_the_document():
+    state = {"id": "T-1", "title": "t", "description": "d", **TRACKER_KEYS}
+    text = document.render(state)
+    parsed = document.parse(text)
+    for key, value in TRACKER_KEYS.items():
+        assert parsed[key] == value
+    assert document.render(parsed) == text
+
+
+def test_a_document_with_an_unknown_tracker_item_kind_fails_to_load_with_the_reason():
+    bad = {**TRACKER_KEYS, "tracker_items": [{"kind": "comment", "question": "q"}]}
+    text = document.render({"id": "T-1", "title": "t", "description": "d", **bad})
+    with pytest.raises(ValueError, match="T-1.*write the item as"):
+        document.parse(text, "T-1")
+
+
+def test_a_document_without_typed_tracker_keys_is_byte_identical_after_a_load():
+    raw = (Path(__file__).parent / "fixtures" / "GH-484.yaml").read_text()
+    parsed = document.parse(f"---\n{raw}---\n\n# GH-484\n")
+    text = document.render(parsed)
+    assert "tracker_items" not in text
+    assert "tracker_actions_done" not in text
+    assert "tracker_human" not in text
+    empties = {"tracker_items": [], "tracker_actions_done": {}, "tracker_human": []}
+    assert document.render({**parsed, **empties}) == text
+    assert document.render(document.parse(text)) == text

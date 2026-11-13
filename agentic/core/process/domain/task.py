@@ -41,6 +41,7 @@ from .size_budget import ActualSize, PlanSize
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 from .task_path import Size as TaskSize
+from .tracker_items import TrackerItem
 
 Status = Literal[
     "open",
@@ -401,6 +402,31 @@ def add_head_yield(existing: list[HeadYield], new: HeadYield) -> list[HeadYield]
     """`existing` with `new` appended, at most `HEAD_YIELDS_MAX` rows. The opposite of
     `add_tracker_failures`: the newest rows stay, the oldest are dropped."""
     return [*existing, new][-HEAD_YIELDS_MAX:]
+
+
+class TrackerActionDone(TypedDict):
+    """The record of one typed tracker item, keyed by `tracker_items.item_hash` (GH-620): `at`
+    when it was raised, `url` where (when it has one) and `answered` when the human did."""
+
+    at: str
+    url: NotRequired[str]
+    answered: NotRequired[str]
+
+
+def add_tracker_actions(
+    existing: dict[str, TrackerActionDone] | None, new: dict[str, TrackerActionDone] | None
+) -> dict[str, TrackerActionDone]:
+    """The records of `existing` and `new` as one, by hash. A hash already there keeps its `at`
+    and `url` for good; the only thing a later write adds is a missing `answered`. The only way
+    `tracker_actions_done` is ever written."""
+    joined: dict[str, TrackerActionDone] = dict(existing or {})
+    for key, record in (new or {}).items():
+        held = joined.get(key)
+        if held is None:
+            joined[key] = record
+        elif "answered" not in held and "answered" in record:
+            joined[key] = {**held, "answered": record["answered"]}
+    return joined
 
 
 class Restoration(TypedDict):
@@ -923,6 +949,8 @@ class EscalationPatch(TypedDict):
     # The `MechanicalCause` of a mechanical pause, `None` for a judgment one (GH-593);
     # `rules.logged` copies it onto the `escalation` pause entry.
     escalation_cause: NotRequired[MechanicalCause | None]
+    # The hashes of the typed tracker items a `questions` pause raised (GH-620), `[]` otherwise.
+    tracker_human: NotRequired[list[str]]
 
 
 class SlicesClosedPatch(TypedDict):
@@ -1691,6 +1719,14 @@ class TaskState(TaskInput, total=False):
     # The checklist comment, once posted (GH-336): when and the hash of the items it carried.
     # Written after the comment succeeded; the poller reads it to skip reading GitHub.
     tracker_checklist_posted: Annotated[TrackerPosted, last]
+    # The typed tracker items of the plan (GH-620), replaced whole when a plan is written again;
+    # absent when the plan has none. Never a `tracker_checklist` string and never read as one.
+    tracker_items: Annotated[list[TrackerItem], last]
+    # What was done for each typed item, keyed by `tracker_items.item_hash`, `add_tracker_actions`.
+    tracker_actions_done: Annotated[dict[str, TrackerActionDone], add_tracker_actions]
+    # The hashes of the items the current `questions` pause raised (GH-620); `rules.escalation`
+    # writes it and `rules.resumed` clears it. Not a `MechanicalCause`: the pause is a human's.
+    tracker_human: Annotated[list[str], last]
     # The issue URL of each part already opened, keyed by the part's number as text: written
     # part by part, so a `gh` cut in the middle resumes without opening a part twice.
     split_issues: Annotated[dict[str, str], merge]
@@ -2048,6 +2084,9 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:
                 patch[key] = fresh
+        elif reducer is add_tracker_actions:
+            if add_tracker_actions(old, value) != old:
+                patch[key] = value
         elif reducer is add_merge_ci:
             prior = {(r["head"], r["master"]): r for r in old}
             if grown := [r for r in value if prior.get((r["head"], r["master"])) != r]:

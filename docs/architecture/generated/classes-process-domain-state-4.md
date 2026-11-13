@@ -10,6 +10,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: playbook](classes-process-domain-playbook.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
@@ -24,7 +25,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__DesignItemRecord["DesignItemRecord"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
@@ -38,6 +38,8 @@ classDiagram
     class task__FlakeRecord["FlakeRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksRecord["FullChecksRecord"]
+    class task__GateRecord["GateRecord"]
+    class task__HeadYield["HeadYield"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 

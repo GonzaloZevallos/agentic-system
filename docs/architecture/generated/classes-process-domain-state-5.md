@@ -10,6 +10,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: playbook](classes-process-domain-playbook.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
@@ -24,8 +25,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__GateRecord["GateRecord"]
-    class task__HeadYield["HeadYield"]
     class task__InterviewStats["InterviewStats"]
     class task__LandedSlice["LandedSlice"]
     class task__LandedSliceRef["LandedSliceRef"]
@@ -38,9 +37,13 @@ classDiagram
     class task__OutOfBoundsLine["OutOfBoundsLine"]
     class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
+    class task__PathRevision["PathRevision"]
+    class task__PendingCloseDocs["PendingCloseDocs"]
+    class task__PlanRoute["PlanRoute"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `task.TaskState` se asocia con `task.InterviewStats`
+  - `task.TaskState` se asocia con `task.PlanRoute`

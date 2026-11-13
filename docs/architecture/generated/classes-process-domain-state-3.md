@@ -10,6 +10,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: playbook](classes-process-domain-playbook.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
@@ -24,9 +25,9 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class size_budget__Divergence["Divergence"]
-    class size_budget__NumstatRow["NumstatRow"]
     class size_budget__PlanSize["PlanSize"]
+    class spec_delivery__Screen["Screen"]
+    class spec_delivery__SpecContract["SpecContract"]
     class task__ArmAssignment["ArmAssignment"]
     class task__Carried["Carried"]
     class task__ChangesRequested["ChangesRequested"]
@@ -38,6 +39,7 @@ classDiagram
     class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
     class task__DependencyState["DependencyState"]
+    class task__DesignItemRecord["DesignItemRecord"]
 ```
 
 ## Relaciones con otras páginas

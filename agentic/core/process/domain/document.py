@@ -23,7 +23,7 @@ from typing import Any, get_args
 
 import yaml
 
-from . import size_budget
+from . import size_budget, tracker_items
 from .landing_order import YieldReason, instant
 from .legacy_names import rename_legacy_roles
 from .task import HEAD_YIELDS_MAX, RoleRun
@@ -185,6 +185,13 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
     for key in _HEAD_KEYS:
         state.pop(key, None)
     state.update(_head_fields(data))
+    # The typed tracker items come back through their own parser, so a bad one fails the load
+    # with its reason: nothing is dropped silently.
+    if "tracker_items" in state:
+        try:
+            state["tracker_items"] = tracker_items.parse(state["tracker_items"])
+        except ValueError as error:
+            raise ValueError(f"{source}: {error}") from error
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -391,6 +398,12 @@ def render(
         # by `parse` under the same name: the state's key is the frontmatter's.
         **({"tracker_checklist": e} if (e := state.get("tracker_checklist")) else {}),
         **({"tracker_checklist_posted": e} if (e := state.get("tracker_checklist_posted")) else {}),
+        # The typed tracker items (GH-620), what was done for each and the hashes of the ones
+        # the current pause raised: each written only when non-empty, so a document without
+        # them is byte-identical to one written before. Read back under the same names.
+        **({"tracker_items": e} if (e := state.get("tracker_items")) else {}),
+        **({"tracker_actions_done": e} if (e := state.get("tracker_actions_done")) else {}),
+        **({"tracker_human": e} if (e := state.get("tracker_human")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),
         "prompts": state.get("prompts", {}),

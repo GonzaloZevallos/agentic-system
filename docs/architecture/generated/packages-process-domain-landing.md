@@ -6,7 +6,8 @@ Esta página muestra los módulos del grupo `landing` de `domain` y los imports 
   - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: roles](packages-process-domain-roles.md)
-  - [domain: state](packages-process-domain-state.md)
+  - [domain: state (parte 1)](packages-process-domain-state-1.md)
+  - [domain: state (parte 2)](packages-process-domain-state-2.md)
 
 ```mermaid
 graph TD
@@ -38,5 +39,6 @@ graph TD
     m_domain__plan_revision --> g_domain__state
     m_domain__plan_settlement --> g_domain__roles
     m_domain__plan_settlement --> g_domain__state
+    m_domain__plan_view --> g_domain__roles
     m_domain__plan_view --> g_domain__state
 ```

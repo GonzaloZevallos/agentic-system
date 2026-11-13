@@ -10,6 +10,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: playbook](classes-process-domain-playbook.md)
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
@@ -24,9 +25,6 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
-    class schemas__PlatformAnswers["PlatformAnswers"]
-    class schemas__Reflection["Reflection"]
-    class schemas__Review["Review"]
     class schemas__RoleOutput["RoleOutput"]
     class schemas__Ruling["Ruling"]
     class schemas__SolutionTurn["SolutionTurn"]
@@ -36,9 +34,7 @@ classDiagram
     class schemas__TechPlan["TechPlan"]
     class schemas__Verdict["Verdict"]
     class stack_signals__Signals["Signals"]
-    schemas__PlatformAnswers --|> schemas__RoleOutput
-    schemas__Reflection --|> schemas__RoleOutput
-    schemas__Review --|> schemas__RoleOutput
+    class tracker_items__HumanItem["HumanItem"]
     schemas__Ruling --|> schemas__RoleOutput
     schemas__StackProposal --|> schemas__RoleOutput
     schemas__TechAnswers --|> schemas__RoleOutput
@@ -52,8 +48,8 @@ classDiagram
   - `schemas.Answers` hereda de `schemas.RoleOutput`
   - `schemas.Classification` hereda de `schemas.RoleOutput`
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
-- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
+- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`
   - `schemas.Delivery` hereda de `schemas.RoleOutput`
@@ -67,4 +63,7 @@ classDiagram
   - `schemas.PRD` hereda de `schemas.RoleOutput`
   - `schemas.PlanCritique` hereda de `schemas.RoleOutput`
   - `schemas.PlanSize` hereda de `schemas.RoleOutput`
+  - `schemas.PlatformAnswers` hereda de `schemas.RoleOutput`
+  - `schemas.Reflection` hereda de `schemas.RoleOutput`
+  - `schemas.Review` hereda de `schemas.RoleOutput`
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`

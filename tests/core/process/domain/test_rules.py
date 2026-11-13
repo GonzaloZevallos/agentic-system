@@ -67,6 +67,7 @@ def test_escalation_carries_the_reason_and_its_class_together():
         "escalated": "PjM stopped by the task cap",
         "escalation_class": "cap",
         "escalation_cause": None,
+        "tracker_human": [],
     }
 
 
@@ -4844,3 +4845,77 @@ def test_the_task_and_the_poller_disagree_after_a_retake_with_a_passed_reset():
     # the task's own stated reset has passed.
     assert rules.account_paused([candidate(retaken=True)], _TAP_NOW)
     assert not rules.account_paused([candidate(retaken=False)], _TAP_NOW)
+
+
+TRACKER_ITEMS = [{"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."}]
+
+
+def test_tracker_only_plan_is_true_for_items_only_checklist_only_and_both():
+    assert rules.tracker_only_plan({"tracker_items": TRACKER_ITEMS})
+    assert rules.tracker_only_plan({"tracker_checklist": CHECKLIST})
+    assert rules.tracker_only_plan({"tracker_items": TRACKER_ITEMS, "tracker_checklist": CHECKLIST})
+
+
+def test_tracker_only_plan_is_false_without_either_key_or_next_to_subtasks_or_parts():
+    assert not rules.tracker_only_plan({})
+    assert not rules.tracker_only_plan({"tracker_items": [], "tracker_checklist": []})
+    subtasks = {"a": {"status": "pending"}}
+    assert not rules.tracker_only_plan({"tracker_items": TRACKER_ITEMS, "subtasks": subtasks})
+    assert not rules.tracker_only_plan({"tracker_items": TRACKER_ITEMS, "parts": PARTS})
+
+
+def test_tracker_hash_and_marker_keep_their_values():
+    assert rules.tracker_hash(["  a ", "b"]) == rules.tracker_hash(["a", "b"]) == "7e18f737311b"
+    assert rules.tracker_marker("GH-1", ["a", "b"]) == "<!-- agentic-tracker: GH-1 7e18f737311b -->"
+
+
+def test_escalation_with_tracker_human_writes_the_hashes_and_other_escalations_clear_them():
+    patch = rules.escalation("questions", "Decide.", tracker_human=["aaa", "bbb"])
+    assert patch["tracker_human"] == ["aaa", "bbb"]
+    assert patch["escalation_cause"] is None
+    assert rules.escalation("questions", "Decide.")["tracker_human"] == []
+    assert rules.escalation("failure", "x", cause="delivery_transient")["tracker_human"] == []
+
+
+def test_escalation_refuses_tracker_human_with_another_class_or_with_a_cause():
+    with pytest.raises(ValueError, match="questions"):
+        rules.escalation("failure", "x", tracker_human=["aaa"])
+    with pytest.raises(ValueError, match="cause"):
+        rules.escalation("questions", "x", cause="delivery_transient", tracker_human=["aaa"])
+
+
+def test_a_tracker_human_escalation_is_a_human_pause_and_resuming_it_clears_the_hashes():
+    patch = rules.logged(
+        rules.escalation("questions", "Decide.", tracker_human=["aaa"]), at="2026-11-12T10:00:00Z"
+    )
+    state = {"pause_log": patch["pause_log"], "tracker_human": patch["tracker_human"]}
+    assert rules.auto_resumable(state) is None
+    assert rules.pause_kind(patch["pause_log"]) == "human"
+    assert "tracker_human" not in get_args(task.MechanicalCause)
+    resumed = rules.resumed(state, "Yes.", at="2026-11-12T11:00:00Z")
+    assert resumed["tracker_human"] == []
+    assert resumed["escalation_cause"] is None
+
+
+def test_add_tracker_actions_adds_a_hash_keeps_the_first_record_and_adds_answered_once():
+    first = {"aaa": {"at": "t1", "url": "u1"}}
+    joined = task.add_tracker_actions(None, first)
+    assert joined == first
+    again = task.add_tracker_actions(
+        joined, {"aaa": {"at": "t2", "url": "u2"}, "bbb": {"at": "t3"}}
+    )
+    assert again == {"aaa": {"at": "t1", "url": "u1"}, "bbb": {"at": "t3"}}
+    answered = task.add_tracker_actions(again, {"aaa": {"at": "t9", "answered": "t4"}})
+    assert answered["aaa"] == {"at": "t1", "url": "u1", "answered": "t4"}
+    kept = task.add_tracker_actions(answered, {"aaa": {"at": "t9", "answered": "t5"}})
+    assert kept["aaa"]["answered"] == "t4"
+    assert task.apply(
+        {"tracker_actions_done": first}, {"tracker_actions_done": {"bbb": {"at": "t"}}}
+    )["tracker_actions_done"] == {**first, "bbb": {"at": "t"}}
+
+
+def test_delta_of_tracker_actions_round_trips_through_apply():
+    before = {"tracker_actions_done": {"aaa": {"at": "t1"}}}
+    after = {"tracker_actions_done": {"aaa": {"at": "t1", "answered": "t2"}, "bbb": {"at": "t3"}}}
+    assert task.apply(before, task.delta(before, after)) == after
+    assert task.delta(after, after) == {}

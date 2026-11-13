@@ -10,6 +10,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
   - [domain: machine (parte 1)](classes-process-domain-machine-1.md)
   - [domain: machine (parte 2)](classes-process-domain-machine-2.md)
+  - [domain: machine (parte 3)](classes-process-domain-machine-3.md)
   - [domain: playbook](classes-process-domain-playbook.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
@@ -36,6 +37,7 @@ classDiagram
     class schemas__CapabilityFile["CapabilityFile"]
     class schemas__Classification["Classification"]
     class schemas__Consolidation["Consolidation"]
+    class schemas__Consultation["Consultation"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
@@ -46,3 +48,4 @@ classDiagram
   - `schemas.Answers` hereda de `schemas.RoleOutput`
   - `schemas.Classification` hereda de `schemas.RoleOutput`
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
+  - `schemas.Consultation` hereda de `schemas.RoleOutput`
