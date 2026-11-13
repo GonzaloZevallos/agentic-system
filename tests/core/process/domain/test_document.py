@@ -1332,6 +1332,7 @@ _LANDING_SCALAR_KEYS = frozenset(
         "head_charged_s",
         "head_seen_at",
         "head_yielded_at",
+        "lane_recorded",
     }
 )
 _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
