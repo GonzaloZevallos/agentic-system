@@ -1952,3 +1952,54 @@ def test_ci_ghost_dispatch_roundtrips_through_the_frontmatter_and_is_absent_when
     text = document.render(_speculative_state(ci_ghost_dispatch=fact))
     assert document.parse(text)["ci_ghost_dispatch"] == fact
     assert "ci_ghost_dispatch" not in document.render(_speculative_state())
+
+
+_ESCALATED = {
+    "escalated": "Interview stopped: 1 question for you",
+    "escalation_class": "questions",
+    "questions_for_human": ["Which plan?"],
+    "tracker_human": ["0123456789ab"],
+}
+
+
+@pytest.mark.parametrize("state", [{}, _ESCALATED])
+def test_a_document_without_assumptions_or_spec_cause_is_byte_identical(state):
+    """GH-594: both keys are written only when set, so a document of any task without a spec
+    renders and loads back unchanged."""
+    text = document.render(_bare(**state))
+    assert "assumptions" not in text and "spec_cause" not in text
+    assert document.render(_bare(**state, assumptions=[], spec_cause=None)) == text
+    loaded = document.parse(text)
+    assert "assumptions" not in loaded and "spec_cause" not in loaded
+    assert document.render(loaded | {"sections": {}}) == text
+
+
+def test_assumptions_and_spec_cause_round_trip_through_the_document():
+    rows = [
+        {"role": "Developer", "text": "The empty state shows no table"},
+        {"role": "Tech Lead", "text": "Dates use the local zone"},
+    ]
+    text = document.render(_bare(**_ESCALATED, assumptions=rows, spec_cause="conflict"))
+    loaded = document.parse(text)
+    assert loaded["assumptions"] == rows
+    assert loaded["spec_cause"] == "conflict"
+    assert document.render(loaded | {"sections": {}}) == text
+
+
+def test_a_hand_edited_document_loads_without_its_bad_assumption_rows():
+    """Rejected input: a row the rule refuses is dropped on load, and duplicates by canonical
+    text keep the first row."""
+    raw = document.render(_bare())
+    edited = raw.replace(
+        "\n---\n",
+        "\nassumptions:\n"
+        "- {role: Developer, text: keep me}\n"
+        '- {role: Developer, text: "two\\nlines"}\n'
+        f"- {{role: Developer, text: {'x' * 241}}}\n"
+        "- {role: Tech Lead, text: '  keep   me '}\n"
+        "- {role: Developer}\n"
+        "- not a row\n"
+        "---\n",
+        1,
+    )
+    assert document.parse(edited)["assumptions"] == [{"role": "Developer", "text": "keep me"}]

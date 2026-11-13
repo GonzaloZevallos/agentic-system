@@ -71,6 +71,7 @@ from .roles import (
 from .schemas import LIGHT_SUBTASK_CAP, FitDecision, TaskType
 from .scratch import INODE_FLOOR, SpaceReading
 from .size_budget import LEGACY_FILES, UNPROVEN_RATIO, PlanSize
+from .spec_delivery import SpecContract
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -110,6 +111,7 @@ from .task import (
     ReviewKind,
     RoleRun,
     SettledRow,
+    SpecEscalationCause,
     Status,
     Subtask,
     TaskInput,
@@ -746,6 +748,8 @@ def escalation(
     *,
     cause: MechanicalCause | None = None,
     tracker_human: Sequence[str] = (),
+    spec: SpecContract | None = None,
+    spec_cause: SpecEscalationCause | None = None,
 ) -> EscalationPatch:
     """The patch that escalates the task: `escalated`, the text for the human, and
     `escalation_class`, the closed reason `agentic.task.paused` groups pauses by. The
@@ -762,7 +766,25 @@ def escalation(
     raised. It is written only when it is not empty: any other escalation leaves the key out, so
     the pending hashes survive it through the `last` reducer and only `resumed` clears them. It
     is not a `MechanicalCause`: the pause stays a human's. It is refused with another class or
-    with a `cause`, so a mechanical pause never carries a human's items."""
+    with a `cause`, so a mechanical pause never carries a human's items.
+
+    `spec` (GH-594) is the task's `state.get("spec")`; the graph's empty default (`{}`) is no
+    spec, like `None`. Every call site that can raise a
+    `questions` about the spec's behaviour passes it. With a spec, a `questions` escalation
+    needs a `spec_cause` (`contradiction`, `conflict` or `data_loss`), still under class
+    `questions`: it is no new class and no `MechanicalCause`. The key `spec_cause` is written
+    only when a spec is given (`None` for any other pause, so a cause cannot outlive its
+    pause); without a spec the patch is exactly the keys above. `spec_cause` is refused
+    with another class, with a `cause`, or without a spec: a programming error, `ValueError`."""
+    has_spec = bool(spec)
+    if has_spec and cls == "questions" and spec_cause is None:
+        raise ValueError("a spec delivery's questions escalation needs a spec_cause")
+    if spec_cause is not None and cls != "questions":
+        raise ValueError(f"spec_cause belongs to a questions escalation, not {cls!r}")
+    if spec_cause is not None and cause is not None:
+        raise ValueError("spec_cause is a human's pause: it takes no mechanical cause")
+    if spec_cause is not None and not has_spec:
+        raise ValueError("spec_cause belongs to a spec delivery: there is no spec")
     if tracker_human and cls != "questions":
         raise ValueError(f"tracker_human belongs to a questions escalation, not {cls!r}")
     if tracker_human and cause is not None:
@@ -774,6 +796,8 @@ def escalation(
     }
     if tracker_human:
         patch["tracker_human"] = list(tracker_human)
+    if has_spec:
+        patch["spec_cause"] = spec_cause
     return patch
 
 
@@ -2997,7 +3021,9 @@ def combined_return(state: TaskState, patches: Mapping[Verifier, TaskState]) -> 
             reason = entry.get("reason", "")
             if other != name and reason not in text:
                 text = f"{text}\n\n{other}: {reason}"
-        merged |= escalation(patch.get("escalation_class") or "failure", text)
+        merged |= escalation(
+            patch.get("escalation_class") or "failure", text, spec=state.get("spec")
+        )
         merged["status"] = WAITING_ON_HUMAN
         break
     final = patches.get("final_validation")
@@ -3348,6 +3374,8 @@ def resumed(
         # counts toward what the poller may retry on its own next time.
         "pause_log": [resumed_entry(at=at)],
     }
+    if state.get("spec"):
+        patch["spec_cause"] = None
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
     decided = bool(decision and decision.strip())

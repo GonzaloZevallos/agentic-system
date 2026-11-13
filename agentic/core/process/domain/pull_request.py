@@ -13,11 +13,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeIs, get_args
 
+from .task import assumption_text
+
 # Under GitHub's 65,536 with room for `Closes #N\n\n` (the tracker's own prefix).
 PR_BODY_MAX = 60_000
 
 TRUNCATED = "(truncated; full text in the task document)"
 POINTER_HEADING = "Task document"
+ASSUMPTIONS_HEADING = "Assumptions"
+# The most delivery-assumption rows the body writes; the rest are counted, not shown.
+ASSUMPTIONS_SHOWN = 20
 _SEPARATOR = "\n\n"
 
 
@@ -129,6 +134,7 @@ def bounded_body(
     *,
     preface: str = "",
     required: str = "",
+    assumptions: Sequence[str] = (),
 ) -> BoundedBody:
     """`parts` are `(heading, text)` pairs rendered as `## heading` sections. A body
     within `limit` is exactly their join, or `fallback` when there are none. A longer one
@@ -144,14 +150,30 @@ def bounded_body(
     its own block: it counts against `limit` and is never trimmed -- the sections give
     way to it. With `""` the result is exactly what it was before it existed. A `required`
     line (the product's `Breaking-API:` line) is reserved the same way, but it is not added:
-    the caller puts it in front (`with_required_lines`) and the sections give way to its room."""
+    the caller puts it in front (`with_required_lines`) and the sections give way to its room.
+
+    The `assumptions` (a spec delivery's, GH-594) are the texts of its rows: after the preface
+    they lead the sections as an `## Assumptions` block of `Assumption: <text>` lines
+    (`_assumptions_block`), reserved like the preface so the sections give way and the block is
+    never dropped. With `()`, or only rows `assumption_text` refuses, the result is exactly what
+    it was before they existed."""
     if required:
         room = limit - github_length(required) - len(_SEPARATOR)
-        return bounded_body(parts, fallback, pointer, room, preface=preface)
+        return bounded_body(
+            parts, fallback, pointer, room, preface=preface, assumptions=assumptions
+        )
     if preface:
         room = limit - github_length(preface) - len(_SEPARATOR)
-        inner = bounded_body(parts, fallback, pointer, room)
+        inner = bounded_body(parts, fallback, pointer, room, assumptions=assumptions)
         return BoundedBody(f"{preface}{_SEPARATOR}{inner.text}", inner.bounded, inner.omitted)
+    if assumptions:
+        headings = tuple(heading for heading, _ in parts)
+        reserved = github_length(_pointer_block(pointer, headings)) + len(_SEPARATOR)
+        block = _assumptions_block(assumptions, limit - reserved - len(_SEPARATOR))
+        if block:
+            room = limit - github_length(block) - len(_SEPARATOR)
+            inner = bounded_body(parts, fallback, pointer, room)
+            return BoundedBody(f"{block}{_SEPARATOR}{inner.text}", inner.bounded, inner.omitted)
     rendered = [f"## {heading}\n\n{text}" for heading, text in parts]
     full = _SEPARATOR.join(rendered) or fallback
     if github_length(full) <= limit:
@@ -175,6 +197,26 @@ def bounded_body(
             kept.append(trimmed)
     blocks = [*kept, _pointer_block(pointer, omitted)]
     return BoundedBody(_SEPARATOR.join(blocks), True, omitted)
+
+
+def _assumptions_block(texts: Sequence[str], room: int) -> str:
+    """The `## Assumptions` block for the rows `assumption_text` accepts (first of each canonical
+    text), `""` when there are none: at most `ASSUMPTIONS_SHOWN` whole rows, as many as fit in
+    `room` together with the heading and the closing line `…and N more in the task document`,
+    which counts the rows left out and is written whenever there are any. When the heading and
+    the closing line do not fit together, only the closing line is."""
+    rows = list(dict.fromkeys(c for c in map(assumption_text, texts) if c is not None))
+    lines = [f"Assumption: {row}" for row in rows]
+    if not lines:
+        return ""
+    for shown in range(min(len(lines), ASSUMPTIONS_SHOWN), -1, -1):
+        closing = (
+            [f"…and {len(lines) - shown} more in the task document"] if shown < len(lines) else []
+        )
+        block = f"## {ASSUMPTIONS_HEADING}\n\n" + "\n".join([*lines[:shown], *closing])
+        if github_length(block) <= room:
+            return block
+    return f"…and {len(lines)} more in the task document"
 
 
 def _pointer_block(pointer: Callable[[tuple[str, ...]], str], omitted: tuple[str, ...]) -> str:

@@ -55,6 +55,7 @@ WALKERS = (
     "tests/core/process/application/test_pause_log_guard.py",
     "tests/core/process/domain/test_reaping.py",
     "tests/core/process/domain/test_returns.py",
+    "tests/core/process/domain/test_escalation_spec_guard.py",
     "tests/core/process/application/test_release.py",
     "tests/core/process/application/test_prompt_placeholder_scan.py",
 )

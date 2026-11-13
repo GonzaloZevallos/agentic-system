@@ -452,7 +452,16 @@ def _bounded(state: TaskState, relative: str, *, preface: str, required: str = "
             f"`{relative}`; the system does not version it."
         )
 
-    return bounded_body(_parts(state), state["title"], pointer, preface=preface, required=required)
+    # Delivery assumptions are a spec delivery's only: without `state["spec"]` the body is as ever.
+    assumptions = [row["text"] for row in state.get("assumptions", [])] if state.get("spec") else ()
+    return bounded_body(
+        _parts(state),
+        state["title"],
+        pointer,
+        preface=preface,
+        required=required,
+        assumptions=assumptions,
+    )
 
 
 def _parts(state: TaskState) -> list[tuple[str, str]]:

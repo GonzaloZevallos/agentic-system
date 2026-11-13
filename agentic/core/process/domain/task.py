@@ -38,6 +38,7 @@ from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
 from .size_budget import ActualSize, PlanSize
+from .spec_delivery import SpecContract
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 from .task_path import Size as TaskSize
@@ -345,6 +346,41 @@ def add_flakes(existing: list[FlakeRecord], new: list[FlakeRecord]) -> list[Flak
     for record in joined.values():
         record["tests"] = sorted(record["tests"])[:FAILED_IDS_MAX]
     return [joined[key] for key in sorted(joined)]
+
+
+SpecEscalationCause = Literal["contradiction", "conflict", "data_loss"]
+ASSUMPTION_MAX_CHARS = 240
+
+
+class AssumptionRow(TypedDict):
+    """One delivery assumption (GH-594): the role that made it and its canonical text."""
+
+    role: str
+    text: str
+
+
+def assumption_text(raw: str) -> str | None:
+    """The canonical text of a delivery assumption, or `None` when `raw` is not one: it holds a
+    line break, or its whitespace-collapsed form is empty or longer than 240 characters. The
+    only place the rule is written: the reducer, the document loader and the pull request body
+    renderer all call it."""
+    if "\n" in raw or "\r" in raw:
+        return None
+    text = " ".join(raw.split())
+    return text if 0 < len(text) <= ASSUMPTION_MAX_CHARS else None
+
+
+def add_assumptions(existing: list[AssumptionRow], new: list[AssumptionRow]) -> list[AssumptionRow]:
+    """The assumptions of `existing` and `new` as one list in order, one row per canonical text
+    (the first row and its role kept). A row `assumption_text` refuses raises `ValueError`: a
+    writer that sends one has a bug, unlike a hand-edited document, whose loader drops it."""
+    joined: dict[str, AssumptionRow] = {}
+    for item in (*existing, *new):
+        text = assumption_text(item["text"])
+        if text is None:
+            raise ValueError("assumption text must be 1-240 characters on one line")
+        joined.setdefault(text, {"role": item["role"], "text": text})
+    return list(joined.values())
 
 
 TrackerTarget = Literal["comment", "label"]
@@ -951,6 +987,8 @@ class EscalationPatch(TypedDict):
     escalation_cause: NotRequired[MechanicalCause | None]
     # The hashes of the typed tracker items a `questions` pause raised (GH-620), `[]` otherwise.
     tracker_human: NotRequired[list[str]]
+    # Why a spec delivery's `questions` pause was raised (GH-594), written only with a spec.
+    spec_cause: NotRequired[SpecEscalationCause | None]
 
 
 class SlicesClosedPatch(TypedDict):
@@ -1741,6 +1779,15 @@ class TaskState(TaskInput, total=False):
     # The hashes of the items the current `questions` pause raised (GH-620); `rules.escalation`
     # writes it and `rules.resumed` clears it. Not a `MechanicalCause`: the pause is a human's.
     tracker_human: Annotated[list[str], last]
+    # Why a spec delivery's `questions` pause was raised (GH-594): written only by
+    # `rules.escalation`, with a spec in the state; never a `MechanicalCause`.
+    spec_cause: Annotated[SpecEscalationCause | None, last]
+    # The spec a delivery is built against (GH-594). Nothing sets it yet; its document
+    # round-trip belongs to the part that does.
+    spec: Annotated[SpecContract, last]
+    # The delivery assumptions (GH-594), `add_assumptions`: one row per canonical text. Read
+    # with `.get("assumptions", [])`: a document written before this field has none.
+    assumptions: Annotated[list[AssumptionRow], add_assumptions]
     # The issue URL of each part already opened, keyed by the part's number as text: written
     # part by part, so a `gh` cut in the middle resumes without opening a part twice.
     split_issues: Annotated[dict[str, str], merge]
@@ -2106,6 +2153,10 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 or any(t not in old_tests[_flake_key(r)] for t in r["tests"])
             ]:
                 patch[key] = grown
+        elif reducer is add_assumptions:
+            held_texts = {r["text"] for r in old}
+            if fresh_rows := [r for r in value if r["text"] not in held_texts]:
+                patch[key] = fresh_rows
         elif reducer is add_tracker_failures:
             known = {(r["target"], r["cls"]) for r in old}
             if fresh := [r for r in value if (r["target"], r["cls"]) not in known]:

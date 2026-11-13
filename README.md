@@ -299,6 +299,25 @@ decisión: resetear el contador sin nada nuevo repite la misma devolución.
 Esto exige estado durable del lado del sistema: el grafo se frena, el estado sobrevive al
 proceso en un checkpointer, y la respuesta del humano lo reanuda donde estaba (ADR-0003).
 
+### Supuestos de entrega (GH-594)
+
+En una entrega de especificación, una duda sobre el comportamiento que no cambia el contrato
+no escala: queda como **supuesto de entrega**, una fila `{role, text}` en
+`state["assumptions"]`. El texto tiene a lo sumo 240 caracteres y ningún salto de línea; esa
+regla vive solo en `assumption_text` (`domain/task.py`), y el reductor `add_assumptions`, el
+cargador del documento de tarea y el cuerpo del pull request la llaman, sin repetir el límite.
+
+Lo que sí escala es una contradicción de la especificación consigo misma, un conflicto con el
+producto o una pérdida de datos. Es un escalado de clase `questions` con un campo cerrado
+`spec_cause` (`contradiction`, `conflict`, `data_loss`) que solo construye `rules.escalation`.
+No hay clase nueva ni causa mecánica: la pausa sigue siendo del humano. Con una especificación
+en el estado, `rules.escalation` rechaza un `questions` sin `spec_cause`; sin ella, el parche,
+el documento y el cuerpo del pull request son idénticos a los de antes.
+
+Las preguntas sobre la mecánica de la entrega (aterrizaje, CI, colisión de ADR) no llevan
+`spec_cause`: están eximidas en la lista de permitidos del test AST, cada una con su razón.
+Todo esto queda inerte hasta que la parte 4b ponga `state["spec"]`.
+
 ### Pausar una corrida (GH-355, GH-466)
 
 Para frenar una corrida `agentic run` o `agentic resume` (por ejemplo para bajar la carga
