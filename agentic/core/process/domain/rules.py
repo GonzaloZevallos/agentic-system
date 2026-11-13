@@ -6433,11 +6433,10 @@ _PARTS_REMEDY = (
 # appends it, so the three never drift. A multi-line passage, indented like the prompt line
 # its placeholder sits on.
 TRACKER_WITH_PARTS = (
-    "When you split, tracker work for this task stays in `tracker_checklist` and the split\n"
-    "   posts it on this issue. The system itself re-points to the last part every open issue\n"
-    "   whose body has a line, outside a code fence, saying `Blocked by: #<this issue>`, so\n"
-    "   do not write those items. Add only other tracker work, such as native blockers you\n"
-    "   know about. A part's own tracker work goes in that part's body."
+    "A plan with parts carries no `tracker_items`. The system itself re-points to the last\n"
+    "   part every open issue whose body has a line, outside a code fence, saying\n"
+    "   `Blocked by: #<this issue>`, so do not write those items. A part's own tracker work\n"
+    "   goes in that part's body."
 )
 _PARTS_STEP = (
     "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"

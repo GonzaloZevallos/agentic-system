@@ -250,38 +250,65 @@ async def test_both_rendered_tech_lead_prompts_teach_the_tracker_only_rule(task_
 
     prompt = " ".join(runner.calls[0]["system_prompt"].split())
     assert "task changes at least one file unless its only work is on the tracker" in prompt
-    assert "`tracker_checklist`, no subtasks, no parts and `estimated_files: 0`" in prompt
+    assert "`tracker_items`, no subtasks, no parts and `estimated_files: 0`" in prompt
     assert "Tracker work never becomes a subtask" in prompt
     assert "every task changes one" not in prompt
 
 
-async def test_a_tracker_only_plan_is_delivered_with_its_checklist_and_no_subtasks(tmp_path):
-    items = ["Post the verdict table on #307", "Close the follow-ups that are done"]
-    runner = ScriptedRunner(tech_lead=[planned_tracker_only(items)])
+ITEM1 = {"kind": "human", "question": "Post the verdict on #307?", "recommendation": "Yes."}
+ITEM2 = {"kind": "human", "question": "Close the done follow-ups?", "recommendation": "Close."}
+
+
+async def test_a_tracker_only_plan_is_delivered_with_its_items_and_no_subtasks(tmp_path):
+    runner = ScriptedRunner(tech_lead=[planned_tracker_only([ITEM1, ITEM2])])
     patch = await plan(TASK, cold(tmp_path), memory_ports(runner))
 
     assert patch["status"] == "planned"
-    assert patch["tracker_checklist"] == items
+    assert patch["tracker_items"] == [ITEM1, ITEM2]
+    assert "tracker_checklist" not in patch
     assert patch["estimate"] == {"cost_usd": 2.0, "files": 0}
     assert "subtasks" not in patch and "parts" not in patch
-    assert "### Tracker work for the human" in patch["sections"]["Tech Lead"]
+    assert "### Decisions for the owner" in patch["sections"]["Tech Lead"]
     assert "### Subtasks" not in patch["sections"]["Tech Lead"]
 
 
-async def test_a_checklist_next_to_subtasks_is_stored_and_the_subtasks_still_are(tmp_path):
-    runner = ScriptedRunner(tech_lead=[planned(tracker_checklist=["Close #9"])])
+async def test_items_next_to_subtasks_are_stored_and_the_subtasks_still_are(tmp_path):
+    runner = ScriptedRunner(tech_lead=[planned(tracker_items=[ITEM1])])
     patch = await plan(TASK, cold(tmp_path), memory_ports(runner))
 
-    assert patch["tracker_checklist"] == ["Close #9"]
+    assert patch["tracker_items"] == [ITEM1]
     assert list(patch["subtasks"]) == ["api"]
-    assert "### Tracker work for the human" in patch["sections"]["Tech Lead"]
+    assert "### Decisions for the owner" in patch["sections"]["Tech Lead"]
     assert "### Subtasks" in patch["sections"]["Tech Lead"]
 
 
-async def test_a_plan_without_a_checklist_stores_none_and_adds_no_block(tmp_path):
+async def test_a_plan_without_items_writes_an_empty_list_and_adds_no_block(tmp_path):
     patch = await plan(TASK, cold(tmp_path), memory_ports(ScriptedRunner(tech_lead=[planned()])))
+    assert patch["tracker_items"] == []
     assert "tracker_checklist" not in patch
-    assert "Tracker work" not in patch["sections"]["Tech Lead"]
+    assert "Decisions for the owner" not in patch["sections"]["Tech Lead"]
+
+
+async def test_a_replan_without_items_clears_the_ones_an_earlier_plan_left(tmp_path):
+    from agentic.core.process.domain import task, tracker_items
+
+    state = task.apply(TASK, {"tracker_items": [ITEM1]})
+    assert tracker_items.escalate_human(state, "t")  # the earlier plan would escalate
+    patch = await plan(state, cold(tmp_path), memory_ports(ScriptedRunner(tech_lead=[planned()])))
+    state = task.apply(state, patch)
+    assert state["tracker_items"] == []
+    assert "Decisions for the owner" not in state["sections"]["Tech Lead"]
+    assert tracker_items.escalate_human(state, "t") == {}
+
+
+async def test_a_fresh_plan_with_the_legacy_key_is_refused_naming_tracker_items(tmp_path):
+    legacy = planned()
+    legacy.structured_output["tracker_checklist"] = ["Close #9"]
+    runner = ScriptedRunner(tech_lead=[legacy, planned()])
+    patch = await plan(TASK, cold(tmp_path), memory_ports(runner))
+
+    assert "tracker_items" in patch["failures"][0]["error"]
+    assert "tracker_checklist" not in patch
 
 
 # A task that is a part of a split (ADR-0054, GH-338 and GH-346): the Tech Lead is told so,
@@ -394,15 +421,12 @@ async def test_a_task_that_is_not_a_part_over_the_line_by_reference_is_still_ref
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
 async def test_the_refusal_of_parts_on_a_part_says_subtasks_only(arm, tmp_path):
-    """GH-346: parts plus a checklist on a part. The retry reads the rule, not 'write parts'."""
-    with_checklist = planned_parts()
-    with_checklist.structured_output["tracker_checklist"] = ["Close the old board."]
-    runner, cfg = arm_of(arm, tmp_path, with_checklist, planned())
+    """GH-346: parts on a part. The retry reads the rule, not 'write parts'."""
+    runner, cfg = arm_of(arm, tmp_path, planned_parts(), planned())
     patch = await plan(PART, cfg, memory_ports(runner))
 
     error = patch["failures"][0]["error"]
     assert "part 2 of GH-316" in error and "write subtasks only" in error
-    assert "tracker_checklist" not in error
     assert runner.slugs.count("tech_lead") == 2
     assert list(patch["subtasks"]) == ["api"]
 

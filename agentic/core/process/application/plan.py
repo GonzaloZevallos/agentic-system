@@ -31,6 +31,7 @@ from ..domain import (
     schemas,
     size_budget,
     task_path,
+    tracker_items,
 )
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
@@ -193,6 +194,8 @@ async def _interview_and_plan(
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
+        tracker_items_max=tracker_items.MAX_ITEMS,
+        tracker_field_max=tracker_items.MAX_FIELD_CHARS,
     )
     output, floored = _floored(output, interviewed, history)
     delivered = apply(
@@ -477,6 +480,8 @@ async def _cold_draft(
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),
         tracker_with_parts=rules.TRACKER_WITH_PARTS,
+        tracker_items_max=tracker_items.MAX_ITEMS,
+        tracker_field_max=tracker_items.MAX_FIELD_CHARS,
     )
 
 
@@ -652,11 +657,12 @@ def _delivered(
         # A promotion the Tech Lead asks for (GH-591): stored, never applied here; the plan
         # node's serialized system step applies it after the model ran.
         written.update(promotion.plan_requested(written, section, output.data.get("promote")))
-        if output.data.get("tracker_checklist"):
-            # What the human must do on the tracker (GH-336); it may sit next to subtasks.
-            written["tracker_checklist"] = list(output.data["tracker_checklist"])
-            written["sections"][section] = plan_view.with_tracker_block(
-                written["sections"][section], written["tracker_checklist"]
+        # Always written, an empty list included: a re-plan clears the items an earlier plan
+        # left (GH-663). The block is added only when there are items.
+        written["tracker_items"] = list(output.data.get("tracker_items") or [])
+        if written["tracker_items"]:
+            written["sections"][section] = plan_view.with_tracker_items_block(
+                written["sections"][section], written["tracker_items"]
             )
         reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
         written["experiment"] = experiment_snapshot(cfg, reviewer_model)

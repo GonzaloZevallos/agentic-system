@@ -3474,7 +3474,8 @@ def test_the_last_parts_are_the_ones_no_other_part_depends_on():
 
 def test_tracker_with_parts_states_where_the_work_goes():
     text = rules.TRACKER_WITH_PARTS
-    assert "tracker_checklist" in text and "Blocked by:" in text
+    assert "tracker_items" in text and "Blocked by:" in text
+    assert "tracker_checklist" not in text
     assert "do not write" in text and "part's own" in text
     assert "first line" not in text and "outside a code fence" in text
     assert "re-points" in text and "close #" not in text

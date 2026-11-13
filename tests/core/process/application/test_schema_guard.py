@@ -32,3 +32,23 @@ def test_denies_at_most_once_per_instance_then_lets_the_invalid_shape_through():
     # this run ends up instead, not a second denial that would only cost a turn).
     assert guard(INVALID) is None
     assert guard.refusals == 1
+
+
+def test_the_guard_denies_a_mention_in_a_tracker_item_and_names_the_way_out():
+    """GH-663: the denial the Tech Lead reads carries the word mention and the item form."""
+    from agentic.core.process.domain import schemas
+
+    plan = {
+        "markdown": "m",
+        "estimated_cost_usd": 1,
+        "estimated_files": 0,
+        "hand_files": 0,
+        "hand_lines": 0,
+        "test_lines": 0,
+        "ci_required": [],
+        "ci_none_reason": "The work is on the tracker.",
+        "tracker_items": [{"kind": "human", "question": "ask @bob", "recommendation": "Yes."}],
+    }
+    reason = RoleSchemaGuard(schemas.TechPlan, {})(plan)
+    assert reason is not None
+    assert "mention" in reason and "{kind: human, question, recommendation}" in reason

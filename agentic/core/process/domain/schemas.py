@@ -23,11 +23,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 
-from . import ci_workflow, plan_view, size_budget
+from . import ci_workflow, plan_view, size_budget, tracker_items
 from .ci_workflow import WorkflowNames
 from .cost_history import History, Raise, bucket_median, raised_estimate, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
@@ -42,6 +42,7 @@ from .task import (
     Severity,
 )
 from .task_path import TEXT_MAX, Size, validate_request
+from .tracker_items import TrackerItem
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -641,12 +642,14 @@ class TechPlan(RoleOutput):
         "measure, each with its volume and budgets. Empty when not convened",
     )
 
-    tracker_checklist: list[str] = Field(
+    tracker_items: list[TrackerItem] = Field(
         default_factory=list,
-        description="What the human must do on the issue tracker (post a verdict, close or "
-        "retitle issues), one line per item. Never a subtask: no role has `gh`. A task whose "
-        "only work is this has no subtasks, no parts and `estimated_files: 0`; it may also sit "
-        "next to subtasks. Empty when there is none",
+        description="What only the owner can decide on the issue tracker, as items "
+        f"`{{kind: human, question, recommendation}}`: at most {tracker_items.MAX_ITEMS}, each "
+        f"field one line of at most {tracker_items.MAX_FIELD_CHARS} characters, no `@` mention "
+        "and no `<!--`, `-->` or `{{`. Never a subtask: no role has `gh`. A task whose only "
+        "work is this has no subtasks, no parts and `estimated_files: 0`; it may also sit next "
+        "to subtasks, never next to `parts`. Empty when there is none",
     )
 
     ci_required: list[str] = Field(
@@ -719,10 +722,31 @@ class TechPlan(RoleOutput):
             raise ValueError("the plan names a performance scenario twice")
         return self
 
+    @model_validator(mode="before")
+    @classmethod
+    def _no_legacy_checklist(cls, data: Any) -> Any:
+        # The key is no longer part of the plan, and pydantic would drop it silently: a fresh plan
+        # that still carries one is refused, so the work it names is not lost (GH-663).
+        if isinstance(data, dict) and data.get("tracker_checklist"):
+            raise ValueError(
+                "tracker_checklist is no longer a plan field: write the tracker work as "
+                f"tracker_items, {{kind: human, question, recommendation}} each, at most "
+                f"{tracker_items.MAX_ITEMS}"
+            )
+        return data
+
+    @field_validator("tracker_items", mode="before")
+    @classmethod
+    def _items_parse(cls, value: Any) -> Any:
+        return [] if value is None else tracker_items.parse(value)
+
     @model_validator(mode="after")
-    def _checklist_lines(self) -> TechPlan:
-        for item in self.tracker_checklist:
-            _one_line(item, "a tracker checklist item")
+    def _items_never_with_parts(self) -> TechPlan:
+        if self.tracker_items and self.parts:
+            raise ValueError(
+                "tracker_items and parts never together: a plan with parts builds nothing "
+                "itself and carries no items; drop tracker_items (a part carries its own)"
+            )
         return self
 
 
@@ -1116,13 +1140,13 @@ def _terminal_check(parts: list[dict[str, Any]]) -> None:
 
 def _tracker_only_check(data: dict[str, Any]) -> None:
     """Shape (C): the plan's only work is on the issue tracker. It changes no file, so a
-    positive `estimated_files` contradicts the checklist. Its cost has no fit to judge; a
+    positive `estimated_files` contradicts the items. Its cost has no fit to judge; a
     figure below what the task spent is raised by the plan stage, never refused (GH-529)."""
     if data["estimated_files"] != 0:
         raise ValueError(
             f"a plan whose only work is on the tracker changes no file: estimated_files must "
             f"be 0, this one says {data['estimated_files']}. If the task changes files, write "
-            "subtasks and keep the checklist next to them"
+            "subtasks and keep the items next to them"
         )
 
 
@@ -1343,11 +1367,10 @@ def plan_check_for(
     fits -- or a waived fit. (B) parts, no subtasks, an estimate that does not fit, and no
     waiver. `rules.estimate_fits` decides which, over the history's reference for the
     bucket of the plan's own size: its subtasks in (A), its parts in (B). (C) no subtasks,
-    no parts, a non-empty `tracker_checklist` and `estimated_files == 0` (GH-336): the
-    only work is on the issue tracker, so there is nothing to fit and no reference to
-    consult. A checklist next to subtasks (A) or next to parts (B) is allowed and changes
-    nothing here: its items were checked one by one when the plan was read, and next to parts
-    the split posts it on the issue (GH-350).
+    no parts, non-empty `tracker_items` and `estimated_files == 0` (GH-336): the only work
+    is on the issue tracker, so there is nothing to fit and no reference to consult. Items
+    next to subtasks (A) are allowed and change nothing here: `parse` checked them one by one
+    when the plan was read. Items next to parts (B) are refused by `TechPlan` (GH-663).
 
     A task that is itself a part (`part_of`, the `(task id, part, depth)` of its marker)
     splits again like any task while its depth is under `rules.MAX_SPLIT_DEPTH` (GH-592):
@@ -1400,7 +1423,7 @@ def plan_check_for(
                 "is split into parts and builds nothing itself, so drop `subtasks` (the "
                 f"parts carry the work). {TRACKER_WITH_PARTS}"
             )
-        if data.get("tracker_checklist") and not subtasks and not parts:
+        if data.get("tracker_items") and not subtasks and not parts:
             _tracker_only_check(data)
             return
         if parts:

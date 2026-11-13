@@ -8,6 +8,7 @@ for the owner with the author's recommendation, which reaches a human as an esca
 is added to `KINDS` only in the diff that adds the code that performs it."""
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypedDict
 
@@ -25,7 +26,15 @@ TrackerItem = HumanItem
 
 KINDS: frozenset[str] = frozenset({"human"})
 
+# The one definition of the limits: no other module or prompt states them as its own literal.
+MAX_ITEMS = 5
+MAX_FIELD_CHARS = 240
+
 _FIELDS = ("question", "recommendation")
+_MARKERS = ("<!--", "-->", "{{")
+# An `@` that starts a word: `actions/checkout@v4`, `pkg@1.2` and `a@b.com` have a word
+# character, a `/` or a `.` before it and pass.
+_MENTION = re.compile(r"(?<![\w/.])@[A-Za-z]")
 _WRITE_AS_HUMAN = "write the item as {kind: human, question, recommendation}"
 
 
@@ -49,16 +58,37 @@ def item_hash(item: TrackerItem) -> str:
 
 
 def parse(raw: object) -> list[TrackerItem]:
-    """The items of `raw`, a list of mappings, as new dicts holding exactly the three keys.
-    Raises `ValueError` on anything else, naming the way out: nothing is dropped silently."""
+    """The items of `raw`, a list of mappings, as new dicts holding exactly the three keys, with
+    stripped strings (so the stored value, its hash and the posted line are one string).
+    Raises `ValueError` on anything else, naming the way out: nothing is dropped silently.
+
+    The checks run in a fixed order: a list, at most `MAX_ITEMS`, each item in turn, and last
+    that no `item_hash` repeats. This is the only validator of item text: it reaches a comment
+    or a question for the owner only after passing here (GH-663)."""
     if not isinstance(raw, list):
         raise ValueError(f"tracker_items must be a list of items; {_WRITE_AS_HUMAN}")
-    return [_parse_item(entry) for entry in raw]
+    if len(raw) > MAX_ITEMS:
+        raise ValueError(
+            f"tracker_items holds {len(raw)} items, at most {MAX_ITEMS} are allowed: keep the "
+            f"decisions only the owner can take; {_WRITE_AS_HUMAN}"
+        )
+    items = [_parse_item(entry) for entry in raw]
+    seen: set[str] = set()
+    for item in items:
+        if (key := item_hash(item)) in seen:
+            raise ValueError(
+                f"tracker_items names the item {item['question']!r} twice: drop the repeat; "
+                f"{_WRITE_AS_HUMAN}"
+            )
+        seen.add(key)
+    return items
 
 
 def _parse_item(entry: object) -> TrackerItem:
     if not isinstance(entry, Mapping):
         raise ValueError(f"a tracker item must be a mapping, not {entry!r}; {_WRITE_AS_HUMAN}")
+    if extra := sorted(str(key) for key in entry if key not in ("kind", *_FIELDS)):
+        raise ValueError(f"a tracker item has no key {', '.join(extra)}; {_WRITE_AS_HUMAN}")
     kind = entry.get("kind")
     if not isinstance(kind, str) or kind not in KINDS:
         raise ValueError(f"unknown tracker item kind {kind!r}; {_WRITE_AS_HUMAN}")
@@ -68,12 +98,31 @@ def _parse_item(entry: object) -> TrackerItem:
         if not isinstance(value, str):
             raise ValueError(f"a tracker item is missing its {field}; {_WRITE_AS_HUMAN}")
         _one_line(value, f"a tracker item's {field}")
-        texts[field] = value
+        texts[field] = _field_text(value.strip(), field)
     return {
         "kind": "human",
         "question": texts["question"],
         "recommendation": texts["recommendation"],
     }
+
+
+def _field_text(text: str, field: str) -> str:
+    if len(text) > MAX_FIELD_CHARS:
+        raise ValueError(
+            f"a tracker item's {field} is {len(text)} characters, at most {MAX_FIELD_CHARS} "
+            f"are allowed: say it shorter; {_WRITE_AS_HUMAN}"
+        )
+    if marker := next((m for m in _MARKERS if m in text), None):
+        raise ValueError(
+            f"a tracker item's {field} holds the marker {marker!r}, which the issue "
+            f"tracker would read as markup: say it in plain words; {_WRITE_AS_HUMAN}"
+        )
+    if _MENTION.search(text):
+        raise ValueError(
+            f"a tracker item's {field} holds a mention (@name), which would notify a person: "
+            f"write the name without the @; {_WRITE_AS_HUMAN}"
+        )
+    return text
 
 
 def unanswered(
