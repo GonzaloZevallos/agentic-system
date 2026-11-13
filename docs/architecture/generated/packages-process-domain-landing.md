@@ -41,4 +41,5 @@ graph TD
     m_domain__plan_settlement --> g_domain__state
     m_domain__plan_view --> g_domain__roles
     m_domain__plan_view --> g_domain__state
+    m_domain__pull_request --> g_domain__state
 ```
