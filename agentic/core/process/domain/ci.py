@@ -800,10 +800,12 @@ class GhostWatch:
         treat such a read."""
         if isinstance(read, CiUnreadable):
             return self
-        return GhostWatch({run_id: self.seen.get(run_id, at_s) for run_id in read.queued_empty_runs})
+        return GhostWatch(
+            {run_id: self.seen.get(run_id, at_s) for run_id in read.queued_empty_runs}
+        )
 
     def observe_dispatched(
-        self, runs: Sequence[DispatchedRun], head: str, at_s: float
+        self, runs: list[DispatchedRun] | tuple[DispatchedRun, ...], head: str, at_s: float
     ) -> GhostWatch:
         """The watch after a listing of dispatched runs, over the one run `chosen_run(runs, head)`
         picks: queued with no jobs it is added at `at_s` (an id already seen keeps its instant),
