@@ -34,7 +34,9 @@ classDiagram
     class schemas__TechPlan["TechPlan"]
     class schemas__Verdict["Verdict"]
     class stack_signals__Signals["Signals"]
+    class tracker_items__CommentItem["CommentItem"]
     class tracker_items__HumanItem["HumanItem"]
+    class tracker_items__OpenIssueItem["OpenIssueItem"]
     schemas__Ruling --|> schemas__RoleOutput
     schemas__StackProposal --|> schemas__RoleOutput
     schemas__TechAnswers --|> schemas__RoleOutput
