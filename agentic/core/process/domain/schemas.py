@@ -40,6 +40,7 @@ from .task import (
     FindingCategory,
     FindingScope,
     Severity,
+    SpecEscalationCause,
 )
 from .task_path import TEXT_MAX, Size, validate_request
 from .tracker_items import TrackerItem
@@ -221,6 +222,17 @@ class TechAnswers(RoleOutput):
     )
 
 
+class TechAnswersWithAssumptions(TechAnswers):
+    """`TechAnswers` of a spec delivery: a doubt is an assumption, a conflict escalates."""
+
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Behaviour decisions taken where the request was silent: one line each, "
+        "at most 240 characters",
+    )
+    spec_conflict: SpecEscalationCause | None = None
+
+
 class PlanSize(RoleOutput):
     """The plan sizer's pre-estimate (GH-472): what the issue alone says the task will cost,
     before any plan exists. It decides the route and is recorded beside the plan's own
@@ -293,6 +305,21 @@ class PlatformAnswers(RoleOutput):
     )
 
 
+class PlatformAnswersWithAssumptions(PlatformAnswers):
+    """`PlatformAnswers` of a spec delivery: a doubt is an assumption, a conflict escalates."""
+
+    questions_for_human: list[str] = Field(
+        description="In a spec delivery a behaviour doubt is recorded as an assumption, not "
+        "asked; only spec_conflict escalates"
+    )
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Behaviour decisions taken where the request was silent: one line each, "
+        "at most 240 characters",
+    )
+    spec_conflict: SpecEscalationCause | None = None
+
+
 class Consultation(RoleOutput):
     """PM's answers to a consultation: clarifications of the definition, the knowledge
     they change (consolidated again, ADR-0006) and what only a person can decide."""
@@ -313,6 +340,20 @@ class Consultation(RoleOutput):
     )
     glossary: list[GlossaryTerm] = Field(
         description="Terms an answer introduces or changes. Empty if none"
+    )
+
+
+class ConsultationWithAssumptions(Consultation):
+    """`Consultation` of a spec delivery: a doubt becomes an assumption, never a question."""
+
+    questions_for_human: list[str] = Field(
+        description="In a spec delivery a behaviour doubt is recorded as an assumption, not "
+        "asked, so this stays empty"
+    )
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Behaviour decisions taken where the request was silent: one line each, "
+        "at most 240 characters",
     )
 
 
@@ -492,6 +533,16 @@ class FinalValidation(RoleOutput):
         description="On `approved`, the complete file of each capability the task changed, "
         "reconciled with the delivered diff and the final reports, each opening with its "
         "`## Jobs`. Empty when no capability changed, and always empty on `returned`"
+    )
+
+
+class FinalValidationWithAssumptions(FinalValidation):
+    """`FinalValidation` of a spec delivery: it also records the assumptions it took."""
+
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Behaviour decisions taken where the request was silent: one line each, "
+        "at most 240 characters",
     )
 
 
@@ -748,6 +799,16 @@ class TechPlan(RoleOutput):
                 "itself and carries no items; drop tracker_items (a part carries its own)"
             )
         return self
+
+
+class TechPlanWithAssumptions(TechPlan):
+    """`TechPlan` of a spec delivery: it also records the assumptions it took."""
+
+    assumptions: list[str] = Field(
+        default_factory=list,
+        description="Behaviour decisions taken where the request was silent: one line each, "
+        "at most 240 characters",
+    )
 
 
 class StackProposal(RoleOutput):

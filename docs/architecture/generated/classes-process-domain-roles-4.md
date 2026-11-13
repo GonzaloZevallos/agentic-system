@@ -31,7 +31,9 @@ classDiagram
     class schemas__StackProposal["StackProposal"]
     class schemas__Subtask["Subtask"]
     class schemas__TechAnswers["TechAnswers"]
+    class schemas__TechAnswersWithAssumptions["TechAnswersWithAssumptions"]
     class schemas__TechPlan["TechPlan"]
+    class schemas__TechPlanWithAssumptions["TechPlanWithAssumptions"]
     class schemas__Verdict["Verdict"]
     class stack_signals__Signals["Signals"]
     class tracker_items__CommentItem["CommentItem"]
@@ -40,7 +42,9 @@ classDiagram
     schemas__Ruling --|> schemas__RoleOutput
     schemas__StackProposal --|> schemas__RoleOutput
     schemas__TechAnswers --|> schemas__RoleOutput
+    schemas__TechAnswersWithAssumptions --|> schemas__TechAnswers
     schemas__TechPlan --|> schemas__RoleOutput
+    schemas__TechPlanWithAssumptions --|> schemas__TechPlan
     schemas__Verdict --|> schemas__RoleOutput
 ```
 
