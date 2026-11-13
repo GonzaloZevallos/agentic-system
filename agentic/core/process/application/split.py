@@ -27,9 +27,8 @@ GH-619 may still hold derived items in its saved checklist, and posts them on re
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any
 
 from agentic.shared.configuration import Configuration
 
@@ -53,9 +52,9 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     part_of = rules.split_part_of(state.get("description", ""))
     if part_of is not None and part_of[2] >= rules.MAX_SPLIT_DEPTH:
         # Defensive: the plan stage asks the human before a part at the cap reaches here.
-        return finish(
-            state, _patch(rules.part_over_line(task_id, part_of, None, at=ports.now())), ports
-        )
+        over = _paused(state, rules.part_over_line(task_id, part_of, None, at=ports.now()))
+        over["fit_question"] = True
+        return finish(state, over, ports)
     depth = 1 if part_of is None else part_of[2] + 1
     parts: list[PartRecord] = [
         {**part, "depth": part.get("depth", depth)} for part in state.get("parts", [])
@@ -64,11 +63,12 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     # What the node returns besides the end: the graph's channels take the checklist and its
     # record from the patch, never from the document `finish` saved (invariant: the record's
     # hash is that of the checklist in the same state).
-    carried: dict[str, object] = {}
+    carried = _base(state)
     if parts != state.get("parts", []):
         # The depth each part is opened at is saved with the record, so a retry opens the
         # same one.
-        stamped = _patch({"parts": parts})
+        stamped = _base(current)
+        stamped["parts"] = parts
         finish(current, stamped, ports)
         current = apply(current, stamped)
         carried.update(stamped)
@@ -96,7 +96,8 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
             except (ValueError, OSError) as exc:
                 return _stopped(current, f"opening part {number}", exc, ports, _LEFT_PARTS)
             open_bodies.append((url, body))
-        patch = _patch({"split_issues": {key: url}})
+        patch = _base(current)
+        patch["split_issues"] = {key: url}
         finish(current, patch, ports)  # saved as soon as the part exists
         current = apply(current, patch)
     swept = _repoint(current, parts, ports)
@@ -108,7 +109,8 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         except (ValueError, OSError) as exc:
             return _stopped(current, "posting the tracker checklist", exc, ports, _LEFT_CHECKLIST)
         if record is not None:
-            posted = _patch({"tracker_checklist_posted": record})
+            posted = _base(current)
+            posted["tracker_checklist_posted"] = record
             finish(current, posted, ports)  # saved before the split comment can fail
             current = apply(current, posted)
             carried.update(posted)
@@ -128,11 +130,13 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     except (ValueError, OSError) as exc:
         return _stopped(current, "commenting the list of parts", exc, ports, _LEFT_COMMENT)
     ended = rules.finished("split", datetime.now(UTC).isoformat(timespec="seconds"))
-    return finish(
-        current,
-        _patch({"current_role": PJM.name, **carried, **ended, **lead_time.NO_MERGE}),
-        ports,
-    )
+    end = _base(current)
+    end.update(carried)
+    end["current_role"] = PJM.name
+    end["status"] = ended["status"]
+    end["finished_at"] = ended["finished_at"]
+    end["lead_time"] = lead_time.NO_MERGE[lead_time.LEAD_TIME_KEY]
+    return finish(current, end, ports)
 
 
 def _repoint(state: TaskState, parts: list[PartRecord], ports: Ports) -> RepointResult:
@@ -168,25 +172,41 @@ _LEFT_COMMENT = "the split comment is left"
 
 def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports, left: str) -> TaskState:
     done = len(state.get("split_issues", {}))
-    patch = rules.logged(
-        {
-            "current_role": PJM.name,
-            "status": WAITING_ON_HUMAN,
-            **rules.escalation(
-                "failure",
-                f"split: {step} failed ({exc}); {done} of "
-                f"{len(state.get('parts', []))} parts are open and {left}, resume to finish",
-            ),
-        },
-        at=ports.now(),
+    paused = _paused(
+        state,
+        rules.logged(
+            {
+                "current_role": PJM.name,
+                "status": WAITING_ON_HUMAN,
+                **rules.escalation(
+                    "failure",
+                    f"split: {step} failed ({exc}); {done} of "
+                    f"{len(state.get('parts', []))} parts are open and {left}, resume to finish",
+                ),
+            },
+            at=ports.now(),
+        ),
     )
-    return finish(state, _patch(patch), ports)
+    return finish(state, paused, ports)
 
 
-def _patch(fields: Mapping[str, object]) -> TaskState:
-    """A partial patch as a `TaskState`: the node's patches carry only the fields they change,
-    which the total `TaskInput` keys do not let a literal say."""
-    return cast(TaskState, dict(fields))
+def _paused(state: TaskState, logged: dict[str, Any]) -> TaskState:
+    """The pause `rules.logged` composed, key by key into a typed patch: the rules layer
+    answers a plain dict, so each value is copied to the field it belongs to."""
+    patch = _base(state)
+    patch["current_role"] = logged["current_role"]
+    patch["status"] = logged["status"]
+    patch["escalated"] = logged["escalated"]
+    patch["escalation_class"] = logged["escalation_class"]
+    patch["escalation_cause"] = logged["escalation_cause"]
+    patch["pause_log"] = logged["pause_log"]
+    return patch
+
+
+def _base(state: TaskState) -> TaskState:
+    """The start of every patch of the node: `TaskInput` requires these three keys to type a
+    patch, so they are written back unchanged (as `pre_pr_fix` does)."""
+    return {"id": state["id"], "title": state["title"], "description": state["description"]}
 
 
 def _body(
