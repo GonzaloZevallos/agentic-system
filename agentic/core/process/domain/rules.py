@@ -6660,6 +6660,10 @@ def delivered_files(changed_files: int) -> dict[str, int]:
 
 BlockerReason = Literal["no_merge_recorded", "merge_not_in_upstream", "slices_not_in_upstream"]
 
+# How one blocker stands (`poll._blocker_verdict`): `resolved`, `open`, a doubt (`unknown`),
+# or a closed issue the system cannot rest a resolution on.
+BlockerVerdict = Literal["resolved", "open", "unknown"] | BlockerReason
+
 _BLOCKER_REASON_TEXT: dict[BlockerReason, str] = {
     "no_merge_recorded": "no merge recorded",
     "merge_not_in_upstream": "merge not in upstream",
@@ -6712,6 +6716,24 @@ def queue_blocked_line(reports: Sequence[BlockerReport]) -> str | None:
     return f"agentic: poll: queue blocked by closed issues it cannot resolve: {named}"
 
 
+def split_parent_state(
+    parts: Sequence[tuple[str, str | None, BlockerVerdict]],
+) -> Literal["done", "waiting", "abandoned"]:
+    """What a split parent's parts come to, each given as (issue state, `state_reason`,
+    blocker verdict). The `state_reason` is read before the verdict (GH-619): a part closed
+    `NOT_PLANNED` reads `resolved` as a blocker, but it never landed, so it is never done.
+    Any such part is `abandoned`; every part `CLOSED`/`COMPLETED` and `resolved` is `done`;
+    anything else, an empty list and any `unknown` verdict included, is `waiting`."""
+    if any(state == "CLOSED" and reason == "NOT_PLANNED" for state, reason, _ in parts):
+        return "abandoned"
+    if parts and all(
+        state == "CLOSED" and reason == "COMPLETED" and verdict == "resolved"
+        for state, reason, verdict in parts
+    ):
+        return "done"
+    return "waiting"
+
+
 # --- GH-344 close-after-merge ---
 # The one place that says when a task's still-open issue is closed by the system
 # (ADR-0062, addendum GH-344). Every other module asks `close_after_merge`.
@@ -6723,7 +6745,8 @@ def close_after_merge(document: Mapping[str, object]) -> bool:
     """Whether the system closes this task's issue as completed. The caller already knows
     the issue is open. True for a merged outcome with a recorded merge commit, or for slices
     that closed the task (`closed_by_slices`). Never for `closed`, a missing outcome,
-    `tracker_only` or a split: those either merged nothing or are the human's to close. It
+    `tracker_only` or a split: those either merged nothing or are the human's to close. A
+    split parent is closed by the split sweep (`split_sweep.sweep`, GH-619), never here. It
     does not read `closed_at`, so a failed close is retried until the issue reads closed."""
     commit = document.get("merge_commit")
     if document.get("delivery_outcome") in _MERGED_OUTCOMES and isinstance(commit, str) and commit:

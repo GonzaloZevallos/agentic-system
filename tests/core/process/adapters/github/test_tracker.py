@@ -2360,3 +2360,11 @@ def test_only_the_watched_query_counts_check_runs_per_suite():
     assert "checkRuns" not in tracker_module._BRANCH_CI_QUERY
     assert "checkRuns" not in tracker_module._SUITES
     assert "checkRuns(first: 0) { totalCount }" in tracker_module._WATCHED_BRANCH_CI_QUERY
+
+
+def test_close_issue_with_a_comment_is_one_gh_call_carrying_it():
+    run = Recorder()
+    GhTracker(Path("/p"), run).close_issue("GH-12", comment="All parts merged")
+    assert run.calls == [
+        ["gh", "issue", "close", "12", "--reason", "completed", "--comment", "All parts merged"]
+    ]

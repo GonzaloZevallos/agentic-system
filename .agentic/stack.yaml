@@ -113,4 +113,6 @@ forbidden:
 ci: [check]
 # `ci_dispatch` (GH-462): a head that touches `.github/` is judged by a dispatch of this
 # workflow as it is on the task's base, with the head sha in the input `sha`.
+# Declaring it also remedies a ghost run (GH-601): a head whose only runs are queued with no job
+# gets a fresh dispatch. Without it, a ghost escalates `run_unfinished`.
 ci_dispatch: {workflow: ci.yml, sha_input: sha}
