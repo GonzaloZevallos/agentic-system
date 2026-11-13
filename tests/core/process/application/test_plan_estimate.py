@@ -250,7 +250,7 @@ async def test_both_rendered_tech_lead_prompts_teach_the_tracker_only_rule(task_
 
     prompt = " ".join(runner.calls[0]["system_prompt"].split())
     assert "task changes at least one file unless its only work is on the tracker" in prompt
-    assert "`tracker_checklist`, no subtasks, no parts and `estimated_files: 0`" in prompt
+    assert "`tracker_items`, no subtasks, no parts and `estimated_files: 0`" in prompt
     assert "Tracker work never becomes a subtask" in prompt
     assert "every task changes one" not in prompt
 

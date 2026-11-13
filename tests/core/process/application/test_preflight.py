@@ -28,7 +28,7 @@ from agentic.core.process.application.preflight import (
     unfixed_stage0,
 )
 from agentic.core.process.application.run_role import load_prompt
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import rules, tracker_items
 from agentic.core.process.domain.docs import Docs, plan_text, review_text
 from agentic.core.process.domain.presubmit import RerunForm
 from agentic.core.process.domain.roles import ROLES
@@ -725,6 +725,22 @@ def test_both_tech_lead_prompts_render_the_one_text_on_tracker_work_with_parts(
     assert rules.TRACKER_WITH_PARTS in text
     assert "do not write those items" in text.replace("\n   ", " ")
     assert "re-point" not in text.replace(rules.TRACKER_WITH_PARTS, "")
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_both_tech_lead_prompts_teach_the_human_item_with_the_constants_of_parse(slug, tmp_path):
+    """GH-663: the typed form is what the Tech Lead is taught, with the limits `parse` enforces
+    rendered from its own constants, and the legacy checklist is not named."""
+    role = next(r for r in ROLES if r.slug == slug)
+    text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **PLACEHOLDERS)
+    prompt = " ".join(text.text.split())
+    assert "{{" not in prompt
+    assert "`tracker_items`" in prompt
+    assert f"at most {tracker_items.MAX_FIELD_CHARS} characters" in prompt
+    assert f"at most {tracker_items.MAX_ITEMS} items" in prompt
+    assert "tracker work is a `human` item" in prompt
+    assert "Its `question` asks the owner to do or approve the work" in prompt
+    assert "tracker_checklist" not in prompt
 
 
 class BrokenRerunChecksStack(MemoryStack):

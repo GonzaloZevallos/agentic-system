@@ -114,10 +114,11 @@ def test_a_control_arm_document_renders_as_it_did():
 # unchanged. GH-591 part 2 added the `promote` line to the Output list of both, so they
 # moved a fifth time; GH-610 added the `api_break` field to the Output list of both and
 # moved them a sixth; GH-619 rewrote `TRACKER_WITH_PARTS` (the system re-points) and moved
-# them a seventh.
+# them a seventh; GH-663 taught `tracker_items` in place of `tracker_checklist` and moved them
+# an eighth.
 PROMPT_GOLDENS = {
-    "tech_lead": "67c5652027d7c5ca003882eb08f366f11657d11115d3957056d17c39f9f8849d",
-    "tech_lead_platform": "7144cbd1ba7c05eb27c7fc87e64293d79244b25639692d9d7400edab711f0576",
+    "tech_lead": "b83df3f27e47b5264e5f7a9a567e715f2f887928b00f58f2b388c24523dd4606",
+    "tech_lead_platform": "db2ed23d2e011c874e46a7a614cf6702da6e3ed1584e09df6458aaf026a08b83",
 }
 
 

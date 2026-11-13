@@ -103,9 +103,15 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    {{parts_remedy}}
    A task changes at least one file unless its only work is on the tracker (the issue tracker: post a
    verdict, close or retitle issues): no role has `gh`, so that work is for the human. Then
-   write `tracker_checklist`, no subtasks, no parts and `estimated_files: 0`. Tracker work
-   never becomes a subtask; next to subtasks it is a `tracker_checklist` the human does
-   once the pull request is open.
+   write `tracker_items`, no subtasks, no parts and `estimated_files: 0`. Tracker work
+   never becomes a subtask, because no role has `gh`.
+   `tracker_items`: tracker work is a `human` item, `{kind: human, question, recommendation}`,
+   and no other kind exists. Its `question` asks the owner to do or approve the work (for
+   example "Close #12 as superseded?") and its `recommendation` says what to do. Each field
+   is one line of at most {{tracker_field_max}} characters with no @-mention, and a plan
+   carries at most {{tracker_items_max}} items. The Breaking-API line (`api_break`),
+   follow-ups (outside findings) and closing the issue via the pull request are not items.
+   An item the owner already answered is in the `Human` section: do not write it again.
    {{tracker_with_parts}}
 Done criteria, outside the numbered sections: read the request's done criteria for
 what only GitHub can say and for what must change in a named file, and write them
@@ -157,8 +163,8 @@ Everything goes in the structured output, in one call:
   convened.
 - `estimated_cost_usd` and `estimated_files`: the two numbers of `### Estimate`.
 - `hand_files`, `hand_lines` and `test_lines`: the size budget's three figures, as above.
-- `tracker_checklist`: what the human must do on the issue tracker, one line per item;
-  empty when there is none. Never a subtask.
+- `tracker_items`: the `human` items above, what the owner must do or approve on the issue
+  tracker; empty when there is none, and always empty with `parts`. Never a subtask.
 - `ci_required`, `ci_none_reason` and `required_paths`: as above. Exactly one of
   `ci_required` and `ci_none_reason` is non-empty.
 - `api_break`: the approved reason of a break of the public API, one line of at most 240
