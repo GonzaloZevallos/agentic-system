@@ -1349,6 +1349,22 @@ def gather_merges(
     round_ = evaluate_landing_order(
         ports, eval_set, current_master, lock, busy, cfg, now, resumes, integrating
     )
+    if not held:
+        # GH-681, informative: the lane's record, never read by a decision. Recording first, so
+        # clearing never takes an admission a merge followed; a task at work is never written.
+        def at_work(task_id: str) -> bool:
+            return task_id in busy or lock.refusal(task_id) is not None
+
+        landing_lane.record_lane_merges(
+            ports, [entry.task_id for entry in round_.entries], now, at_work, out
+        )
+        landing_lane.clear_admissions(
+            ports,
+            [(entry.task_id, entry.number) for entry in round_.entries],
+            round_.lane,
+            at_work,
+            out,
+        )
     for entry in round_.entries:
         task_id, number, raw = entry.task_id, entry.number, entry.raw
         assessed = entry.outcome
@@ -1458,6 +1474,10 @@ def gather_merges(
                     out.append(
                         f"agentic: poll: auto-merge #{number} -> fast lane behind busy #{busy_head}"
                     )
+                    if not held and busy_head is not None and head is not None:
+                        landing_lane.admit(
+                            ports, task_id, raw, busy_head, head, current_master, now, at_work, out
+                        )
                 found.append(number)
     return found
 

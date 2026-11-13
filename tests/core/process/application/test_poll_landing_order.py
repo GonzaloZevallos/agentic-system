@@ -721,11 +721,13 @@ class TestFastLane:
         assert [(e.member, e.turned) for e in a.entries] == [
             (e.member, e.turned) for e in b.entries
         ]
+        # Its own writing is the informative admission (GH-681 part 2), on the member alone.
         for number in (5, 6, 7):
-            assert with_lane.documents.load(f"GH-{number}") == without.documents.load(
-                f"GH-{number}"
-            )
-            assert "landing" not in with_lane.documents.load(f"GH-{number}")
+            written = dict(with_lane.documents.load(f"GH-{number}"))
+            admitted = written.pop("lane_admitted", None)
+            assert written == without.documents.load(f"GH-{number}")
+            assert (admitted is not None) is (number == 5)
+            assert "landing" not in written
 
     @pytest.mark.parametrize(
         ("kind", "opens"),
@@ -756,3 +758,89 @@ class TestFastLane:
                 "agentic: poll: auto-merge #5 -> waiting (clean, head not integrating) behind #7"
                 in lines
             )
+
+
+def _idle_round(ports, tmp_path, locks):
+    """A round with no busy child: the head is at work only when `locks` refuses it."""
+    poll.gather_merges(
+        ports,
+        frozenset(),
+        MASTER,
+        locks,
+        [],
+        [],
+        now=NOW + timedelta(minutes=5),
+        busy=frozenset(),
+        cfg=Configuration(product_dir=tmp_path),
+        integrating=frozenset({"GH-7"}),
+    )
+
+
+class TestFastLaneRecord:
+    """GH-681 part 2: what `gather_merges` writes of the lane's informative record. The writers'
+    own cases are in `test_landing_lane.py`; these are the wiring: when the round writes at all."""
+
+    def test_the_lane_member_is_admitted_once_in_its_own_document(self, tmp_path):
+        ports = _lane_ports()
+
+        _lane_round(ports, tmp_path)
+        first = ports.documents.load("GH-5")["lane_admitted"]
+        _lane_round(ports, tmp_path, now=NOW + timedelta(minutes=1))
+
+        assert first == {
+            "head_issue": 7,
+            "pr_head": _head_of(5),
+            "master": MASTER,
+            "at": NOW.isoformat(),
+        }
+        assert ports.documents.load("GH-5")["lane_admitted"] == first
+        assert not any(ports.documents.load(f"GH-{n}").get("lane_admitted") for n in (6, 7))
+
+    def test_a_held_round_writes_no_lane_key_anywhere(self, tmp_path):
+        ports = _lane_ports()
+
+        found, _ = _lane_round(ports, tmp_path, held=True)
+
+        assert found == [5]
+        for number in (5, 6, 7):
+            document = ports.documents.load(f"GH-{number}")
+            assert not {"lane_admitted", "lane_recorded", "lane_merges"} & set(document)
+
+    def test_a_merge_after_the_admission_is_recorded_on_the_head_once_it_is_idle(self, tmp_path):
+        ports = _lane_ports()
+        _lane_round(ports, tmp_path)
+        ports.documents.record_closure(
+            "GH-5",
+            {
+                "auto_merge_head": _head_of(5),
+                "auto_merge_master": MASTER,
+                "auto_merged_at": (NOW + timedelta(minutes=2)).isoformat(),
+            },
+        )
+
+        # A head with a child at work is not written (`busy`): the next round that finds it idle is.
+        _lane_round(ports, tmp_path, now=NOW + timedelta(minutes=4))
+        assert "lane_merges" not in ports.documents.load("GH-7")
+        _idle_round(ports, tmp_path, _Locks())
+
+        merges = ports.documents.load("GH-7")["lane_merges"]
+        assert [(m["issue"], m["pr_head"]) for m in merges] == [(5, _head_of(5))]
+        assert ports.documents.load("GH-5")["lane_recorded"] is not None
+        assert "landing" not in ports.documents.load("GH-7")
+
+    def test_a_head_the_lock_refuses_is_not_written_even_with_no_busy_child(self, tmp_path):
+        ports = _lane_ports()
+        _lane_round(ports, tmp_path)
+        ports.documents.record_closure(
+            "GH-5",
+            {
+                "auto_merge_head": _head_of(5),
+                "auto_merge_master": MASTER,
+                "auto_merged_at": (NOW + timedelta(minutes=2)).isoformat(),
+            },
+        )
+
+        _idle_round(ports, tmp_path, _Locks(alive={"GH-7"}))
+
+        assert "lane_merges" not in ports.documents.load("GH-7")
+        assert "lane_recorded" not in ports.documents.load("GH-5")

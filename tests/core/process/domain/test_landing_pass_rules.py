@@ -11,6 +11,7 @@ import pytest
 
 from agentic.core.process.domain import document, landing, rules
 from agentic.core.process.domain.landing import LandingStepKind
+from agentic.core.process.domain.landing_order import unproductive_steps
 
 FIXTURE = Path(__file__).parent / "fixtures" / "GH-484.yaml"
 NOW = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
@@ -175,8 +176,6 @@ def test_an_unstarted_pass_is_owed_to_land_and_is_not_taken():
 def test_landing_pass_and_unproductive_steps_are_blind_to_lane_merges():
     """GH-681 part 2: the fast lane's record lives outside `landing`, so a document that holds
     `lane_merges` is read exactly as one without it."""
-    from agentic.core.process.domain.landing_order import unproductive_steps
-
     plain = killed()
     merges = [
         {"issue": 9, "pr_head": "a" * 40, "master": "b" * 40, "merged_at": NOW.isoformat()},
