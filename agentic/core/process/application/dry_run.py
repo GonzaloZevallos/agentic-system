@@ -14,8 +14,10 @@ What a dry round does differently from a live one (also in `agentic poll --help`
 - `publish_spend` returns `[]`: this product's own spend is not published.
 - The land and exempt waits the round would publish are not visible to other pollers.
 - `exclusive` is a `nullcontext()`: no atomicity between pollers, harmless as nothing launches.
-- The fetches (`Workspace.upstream`, the declared exception, and the object fetches below) are
-  the one network effect.
+- `Workspace.upstream` (the declared exception, a read) is the one network effect. The other
+  fetchers write git objects: `fetch_commit` says `False`, `contains` `"unknown"`, `merge_conflicts`
+  `None`, and `merge_base` is refused, so a landing candidate whose criteria are probed
+  (`poll.read_criteria`) ends the dry round with exit 1.
 """
 
 from collections.abc import Callable
@@ -91,9 +93,9 @@ def _names(text: str) -> frozenset[str]:
 # `filesystem/lock.py`, `filesystem/run_registry.py`, `filesystem/scratch.py`,
 # `filesystem/free_space.py`, `filesystem/experiment_file.py`, `github/inbox.py`, and
 # `git/workspace.py`; the READS of each create and delete nothing (the filesystem ones are
-# audited in test_dry_run). `Workspace` reads include the declared exception `upstream` (the
-# fetch), and the fetchers `fetch_commit`, `merge_base`, `merge_conflicts` and `contains`,
-# which only add objects to the object database, never a file of a checkout.
+# audited in test_dry_run). The one declared exception is `Workspace.upstream` (the fetch), a
+# read. The other fetchers (`fetch_commit`, `merge_base`, `merge_conflicts`, `contains`) write
+# git objects, so they are writes below.
 READS = {
     "Tracker": _names(
         """branch_ci changed_files ci_report dispatched_ci issue_comments issue_created_at
@@ -104,10 +106,10 @@ READS = {
     "Workspace": _names(
         """added_adrs added_lines adr_first_date ancestry base_of branch_head branches
         changed_lines changed_paths checkout_names checkout_path commit_date commit_messages
-        contains dependency_state differs_outside fast_forward_view fetch_commit fetched_upstream
-        first_parent_commits full_head gain_paths git_version head introduced_paths is_ancestor
-        is_clean is_committed is_ignored merge_base merge_conflicts merge_head merge_in_progress
-        merge_resolution numstat owned_drift paths_naming remote_dispatch_refs remote_refs
+        dependency_state differs_outside fast_forward_view fetched_upstream first_parent_commits
+        full_head gain_paths git_version head introduced_paths is_ancestor is_clean is_committed
+        is_ignored merge_head merge_in_progress merge_resolution numstat owned_drift paths_naming
+        remote_dispatch_refs remote_refs
         repository_at setup_tree show touched_paths tree tree_changes tree_names upstream
         worktrees"""
     ),
@@ -163,6 +165,13 @@ WRITES_VALUED: dict[str, dict[str, Factory]] = {
         "flake_lock": lambda inner, args: nullcontext(False),
         "publish_spend": lambda inner, args: [],
     },
+    # Nothing fetched: the head is unknown, the probe is no verdict (the planner doubts, it
+    # never launches on it).
+    "Workspace": {
+        "contains": lambda inner, args: "unknown",
+        "merge_conflicts": lambda inner, args: None,
+        "fetch_commit": lambda inner, args: False,
+    },
     "Launcher": {"spawn": lambda inner, args: 0},
 }
 
@@ -171,7 +180,7 @@ WRITES_VALUED: dict[str, dict[str, Factory]] = {
 UNREACHED = {
     "Tracker": _names("merge open_issue open_pull_request"),
     "Workspace": _names(
-        """detached_checkout merge_keeping_conflicts merge_upstream_into restore_owned
+        """detached_checkout merge_base merge_keeping_conflicts merge_upstream_into restore_owned
         subtask_checkout task_checkout"""
     ),
     "Scratch": _names("ensure_kept open"),

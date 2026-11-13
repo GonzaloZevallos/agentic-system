@@ -53,6 +53,8 @@ def _accepts(hint: object, value: object) -> bool:
     origin = typing.get_origin(hint)
     if origin in (types.UnionType, typing.Union):
         return any(_accepts(arm, value) for arm in typing.get_args(hint))
+    if origin is typing.Literal:
+        return value in typing.get_args(hint)
     if origin is contextlib.AbstractContextManager:
         return hasattr(value, "__enter__") and hasattr(value, "__exit__")
     if origin is collections.abc.Iterator:
@@ -235,7 +237,7 @@ def test_the_audits_reject_what_they_should(tmp_path):
     # A neutral value of the wrong type, and a write the tree audit would catch.
     assert not _accepts(list[str], 5) and not _accepts(Path | None, "x")
     with pytest.raises(AssertionError, match="unhandled"):
-        _accepts(typing.Literal["a"], "a")
+        _accepts(typing.Annotated[int, "a"], 1)
     registry = FilesystemRunRegistry(tmp_path / "registry")
     before = _tree(tmp_path)
     with registry.exclusive():
