@@ -84,6 +84,9 @@ def test_reducers_are_read_from_the_annotations():
         "restorations",
         "review_scopes",
         "shadow_reviews",
+        "spec_cause",
+        "spec",
+        "assumptions",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
     assert REDUCERS["experiment"] is last
