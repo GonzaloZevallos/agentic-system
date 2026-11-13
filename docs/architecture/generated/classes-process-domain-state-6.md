@@ -24,9 +24,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__PendingCloseDocs["PendingCloseDocs"]
-    class task__PlanRoute["PlanRoute"]
-    class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
     class task__ReleasePatch["ReleasePatch"]
@@ -38,11 +35,25 @@ classDiagram
     class task__RoleRun["RoleRun"]
     class task__SettledRow["SettledRow"]
     class task__ShadowRecord["ShadowRecord"]
+    class task__SlicesClosedPatch["SlicesClosedPatch"]
+    class task__Subtask["Subtask"]
+    class task__TaskInput["TaskInput"]
+    class task__TaskState["TaskState"]
+    task__TaskState --|> task__TaskInput
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
+- [domain: state (parte 3)](classes-process-domain-state-3.md)
+  - `task.TaskState` se asocia con `task.ArmAssignment`
+- [domain: state (parte 4)](classes-process-domain-state-4.md)
+  - `task.TaskState` se asocia con `task.EvaluationRef`
+  - `task.TaskState` se asocia con `task.FullChecksRecord`
+  - `task.TaskState` se asocia con `task.InterviewStats`
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `task.TaskState` se asocia con `task.PlanRoute`
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
+  - `task.Subtask` se asocia con `task_path.PromoteRequest`
+  - `task.TaskState` se asocia con `task_path.Promotion`

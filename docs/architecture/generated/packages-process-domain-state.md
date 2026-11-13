@@ -26,6 +26,7 @@ graph TD
     m_domain__rules["domain.rules"]
     m_domain__signals["domain.signals"]
     m_domain__size_budget["domain.size_budget"]
+    m_domain__spec_delivery["domain.spec_delivery"]
     m_domain__task["domain.task"]
     m_domain__task_path["domain.task_path"]
     m_domain__document --> g_domain__roles
