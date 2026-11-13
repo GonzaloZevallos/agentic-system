@@ -879,3 +879,13 @@ tasks:
     cost_usd: 0.0855
   GH-650@review:
     cost_usd: 0.0415
+  GH-626@review:
+    cost_usd: 0.063
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-626
