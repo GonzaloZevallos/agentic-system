@@ -1771,6 +1771,9 @@ class MemoryTracker:
         self.branch_reports: dict[str, CiReport | CiUnreadable] = {}
         self.ci_reads: list[str] = []
         self.branch_reads: list[str] = []
+        # GH-601: `watched_branch_ci`'s answer per branch (absent is unreadable) and each ask.
+        self.watched_reports: dict[str, CiReport | CiUnreadable] = {}
+        self.watched_reads: list[str] = []
         # GH-462: `dispatch_ci` answers `dispatch_result` (None is accepted) and records each
         # call; `dispatched_ci` answers the scripted listings in order, the last one for good
         # (an empty list is no run), and records each ask.
@@ -1790,6 +1793,10 @@ class MemoryTracker:
     def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
         self.branch_reads.append(branch)
         return self.branch_reports.get(branch, CiUnreadable("gh_unreadable"))
+
+    def watched_branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        self.watched_reads.append(branch)
+        return self.watched_reports.get(branch, CiUnreadable("gh_unreadable"))
 
     def dispatch_ci(
         self, workflow: str, ref: str, inputs: Mapping[str, str]
