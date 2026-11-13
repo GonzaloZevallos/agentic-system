@@ -674,25 +674,21 @@ def ghost_dispatch_due(
     )
 
 
-def ghost_fact_in_force(fact: CiGhostDispatch | None, head: str) -> bool:
-    """Whether a recorded ghost dispatch (GH-601) is for this very commit and not yet escalated:
-    the node then waits on the dispatched runs instead of dispatching again."""
-    return fact is not None and not fact["escalated"] and rules.same_commit(fact["head"], head)
-
-
-def dispatched_ghost(
-    verdict: FullTierVerdict,
-    runs: list[DispatchedRun] | tuple[DispatchedRun, ...] | CiUnreadable,
-    head: str,
-    ghosts: frozenset[str],
+def ghost_fact_in_force(
+    fact: CiGhostDispatch | None, head: str, now_iso: str, bound_s: float
 ) -> bool:
-    """Whether a dispatched wait that ended `timed_out` did so on a run that is itself a ghost
-    (GH-601): the run that judges `head` (`chosen_run`, the newest) is one of `ghosts`. Such an end
-    is no verdict of the suite, never red."""
-    if verdict.state != "timed_out" or isinstance(runs, CiUnreadable):
+    """Whether a recorded ghost dispatch (GH-601) is still being waited on: it is for this very
+    commit, not escalated, and its `dispatched_at` is readable and younger than `bound_s` as of
+    `now_iso`, both instants of this machine. An unreadable instant is not in force. It never reads
+    an instant GitHub gave; it is the only rule that decides to wait on a recorded dispatch."""
+    if fact is None or fact["escalated"] or not rules.same_commit(fact["head"], head):
         return False
-    run = chosen_run(runs, head)
-    return run is not None and str(run.run_id) in ghosts
+    dispatched_at, now = _instant(fact["dispatched_at"]), _instant(now_iso)
+    return (
+        dispatched_at is not None
+        and now is not None
+        and (now - dispatched_at).total_seconds() < bound_s
+    )
 
 
 # The margin subtracted from the local instant a workflow was dispatched to form the loose

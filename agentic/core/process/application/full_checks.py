@@ -104,8 +104,7 @@ _CI_DETAIL: dict[CiCause, str] = {
     "unknown_names": "no check run carries a declared job name",
     "run_unfinished": "a workflow run of that head was still going after {min:g} min and had "
     "reported no declared job",
-    "ghost_run": "CI runs on {ref} for that head stayed queued with no job for {min:g} min "
-    "({ghosts})",
+    "ghost_run": "CI runs on {ref} for that head stayed queued with no job ({ghosts})",
 }
 # Every cause when the verdict was asked of a dispatched run (GH-504), none inherited from the CI
 # branch ref's table: `{ref}` is the workflow file, `{dispatch_ref}` the ref the head was
@@ -126,8 +125,7 @@ _DISPATCH_DETAIL: dict[CiCause, str] = {
     "{sha} had been published to {dispatch_ref}",
     "run_unfinished": "the dispatched {ref} was still going after {min:g} min and had reported no "
     "declared job",
-    "ghost_run": "the dispatched {ref} for that head stayed queued with no job for {min:g} min "
-    "({ghosts}), after the pushed runs had done the same",
+    "ghost_run": "the dispatched {ref} for that head stayed queued with no job ({ghosts})",
 }
 
 _LOG = logging.getLogger(__name__)
@@ -194,14 +192,6 @@ class _Ghosts:
 
     def maturing(self, now_s: float) -> frozenset[str]:
         return self.current.maturing(now_s, self.bound_s)
-
-
-@dataclass
-class _GhostFact:
-    """The `ci_ghost_dispatch` the node holds while it dispatches (GH-601): the one fact saved
-    after an accepted dispatch, kept to be carried by every patch that follows."""
-
-    fact: CiGhostDispatch | None = None
 
 
 @dataclass(frozen=True)
@@ -358,7 +348,9 @@ async def full_checks(
             stage=outcome.stage,
             dispatch_ref=rules.ci_dispatch_ref(state["id"]),
             sha=outcome.head or head,
-            ghosts=ci.ghost_ids_text(()),
+            ghosts=ci.ghost_ids_text(
+                outcome.ghost_dispatch["ghost_run_ids"] if outcome.ghost_dispatch else ()
+            ),
         )
         patch = rules.ci_unavailable(
             outcome.cause,
@@ -569,37 +561,49 @@ async def _ci_full_checks(
     gate_names = rules.ci_gate_names(names, state.get("ci_required") or []).names
     ghosts = _Ghosts(clock(), cfg.check_timeout_s)
     recorded_ghost = state.get("ci_ghost_dispatch")
-    if recorded_ghost is not None and ci.ghost_fact_in_force(recorded_ghost, head):
-        # GH-601: a fresh run was already dispatched for this very head and the task was
-        # retaken: wait on the dispatched runs, never dispatch (nor publish) again. A fact of
-        # another head, an escalated one or an unreadable instant is not in force.
-        since = _since_of(recorded_ghost["dispatched_at"])
+    if recorded_ghost is not None and rules.same_commit(recorded_ghost["head"], head):
+        # GH-601: a fresh run was already dispatched for this very head and the task was retaken.
+        # `ghost_fact_in_force` alone decides: a young fact is waited on, never dispatched again;
+        # a stale, unreadable or escalated one is dispatched at once (no push wait, a normal
+        # budget). With no `_Fallback` there is nothing to wait on or dispatch: the same cause
+        # escalates again on the stored fact, untouched (GH-652).
         waiting_on = await anyio.to_thread.run_sync(_fallback_dispatch, ports, state)
-        if since is not None and isinstance(waiting_on, _Fallback):
-            return await _dispatched_after_no_run(
-                state,
-                cfg,
-                ports,
-                task,
-                head,
-                waiting_on,
-                [],
-                ports.now(),
-                0.0,
-                sleep,
-                clock,
-                push_sleep,
-                cause="ghost",
-                ghosts=ghosts,
-                ghost_fact=recorded_ghost,
-                since=since,
-            )
+        if isinstance(waiting_on, _NotTried):
+            return _NoVerdict("ghost_run", 0.0, not_tried=waiting_on, ghost_dispatch=recorded_ghost)
+        in_force = ci.ghost_fact_in_force(recorded_ghost, head, ports.now(), cfg.check_timeout_s)
+        return await _dispatched_after_no_run(
+            state,
+            cfg,
+            ports,
+            task,
+            head,
+            waiting_on,
+            [],
+            ports.now(),
+            0.0,
+            sleep,
+            clock,
+            push_sleep,
+            ghosts,
+            cause="ghost",
+            since=_since_of(recorded_ghost["dispatched_at"]) if in_force else None,
+        )
     if not trust.trusted:
         if trust.dispatch is None:
             unfetched = trust.fallback in ("no_master", "unfetched")
             return _LocalUntrusted(_UNFETCHED_DETAIL if unfetched else "")
         return await _dispatched_full_checks(
-            state, cfg, ports, task, head, gate_names, trust.dispatch, sleep, clock, push_sleep
+            state,
+            cfg,
+            ports,
+            task,
+            head,
+            gate_names,
+            trust.dispatch,
+            sleep,
+            clock,
+            push_sleep,
+            ghosts,
         )
     ref = rules.ci_ref(state["id"])
     speculative = False
@@ -718,6 +722,7 @@ async def _ci_full_checks(
                 sleep,
                 clock,
                 push_sleep,
+                ghosts,
             )
         not_tried = fallback if isinstance(fallback, _NotTried) else None
         reported = ci.reported_names(read) if isinstance(read, CiReport) else ()
@@ -748,9 +753,9 @@ async def _ci_full_checks(
                 sleep,
                 clock,
                 push_sleep,
+                ghosts,
                 cause="ghost",
-                ghosts=ghosts,
-                ghost_run_ids=sorted(read.running_runs),
+                pushed_ghosts=sorted(read.running_runs),
             )
         return _NoVerdict(
             "run_unfinished",
@@ -891,37 +896,18 @@ async def _dispatched_after_no_run(
     sleep: Sleep,
     clock: Clock,
     push_sleep: PushSleep,
+    ghosts: _Ghosts,
     *,
     cause: Literal["no_run", "ghost"] = "no_run",
-    ghosts: _Ghosts | None = None,
-    ghost_run_ids: Sequence[str] = (),
-    ghost_fact: CiGhostDispatch | None = None,
+    pushed_ghosts: Sequence[str] = (),
     since: str | None = None,
 ) -> dict[str, Any] | _NoVerdict:
-    """The head whose pushes got no run, judged by the upstream's dispatched workflow against
-    the names read at that same revision (GH-531). The wait is the whole node's (`node_started_at`
-    and `waited` carry the pushes'), the push rows stay on the record, and the record says why it
-    was dispatched and at which revision the declaration was read. Neither decides anything:
-    `rules.ci_untrusted` still comes from the paths.
-
-    With `cause="ghost"` (GH-601) the head's live runs were all ghosts, and the record says so.
-    The fact `ci_ghost_dispatch` is saved at once after an accepted dispatch (`ports.documents`),
-    before the fresh run is waited on, and every patch that follows carries it. `ghost_fact` is
-    the fact of an earlier node that is still in force: no dispatch, the wait starts at `since`
-    (and dispatches only if the listing shows no run). `ghosts` also watches the dispatched run,
-    which is itself a ghost when it stays queued with no job: `run_unfinished`, not red."""
-    held = _GhostFact(ghost_fact)
-
-    def saved(dispatched_at: str) -> None:
-        base = held.fact or {
-            "head": head,
-            "ghost_run_ids": list(ghost_run_ids),
-            "dispatched_at": dispatched_at,
-            "escalated": False,
-        }
-        held.fact = {**base, "dispatched_at": dispatched_at}
-        ports.documents.save(apply(state, {"ci_ghost_dispatch": held.fact}))
-
+    """The head whose pushes got no run (or only ghosts), judged by the upstream's dispatched
+    workflow against the names read at that same revision (GH-531). The wait is the whole node's
+    (`node_started_at` and `waited` carry the pushes'), the push rows stay on the record, and the
+    record says why it was dispatched (`cause`) and at which revision the declaration was read.
+    Neither decides anything: `rules.ci_untrusted` still comes from the paths. `pushed_ghosts` and
+    `since` go to `_dispatched_full_checks`, which owns the ghost ids and the fact."""
     outcome = await _dispatched_full_checks(
         state,
         cfg,
@@ -933,24 +919,18 @@ async def _dispatched_after_no_run(
         sleep,
         clock,
         push_sleep,
+        ghosts,
         node_started_at=node_started_at,
         waited=waited,
+        pushed_ghosts=pushed_ghosts,
         since=since,
-        wait_first=ghost_fact is not None and since is not None,
-        cause=cause,
-        ghosts=ghosts,
-        on_dispatched=saved if cause == "ghost" else None,
     )
     if isinstance(outcome, _NoVerdict):
-        if held.fact is not None:
-            return replace(outcome, ghost_dispatch=held.fact)
         return outcome
     _with_pushes(outcome, pushes)
     record = outcome["full_checks"]
     record["dispatch_cause"] = cause
     record["stack_at"] = fallback.sha
-    if held.fact is not None:
-        outcome["ci_ghost_dispatch"] = held.fact
     return outcome
 
 
@@ -1075,19 +1055,18 @@ async def _dispatched_full_checks(
     sleep: Sleep,
     clock: Clock,
     push_sleep: PushSleep,
+    ghosts: _Ghosts,
     *,
     node_started_at: str | None = None,
     waited: float = 0.0,
+    pushed_ghosts: Sequence[str] = (),
     since: str | None = None,
-    wait_first: bool = False,
-    cause: Literal["no_run", "ghost"] = "no_run",
-    ghosts: _Ghosts | None = None,
-    on_dispatched: Callable[[str], None] | None = None,
 ) -> dict[str, Any] | _NoVerdict:
     """An untrusted head judged by the base branch's own workflow (GH-462): dispatched on the
     repository's default branch, the one the pull request targets, with the head sha as its
     input. A refusal ends the call at once: no wait, no second dispatch. No run after the
-    grace period is dispatched once more, and the second wait is bounded by the grace again.
+    grace period, or a run that is a ghost (GH-601), is dispatched once more, at most
+    `ci.CI_DISPATCH_ATTEMPTS` dispatches per call.
 
     Before every dispatch (GH-504) the head is published to `rules.ci_dispatch_ref`, the ref
     GitHub serves the checkout from, retried like every push of the CI path (GH-487); a push that
@@ -1097,58 +1076,71 @@ async def _dispatched_full_checks(
     `node_started_at` and `waited` are those of a node that already waited on the push of the
     task's own CI ref (GH-531), so the timing and `waited_s` cover the whole wait.
 
-    The ghost dispatch (GH-601) uses the rest: `wait_first` skips the first dispatch and waits on
-    the runs listed from `since` (a node retaken after a dispatch), `on_dispatched` is called with
-    the instant of every accepted dispatch before its run is waited on, and with `cause="ghost"`
-    and `ghosts` a dispatched run that is itself a ghost at the bound ends `run_unfinished` (no
-    red record, no second dispatch). Without these arguments the behaviour is exactly the
-    original's."""
+    The ghost ids (GH-652) live in one list owned here: the ids of the stored fact of this head,
+    the `pushed_ghosts` of this node, and the run each wait ended `ghost_run` on. After an accepted
+    dispatch, with any id known, `ci_ghost_dispatch` is saved before the wait (`escalated` false);
+    a refused one saves nothing. `since` makes the first round a wait on the runs listed from
+    there (a fact still in force): no dispatch. A wait that ends `ghost_run`, or `no_run` after
+    ghosts were seen (`ci.ghost_end`), escalates `ghost_run` with the fact `escalated`."""
     node_started_at = node_started_at or ports.now()
     pushed_at: str | None = None
-    skip_dispatch = wait_first and since is not None
+    stored = state.get("ci_ghost_dispatch")
+    stored = stored if stored and rules.same_commit(stored["head"], head) else None
+    seen: list[str] = [*(stored["ghost_run_ids"] if stored else ()), *pushed_ghosts]
+    # A fact in force (`since` given) is what this node carries until a dispatch replaces it.
+    held: CiGhostDispatch | None = stored if since is not None else None
+    last_at = stored["dispatched_at"] if stored else ports.now()
     listed_since = since or ""
     for attempt in range(1, ci.CI_DISPATCH_ATTEMPTS + 1):
-        if skip_dispatch:
-            skip_dispatch = False
-        else:
+        if not (attempt == 1 and since is not None):
             dispatched = await _dispatch_once(
                 state, ports, task, head, dispatch, push_sleep, waited, node_started_at, pushed_at
             )
             if isinstance(dispatched, _NoVerdict):
-                return dispatched
+                return replace(dispatched, ghost_dispatch=held) if held else dispatched
             pushed_at, listed_since = dispatched
-            if on_dispatched is not None:
-                on_dispatched(pushed_at)
+            last_at = pushed_at
+            if seen:
+                held = {
+                    "head": head,
+                    "ghost_run_ids": ci.ghost_run_ids(seen),
+                    "dispatched_at": pushed_at,
+                    "escalated": False,
+                }
+                ports.documents.save(apply(state, {"ci_ghost_dispatch": held}))
         verdict, runs, took = await _wait_dispatched(
-            ports,
-            dispatch.workflow,
-            listed_since,
-            head,
-            names,
-            cfg,
-            sleep,
-            clock,
-            ghosts if cause == "ghost" else None,
+            ports, dispatch.workflow, listed_since, head, names, cfg, sleep, clock, ghosts
         )
         waited += took
-        if (
-            not (verdict.state == "unreachable" and verdict.cause == "no_run")
-            or attempt == ci.CI_DISPATCH_ATTEMPTS
-        ):
+        if verdict.state == "unreachable" and verdict.cause == "ghost_run":
+            ghost_run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
+            assert ghost_run is not None  # `ghost_run` is the verdict of a chosen run
+            seen.append(str(ghost_run.run_id))
+        retry = (
+            verdict.state == "unreachable"
+            and verdict.cause in ("no_run", "ghost_run")
+            and attempt < ci.CI_DISPATCH_ATTEMPTS
+        )
+        if not retry:
             break
     if (
-        ghosts is not None
-        and cause == "ghost"
-        and ci.dispatched_ghost(verdict, runs, head, ghosts.ghosts(clock()))
+        verdict.state == "unreachable"
+        and ci.ghost_end(verdict.cause or "no_run", seen) == "ghost_run"
     ):
-        # GH-601: the fresh run is a ghost too: no verdict of the suite, never red, and no
-        # second dispatch; the human decides.
+        ids = ci.ghost_run_ids(seen)
+        escalated: CiGhostDispatch = {
+            "head": head,
+            "ghost_run_ids": ids,
+            "dispatched_at": last_at,
+            "escalated": True,
+        }
         return _NoVerdict(
-            "run_unfinished",
+            "ghost_run",
             waited,
             dispatch.workflow,
             head=head,
             timing=_no_verdict_timing(pushed_at, node_started_at),
+            ghost_dispatch=escalated,
         )
     if verdict.state == "unreachable":
         return _NoVerdict(
@@ -1158,6 +1150,7 @@ async def _dispatched_full_checks(
             head=head,
             stage=_stage_of(verdict),
             timing=_no_verdict_timing(pushed_at, node_started_at),
+            ghost_dispatch=held,
         )
     run = ci.chosen_run(runs, head) if isinstance(runs, tuple) else None
     assert run is not None  # a verdict other than `unreachable` came from a chosen run
@@ -1176,12 +1169,15 @@ async def _dispatched_full_checks(
                 dispatch.workflow,
                 head=head,
                 timing=_no_verdict_timing(pushed_at, node_started_at),
+                ghost_dispatch=held,
             )
         case "waiting" | "unreachable":
             raise AssertionError(f"`{verdict.state}` is settled before a record is written")
         case _ as unreachable:
             assert_never(unreachable)
     _with_timing(patch, pushed_at, node_started_at, verdict, read, names)
+    if held is not None:
+        patch["ci_ghost_dispatch"] = held
     return _dispatched_record(patch, run)
 
 
@@ -1295,7 +1291,7 @@ async def _wait_dispatched(
     cfg: Configuration,
     sleep: Sleep,
     clock: Clock,
-    ghosts: _Ghosts | None = None,
+    ghosts: _Ghosts,
 ) -> tuple[FullTierVerdict, tuple[DispatchedRun, ...] | CiUnreadable, float]:
     """`_wait_ci` for a dispatched run: the listing is read every `CI_POLL_S` until a verdict
     that is not `waiting`, bounded by the grace period while no run of `head` is listed and by
@@ -1309,7 +1305,7 @@ async def _wait_dispatched(
         read = await anyio.to_thread.run_sync(ports.tracker.dispatched_ci, workflow, since)
         at_s = clock()
         waited = at_s - started
-        if ghosts is not None and not isinstance(read, CiUnreadable):
+        if not isinstance(read, CiUnreadable):
             ghosts.watch_dispatched(read, head, started if first_read else at_s)
         first_read = False
         if isinstance(read, CiUnreadable):
@@ -1318,7 +1314,14 @@ async def _wait_dispatched(
             )
         else:
             verdict = ci.dispatch_verdict(
-                read, head, names, waited, cfg.ci_start_grace_s, cfg.check_timeout_s
+                read,
+                head,
+                names,
+                waited,
+                cfg.ci_start_grace_s,
+                cfg.check_timeout_s,
+                ghosts.ghosts(at_s),
+                ghosts.maturing(at_s),
             )
         if verdict.state != "waiting":
             return verdict, read, waited
