@@ -22,6 +22,7 @@ classDiagram
     class landing_adr__CheckedTimeout["CheckedTimeout"]
     class landing_adr__OutOfBounds["OutOfBounds"]
     class landing_fix__Fix["Fix"]
+    class landing_lane__LaneHead["LaneHead"]
     class landing_plan__LandingContext["LandingContext"]
     class landing_plan__Release["Release"]
     class landing_plan__RoleRun["RoleRun"]

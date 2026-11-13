@@ -1004,6 +1004,9 @@ class MemoryWorkspace:
         # not be confused with ("ante la duda, no lanza" needs a rejected-input test
         # for this, not only for the known-false case `ancestors` already covers).
         self.ancestor_errors: set[str] = set()
+        # GH-681: a `ref` here makes `is_ancestor` raise `GitError` for that ref alone, whatever
+        # the sha (`ancestor_errors` keys on the sha, so it cannot tell two heads apart).
+        self.ancestor_ref_errors: set[str] = set()
         # GH-408: the first-parent line `first_parent_commits` answers, oldest first (whatever
         # the range asked), the asks it got, and a message that makes it raise `GitError`.
         self.first_parent_line: tuple[rules.Commit, ...] = ()
@@ -1049,6 +1052,10 @@ class MemoryWorkspace:
         # GH-591: what `touched_paths` answers (renames as both paths, deletions included), the
         # text that makes it raise `GitError`, and each call.
         self.touched: tuple[str, ...] = ()
+        # GH-681: `touched_paths`'s answer per `(base, head)`, consulted before `touched`.
+        self.touched_by: dict[tuple[str, str], tuple[str, ...]] = {}
+        # GH-681: a `head` here makes `touched_paths` raise `GitError` for that head alone.
+        self.touched_head_errors: set[str] = set()
         self.touched_error: str | None = None
         self.touched_reads: list[tuple[str, str]] = []
         # GH-473: what `changed_lines` answers, and each call.
@@ -1525,9 +1532,11 @@ class MemoryWorkspace:
 
     def touched_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.touched_reads.append((base, head))
-        if self.touched_error is not None:
-            raise GitError(self.touched_error)
-        return self.touched
+        if self.touched_error is not None or head in self.touched_head_errors:
+            raise GitError(self.touched_error or f"git diff {base}...{head} failed: scripted")
+        # The three-dot reading the git contract test fixes: what `head` changed since it left
+        # `base`, so a scripted pair answers on its own and `touched` is the fallback.
+        return self.touched_by.get((base, head), self.touched)
 
     def numstat(self, upstream: str, head: str) -> tuple[NumstatRow, ...]:
         self.numstat_reads.append((upstream, head))
@@ -1623,7 +1632,7 @@ class MemoryWorkspace:
 
     def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
         self.ancestor_checks.append((path, sha, ref))
-        if sha in self.ancestor_errors:
+        if sha in self.ancestor_errors or ref in self.ancestor_ref_errors:
             raise GitError(f"git merge-base --is-ancestor {sha} {ref} failed: scripted")
         if ref in self.ancestors_by_ref:
             return sha in self.ancestors_by_ref[ref]
