@@ -99,7 +99,9 @@ class CiReport:
     adapter's check-suite read, the dispatched-run builder from `run.status`); None is "not
     known", and is always a wait (GH-485). `cancelled_runs` holds the run ids whose check suite
     concluded `CANCELLED` and `running_runs` those whose suite is not `COMPLETED` (GH-539); both
-    empty when the source does not say, which keeps every verdict as it was."""
+    empty when the source does not say, which keeps every verdict as it was. `queued_empty_runs`
+    holds the Actions run ids whose check suite is `QUEUED` with zero check runs (GH-601); only
+    `Tracker.watched_branch_ci` fills it, every other read leaves it empty."""
 
     head_sha: str
     base_ref: str | None
@@ -109,6 +111,7 @@ class CiReport:
     runs_completed: bool | None = None
     cancelled_runs: frozenset[str] = frozenset()
     running_runs: frozenset[str] = frozenset()
+    queued_empty_runs: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -773,6 +776,59 @@ def chosen_run(
         if run.event == "workflow_dispatch" and len(head) == 40 and head in run.display_title
     ]
     return max(matching, key=lambda candidate: candidate.created_at) if matching else None
+
+
+@dataclass(frozen=True)
+class GhostWatch:
+    """Which Actions runs are ghosts (GH-601): queued with no job, and for longer than a bound.
+    `seen` maps a run id (always a `str`) to the local instant of the first read that saw it
+    queued with zero jobs. Every `at_s` and `now_s` given to one watch comes from one local clock
+    of the caller and is never compared with an instant GitHub gave (`createdAt`). Each method
+    returns a new watch and never mutates `seen`. The rule is only here: no other module compares
+    a run's age with a bound."""
+
+    seen: Mapping[str, float] = field(default_factory=dict)
+
+    def observe_report(self, read: CiReport | CiUnreadable, at_s: float) -> GhostWatch:
+        """The watch after `read`, taken at `at_s`. The ids of `queued_empty_runs` not yet seen
+        are added at `at_s`; one already seen keeps its first instant. An id that `running_runs`
+        holds but `queued_empty_runs` does not (it has jobs now) and one `running_runs` no
+        longer holds leave the map. An unreadable read changes nothing.
+
+        Known risk: `checkSuites(first: 50)` can be cut (`hasNextPage`); a ghost suite left
+        outside the page reads as absent and its clock restarts. GH-601 part 2 decides how to
+        treat such a read."""
+        if isinstance(read, CiUnreadable):
+            return self
+        return GhostWatch(
+            {run_id: self.seen.get(run_id, at_s) for run_id in read.queued_empty_runs}
+        )
+
+    def observe_dispatched(
+        self, runs: list[DispatchedRun] | tuple[DispatchedRun, ...], head: str, at_s: float
+    ) -> GhostWatch:
+        """The watch after a listing of dispatched runs, over the one run `chosen_run(runs, head)`
+        picks: queued with no jobs it is added at `at_s` (an id already seen keeps its instant),
+        in any other state it leaves the map. No chosen run, or any other id, changes nothing."""
+        run = chosen_run(runs, head)
+        if run is None:
+            return self
+        key = str(run.run_id)
+        seen = {run_id: instant for run_id, instant in self.seen.items() if run_id != key}
+        if run.status == "queued" and run.jobs == ():
+            seen[key] = self.seen.get(key, at_s)
+        return GhostWatch(seen)
+
+    def ghosts(self, now_s: float, bound_s: float) -> frozenset[str]:
+        """The ids seen queued and empty for at least `bound_s` as of `now_s`."""
+        return frozenset(
+            run_id for run_id, instant in self.seen.items() if now_s - instant >= bound_s
+        )
+
+    def maturing(self, now_s: float, bound_s: float) -> frozenset[str]:
+        """The ids seen queued and empty for less than `bound_s` as of `now_s`; a clock that went
+        back makes the age negative and the id maturing, never an error."""
+        return frozenset(self.seen) - self.ghosts(now_s, bound_s)
 
 
 def dispatch_verdict(

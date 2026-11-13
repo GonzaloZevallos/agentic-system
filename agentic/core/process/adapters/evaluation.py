@@ -59,6 +59,7 @@ class EvaluationTracker:
             "pull_request_body",
             "pull_requests_on",
             "queue",
+            "watched_branch_ci",
         }
     )
 

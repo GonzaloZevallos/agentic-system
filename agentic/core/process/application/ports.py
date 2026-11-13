@@ -1771,6 +1771,13 @@ class Tracker(Protocol):
         what cannot be read is a `CiUnreadable`."""
         ...
 
+    def watched_branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        """The CI of the latest commit of `branch` as `branch_ci` reads it, plus
+        `queued_empty_runs` (GH-601): the Actions runs whose suite is queued with no check run.
+        The contract is `branch_ci`'s otherwise. Never raises: what cannot be read is a
+        `CiUnreadable`."""
+        ...
+
     def dispatch_ci(
         self, workflow: str, ref: str, inputs: Mapping[str, str]
     ) -> CiUnreadable | None:

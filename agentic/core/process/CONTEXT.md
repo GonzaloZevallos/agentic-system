@@ -347,6 +347,12 @@ Una corrida de GitHub Actions cuyo rojo no dice nada del código. Superada: la c
 En el código se llama `ci.current_runs`, `ci.cancelled_run`, `CiVerdict.cancelled`, el estado `cancelled` de `FullTierVerdict` y el reintento, `ci_cancel_rerun`.
 _Avoid_: corrida roja, fallo de CI (una corrida cancelada no falló)
 
+**Corrida fantasma**:
+Una corrida de GitHub Actions en cola, sin ningún job, durante `check_timeout_s`, contado con el reloj de esta máquina desde la primera lectura que la vio así; nunca se compara con un instante de GitHub. Deja de serlo apenas una lectura la muestra con jobs o fuera de la cola, y una lectura ilegible no cambia nada. Sólo cuenta el estado de suite `QUEUED`. GitHub a veces la deja así para siempre y no se puede cancelar; sin este hecho, `full_checks` no la distingue de una corrida viva que todavía no reportó.
+En el código se llama `GhostWatch` (`domain/ci.py`: `observe_report`, `observe_dispatched`, `ghosts`, `maturing`), con el campo `CiReport.queued_empty_runs` y la lectura `Tracker.watched_branch_ci`.
+_Avoid_: corrida colgada, varada, huérfana
+_Campo_: sin término de arte
+
 **Empuje especulativo**:
 El push de la cabeza de la unidad final (la integración, o la subtarea única) a `agentic-ci/<id>` que hace su revisión antes de lanzar al Tech Lead, para que el CI corra mientras él lee. Sólo en un producto que declara `ci:` y `delivery_checks`, con una cabeza confiable, sin pull request y sin escalado. No salta ningún chequeo: el veredicto sigue siendo el de `ci.full_tier_verdict` y `full_checks` lo consume sólo si la cabeza aprobada es el mismo sha; si no, o si la corrida se canceló o nunca apareció, publica y espera como siempre. Una devolución descarta el registro. El push se reintenta con la misma regla que todo paso de git del camino del CI y, si aun así falla, sólo deja una línea en el log (ADR-0080, adenda GH-487). El estado guarda el hecho del push (`ci_speculation: {head, pushed_at}`), nunca un veredicto, y el registro `full_checks` gana `speculative: true` cuando consumió esa corrida (ADR-0080, adenda GH-465).
 En el código se llama `speculation` (`domain/speculation.py`: `push_due`, `consumable`, `event_lost`) y `ci_speculation`.
