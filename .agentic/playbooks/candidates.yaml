@@ -1752,3 +1752,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-13T18:52:47.163+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change alters behavior that a flow or architecture doc describes, update that doc in the same change and check that the docs diff is not empty before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-686
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T19:23:39.276+00:00'

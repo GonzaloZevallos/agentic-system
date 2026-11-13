@@ -980,3 +980,13 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-692
+  GH-686@review:
+    cost_usd: 0.0633
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-686
