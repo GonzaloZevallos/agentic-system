@@ -47,6 +47,26 @@ GAP_MAX = timedelta(minutes=15)
 HEAD_STEPS_MAX = 2
 """How many unproductive landing steps on its sha make a head yield."""
 
+LANE_SYNCS_MIN = 2
+"""The fewest syncs a head must have left for a lane to open: one the lane forces on the head
+(it syncs master over the member's merge), and one left for the head's own next move."""
+
+INTEGRATING_KINDS = frozenset({"land_model", "role"})
+"""The kinds of child that integrate: `role` and `land_model` children run on the head's branch,
+and the head's landing then syncs master, paid from its sync budget. `merge` and `land_checks`
+judge a fixed (head, master) pair and change neither."""
+
+LaneReason = Literal[
+    "head_not_integrating",
+    "head_paths_unknown",
+    "head_sync_budget",
+    "holds_master_unknown",
+    "lacks_master",
+    "paths_overlap",
+    "member_paths_unknown",
+]
+"""Why a member that is `merge_now` and clean has no lane beside the head."""
+
 
 @dataclass(frozen=True)
 class Member:
@@ -71,7 +91,19 @@ class Member:
     arrivals included. The wait is bounded by one `HEAD_BUDGET` for each member ahead of it.
 
     Only `observed`, `left_head` and `yielded` write `charged_s`, `seen_at`, `turn_at`,
-    `yielded_at`, `yields` and `steps_on_head`; no other code builds such a state by hand."""
+    `yielded_at`, `yields` and `steps_on_head`; no other code builds such a state by hand.
+
+    The fast-lane facts (GH-681), all defaulted and all read by the caller: `merge_now` that the
+    decision is `merge` and there is no backoff, `clean` that the pull request is clean,
+    `holds_master` that its branch already holds master, `integrating` that a live child of an
+    integrating kind (`integrates`) runs on it, `paths` the files its diff touches and
+    `head_syncs_left` the syncs its head budget still allows. `paths`, `clean` and `holds_master`
+    are `None` when the read failed or was not attempted, never `frozenset()` or `False` as a
+    stand-in: `None` is never clean, never holding master and never disjoint, while an empty
+    `frozenset()` is a read, an empty diff. `paths` is a snapshot taken when the caller read it.
+    The lane's safety rests on the head's own `sync_master` seeing any overlap, which is why
+    `head_syncs_left` is a required fact. A semantic interaction between files that do not
+    overlap is not detected."""
 
     issue: int
     queued_at: datetime | None
@@ -87,6 +119,12 @@ class Member:
     merge_due: bool = False
     waits_on_ci: bool = False
     account_paused: bool = False
+    merge_now: bool = False
+    clean: bool | None = None
+    holds_master: bool | None = None
+    integrating: bool = False
+    paths: frozenset[str] | None = None
+    head_syncs_left: int | None = None
 
 
 @dataclass(frozen=True)
@@ -101,10 +139,14 @@ class Yield:
 @dataclass(frozen=True)
 class Order:
     """The result of `order`: the issue at the head (`None`: nobody eligible) and the members that
-    yielded to reach it, in the order they did."""
+    yielded to reach it, in the order they did. `lane` is the one member that may be integrated
+    beside the head (GH-681), `None` when there is none. A busy head never yields and a head that
+    yielded in this call fails `holds_turn`, so the head as passed in and the head after yields
+    agree whenever a lane exists."""
 
     head: int | None
     yielded: tuple[Yield, ...]
+    lane: int | None = None
 
 
 def instant(value: object) -> datetime | None:
@@ -221,6 +263,73 @@ def _first(members: Iterable[Member]) -> Member | None:
     return ordered[0] if ordered else None
 
 
+def integrates(kind: str) -> bool:
+    """Whether a child of `kind` integrates on the head's branch (`INTEGRATING_KINDS`)."""
+    return kind in INTEGRATING_KINDS
+
+
+def lane_ready(m: Member) -> bool:
+    """Whether `m` has every fact of its own for the lane: `merge_now`, clean, holding master, its
+    paths read, and nothing that keeps it from advancing. It does not check that `m` is eligible
+    in `order`, nor `yielded_at`; the head conditions are `lane_reason`'s."""
+    return (
+        m.merge_now
+        and m.clean is True
+        and m.holds_master is True
+        and m.paths is not None
+        and not (m.waits_on_human or m.busy or m.live_pass or m.waits_on_ci or m.account_paused)
+    )
+
+
+def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | frozenset[str]:
+    """Why `head_` opens no lane, or its paths when it does: the only place the head conditions
+    are written (busy and seen within `GAP_MAX`, integrating, paths read, `LANE_SYNCS_MIN`
+    syncs). A `str` is the reason; a `frozenset` is the head's paths, read and known."""
+    if head_ is None or not (holds_turn(head_, now) and head_.integrating):
+        return "head_not_integrating"
+    if head_.paths is None:
+        return "head_paths_unknown"
+    if head_.head_syncs_left is None or head_.head_syncs_left < LANE_SYNCS_MIN:
+        return "head_sync_budget"
+    return head_.paths
+
+
+def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReason | None:
+    """Why `member`, `merge_now` and clean, has no lane beside `head_`: the head's conditions
+    first, then the member's own. `None` for a member that is not `merge_now` and clean (it gets no
+    reason) and for one with no obstacle of its own: it never means "has the lane", which is
+    `Order.lane`."""
+    if not member.merge_now or member.clean is not True:
+        return None
+    taken = _head_obstacle(head_, now)
+    if isinstance(taken, str):
+        return taken
+    if member.holds_master is None:
+        return "holds_master_unknown"
+    if not member.holds_master:
+        return "lacks_master"
+    if member.paths is None:
+        return "member_paths_unknown"
+    if member.paths & taken:
+        return "paths_overlap"
+    return None
+
+
+def _lane(eligible: list[Member], chosen: Member | None, now: datetime) -> int | None:
+    """The member that gets the lane beside the final head `chosen`, `None` when none does: the
+    first by `(queued_at, issue)` that is `lane_ready` and whose paths are disjoint from the
+    head's."""
+    taken = _head_obstacle(chosen, now)
+    if isinstance(taken, str):
+        return None
+    pick = _first(
+        m
+        for m in eligible
+        if m is not chosen and lane_ready(m) and m.paths is not None and not m.paths & taken
+    )
+    return pick.issue if pick is not None else None
+
+
 def _choose(eligible: list[Member], now: datetime) -> Member | None:
     """The member the tiers put first among `eligible`."""
     fresh = [m for m in eligible if m.yielded_at is None]
@@ -257,7 +366,11 @@ def order(members: Iterable[Member], now: datetime) -> Order:
         done.append(gave_up)
         eligible = [gave_up.member if m is chosen else m for m in eligible]
         chosen = _choose(eligible, now)
-    return Order(chosen.issue if chosen is not None else None, tuple(done))
+    return Order(
+        chosen.issue if chosen is not None else None,
+        tuple(done),
+        _lane(eligible, chosen, now),
+    )
 
 
 def advance(members: Iterable[Member], now: datetime) -> tuple[Order, tuple[Member, ...]]:
@@ -265,7 +378,7 @@ def advance(members: Iterable[Member], now: datetime) -> tuple[Order, tuple[Memb
     state if it yielded in this call, else as given; then the final head gets `observed` (so a
     yielded member that ends as head is anchored in the same call), a member that was not yielded
     and was seen as head gets `left_head`, any other is unchanged. A head that vanished is not in
-    `members` and is not folded."""
+    `members` and is not folded. `Order.lane` passes through as `order` gave it."""
     given = tuple(members)
     result = order(given, now)
     gave_up = {y.member.issue: y.member for y in result.yielded}

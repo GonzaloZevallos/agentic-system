@@ -76,6 +76,7 @@ from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application import stop as stopmod
 from .core.process.application.delivered import files_patch, size_patch
+from .core.process.application.dry_run import DryRunRefused, read_only_ports
 from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
@@ -606,6 +607,17 @@ def build_parser() -> CommandTree:
         metavar="SECONDS",
         help="how long to wait between rounds (default 60)",
     )
+    poll_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --once: one round from reads only, printing what it would do and writing "
+        "nothing; the upstream fetch is the one exception. The five sweeps are skipped, so a "
+        "blocker the live close sweep would close does not release its dependent (GH-348), "
+        "and the first-seen exempt stamp is not recorded; exits 1 if a call was unclassified",
+    )
+    poll_parser.add_argument(
+        "--once", action="store_true", help="run one round and exit (only with --dry-run)"
+    )
     reflect = add(
         ("reflect",),
         sub,
@@ -675,6 +687,7 @@ def main() -> None:
     close = tree.commands[("close",)]
     eval_run = tree.commands[("eval", "run")]
     perf_parser = tree.commands[("perf",)]
+    poll_parser = tree.commands[("poll",)]
     # `parse_args` minus its last line: the root parser reports a flag a subparser did not
     # recognise, so `perf` has to get it back to answer with its own exit code.
     args, unrecognized = parser.parse_known_args()
@@ -699,6 +712,11 @@ def main() -> None:
             resume.error("--detach and --dry-run are exclusive: --dry-run has no child to report")
         if args.detach and not args.yes:
             resume.error("--detach requires --yes: a detached child has no stdin to confirm on")
+    elif args.command == "poll":
+        if args.dry_run != args.once:
+            poll_parser.error("--dry-run and --once go together: --once is only a dry round")
+        if args.dry_run and args.detach:
+            poll_parser.error("--detach and --dry-run are exclusive: --dry-run has no child")
     elif args.command == "close":
         if args.issue is None and not args.all:
             close.error("give --issue N or --all")
@@ -919,7 +937,8 @@ def main() -> None:
         elif args.command == "stack":
             work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
         elif args.command == "poll":
-            log_file = _log_file_for(cfg, "poll")
+            # A dry round writes no log file: `_log_file_for` mkdirs `.agentic/logs`.
+            log_file = None if args.dry_run else _log_file_for(cfg, "poll")
             work = partial(
                 _poll,
                 cfg,
@@ -928,6 +947,7 @@ def main() -> None:
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
+                dry_run=args.dry_run,
             )
         else:
             if args.issue_input is not None:
@@ -1593,6 +1613,7 @@ async def _poll(
     spawn: Spawner | None = None,
     argv0: str | None = None,
     sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
+    dry_run: bool = False,
 ) -> None:
     """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
     product, one `poll.run_once` round every `interval_s` seconds, under the same
@@ -1613,12 +1634,16 @@ async def _poll(
     exactly how the first real poller's 32 minutes of `nothing to do` sat unseen until
     it died. `sleep` replaces the bare `anyio.sleep` call between rounds, injectable
     the same way `poll.run_once`'s own `sleep` already is, for a test to prove every
-    line of a round is flushed before this ever awaits it."""
+    line of a round is flushed before this ever awaits it. `dry_run` (GH-622) is `--dry-run
+    --once`: one round over `read_only_ports`, no lock taken, no launcher, no sleep."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
         return
     registry = registry if registry is not None else _registry_for(cfg)
+    if dry_run:
+        _dry_round(cfg, ports, registry, lock)
+        return
     real_launcher = launcher if launcher is not None else SpawnLauncher(cfg)
     executable = argv0 if argv0 is not None else _self_executable()
     with _locked(lock, pollmod.LOCK_KEY):
@@ -1646,6 +1671,50 @@ async def _poll(
             except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
                 print(f"agentic: poll: round ended early: {exc}", flush=True)
             await sleep(interval_s)
+
+
+DRY_RUN_BANNER = (
+    "dry-run: plan from reads only; effects of this round's own writes are not simulated"
+)
+
+
+def _dry_round(cfg: Configuration, ports: Ports, registry: RunRegistry, lock: RunLock) -> None:
+    """One round of `agentic poll --dry-run --once` (GH-622): the banner, the round's lines, the
+    `would ...` notes of every write the proxies swallowed and one `dry-run: unclassified` line per
+    port member no table classifies. Exits 1 when any was refused, or when the tracker failed."""
+    ro_ports, ro_registry, ro_lock, ro_launcher, log = read_only_ports(ports, registry, lock, None)
+    print(DRY_RUN_BANNER, flush=True)
+    failed = False
+    try:
+        upstream = ro_ports.workspace.upstream()
+        for line in _fast_forward_notice(ro_ports, upstream, None)[1]:
+            print(line, flush=True)
+        for line in pollmod.run_once(
+            cfg,
+            ro_ports,
+            ro_registry,
+            ro_launcher,
+            datetime.now(UTC),
+            _self_executable(),
+            lock=ro_lock,
+            current_boot=liveness.current_boot_id(),
+            eval_set=_round_eval_set(ro_ports, upstream),
+            system_version=telemetry.fresh_system_version,
+            dry_run=True,
+        ):
+            print(line, flush=True)
+    except TrackerCallFailed as exc:
+        print(f"agentic: poll: round ended early: {exc}", flush=True)
+        failed = True
+    except DryRunRefused:
+        pass  # recorded in `log.refused`, said below
+    finally:
+        for note in log.writes:
+            print(note, flush=True)
+        for name in log.refused:
+            print(f"dry-run: unclassified {name}", flush=True)
+    if failed or log.refused:
+        sys.exit(1)
 
 
 async def _run(
@@ -1963,6 +2032,10 @@ async def _resume(
             _inhibited(f"{task_id}: resume"),
         ):
             _reap_dead_run(ports, task_id, taken_over)
+            if r.settled:
+                # GH-620: a pull request paused on its tracker items needs the decision only.
+                _report(resuming.settle(r, ports), task_id, ports)
+                return
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it

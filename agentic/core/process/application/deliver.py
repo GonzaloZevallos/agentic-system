@@ -14,7 +14,7 @@ from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, landing, presubmit, rules
+from ..domain import document, landing, presubmit, rules, tracker_items
 from ..domain.pull_request import BoundedBody, bounded_body, closes_line, with_required_lines
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
@@ -216,6 +216,11 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         _lapsed(lapses, "release task", failed)
     if reaped:
         patch["reaped_at_cleanup"] = list(reaped)
+    # GH-620: the plan's human items reach the owner as a needs-human escalation, after the PR
+    # and the READY comment. Last over the keys above (its status wins), before the lapses
+    # because `rules.logged` replaces `pause_log`. Read from the state deliver received.
+    if human := tracker_items.escalate_human(state, ports.now()):
+        patch = {**patch, **human}
     if lapses:
         patch = _with_lapses(patch, lapses, at=ports.now())
     done = _ended(state, patch, ports)

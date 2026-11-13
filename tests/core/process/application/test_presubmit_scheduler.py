@@ -12,6 +12,7 @@ from agentic.core.process.application.develop import develop
 from agentic.core.process.application.ports import CheckRequest, CommandResult
 from agentic.core.process.application.presubmit import CheckoutPresubmit
 from agentic.core.process.domain.check_schedule import CheckPriority
+from agentic.core.process.domain.task import INTEGRATION
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_landing_slice import _land, _world
 from tests.core.process.application.test_merge_full_checks import _merged_with
@@ -167,16 +168,55 @@ def cfg(tmp_path):
     return Configuration(product_dir=tmp_path)
 
 
-async def test_develop_gates_as_a_subtask(cfg):
+class CallingTheTool(ScriptedRunner):
+    """A runner whose Developer calls the `run_check` tool of the attempt before delivering."""
+
+    async def run_once(self, role, prompt, **kwargs):
+        if (tool := kwargs.get("check_tool")) is not None:
+            tool("tests")
+        return await super().run_once(role, prompt, **kwargs)
+
+
+def _pass(**over):
+    """The open `landing` entry of a live pass on a pull-request task."""
+    return {
+        "pull_request": "https://example.test/pull/1",
+        "landing": [{"step": "sync_master", "at": "2026-11-13T10:00:00Z", **over}],
+    }
+
+
+@pytest.mark.parametrize(
+    "unit,extra,expected",
+    [
+        ("api", {}, CheckPriority.SUBTASK),
+        (INTEGRATION, {}, CheckPriority.INTEGRATION),
+        ("api", _pass(), CheckPriority.LAND),
+        (INTEGRATION, _pass(), CheckPriority.LAND),
+        ("api", _pass(before_pr=True), CheckPriority.SUBTASK),
+        (INTEGRATION, _pass(before_pr=True), CheckPriority.INTEGRATION),
+        ("api", _pass(resolved_at="2026-11-13T11:00:00Z"), CheckPriority.SUBTASK),
+    ],
+)
+async def test_develop_gates_with_the_priority_of_its_step(cfg, unit, extra, expected):
+    from agentic.core.process.domain.task import TaskState
     from tests.core.process.application.test_delivery_tier import TASK, building
+    from tests.fakes import MemoryCheckResults
 
     ports = memory_ports(
-        ScriptedRunner(developer=[delivered()]), stack=MemoryStack(checks={"tests": "pytest"})
+        CallingTheTool(developer=[delivered()], developer_integrator=[delivered()]),
+        stack=MemoryStack(checks={"tests": "pytest"}),
+        check_results=MemoryCheckResults(),
     )
-    state, _ = building(ports)
-    await develop({**TASK, **state}, cfg, ports)
-    assert [r.priority for r in ports.check_scheduler.requests] == [CheckPriority.SUBTASK]
-    assert ports.check_scheduler.requests[0].wait_max_s == cfg.check_wait_max_s
+    state, checkout = building(ports, unit)
+    state["subtasks"][INTEGRATION] = {**state["subtasks"]["api"], "branch": "", "base": ""}
+    ports.workspace.moved.add(ports.workspace.task_checkout("GH-12").path)
+    full: TaskState = {**TASK, **state, **extra}
+    await develop(full, cfg, ports)
+    requests = ports.check_scheduler.requests
+    assert requests[0].wait_max_s == cfg.check_wait_max_s
+    # The delivery gate and the tool's presubmit of the same attempt: both asked, both the same.
+    assert len(requests) >= 2
+    assert {r.priority for r in requests} == {expected}
 
 
 async def test_full_checks_gates_as_integration(cfg):

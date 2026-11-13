@@ -66,6 +66,25 @@ pausadas, aterrizar y mergear pull requests, cerrar) y lo decide en
 `agentic/core/process/domain/rules.py:poll_plan`. El poller no corre ningún rol: lanza
 procesos hijos con `agentic/cli.py:SpawnLauncher`, y cada hijo es una invocación de la CLI.
 
+`agentic poll --product-dir <dir> --dry-run --once` es la ronda de prueba (GH-622): lee todo y
+no escribe nada. `--once` solo se acepta junto con `--dry-run`, y `--dry-run` se rechaza con
+`--detach` (salida 2). En ese modo `_poll` no toma el lock por producto, no crea un
+`SpawnLauncher`, no pide el archivo de log (`_log_file_for`) ni duerme: llama a
+`agentic/cli.py:_dry_round`, que envuelve los puertos, el registro y el lock con
+`agentic/core/process/application/dry_run.py:read_only_ports`. Cada puerto queda detrás de un
+`ReadOnly`: una lectura de la tabla `READS` delega, una escritura clasificada solo se anota
+(`DryRunLog.writes`, la línea `would <puerto>.<método>`) y devuelve un valor neutro, y un
+nombre sin clasificar se anota en `DryRunLog.refused` y levanta `DryRunRefused`. La única
+excepción declarada es `Workspace.upstream()` (el fetch), que es una lectura.
+`run_once(dry_run=True)` no ejecuta los cinco barridos (`close_issues.sweep`,
+`split_sweep.sweep`, `scratch_sweep.sweep`, `ci_ref_sweep.sweep`, `board_sync.mirror`: una línea
+`dry-run: skipped <barrido>` cada uno), ni `execute`, ni `reflect_lines`; en lugar de lanzar
+imprime `would <tipo> issue <N>` por cada acción del plan. Por eso un bloqueador que el barrido
+de cierre cerraría en esa ronda sigue abierto y su dependiente no se lanza (GH-348). La salida
+es el aviso inicial, las líneas de la ronda, las notas `would ...` y una línea
+`dry-run: unclassified <Puerto>.<nombre>` por cada rechazo. Termina con 0; con 1 si hubo algún
+rechazo o si el tracker falló (`TrackerCallFailed`, `round ended early`).
+
 ## El clon stage0
 
 El sistema que ejecuta una corrida no es el que la corrida edita (ADR-0017). Por eso

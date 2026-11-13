@@ -25,12 +25,11 @@ SPEC: SpecContract = {
 
 
 @pytest.mark.parametrize("cls", get_args(EscalationClass))
-def test_without_a_spec_the_patch_is_the_four_keys_of_today(cls: EscalationClass):
+def test_without_a_spec_the_patch_is_the_three_keys_of_today(cls: EscalationClass):
     assert rules.escalation(cls, "why") == {
         "escalated": "why",
         "escalation_class": cls,
         "escalation_cause": None,
-        "tracker_human": [],
     }
 
 

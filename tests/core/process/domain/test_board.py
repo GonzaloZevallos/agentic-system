@@ -310,3 +310,14 @@ def test_an_orphan_document_with_open_blockers_is_trabada_with_the_blockers():
 def test_an_orphan_document_with_no_blocking_report_keeps_the_neutral_text(report):
     got = board.card(_facts(document=_doc("definition_ready"), blocker=report))
     assert (got.etapa, got.bloqueo) == ("Trabada", board.NO_LIVE_PROCESS)
+
+
+def test_the_document_deliver_leaves_with_one_human_item_is_necesita_humano_with_its_bloqueo():
+    from agentic.core.process.domain import tracker_items
+
+    item = {"kind": "human", "question": "Ship the flag?", "recommendation": "Yes"}
+    state = {"id": "GH-12", "tracker_items": [item], "status": "ready_for_review"}
+    patch = tracker_items.escalate_human(state, "2026-11-13T00:00:00+00:00")
+    got = board.card(_facts(document={**state, **patch, "pull_request": "https://x/pull/7"}))
+    assert got.etapa == "Necesita humano"
+    assert got.bloqueo == "the plan leaves 1 decision(s) to the owner"

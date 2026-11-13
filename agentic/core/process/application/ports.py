@@ -1632,10 +1632,12 @@ class Tracker(Protocol):
         not the task's own pull request."""
         ...
 
-    def close_issue(self, task_id: str) -> None:
+    def close_issue(self, task_id: str, *, comment: str | None = None) -> None:
         """Closes the task's issue as completed (GH-344): the system's own answer to a
-        pull request that merged without closing it. Raises `ValueError`/`OSError` when the
-        platform cannot do it; a task with no issue is ignored, like the other calls."""
+        pull request that merged without closing it. With a `comment` the closing note is
+        posted in the same call (GH-619: a split parent says which parts landed), so there
+        is no state with the comment and the issue still open. Raises `ValueError`/`OSError`
+        when the platform cannot do it; a task with no issue is ignored, like the other calls."""
         ...
 
     def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:

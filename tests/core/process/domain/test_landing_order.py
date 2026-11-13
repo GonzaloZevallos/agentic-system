@@ -3,22 +3,29 @@ order. Pure: members in, the head's issue out."""
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
+from typing import get_args
 
 import pytest
 
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.landing_order import (
     GAP_MAX,
     HEAD_BUDGET,
     HEAD_SEEN_EVERY,
+    LANE_SYNCS_MIN,
     YIELD_MARK,
+    LaneReason,
     Member,
     advance,
     head,
     head_time,
     holds_turn,
     instant,
+    integrates,
+    lane_ready,
+    lane_reason,
     left_head,
     observed,
     order,
@@ -559,3 +566,348 @@ def test_a_yield_that_ends_the_call_as_head_again_writes_its_new_turn():
 def test_a_member_that_yielded_long_ago_is_not_a_yield_again():
     before = Member(5, T0, False, False, yielded_at=_ago(30), yields=1)
     assert _patch(before) == {}
+
+
+# --- GH-681: the fast lane facts ---------------------------------------------------------------
+
+
+def _lane_head(**kw) -> Member:
+    """A head that opens a lane: busy, seen a second ago, integrating, paths known, syncs left."""
+    facts = {
+        "busy": True,
+        "seen_at": NOW - SEC,
+        "integrating": True,
+        "paths": frozenset({"a.py"}),
+        "head_syncs_left": LANE_SYNCS_MIN,
+    }
+    return _m(1, **{**facts, **kw})
+
+
+def _cand(issue: int = 2, **kw) -> Member:
+    """A member that qualifies for the lane next to `_lane_head`."""
+    facts = {
+        "merge_now": True,
+        "clean": True,
+        "holds_master": True,
+        "paths": frozenset({"b.py"}),
+    }
+    return _m(issue, **{**facts, **kw})
+
+
+LANE_NOT_READY = {
+    "not_merge_now": {"merge_now": False},
+    "unread_clean": {"clean": None},
+    "dirty": {"clean": False},
+    "master_unknown": {"holds_master": None},
+    "lacks_master": {"holds_master": False},
+    "paths_unknown": {"paths": None},
+    "waits_on_human": {"waits_on_human": True},
+    "busy": {"busy": True},
+    "live_pass": {"live_pass": True},
+    "waits_on_ci": {"waits_on_ci": True},
+    "account_paused": {"account_paused": True},
+}
+
+
+def test_lane_ready_holds_for_a_member_with_every_condition():
+    assert lane_ready(_cand())
+    assert lane_ready(_cand(paths=frozenset()))
+
+
+@pytest.mark.parametrize("facts", list(LANE_NOT_READY.values()), ids=list(LANE_NOT_READY))
+def test_lane_ready_fails_on_each_condition_alone(facts):
+    assert not lane_ready(_cand(**facts))
+
+
+def _lane(members: list[Member]) -> int | None:
+    return order(members, NOW).lane
+
+
+def test_the_lane_goes_to_a_clean_member_beside_a_busy_integrating_head():
+    assert _lane([_lane_head(), _cand()]) == 2
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        {"busy": False},
+        {"seen_at": None},
+        {"seen_at": NOW - GAP_MAX - SEC},
+        {"integrating": False},
+        {"head_syncs_left": None},
+        {"head_syncs_left": LANE_SYNCS_MIN - 1},
+        {"paths": None},
+    ],
+    ids=[
+        "idle",
+        "never_seen",
+        "seen_too_long_ago",
+        "not_integrating",
+        "syncs_none",
+        "syncs_low",
+        "paths_none",
+    ],
+)
+def test_a_head_missing_a_condition_opens_no_lane(facts):
+    assert _lane([_lane_head(**facts), _cand()]) is None
+
+
+def test_a_head_seen_exactly_gap_max_ago_still_opens_a_lane():
+    assert _lane([_lane_head(seen_at=NOW - GAP_MAX), _cand()]) == 2
+
+
+def test_more_syncs_than_the_minimum_open_a_lane():
+    assert _lane([_lane_head(head_syncs_left=LANE_SYNCS_MIN + 3), _cand()]) == 2
+
+
+@pytest.mark.parametrize(
+    ("head_paths", "member_paths"),
+    [
+        (frozenset({"a.py"}), frozenset({"a.py", "b.py"})),
+        (frozenset({"old.py", "new.py"}), frozenset({"old.py"})),
+        (frozenset({"a.py"}), None),
+    ],
+    ids=["overlap", "rename", "member_unknown"],
+)
+def test_overlapping_or_unknown_paths_open_no_lane(head_paths, member_paths):
+    assert _lane([_lane_head(paths=head_paths), _cand(paths=member_paths)]) is None
+
+
+def test_an_empty_head_diff_opens_a_lane_and_an_empty_member_diff_gets_it():
+    assert _lane([_lane_head(paths=frozenset()), _cand()]) == 2
+    assert _lane([_lane_head(), _cand(paths=frozenset())]) == 2
+
+
+def test_only_the_oldest_ready_member_gets_the_lane():
+    members = [_lane_head(), _cand(5), _cand(3), _cand(4)]
+    assert _lane(members) == 3
+    assert _lane(list(reversed(members))) == 3
+    stamp = T0 + timedelta(minutes=2)
+    tie = [_lane_head(), _cand(8, queued_at=stamp), _cand(6, queued_at=stamp)]
+    assert _lane(tie) == 6
+
+
+def test_an_older_member_that_overlaps_does_not_block_a_younger_disjoint_one():
+    overlapping = _cand(2, paths=frozenset({"a.py"}))
+    assert _lane([_lane_head(), overlapping, _cand(3)]) == 3
+
+
+def test_a_head_that_yielded_in_this_call_opens_no_lane():
+    stuck = _lane_head(busy=False, seen_at=None, charged_s=HEAD_BUDGET.total_seconds())
+    result = order([stuck, _cand()], NOW)
+    assert result.yielded and result.head == 2
+    assert result.lane is None
+
+
+def test_a_lone_eligible_member_gets_no_lane():
+    assert _lane([_lane_head()]) is None
+    assert _lane([_lane_head(), _cand(waits_on_human=True)]) is None
+
+
+@pytest.mark.parametrize("facts", [{"waits_on_ci": True}, {"account_paused": True}])
+def test_a_member_that_cannot_advance_never_gets_the_lane(facts):
+    assert _lane([_lane_head(), _cand(**facts)]) is None
+
+
+def test_a_busy_member_is_not_lane_ready_so_it_never_gets_the_lane():
+    assert _lane([_lane_head(), _cand(busy=True)]) is None
+
+
+def test_advance_passes_the_lane_through_and_leaves_the_head_and_yields_alone():
+    members = [_lane_head(), _cand()]
+    with_lane = advance(members, NOW)
+    bare = advance([replace(m, merge_now=False, clean=None) for m in members], NOW)
+    assert with_lane[0].lane == 2 and bare[0].lane is None
+    assert (with_lane[0].head, with_lane[0].yielded) == (bare[0].head, bare[0].yielded)
+
+
+# --- lane_reason ---------------------------------------------------------------------------------
+
+LANE_REASONS: dict[LaneReason, tuple[Member | None, Member]] = {
+    "head_not_integrating": (None, _cand()),
+    "head_paths_unknown": (_lane_head(paths=None), _cand()),
+    "head_sync_budget": (_lane_head(head_syncs_left=None), _cand()),
+    "holds_master_unknown": (_lane_head(), _cand(holds_master=None)),
+    "lacks_master": (_lane_head(), _cand(holds_master=False)),
+    "member_paths_unknown": (_lane_head(), _cand(paths=None)),
+    "paths_overlap": (_lane_head(), _cand(paths=frozenset({"a.py"}))),
+}
+
+
+def test_lane_reason_covers_the_seven_reasons_of_the_type():
+    assert set(LANE_REASONS) == set(get_args(LaneReason))
+    assert get_args(LaneReason) == (
+        "head_not_integrating",
+        "head_paths_unknown",
+        "head_sync_budget",
+        "holds_master_unknown",
+        "lacks_master",
+        "paths_overlap",
+        "member_paths_unknown",
+    )
+
+
+@pytest.mark.parametrize("reason", list(LANE_REASONS))
+def test_lane_reason_names_each_obstacle(reason):
+    head_, member = LANE_REASONS[reason]
+    assert lane_reason(member, head_, NOW) == reason
+
+
+@pytest.mark.parametrize(
+    "head_",
+    [
+        _lane_head(busy=False),
+        _lane_head(seen_at=None),
+        _lane_head(seen_at=NOW - GAP_MAX - SEC),
+        _lane_head(integrating=False),
+    ],
+    ids=["idle", "never_seen", "seen_too_long_ago", "not_integrating"],
+)
+def test_a_head_that_does_not_hold_its_turn_or_integrate_is_not_integrating(head_):
+    assert lane_reason(_cand(), head_, NOW) == "head_not_integrating"
+
+
+def test_the_head_is_checked_before_the_member():
+    member = _cand(holds_master=False, paths=None)
+    assert lane_reason(member, _lane_head(integrating=False), NOW) == "head_not_integrating"
+    assert lane_reason(member, _lane_head(paths=None), NOW) == "head_paths_unknown"
+    assert lane_reason(member, _lane_head(head_syncs_left=1), NOW) == "head_sync_budget"
+    assert lane_reason(member, _lane_head(), NOW) == "lacks_master"
+    unknown = _cand(holds_master=None, paths=None)
+    assert lane_reason(unknown, _lane_head(), NOW) == "holds_master_unknown"
+    assert lane_reason(_cand(paths=None), _lane_head(), NOW) == "member_paths_unknown"
+
+
+def test_the_syncs_are_compared_to_the_minimum():
+    low = _lane_head(head_syncs_left=LANE_SYNCS_MIN - 1)
+    assert lane_reason(_cand(), low, NOW) == "head_sync_budget"
+    assert lane_reason(_cand(), _lane_head(head_syncs_left=LANE_SYNCS_MIN), NOW) is None
+
+
+@pytest.mark.parametrize(
+    "member",
+    [_cand(merge_now=False), _cand(clean=False), _cand(clean=None)],
+    ids=["not_merge_now", "dirty", "unread"],
+)
+def test_a_member_that_is_not_merge_now_and_clean_gets_no_reason(member):
+    assert lane_reason(member, None, NOW) is None
+    assert lane_reason(member, _lane_head(integrating=False), NOW) is None
+
+
+def test_the_lane_member_has_no_reason():
+    assert lane_reason(_cand(), _lane_head(), NOW) is None
+
+
+def test_no_reason_does_not_mean_the_lane():
+    younger = _cand(3)
+    assert _lane([_lane_head(), younger, _cand(2)]) == 2
+    assert lane_reason(younger, _lane_head(), NOW) is None
+    live = _cand(2, live_pass=True)
+    assert lane_reason(live, _lane_head(), NOW) is None
+    assert _lane([_lane_head(), live]) is None
+
+
+LANE_SCENARIOS = [
+    [_lane_head(), _cand()],
+    [_lane_head(), _cand(5), _cand(3)],
+    [_lane_head(), _cand(2, paths=frozenset({"a.py"})), _cand(3)],
+    [_lane_head(paths=frozenset()), _cand(2, paths=frozenset())],
+    [_lane_head(integrating=False), _cand()],
+    [_lane_head(), _cand(live_pass=True)],
+    [_lane_head(), _cand(waits_on_ci=True)],
+    [_lane_head(), _cand(holds_master=None), _cand(3)],
+    [_lane_head(busy=False), _cand(), _cand(3)],
+]
+
+
+@pytest.mark.parametrize("members", LANE_SCENARIOS)
+def test_the_lane_member_has_no_reason_and_is_ready(members):
+    result = order(members, NOW)
+    if result.lane is None:
+        return
+    by_issue = {m.issue: m for m in members}
+    member = by_issue[result.lane]
+    assert lane_reason(member, by_issue[result.head], NOW) is None
+    assert lane_ready(member)
+
+
+def test_the_consistency_table_has_scenarios_with_and_without_a_lane():
+    lanes = [order(members, NOW).lane for members in LANE_SCENARIOS]
+    assert any(lane is not None for lane in lanes) and any(lane is None for lane in lanes)
+
+
+# --- integrates ----------------------------------------------------------------------------------
+
+INTEGRATES = {"role": True, "land_model": True, "merge": False, "land_checks": False}
+
+
+def test_integrates_is_decided_for_every_run_kind():
+    assert set(get_args(rules.RunKind)) == set(INTEGRATES)
+    for kind, expected in INTEGRATES.items():
+        assert integrates(kind) is expected
+
+
+def test_an_unknown_kind_does_not_integrate():
+    assert integrates("something_else") is False
+
+
+# --- defaults ------------------------------------------------------------------------------------
+
+DEFAULT_SCENARIOS = [
+    [_m(1), _m(2), _m(3)],
+    [_m(1, live_pass=True), _m(2)],
+    [_m(1, waits_on_human=True), _m(2)],
+    [_m(1, busy=True, seen_at=NOW - SEC), _m(2)],
+    [_m(1, charged_s=HEAD_BUDGET.total_seconds()), _m(2)],
+    [_m(1)],
+    [],
+]
+
+
+@pytest.mark.parametrize("members", DEFAULT_SCENARIOS)
+def test_default_lane_facts_change_nothing_and_leave_the_lane_unset(members):
+    result = order(members, NOW)
+    assert result.lane is None
+    assert result.head == head(members, NOW)
+    assert advance(members, NOW)[0] == result
+    assert all(not lane_ready(m) for m in members)
+
+
+def test_lane_facts_alone_do_not_move_the_head_or_the_yields():
+    plain = [_m(1, busy=True, seen_at=NOW - SEC), _m(2), _m(3)]
+    rich = [
+        replace(
+            m,
+            merge_now=True,
+            clean=True,
+            holds_master=True,
+            paths=frozenset({str(m.issue)}),
+            integrating=True,
+        )
+        for m in plain
+    ]
+    rich[0] = replace(rich[0], head_syncs_left=LANE_SYNCS_MIN)
+    assert order(rich, NOW).lane == 2
+    assert (order(rich, NOW).head, order(rich, NOW).yielded) == (
+        order(plain, NOW).head,
+        order(plain, NOW).yielded,
+    )
+    assert advance(rich, NOW)[0].head == advance(plain, NOW)[0].head
+
+
+LANE_FIELD_VALUES = {
+    "merge_now": True,
+    "clean": True,
+    "holds_master": False,
+    "integrating": True,
+    "paths": frozenset(),
+    "head_syncs_left": 0,
+}
+
+
+@pytest.mark.parametrize("name", list(LANE_FIELD_VALUES))
+def test_head_without_now_rejects_each_lane_fact_off_its_default(name):
+    assert name in {f.name for f in fields(Member)}
+    with pytest.raises(ValueError, match=name):
+        head([_m(1, **{name: LANE_FIELD_VALUES[name]})])
+    assert head([_m(1)]) == 1

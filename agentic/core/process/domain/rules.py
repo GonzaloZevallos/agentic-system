@@ -763,7 +763,8 @@ def escalation(
     escalation, so a mechanical cause of an earlier pause cannot outlive it.
 
     `tracker_human` (GH-620) is the hashes of the typed tracker items this `questions` pause
-    raised. It is always written, `[]` for any other pause, for the same reason as `cause`. It
+    raised. It is written only when it is not empty: any other escalation leaves the key out, so
+    the pending hashes survive it through the `last` reducer and only `resumed` clears them. It
     is not a `MechanicalCause`: the pause stays a human's. It is refused with another class or
     with a `cause`, so a mechanical pause never carries a human's items.
 
@@ -773,7 +774,7 @@ def escalation(
     needs a `spec_cause` (`contradiction`, `conflict` or `data_loss`), still under class
     `questions`: it is no new class and no `MechanicalCause`. The key `spec_cause` is written
     only when a spec is given (`None` for any other pause, so a cause cannot outlive its
-    pause); without a spec the patch is exactly the four keys above. `spec_cause` is refused
+    pause); without a spec the patch is exactly the keys above. `spec_cause` is refused
     with another class, with a `cause`, or without a spec: a programming error, `ValueError`."""
     has_spec = bool(spec)
     if has_spec and cls == "questions" and spec_cause is None:
@@ -792,11 +793,19 @@ def escalation(
         "escalated": reason,
         "escalation_class": cls,
         "escalation_cause": cause,
-        "tracker_human": list(tracker_human),
     }
+    if tracker_human:
+        patch["tracker_human"] = list(tracker_human)
     if has_spec:
         patch["spec_cause"] = spec_cause
     return patch
+
+
+def tracker_item_pause(state: TaskState) -> bool:
+    """Whether the task is paused on typed tracker items (GH-620): `tracker_human` holds the
+    hashes of the items a person has not answered. The one place that reads it, for its three
+    callers: `resume.py`, the graph's `pause` node and `landing_plan.release`."""
+    return bool(state.get("tracker_human"))
 
 
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> dict[str, Any]:
@@ -3358,7 +3367,6 @@ def resumed(
         "escalated": None,
         "escalation_class": None,
         "escalation_cause": None,
-        "tracker_human": [],
         "status": resumed_status(state),
         "questions_for_human": [],
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
@@ -3373,6 +3381,13 @@ def resumed(
     decided = bool(decision and decision.strip())
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
+    pending = list(state.get("tracker_human", []))
+    if not pending:
+        patch["tracker_human"] = []
+    elif decided:
+        # One decision answers every item the owner was shown; only here is `answered` written.
+        patch["tracker_human"] = []
+        patch["tracker_actions_done"] = {h: {"at": at, "answered": at} for h in pending}
     if state.get("fit_question"):
         # A part at the depth cap asked "narrow it or stop"; a resume is the first answer
         # and waives nothing: the task is planned again with the decision in `Human` and
@@ -6446,11 +6461,10 @@ _PARTS_REMEDY = (
 # appends it, so the three never drift. A multi-line passage, indented like the prompt line
 # its placeholder sits on.
 TRACKER_WITH_PARTS = (
-    "When you split, tracker work for this task stays in `tracker_checklist` and the split\n"
-    "   posts it on this issue. The system itself re-points to the last part every open issue\n"
-    "   whose body has a line, outside a code fence, saying `Blocked by: #<this issue>`, so\n"
-    "   do not write those items. Add only other tracker work, such as native blockers you\n"
-    "   know about. A part's own tracker work goes in that part's body."
+    "A plan with parts carries no `tracker_items`. The system itself re-points to the last\n"
+    "   part every open issue whose body has a line, outside a code fence, saying\n"
+    "   `Blocked by: #<this issue>`, so do not write those items. A part's own tracker work\n"
+    "   goes in that part's body."
 )
 _PARTS_STEP = (
     "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
@@ -6673,6 +6687,10 @@ def delivered_files(changed_files: int) -> dict[str, int]:
 
 BlockerReason = Literal["no_merge_recorded", "merge_not_in_upstream", "slices_not_in_upstream"]
 
+# How one blocker stands (`poll._blocker_verdict`): `resolved`, `open`, a doubt (`unknown`),
+# or a closed issue the system cannot rest a resolution on.
+BlockerVerdict = Literal["resolved", "open", "unknown"] | BlockerReason
+
 _BLOCKER_REASON_TEXT: dict[BlockerReason, str] = {
     "no_merge_recorded": "no merge recorded",
     "merge_not_in_upstream": "merge not in upstream",
@@ -6725,6 +6743,24 @@ def queue_blocked_line(reports: Sequence[BlockerReport]) -> str | None:
     return f"agentic: poll: queue blocked by closed issues it cannot resolve: {named}"
 
 
+def split_parent_state(
+    parts: Sequence[tuple[str, str | None, BlockerVerdict]],
+) -> Literal["done", "waiting", "abandoned"]:
+    """What a split parent's parts come to, each given as (issue state, `state_reason`,
+    blocker verdict). The `state_reason` is read before the verdict (GH-619): a part closed
+    `NOT_PLANNED` reads `resolved` as a blocker, but it never landed, so it is never done.
+    Any such part is `abandoned`; every part `CLOSED`/`COMPLETED` and `resolved` is `done`;
+    anything else, an empty list and any `unknown` verdict included, is `waiting`."""
+    if any(state == "CLOSED" and reason == "NOT_PLANNED" for state, reason, _ in parts):
+        return "abandoned"
+    if parts and all(
+        state == "CLOSED" and reason == "COMPLETED" and verdict == "resolved"
+        for state, reason, verdict in parts
+    ):
+        return "done"
+    return "waiting"
+
+
 # --- GH-344 close-after-merge ---
 # The one place that says when a task's still-open issue is closed by the system
 # (ADR-0062, addendum GH-344). Every other module asks `close_after_merge`.
@@ -6736,7 +6772,8 @@ def close_after_merge(document: Mapping[str, object]) -> bool:
     """Whether the system closes this task's issue as completed. The caller already knows
     the issue is open. True for a merged outcome with a recorded merge commit, or for slices
     that closed the task (`closed_by_slices`). Never for `closed`, a missing outcome,
-    `tracker_only` or a split: those either merged nothing or are the human's to close. It
+    `tracker_only` or a split: those either merged nothing or are the human's to close. A
+    split parent is closed by the split sweep (`split_sweep.sweep`, GH-619), never here. It
     does not read `closed_at`, so a failed close is retried until the issue reads closed."""
     commit = document.get("merge_commit")
     if document.get("delivery_outcome") in _MERGED_OUTCOMES and isinstance(commit, str) and commit:

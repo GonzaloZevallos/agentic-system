@@ -38,6 +38,8 @@ graph TD
     m_domain__schemas --> g_domain__landing
     m_domain__schemas --> g_domain__state
     m_domain__schemas --> g_pkg__agentic__shared
+    m_domain__schemas --> m_domain__tracker_items
+    m_domain__tracker_items --> g_domain__state
     m_domain__turn_notice --> g_domain__state
     m_domain__turn_notice --> m_domain__roles
 ```

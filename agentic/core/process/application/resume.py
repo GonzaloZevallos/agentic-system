@@ -131,6 +131,9 @@ class Resumption:
     # GH-392: the commits after the integration's approved head that this resume takes as an
     # increment to review, when the document was seeded past that head.
     increment: Increment | None = None
+    # GH-620: a task with a pull request paused on its tracker items is settled by the owner's
+    # decision alone: `settle` saves `resumed`, and no graph node runs.
+    settled: bool = False
 
     def answer(self) -> dict[str, float | str | None]:
         """What the graph resumes with: the decision, and the `--estimate` when given."""
@@ -530,10 +533,29 @@ def prepare(
         resumed, target = paused, ", ".join(pending)
     else:
         decision = human_decision(ports.tracker.issue_comments(task_id))
-        if decision is None and paused.get("questions_for_human"):
+        held = rules.tracker_item_pause(paused)
+        if held and decision is not None and not decision.strip():
+            decision = None  # a blank answer decides none of the pending items
+        if decision is None and (paused.get("questions_for_human") or held):
+            waiting = paused.get("questions_for_human") or paused.get("tracker_human", [])
             raise WaitingOnHuman(
-                f"{task_id} waits on {len(paused['questions_for_human'])} question(s): "
+                f"{task_id} waits on {len(waiting)} question(s): "
                 "answer them in comments on the issue, then resume"
+            )
+        if held and paused.get("pull_request"):
+            # GH-620: the pull request exists and the owner's decision is all that was owed.
+            # `rules.resumed` records the items as answered; there is nothing to run.
+            settled = apply(paused, rules.resumed(paused, decision, estimate, at=ports.now()))
+            return Resumption(
+                task_id,
+                source,
+                paused,
+                settled,
+                decision,
+                "settled",
+                task_cap(cfg),
+                estimate=estimate,
+                settled=True,
             )
         if decision is None and paused.get("fit_question"):
             # A part over the line asked once (ADR-0054): without a comment the question is
@@ -593,6 +615,14 @@ def prepare(
         estimate=estimate,
         increment=increment,
     )
+
+
+def settle(r: Resumption, ports: Ports) -> TaskState:
+    """Ends a pause `prepare` settled (GH-620): the resumed document is saved as `rules.resumed`
+    left it and `needs-human` goes; no node runs. The caller holds the task's lock."""
+    ports.documents.save(r.resumed)
+    ports.tracker.drop_label(r.task_id, NEEDS_HUMAN)
+    return r.resumed
 
 
 def _owed_publication(

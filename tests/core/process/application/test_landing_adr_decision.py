@@ -190,6 +190,17 @@ def test_a_decision_on_an_escalated_adr_collision_is_applied_pushed_and_reviewed
     assert again.step == "re_review"
 
 
+def test_the_apply_gate_asks_the_priority_of_a_landing_step(tmp_path):
+    from agentic.core.process.domain.gate_priority import landing_step_priority
+
+    ports, _ = _asked(tmp_path)
+    ports.check_scheduler.requests.clear()
+    result, _ = _round(tmp_path, ports)
+    assert result.step == "apply_adr_decision"
+    assert ports.check_scheduler.requests, "the apply pass must run its checks under a share"
+    assert {r.priority for r in ports.check_scheduler.requests} == {landing_step_priority()}
+
+
 def test_the_review_after_an_applied_decision_is_taken_when_the_passes_are_spent(tmp_path):
     ports, _ = _asked(tmp_path)
     _round(tmp_path, ports)

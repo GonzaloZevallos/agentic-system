@@ -553,19 +553,31 @@ def test_the_plan_schema_leaves_subtasks_and_parts_optional_for_the_model():
     assert "subtasks" not in plan.get("required", []) and "parts" not in plan.get("required", [])
 
 
-# --- The third shape: work that only touches the tracker (GH-336) ----------------------
+# --- The third shape: work that only touches the tracker (GH-336, GH-663) -------------------
 
-CHECKLIST = ["Post the verdict table on #307", "Close the follow-ups that are done"]
+ITEMS = [
+    {
+        "kind": "human",
+        "question": "Post the verdict table on #307?",
+        "recommendation": "Yes, post it.",
+    },
+    {
+        "kind": "human",
+        "question": "Close the follow-ups that are done?",
+        "recommendation": "Close them.",
+    },
+]
+WAY_OUT = "{kind: human, question, recommendation}"
 
 
-def _tracker_only(files=0, cost=2.0, checklist=None, **more):
+def _tracker_only(files=0, cost=2.0, items=None, **more):
     return {
         "markdown": "### Solution",
         "estimated_cost_usd": cost,
         "estimated_files": files,
         "subtasks": [],
         "parts": [],
-        "tracker_checklist": CHECKLIST if checklist is None else checklist,
+        "tracker_items": ITEMS if items is None else items,
         "ci_required": [],
         "ci_none_reason": "The work is on the tracker.",
         **more,
@@ -577,6 +589,13 @@ def test_a_plan_whose_only_work_is_on_the_tracker_is_accepted_without_the_estima
     # the fit, the reference or the median is consulted for the zero-file shape.
     check = schemas.plan_check_for(_history(1, [400] * 5), 0.0)
     check(_tracker_only(cost=0.5))  # does not raise
+
+
+def test_a_tracker_only_plan_with_items_validates_through_the_tech_plan():
+    data = schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **_tracker_only()}, {})
+    assert data["tracker_items"] == ITEMS
+    assert "tracker_checklist" not in data
+    schemas.plan_check_for(_history(1, []), 0.0)(data)  # does not raise
 
 
 def test_the_tracker_shape_refuses_a_positive_file_count():
@@ -591,69 +610,74 @@ def test_the_tracker_shape_no_longer_refuses_a_cost_below_what_the_task_spent():
         schemas.plan_check_for(_history(1, []), 5.0)(_tracker_only(files=2, cost=2.0))
 
 
-def test_a_checklist_next_to_parts_is_accepted_as_a_split_with_tracker_work():
-    # The apostrophe #378 shape: the split posts the list; a part has no checklist to hold it.
-    check = schemas.plan_check_for(_history(1, []), 0.0)
-    check(_split(400.0, 90, tracker_checklist=CHECKLIST))  # does not raise
-
-
-def test_parts_with_a_checklist_still_answer_to_the_cost_and_file_rules():
-    check = schemas.plan_check_for(_history(1, []), 0.0)
-    with pytest.raises(ValueError, match="at least one file"):
-        check(_split(400.0, 0, tracker_checklist=CHECKLIST))
-    with pytest.raises(ValueError, match="at least two parts"):
-        check(_split(400.0, 90, parts=[_part()], tracker_checklist=CHECKLIST))
-    schemas.plan_check_for(_history(1, []), 500.0)(  # raised, never refused
-        _split(400.0, 90, tracker_checklist=CHECKLIST)
-    )
-
-
-def test_a_bad_checklist_item_next_to_parts_is_refused():
-    plan = _split(400.0, 90, tracker_checklist=["Post the verdict\nand close it"])
-    with pytest.raises(ValueError, match="one non-empty line"):
+def test_items_next_to_parts_are_refused_through_the_tech_plan_and_through_validate():
+    plan = _split(400.0, 90, tracker_items=ITEMS)
+    with pytest.raises(ValueError, match="parts") as error:
+        schemas.TechPlan.model_validate({**ZERO_SIZE, **plan})
+    assert "tracker_items" in str(error.value)
+    with pytest.raises(ValueError, match="never together"):
         schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})
-    good = _split(400.0, 90, tracker_checklist=CHECKLIST)
-    assert (
-        schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **good}, {})["tracker_checklist"]
-        == CHECKLIST
-    )
+    plain = _split(400.0, 90, tracker_items=[])
+    assert schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plain}, {})["tracker_items"] == []
 
 
-def test_a_plan_with_no_subtasks_no_parts_and_no_checklist_is_still_refused():
+def test_a_bad_item_is_refused_through_validate_and_names_the_way_out():
+    plan = _tracker_only(items=[{**ITEMS[0], "question": "ping @bob"}])
+    with pytest.raises(ValueError, match="mention") as error:
+        schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})
+    assert WAY_OUT in str(error.value)
+
+
+def test_a_plan_with_no_subtasks_no_parts_and_no_items_is_still_refused():
     check = schemas.plan_check_for(_history(1, []), 0.0)
     with pytest.raises(ValueError, match="at least one subtask"):
-        check(_tracker_only(checklist=[]))
+        check(_tracker_only(items=[]))
     with pytest.raises(ValueError, match="at least one subtask"):
-        check({**_tracker_only(), "tracker_checklist": None})
+        check({**_tracker_only(), "tracker_items": None})
 
 
-def test_zero_files_stay_refused_for_a_plan_with_subtasks_even_with_a_checklist():
+def test_zero_files_stay_refused_for_a_plan_with_subtasks_even_with_items():
     check = schemas.plan_check_for(_history(1, []), 0.0)
     with pytest.raises(ValueError, match="at least one file"):
-        check({**_estimated(20.0, 0), "tracker_checklist": CHECKLIST})
-    check({**_estimated(20.0, 3), "tracker_checklist": CHECKLIST})  # does not raise
+        check({**_estimated(20.0, 0), "tracker_items": ITEMS})
+    check({**_estimated(20.0, 3), "tracker_items": ITEMS})  # does not raise
 
 
-def test_a_checklist_item_must_be_one_line():
+def test_none_validates_as_no_items():
+    plan = _tracker_only(items=[])
+    plan["tracker_items"] = None
+    assert schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})["tracker_items"] == []
+
+
+def test_an_item_must_be_one_line():
     for bad in ("", "two\nlines"):
         with pytest.raises(ValueError, match="one non-empty line"):
             schemas.TechPlan.model_validate(
-                {
-                    "markdown": "m",
-                    "estimated_cost_usd": 1,
-                    "estimated_files": 0,
-                    **ZERO_SIZE,
-                    "ci_required": [],
-                    "ci_none_reason": "The work is on the tracker.",
-                    "tracker_checklist": [bad],
-                }
+                {**ZERO_SIZE, **_tracker_only(items=[{**ITEMS[0], "question": bad}])}
             )
 
 
-def test_the_plan_schema_leaves_the_checklist_optional_for_the_model():
+@pytest.mark.parametrize("legacy", [["Close #12"], "Close #12"])
+def test_a_fresh_plan_with_the_legacy_key_is_refused_naming_tracker_items(legacy):
+    plan = {**_tracker_only(items=[]), "tracker_checklist": legacy}
+    with pytest.raises(ValueError, match="tracker_items") as error:
+        schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})
+    assert WAY_OUT in str(error.value)
+
+
+@pytest.mark.parametrize("empty", [[], None, ""])
+def test_an_empty_legacy_key_is_no_news_and_validates(empty):
+    plan = {**_tracker_only(items=[]), "tracker_checklist": empty}
+    assert schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **plan}, {})["tracker_items"] == []
+
+
+def test_the_plan_schema_has_tracker_items_and_no_legacy_checklist():
     plan = schemas.json_schema(schemas.TechPlan, VOCAB)
-    assert "tracker_checklist" in plan["properties"]
-    assert "tracker_checklist" not in plan.get("required", [])
+    assert "tracker_items" in plan["properties"]
+    assert "tracker_items" not in plan.get("required", [])
+    assert "tracker_checklist" not in plan["properties"]
+    described = plan["properties"]["tracker_items"]["description"]
+    assert "5" in described and "240" in described  # built from tracker_items' constants
 
 
 # --- QA Performance convening (GH-318, ADR-0060) ---------------------------------------
@@ -840,13 +864,13 @@ PART_AT_DEPTH_ONE = ("GH-316", 2, 1)
 HIGH_REFERENCE = [10, 10, 10, 10, 200, 200, 200]
 
 
-def test_a_part_that_writes_parts_and_a_checklist_is_told_to_write_subtasks_only():
-    # The GH-346 shape: the checklist refusal is never reached.
+def test_a_part_that_writes_parts_and_items_is_told_to_write_subtasks_only():
+    # The GH-346 shape: the items refusal is never reached.
     check = schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_OF)
     with pytest.raises(
         ValueError, match="part 2 of GH-316.*depth 2.*at most 2 levels.*subtasks only"
     ) as e:
-        check(_split(400.0, 90, tracker_checklist=CHECKLIST))
+        check(_split(400.0, 90, tracker_items=ITEMS))
     assert "write parts" not in str(e.value)
     with pytest.raises(ValueError, match="subtasks only"):
         check(_split(20.0, 3))  # parts that would fit too: refused all the same
@@ -1178,7 +1202,7 @@ def _requiring(*paths: str) -> dict:
         **ZERO_SIZE,
         "ci_required": [],
         "ci_none_reason": "The work is on the tracker.",
-        "tracker_checklist": ["Post the verdict"],
+        "tracker_items": [ITEMS[0]],
         "required_paths": list(paths),
     }
 
@@ -1434,6 +1458,7 @@ def test_the_plan_check_asks_for_one_terminal_part_only_of_a_part():
         schemas.plan_check_for(_history(1, []), 0.0, part_of=("GH-1", 1, 1))(data)
 
 
-def test_the_tech_plan_does_not_expose_tracker_items_yet():
-    # The guard of GH-620 part 1: no run can set the key until part 2 flips this on purpose.
-    assert "tracker_items" not in schemas.TechPlan.model_fields
+def test_the_tech_plan_exposes_tracker_items_and_no_longer_the_checklist():
+    # GH-663 flips the guard of GH-620 part 1 on purpose: the writer is on.
+    assert "tracker_items" in schemas.TechPlan.model_fields
+    assert "tracker_checklist" not in schemas.TechPlan.model_fields

@@ -25,6 +25,10 @@ ALLOWED: dict[tuple[str, str], str] = {
     (f"{APPLICATION}/run_role.py", "run_role"): (
         "calls the module's own `escalation(exc)` wrapper above, not rules.escalation"
     ),
+    ("agentic/core/process/domain/tracker_items.py", "escalate_human"): (
+        "raises the plan's typed tracker items for the owner (GH-620), decisions of the plan "
+        "and not doubts about the spec's behaviour"
+    ),
     (f"{APPLICATION}/landing_fix.py", "_escalate"): (
         "delivery-mechanics questions (landing, CI, ADR collisions), not doubts about the "
         "spec's behaviour"

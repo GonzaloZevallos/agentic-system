@@ -31,7 +31,7 @@ from typing import Literal
 from ..domain import landing, rules
 from ..domain import landing as landing_rules
 from ..domain.adr_numbers import Ambiguous, DecidedRenaming, kept_spots, outside_bounds
-from ..domain.check_schedule import CheckPriority
+from ..domain.gate_priority import landing_step_priority
 from ..domain.presubmit import CheckResult, RedCheck, describe_checks, gate_verdict, red_checks
 from ..domain.roles import DEVELOPER
 from ..domain.task import AdrDecisionOutcome, TaskState, apply
@@ -397,7 +397,7 @@ def _gate(context: LandingContext, state: TaskState, path: Path, before: str) ->
         before,
         fast_tier(ports.stack.checks(base), ports.stack.delivery_checks(base)),
         cfg.check_timeout_s,
-        priority=CheckPriority.SUBTASK,
+        priority=landing_step_priority(),
         wait_max_s=cfg.check_wait_max_s,
         witness=ports.stack.witness(base),
         parallel=ports.stack.parallel_checks(base),
