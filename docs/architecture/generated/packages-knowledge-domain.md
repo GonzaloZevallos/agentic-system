@@ -12,6 +12,7 @@ graph TD
     m_domain__knowledge["domain.knowledge"]
     m_domain__knowledge_index["domain.knowledge_index"]
     m_domain__owner_rules["domain.owner_rules"]
+    m_domain__spec["domain.spec"]
     m_domain__stack["domain.stack"]
     m_domain__stack_checks["domain.stack_checks"]
     m_domain__knowledge --> g_pkg__agentic__core__process
@@ -21,6 +22,7 @@ graph TD
     m_domain__knowledge_index --> m_domain__knowledge
     m_domain__knowledge_index --> m_domain__owner_rules
     m_domain__owner_rules --> g_pkg__agentic__core__process
+    m_domain__spec --> g_pkg__agentic__core__process
     m_domain__stack --> g_pkg__agentic__core__process
     m_domain__stack --> m_domain__stack_checks
     m_domain__stack_checks --> g_pkg__agentic__core__process
