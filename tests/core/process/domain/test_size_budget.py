@@ -146,3 +146,105 @@ def test_a_pair_of_ratios_judges_files_and_lines_each_by_its_own():
 
 def test_budget_text_with_a_pair_of_ratios_names_each():
     assert "judged x 1.2 files and x 2 lines, rounded up" in budget.budget_text((1.2, 2.0))
+
+
+# The refusal and prompt figures (GH-691): `max_declarable` is the one inverse of `judged`.
+
+RATIOS = [1.0, 1.2, 1.5, 1.4285714, 2.0, (1.2, 2.0), (1.4285714, 1.3)]
+BUDGET_TEXT_BEFORE = (
+    "Size budget: a task may declare at most 15 hand-written non-test files and 400 added "
+    "hand-written non-test lines. Tests have their own cap of 600 added lines. A path is a "
+    "test when a directory of it is one of `tests`, `test`, `__tests__`, `e2e` or its file "
+    "name matches `test_*`, `*_test.*`, `*.test.*`, `*.spec.*`. Generated paths never count: "
+    "the lockfiles (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `package-lock.json`, "
+    "`npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `Cargo.lock`, "
+    "`go.sum`, `Gemfile.lock`, `composer.lock`), the stack's `docs.paths` and its "
+    "`generated:` globs. Docs, ADRs, README and prompt files are hand-written."
+)
+
+
+@pytest.mark.parametrize("ratio", RATIOS)
+def test_max_declarable_is_the_largest_size_that_still_fits(ratio):
+    most = budget.max_declarable(ratio)
+    assert budget.fits(budget.judged(most, ratio))
+    assert most.test_lines == budget.TEST_LINES
+    for field in ("hand_files", "hand_lines"):
+        more = PlanSize(
+            most.hand_files + (field == "hand_files"),
+            most.hand_lines + (field == "hand_lines"),
+            0,
+        )
+        assert budget.crossed(budget.judged(more, ratio)) == (field,)
+
+
+def test_max_declarable_pins_the_unproven_ratio_and_leaves_tests_unscaled():
+    assert budget.max_declarable() == PlanSize(10, 266, 600)
+    assert budget.max_declarable(budget.UNPROVEN_RATIO) == PlanSize(10, 266, 600)
+    for ratio in RATIOS:
+        assert budget.max_declarable(ratio).test_lines == 600
+
+
+def test_over_text_for_a_part_over_hand_lines_names_every_figure():
+    text = budget.over_text(PlanSize(3, 270, 10), 1.5, "part")
+    assert text.startswith("Do not lower a declaration to fit")
+    assert "hand_lines declared 270, judged 405 at x1.5, cap 400" in text
+    assert "an honest estimate fits only at 266 or less" in text
+    assert "hand_files" not in text and "test_lines" not in text
+
+
+def test_over_text_for_a_part_over_test_lines_names_every_figure():
+    text = budget.over_text(PlanSize(1, 10, 700), 1.5, "part")
+    assert "test_lines declared 700, judged 700 (not scaled), cap 600" in text
+    assert "fits only at 600 or less" in text
+    assert "hand_lines" not in text
+
+
+def test_over_text_names_every_crossed_field_in_field_order():
+    text = budget.over_text(PlanSize(11, 270, 700), 1.5, "part")
+    assert text.index("hand_files") < text.index("hand_lines") < text.index("test_lines")
+
+
+@pytest.mark.parametrize("ratio", [1.4285714, (1.4285714, 1.3)])
+def test_over_text_prints_the_integers_of_judged_and_says_about_for_a_long_ratio(ratio):
+    size = PlanSize(40, 320, 10)
+    judged, most = budget.judged(size, ratio), budget.max_declarable(ratio)
+    text = budget.over_text(size, ratio, "part")
+    assert f"hand_files declared 40, judged {judged.hand_files} at about x" in text
+    assert f"hand_lines declared 320, judged {judged.hand_lines} at " in text
+    assert f"fits only at {most.hand_files} or less" in text
+    assert f"fits only at {most.hand_lines} or less" in text
+    assert "about x1.43" in text
+
+
+def test_over_text_shows_a_pair_by_each_halfs_own_ratio():
+    text = budget.over_text(PlanSize(20, 300, 0), (1.2, 2.0), "part")
+    assert "hand_files declared 20, judged 24 at x1.2, cap 15" in text
+    assert "hand_lines declared 300, judged 600 at x2, cap 400" in text
+
+
+def test_over_text_for_a_plan_gives_the_cap_and_a_ceiling_per_part():
+    text = budget.over_text(PlanSize(3, 270, 700), 1.5, "plan")
+    assert "hand_lines judged 405 (declared 270 at x1.5), cap 400" in text
+    assert "test_lines judged 700 (declared 700, not scaled), cap 600" in text
+    assert "write parts" in text and "size each part honestly" in text
+    assert "no more than 266 declared hand-written lines" in text
+    assert "and 600 test lines" in text
+    assert "fits only at" not in text
+    assert "lower" not in text
+
+
+def test_budget_text_without_a_ratio_is_byte_for_byte_what_it_was():
+    assert budget.budget_text(None) == BUDGET_TEXT_BEFORE
+
+
+@pytest.mark.parametrize("ratio", [budget.UNPROVEN_RATIO, 1.2, (1.2, 2.0)])
+def test_budget_text_with_a_ratio_appends_one_sentence_with_the_max_declarable(ratio):
+    text, most = budget.budget_text(ratio), budget.max_declarable(ratio)
+    before = budget.budget_text(None)
+    assert text.startswith(before)
+    assert text.endswith(
+        f"At this factor the most you can declare and still fit is {most.hand_files} "
+        f"hand-written files and {most.hand_lines} hand-written lines; tests are not scaled, "
+        f"so up to {budget.TEST_LINES} test lines."
+    )
+    assert "judged x" in text
