@@ -948,3 +948,5 @@ tasks:
     cost_usd: 0.0
   GH-628@review:
     cost_usd: 0.0687
+  GH-670@review:
+    cost_usd: 0.0897

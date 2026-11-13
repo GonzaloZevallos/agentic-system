@@ -1677,3 +1677,21 @@ candidates:
   - finding
   - return
   added_at: '2026-11-13T09:41:09.748+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a change adds a new entry path to shared message or template text, trace every path that now renders it and check the wording is true for each, including zero or unknown values.
+  confidence: medium
+  seen_in:
+  - GH-670
+  sources:
+  - finding
+  added_at: '2026-11-13T14:23:08.539+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: After a message or template changes on the branch, re-read the docs sentences that quote or describe it and check they still match the final code.
+  confidence: low
+  seen_in:
+  - GH-670
+  sources:
+  - finding
+  added_at: '2026-11-13T14:23:08.539+00:00'
