@@ -94,6 +94,7 @@ files = [
     "agentic/core/process/application/pre_pr_fix.py",
     "agentic/core/process/application/split.py",
     "agentic/core/process/application/split_sweep.py",
+    "agentic/core/process/application/stage0_rotate.py",
     "scripts/poll_waits.py",
     "scripts/gate_concurrency.py",
     "scripts/docs/render.py",
