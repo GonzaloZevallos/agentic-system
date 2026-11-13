@@ -716,14 +716,14 @@ def test_both_tech_lead_prompts_render_the_one_text_on_tracker_work_with_parts(
 ):
     """With the parts step empty (a part) and with the normal one, the rule on where tracker
     work goes is there, whole, from the one constant; and nothing asks the Tech Lead to
-    write the re-point item itself: the system derives it."""
+    write the re-point item itself: the system re-points the lines itself."""
     role = next(r for r in ROLES if r.slug == slug)
     text = load_prompt(
         role, Configuration(product_dir=tmp_path), memory_ports(), {}, **part_values(part_of)
     ).text
     assert "{{" not in text
     assert rules.TRACKER_WITH_PARTS in text
-    assert "so do not write those\n   items" in text
+    assert "so do\n   not write those items" in text
     assert "re-point" not in text.replace(rules.TRACKER_WITH_PARTS, "")
 
 

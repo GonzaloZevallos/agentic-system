@@ -1444,7 +1444,7 @@ def test_a_split_task_writes_and_reads_back_its_checklist_and_record():
         {"title": "One", "body": "b", "depends_on": []},
         {"title": "Two", "body": "b", "depends_on": [1]},
     ]
-    items = [*_CHECKLIST, "#77 is blocked by #53, which this split does not close: close #53"]
+    items = [*_CHECKLIST, "Retitle #77 after the split"]
     posted = {"at": "2026-10-25T10:00:00+00:00", "hash": rules.tracker_hash(items)}
     state = _bare(
         parts=parts,

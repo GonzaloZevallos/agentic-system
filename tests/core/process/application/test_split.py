@@ -179,8 +179,8 @@ def test_the_reader_of_blockers_unites_every_blocked_by_line():
     assert rules.blockers_from_body("Blocked by: #1, #2\n\nbody") == (1, 2)
 
 
-# The split posts the tracker checklist (GH-350, ADR-0062): the Tech Lead's items, then one
-# the system derives for each open issue still blocked by the task that will never close.
+# The split posts the plan's own tracker checklist (GH-350, ADR-0062) and re-points the
+# dependents itself (GH-619): no item is derived or asks the human to close or re-point.
 BLOCKED = ("https://github.com/o/r/issues/77", "Blocked by: #53\n\nWaits for the whole task.")
 WITH_CHECKLIST = {**STATE, "tracker_checklist": ["Close #12 as superseded"]}
 
@@ -193,65 +193,128 @@ def split_comments(ports):
     return [text for _, text in ports.tracker.comments if text.startswith(SPLIT)]
 
 
-def ports_with_a_blocked_issue():
+def ports_with_a_blocked_issue(body=BLOCKED[1]):
+    """Ports whose inbox lists issue #77 waiting on `GH-53`, wired to the tracker's writes."""
     ports = ports_with_numbered_issues()
-    ports.inbox._open_issues = [BLOCKED]
+    ports.inbox._open_issues = [(BLOCKED[0], body)]
+    ports.inbox.issues["77"] = {"id": "GH-77", "title": "Next", "description": body}
+    ports.tracker.inbox = ports.inbox
     return ports
 
 
-async def test_a_split_posts_the_checklist_with_the_derived_items_before_the_split_comment(
-    tmp_path,
-):
+async def test_a_split_posts_the_plans_own_checklist_unchanged_before_the_split_comment(tmp_path):
     ports = ports_with_a_blocked_issue()
     patch = await split(WITH_CHECKLIST, Configuration(product_dir=tmp_path), ports)
 
     assert patch["status"] == "split"
     (posted,) = checklist_comments(ports)
-    assert "- [ ] Close #12 as superseded" in posted
-    # The last part is the fourth: nothing depends on it, so its issue is #104.
-    assert (
-        "- [ ] #77 is blocked by #53, which this split does not close: "
-        "close #53 or re-point #77 to #104"
-    ) in posted
+    assert posted.count("- [ ]") == 1 and "- [ ] Close #12 as superseded" in posted
+    assert "re-point" not in posted and "close #53" not in posted
     assert [text.split(":")[0] for _, text in ports.tracker.comments] == [
         TRACKER_WORK.split(":")[0],
         SPLIT.split(":")[0],
     ]
     saved = ports.documents.saved[-1]
-    assert saved["tracker_checklist"][0] == "Close #12 as superseded"
-    assert len(saved["tracker_checklist"]) == 2
+    assert saved["tracker_checklist"] == ["Close #12 as superseded"]
     assert saved["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
         saved["tracker_checklist"]
     )
     assert rules.tracker_marker("GH-53", saved["tracker_checklist"]) in posted
 
 
-async def test_a_split_without_a_checklist_and_without_blocked_issues_posts_only_the_split(
-    tmp_path,
-):
-    ports = ports_with_numbered_issues()
-    ports.inbox._open_issues = [("https://github.com/o/r/issues/5", "Blocked by: #9\n\nx")]
+async def test_a_split_without_a_checklist_posts_only_the_split_comment(tmp_path):
+    ports = ports_with_a_blocked_issue()
     patch = await split(STATE, Configuration(product_dir=tmp_path), ports)
 
     assert patch["status"] == "split"
-    assert len(ports.tracker.comments) == 1 and checklist_comments(ports) == []
+    assert checklist_comments(ports) == [] and len(split_comments(ports)) == 1
     assert "tracker_checklist" not in patch and "tracker_checklist_posted" not in patch
-    assert "tracker_checklist" not in ports.documents.saved[-1]
 
 
-async def test_the_system_items_alone_are_a_checklist_when_the_plan_wrote_none(tmp_path):
-    ports = ports_with_a_blocked_issue()
+def edits(ports):
+    return [entry for entry in ports.tracker.events if entry == "update_issue_body"]
+
+
+def dependent_comments(ports):
+    return [(ref, text) for ref, text in ports.tracker.commented_issues if ref == BLOCKED[0]]
+
+
+async def test_a_cut_split_comment_and_its_resume_edit_and_comment_on_the_dependent_once(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    first = ports_with_a_blocked_issue()
+    real = first.tracker.comment
+
+    def comment(task_id, text):
+        if text.startswith(SPLIT):
+            raise ValueError("gh: boom")
+        real(task_id, text)
+
+    first.tracker.comment = comment
+    cut = await split(STATE, cfg, first)
+
+    assert cut["escalation_class"] == "failure" and "split comment" in cut["escalated"]
+    # The sweep ran after the parts were open; the last part is the fourth, issue #104.
+    assert first.tracker.updated_bodies == [(77, "Blocked by: #104\n\nWaits for the whole task.")]
+    paused = apply(first.documents.saved[-1], cut)
+
+    again = ports_with_a_blocked_issue()
+    again.inbox._open_issues = [(BLOCKED[0], first.tracker.updated_bodies[0][1])]
+    again.inbox.issues["77"]["description"] = first.tracker.updated_bodies[0][1]
+    done = await split(
+        apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00")), cfg, again
+    )
+
+    assert done["status"] == "split"
+    assert edits(again) == [] and dependent_comments(again) == []
+    assert len(edits(first)) == 1 and len(dependent_comments(first)) == 1
+    assert "#53" in dependent_comments(first)[0][1] and "#104" in dependent_comments(first)[0][1]
+    assert "did not finish" not in split_comments(again)[0]
+
+
+async def test_a_dependent_edited_only_on_its_blocked_by_line(tmp_path):
+    body = "Intro\r\nBlocked by: #53, #9\r\n```\nBlocked by: #53\n```\n<!-- marker -->"
+    ports = ports_with_a_blocked_issue(body)
     await split(STATE, Configuration(product_dir=tmp_path), ports)
 
-    (posted,) = checklist_comments(ports)
-    assert posted.count("- [ ]") == 1 and "#77 is blocked by #53" in posted
+    ((number, written),) = ports.tracker.updated_bodies
+    assert number == 77
+    assert written == body.replace("Blocked by: #53, #9", "Blocked by: #104, #9", 1)
 
 
-async def test_a_task_without_an_issue_number_derives_nothing(tmp_path):
+async def test_an_unreadable_open_issue_list_ends_split_with_the_read_failure_line(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    first = ports_with_a_blocked_issue()
+    first.inbox.refs_error = ValueError("gh: boom secret")
+    patch = await split(STATE, cfg, first)
+
+    assert patch["status"] == "split" and edits(first) == []
+    (text,) = split_comments(first)
+    assert "the open issues could not be read; the sweep of part 2 finishes it." in text
+    assert "secret" not in text
+
+    again = ports_with_a_blocked_issue()
+    again.tracker.issue_numbers_from = 101
+    paused = {**STATE, "split_issues": dict(first.documents.saved[-1]["split_issues"])}
+    await split(paused, cfg, again)
+    assert len(edits(again)) == 1 and len(dependent_comments(again)) == 1
+
+
+async def test_a_failed_edit_of_a_dependent_is_counted_in_the_split_comment(tmp_path):
+    ports = ports_with_a_blocked_issue()
+    ports.tracker.body_errors = {77}
+    patch = await split(STATE, Configuration(product_dir=tmp_path), ports)
+
+    assert patch["status"] == "split"
+    assert "1 of 1 failed; the sweep of part 2 finishes it." in split_comments(ports)[0]
+    assert dependent_comments(ports) == []
+
+
+async def test_a_task_without_an_issue_number_re_points_nothing(tmp_path):
     ports = ports_with_a_blocked_issue()
     state = {**STATE, "id": "local-1", "tracker_checklist": ["Close #12"]}
     await split(state, Configuration(product_dir=tmp_path), ports)
 
+    assert edits(ports) == [] and ports.inbox.refs_calls == 0
     (posted,) = checklist_comments(ports)
     assert posted.count("- [ ]") == 1
 
@@ -265,18 +328,17 @@ async def test_a_failed_checklist_post_resumes_with_one_checklist_and_one_split_
     assert cut["escalation_class"] == "failure" and "tracker checklist" in cut["escalated"]
     assert len(first.tracker.opened_issues) == 4 and first.tracker.comments == []
     paused = apply(first.documents.saved[-1], cut)
-    assert len(paused["tracker_checklist"]) == 2  # saved before it was posted
+    assert paused["tracker_checklist"] == ["Close #12 as superseded"]
     assert "tracker_checklist_posted" not in paused
 
     again = ports_with_a_blocked_issue()
-    again.tracker.issue_numbers_from = 201  # a recomposition would show: it must not happen
+    again.tracker.issue_numbers_from = 201
     done = await split(
         apply(paused, rules.resumed(paused, None, at="2026-11-06T12:00:00+00:00")), cfg, again
     )
 
     assert done["status"] == "split" and again.tracker.opened_issues == []
     assert len(checklist_comments(again)) == 1 and len(split_comments(again)) == 1
-    assert "#77 is blocked by #53" in checklist_comments(again)[0]
 
 
 async def test_a_failed_split_comment_after_the_checklist_resumes_without_posting_it_again(
