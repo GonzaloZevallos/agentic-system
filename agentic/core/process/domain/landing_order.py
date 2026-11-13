@@ -281,16 +281,17 @@ def lane_ready(m: Member) -> bool:
     )
 
 
-def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | None:
-    """Why `head_` opens no lane, `None` when it does: the only place the head conditions are
-    written (busy and seen within `GAP_MAX`, integrating, paths read, `LANE_SYNCS_MIN` syncs)."""
+def _head_obstacle(head_: Member | None, now: datetime) -> LaneReason | frozenset[str]:
+    """Why `head_` opens no lane, or its paths when it does: the only place the head conditions
+    are written (busy and seen within `GAP_MAX`, integrating, paths read, `LANE_SYNCS_MIN`
+    syncs). A `str` is the reason; a `frozenset` is the head's paths, read and known."""
     if head_ is None or not (holds_turn(head_, now) and head_.integrating):
         return "head_not_integrating"
     if head_.paths is None:
         return "head_paths_unknown"
     if head_.head_syncs_left is None or head_.head_syncs_left < LANE_SYNCS_MIN:
         return "head_sync_budget"
-    return None
+    return head_.paths
 
 
 def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReason | None:
@@ -300,16 +301,16 @@ def lane_reason(member: Member, head_: Member | None, now: datetime) -> LaneReas
     `Order.lane`."""
     if not member.merge_now or member.clean is not True:
         return None
-    obstacle = _head_obstacle(head_, now)
-    if obstacle is not None:
-        return obstacle
+    taken = _head_obstacle(head_, now)
+    if isinstance(taken, str):
+        return taken
     if member.holds_master is None:
         return "holds_master_unknown"
     if not member.holds_master:
         return "lacks_master"
     if member.paths is None:
         return "member_paths_unknown"
-    if head_ is not None and head_.paths is not None and member.paths & head_.paths:
+    if member.paths & taken:
         return "paths_overlap"
     return None
 
@@ -318,13 +319,13 @@ def _lane(eligible: list[Member], chosen: Member | None, now: datetime) -> int |
     """The member that gets the lane beside the final head `chosen`, `None` when none does: the
     first by `(queued_at, issue)` that is `lane_ready` and whose paths are disjoint from the
     head's."""
-    if chosen is None or _head_obstacle(chosen, now) is not None or chosen.paths is None:
+    taken = _head_obstacle(chosen, now)
+    if isinstance(taken, str):
         return None
-    taken = chosen.paths
     pick = _first(
         m
         for m in eligible
-        if m.issue != chosen.issue and lane_ready(m) and m.paths is not None and not m.paths & taken
+        if m is not chosen and lane_ready(m) and m.paths is not None and not m.paths & taken
     )
     return pick.issue if pick is not None else None
 
