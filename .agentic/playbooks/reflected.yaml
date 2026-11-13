@@ -889,3 +889,5 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-626
+  GH-659@review:
+    cost_usd: 0.0
