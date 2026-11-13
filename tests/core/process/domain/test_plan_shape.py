@@ -193,7 +193,9 @@ def test_single_never_refuses_a_plan_with_parts_or_a_tracker_only_plan():
     tracker = {
         **plan(),
         "subtasks": [],
-        "tracker_checklist": ["Close issue 12"],
+        "tracker_items": [
+            {"kind": "human", "question": "Close issue 12?", "recommendation": "Yes."}
+        ],
         "estimated_files": 0,
         "estimated_cost_usd": 1.0,
     }

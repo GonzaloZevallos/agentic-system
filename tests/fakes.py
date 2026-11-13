@@ -2791,7 +2791,7 @@ def planned(
     integration: str = "",
     estimated_cost_usd: float = 20.0,
     estimated_files: int = 5,
-    tracker_checklist: Sequence[str] = (),
+    tracker_items: Sequence[dict[str, str]] = (),
     hand_files: int = 1,
     hand_lines: int = 10,
     test_lines: int = 10,
@@ -2816,7 +2816,7 @@ def planned(
             "test_lines": test_lines,
             "ci_required": [],
             "ci_none_reason": "The issue requires no external check.",
-            **({"tracker_checklist": list(tracker_checklist)} if tracker_checklist else {}),
+            **({"tracker_items": [dict(i) for i in tracker_items]} if tracker_items else {}),
         },
         cost,
         2,
@@ -2825,14 +2825,14 @@ def planned(
 
 
 def planned_tracker_only(
-    checklist: Sequence[str],
+    items: Sequence[dict[str, str]],
     *,
     cost: float = 0.3,
     session: str = "tl",
     estimated_cost_usd: float = 2.0,
 ) -> RawResult:
-    """A Tech Lead plan whose only work is on the issue tracker (GH-336): a checklist, no
-    subtasks, no parts and no file."""
+    """A Tech Lead plan whose only work is on the issue tracker (GH-336): typed items, no
+    subtasks, no parts and no file. Its `items` are the typed `human` tracker items (GH-663)."""
     return RawResult(
         {
             "markdown": "### Solution\n\nThe work is on the tracker.",
@@ -2846,7 +2846,7 @@ def planned_tracker_only(
             "test_lines": 0,
             "ci_required": [],
             "ci_none_reason": "The work is on the tracker.",
-            "tracker_checklist": list(checklist),
+            "tracker_items": [dict(i) for i in items],
         },
         cost,
         2,

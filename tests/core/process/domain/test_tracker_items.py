@@ -9,11 +9,96 @@ from agentic.core.process.domain import rules, task, tracker_items
 ITEM = {"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."}
 
 
+WAY_OUT = "{kind: human, question, recommendation}"
+
+
 def test_parse_accepts_a_valid_item_and_returns_a_new_dict_with_exactly_the_three_keys():
-    raw = [{**ITEM, "extra": "dropped"}]
+    raw = [dict(ITEM)]
     parsed = tracker_items.parse(raw)
     assert parsed == [ITEM]
     assert parsed[0] is not raw[0]
+
+
+def test_parse_refuses_a_key_outside_the_three_and_names_it():
+    with pytest.raises(ValueError, match="urgent") as error:
+        tracker_items.parse([{**ITEM, "urgent": "yes"}])
+    assert WAY_OUT in str(error.value)
+
+
+def test_parse_returns_the_stripped_strings_so_the_hash_and_the_line_agree():
+    padded = {"kind": "human", "question": "  Ship it?  ", "recommendation": " Yes, ship.\t"}
+    assert tracker_items.parse([padded]) == [ITEM]
+
+
+def test_the_limits_are_defined_here_once():
+    assert tracker_items.MAX_ITEMS == 5
+    assert tracker_items.MAX_FIELD_CHARS == 240
+
+
+def _distinct(count: int) -> list[dict[str, str]]:
+    return [{**ITEM, "question": f"Question {n}?"} for n in range(count)]
+
+
+def test_parse_takes_five_items_and_refuses_six():
+    assert len(tracker_items.parse(_distinct(tracker_items.MAX_ITEMS))) == 5
+    with pytest.raises(ValueError, match="at most 5") as error:
+        tracker_items.parse(_distinct(tracker_items.MAX_ITEMS + 1))
+    assert WAY_OUT in str(error.value)
+
+
+@pytest.mark.parametrize("field", ["question", "recommendation"])
+def test_parse_takes_a_field_of_240_characters_after_strip_and_refuses_241(field):
+    limit = tracker_items.MAX_FIELD_CHARS
+    assert tracker_items.parse([{**ITEM, field: f"  {'x' * limit}  "}])[0][field] == "x" * limit
+    with pytest.raises(ValueError, match="at most 240") as error:
+        tracker_items.parse([{**ITEM, field: "x" * (limit + 1)}])
+    assert field in str(error.value) and WAY_OUT in str(error.value)
+
+
+@pytest.mark.parametrize("marker", ["<!--", "-->", "{{"])
+@pytest.mark.parametrize("field", ["question", "recommendation"])
+def test_parse_refuses_a_comment_or_template_marker(field, marker):
+    with pytest.raises(ValueError, match="marker") as error:
+        tracker_items.parse([{**ITEM, field: f"close it {marker} now"}])
+    assert WAY_OUT in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "uses actions/checkout@v4",
+        "bump pkg@1.2",
+        "mail a@b.com",
+        "x.@bob",  # passes on purpose: the pattern excludes a `.` before the `@`, as the request says
+        "an @ alone, and 3 @ 4",
+    ],
+)
+def test_parse_lets_a_version_pin_an_email_and_a_bare_at_through(text):
+    assert tracker_items.parse([{**ITEM, "question": text}])[0]["question"] == text
+
+
+@pytest.mark.parametrize("text", ["@bob", "(@bob)", "x @bob", "ask @org/team", "a @Bob"])
+@pytest.mark.parametrize("field", ["question", "recommendation"])
+def test_parse_refuses_a_mention(field, text):
+    with pytest.raises(ValueError, match="mention") as error:
+        tracker_items.parse([{**ITEM, field: text}])
+    assert WAY_OUT in str(error.value)
+
+
+def test_parse_refuses_two_items_equal_after_strip_and_takes_ones_differing_in_the_advice():
+    twin = {**ITEM, "question": f" {ITEM['question']} "}
+    with pytest.raises(ValueError, match="twice") as error:
+        tracker_items.parse([ITEM, twin])
+    assert WAY_OUT in str(error.value)
+    assert len(tracker_items.parse([ITEM, {**ITEM, "recommendation": "No."}])) == 2
+
+
+def test_parse_judges_the_count_before_the_items_and_the_items_before_the_repeat():
+    broken = {**ITEM, "question": "@bob"}
+    with pytest.raises(ValueError, match="at most 5"):
+        tracker_items.parse([broken] * 6)
+    with pytest.raises(ValueError, match="mention"):
+        tracker_items.parse([ITEM, broken, ITEM])
 
 
 def test_kinds_holds_only_human():
