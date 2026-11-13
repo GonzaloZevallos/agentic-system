@@ -72,6 +72,18 @@ def test_an_unreadable_proc_prunes_nothing_and_says_so_in_fixed_words():
     assert store.removed == []
 
 
+@pytest.mark.parametrize("read", ["stages", "current", "switch_record"])
+def test_a_store_that_cannot_be_read_prunes_nothing_and_leaks_no_path(read):
+    store = Store(current=NAMES[9])
+
+    def unreadable():
+        raise PermissionError(13, "Permission denied", "/stage0-root/secret-path")
+
+    setattr(store, read, unreadable)
+    assert run(store, frozenset()) == ["prune: unreadable"]
+    assert store.removed == []
+
+
 def test_a_missing_switch_record_protects_only_what_the_rules_do():
     store = Store(current=NAMES[9])
     assert run(store, frozenset()) == ["pruned: 8"]

@@ -21,19 +21,22 @@ def make_prune(root: Path) -> Prune:
             parts = own.resolve().relative_to(base).parts
         except ValueError:
             parts = ()
-        record = store.switch_record()
-        previous, new = (record[0], record[1]) if record is not None else (None, None)
-        in_use = users.users()
-        if not isinstance(in_use, Unreadable) and new is not None:
-            in_use = in_use | {new}
-        doomed = prunable(
-            store.stages(),
-            store.current(),
-            parts[0] if parts else None,
-            in_use,
-            keep=2,
-            previous=previous,
-        )
+        try:
+            record = store.switch_record()
+            previous, new = (record[0], record[1]) if record is not None else (None, None)
+            in_use = users.users()
+            if not isinstance(in_use, Unreadable) and new is not None:
+                in_use = in_use | {new}
+            doomed = prunable(
+                store.stages(),
+                store.current(),
+                parts[0] if parts else None,
+                in_use,
+                keep=2,
+                previous=previous,
+            )
+        except OSError:  # its message may carry a path: say only the fixed line
+            doomed = Unreadable()
         if isinstance(doomed, Unreadable):
             out("prune: unreadable")
             return
