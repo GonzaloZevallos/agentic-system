@@ -252,3 +252,8 @@ def test_a_reworded_item_is_asked_again_and_the_answered_one_is_not():
     patch = tracker_items.escalate_human(state, AT)
     assert patch["tracker_human"] == [tracker_items.item_hash(reworded)]
     assert H not in patch["tracker_actions_done"]
+
+
+def test_parse_names_an_unknown_key_before_an_unknown_kind_in_the_same_item():
+    with pytest.raises(ValueError, match="urgent"):
+        tracker_items.parse([{**ITEM, "kind": "comment", "urgent": "yes"}])
