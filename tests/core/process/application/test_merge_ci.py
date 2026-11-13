@@ -401,8 +401,9 @@ def test_a_poll_round_waiting_on_ci_writes_nothing_and_comments_nothing():
 
     _merges(ports)
 
-    # GH-588: the poller's one write is the head's anchor (`head_since_*`); no comment.
-    anchored = {k: v for k, v in _doc(ports).items() if not k.startswith("head_since_")}
+    # GH-588, GH-621: the poller's only writes are the head's anchor and sighting (`head_*`); no
+    # comment.
+    anchored = {k: v for k, v in _doc(ports).items() if not k.startswith("head_")}
     assert anchored == before and ports.tracker.comments == []
 
 

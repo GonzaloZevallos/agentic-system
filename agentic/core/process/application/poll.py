@@ -2631,7 +2631,6 @@ def run_once(
                 backed_off_merges,
                 backoff_ends,
                 bool(held),
-                resumes,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())

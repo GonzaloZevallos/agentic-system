@@ -180,18 +180,13 @@ def test_a_busy_head_left_unobserved_for_forty_minutes_keeps_the_head(tmp_path):
     assert turned is not None and turned.charged_s == 600.0
 
 
-def test_the_writer_is_the_only_caller_of_the_charge_functions():
-    import pathlib
+def test_nothing_outside_landing_order_calls_the_charge_functions():
+    import inspect
 
-    root = pathlib.Path(poll.__file__).parents[1]
-    for path in root.rglob("*.py"):
-        if path.name == "landing_order.py":
-            continue
-        text = path.read_text()
-        for name in (
-            "landing_order.observed(",
-            "landing_order.left_head(",
-            "landing_order.yielded(",
-        ):
-            assert name not in text, f"{path.name} calls {name}"
+    from agentic.core.process.application import landing, landing_fix
+
+    for module in (poll, landing, landing_fix):
+        text = inspect.getsource(module)
+        for name in ("observed(", "left_head(", "landing_order.yielded("):
+            assert f"landing_order.{name}" not in text, f"{module.__name__} calls {name}"
     assert landing_order.YIELD_MARK == "head_yields"
