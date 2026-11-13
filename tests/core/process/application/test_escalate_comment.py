@@ -128,15 +128,23 @@ def test_a_role_question_and_a_pending_item_show_once_each_in_that_order(cfg):
     assert text.index("Which currency?") < text.index(line)
 
 
-def test_a_ci_escalation_after_the_items_still_lists_them_under_its_own_prompt(cfg):
+def test_a_ci_escalation_after_the_items_shows_each_item_once(cfg):
     state = raised()
     ci = rules.logged(rules.escalation("ci", "red", cause="ci_gh_unavailable"), at=AT)
     text = escalate.comment(task.apply(state, ci), cfg, memory_ports())
 
     question, _, _ = rules.ESCALATION_PROMPTS[("ci", "ci_gh_unavailable")]
     assert f"Question: {question}" in text
+    assert text.count(tracker_items.question_line(ITEM)) == 1
+
+
+def test_a_ci_escalation_lists_pending_items_not_in_the_questions_under_its_own_prompt(cfg):
+    state = {**raised(), "questions_for_human": []}
+    ci = rules.logged(rules.escalation("ci", "red", cause="ci_gh_unavailable"), at=AT)
+    text = escalate.comment(task.apply(state, ci), cfg, memory_ports())
+
     assert "Your reply also decides these items:" in text
-    assert f"- {tracker_items.question_line(ITEM)}" in text
+    assert text.count(tracker_items.question_line(ITEM)) == 1
 
 
 def test_without_pending_items_the_comment_has_no_item_block(cfg):

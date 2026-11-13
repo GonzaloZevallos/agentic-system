@@ -121,9 +121,11 @@ def _prompt_block(
         block.extend(f"{n}. {q}" for n, q in enumerate(questions, 1))
     else:
         block.append(f"Question: {question}")
-        if pending:
+        # A line `comment` lists under "Questions for you" is not shown a second time.
+        unlisted = [line for line in pending if line not in questions]
+        if unlisted:
             block.append("Your reply also decides these items:")
-            block.extend(f"- {line}" for line in pending)
+            block.extend(f"- {line}" for line in unlisted)
     block.append(f"Recommended: {_code(recommended.format(**fill))}")
     block.append("Options:")
     block.extend(f"- {_code(option.format(**fill))}" for option in options)
