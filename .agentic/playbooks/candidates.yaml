@@ -1733,3 +1733,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-13T15:31:59.780+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the brief says a condition lives in one place, do not restate it in callers to narrow types. Have the single helper return the narrowed value too, and grep for the condition before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-685
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T15:58:10.395+00:00'
