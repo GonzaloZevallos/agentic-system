@@ -212,3 +212,10 @@ async def test_typed_items_all_answered_end_tracker_only_without_posting(tmp_pat
     ports = memory_ports()
     patch = await tracker_only(state, cfg(tmp_path), ports)
     assert patch["status"] == "tracker_only" and ports.tracker.comments == []
+
+
+async def test_a_legacy_checklist_next_to_unanswered_typed_items_waits_for_the_decision(tmp_path):
+    ports = memory_ports()
+    patch = await tracker_only({**STATE, "tracker_items": [_ITEM]}, cfg(tmp_path), ports)
+    assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
+    assert not any(text.startswith(TRACKER_WORK) for _, text in ports.tracker.comments)
