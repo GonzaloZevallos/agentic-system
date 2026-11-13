@@ -126,3 +126,13 @@ _Campo_: decision log — estándar en ingeniería (ADR); acá es del dueño y s
 La línea que el stack de un producto declara (`Stack.api_break_line`: prefijo, check y paso) y que el cuerpo del pull request debe llevar con el motivo de la ruptura cuando el check falla en ese paso. Solo `pull_request.with_required_lines` la escribe y solo `pull_request.declares` decide si está.
 _Avoid_: etiqueta de breaking change
 _Campo_: sin término de arte
+
+**Spec**:
+El archivo de definición aprobado bajo `docs/specs/` que una entrega lee en lugar de la cadena de definición. Lleva un front matter con el estado y la aprobación del dueño (un hash del cuerpo) y secciones fijas: objetivo, criterios de aceptación, fuera de alcance, decisiones con su motivo, pantallas con su texto, riesgos y rebanadas. `SpecContract` vive en Proceso (`process/domain/spec_delivery.py`); el validador vive en Conocimiento (`knowledge/domain/spec.py`), que es el único que decide si una spec es válida y está aprobada.
+_Avoid_: PRD, especificación suelta, plan
+_Campo_: specification document — estándar en ingeniería de requisitos
+
+**Rebanada**:
+Una parte de una Spec con sus propios criterios de aceptación y sus propios riesgos, que una entrega construye sola. Se nombra con el sufijo `#<id>` de la línea `Spec:`, obligatorio cuando la spec tiene más de una.
+_Avoid_: parte, fase, subtarea (la subtarea es del plan del Tech Lead; la rebanada es de la spec)
+_Campo_: vertical slice — estándar en gestión ágil

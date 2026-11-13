@@ -24,9 +24,9 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class size_budget__Divergence["Divergence"]
-    class size_budget__NumstatRow["NumstatRow"]
     class size_budget__PlanSize["PlanSize"]
+    class spec_delivery__Screen["Screen"]
+    class spec_delivery__SpecContract["SpecContract"]
     class task__ArmAssignment["ArmAssignment"]
     class task__Carried["Carried"]
     class task__ChangesRequested["ChangesRequested"]
@@ -38,9 +38,10 @@ classDiagram
     class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
     class task__DependencyState["DependencyState"]
+    class task__DesignItemRecord["DesignItemRecord"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
+- [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.TaskState` se asocia con `task.ArmAssignment`
