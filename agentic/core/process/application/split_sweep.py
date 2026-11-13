@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from ..domain import rules
 from ..domain.landing import IssueRef
 from ..domain.task import TaskState
-from .ports import Ports, TrackerRateLimited, TrackerTimedOut, TrackerUnreachable
+from .ports import IssueState, Ports, TrackerRateLimited, TrackerTimedOut, TrackerUnreachable
 
 # The failures that say the tracker will not answer this round: they end the pass and the
 # sweep instead of failing one issue after another (GH-619, invariant 7).
@@ -142,33 +142,90 @@ def _issue_number(url: str) -> int | None:
     return int(tail) if tail.isdigit() else None
 
 
-def repoint_targets(state: TaskState) -> tuple[list[int], set[int]] | None:
-    """Where a split parent's dependents go: the issue numbers of `rules.last_part_numbers` of
-    its parts, and every part's issue number (never edited). The one place that combines the
-    two (GH-619). `None` for a split cut halfway (`split_issues` shorter than `parts`), a key
-    missing or a URL that does not parse: nothing may be re-pointed to a part that is not there."""
+def part_numbers(state: TaskState) -> list[int] | None:
+    """The issue number of each part of a split, in the order of `parts` (part 1 first). `None`
+    for a split cut halfway (`split_issues` shorter than `parts`), a key missing or a URL that
+    does not parse: nothing may be judged or re-pointed to a part that is not there."""
     parts = state.get("parts", [])
     issues = state.get("split_issues", {})
     if not parts or len(issues) != len(parts):
         return None
-    numbers: dict[int, int] = {}
+    numbers: list[int] = []
     for n in range(1, len(parts) + 1):
         number = _issue_number(issues.get(str(n), ""))
         if number is None:
             return None
-        numbers[n] = number
-    return [numbers[n] for n in rules.last_part_numbers(parts)], set(numbers.values())
+        numbers.append(number)
+    return numbers
+
+
+def repoint_targets(state: TaskState) -> tuple[list[int], set[int]] | None:
+    """Where a split parent's dependents go: the issue numbers of `rules.last_part_numbers` of
+    its parts, and every part's issue number (never edited). The one place that combines the
+    two (GH-619). `None` when `part_numbers` finds no complete set of parts."""
+    numbers = part_numbers(state)
+    if numbers is None:
+        return None
+    return [numbers[n - 1] for n in rules.last_part_numbers(state["parts"])], set(numbers)
+
+
+def _judges_nothing(number: int) -> rules.BlockerVerdict:
+    return "unknown"
+
+
+class _RoundStopped(Exception):
+    """A re-point pass inside a close ended on a `ROUND_STOPPERS` failure, named by `name`."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
+
+
+class _Refs:
+    """The round's one `Inbox.open_issue_refs` read, taken on first use and kept, a failure
+    included: a failed read is not repeated for every parent."""
+
+    def __init__(self, ports: Ports) -> None:
+        self._ports = ports
+        self._refs: list[IssueRef] | None = None
+        self._failure: Exception | None = None
+
+    def get(self) -> list[IssueRef]:
+        if self._failure is not None:
+            raise self._failure
+        if self._refs is None:
+            try:
+                self._refs = list(self._ports.inbox.open_issue_refs())
+            except (ValueError, OSError) as failed:
+                self._failure = failed
+                raise
+        return self._refs
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def sweep(
-    ports: Ports, documents: Mapping[int, TaskState | None], *, report_failures: bool = False
+    ports: Ports,
+    documents: Mapping[int, TaskState | None],
+    *,
+    verdict: Callable[[int], rules.BlockerVerdict] = _judges_nothing,
+    report_failures: bool = False,
 ) -> list[str]:
-    """One pass of the poller over the round's queue documents (`poll.queue_documents`): every
-    `split` parent without `split_repointed_at` and with all its parts recorded gets its
+    """One pass of the poller over the round's queue documents (`poll.queue_documents`). First,
+    every `split` parent without `split_repointed_at` and with all its parts recorded gets its
     dependents re-pointed over one shared `open_issue_refs` read, and the record when the pass
-    was complete. No such parent, no tracker call. Never raises. The lines are
-    `agentic: split: GH-N: K dependents re-pointed`; with `report_failures` also the skipped
+    was complete. Then every such parent none of whose parts is in the queue is judged
+    (`_judge`): closed when done, escalated once when a part was abandoned. `verdict` is the
+    blocker verdict of one part (`poll._part_verdict`), asked only for a part closed
+    `COMPLETED`. No parent to work on, no tracker call. Never raises. The lines are
+    `agentic: split: GH-N: K dependents re-pointed`, `agentic: split: GH-N: parent closed` and
+    `agentic: split: GH-N: part K abandoned, escalated`; with `report_failures` also the skipped
     round and the parent left unfinished."""
+    refs = _Refs(ports)
+    lines: list[str] = []
+    finished: set[str] = set()
     pending = [
         (state, found)
         for state in documents.values()
@@ -177,30 +234,26 @@ def sweep(
         and not state.get("split_repointed_at")
         and (found := repoint_targets(state)) is not None
     ]
-    if not pending:
-        return []
-    lines: list[str] = []
-    try:
-        refs = ports.inbox.open_issue_refs()
-    except ROUND_STOPPERS as failed:
-        return _skipped(type(failed).__name__, report_failures)
-    except (ValueError, OSError) as failed:
-        # No list, nothing to work from: the round ends here too, and the next one tries again.
-        return _skipped(type(failed).__name__, report_failures)
+    if pending:
+        try:
+            shared = refs.get()
+        except ROUND_STOPPERS as failed:
+            return _skipped(type(failed).__name__, report_failures)
+        except (ValueError, OSError) as failed:
+            # No list, nothing to work from: the round ends here too, the next one tries again.
+            return _skipped(type(failed).__name__, report_failures)
     for state, (targets, parts) in pending:
         task_id = state["id"]
         try:
             parent = ports.inbox.issue_of(task_id)
             if parent is None:
                 continue
-            result = repoint_dependents(ports, parent, targets, refs, {*parts, parent})
+            result = repoint_dependents(ports, parent, targets, shared, {*parts, parent})
             if result.stopped:
                 return [*lines, *_skipped(result.stopped_by, report_failures)]
             if result.complete:
-                ports.documents.record_closure(
-                    task_id,
-                    {"split_repointed_at": datetime.now(UTC).isoformat(timespec="seconds")},
-                )
+                ports.documents.record_closure(task_id, {"split_repointed_at": _now()})
+                finished.add(task_id)
             elif report_failures:
                 lines.append(f"agentic: split: {task_id}: re-point unfinished")
         except ROUND_STOPPERS as failed:
@@ -209,7 +262,158 @@ def sweep(
             continue
         if result.changed:
             lines.append(f"agentic: split: {task_id}: {result.changed} dependents re-pointed")
+    states: dict[int, IssueState] = {}
+    for document in documents.values():
+        numbers = _judgeable(document, documents)
+        if document is None or numbers is None:
+            continue
+        try:
+            repointed = document["id"] in finished
+            lines.extend(
+                _judge(ports, document, numbers, verdict, states, refs, repointed, report_failures)
+            )
+        except _RoundStopped as stopped:
+            return [*lines, *_skipped(stopped.name, report_failures)]
+        except ROUND_STOPPERS as failed:
+            return [*lines, *_skipped(type(failed).__name__, report_failures)]
+        except (ValueError, OSError, KeyError):
+            continue
     return lines
+
+
+def _judgeable(state: TaskState | None, queue: Mapping[int, object]) -> list[int] | None:
+    """The part numbers of a parent worth judging: a `split` document with every part recorded
+    and none of them in this round's queue (a part still open and labelled is still being built:
+    no call at all for that parent)."""
+    if state is None or state.get("status") != "split":
+        return None
+    numbers = part_numbers(state)
+    if numbers is None or any(number in queue for number in numbers):
+        return None
+    return numbers
+
+
+def _judge(
+    ports: Ports,
+    state: TaskState,
+    numbers: list[int],
+    verdict: Callable[[int], rules.BlockerVerdict],
+    states: dict[int, IssueState],
+    refs: _Refs,
+    repointed: bool,
+    report_failures: bool,
+) -> list[str]:
+    """What one parent's parts come to. One `issue_state` read per part, memoised by number in
+    `states`; `verdict` is asked only for a part closed `COMPLETED`. `ROUND_STOPPERS` and
+    `ValueError`/`OSError`/`KeyError` propagate to `sweep`."""
+    rows: list[tuple[str, str | None, rules.BlockerVerdict]] = []
+    for number in numbers:
+        if number not in states:
+            states[number] = ports.tracker.issue_state(number)
+        part = states[number]
+        if part.state != "CLOSED":
+            part_verdict: rules.BlockerVerdict = "open"
+        elif part.state_reason == "COMPLETED":
+            part_verdict = verdict(number)
+        else:
+            part_verdict = "unknown"
+        rows.append((part.state, part.state_reason, part_verdict))
+    match rules.split_parent_state(rows):
+        case "done":
+            return _close(ports, state, numbers, refs, repointed, report_failures)
+        case "abandoned":
+            first = next(
+                i for i, (st, why, _) in enumerate(rows) if (st, why) == ("CLOSED", "NOT_PLANNED")
+            )
+            return _escalate(ports, state, numbers, first + 1)
+        case _:
+            return []
+
+
+def _close(
+    ports: Ports,
+    state: TaskState,
+    numbers: list[int],
+    refs: _Refs,
+    repointed: bool,
+    report_failures: bool,
+) -> list[str]:
+    """Every part merged: one fresh re-point pass (tidiness: once `split_closed_at` is recorded
+    the verdict of a dependent that still names the parent resolves anyway), then the record,
+    and only then the close with its comment. A record that cannot be written means no close."""
+    task_id = state["id"]
+    targets, parts = repoint_targets(state) or ([], set())
+    parent = ports.inbox.issue_of(task_id)
+    if parent is None:
+        return []
+    if not repointed:
+        result = repoint_dependents(ports, parent, targets, refs.get(), {*parts, parent})
+        if result.stopped:
+            raise _RoundStopped(result.stopped_by)
+    unfinished = [f"agentic: split: {task_id}: close unfinished"] if report_failures else []
+    if not state.get("split_closed_at"):
+        try:
+            ports.documents.record_closure(task_id, {"split_closed_at": _now()})
+        except (ValueError, OSError):
+            return unfinished
+    try:
+        ports.tracker.close_issue(task_id, comment=_closing_comment(ports, numbers))
+    except ROUND_STOPPERS:
+        raise
+    except (ValueError, OSError):
+        return unfinished
+    return [f"agentic: split: {task_id}: parent closed"]
+
+
+def _closing_comment(ports: Ports, numbers: Sequence[int]) -> str:
+    """The note the parent closes with: each part and the pull request of its own document,
+    `split again (see #n)` for a part that was split in its turn, `no PR recorded` for one with
+    no document, an unreadable one or no pull request. Never raises."""
+    rows = []
+    for number in numbers:
+        try:
+            document = ports.documents.load(ports.inbox.task_id(number)) or {}
+        except (ValueError, OSError):
+            document = {}
+        if document.get("status") == "split":
+            shown = f"split again (see #{number})"
+        else:
+            shown = str(document.get("pull_request") or "no PR recorded")
+        rows.append(f"- #{number}: {shown}")
+    return "All parts of this split merged, so this issue is closed.\n\n" + "\n".join(rows)
+
+
+def _escalate(ports: Ports, state: TaskState, numbers: list[int], part: int) -> list[str]:
+    """One comment per parent when a part was abandoned (closed as not planned): none when
+    `split_abandoned_at` is recorded; none either when the comments already carry the part's
+    marker (a cut between the comment and the record), and then only the record is written.
+    No label. `ROUND_STOPPERS` propagate; `ValueError`/`OSError` skip the parent."""
+    task_id = state["id"]
+    parent = ports.inbox.issue_of(task_id)
+    if parent is None or state.get("split_abandoned_at"):
+        return []
+    marker = f"<!-- agentic-split-abandoned: {task_id} part {part} -->"
+    if not any(marker in text for text in ports.tracker.issue_comments(task_id)):
+        ports.tracker.comment_on_issue(str(parent), _escalation_text(state, numbers, part, marker))
+    ports.documents.record_closure(task_id, {"split_abandoned_at": _now()})
+    return [f"agentic: split: {task_id}: part {part} abandoned, escalated"]
+
+
+def _escalation_text(state: TaskState, numbers: list[int], part: int, marker: str) -> str:
+    parts = state["parts"]
+    if part in rules.last_part_numbers(parts):
+        effect = "Its re-pointed dependents are now free."
+    else:
+        waiting = ", ".join(f"#{numbers[n - 1]}" for n in rules.last_part_numbers(parts))
+        effect = (
+            f"The dependents still wait on part(s) {waiting}; the next parts of the chain may "
+            "launch over this one."
+        )
+    return (
+        f"Part {part} (#{numbers[part - 1]}) of this split was abandoned: its issue was closed "
+        f"as not planned. {effect}\n\nWhat should happen with this parent? The system leaves it "
+        f"open.\n\n{marker}"
+    )
 
 
 def _skipped(name: str, report_failures: bool) -> list[str]:

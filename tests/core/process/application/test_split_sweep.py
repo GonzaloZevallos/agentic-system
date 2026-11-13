@@ -4,10 +4,16 @@ never edited; a rewrite that breaks the post-condition writes nothing."""
 
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application import poll, split_sweep
-from agentic.core.process.application.ports import TrackerRateLimited, TrackerUnreachable
+from agentic.core.process.application.ports import (
+    GitError,
+    IssueState,
+    TrackerRateLimited,
+    TrackerUnreachable,
+)
 from agentic.core.process.application.split_sweep import RepointResult, repoint_dependents
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.landing import IssueRef
+from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryInbox, memory_ports
 
 URL = "https://github.com/o/r/issues/{}"
@@ -279,3 +285,202 @@ def test_a_split_that_never_had_dependents_is_recorded_without_a_line():
 
     assert split_sweep.sweep(ports, queued(ports)) == []
     assert ports.documents.load("GH-5")["split_repointed_at"]
+
+
+# --- the close and the escalation (GH-619 part 3) -------------------------------------
+
+COMPLETED = IssueState("CLOSED", "COMPLETED", None, None, ())
+NOT_PLANNED = IssueState("CLOSED", "NOT_PLANNED", None, None, ())
+OPEN = IssueState("OPEN", "", None, None, ())
+
+
+def resolved(number):
+    return "resolved"
+
+
+def close_ports(*states, parts=(COMPLETED, COMPLETED), first=8, **bodies):
+    """Split parents in the queue, their parts (issues `first`, `first + 1`) scripted by state."""
+    ports = sweep_ports(*states, **bodies)
+    for offset, part in enumerate(parts):
+        ports.tracker.states[first + offset] = part
+    return ports
+
+
+def judge(ports, verdict=resolved, **more):
+    return split_sweep.sweep(ports, queued(ports), verdict=verdict, **more)
+
+
+def test_split_parent_state_is_abandoned_for_a_not_planned_part_whose_verdict_is_resolved():
+    assert rules.split_parent_state([("CLOSED", "NOT_PLANNED", "resolved")]) == "abandoned"
+    assert (
+        rules.split_parent_state(
+            [("CLOSED", "COMPLETED", "resolved"), ("CLOSED", "NOT_PLANNED", "resolved")]
+        )
+        == "abandoned"
+    )
+
+
+def test_an_old_split_with_all_parts_merged_is_re_pointed_recorded_then_closed_with_its_comment():
+    ports = close_ports(split_state(), **{"7": "Blocked by: #5\n\nbody"})
+    ports.documents.save({"id": "GH-8", "pull_request": "https://github.com/o/r/pull/80"})
+    ports.documents.save({"id": "GH-9", "status": "split", "title": "t", "description": "d"})
+    order = []
+    close = ports.tracker.close_issue
+
+    def checked_close(task_id, *, comment=None):
+        order.append("split_closed_at" in ports.documents.load(task_id))
+        close(task_id, comment=comment)
+
+    ports.tracker.close_issue = checked_close
+
+    lines = judge(ports)
+
+    assert lines == [
+        "agentic: split: GH-5: 1 dependents re-pointed",
+        "agentic: split: GH-5: parent closed",
+    ]
+    assert ports.tracker.updated_bodies == [(7, "Blocked by: #9\n\nbody")]
+    assert order == [True] and ports.tracker.closed_issues == ["GH-5"]
+    comment = ports.tracker.close_comments["GH-5"]
+    assert "#8: https://github.com/o/r/pull/80" in comment and "#9: split again (see #9)" in comment
+
+    # the parent is gone from the queue on the next round: nothing is called at all
+    ports.tracker._queue = []
+    ports.inbox.refs_calls = 0
+    writes = (len(ports.tracker.updated_bodies), ports.tracker.comment_on_issue_calls)
+    assert judge(ports) == [] and ports.inbox.refs_calls == 0
+    assert (len(ports.tracker.updated_bodies), ports.tracker.comment_on_issue_calls) == writes
+    assert ports.tracker.closed_issues == ["GH-5"]
+
+
+def test_a_cut_after_the_record_keeps_the_parent_open_and_the_next_round_only_closes():
+    ports = close_ports(split_state(), **{"7": "Blocked by: #5"})
+    ports.tracker.close_issue_failures = [ValueError("gh issue close failed")]
+
+    assert judge(ports, report_failures=True) == [
+        "agentic: split: GH-5: 1 dependents re-pointed",
+        "agentic: split: GH-5: close unfinished",
+    ]
+    assert ports.tracker.closed_issues == []
+    first_record = ports.documents.load("GH-5")["split_closed_at"]
+
+    assert judge(ports) == ["agentic: split: GH-5: parent closed"]
+    assert ports.tracker.closed_issues == ["GH-5"]
+    assert ports.documents.load("GH-5")["split_closed_at"] == first_record
+    assert len(ports.tracker.updated_bodies) == 1
+
+
+def test_a_record_that_cannot_be_written_means_no_close():
+    ports = close_ports(split_state())
+
+    def refuse(task_id, values):
+        raise OSError("disk full")
+
+    ports.documents.record_closure = refuse
+
+    assert judge(ports, report_failures=True) == ["agentic: split: GH-5: close unfinished"]
+    assert ports.tracker.closed_issues == []
+
+
+def test_a_part_whose_verdict_is_unknown_leaves_the_parent_open_and_another_is_still_judged():
+    first = split_state("GH-5", first=8)
+    second = split_state("GH-6", first=20)
+    ports = close_ports(first, second)
+    ports.tracker.states.update({20: COMPLETED, 21: COMPLETED})
+
+    judge(ports, verdict=lambda n: "unknown" if n == 9 else "resolved")
+
+    assert ports.tracker.closed_issues == ["GH-6"]
+    assert "split_closed_at" not in ports.documents.load("GH-5")
+
+
+def test_part_verdict_reads_a_git_failure_as_unknown(tmp_path):
+    ports = memory_ports()
+    ports.tracker.states[8] = COMPLETED
+    ports.documents.save({"id": "GH-8", "merge_commit": "abc"})
+
+    def boom(*args, **kwargs):
+        raise GitError("is_ancestor failed")
+
+    ports.workspace.is_ancestor = boom
+    cfg = Configuration(product_dir=tmp_path)
+
+    assert poll._part_verdict(cfg, ports, ports.workspace.upstream, 8) == "unknown"
+
+
+def test_a_part_still_in_the_queue_means_no_call_for_that_parent():
+    ports = close_ports(split_state())
+    ports.tracker._queue = [5, 9]
+    ports.documents.save({"id": "GH-9", "title": "t", "description": "d"})
+
+    assert judge(ports) == []
+    assert ports.tracker.closed_issues == [] and ports.tracker.commented_issues == []
+
+
+def abandoned_ports(parts=(COMPLETED, NOT_PLANNED), **bodies):
+    return close_ports(split_state(), parts=parts, **bodies)
+
+
+def test_a_not_planned_last_part_gets_one_comment_across_two_sweeps_and_the_parent_stays_open():
+    ports = abandoned_ports()
+
+    assert judge(ports) == ["agentic: split: GH-5: part 2 abandoned, escalated"]
+    assert judge(ports) == []
+
+    ((reference, text),) = ports.tracker.commented_issues
+    assert reference == "5" and text.endswith("<!-- agentic-split-abandoned: GH-5 part 2 -->")
+    assert "re-pointed dependents are now free" in text
+    assert ports.tracker.closed_issues == [] and ports.tracker.labels == []
+    assert ports.documents.load("GH-5")["split_abandoned_at"]
+
+
+def test_a_not_planned_middle_part_says_the_dependents_still_wait_and_a_second_adds_nothing():
+    ports = abandoned_ports(parts=(NOT_PLANNED, OPEN))
+
+    assert judge(ports) == ["agentic: split: GH-5: part 1 abandoned, escalated"]
+    ((_, text),) = ports.tracker.commented_issues
+    assert "still wait on part(s) #9" in text and "may launch over this one" in text
+
+    ports.tracker.states[9] = NOT_PLANNED
+    assert judge(ports) == [] and len(ports.tracker.commented_issues) == 1
+
+
+def test_a_marker_already_in_the_comments_posts_nothing_and_the_record_is_written():
+    ports = abandoned_ports()
+    ports.tracker.earlier = ["<!-- agentic-split-abandoned: GH-5 part 2 -->"]
+
+    assert judge(ports) == ["agentic: split: GH-5: part 2 abandoned, escalated"]
+    assert ports.tracker.commented_issues == []
+    assert ports.documents.load("GH-5")["split_abandoned_at"]
+
+
+def test_an_abandoned_part_that_is_reopened_and_merged_lets_the_parent_close():
+    ports = abandoned_ports()
+    judge(ports)
+    ports.tracker.states[9] = COMPLETED
+
+    assert judge(ports) == ["agentic: split: GH-5: parent closed"]
+    assert ports.tracker.closed_issues == ["GH-5"]
+
+
+def test_the_closing_note_says_no_pr_recorded_for_a_part_with_no_document():
+    ports = close_ports(split_state())
+
+    judge(ports)
+
+    assert ports.tracker.close_comments["GH-5"].count("no PR recorded") == 2
+
+
+def test_split_closed_at_and_split_abandoned_at_survive_a_real_document_round_trip(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save(split_state("GH-5"))
+    documents.save(split_state("GH-6", first=20))
+    ports = memory_ports(documents=documents)
+    ports.tracker._queue = [5, 6]
+    ports.tracker.states.update({8: COMPLETED, 9: COMPLETED, 20: COMPLETED, 21: NOT_PLANNED})
+
+    split_sweep.sweep(ports, poll.queue_documents(ports), verdict=resolved)
+
+    assert documents.load("GH-5")["split_closed_at"].endswith("+00:00")
+    assert documents.load("GH-6")["split_abandoned_at"].endswith("+00:00")
+    assert isinstance(poll.queue_documents(ports)[5]["split_closed_at"], str)

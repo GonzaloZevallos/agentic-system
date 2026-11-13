@@ -1554,6 +1554,18 @@ def _blocker_verdict(
     return "slices_not_in_upstream" if tip else "unknown"
 
 
+def _part_verdict(
+    cfg: Configuration, ports: Ports, upstream: Callable[[], Upstream], number: int
+) -> rules.BlockerVerdict:
+    """How one part of a split parent stands, for `split_sweep.sweep` (GH-619): the blocker
+    verdict, with any doubt (`ValueError`/`OSError`/`KeyError`, a real `GitError`) read as
+    `unknown`, so the parent waits and the sweep never sees an exception from git."""
+    try:
+        return _blocker_verdict(cfg, ports, number, upstream)
+    except (ValueError, OSError, KeyError, GitError):
+        return "unknown"
+
+
 def _blocked(
     cfg: Configuration, ports: Ports, number: int, upstream: Callable[[], Upstream]
 ) -> rules.BlockerReport:
@@ -2403,7 +2415,14 @@ def run_once(
     # sweep needs it before the launches; the same dict feeds `gather_launches` and the orphan
     # pass inside the lock (launch dedup rests on `registry.launch_attempts`, read there).
     queued = queue_documents(ports)
-    swept = [*split_sweep.sweep(ports, queued, report_failures=False), *swept]
+    # The sweep's own memoised upstream (at most one fetch, and only when it has a merge commit
+    # to judge); the one `registry.exclusive()` builds below is not shared with it.
+    sweep_upstream = functools.cache(ports.workspace.upstream)
+    part_verdict = functools.partial(_part_verdict, cfg, ports, sweep_upstream)
+    swept = [
+        *split_sweep.sweep(ports, queued, verdict=part_verdict, report_failures=False),
+        *swept,
+    ]
     # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
     # read, so a round that frees room starts its children in the same round.
     swept = [*scratch_sweep.sweep(ports, now), *swept]
