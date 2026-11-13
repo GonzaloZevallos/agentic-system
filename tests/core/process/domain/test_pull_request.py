@@ -245,3 +245,79 @@ def test_the_required_line_keeps_its_room_when_the_body_is_bounded():
     assert written.startswith(line)
     assert github_length(written) <= PR_BODY_MAX
     assert bounded.bounded
+
+
+ASSUMPTION = "x" * 240
+
+
+def _rows(count: int, text: str = ASSUMPTION) -> list[str]:
+    return [f"{index:02d} {text}"[:240] for index in range(count)]
+
+
+def test_the_assumptions_are_written_as_lines_of_their_own_section_before_the_sections():
+    result = bounded_body(
+        [("PM", "Six numbers.")], "T", pointer, assumptions=["first thing", "  second   thing "]
+    )
+    assert result.text == (
+        "## Assumptions\n\nAssumption: first thing\nAssumption: second thing"
+        "\n\n## PM\n\nSix numbers."
+    )
+    assert not result.bounded
+
+
+def test_the_assumptions_follow_the_preface_and_a_refused_or_repeated_row_is_not_written():
+    result = bounded_body(
+        [("PM", "Six.")],
+        "T",
+        pointer,
+        preface=NOTE,
+        assumptions=["same", "a\nb", "", "same ", "y" * 241, "other"],
+    )
+    assert result.text == (
+        f"{NOTE}\n\n## Assumptions\n\nAssumption: same\nAssumption: other\n\n## PM\n\nSix."
+    )
+
+
+@pytest.mark.parametrize("assumptions", [(), [], ["a\nb"], [""]])
+def test_without_a_writable_assumption_the_body_is_exactly_what_it_was(assumptions):
+    cases = [
+        ([("PM", "Six."), ("Tech Lead", "plan")], {}),
+        ([("PM", "word " * 20_000), ("Tech Lead", "plan")], {}),
+        ([("PM", "word " * 20_000)], {"preface": NOTE, "required": "Breaking-API: drops v1"}),
+        ([], {"preface": NOTE}),
+    ]
+    for parts, extra in cases:
+        assert bounded_body(parts, "T", pointer, assumptions=assumptions, **extra) == bounded_body(
+            parts, "T", pointer, **extra
+        )
+
+
+def test_twenty_rows_are_all_shown_when_there_is_room_and_more_are_counted():
+    shown = bounded_body([("PM", "p")], "T", pointer, assumptions=_rows(20)).text
+    assert shown.count("Assumption: ") == 20 and "…and" not in shown
+    result = bounded_body([("PM", "p")], "T", pointer, assumptions=_rows(23))
+    assert result.text.count("Assumption: ") == 20
+    assert "…and 3 more in the task document" in result.text
+
+
+def test_assumptions_keep_whole_rows_and_the_rest_gives_way_near_the_limit():
+    preface = "note " * 3_000
+    line = "Breaking-API: " + "w" * 40_000
+    parts = [("PM", "word " * 20_000), ("Tech Lead", "plan " * 2_000)]
+    result = bounded_body(
+        parts, "T", pointer, preface=preface.strip(), required=line, assumptions=_rows(20)
+    )
+    written = with_required_lines(result.text, PREFIX, "w" * 40_000)
+    assert github_length(written) <= PR_BODY_MAX
+    assert written.startswith(line) and preface.strip() in written
+    rows = [text for text in result.text.splitlines() if text.startswith("Assumption: ")]
+    assert 0 < len(rows) < 20
+    assert all(len(row) == len("Assumption: ") + 240 for row in rows)
+    assert f"…and {20 - len(rows)} more in the task document" in result.text
+    assert result.bounded
+
+
+def test_the_closing_line_alone_is_written_when_the_heading_does_not_fit_with_it():
+    result = bounded_body([("PM", "p")], "T", pointer, limit=90, assumptions=_rows(3))
+    assert result.text.startswith("…and 3 more in the task document")
+    assert "## Assumptions" not in result.text
