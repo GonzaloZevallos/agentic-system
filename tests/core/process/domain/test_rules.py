@@ -2346,8 +2346,13 @@ def test_repoint_blockers_table(name):
     assert (
         tuple(i for i, (a, b) in enumerate(zip(before, after, strict=True)) if a != b) == rewritten
     )
-    assert parent not in rules.blockers_from_body(new) or parent in targets
-    assert set(targets) <= set(rules.blockers_from_body(new))
+    # oracle: the reader sees the old blockers with the parent replaced in place by the targets
+    expected_blockers: list[int] = []
+    for number in rules.blockers_from_body(body):
+        for replacement in targets if number == parent else (number,):
+            if replacement not in expected_blockers:
+                expected_blockers.append(replacement)
+    assert rules.blockers_from_body(new) == tuple(expected_blockers)
     # a second pass finds nothing left to do
     assert rules.repoint_blockers(new, parent, targets) is None
 
