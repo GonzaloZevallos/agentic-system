@@ -15,16 +15,18 @@ one, and the frontmatter lists every run with its Claude Code session id.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import yaml
 
 from . import size_budget
+from .landing_order import YieldReason, instant
 from .legacy_names import rename_legacy_roles
-from .task import RoleRun
+from .task import HEAD_YIELDS_MAX, RoleRun
 
 TASKS_SUBDIR = Path(".agentic/tasks")
 # Where an evaluation run's document is kept once its root is gone (GH-470): outside
@@ -125,6 +127,46 @@ def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
     return {SUBTASK_RECORDED_AS.get(k, k): v for k, v in subtask.items()}
 
 
+_HEAD_INSTANTS = ("head_turn_at", "head_seen_at", "head_yielded_at")
+_HEAD_KEYS = (*_HEAD_INSTANTS, "head_charged_s", "head_yields")
+
+
+def _head_yield_ok(entry: object) -> bool:
+    return (
+        isinstance(entry, Mapping)
+        and entry.get("reason") in get_args(YieldReason)
+        and instant(entry.get("at")) is not None
+        and isinstance(entry.get("head"), str)
+    )
+
+
+def _head_fields(source: Mapping[str, Any]) -> dict[str, Any]:
+    """The head budget's keys (GH-621) of `source` as the document keeps them, the only place
+    they are validated, called by `render` and by `from_frontmatter`. A key is kept when its
+    normalized value is not `None` (so `0.0` and `[]` survive) and omitted otherwise: a seconds
+    charge that is not a finite number `>= 0` (a bool is not one) or an instant that is naive or
+    unparsable is dropped, as is a yield entry with an unknown reason, a naive `at` or a `head`
+    that is not a string. The charge is whole seconds; only the last `HEAD_YIELDS_MAX` yields
+    stay. Never raises."""
+    out: dict[str, Any] = {}
+    for key in _HEAD_INSTANTS:
+        if (value := source.get(key)) is not None and instant(value) is not None:
+            out[key] = value
+    charged = source.get("head_charged_s")
+    if (
+        isinstance(charged, int | float)
+        and not isinstance(charged, bool)
+        and math.isfinite(charged)
+        and charged >= 0
+    ):
+        out["head_charged_s"] = float(round(charged))
+    yields = source.get("head_yields")
+    if isinstance(yields, list):
+        kept = [dict(e) for e in yields if _head_yield_ok(e)]
+        out["head_yields"] = kept[-HEAD_YIELDS_MAX:]
+    return out
+
+
 def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[str, Any]:
     """The inverse of what `render` writes: the frontmatter under the state's names,
     with the 2026-10-05 role-rename alias applied last (`legacy_names.
@@ -140,6 +182,9 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             sid: {subtask_inverse.get(k, k): v for k, v in sub.items()}
             for sid, sub in subtasks.items()
         }
+    for key in _HEAD_KEYS:
+        state.pop(key, None)
+    state.update(_head_fields(data))
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -291,6 +336,7 @@ def render(
         **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
         **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
         **({"head_since_head": q} if (q := state.get("head_since_head")) else {}),
+        **_head_fields(state),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         # The clean restarts of a task (GH-593): the count per pair, the restart still owed to the

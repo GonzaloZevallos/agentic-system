@@ -32,6 +32,7 @@ from typing import (
 )
 
 from .ci_push import PushKind
+from .landing_order import YieldReason
 from .lead_time import LeadTime
 from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
@@ -382,6 +383,24 @@ def add_tracker_failures(
     for record in (*existing, *new):
         joined.setdefault((record["target"], record["cls"]), record)
     return list(joined.values())[:TRACKER_FAILURES_MAX]
+
+
+HEAD_YIELDS_MAX = 10
+
+
+class HeadYield(TypedDict):
+    """One time a member gave up its turn as head (GH-621): when, on which pull request head
+    sha, and why."""
+
+    at: str
+    head: str
+    reason: YieldReason
+
+
+def add_head_yield(existing: list[HeadYield], new: HeadYield) -> list[HeadYield]:
+    """`existing` with `new` appended, at most `HEAD_YIELDS_MAX` rows. The opposite of
+    `add_tracker_failures`: the newest rows stay, the oldest are dropped."""
+    return [*existing, new][-HEAD_YIELDS_MAX:]
 
 
 class Restoration(TypedDict):
@@ -1824,6 +1843,16 @@ class TaskState(TaskInput, total=False):
     landing_queued_at: NotRequired[str]
     head_since_at: NotRequired[str]
     head_since_head: NotRequired[str]
+    # The head budget's facts (GH-621): the start of the member's current turn, the seconds it
+    # was already charged, when it was last seen as head, when it last yielded and its yields.
+    # The poller's writer writes them (GH-621 part 2); they are read only to build
+    # `landing_order.Member`. The scope is per member, not per sha. The landing restart clears
+    # them with a `None` patch, so there is no reducer on them.
+    head_turn_at: NotRequired[str]
+    head_charged_s: NotRequired[float]
+    head_seen_at: NotRequired[str]
+    head_yielded_at: NotRequired[str]
+    head_yields: NotRequired[list[HeadYield]]
     # The slices the landing merged ahead of the task's pull request (GH-297, ADR-0048):
     # one record per slice, appended whole through `record_closure`. Optional, read with `.get`.
     landed_slices: list[LandedSlice]

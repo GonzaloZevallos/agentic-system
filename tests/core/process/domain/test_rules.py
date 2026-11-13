@@ -4762,3 +4762,85 @@ def test_orphaned_line_names_an_interrupted_retake_waiting_on_its_calendar():
         "agentic: poll: #7 interrupted (lock kept): retake due at 13:05; "
         "remove the agentic label to hold it"
     )
+
+
+# --- GH-621: task_account_paused ---------------------------------------------------------
+
+_TAP_NOW = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
+
+
+def _tap_state(*reasons: str, resets_at: datetime | None = None, **more: Any) -> dict:
+    failures = [
+        cast(
+            Any,
+            {"reason": r, "section": "Developer: api"}
+            | ({"resets_at": resets_at.isoformat()} if resets_at and r == "account_limit" else {}),
+        )
+        for r in reasons
+    ]
+    patch = rules.logged(
+        {"escalation_class": "failure"}, failures, at=(_TAP_NOW - timedelta(minutes=5)).isoformat()
+    )
+    return {"status": "open", "pause_log": patch["pause_log"], **more}
+
+
+def _tap_resumed(state: dict) -> dict:
+    entry = rules.resumed_entry(at=_TAP_NOW.isoformat())
+    return {**state, "pause_log": [*state["pause_log"], entry]}
+
+
+def test_an_open_account_limit_epoch_without_a_reset_is_paused():
+    assert rules.task_account_paused(cast(Any, _tap_state("account_limit")), _TAP_NOW)
+
+
+def test_a_reset_in_the_future_is_paused():
+    state = _tap_state("account_limit", resets_at=_TAP_NOW + timedelta(hours=1))
+    assert rules.task_account_paused(cast(Any, state), _TAP_NOW)
+
+
+def test_a_reset_in_the_past_is_not_paused():
+    state = _tap_state("account_limit", resets_at=_TAP_NOW - timedelta(minutes=1))
+    assert not rules.task_account_paused(cast(Any, state), _TAP_NOW)
+
+
+def test_an_epoch_closed_by_a_resume_is_not_paused():
+    state = _tap_resumed(_tap_state("account_limit"))
+    assert not rules.task_account_paused(cast(Any, state), _TAP_NOW)
+
+
+def test_a_failure_other_than_account_limit_is_not_paused():
+    assert not rules.task_account_paused(cast(Any, _tap_state("upstream")), _TAP_NOW)
+
+
+def test_a_delivered_task_is_paused_until_it_is_resumed():
+    state = _tap_state("account_limit", status="delivered")
+    assert rules.task_account_paused(cast(Any, state), _TAP_NOW)
+    assert not rules.task_account_paused(cast(Any, _tap_resumed(state)), _TAP_NOW)
+
+
+def test_a_mixed_epoch_is_paused_whatever_its_last_failure_keys_the_retake_by():
+    state = cast(Any, _tap_state("account_limit", "upstream"))
+    assert rules.task_account_paused(state, _TAP_NOW)
+    assert rules.auto_resumable(state) == "upstream"
+
+
+def test_the_task_and_the_poller_disagree_after_a_retake_with_a_passed_reset():
+    state = cast(Any, _tap_state("account_limit", resets_at=_TAP_NOW - timedelta(minutes=30)))
+    reset = rules.stated_reset(state)
+
+    def candidate(retaken: bool) -> rules.ResumeCandidate:
+        return rules.ResumeCandidate(
+            7,
+            "account_limit",
+            _TAP_NOW - timedelta(minutes=5),
+            0,
+            len(rules.ACCOUNT_LIMIT_SCHEDULE),
+            resets_at=reset,
+            retaken=retaken,
+        )
+
+    assert not rules.task_account_paused(state, _TAP_NOW)
+    # `retaken` is the lever: after a retake the calendar governs the poller's candidate, while
+    # the task's own stated reset has passed.
+    assert rules.account_paused([candidate(retaken=True)], _TAP_NOW)
+    assert not rules.account_paused([candidate(retaken=False)], _TAP_NOW)

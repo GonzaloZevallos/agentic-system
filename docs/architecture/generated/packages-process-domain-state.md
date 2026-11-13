@@ -28,6 +28,7 @@ graph TD
     m_domain__size_budget["domain.size_budget"]
     m_domain__task["domain.task"]
     m_domain__task_path["domain.task_path"]
+    m_domain__document --> g_domain__landing
     m_domain__document --> m_domain__legacy_names
     m_domain__document --> m_domain__size_budget
     m_domain__document --> m_domain__task

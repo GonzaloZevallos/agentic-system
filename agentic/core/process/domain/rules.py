@@ -3976,6 +3976,25 @@ def stated_reset(state: TaskState) -> datetime | None:
     return max((t for t in stated if t is not None), default=None)
 
 
+def task_account_paused(state: TaskState, now: datetime) -> bool:
+    """Whether this task itself is paused by the account limit (GH-621): its current epoch has an
+    `account_limit` failure and the reset it states, if any, is still ahead of `now` (`now` is
+    aware, as in `account_paused`). The epoch is open by construction: every resume appends
+    `resumed_entry` and a failure reaches `pause_log` only through `logged`, at escalation time.
+    "Any" `account_limit` in the epoch is deliberate, unlike `_resume_key` and `auto_resumable`,
+    which key on the last entry.
+
+    It reads the task's own log and stated reset. `account_paused(resumes, now)` is the poller's
+    product-level check over resume candidates and their calendar; the two can disagree, for a
+    retaken pause follows its calendar there while the stated reset here has passed."""
+    if not any(
+        entry["kind"] == "failure" and entry["value"] == "account_limit"
+        for entry in _current_epoch(state)
+    ):
+        return False
+    return (reset := stated_reset(state)) is None or reset > now
+
+
 def schedule_for(reason: ResumeKey, chase_prior: int = 0) -> tuple[int, ...]:
     """The calendar a retake of `reason` follows (a mechanical cause: the growing
     `RETAKE_SCHEDULE`, bounded by `MECHANICAL_RETAKE_MAX`): the flat `ACCOUNT_LIMIT_SCHEDULE` for
