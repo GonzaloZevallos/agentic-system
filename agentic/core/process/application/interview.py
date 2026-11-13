@@ -24,10 +24,17 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import rules, spec_assumptions
 from ..domain.document import HUMAN
 from ..domain.roles import Interview, Role
-from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
+from ..domain.task import (
+    WAITING_ON_HUMAN,
+    AssumptionRow,
+    SpecEscalationCause,
+    TaskState,
+    apply,
+    assumption_text,
+)
 from .ports import Ports
 from .run_role import Output, run_role, with_context
 
@@ -56,20 +63,37 @@ class Transcript:
     # (issue #28). Not the closing round, which asks nobody anything.
     completed_rounds: int = 0
     consultations: int = 0
+    # What the deciders assumed instead of asking the human, with a spec (GH-594): rows
+    # `_record` folds into the patch's `assumptions` through its reducer.
+    assumptions: list[AssumptionRow] = field(default_factory=list)
 
     @property
     def text(self) -> str:
         return "\n\n".join(self.rounds)
 
-    def ask_human(self, questions: list[str]) -> None:
+    def ask_human(self, questions: list[str], *, has_spec: bool, role_name: str) -> None:
         """Keep a question once. Nobody answers the human during the run, so the decider
         may list an open question again in a later round (issue #4); the prompt asks for
-        new ones only and this catches the literal repeats. A rewording still gets through."""
+        new ones only and this catches the literal repeats. A rewording still gets through.
+        With a spec nothing goes to the human: each doubt becomes an assumption of
+        `role_name` (`spec_assumptions.interview_doubts`)."""
+        to_human, doubts = spec_assumptions.interview_doubts(questions, has_spec)
         seen = {_key(q) for q in self.questions_for_human}
-        for question in questions:
+        for question in to_human:
             if _key(question) not in seen:
                 seen.add(_key(question))
                 self.questions_for_human.append(question)
+        self.assume(role_name, doubts)
+
+    def assume(self, role_name: str, texts: list[str]) -> None:
+        """Keep an assumption once, in its canonical text; a text `assumption_text` refuses
+        is dropped."""
+        seen = {row["text"] for row in self.assumptions}
+        for raw in texts:
+            text = assumption_text(raw)
+            if text is not None and text not in seen:
+                seen.add(text)
+                self.assumptions.append({"role": role_name, "text": text})
 
     def propose(self, invariants: list[str]) -> None:
         """Keep an invariant once, in the order it was proposed. A round may repeat what
@@ -129,6 +153,7 @@ async def interview(
     the last one stopped. `max_rounds` past this point is the total the roles are told
     about — rounds already run plus what a retake still has — never the ordinary cap
     alone, so a round a retake runs never reads as past the limit it was just given."""
+    has_spec = bool(state.get("spec"))
     progress = rules.interview_progress(state, spec, cfg.interview_max_rounds)
     transcript = Transcript(
         sessions=dict(progress.sessions),
@@ -267,7 +292,25 @@ async def interview(
         reply, consulted = answers.text, None
         if spec.consultant is None:
             transcript.withdraw(answers.data["withdrawn"])
-            transcript.ask_human(answers.data["questions_for_human"])
+            transcript.ask_human(
+                answers.data["questions_for_human"], has_spec=has_spec, role_name=decider.name
+            )
+        if has_spec and (cause := answers.data.get("spec_conflict")):
+            if not spec_assumptions.conflict_decided(state.get("pause_log", [])):
+                # Escalates in this round: its questions for PM are dropped, no consultation runs.
+                reason = spec_assumptions.conflict_reason(cause, round_)
+                return None, _escalate_questions(
+                    state,
+                    _record(state, spec, transcript, patch),
+                    reason,
+                    ports,
+                    spec_cause=cause,
+                )
+            transcript.assume(
+                spec.interviewee.name,
+                [f"spec conflict ({cause}) settled by the owner's decision"],
+            )
+        if spec.consultant is None:
             continue
 
         to_pm = answers.data["questions_for_pm"]
@@ -279,7 +322,9 @@ async def interview(
             return None, _record(state, spec, transcript, patch)
         transcript.rounds.append(f"### Round {round_}: {decider.name} answers\n\n{answered.text}")
         transcript.withdraw(answered.data["withdrawn"])
-        transcript.ask_human(answered.data["questions_for_human"])
+        transcript.ask_human(
+            answered.data["questions_for_human"], has_spec=has_spec, role_name=decider.name
+        )
         consulted = f"## {decider.name} answered (round {round_})\n\n{answered.text}"
         reply = f"{answers.text}\n\n{consulted}"
         if answered.data["definitions"] or answered.data["glossary"]:
@@ -298,16 +343,33 @@ async def interview(
 
     patch = _record(state, spec, transcript, patch)
     if transcript.questions_for_human:
-        patch |= rules.escalation(
-            "questions",
+        # Without a spec only: with one `ask_human` never fills `questions_for_human`, and
+        # `rules.escalation` refuses a spec escalation without a cause.
+        reason = (
             f"{decider.name} could not decide {len(transcript.questions_for_human)} "
-            "question(s) from the request and the product knowledge; see the questions",
-            spec=state.get("spec"),
+            "question(s) from the request and the product knowledge; see the questions"
         )
-        patch = rules.logged(patch, at=ports.now())
-        patch["status"] = WAITING_ON_HUMAN
-        return None, patch
+        return None, _escalate_questions(state, patch, reason, ports)
     return transcript, patch
+
+
+def _escalate_questions(
+    state: TaskState,
+    patch: TaskState,
+    reason: str,
+    ports: Ports,
+    *,
+    spec_cause: SpecEscalationCause | None = None,
+) -> TaskState:
+    """`patch` escalated as a `questions` pause, waiting on the human. The only place of
+    this module that raises one, so a spec's `spec_cause` is passed in one place."""
+    patch = rules.logged(
+        patch
+        | rules.escalation("questions", reason, spec=state.get("spec"), spec_cause=spec_cause),
+        at=ports.now(),
+    )
+    patch["status"] = WAITING_ON_HUMAN
+    return patch
 
 
 def _interviewer_prompt(transcript: Transcript, reply: str | None) -> str | None:
@@ -346,6 +408,8 @@ def _record(
         patch = apply(patch, {"sections": {spec.section: transcript.text}})
     if transcript.questions_for_human:
         patch["questions_for_human"] = transcript.questions_for_human
+    if transcript.assumptions:
+        patch = apply(patch, {"assumptions": transcript.assumptions})
     patch["proposed_invariants"] = transcript.invariants
     patch["interview_stats"] = {
         "interview": spec.stage,
