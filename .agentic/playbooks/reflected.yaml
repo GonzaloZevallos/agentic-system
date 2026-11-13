@@ -966,4 +966,4 @@ tasks:
     cost_usd: 0.0708
   GH-688@review:
     cost_usd: 0.0
-    attempts: 1
+    attempts: 2
