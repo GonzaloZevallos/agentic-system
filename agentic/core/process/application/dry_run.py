@@ -16,8 +16,9 @@ What a dry round does differently from a live one (also in `agentic poll --help`
 - `exclusive` is a `nullcontext()`: no atomicity between pollers, harmless as nothing launches.
 - `Workspace.upstream` (the declared exception, a read) is the one network effect. The other
   fetchers write git objects: `fetch_commit` says `False`, `contains` `"unknown"`, `merge_conflicts`
-  `None`, and `merge_base` is refused, so a landing candidate whose criteria are probed
-  (`poll.read_criteria`) ends the dry round with exit 1.
+  `None`, and `merge_base` raises `GitError` (nothing was fetched, the base is unreadable), so
+  a landing candidate's criteria probe (`poll.read_criteria`) reads as unreadable and the
+  decision refuses the merge, as it does when git fails.
 """
 
 from collections.abc import Callable
@@ -25,7 +26,13 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, fields, replace
 from typing import Any
 
-from agentic.core.process.application.ports import Launcher, Ports, RunLock, RunRegistry
+from agentic.core.process.application.ports import (
+    GitError,
+    Launcher,
+    Ports,
+    RunLock,
+    RunRegistry,
+)
 
 Factory = Callable[[object, tuple[object, ...]], object]
 # `replace` is checked field by field against the keywords it is given; the wrapped ports are
@@ -153,6 +160,11 @@ NONE_WRITES = {
     "Scratch": _names("sweep"),
 }
 
+
+def _unreadable_base(inner: object, args: tuple[object, ...]) -> object:
+    raise GitError("dry-run: nothing is fetched, so no merge base is read")
+
+
 # Writes that must hand back a value of their annotated type: a fresh one on each call.
 WRITES_VALUED: dict[str, dict[str, Factory]] = {
     "Tracker": {"rerun_failed_ci": lambda inner, args: []},
@@ -171,6 +183,7 @@ WRITES_VALUED: dict[str, dict[str, Factory]] = {
         "contains": lambda inner, args: "unknown",
         "merge_conflicts": lambda inner, args: None,
         "fetch_commit": lambda inner, args: False,
+        "merge_base": _unreadable_base,  # its Protocol answer is a sha or a `GitError`
     },
     "Launcher": {"spawn": lambda inner, args: 0},
 }
@@ -180,7 +193,7 @@ WRITES_VALUED: dict[str, dict[str, Factory]] = {
 UNREACHED = {
     "Tracker": _names("merge open_issue open_pull_request"),
     "Workspace": _names(
-        """detached_checkout merge_base merge_keeping_conflicts merge_upstream_into restore_owned
+        """detached_checkout merge_keeping_conflicts merge_upstream_into restore_owned
         subtask_checkout task_checkout"""
     ),
     "Scratch": _names("ensure_kept open"),

@@ -15,7 +15,7 @@ from agentic.core.process.adapters.filesystem.documents import FilesystemTaskDoc
 from agentic.core.process.adapters.filesystem.lock import FilesystemRunLock
 from agentic.core.process.adapters.filesystem.run_registry import FilesystemRunRegistry
 from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
-from agentic.core.process.application import dry_run, ports
+from agentic.core.process.application import dry_run, poll, ports
 from agentic.core.process.application.dry_run import (
     NONE_WRITES,
     READS,
@@ -102,8 +102,23 @@ def test_neutral_values_fit_the_annotations(port):
     for name in NONE_WRITES.get(port, frozenset()):
         assert _accepts(_hint(port, name), None), f"{port}.{name} cannot return None"
     for name, make in WRITES_VALUED.get(port, {}).items():
+        if name == "merge_base":  # answers a sha or raises `GitError`: see the test below
+            continue
         value = make(Paths(), (Paths(), {}))
         assert _accepts(_hint(port, name), value), f"{port}.{name} -> {value!r}"
+
+
+def test_a_criteria_probe_reads_as_unreadable_in_a_dry_round_and_is_not_refused():
+    """`read_criteria` asks `merge_base` (poll.py:619): nothing is fetched, so the base is
+    unreadable (`None`, which the merge decision refuses), and the round goes on."""
+    world, registry, lock, _, log = read_only_ports(memory_ports(), Raises(), Raises(), None)
+
+    assert poll.read_criteria(world, "a" * 40, "b" * 40) is None
+    assert len(log.writes) == 1
+    assert log.writes[0].startswith("would workspace.merge_base 'aaaa")
+    assert log.refused == []
+    with pytest.raises(ports.GitError):
+        dry_run.WRITES_VALUED["Workspace"]["merge_base"](Paths(), ())
 
 
 def test_a_valued_write_hands_back_a_fresh_value_each_call():
