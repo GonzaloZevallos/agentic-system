@@ -11,8 +11,7 @@ Esta página muestra los módulos del grupo `definition` de `application` y los 
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support (parte 1)](packages-process-application-support-1.md)
-  - [application: support (parte 2)](packages-process-application-support-2.md)
+  - [application: support](packages-process-application-support.md)
 
 ```mermaid
 graph TD

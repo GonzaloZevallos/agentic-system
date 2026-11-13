@@ -11,13 +11,13 @@ Esta página muestra los módulos del grupo `reflection` de `application` y los 
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-  - [application: support (parte 1)](packages-process-application-support-1.md)
-  - [application: support (parte 2)](packages-process-application-support-2.md)
+  - [application: support](packages-process-application-support.md)
 
 ```mermaid
 graph TD
     g_application__definition["definition (grupo)"]
     g_application__landing["landing (grupo)"]
+    g_application__lifecycle["lifecycle (grupo)"]
     g_application__support["support (grupo)"]
     g_domain__machine["machine (grupo de domain)"]
     g_domain__playbook["playbook (grupo de domain)"]
@@ -28,6 +28,7 @@ graph TD
     m_application__reflect["application.reflect"]
     m_application__reflect_run["application.reflect_run"]
     m_application__stack_review["application.stack_review"]
+    m_application__stage0_prune["application.stage0_prune"]
     m_application__owner_rules --> g_application__support
     m_application__owner_rules --> g_domain__roles
     m_application__owner_rules --> g_domain__state
@@ -49,4 +50,7 @@ graph TD
     m_application__stack_review --> g_domain__roles
     m_application__stack_review --> g_domain__state
     m_application__stack_review --> g_pkg__agentic__shared
+    m_application__stage0_prune --> g_application__lifecycle
+    m_application__stage0_prune --> g_application__support
+    m_application__stage0_prune --> g_domain__machine
 ```
