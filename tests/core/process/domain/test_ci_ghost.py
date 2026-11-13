@@ -169,7 +169,10 @@ def _run(run_id=7, title=f"ci {HEAD}", created_at="2026-11-13T10:00:00Z"):
         # The newest run judges: the ghost is ignored once a newer run exists.
         (
             _TIMED_OUT,
-            (_run(7, created_at="2026-11-13T10:00:00Z"), _run(8, created_at="2026-11-13T10:05:00Z")),
+            (
+                _run(7, created_at="2026-11-13T10:00:00Z"),
+                _run(8, created_at="2026-11-13T10:05:00Z"),
+            ),
             frozenset({"7"}),
             False,
         ),

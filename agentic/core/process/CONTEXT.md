@@ -349,7 +349,7 @@ _Avoid_: corrida roja, fallo de CI (una corrida cancelada no falló)
 
 **Corrida fantasma**:
 Una corrida de GitHub Actions en cola, sin ningún job, durante `check_timeout_s`, contado con el reloj de esta máquina desde la primera lectura que la vio así; nunca se compara con un instante de GitHub. Deja de serlo apenas una lectura la muestra con jobs o fuera de la cola, y una lectura ilegible no cambia nada. Sólo cuenta el estado de suite `QUEUED`. GitHub a veces la deja así para siempre y no se puede cancelar; sin este hecho, `full_checks` no la distingue de una corrida viva que todavía no reportó.
-En el código se llama `GhostWatch` (`domain/ci.py`: `observe_report`, `observe_dispatched`, `ghosts`, `maturing`), con el campo `CiReport.queued_empty_runs` y la lectura `Tracker.watched_branch_ci`.
+En el código se llama `GhostWatch` (`domain/ci.py`: `observe_report`, `observe_dispatched`, `ghosts`, `maturing`), con el campo `CiReport.queued_empty_runs` y la lectura `Tracker.watched_branch_ci`. `full_checks` despacha el workflow `ci_dispatch` del upstream cuando toda corrida viva del head empujado es una corrida fantasma, y registra `ci_ghost_dispatch` (`head`, `ghost_run_ids`, `dispatched_at`, `escalated`) y `dispatch_cause: ghost`; una página cortada de suites (`hasNextPage`) nunca crea una corrida fantasma.
 _Avoid_: corrida colgada, varada, huérfana
 _Campo_: sin término de arte
 
