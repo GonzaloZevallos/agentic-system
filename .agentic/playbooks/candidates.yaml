@@ -1639,3 +1639,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-13T06:02:59.480+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change adds or alters a port, adapter or other contract between modules, update the hand-written architecture docs that list them in the same change, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-660
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T06:47:48.022+00:00'

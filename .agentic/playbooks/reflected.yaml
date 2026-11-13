@@ -891,3 +891,13 @@ tasks:
       - GH-626
   GH-659@review:
     cost_usd: 0.0
+  GH-660@review:
+    cost_usd: 0.0605
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-660
