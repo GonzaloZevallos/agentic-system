@@ -153,8 +153,8 @@ def item_hash(item: TrackerItem) -> str:
 
 
 def _for_owner(item: TrackerItem) -> TypeGuard[HumanItem]:
-    """Whether the row of `item` is not performed by the system: the one reading of the flag."""
-    return not _TABLE[item["kind"]].system
+    """Whether `item` is a `human` one, the only kind the system does not perform."""
+    return item["kind"] == "human" and not _TABLE[item["kind"]].system
 
 
 def _by_system(item: TrackerItem) -> TypeGuard[CommentItem | OpenIssueItem]:
@@ -291,7 +291,7 @@ def marker(item: TrackerItem, task_id: str) -> str:
     return f"<!-- agentic-item: {task_id} {item_hash(item)} -->"
 
 
-def report(items: Sequence[TrackerItem], done: Mapping[str, Mapping[str, str]]) -> str:
+def report(items: Sequence[TrackerItem], done: Mapping[str, Mapping[str, object]]) -> str:
     """One line per system item whose record in `done` carries a `kind`, in plan order: what
     the system did, and where only when the record has a url. `''` when there is none."""
     lines = []
