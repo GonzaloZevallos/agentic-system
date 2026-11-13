@@ -257,3 +257,97 @@ def test_a_reworded_item_is_asked_again_and_the_answered_one_is_not():
 def test_parse_names_an_unknown_key_before_an_unknown_kind_in_the_same_item():
     with pytest.raises(ValueError, match="urgent"):
         tracker_items.parse([{**ITEM, "kind": "comment", "urgent": "yes"}])
+
+
+# --- GH-625 part 3a: one table of kinds, two filters, the other kinds' shapes ---------------
+
+COMMENT = {"kind": "comment", "text": "Superseded by #12."}
+OPEN_ISSUE = {"kind": "open_issue", "title": "Track the retry", "body": "Line one.\nLine two."}
+MIXED = [ITEM, COMMENT, OPEN_ISSUE, {**ITEM, "question": "Rename it?"}]
+EVERY_KIND = frozenset({"human", "comment", "open_issue"})
+
+
+@pytest.fixture
+def every_kind(monkeypatch):
+    """The kinds the table knows, switched on: no kind but `human` is performed yet."""
+    monkeypatch.setattr(tracker_items, "KINDS", EVERY_KIND)
+
+
+@pytest.mark.parametrize(
+    ("item", "expected"),
+    [(ITEM, "28383afe2b80"), (COMMENT, "2ea9e9565f9e"), (OPEN_ISSUE, "50ec67333944")],
+    ids=["human", "comment", "open_issue"],
+)
+def test_item_hash_is_pinned_for_every_kind(item, expected):
+    assert tracker_items.item_hash(item) == expected
+
+
+@pytest.mark.parametrize("item", [COMMENT, OPEN_ISSUE], ids=["comment", "open_issue"])
+def test_parse_still_refuses_a_kind_that_is_not_performed_yet(item):
+    with pytest.raises(ValueError, match="unknown tracker item kind") as error:
+        tracker_items.parse([item])
+    assert item["kind"] in str(error.value) and WAY_OUT in str(error.value)
+
+
+def test_human_items_and_system_items_split_a_mixed_list_and_keep_its_order():
+    assert tracker_items.human_items(MIXED) == [MIXED[0], MIXED[3]]
+    assert tracker_items.system_items(MIXED) == [COMMENT, OPEN_ISSUE]
+    assert tracker_items.human_items([]) == [] and tracker_items.system_items([]) == []
+
+
+@pytest.mark.parametrize(
+    ("item", "expected"),
+    [
+        (ITEM, "human: Ship it?"),
+        (COMMENT, "comment: Superseded by #12."),
+        ({"kind": "comment", "text": "x" * 80}, f"comment: {'x' * 80}"),
+        (
+            {"kind": "comment", "text": f"{'x' * 40}\n{'y' * 40}"},
+            f"comment: {'x' * 40} {'y' * 39}…",
+        ),
+        (OPEN_ISSUE, "open_issue: Track the retry"),
+    ],
+    ids=["human", "comment", "80 characters", "81 with a newline", "open_issue"],
+)
+def test_summary_line_is_the_kind_and_the_title_or_the_first_80_characters(item, expected):
+    assert tracker_items.summary_line(item) == expected
+
+
+def test_the_duplicate_error_names_the_item_by_its_summary():
+    with pytest.raises(ValueError, match="twice") as error:
+        tracker_items.parse([ITEM, ITEM])
+    assert "'human: Ship it?'" in str(error.value)
+
+
+def test_kinds_text_names_only_the_kinds_in_kinds_and_in_the_tables_order(monkeypatch):
+    sole = tracker_items.kinds_text()
+    assert "and no other kind exists" in sole and "`comment`" not in sole
+    monkeypatch.setattr(tracker_items, "KINDS", frozenset({"open_issue", "human"}))
+    both = tracker_items.kinds_text()
+    assert "no other kind exists" not in both
+    assert both.index("`human`") < both.index("`open_issue`") and "`comment`" not in both
+
+
+def test_a_several_lines_field_takes_lines_and_every_other_rule_still_holds(every_kind):
+    assert tracker_items.parse([OPEN_ISSUE]) == [OPEN_ISSUE]
+    assert tracker_items.parse([COMMENT]) == [COMMENT]
+    body = tracker_items.MAX_BODY_CHARS
+    assert tracker_items.parse([{**OPEN_ISSUE, "body": "x" * body}])[0]["body"] == "x" * body
+    for bad, match in [
+        ({**OPEN_ISSUE, "body": "x" * (body + 1)}, "at most 2000"),
+        ({**OPEN_ISSUE, "body": "one\n<!-- two"}, "marker"),
+        ({**OPEN_ISSUE, "body": "one\n{{two"}, "marker"),
+        ({**OPEN_ISSUE, "body": "one\nask @bob"}, "mention"),
+        ({**OPEN_ISSUE, "title": "one\ntwo"}, "one non-empty line"),
+        ({**OPEN_ISSUE, "title": "x" * 241}, "at most 240"),
+        ({**COMMENT, "text": "a\n" + "x" * 240}, "at most 240"),
+    ]:
+        with pytest.raises(ValueError, match=match):
+            tracker_items.parse([bad])
+
+
+def test_the_keys_of_the_kind_are_the_only_ones_a_performed_kind_takes(every_kind):
+    with pytest.raises(ValueError, match="no key question"):
+        tracker_items.parse([{**COMMENT, "question": "q"}])
+    with pytest.raises(ValueError, match="missing its body"):
+        tracker_items.parse([{"kind": "open_issue", "title": "t"}])

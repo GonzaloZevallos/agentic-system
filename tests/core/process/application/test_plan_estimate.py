@@ -10,6 +10,7 @@ from agentic.core.process.domain.size_budget import PROVEN_PAIRS, ActualSize, Pl
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_preflight import ORIGINAL_PARTS_WORDING
+from tests.core.process.domain.test_tracker_item_kinds_prompt import PARAGRAPH_TODAY
 from tests.fakes import (
     ScriptedRunner,
     memory_ports,
@@ -567,3 +568,13 @@ async def test_a_part_at_the_depth_cap_is_judged_with_the_proven_ratio_too(tmp_p
 
     assert "fit_question" not in fits and "subtasks" in fits
     assert refused["fit_question"] is True and "subtasks" not in refused
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_both_render_sites_tell_the_tech_lead_the_kinds_with_the_limits_filled_in(
+    arm, tmp_path
+):
+    runner, cfg = arm_of(arm, tmp_path, planned())
+    await plan(TASK, cfg, memory_ports(runner))
+    told = runner.calls[-1]["system_prompt"]
+    assert PARAGRAPH_TODAY in told and "tracker_item_kinds" not in told

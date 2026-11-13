@@ -105,11 +105,7 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    verdict, close or retitle issues): no role has `gh`, so that work is for the human. Then
    write `tracker_items`, no subtasks, no parts and `estimated_files: 0`. Tracker work
    never becomes a subtask, because no role has `gh`.
-   `tracker_items`: tracker work is a `human` item, `{kind: human, question, recommendation}`,
-   and no other kind exists. Its `question` asks the owner to do or approve the work (for
-   example "Close #12 as superseded?") and its `recommendation` says what to do. Each field
-   is one line of at most {{tracker_field_max}} characters with no @-mention, and a plan
-   carries at most {{tracker_items_max}} items. The Breaking-API line (`api_break`),
+   {{tracker_item_kinds}} The Breaking-API line (`api_break`),
    follow-ups (outside findings) and closing the issue via the pull request are not items.
    An item the owner already answered is in the `Human` section: do not write it again.
    {{tracker_with_parts}}

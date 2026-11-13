@@ -46,7 +46,7 @@ import re
 from collections.abc import Mapping, Sequence
 
 from .task import INTEGRATION, PartRecord, Subtask
-from .tracker_items import TrackerItem
+from .tracker_items import TrackerItem, human_items
 
 # `### Subtasks` at the top level only, exactly that line (`### Subtasks:` and
 # `#### Subtasks` both miss): the `#### <id>` briefs inside it start with a fourth
@@ -173,11 +173,13 @@ TRACKER_ITEMS_TITLE = "Decisions for the owner"
 def with_tracker_items_block(section: str, items: Sequence[TrackerItem]) -> str:
     """`section` with a `### Decisions for the owner` list built from the typed `items`
     (GH-620): each question with the author's recommendation. Unchanged when there are none.
-    A heading of its own, apart from the legacy checklist's, which this never touches."""
-    if not items:
+    Only the owner's items are listed: the system performs the others itself (GH-625). A heading
+    of its own, apart from the legacy checklist's, which this never touches."""
+    asked = human_items(items)
+    if not asked:
         return section
     lines = "\n".join(
-        f"- {item['question']} Recommendation: {item['recommendation']}" for item in items
+        f"- {item['question']} Recommendation: {item['recommendation']}" for item in asked
     )
     return f"{section.rstrip()}\n\n### {TRACKER_ITEMS_TITLE}\n\n{lines}"
 

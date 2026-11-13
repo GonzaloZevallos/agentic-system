@@ -74,7 +74,7 @@ def _pending_lines(state: TaskState) -> list[str]:
     pending = set(state.get("tracker_human", []))
     return [
         tracker_items.question_line(item)
-        for item in tracker_items.parse(state.get("tracker_items", []))
+        for item in tracker_items.human_items(tracker_items.parse(state.get("tracker_items", [])))
         if tracker_items.item_hash(item) in pending
     ]
 
