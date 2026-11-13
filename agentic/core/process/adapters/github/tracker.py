@@ -517,6 +517,22 @@ class GhTracker:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def update_issue_body(self, number: int, body: str) -> None:
+        # `--body-file <path>`, never `-`: the runner passes `stdin=DEVNULL`, so `-`
+        # would send an empty body. An empty body is refused before any `gh` call.
+        if not body.strip():
+            raise ValueError(f"refusing to write an empty body to issue #{number}")
+        # `newline=""`: the body goes out byte for byte, CRLF lines included.
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".md", delete=False, encoding="utf-8", newline=""
+        ) as h:
+            h.write(body)
+            path = h.name
+        try:
+            self._gh_retrying("issue", "edit", str(number), "--body-file", path)
+        finally:
+            Path(path).unlink(missing_ok=True)
+
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         pull_request_number(reference)  # rejected before any `gh` call, as `merge` does
         runs = self._json_list(

@@ -17,7 +17,6 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
 
 ```mermaid
 classDiagram
-    class poll__Seen["Seen"]
     class poll__StackUnreadable["StackUnreadable"]
     class restore__RestoreResult["RestoreResult"]
     class resume__Increment["Increment"]
@@ -25,4 +24,5 @@ classDiagram
     class resume__Seed["Seed"]
     class resume__WaitingOnHuman["WaitingOnHuman"]
     class schedule__FoldingDocuments["FoldingDocuments"]
+    class split_sweep__RepointResult["RepointResult"]
 ```

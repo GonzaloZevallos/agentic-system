@@ -25,4 +25,5 @@ classDiagram
     class poll__OrderEntry["OrderEntry"]
     class poll__OrderLock["OrderLock"]
     class poll__RetakesSpent["RetakesSpent"]
+    class poll__Seen["Seen"]
 ```

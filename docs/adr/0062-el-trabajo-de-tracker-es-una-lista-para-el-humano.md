@@ -158,3 +158,29 @@ una decisión. Lo registra ADR-0073.
 Addendum (GH-415, 2026-10-28): el alcance de "cuya primera línea diga `Blocked by:`" del
 addendum de GH-350 pasó a ser cualquier línea completa fuera de un bloque de código; ver el
 addendum de GH-415 en ADR-0039.
+
+## Addendum (GH-619, regla del dueño 2026-11-12): el sistema reapunta a los dependientes
+
+Reemplaza el punto "El humano reaparta" del addendum de GH-350: el sistema mantiene el tracker
+coherente con sus propios splits.
+
+- **Decisión:** cuando `split` termina, `split_sweep.repoint_dependents` reescribe, en cada
+  issue abierto que no sea una parte ni el issue de la tarea, las líneas completas
+  `Blocked by:` (fuera de un bloque de código) que nombran a la tarea, para que apunten a
+  `rules.last_part_numbers`. La lista de candidatos sale solo de `Inbox.open_issue_refs` (que
+  falla ante una página llena), nunca de `open_issues`. Cada dependiente se vuelve a leer con
+  `Inbox.task` justo antes de escribir, la reescritura la hace `rules.repoint_blockers` (el
+  mismo recorrido que `blockers_from_body`, consciente de los bloques de código) y solo se
+  escribe si se cumple la poscondición. Una edición (`Tracker.update_issue_body`) y un
+  comentario por issue; la lista del split vuelve a ser solo la del plan, y ningún ítem pide
+  al humano cerrar o reapuntar. `rules.TRACKER_WITH_PARTS` sigue siendo el único texto que dice
+  quién reapunta.
+- **Si falla:** una lectura o una edición que falla nunca detiene el split; el comentario
+  `Split:` lo dice en una línea y el barrido de la parte 2 lo termina. El issue de la tarea
+  partida no se cierra solo hasta la parte 3.
+- **Límites conocidos:** no hay compare-and-swap sobre el cuerpo de un issue: una edición
+  humana entre la relectura y la escritura se pierde; los espacios en los bordes del cuerpo se
+  pierden porque la relectura va recortada; los enlaces nativos y las referencias externas
+  `owner/repo#N` no se editan; un corte entre la edición y el comentario pierde el comentario;
+  un split en vuelo antes de GH-619 puede publicar ítems derivados que ya tenía guardados; un
+  barrido que falló espera a la parte 2.

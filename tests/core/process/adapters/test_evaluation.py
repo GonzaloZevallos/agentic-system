@@ -22,6 +22,7 @@ REFUSED_TRACKER_CALLS = {
     "close_issue": ("EVAL-1-aaaaaaaa-default-1",),
     "open_issue": ("title", "body"),
     "comment_on_issue": ("7", "text"),
+    "update_issue_body": (7, "body"),
     "rerun_failed_ci": ("https://github.com/o/r/pull/7", "abc"),
     "rerun_ci_run": ("123456",),
     "close_pull_request": ("https://github.com/o/r/pull/7",),
