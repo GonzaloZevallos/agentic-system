@@ -11,7 +11,8 @@ Esta página muestra los grupos de módulos de `domain` y una flecha por cada gr
   - [adapters](packages-process-adapters.md)
   - [application](packages-process-application.md)
 - Grupos:
-  - [domain: checks](packages-process-domain-checks.md)
+  - [domain: checks (parte 1)](packages-process-domain-checks-1.md)
+  - [domain: checks (parte 2)](packages-process-domain-checks-2.md)
   - [domain: landing](packages-process-domain-landing.md)
   - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
