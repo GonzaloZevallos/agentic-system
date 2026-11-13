@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, escalation_prompts, rules
+from ..domain import document, escalation_prompts, rules, tracker_items
 from ..domain.task import EscalationClass, TaskState
 from .ports import Ports
 
@@ -67,6 +67,18 @@ def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
     return "\n".join(lines)
 
 
+def _pending_lines(state: TaskState) -> list[str]:
+    """The lines of the typed items still pending (`tracker_human`), in item order."""
+    if not rules.tracker_item_pause(state):
+        return []
+    pending = set(state.get("tracker_human", []))
+    return [
+        tracker_items.question_line(item)
+        for item in tracker_items.parse(state.get("tracker_items", []))
+        if tracker_items.item_hash(item) in pending
+    ]
+
+
 def _code(command: str) -> str:
     """`command` as inline code, left bare when it carries a backtick of its own."""
     return command if "`" in command else f"`{command}`"
@@ -95,12 +107,23 @@ def _prompt_block(
         "issue": "<issue>" if number is None else str(number),
         "usd": "<usd>" if usd is None else usd,
     }
+    pending = _pending_lines(state)
+    shown = list(questions)
+    shown.extend(line for line in pending if line not in shown)
     block = [""]
-    if cls == "questions" and questions:
+    if cls == "questions" and rules.tracker_item_pause(state):
+        question, recommended, options = escalation_prompts.tracker_human_prompt()
+        block.append("Question:")
+        block.extend(f"{n}. {q}" for n, q in enumerate(shown, 1))
+        block.append(question)
+    elif cls == "questions" and questions:
         block.append("Question:")
         block.extend(f"{n}. {q}" for n, q in enumerate(questions, 1))
     else:
         block.append(f"Question: {question}")
+        if pending:
+            block.append("Your reply also decides these items:")
+            block.extend(f"- {line}" for line in pending)
     block.append(f"Recommended: {_code(recommended.format(**fill))}")
     block.append("Options:")
     block.extend(f"- {_code(option.format(**fill))}" for option in options)

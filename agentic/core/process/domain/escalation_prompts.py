@@ -98,3 +98,9 @@ def restarted_returns_prompt() -> Prompt:
     """The prompt of a `returns` escalation of a restarted attempt: the recommended answer
     changes the brief (a `Decision:`) before resuming."""
     return _RESTARTED
+
+
+def tracker_human_prompt() -> Prompt:
+    """The prompt of a `questions` pause raised by typed tracker items (GH-620): the owner decides
+    each item shown above, so it recommends and offers only a `Decision:` (no close)."""
+    return ("Decide each item above; each recommendation is the plan's.", DECIDE, (DECIDE,))

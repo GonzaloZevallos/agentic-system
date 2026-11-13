@@ -5,7 +5,7 @@ closes by (class, cause). It is presentation only: the rest of the comment is wh
 import pytest
 
 from agentic.core.process.application import escalate
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import rules, task, tracker_items
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -93,3 +93,54 @@ def test_a_state_with_no_class_keeps_the_comment_it_had(cfg):
 
     assert "Question:" not in text
     assert text.splitlines()[0] == "Escalated: old reason"
+
+
+ITEM = {"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."}
+AT = "2026-11-13T10:00:00+00:00"
+
+
+def raised(**extra):
+    base = {"id": "GH-12", "tracker_items": [ITEM], **extra}
+    return task.apply(base, tracker_items.escalate_human(base, AT))
+
+
+@pytest.mark.anyio
+async def test_a_human_item_escalates_through_the_node_with_needs_human_and_no_close(cfg):
+    ports = memory_ports()
+    state = raised()
+
+    await escalate.escalate(state, cfg, ports)
+
+    assert ports.tracker.labels == [("GH-12", "needs-human")]
+    [(_, text)] = ports.tracker.comments
+    assert "Ship it? — Recommended: Yes, ship." in text
+    assert "Decision:" in text
+    assert "gh issue close" not in text
+    assert "Decide each item above; each recommendation is the plan's." in text
+
+
+def test_a_role_question_and_a_pending_item_show_once_each_in_that_order(cfg):
+    state = {**raised(), "questions_for_human": ["Which currency?"]}
+    text = escalate.comment(state, cfg, memory_ports())
+
+    line = tracker_items.question_line(ITEM)
+    assert text.count("Which currency?") == 1 and text.count(line) == 1
+    assert text.index("Which currency?") < text.index(line)
+
+
+def test_a_ci_escalation_after_the_items_still_lists_them_under_its_own_prompt(cfg):
+    state = raised()
+    ci = rules.logged(rules.escalation("ci", "red", cause="ci_gh_unavailable"), at=AT)
+    text = escalate.comment(task.apply(state, ci), cfg, memory_ports())
+
+    question, _, _ = rules.ESCALATION_PROMPTS[("ci", "ci_gh_unavailable")]
+    assert f"Question: {question}" in text
+    assert "Your reply also decides these items:" in text
+    assert f"- {tracker_items.question_line(ITEM)}" in text
+
+
+def test_without_pending_items_the_comment_has_no_item_block(cfg):
+    text = escalate.comment(
+        state("x", "ci", escalation_cause="ci_gh_unavailable"), cfg, memory_ports()
+    )
+    assert "also decides" not in text
