@@ -1787,6 +1787,75 @@ def test_auto_resumable_returns_the_most_recent_failures_reason():
     assert rules.auto_resumable(state) == "upstream"
 
 
+def test_auto_resumable_retakes_a_role_whose_retry_hit_the_account_limit_after_a_failed_check():
+    # GH-640: the Tech Lead's attempt 1 failed its check and was retried; only the retry's
+    # 429 ended the run, so that one decides.
+    log = [
+        _failure_entry("check", "Tech Lead"),
+        _failure_entry("account_limit", "Tech Lead"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) == "account_limit"
+    assert rules.pause_kind(log) == "external"
+
+
+def test_auto_resumable_is_none_when_the_last_failure_of_the_section_is_not_external():
+    # Rejected input: the reverse order, the check ended the run.
+    log = [
+        _failure_entry("account_limit", "Tech Lead"),
+        _failure_entry("check", "Tech Lead"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+    assert rules.pause_kind(log) == "human"
+
+
+def test_auto_resumable_is_none_when_sections_interleave():
+    # Rejected input: `Developer: a` check is the last of its section, whatever b did between.
+    log = [
+        _failure_entry("check", "Developer: a"),
+        _failure_entry("account_limit", "Developer: b"),
+        _failure_entry("check", "Developer: a"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+
+
+def test_auto_resumable_does_not_let_one_batch_supersede_another_branchs():
+    # Rejected input: two parallel branches log one batch each; B's external failure must not
+    # hide A's check, with distinct sections or the same bare one.
+    for a, b in (("Developer: a", "Developer: b"), ("Developer", "Developer")):
+        log = [
+            _failure_entry("check", a),
+            _failure_entry("check", a),
+            _escalation_entry("failure"),
+            _failure_entry("account_limit", b),
+            _escalation_entry("failure"),
+        ]
+        assert rules.auto_resumable({"pause_log": log}) is None
+
+
+def test_auto_resumable_never_supersedes_a_failure_with_an_empty_section():
+    # Rejected input: with no section there is no way to tell it was retried.
+    log = [
+        _failure_entry("check", ""),
+        _failure_entry("account_limit", ""),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+
+
+def test_auto_resumable_does_not_supersede_across_batches_without_a_resumed():
+    # Rejected input: the same section in two batches is two runs of the role, not a retry.
+    log = [
+        _failure_entry("check", "Developer: a"),
+        _escalation_entry("failure"),
+        _failure_entry("account_limit", "Developer: a"),
+        _escalation_entry("failure"),
+    ]
+    assert rules.auto_resumable({"pause_log": log}) is None
+
+
 def test_auto_resumable_only_reads_the_current_epoch_after_the_last_resumed():
     # An old epoch's external failure must not leak into a fresh one that escalated on
     # `questions` after a human already resumed the task once.
