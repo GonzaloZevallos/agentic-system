@@ -1,0 +1,84 @@
+{
+  "_note": "SYNTHETIC: written by hand to the shape of COMMIT_CI_QUERY (agentic/core/process/adapters/github/tracker.py), not captured from GitHub. Replace it with a real `gh api graphql` recording when one can be made.",
+  "data": {
+    "repository": {
+      "object": {
+        "oid": "1111111111111111111111111111111111111111",
+        "statusCheckRollup": {
+          "contexts": {
+            "pageInfo": {"hasNextPage": false},
+            "nodes": [
+              {
+                "__typename": "CheckRun",
+                "id": "CR_lint_old",
+                "name": "lint",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+                "detailsUrl": "https://github.com/o/r/actions/runs/99/job/1",
+                "startedAt": "2026-11-01T10:00:00Z",
+                "completedAt": "2026-11-01T10:02:00Z"
+              },
+              {
+                "__typename": "CheckRun",
+                "id": "CR_lint",
+                "name": "lint",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "detailsUrl": "https://github.com/o/r/actions/runs/101/job/2",
+                "startedAt": "2026-11-01T11:00:00Z",
+                "completedAt": "2026-11-01T11:02:00Z"
+              },
+              {
+                "__typename": "CheckRun",
+                "id": "CR_e2e",
+                "name": "e2e",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+                "detailsUrl": "https://github.com/o/r/actions/runs/103/job/3",
+                "startedAt": "2026-11-01T11:00:00Z",
+                "completedAt": "2026-11-01T11:09:00Z"
+              },
+              {
+                "__typename": "CheckRun",
+                "id": "CR_slow",
+                "name": "slow",
+                "status": "IN_PROGRESS",
+                "conclusion": null,
+                "detailsUrl": "https://github.com/o/r/actions/runs/104/job/4",
+                "startedAt": "2026-11-01T11:00:00Z",
+                "completedAt": null
+              },
+              {
+                "__typename": "CheckRun",
+                "id": "CR_docs",
+                "name": "docs",
+                "status": "COMPLETED",
+                "conclusion": "CANCELLED",
+                "detailsUrl": "https://github.com/o/r/actions/runs/105/job/5",
+                "startedAt": "2026-11-01T11:00:00Z",
+                "completedAt": "2026-11-01T11:01:00Z"
+              },
+              {
+                "__typename": "StatusContext",
+                "context": "ci/legacy",
+                "state": "SUCCESS",
+                "targetUrl": "https://example.test/legacy"
+              }
+            ]
+          }
+        },
+        "checkSuites": {
+          "pageInfo": {"hasNextPage": false},
+          "nodes": [
+            {"status": "COMPLETED", "conclusion": "FAILURE", "workflowRun": {"databaseId": 99}},
+            {"status": "COMPLETED", "conclusion": "SUCCESS", "workflowRun": {"databaseId": 101}},
+            {"status": "COMPLETED", "conclusion": "FAILURE", "workflowRun": {"databaseId": 103}},
+            {"status": "IN_PROGRESS", "conclusion": null, "workflowRun": {"databaseId": 104}},
+            {"status": "COMPLETED", "conclusion": "CANCELLED", "workflowRun": {"databaseId": 105}},
+            {"status": "COMPLETED", "conclusion": "SUCCESS", "workflowRun": null}
+          ]
+        }
+      }
+    }
+  }
+}

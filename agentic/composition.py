@@ -47,6 +47,7 @@ from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.git import GitWorkspace
+from .core.process.adapters.git.master_window import GitMasterWindow
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker
 from .core.process.adapters.github.board import (
@@ -56,6 +57,7 @@ from .core.process.adapters.github.board import (
     GhBoard,
 )
 from .core.process.adapters.github.ci_logs import GhCiLogs
+from .core.process.adapters.github.commit_ci import GhCommitCi
 from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
@@ -201,6 +203,26 @@ def ci_reader(tracker: GhTracker) -> Callable[[str], CiReport | CiUnreadable]:
         return tracker.ci_report(reference)
 
     return read
+
+
+def stage0_master_window(
+    root: Path,
+    remote_url: str,
+    product_dir: Path,
+    stack_ci: Callable[[str], tuple[str, ...]],
+) -> GitMasterWindow:
+    """The stage0 rotation's view of master (GH-632, part 2c): a mirror under `root` of
+    `remote_url`, each commit's CI read by sha through `gh` run in `product_dir`. Nothing calls it
+    until part 2d (#697) wires the CLI.
+
+    The tracker has no `GhRetry`: one `gh api graphql` call per commit, ten per window, in series,
+    no cache and no failed-step lookup. A `gh` that hangs on every call costs up to ten times
+    `GH_TIMEOUT_S` (60 s) a window; the cache and a deadline for the whole window are 2d's.
+    `remote_url` (the mirror) and the repository `gh` resolves from `product_dir` are assumed to be
+    the same one: neither is derived from the other here, 2d checks it."""
+    return GitMasterWindow(
+        root, remote_url, ci=GhCommitCi(GhTracker(product_dir)), stack_ci=stack_ci
+    )
 
 
 def evaluation_ports(ports: Ports, inbox: Inbox) -> Ports:
