@@ -38,7 +38,7 @@ from ..domain.roles import PJM
 from ..domain.task import WAITING_ON_HUMAN, PartRecord, TaskState, apply
 from .ports import Ports
 from .run_role import finish
-from .split_sweep import RepointResult, repoint_dependents
+from .split_sweep import ROUND_STOPPERS, RepointResult, repoint_dependents, repoint_targets
 from .tracker_only import post_tracker_checklist
 
 # The label of the queue itself: the parts are tasks the poller must take up.
@@ -145,14 +145,18 @@ def _repoint(state: TaskState, parts: list[PartRecord], ports: Ports) -> Repoint
     parent = ports.inbox.issue_of(state["id"])
     if parent is None:
         return RepointResult()
+    stamped: TaskState = {**state, "parts": parts}
+    found = repoint_targets(stamped)
+    if found is None:
+        return RepointResult(read_failed=True)
+    targets, excluded = found
     try:
         refs: list[IssueRef] = ports.inbox.open_issue_refs()
+    except ROUND_STOPPERS as stopper:
+        return RepointResult(stopped=True, stopped_by=type(stopper).__name__)
     except (ValueError, OSError):
         return RepointResult(read_failed=True)
-    issues = state.get("split_issues", {})
-    targets = [_issue_number(issues[str(n)]) for n in rules.last_part_numbers(parts)]
-    excluded = {_issue_number(url) for url in issues.values()} | {parent}
-    return repoint_dependents(ports, parent, targets, refs, excluded)
+    return repoint_dependents(ports, parent, targets, refs, {*excluded, parent})
 
 
 def _unfinished(swept: RepointResult) -> str:
@@ -161,6 +165,8 @@ def _unfinished(swept: RepointResult) -> str:
     head = "The re-point of blocked issues did not finish: "
     if swept.read_failed:
         return f"{head}the open issues could not be read; the sweep of part 2 finishes it."
+    if swept.stopped:
+        return f"{head}the tracker stopped answering; the sweep of part 2 finishes it."
     return f"{head}{swept.failed} of {swept.considered} failed; the sweep of part 2 finishes it."
 
 

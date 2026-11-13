@@ -744,3 +744,8 @@ _Campo_: sin término de arte
 El paso del aterrizaje, sin modelo, que escribe en el cuerpo del pull request la línea que el producto exige, lo cierra y lo reabre para que CI corra con el cuerpo nuevo. Una vez por cabeza y solo con las corridas completas; `resolved_at` es la reapertura.
 _Avoid_: arreglo del PR, re-run
 _Campo_: sin término de arte
+
+**Barrido de partidas**:
+El pase del poller, una vez por vuelta, que reapunta las líneas `Blocked by:` de los dependientes abiertos de cada padre `split` abierto que aún no tiene `split_repointed_at` y cuyas partes están todas registradas. Lee una sola vez la lista de issues abiertos (`open_issue_refs`) y escribe esa clave con `record_closure` solo tras un pase completo; un límite de tasa, un tracker inalcanzable o un tiempo agotado terminan la vuelta sin registro. Con todos los padres registrados no hace ninguna llamada. Es la mitad del reapunte; el cierre del padre es de otra parte. Sus líneas `agentic: split: GH-N: K dependents re-pointed` son salida del poller, no una métrica.
+_Avoid_: barrido de splits, reapuntador
+_Campo_: sin término de arte

@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 
+from agentic.core.process.application.ports import TrackerRateLimited
 from agentic.core.process.application.split import SPLIT, split
 from agentic.core.process.application.tracker_only import TRACKER_WORK
 from agentic.core.process.domain import pull_request, rules
@@ -297,6 +298,30 @@ async def test_an_unreadable_open_issue_list_ends_split_with_the_read_failure_li
     paused = {**STATE, "split_issues": dict(first.documents.saved[-1]["split_issues"])}
     await split(paused, cfg, again)
     assert len(edits(again)) == 1 and len(dependent_comments(again)) == 1
+
+
+async def test_a_rate_limit_on_the_list_or_a_dependent_ends_split_with_the_stopped_line(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    on_list = ports_with_a_blocked_issue()
+    on_list.inbox.refs_error = TrackerRateLimited("gh: slow down")
+    on_dependent = ports_with_a_blocked_issue()
+    on_dependent.inbox.task_errors = set()
+    read = on_dependent.inbox.task
+
+    def limited(number):
+        if number == 77:
+            raise TrackerRateLimited("gh: slow down")
+        return read(number)
+
+    on_dependent.inbox.task = limited
+
+    for ports in (on_list, on_dependent):
+        patch = await split(STATE, cfg, ports)
+        assert patch["status"] == "split" and edits(ports) == []
+        assert (
+            "the tracker stopped answering; the sweep of part 2 finishes it."
+            in (split_comments(ports)[0])
+        )
 
 
 async def test_a_failed_edit_of_a_dependent_is_counted_in_the_split_comment(tmp_path):

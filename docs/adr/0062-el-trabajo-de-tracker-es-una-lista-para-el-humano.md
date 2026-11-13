@@ -184,3 +184,12 @@ coherente con sus propios splits.
   `owner/repo#N` no se editan; un corte entre la edición y el comentario pierde el comentario;
   un split en vuelo antes de GH-619 puede publicar ítems derivados que ya tenía guardados; un
   barrido que falló espera a la parte 2.
+
+- **Costo del barrido de partidas (parte 2):** en régimen estable no hace ninguna llamada: sin
+  padre `split` abierto y sin `split_repointed_at`, la vuelta no toca el tracker. Mientras algún
+  padre carezca del registro hay una lectura de lista (`open_issue_refs`) por vuelta, más una
+  relectura, una edición y un comentario por dependiente. Una página llena de 1000 issues
+  abiertos hace que la lectura falle: no se escribe el registro y el barrido repite esa lectura,
+  en silencio, cada vuelta. Un dependiente que empieza a nombrar al padre después de escrito el
+  registro no se reapunta nunca; la parte 3 (cerrar el padre) lo acota. Las líneas nuevas son
+  salida del poller, no una métrica (estándar 7).
