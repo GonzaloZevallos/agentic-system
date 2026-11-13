@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 19
-summarised: 192
+summaries: 20
+summarised: 202
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -996,4 +996,5 @@ tasks:
     cost_usd: 0.0418
   GH-693@review:
     cost_usd: 0.0
-    attempts: 2
+    failed: 'Reflector failed 1 times: You''ve hit your session limit · resets 8:30pm (America/Argentina/Buenos_Aires) (terminal reason: api_error, HTTP 429, exit code 1)'
+    attempts: 3
