@@ -921,3 +921,13 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-627
+  GH-630@review:
+    cost_usd: 0.0749
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-630

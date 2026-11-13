@@ -1658,3 +1658,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-13T08:54:14.623+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change alters a key flow, update the architecture docs that describe it in the same change, and grep them for the names of the functions you replaced before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-630
+  sources:
+  - finding
+  added_at: '2026-11-13T09:41:09.748+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: For each input or fact the brief says a component must feed, trace it from the production entry point to its consumer and confirm no call drops it; do not remove wiring a brief requires.
+  confidence: medium
+  seen_in:
+  - GH-630
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T09:41:09.748+00:00'
