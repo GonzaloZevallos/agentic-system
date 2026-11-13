@@ -3948,15 +3948,38 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
     return log[last_resumed + 1 :]
 
 
+def _terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
+    """`entries` without the failures the run already retried (GH-659), in the same order. A batch
+    is the contiguous `failure` entries before the `escalation` entry that closes them (one
+    `rules.logged` call per `run_role`); inside a batch a failure is superseded only by a later
+    failure of the same non-empty `section`. A failure with an empty or missing `section`, or the
+    last of its batch and section, stays; every other kind passes through. List order decides,
+    never `at`."""
+    kept: list[PauseEntry] = []
+    seen: set[str] = set()
+    for entry in reversed(entries):
+        if entry["kind"] == "escalation":
+            seen = set()
+        elif entry["kind"] == "failure":
+            section = entry.get("section", "")
+            if section and section in seen:
+                continue
+            seen.add(section)
+        kept.append(entry)
+    kept.reverse()
+    return kept
+
+
 def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
     """The key `entries` are retaken by, `None` when a human is needed (GH-593): the one reading
     both `auto_resumable` (the poller's) and `pause_kind` (the measurement's) share, so a cause is
-    mechanical in one place. Every failure is in `EXTERNAL_REASONS`, and every escalation is
-    either a `failure` one (a role broke, the failures say why) or carries a `MechanicalCause`;
-    there is at least one failure or one cause. The key is the most recent entry's own: a
-    failure's reason, or an escalation's cause."""
+    mechanical in one place. Every failure that ended the run (`_terminal_failures`: not one the
+    run already retried) is in `EXTERNAL_REASONS`, and every escalation is either a `failure` one
+    (a role broke, the failures say why) or carries a `MechanicalCause`; there is at least one
+    failure or one cause. The key is the most recent entry's own: a failure's reason, or an
+    escalation's cause."""
     keyed: list[ResumeKey] = []
-    for entry in entries:
+    for entry in _terminal_failures(entries):
         if entry["kind"] == "failure":
             if entry["value"] not in EXTERNAL_REASONS:
                 return None

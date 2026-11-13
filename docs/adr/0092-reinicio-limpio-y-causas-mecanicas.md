@@ -53,3 +53,21 @@ recuperan") y el equipo de Codex de OpenAI (el agente escala "solo por juicio").
   siguen siendo de juicio.
 - Un `GitError` de push no tiene tipo transitorio, así que sigue siendo de juicio (clasificar el
   stderr rompería la regla de no leer texto).
+
+## Adenda GH-659
+
+`rules._resume_key` sigue siendo el único lector, pero ya no deja que un fallo que la corrida
+reintentó decida si la pausa es mecánica: decide el fallo que la terminó. Un fallo queda superado
+solo por un fallo posterior de la misma `section` no vacía dentro de la misma tanda (los `failure`
+contiguos antes del `escalation` que los cierra). GH-640 (`check` y luego `account_limit` del Tech
+Lead) pasa a reanudarse sola con la clave `account_limit` y su espera cuenta como externa.
+
+- **Por qué tanda y sección.** `pause_log` no guarda `attempt` ni `role`; las tandas vienen de
+  `rules.logged`, que escribe una por llamada a `run_role`, y la sección distingue a quien falló.
+  Dos ramas paralelas nunca se mezclan en una tanda, así que una no tapa el fallo de la otra.
+- **Sección vacía.** Un fallo con `section` vacía o ausente nunca queda superado: sin sección no hay
+  forma de saber que se reintentó.
+- **Sin cambio.** El conteo de fallos propios del scorecard (un `check` reintentado sigue siendo un
+  fallo real del rol) y los lectores de `landing.py` (ADR-0048) no cambian.
+- **Consecuencia.** Las horas de pausa humana y externa no se comparan de un lado al otro de este
+  cambio.
