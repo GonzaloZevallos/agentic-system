@@ -116,10 +116,11 @@ def test_a_control_arm_document_renders_as_it_did():
 # moved them a sixth; GH-619 rewrote `TRACKER_WITH_PARTS` (the system re-points) and moved
 # them a seventh; GH-663 taught `tracker_items` in place of `tracker_checklist` and moved them
 # an eighth; GH-691 appended the max-declarable sentence to the size budget paragraph and
-# moved them a ninth time.
+# moved them a ninth time; GH-689 added the `comment` kind to `tracker_items` and moved them a
+# tenth.
 PROMPT_GOLDENS = {
-    "tech_lead": "fb51f872268aeaad2221e4399735dad7d60096215b60295fe1d985155824d049",
-    "tech_lead_platform": "4f649dddcf2204907246670aa7fcf065a4b33cd487e1c10cc9e166718cc66f9e",
+    "tech_lead": "2de2501dc4000f7c94569334f09365ef0f7541ee59cc3835db08d7d4bb6677d5",
+    "tech_lead_platform": "91d1e170b1124d1b5a0125463e8ec70c02bd35694bc93aeac7f2fb6e98e56725",
 }
 
 

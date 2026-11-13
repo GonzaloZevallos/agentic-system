@@ -134,6 +134,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.split_sweep": "lifecycle",
     "application.stack_review": "reflection",
     "application.stop": "lifecycle",
+    "application.tracker_items": "support",
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
     "application.verifiers": "checks",

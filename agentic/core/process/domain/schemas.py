@@ -645,11 +645,14 @@ class TechPlan(RoleOutput):
     tracker_items: list[TrackerItem] = Field(
         default_factory=list,
         description="What only the owner can decide on the issue tracker, as items "
-        f"`{{kind: human, question, recommendation}}`: at most {tracker_items.MAX_ITEMS}, each "
+        f"`{tracker_items.shape('human')}`, or what the system posts itself as "
+        f"`{tracker_items.shape('comment')}`: at most {tracker_items.MAX_ITEMS}, each "
         f"field one line of at most {tracker_items.MAX_FIELD_CHARS} characters, no `@` mention "
-        "and no `<!--`, `-->` or `{{`. Never a subtask: no role has `gh`. A task whose only "
-        "work is this has no subtasks, no parts and `estimated_files: 0`; it may also sit next "
-        "to subtasks, never next to `parts`. Empty when there is none",
+        "and no `<!--`, `-->` or `{{`; a `comment` text holds no URL, `www.`, Markdown link, "
+        "HTML tag, `#N`, `owner/repo#N` or `GH-N`. Never a subtask: no role has `gh`. A task "
+        "whose only work is a `human` item has no subtasks, no parts and `estimated_files: 0`; "
+        "a `comment` needs subtasks beside it (a tracker-only plan cannot post it yet, #705); "
+        "items may sit next to subtasks, never next to `parts`. Empty when there is none",
     )
 
     ci_required: list[str] = Field(
@@ -730,7 +733,7 @@ class TechPlan(RoleOutput):
         if isinstance(data, dict) and data.get("tracker_checklist"):
             raise ValueError(
                 "tracker_checklist is no longer a plan field: write the tracker work as "
-                f"tracker_items, {{kind: human, question, recommendation}} each, at most "
+                f"tracker_items, {tracker_items.shape('human')} each, at most "
                 f"{tracker_items.MAX_ITEMS}"
             )
         return data
@@ -1145,6 +1148,12 @@ def _tracker_only_check(data: dict[str, Any]) -> None:
     """Shape (C): the plan's only work is on the issue tracker. It changes no file, so a
     positive `estimated_files` contradicts the items. Its cost has no fit to judge; a
     figure below what the task spent is raised by the plan stage, never refused (GH-529)."""
+    if tracker_items.system_items(tracker_items.parse(data["tracker_items"])):
+        raise ValueError(
+            "a plan whose only work is on the tracker cannot carry a comment item yet: the system "
+            "posts it only from a delivery, so put the comment in a plan that builds something "
+            "(subtasks), or leave it until #705 performs it in a tracker-only plan"
+        )
     if data["estimated_files"] != 0:
         raise ValueError(
             f"a plan whose only work is on the tracker changes no file: estimated_files must "

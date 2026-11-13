@@ -1532,3 +1532,28 @@ def test_a_plan_with_no_size_fields_gets_no_added_text():
     with pytest.raises(ValueError) as caught:
         check(_estimated(150.0, size_budget.LEGACY_FILES + 1))
     assert "within its caps" not in str(caught.value) and "cap" not in str(caught.value)
+
+
+# --- GH-689: a comment item is posted from a delivery, not (yet) from a tracker-only plan -----
+
+NOTE_ITEM = {"kind": "comment", "text": "Superseded by the newer item."}
+
+
+def test_a_tracker_only_plan_with_a_comment_item_is_refused_naming_705():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="#705"):
+        check(_tracker_only(items=[ITEMS[0], NOTE_ITEM]))
+    check(_tracker_only(items=ITEMS))  # human items alone stay accepted
+
+
+def test_the_same_comment_item_is_accepted_in_a_plan_with_subtasks():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    check({**_estimated(20.0, 3), "tracker_items": [NOTE_ITEM]})  # does not raise
+    data = schemas.validate(schemas.TechPlan, {**ZERO_SIZE, **_tracker_only(items=[NOTE_ITEM])}, {})
+    assert data["tracker_items"] == [NOTE_ITEM]
+
+
+def test_the_plan_schema_describes_the_comment_shape_and_what_it_may_not_hold():
+    plan = schemas.json_schema(schemas.TechPlan, VOCAB)
+    described = plan["properties"]["tracker_items"]["description"]
+    assert "{kind: comment, text}" in described and "#N" in described and "GH-N" in described

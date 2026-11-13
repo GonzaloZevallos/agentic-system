@@ -46,7 +46,7 @@ import re
 from collections.abc import Mapping, Sequence
 
 from .task import INTEGRATION, PartRecord, Subtask
-from .tracker_items import TrackerItem, human_items
+from .tracker_items import TrackerItem, human_items, system_items
 
 # `### Subtasks` at the top level only, exactly that line (`### Subtasks:` and
 # `#### Subtasks` both miss): the `#### <id>` briefs inside it start with a fourth
@@ -182,6 +182,22 @@ def with_tracker_items_block(section: str, items: Sequence[TrackerItem]) -> str:
         f"- {item['question']} Recommendation: {item['recommendation']}" for item in asked
     )
     return f"{section.rstrip()}\n\n### {TRACKER_ITEMS_TITLE}\n\n{lines}"
+
+
+SYSTEM_ITEMS_TITLE = "Comments the system posts"
+
+
+def with_system_items_block(section: str, items: Sequence[TrackerItem]) -> str:
+    """`section` with a `### Comments the system posts` list of the system items' text (GH-689),
+    the one place the owner reads what will be posted on the issue. Unchanged when there are
+    none. Apart from `with_tracker_items_block`, whose block holds the owner's items only."""
+    posted = system_items(items)
+    if not posted:
+        return section
+    lines = "\n".join(
+        f"- {item['text'] if item['kind'] == 'comment' else item['title']}" for item in posted
+    )
+    return f"{section.rstrip()}\n\n### {SYSTEM_ITEMS_TITLE}\n\n{lines}"
 
 
 def _part_brief(number: int, part: PartRecord) -> str:

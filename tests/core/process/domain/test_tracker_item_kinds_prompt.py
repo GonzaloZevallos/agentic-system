@@ -29,15 +29,39 @@ def _raw(name: str) -> str:
     return (roles.PROMPTS_DIR / f"{name}.md").read_text()
 
 
-def test_kinds_text_is_the_paragraph_the_prompts_carried_with_the_limits_filled_in():
+PARAGRAPH_WITH_COMMENT = (
+    "`tracker_items`: tracker work is a `human` item, `{kind: human, question, recommendation}` "
+    "or a `comment` item, `{kind: comment, text}`. Its `question` asks the owner to do or approve "
+    'the work (for\n   example "Close #12 as superseded?") and its `recommendation` says what to '
+    "do. Its `text` is a comment the system posts on this issue, with no URL, link, HTML tag or "
+    "issue reference (`#N`, `owner/repo#N`, `GH-N`). Each field\n   is one line of at most 240 "
+    "characters with no @-mention, and a plan\n   carries at most 5 items."
+)
+
+
+@pytest.fixture
+def human_only(monkeypatch):
+    monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human"}))
+
+
+def test_kinds_text_is_the_paragraph_the_prompts_carried_with_the_limits_filled_in(human_only):
     assert tracker_items.kinds_text() == PARAGRAPH_TODAY
 
 
+def test_kinds_text_names_the_comment_kind_and_what_it_may_not_hold():
+    assert tracker_items.kinds_text() == PARAGRAPH_WITH_COMMENT
+
+
 @pytest.mark.parametrize("name", PROMPTS)
-def test_the_prompt_renders_as_it_did_before_the_placeholder(name):
+def test_the_prompt_renders_as_it_did_before_the_placeholder(name, human_only):
     raw = _raw(name)
     assert raw.count(PLACEHOLDER) == 1 and OLD_PARAGRAPH not in raw
-    values = {**preflight.PLACEHOLDERS, "date": "2026-01-01"}
+    # `PLACEHOLDERS` was filled at import, with every kind: the old paragraph is `human` alone.
+    values = {
+        **preflight.PLACEHOLDERS,
+        "date": "2026-01-01",
+        "tracker_item_kinds": tracker_items.kinds_text(),
+    }
     new = roles.render(raw, roles.PROMPTS_DIR / f"{name}.md", **values)
     old_values = {**values, "tracker_items_max": 5, "tracker_field_max": 240}
     old = roles.render(
@@ -46,3 +70,7 @@ def test_the_prompt_renders_as_it_did_before_the_placeholder(name):
     assert new.text == old.text and PARAGRAPH_TODAY in new.text
     # No prompt states a kind, a field or a cap of its own: that text comes from the table.
     assert "{kind:" not in raw and "{{tracker_items_max}}" not in raw
+
+
+def test_the_placeholder_values_the_prompts_get_hold_the_comment_paragraph():
+    assert preflight.PLACEHOLDERS["tracker_item_kinds"] == PARAGRAPH_WITH_COMMENT

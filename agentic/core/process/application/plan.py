@@ -659,8 +659,11 @@ def _delivered(
         # left (GH-663). The block is added only when there are items.
         written["tracker_items"] = list(output.data.get("tracker_items") or [])
         if written["tracker_items"]:
-            written["sections"][section] = plan_view.with_tracker_items_block(
-                written["sections"][section], written["tracker_items"]
+            written["sections"][section] = plan_view.with_system_items_block(
+                plan_view.with_tracker_items_block(
+                    written["sections"][section], written["tracker_items"]
+                ),
+                written["tracker_items"],
             )
         reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
         written["experiment"] = experiment_snapshot(cfg, reviewer_model)

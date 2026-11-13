@@ -442,9 +442,11 @@ def add_head_yield(existing: list[HeadYield], new: HeadYield) -> list[HeadYield]
 
 class TrackerActionDone(TypedDict):
     """The record of one typed tracker item, keyed by `tracker_items.item_hash` (GH-620): `at`
-    when it was raised, `url` where (when it has one) and `answered` when the human did."""
+    when it was raised, `kind` what the system did (a system item, GH-689), `url` where (when it
+    has one) and `answered` when the human did."""
 
     at: str
+    kind: NotRequired[str]
     url: NotRequired[str]
     answered: NotRequired[str]
 
