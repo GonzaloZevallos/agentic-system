@@ -2,6 +2,8 @@
 re-pointed to the last part(s) and told so, once; the parts and the task's own issue are
 never edited; a rewrite that breaks the post-condition writes nothing."""
 
+from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+from agentic.core.process.application import poll
 from agentic.core.process.application.split_sweep import RepointResult, repoint_dependents
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.landing import IssueRef
@@ -95,3 +97,17 @@ def test_the_post_condition_rejects_a_fenced_line_changed_and_accepts_the_blocke
     assert not rules.repoint_confined("a\nBlocked by: #6", "a\nBlocked by: #9", 5)
     assert not rules.repoint_confined("Blocked by: #5", "Blocked by: #9\nextra", 5)
     assert rules.repoint_confined("a\r\nBlocked by: #5\r\n", "a\r\nBlocked by: #9\r\n", 5)
+
+
+def test_split_repointed_at_round_trips_through_record_closure_load_and_the_queue(tmp_path):
+    """The key a split document gets from the sweep is read back by the next round's queue."""
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save({"id": "GH-5", "title": "t", "description": "d", "status": "split"})
+    ports = memory_ports(documents=documents)
+    ports.tracker._queue = [5]
+    assert "split_repointed_at" not in poll.queue_documents(ports)[5]
+
+    documents.record_closure("GH-5", {"split_repointed_at": "2026-11-13T10:00:00+00:00"})
+
+    assert documents.load("GH-5")["split_repointed_at"] == "2026-11-13T10:00:00+00:00"
+    assert poll.queue_documents(ports)[5]["split_repointed_at"] == "2026-11-13T10:00:00+00:00"

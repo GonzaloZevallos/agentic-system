@@ -1730,6 +1730,14 @@ class TaskState(TaskInput, total=False):
     # The issue URL of each part already opened, keyed by the part's number as text: written
     # part by part, so a `gh` cut in the middle resumes without opening a part twice.
     split_issues: Annotated[dict[str, str], merge]
+    # The split sweep's own record (GH-619), ISO UTC strings, read with `.get`. A `split`
+    # document is terminal and never goes back through `finish`, so the sweep writes these only
+    # through `Documents.record_closure`: `split_repointed_at` once every open dependent of the
+    # parent was re-pointed over one complete read; `split_closed_at` and `split_abandoned_at`
+    # belong to the part that closes the parent (not written by the re-point half).
+    split_repointed_at: NotRequired[str]
+    split_closed_at: NotRequired[str]
+    split_abandoned_at: NotRequired[str]
     # A human decided the task builds whole although its estimate does not fit; the plan
     # check then accepts a plan that does not fit and refuses a split one.
     fit_waived: Annotated[bool, last]
