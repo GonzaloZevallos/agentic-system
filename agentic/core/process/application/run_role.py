@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -70,6 +70,7 @@ from ..domain import (
     playbook,
     rules,
     schemas,
+    spec_assumptions,
     task_path,
     turn_notice,
 )
@@ -1059,6 +1060,10 @@ async def run_role(
     the message of every attempt, `cold_prompt` included. Empty, nothing changes. It is for
     the prompt only: it never reaches the system prompt, its hash, the patch or a span."""
     section = section or role.name
+    # With a spec the role is asked for its `*WithAssumptions` schema (GH-594): the guard,
+    # the JSON schema and the validation all read the swapped one.
+    has_spec = bool(state.get("spec"))
+    role = replace(role, schema=spec_assumptions.schema_for(role.schema, has_spec))
     vocabulary = ports.flags.load()
     try:
         raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)
@@ -1143,6 +1148,8 @@ async def run_role(
         "cost_usd": output.cost_usd,
         "runs": [run_record(state, role, section, output)],
     }
+    if rows := spec_assumptions.assumption_rows(role.name, output.data, has_spec):
+        patch["assumptions"] = rows
     return output, patch
 
 
