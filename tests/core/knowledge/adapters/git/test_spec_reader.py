@@ -220,7 +220,21 @@ def test_a_blob_that_outgrows_what_ls_tree_said_is_oversize(
 
 @pytest.mark.parametrize(
     "path",
-    ["..", "docs/specs/../x.md", "/docs/specs/a.md", "docs/specs/a\x00.md", "docs/specs/s/a.md"],
+    [
+        "..",
+        "docs/specs/../x.md",
+        "/docs/specs/a.md",
+        "docs\\specs\\a.md",
+        "docs/specs/a\x00.md",
+        "docs/specs/a.md\n",
+        "docs/specs/a\x1f.md",
+        "docs/specs/s/a.md",
+        "docs/specs/a.txt",
+        "docs/other/a.md",
+        "docs/specs/.md",
+        "docs/specs/.hidden.md",
+        "docs/specs/" + "a" * 253 + ".md",
+    ],
 )
 def test_a_refused_path_starts_no_subprocess(
     repo: Path, monkeypatch: pytest.MonkeyPatch, path: str
