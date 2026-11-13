@@ -607,6 +607,9 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
             "landing_queued_at": "2026-10-14T08:00:00+00:00",
             "head_since_at": "2026-10-14T09:00:00+00:00",
             "head_since_head": HEAD,
+            "head_turn_at": "2026-10-14T09:00:00+00:00",
+            "head_charged_s": 120.0,
+            "head_seen_at": "2026-10-14T09:02:00+00:00",
         },
     )
     from agentic.core.process.application.ports import RawResult
@@ -659,6 +662,9 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
     # GH-588: the fresh run queues again, and its turn is counted from its own head
     assert closure["landing_queued_at"] is None
     assert closure["head_since_at"] is None and closure["head_since_head"] is None
+    # GH-621: and its head budget starts again
+    for key in ("head_turn_at", "head_charged_s", "head_seen_at", "head_yielded_at", "head_yields"):
+        assert key in closure and closure[key] is None
     assert [e["step"] for e in spans[0]["landing"]] == ["diagnose"]
     assert spans[0]["landing"][-1]["refusal"] == "merge_failed"
     assert ports.tracker.opened_issues == []
