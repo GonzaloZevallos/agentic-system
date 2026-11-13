@@ -931,3 +931,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-630
+  GH-661@review:
+    cost_usd: 0.0419
