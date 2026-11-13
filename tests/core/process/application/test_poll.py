@@ -1673,8 +1673,9 @@ def test_a_comment_failing_with_any_other_value_error_still_escapes():
 
 
 class _ReadsStall(MemoryTracker):
-    """The first `queue()` read of a round is the GH-348 sweep's, outside the registry's lock;
-    the stall this scenario is about is the one inside it, from the second read on."""
+    """The first `queue()` read of a round is the GH-348 sweep's; the second is the round's
+    documents (GH-627), read before the registry's lock is taken. The stall this scenario is
+    about is that second one."""
 
     def __init__(self):
         super().__init__()
@@ -1690,7 +1691,7 @@ class _ReadsStall(MemoryTracker):
         raise TrackerTimedOut("gh pr list timed out after 60 s")
 
 
-def test_a_round_whose_reads_time_out_releases_the_registry_lock_and_acts_on_nothing(tmp_path):
+def test_a_round_whose_reads_time_out_holds_no_registry_lock_and_acts_on_nothing(tmp_path):
     import fcntl
 
     from agentic.core.process.adapters.filesystem import FilesystemRunRegistry
@@ -1701,6 +1702,7 @@ def test_a_round_whose_reads_time_out_releases_the_registry_lock_and_acts_on_not
     launcher = FakeLauncher()
     with pytest.raises(TrackerTimedOut):
         _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    (tmp_path / "runs").mkdir(exist_ok=True)
     with open(tmp_path / "runs" / ".lock", "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
     assert launcher.spawned == [] and ports.tracker.comments == []

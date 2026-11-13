@@ -59,6 +59,7 @@ from . import (
     reflect_run,
     release,
     scratch_sweep,
+    split_sweep,
     tracker_only,
 )
 from . import escalate as escalate_module
@@ -2397,6 +2398,11 @@ def run_once(
     # GH-348: before the launches, so a dependent sees its blocker CLOSED this same round;
     # outside the exclusive section, since it takes no slot. Only the closes are said.
     swept = close_issues.sweep(ports, report_failures=False)
+    # GH-627: the queue is read once per round, here and outside the lock, because the split
+    # sweep needs it before the launches; the same dict feeds `gather_launches` and the orphan
+    # pass inside the lock (launch dedup rests on `registry.launch_attempts`, read there).
+    queued = queue_documents(ports)
+    swept = [*split_sweep.sweep(ports, queued, report_failures=False), *swept]
     # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
     # read, so a round that frees room starts its children in the same round.
     swept = [*scratch_sweep.sweep(ports, now), *swept]
@@ -2447,7 +2453,6 @@ def run_once(
         upstream = functools.cache(ports.workspace.upstream)
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
-        queued = queue_documents(ports)
         experiment_notes: list[str] = []
         launches = gather_launches(
             cfg,
