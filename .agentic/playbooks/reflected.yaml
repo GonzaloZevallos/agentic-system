@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 17
-summarised: 172
+summaries: 18
+summarised: 182
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -901,3 +901,13 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-660
+  GH-651@review:
+    cost_usd: 0.086
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-651
