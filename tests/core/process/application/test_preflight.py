@@ -732,7 +732,9 @@ def test_both_tech_lead_prompts_teach_the_human_item_with_the_constants_of_parse
     """GH-663: the typed form is what the Tech Lead is taught, with the limits `parse` enforces
     rendered from its own constants, and the legacy checklist is not named."""
     role = next(r for r in ROLES if r.slug == slug)
-    text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **PLACEHOLDERS)
+    text = load_prompt(
+        role, Configuration(product_dir=tmp_path), memory_ports(), {}, **PLACEHOLDERS
+    )
     prompt = " ".join(text.text.split())
     assert "{{" not in prompt
     assert "`tracker_items`" in prompt
