@@ -1620,3 +1620,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-12T22:52:14.008+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before you state that a closed set of files is the only change, check which declared checks (docs, registries, generated pages) require extra files for new modules, and list those files in the plan.
+  confidence: medium
+  seen_in:
+  - GH-637
+  sources:
+  - finding
+  added_at: '2026-11-13T04:24:48.312+00:00'
