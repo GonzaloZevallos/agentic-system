@@ -1762,3 +1762,21 @@ candidates:
   - finding
   - return
   added_at: '2026-11-13T19:23:39.276+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a port or adapter, search the hand-written architecture docs for text that describes that area and update it in the same change, so no paragraph still says the adapter is missing.
+  confidence: medium
+  seen_in:
+  - GH-694
+  sources:
+  - finding
+  added_at: '2026-11-13T23:35:02.784+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: For a part at split depth 2, which cannot split again, keep the plan under the 400 hand-written line cap. If it is over, propose moving one whole step into a new issue that blocks the same later parts.
+  confidence: low
+  seen_in:
+  - GH-694
+  sources:
+  - human_decision
+  added_at: '2026-11-13T23:35:02.784+00:00'
