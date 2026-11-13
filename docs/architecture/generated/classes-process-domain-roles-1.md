@@ -38,8 +38,10 @@ classDiagram
     class schemas__Classification["Classification"]
     class schemas__Consolidation["Consolidation"]
     class schemas__Consultation["Consultation"]
+    class schemas__ConsultationWithAssumptions["ConsultationWithAssumptions"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
+    schemas__ConsultationWithAssumptions --|> schemas__Consultation
 ```
 
 ## Relaciones con otras páginas

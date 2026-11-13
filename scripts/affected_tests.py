@@ -207,6 +207,15 @@ TABLE: tuple[Row, ...] = (
         "a Playwright list-reporter tail with one failure: the `{failed_ids}` expansion test "
         "reads it",
     ),
+    Row(
+        "tests/core/process/domain/fixtures/spec_schemas_golden.json",
+        (
+            "tests/core/process/domain/test_spec_schemas_golden.py",
+            "tests/core/process/domain/test_spec_assumptions.py",
+        ),
+        "the six spec-path schemas as rendered before the spec subclasses: the golden test and "
+        "the sync test read it",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (

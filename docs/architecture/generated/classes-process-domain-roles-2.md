@@ -35,9 +35,11 @@ classDiagram
     class schemas__DesignReview["DesignReview"]
     class schemas__Diagnosis["Diagnosis"]
     class schemas__FinalValidation["FinalValidation"]
+    class schemas__FinalValidationWithAssumptions["FinalValidationWithAssumptions"]
     class schemas__Finding["Finding"]
     class schemas__FitBucket["FitBucket"]
     class schemas__FitDecision["FitDecision"]
+    schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
 
 ## Relaciones con otras páginas
