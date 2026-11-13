@@ -145,14 +145,15 @@ def _repoint(state: TaskState, parts: list[PartRecord], ports: Ports) -> Repoint
     parent = ports.inbox.issue_of(state["id"])
     if parent is None:
         return RepointResult()
-    found = repoint_targets({**state, "parts": parts})
+    stamped: TaskState = {**state, "parts": parts}
+    found = repoint_targets(stamped)
     if found is None:
         return RepointResult(read_failed=True)
     targets, excluded = found
     try:
         refs: list[IssueRef] = ports.inbox.open_issue_refs()
-    except ROUND_STOPPERS:
-        return RepointResult(stopped=True)
+    except ROUND_STOPPERS as stopper:
+        return RepointResult(stopped=True, stopped_by=type(stopper).__name__)
     except (ValueError, OSError):
         return RepointResult(read_failed=True)
     return repoint_dependents(ports, parent, targets, refs, {*excluded, parent})

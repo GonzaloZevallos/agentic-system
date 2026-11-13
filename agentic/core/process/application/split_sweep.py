@@ -44,6 +44,8 @@ class RepointResult:
     failed: int = 0
     read_failed: bool = False
     stopped: bool = False
+    # The class name of the stopper that ended the pass (`stopped` is set with it).
+    stopped_by: str = ""
 
     @property
     def complete(self) -> bool:
@@ -63,7 +65,7 @@ def repoint_dependents(
     issue). One edit and one comment per issue changed; a failure on one issue never stops
     the others."""
     considered = changed = failed = 0
-    stopped = False
+    stopped = ""
     for ref in refs:
         number = _issue_number(ref.url)
         if number is None or number in excluded or parent not in rules.blockers_from_body(ref.body):
@@ -71,14 +73,20 @@ def repoint_dependents(
         considered += 1
         try:
             done = _repoint(ports, parent, targets, ref, number, rewrite)
-        except ROUND_STOPPERS:
-            stopped = True
+        except ROUND_STOPPERS as stopper:
+            stopped = type(stopper).__name__
             break
         if done:
             changed += 1
         else:
             failed += 1
-    return RepointResult(considered=considered, changed=changed, failed=failed, stopped=stopped)
+    return RepointResult(
+        considered=considered,
+        changed=changed,
+        failed=failed,
+        stopped=bool(stopped),
+        stopped_by=stopped,
+    )
 
 
 def _repoint(
@@ -134,25 +142,22 @@ def _issue_number(url: str) -> int | None:
     return int(tail) if tail.isdigit() else None
 
 
-def repoint_targets(state: Mapping[str, object] | TaskState) -> tuple[list[int], set[int]] | None:
+def repoint_targets(state: TaskState) -> tuple[list[int], set[int]] | None:
     """Where a split parent's dependents go: the issue numbers of `rules.last_part_numbers` of
     its parts, and every part's issue number (never edited). The one place that combines the
     two (GH-619). `None` for a split cut halfway (`split_issues` shorter than `parts`), a key
     missing or a URL that does not parse: nothing may be re-pointed to a part that is not there."""
-    parts = state.get("parts")
-    issues = state.get("split_issues")
-    if not isinstance(parts, list) or not parts or not isinstance(issues, dict):
+    parts = state.get("parts", [])
+    issues = state.get("split_issues", {})
+    if not parts or len(issues) != len(parts):
         return None
-    if len(issues) != len(parts):
-        return None
-    try:
-        numbers = {n: _issue_number(issues[str(n)]) for n in range(1, len(parts) + 1)}
-    except (KeyError, AttributeError):
-        return None
-    if any(number is None for number in numbers.values()):
-        return None
-    targets = [numbers[n] for n in rules.last_part_numbers(parts)]
-    return [t for t in targets if t is not None], {n for n in numbers.values() if n is not None}
+    numbers: dict[int, int] = {}
+    for n in range(1, len(parts) + 1):
+        number = _issue_number(issues.get(str(n), ""))
+        if number is None:
+            return None
+        numbers[n] = number
+    return [numbers[n] for n in rules.last_part_numbers(parts)], set(numbers.values())
 
 
 def sweep(
@@ -178,10 +183,10 @@ def sweep(
     try:
         refs = ports.inbox.open_issue_refs()
     except ROUND_STOPPERS as failed:
-        return _skipped(failed, report_failures)
+        return _skipped(type(failed).__name__, report_failures)
     except (ValueError, OSError) as failed:
         # No list, nothing to work from: the round ends here too, and the next one tries again.
-        return _skipped(failed, report_failures)
+        return _skipped(type(failed).__name__, report_failures)
     for state, (targets, parts) in pending:
         task_id = state["id"]
         try:
@@ -190,7 +195,7 @@ def sweep(
                 continue
             result = repoint_dependents(ports, parent, targets, refs, {*parts, parent})
             if result.stopped:
-                return [*lines, *_skipped(None, report_failures)]
+                return [*lines, *_skipped(result.stopped_by, report_failures)]
             if result.complete:
                 ports.documents.record_closure(
                     task_id,
@@ -199,7 +204,7 @@ def sweep(
             elif report_failures:
                 lines.append(f"agentic: split: {task_id}: re-point unfinished")
         except ROUND_STOPPERS as failed:
-            return [*lines, *_skipped(failed, report_failures)]
+            return [*lines, *_skipped(type(failed).__name__, report_failures)]
         except (ValueError, OSError, KeyError):
             continue
         if result.changed:
@@ -207,8 +212,5 @@ def sweep(
     return lines
 
 
-def _skipped(failed: Exception | None, report_failures: bool) -> list[str]:
-    if not report_failures:
-        return []
-    name = type(failed).__name__ if failed is not None else "TrackerCallFailed"
-    return [f"agentic: split: re-point skipped: {name}"]
+def _skipped(name: str, report_failures: bool) -> list[str]:
+    return [f"agentic: split: re-point skipped: {name}"] if report_failures else []

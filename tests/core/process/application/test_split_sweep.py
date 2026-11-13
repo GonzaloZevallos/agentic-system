@@ -223,7 +223,7 @@ def test_a_rate_limit_on_the_first_dependent_stops_the_round_with_no_record():
     assert "split_repointed_at" not in ports.documents.load("GH-6")
 
     shown = split_sweep.sweep(ports, queued(ports), report_failures=True)
-    assert shown == ["agentic: split: re-point skipped: TrackerCallFailed"]
+    assert shown == ["agentic: split: re-point skipped: TrackerRateLimited"]
 
 
 def test_a_rate_limit_on_the_shared_list_read_stops_the_round():
