@@ -218,6 +218,9 @@ UNCOVERED: dict[str, Uncovered] = {
     "Stage0Users": Uncovered(
         (("tests/core/process/application/test_stage0_rotate.py", "Users"),), _INLINE
     ),
+    "CommitCiReader": Uncovered(
+        (("tests/core/process/adapters/git/test_master_window.py", "FakeReader"),), _INLINE
+    ),
     "MasterWindow": Uncovered(
         (("tests/core/process/application/test_stage0_rotate.py", "Window"),), _INLINE
     ),
