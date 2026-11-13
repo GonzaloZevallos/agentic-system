@@ -17,7 +17,9 @@ graph TD
     m_domain__reaping["domain.reaping"]
     m_domain__retakes["domain.retakes"]
     m_domain__scratch["domain.scratch"]
+    m_domain__stage0_rotation["domain.stage0_rotation"]
     m_domain__stall["domain.stall"]
     m_domain__account_reset --> g_domain__state
     m_domain__exempt_queue --> g_domain__state
+    m_domain__stage0_rotation --> g_domain__state
 ```

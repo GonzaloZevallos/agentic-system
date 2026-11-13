@@ -673,6 +673,11 @@ La copia del sistema, fijada a un sha, que ejecuta una corrida. No es la que se 
 _Avoid_: runtime (es el harness de cada rol), sistema fijado
 _Campo_: stage0 — del bootstrapping de rustc (rustc-dev-guide), que llama "the same-result test" a la comparación de stage3 con stage2
 
+**Rotación de stage0**:
+Las reglas que deciden cuándo y a dónde se mueve stage0 sin que una persona lo haga a mano, todas en `domain/stage0_rotation.py` y todas puras (reciben los hechos como parámetros, no leen disco, reloj ni entorno). `target` elige el sha: un pin manda aunque sea más viejo y un pin igual al actual no mueve nada; sin pin, el commit más nuevo con CI verde que desciende estrictamente del actual y no fue rechazado. Si no adopta ninguno, devuelve `Keep` con su causa: `pinned`, `up_to_date`, `no_green_in_window`, `unreadable` o `rejected`; las otras dos del tipo, `busy` y `smoke_failed`, las producen partes posteriores, no `target`. `prunable` dice qué stages se pueden borrar, `reexec_due` cuándo un poller debe reiniciarse en el checkout vigente y `rollback_due` cuándo hay que volver atrás. Todavía no rota nada: las partes posteriores de GH-622 llaman estas reglas.
+_Avoid_: actualización de stage0 (eso es mover stage0 a mano, sin reglas), auto-update
+_Campo_: sin término de arte
+
 **Tope de turnos**:
 Máximo de turnos que un rol tiene para entregar en un intento. Se dimensiona por el trabajo que la entrega de ese rol exige, no por lo que le alcanza a otro rol que comparte el prompt base. Agotarlo sin resultado es un fallo de rol, y continuar la sesión en el reintento no lo repone. Un rol listado en `RETRY_TURNS` tiene su propio tope absoluto en el reintento posterior a un corte por turnos, y cada intento registra el tope con el que corrió.
 _Avoid_: presupuesto (eso es lo que se espera gastar), max_turns (el nombre en el código, no el concepto)
