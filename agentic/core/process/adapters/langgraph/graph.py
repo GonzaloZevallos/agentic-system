@@ -266,14 +266,15 @@ def _pause_node(ports_of: PortsOf):
 
     async def pause(state: TaskState, config: RunnableConfig) -> TaskState:
         cfg = configuration_from(config, state)
-        answer = interrupt(
-            {
-                "reason": state.get("escalated"),
-                "spent_usd": state.get("cost_usd", 0.0),
-                "questions": state.get("questions_for_human", []),
-            }
-        )
-        answer = answer or {}
+        payload = {
+            "reason": state.get("escalated"),
+            "spent_usd": state.get("cost_usd", 0.0),
+            "questions": state.get("questions_for_human", []),
+        }
+        answer = interrupt(payload) or {}
+        # GH-620: a pause on tracker items is answered only by a decision; a blank one asks again.
+        while rules.tracker_item_pause(state) and not (answer.get("decision") or "").strip():
+            answer = interrupt(payload) or {}
         ports = ports_of(cfg, config)
         resumed = rules.resumed(
             state, answer.get("decision"), answer.get("estimate"), at=ports.now()

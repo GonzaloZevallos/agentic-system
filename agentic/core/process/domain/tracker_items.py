@@ -1,6 +1,7 @@
 """Typed tracker items (GH-620): what the plan asks of the issue tracker, as data and not as
-free prose. A leaf module: the standard library and `typing` only, so `schemas`, `task`,
-`rules` and `document` can all import it without a cycle.
+free prose. A leaf at module level: the standard library and `typing` only, so `schemas`,
+`task`, `rules` and `document` can all import it without a cycle. `escalate_human` imports
+`rules` inside its body, so importing this module never imports `rules`.
 
 The one place that decides what kind an item is. Only `human` exists in this part: a question
 for the owner with the author's recommendation, which reaches a human as an escalation. A kind
@@ -8,7 +9,7 @@ is added to `KINDS` only in the diff that adds the code that performs it."""
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class HumanItem(TypedDict):
@@ -73,3 +74,45 @@ def _parse_item(entry: object) -> TrackerItem:
         "question": texts["question"],
         "recommendation": texts["recommendation"],
     }
+
+
+def unanswered(
+    items: Sequence[TrackerItem], done: Mapping[str, Mapping[str, str]]
+) -> list[TrackerItem]:
+    """The items whose hash has no record in `done` carrying `answered`: the one place that
+    decides whether an item is unanswered. A record of only `at` (raised, not answered) counts."""
+    return [item for item in items if "answered" not in done.get(item_hash(item), {})]
+
+
+def question_line(item: TrackerItem) -> str:
+    """The one line an item reaches a person as: the only formatter of item text."""
+    return f"{item['question']} — Recommended: {item['recommendation']}"
+
+
+def escalate_human(state: Mapping[str, Any], at: str) -> dict[str, Any]:
+    """The patch that raises the unanswered `human` items as a `questions` escalation, `{}` when
+    there is nothing new to raise. Pure: `at` is the instant the caller stamped. An item whose
+    hash is already in `tracker_human` is not raised twice; the pending hashes stay pending."""
+    from . import rules
+
+    pending: list[str] = list(state.get("tracker_human", []))
+    fresh = [
+        item
+        for item in unanswered(
+            parse(state.get("tracker_items", [])), state.get("tracker_actions_done", {})
+        )
+        if item_hash(item) not in pending
+    ]
+    if not fresh:
+        return {}
+    hashes = [item_hash(item) for item in fresh]
+    reason = f"the plan leaves {len(pending) + len(fresh)} decision(s) to the owner"
+    return rules.logged(
+        {
+            "status": "waiting_on_human",
+            **rules.escalation("questions", reason, tracker_human=[*pending, *hashes]),
+            "questions_for_human": [question_line(item) for item in fresh],
+            "tracker_actions_done": {h: {"at": at} for h in hashes},
+        },
+        at=at,
+    )
