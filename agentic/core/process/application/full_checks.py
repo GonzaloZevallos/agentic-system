@@ -904,7 +904,7 @@ async def _dispatched_after_no_run(
     before the fresh run is waited on, and every patch that follows carries it. `ghost_fact` is
     the fact of an earlier node that is still in force: no dispatch, the wait starts at `since`
     (and dispatches only if the listing shows no run). `ghosts` also watches the dispatched run,
-    which is itself a ghost when it stays queued with no job: that ends `run_unfinished`, not red."""
+    which is itself a ghost when it stays queued with no job: `run_unfinished`, not red."""
     held = _GhostFact(ghost_fact)
 
     def saved(dispatched_at: str) -> None:
