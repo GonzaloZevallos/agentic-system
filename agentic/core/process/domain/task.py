@@ -1508,6 +1508,19 @@ class CiCancelRerun(TypedDict):
     rerun_at: str
 
 
+class CiGhostDispatch(TypedDict):
+    """The one fresh run `full_checks` dispatched because every live run of a head was a ghost
+    (GH-601): `head` the whole sha judged, `ghost_run_ids` the ghosts seen, `dispatched_at`
+    the ISO instant of the accepted dispatch and `escalated` whether the task already escalated
+    for it (set by a later part; a fact with it true never stops a new dispatch). One fact, never a
+    list. Carries no verdict."""
+
+    head: str
+    ghost_run_ids: list[str]
+    dispatched_at: str
+    escalated: bool
+
+
 OwnerRuleRejection = Literal["system", "newline", "template", "link", "too_long", "unknown_scope"]
 """Why an owner rule is not written, the closed class of a `Rejected` (`core.knowledge`
 `owner_rules`): `system` is a rule for the system that this repo has no file for; `newline`,
@@ -1555,7 +1568,7 @@ class FullChecksRecord(TypedDict):
     # workflow judged it; and the upstream revision whose `ci_dispatch` and `ci:` names that
     # verdict was read against. Only the no-run fallback writes them, with `ran_on:
     # "ci_dispatch"`, and nothing decides on them (`rules.ci_untrusted` stays from the paths).
-    dispatch_cause: NotRequired[Literal["no_run"]]
+    dispatch_cause: NotRequired[Literal["no_run", "ghost"]]
     stack_at: NotRequired[str]
     # Why a `ci:` product ran locally; written only with `ran_on: "local"`.
     ci_fallback: NotRequired[FallbackCause]
@@ -1851,6 +1864,10 @@ class TaskState(TaskInput, total=False):
     # it reruns, read only for that same head (`rules.same_commit`), written to the document only
     # when set, read with `.get`.
     ci_cancel_rerun: NotRequired[CiCancelRerun | None]
+    # The fresh run dispatched for a head whose live runs were all ghosts (GH-601): written by
+    # `full_checks` right after the dispatch is accepted, read only for that same head
+    # (`rules.same_commit`), written to the document only when set, read with `.get`.
+    ci_ghost_dispatch: NotRequired[CiGhostDispatch | None]
     # The processes a role left running that the release stopped when the task closed
     # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
     # and it is read with `.get`.

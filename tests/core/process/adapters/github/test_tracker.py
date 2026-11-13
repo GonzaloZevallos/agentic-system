@@ -2305,6 +2305,14 @@ def test_a_field_the_watched_read_cannot_parse_adds_nothing_and_stays_readable(s
     assert report.queued_empty_runs == frozenset()
 
 
+def test_a_cut_suites_page_lists_no_queued_empty_run_even_with_a_queued_empty_suite():
+    # GH-601: a page cut by `hasNextPage` can hide the live suite, so it never makes a ghost.
+    report = _watched([_counted_suite(7, "QUEUED", 0)], whole=False)
+    assert isinstance(report, CiReport)
+    assert report.running_runs == frozenset({"7"})
+    assert report.queued_empty_runs == frozenset()
+
+
 def test_watched_branch_ci_without_a_suites_field_is_a_readable_report_with_nothing_queued():
     stdout = _branch_graphql(_DONE)
     report = GhTracker(Path("/p"), Recorder(stdout=stdout)).watched_branch_ci("master")
