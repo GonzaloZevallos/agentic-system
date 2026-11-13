@@ -23,6 +23,7 @@ graph TD
     m_domain__schemas["domain.schemas"]
     m_domain__stack_review["domain.stack_review"]
     m_domain__stack_signals["domain.stack_signals"]
+    m_domain__tracker_items["domain.tracker_items"]
     m_domain__turn_notice["domain.turn_notice"]
     m_domain__copy --> g_domain__state
     m_domain__copy --> m_domain__schemas

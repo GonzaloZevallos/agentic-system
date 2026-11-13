@@ -29,6 +29,7 @@ from . import (
     retakes,
     size_budget,
     task_path,
+    tracker_items,
 )
 from .copy import copy_location_parts
 from .denials import denial_for
@@ -740,7 +741,11 @@ def finished(
 
 
 def escalation(
-    cls: EscalationClass, reason: str, *, cause: MechanicalCause | None = None
+    cls: EscalationClass,
+    reason: str,
+    *,
+    cause: MechanicalCause | None = None,
+    tracker_human: Sequence[str] = (),
 ) -> EscalationPatch:
     """The patch that escalates the task: `escalated`, the text for the human, and
     `escalation_class`, the closed reason `agentic.task.paused` groups pauses by. The
@@ -751,8 +756,22 @@ def escalation(
 
     `cause` (GH-593) is the closed `MechanicalCause` the raise site knew from the error's class
     and recorded type, never from `reason`'s text. It is always written, `None` for a judgment
-    escalation, so a mechanical cause of an earlier pause cannot outlive it."""
-    return {"escalated": reason, "escalation_class": cls, "escalation_cause": cause}
+    escalation, so a mechanical cause of an earlier pause cannot outlive it.
+
+    `tracker_human` (GH-620) is the hashes of the typed tracker items this `questions` pause
+    raised. It is always written, `[]` for any other pause, for the same reason as `cause`. It
+    is not a `MechanicalCause`: the pause stays a human's. It is refused with another class or
+    with a `cause`, so a mechanical pause never carries a human's items."""
+    if tracker_human and cls != "questions":
+        raise ValueError(f"tracker_human belongs to a questions escalation, not {cls!r}")
+    if tracker_human and cause is not None:
+        raise ValueError("tracker_human is a human's pause: it takes no mechanical cause")
+    return {
+        "escalated": reason,
+        "escalation_class": cls,
+        "escalation_cause": cause,
+        "tracker_human": list(tracker_human),
+    }
 
 
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> dict[str, Any]:
@@ -2589,11 +2608,14 @@ def after_plan(state: TaskState) -> str | None:
 
 
 def tracker_only_plan(state: TaskState) -> bool:
-    """The third plan shape (GH-336): no subtasks, no parts and a checklist for the human.
-    The one place the shape is decided; a checklist next to subtasks rides the delivery, and
-    next to parts the split posts it (GH-350), so neither is this shape."""
+    """The third plan shape (GH-336): no subtasks, no parts and tracker work for the human,
+    typed (`tracker_items`, GH-620) or the legacy `tracker_checklist`. The one place the shape
+    is decided; tracker work next to subtasks rides the delivery, and next to parts the split
+    posts it (GH-350), so neither is this shape."""
     return bool(
-        state.get("tracker_checklist") and not state.get("subtasks") and not state.get("parts")
+        not state.get("subtasks")
+        and not state.get("parts")
+        and (state.get("tracker_items") or state.get("tracker_checklist"))
     )
 
 
@@ -3309,6 +3331,7 @@ def resumed(
         "escalated": None,
         "escalation_class": None,
         "escalation_cause": None,
+        "tracker_human": [],
         "status": resumed_status(state),
         "questions_for_human": [],
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
@@ -6384,8 +6407,7 @@ def _url_issue_number(url: str) -> int | None:
 def tracker_hash(items: Sequence[str]) -> str:
     """The first twelve hex digits of the sha256 of the stripped items joined by newlines:
     what tells one checklist from another (GH-336)."""
-    text = "\n".join(item.strip() for item in items)
-    return hashlib.sha256(text.encode()).hexdigest()[:12]
+    return tracker_items.digest(items)
 
 
 def tracker_marker(task_id: str, items: Sequence[str]) -> str:

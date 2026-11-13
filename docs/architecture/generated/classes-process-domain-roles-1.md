@@ -36,6 +36,7 @@ classDiagram
     class schemas__CapabilityFile["CapabilityFile"]
     class schemas__Classification["Classification"]
     class schemas__Consolidation["Consolidation"]
+    class schemas__Consultation["Consultation"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
@@ -46,3 +47,4 @@ classDiagram
   - `schemas.Answers` hereda de `schemas.RoleOutput`
   - `schemas.Classification` hereda de `schemas.RoleOutput`
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
+  - `schemas.Consultation` hereda de `schemas.RoleOutput`

@@ -24,8 +24,6 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
-    class schemas__FitBucket["FitBucket"]
-    class schemas__FitDecision["FitDecision"]
     class schemas__GlossaryTerm["GlossaryTerm"]
     class schemas__InterviewTurn["InterviewTurn"]
     class schemas__LandingDiagnosis["LandingDiagnosis"]
@@ -36,6 +34,9 @@ classDiagram
     class schemas__PerfScenario["PerfScenario"]
     class schemas__PlanCritique["PlanCritique"]
     class schemas__PlanSize["PlanSize"]
+    class schemas__PlatformAnswers["PlatformAnswers"]
+    class schemas__Reflection["Reflection"]
+    class schemas__Review["Review"]
 ```
 
 ## Relaciones con otras páginas
@@ -46,4 +47,7 @@ classDiagram
   - `schemas.PRD` hereda de `schemas.RoleOutput`
   - `schemas.PlanCritique` hereda de `schemas.RoleOutput`
   - `schemas.PlanSize` hereda de `schemas.RoleOutput`
+  - `schemas.PlatformAnswers` hereda de `schemas.RoleOutput`
+  - `schemas.Reflection` hereda de `schemas.RoleOutput`
+  - `schemas.Review` hereda de `schemas.RoleOutput`
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`

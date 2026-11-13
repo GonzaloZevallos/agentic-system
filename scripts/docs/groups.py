@@ -194,6 +194,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.system_lessons": "playbook",
     "domain.task": "state",
     "domain.task_path": "state",
+    "domain.tracker_items": "roles",
     "domain.turn_notice": "roles",
 }
 

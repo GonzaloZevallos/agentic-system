@@ -23,6 +23,7 @@ from agentic.core.process.domain.task import (
     add_restorations,
     add_review_scopes,
     add_shadow_reviews,
+    add_tracker_actions,
     add_tracker_failures,
     apply,
     first,
@@ -406,6 +407,10 @@ def value_for(key: str, branch: str, n: int):
         # row that differed by branch would depend on which branch landed first.
         target = "comment" if n % 2 else "label"
         return [{"target": target, "cls": "transient", "at": f"{target}-at"}]
+    if reducer is add_tracker_actions:
+        # One record per hash, a function of the hash alone: the first record seen wins, so a
+        # record that differed by branch would depend on which branch landed first.
+        return {f"h{n % 3}": {"at": f"at{n % 3}"}}
     if reducer is add_restorations:
         # One row per archive, its cut a function of the archive alone: the first row seen
         # wins, so a row that differed by branch would depend on which branch landed first.
@@ -478,6 +483,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             add_restorations,
             add_review_scopes,
             add_shadow_reviews,
+            add_tracker_actions,
             add_tracker_failures,
             last,
         ), key
