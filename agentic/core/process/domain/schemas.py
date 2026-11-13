@@ -223,7 +223,7 @@ class TechAnswers(RoleOutput):
 
 
 class TechAnswersWithAssumptions(TechAnswers):
-    """`TechAnswers` of a spec delivery: a behaviour doubt is an assumption, a conflict escalates."""
+    """`TechAnswers` of a spec delivery: a doubt is an assumption, a conflict escalates."""
 
     assumptions: list[str] = Field(
         default_factory=list,
@@ -306,11 +306,11 @@ class PlatformAnswers(RoleOutput):
 
 
 class PlatformAnswersWithAssumptions(PlatformAnswers):
-    """`PlatformAnswers` of a spec delivery: a behaviour doubt is an assumption, a conflict escalates."""
+    """`PlatformAnswers` of a spec delivery: a doubt is an assumption, a conflict escalates."""
 
     questions_for_human: list[str] = Field(
-        description="In a spec delivery a behaviour doubt is recorded as an assumption, not asked; only "
-        "spec_conflict escalates"
+        description="In a spec delivery a behaviour doubt is recorded as an assumption, not "
+        "asked; only spec_conflict escalates"
     )
     assumptions: list[str] = Field(
         default_factory=list,
