@@ -115,10 +115,11 @@ def test_a_control_arm_document_renders_as_it_did():
 # moved a fifth time; GH-610 added the `api_break` field to the Output list of both and
 # moved them a sixth; GH-619 rewrote `TRACKER_WITH_PARTS` (the system re-points) and moved
 # them a seventh; GH-663 taught `tracker_items` in place of `tracker_checklist` and moved them
-# an eighth.
+# an eighth; GH-691 appended the max-declarable sentence to the size budget paragraph and
+# moved them a ninth time.
 PROMPT_GOLDENS = {
-    "tech_lead": "b83df3f27e47b5264e5f7a9a567e715f2f887928b00f58f2b388c24523dd4606",
-    "tech_lead_platform": "db2ed23d2e011c874e46a7a614cf6702da6e3ed1584e09df6458aaf026a08b83",
+    "tech_lead": "fb51f872268aeaad2221e4399735dad7d60096215b60295fe1d985155824d049",
+    "tech_lead_platform": "4f649dddcf2204907246670aa7fcf065a4b33cd487e1c10cc9e166718cc66f9e",
 }
 
 

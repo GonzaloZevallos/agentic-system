@@ -186,6 +186,59 @@ def judged(size: PlanSize, ratio: Ratio = UNPROVEN_RATIO) -> PlanSize:
     )
 
 
+def max_declarable(ratio: Ratio = UNPROVEN_RATIO) -> PlanSize:
+    """The most a plan may declare and still fit: the one inverse of `judged`. Hand-written
+    files and lines are each the largest figure that, scaled by its own half of `ratio`, is
+    within its cap; test lines are the cap, because `judged` does not scale them."""
+    files, lines = _pair(ratio)
+    return PlanSize(_largest(HAND_FILES, files), _largest(HAND_LINES, lines), TEST_LINES)
+
+
+def over_text(size: PlanSize, ratio: Ratio, scope: Literal["part", "plan"]) -> str:
+    """The one wording of the size figures a refusal gives (GH-691), for each field of the
+    judged `size` over its cap: what was declared, what it is judged at, the cap, and the
+    most that may be declared. The integers are authoritative; the ratio is only an aid.
+
+    Scope `part` is for a part that must fit on its own; scope `plan` is for a plan that
+    asks for a split. The figure is a ceiling for an honest estimate, never a target."""
+    judged_size, most = judged(size, ratio), max_declarable(ratio)
+    files_ratio, lines_ratio = _pair(ratio)
+    rows = {
+        HAND_FILES_FIELD: (
+            size.hand_files, judged_size.hand_files, HAND_FILES, most.hand_files,
+            _ratio_text(files_ratio), "declared hand-written files",
+        ),
+        HAND_LINES_FIELD: (
+            size.hand_lines, judged_size.hand_lines, HAND_LINES, most.hand_lines,
+            _ratio_text(lines_ratio), "declared hand-written lines",
+        ),
+        TEST_LINES_FIELD: (
+            size.test_lines, judged_size.test_lines, TEST_LINES, most.test_lines,
+            None, "test lines",
+        ),
+    }  # fmt: skip
+    over = [(name, rows[name]) for name in crossed(judged_size)]
+    if scope == "part":
+        figures = "; ".join(
+            f"{name} declared {declared}, judged {judge} "
+            + (f"at {shown}" if shown else "(not scaled)")
+            + f", cap {cap}: an honest estimate fits only at {top} or less"
+            for name, (declared, judge, cap, top, shown, _) in over
+        )
+        return (
+            "Do not lower a declaration to fit: if your honest estimate is higher, move a "
+            f"whole step, with its tests, into another part. {figures}"
+        )
+    figures = ", ".join(
+        f"{name} judged {judge} (declared {declared}"
+        + (f" at {shown}" if shown else ", not scaled")
+        + f"), cap {cap}"
+        for name, (declared, judge, cap, _, shown, _) in over
+    )
+    ceilings = " and ".join(f"{top} {unit}" for _, (_, _, _, top, _, unit) in over)
+    return f"{figures}; write parts; size each part honestly at no more than {ceilings}"
+
+
 def crossed(size: PlanSize) -> tuple[str, ...]:
     """The fields of `size` over their cap, by the name the record stores them under."""
     over = (
@@ -234,6 +287,12 @@ def budget_text(ratio: Ratio | None) -> str:
             f" The declared hand-written files and lines are judged {factor}, rounded up, "
             "so declare them as honestly as you can."
         )
+        most = max_declarable(ratio)
+        text += (
+            f" At this factor the most you can declare and still fit is {most.hand_files} "
+            f"hand-written files and {most.hand_lines} hand-written lines; tests are not "
+            f"scaled, so up to {TEST_LINES} test lines."
+        )
     return text
 
 
@@ -249,6 +308,22 @@ def _scaled(figure: int, ratio: float) -> int:
     # Rounded to 9 places first, so a float product that lands a hair over a whole number
     # (2.0000000000000004) is not pushed to the next one by the ceiling.
     return math.ceil(round(figure * ratio, 9))
+
+
+def _largest(cap: int, ratio: float) -> int:
+    # Starts at the real quotient and corrects through `_scaled`, so it never disagrees with
+    # `judged` over a float edge.
+    most = math.floor(cap / ratio)
+    while most > 0 and _scaled(most, ratio) > cap:
+        most -= 1
+    while _scaled(most + 1, ratio) <= cap:
+        most += 1
+    return most
+
+
+def _ratio_text(ratio: float) -> str:
+    shown = f"{ratio:.2f}".rstrip("0").rstrip(".")
+    return f"x{shown}" if float(f"{ratio:.2f}") == ratio else f"about x{shown}"
 
 
 def _ratio(actual: int, planned: int) -> float | None:
