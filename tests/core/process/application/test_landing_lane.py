@@ -349,12 +349,22 @@ def test_an_admission_is_cleared_when_the_member_is_no_longer_the_lane():
     ports = _lane_ports(5, 7)
     _admit(ports)
     out: list[str] = []
-    landing_lane.clear_admissions(ports, [("GH-5", 5)], 5, _work(), out)
-    assert _admission(ports) is not None  # still the lane (even when its step is a ci wait)
     landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work("GH-5"), out)
     assert _admission(ports) is not None  # at work: not written
     landing_lane.clear_admissions(ports, [("GH-5", 5)], None, _work(), out)
     assert _admission(ports) is None and out == []
+
+
+def test_a_member_that_is_still_the_lane_keeps_its_admission_and_the_head_is_untouched():
+    """The round's lane is read from the decisions: a member that is still `lane` (whatever its
+    child is doing) is never cleared, and clearing never writes the head's document."""
+    ports = _lane_ports(5, 7)
+    _admit(ports)
+    before = (_admission(ports), dict(ports.documents.closures))
+    out: list[str] = []
+    landing_lane.clear_admissions(ports, [("GH-5", 5), ("GH-7", 7)], 5, _work(), out)
+    assert (_admission(ports), dict(ports.documents.closures)) == before
+    assert out == []
 
 
 def test_clearing_never_takes_an_admission_a_merge_followed():

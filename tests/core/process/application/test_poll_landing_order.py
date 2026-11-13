@@ -828,6 +828,18 @@ class TestFastLaneRecord:
         assert ports.documents.load("GH-5")["lane_recorded"] is not None
         assert "landing" not in ports.documents.load("GH-7")
 
+    def test_a_member_that_starts_waiting_on_ci_loses_the_lane_and_its_admission(self, tmp_path):
+        ports = _lane_ports()
+        _lane_round(ports, tmp_path)
+        assert ports.documents.load("GH-5")["lane_admitted"] is not None
+        head_before = dict(ports.documents.load("GH-7"))
+
+        found, _ = _lane_round(_missing_ci(ports), tmp_path, now=NOW + timedelta(minutes=1))
+
+        assert found == []
+        assert not ports.documents.load("GH-5").get("lane_admitted")
+        assert ports.documents.load("GH-7") == head_before
+
     def test_a_head_the_lock_refuses_is_not_written_even_with_no_busy_child(self, tmp_path):
         ports = _lane_ports()
         _lane_round(ports, tmp_path)
