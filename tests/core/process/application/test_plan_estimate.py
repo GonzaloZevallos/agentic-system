@@ -294,9 +294,7 @@ async def test_a_replan_without_items_clears_the_ones_an_earlier_plan_left(tmp_p
 
     state = task.apply(TASK, {"tracker_items": [ITEM1]})
     assert tracker_items.escalate_human(state, "t")  # the earlier plan would escalate
-    patch = await plan(
-        state, cold(tmp_path), memory_ports(ScriptedRunner(tech_lead=[planned()]))
-    )
+    patch = await plan(state, cold(tmp_path), memory_ports(ScriptedRunner(tech_lead=[planned()])))
     state = task.apply(state, patch)
     assert state["tracker_items"] == []
     assert "Decisions for the owner" not in state["sections"]["Tech Lead"]

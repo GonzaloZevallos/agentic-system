@@ -69,7 +69,7 @@ def test_parse_refuses_a_comment_or_template_marker(field, marker):
         "uses actions/checkout@v4",
         "bump pkg@1.2",
         "mail a@b.com",
-        "x.@bob",  # passes on purpose: the pattern excludes a `.` before the `@`, as the request says
+        "x.@bob",  # passes on purpose: the pattern excludes a `.` before the `@`
         "an @ alone, and 3 @ 4",
     ],
 )
@@ -233,3 +233,16 @@ def test_importing_the_module_does_not_import_rules():
         "sys.exit('agentic.core.process.domain.rules' in sys.modules)"
     )
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+def test_a_reworded_item_is_asked_again_and_the_answered_one_is_not():
+    """Accepted behaviour (GH-663): the hash covers the text, so a reworded item A' is a new
+    item and is raised, while A stays answered. There is no fuzzy matching."""
+    reworded = {**ITEM, "question": "Ship it now?"}
+    state = {
+        "tracker_items": [reworded],
+        "tracker_actions_done": {H: {"at": "a", "answered": "b"}},
+    }
+    patch = tracker_items.escalate_human(state, AT)
+    assert patch["tracker_human"] == [tracker_items.item_hash(reworded)]
+    assert H not in patch["tracker_actions_done"]

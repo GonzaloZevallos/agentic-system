@@ -29,7 +29,7 @@ from agentic.core.process.application import resume
 from agentic.core.process.application.final_validation import _verdict_patch
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.application.preflight import UNKNOWN_PRODUCT
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import plan_revision, rules
 from agentic.core.process.domain.design import NO_DESIGN_NOTE, NO_SAMPLE_APP_NOTE, Design
 from agentic.core.process.domain.roles import (
     FINDINGS,
@@ -301,14 +301,40 @@ async def test_definition_stage_then_delivery(config, tmp_path):
     assert doc["pull_request"] == final["pull_request"]
 
 
-async def test_a_plan_with_a_tracker_checklist_delivers_through_the_graph_with_an_empty_start(
-    config,
-):
-    """GH-342: the reducer channel starts at `{}`, which the delivery used to subscript."""
+async def _seeded_at_plan(script, config, fakes, inbox=None, **more):
+    """The graph holding a plan written by an earlier version, as if the `plan` node had just
+    run: the legacy `tracker_checklist` is no longer something a fresh plan can write, so the
+    legacy readers keep their proof from a stored state (GH-663)."""
+    graph = compiled(script, fakes=fakes, inbox=inbox)
+    state = {
+        **TASK,
+        "type": "feature",
+        "status": "planned",
+        "sections": {"Tech Lead": "### Solution\n\nHex."},
+        "invariants": [],
+        "integration_brief": "",
+        "estimate": {"cost_usd": 20.0, "files": 5},
+        **more,
+    }
+    await graph.aupdate_state(config, state, as_node="plan")
+    return graph
+
+
+async def test_a_stored_tracker_checklist_delivers_through_the_graph_with_an_empty_start(config):
+    """GH-342: the reducer channel starts at `{}`, which the delivery used to subscript.
+    The checklist comes from a document stored before GH-663; no plan writes it any more."""
     items = ["Post the verdict table on #1", "Close the follow-ups"]
     fakes = Fakes()
-    script = script_for(**technical(tech_lead=[planned(tracker_checklist=items)]))
-    final = await run_graph(script, config, fakes=fakes)
+    script = script_for(**technical())
+    api = {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"], "depends_on": []}
+    graph = await _seeded_at_plan(
+        script,
+        config,
+        fakes,
+        subtasks={"api": plan_revision.pending(api)},
+        tracker_checklist=items,
+    )
+    final = await graph.ainvoke(None, config=config)
 
     assert final["status"] == "ready_for_review"
     assert final["pull_request"].endswith("/pull/7")
@@ -318,27 +344,29 @@ async def test_a_plan_with_a_tracker_checklist_delivers_through_the_graph_with_a
     assert final["tracker_checklist_posted"]["hash"] == rules.tracker_hash(items)
 
 
-async def test_a_plan_with_parts_and_a_checklist_ends_in_a_split_that_posts_it(config):
-    """GH-350, the apostrophe #378 shape: parts plus a Tech Lead checklist item, and an open
-    issue that waits on this task. One Tech Lead run, no retry, no escalation; both parts
-    open; the waiting issue re-pointed by the system; one checklist comment with the Tech Lead's
-    item only; then `Split:`."""
-    plan = planned_parts()
-    plan.structured_output["tracker_checklist"] = ["Close #12 as superseded"]
+async def test_a_stored_plan_with_parts_and_a_checklist_ends_in_a_split_that_posts_it(config):
+    """GH-350, the apostrophe #378 shape, from a document stored before GH-663 (a fresh plan
+    cannot carry items next to parts): parts plus a checklist item, and an open issue that waits
+    on this task. No Tech Lead run, no escalation; both parts open; the waiting issue
+    re-pointed by the system; one checklist comment with the stored item only; then `Split:`."""
+    parts = planned_parts().structured_output["parts"]
     blocked = ("https://github.com/o/r/issues/379", "Blocked by: #1\n\nThe next cut.")
     fakes = Fakes()
     fakes.tracker.issue_numbers_from = 101
-    script = script_for(**technical(tech_lead=[plan]))
+    script = script_for(**technical())
     inbox = MemoryInbox(
         open_issues=[blocked],
         **{"379": {"id": "GH-379", "title": "Next", "description": blocked[1]}},
     )
-    final = await run_graph(script, config, fakes=fakes, inbox=inbox)
+    graph = await _seeded_at_plan(
+        script, config, fakes, inbox, parts=parts, tracker_checklist=["Close #12 as superseded"]
+    )
+    final = await graph.ainvoke(None, config=config)
 
     assert final["status"] == "split" and not final.get("escalated")
     assert fakes.tracker.updated_bodies == [(379, "Blocked by: #102\n\nThe next cut.")]
     assert [title for title, _ in fakes.tracker.opened_issues] == ["Catalogue", "Screens"]
-    assert len([c for c in script.calls if c["slug"] == "tech_lead"]) == 1
+    assert not [c for c in script.calls if c["slug"] == "tech_lead"]
     comments = [text for _, text in fakes.tracker.comments]
     assert [c.split(":")[0] for c in comments] == ["Tracker work for you", "Split"]
     checklist = comments[0]
