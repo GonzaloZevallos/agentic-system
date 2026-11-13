@@ -2,8 +2,7 @@ Esta página muestra los módulos del grupo `landing` de `domain` y los imports 
 
 - Padre: [domain](packages-process-domain.md)
 - Hermanas:
-  - [domain: checks (parte 1)](packages-process-domain-checks-1.md)
-  - [domain: checks (parte 2)](packages-process-domain-checks-2.md)
+  - [domain: checks](packages-process-domain-checks.md)
   - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: roles](packages-process-domain-roles.md)
@@ -20,6 +19,7 @@ graph TD
     m_domain__adr_numbers["domain.adr_numbers"]
     m_domain__board["domain.board"]
     m_domain__cost_history["domain.cost_history"]
+    m_domain__gate_priority["domain.gate_priority"]
     m_domain__landing["domain.landing"]
     m_domain__landing_order["domain.landing_order"]
     m_domain__plan_revision["domain.plan_revision"]
@@ -31,6 +31,8 @@ graph TD
     m_domain__board --> g_domain__state
     m_domain__cost_history --> g_domain__state
     m_domain__cost_history --> g_pkg__agentic__shared
+    m_domain__gate_priority --> g_domain__checks
+    m_domain__gate_priority --> g_domain__state
     m_domain__landing --> g_domain__checks
     m_domain__landing --> g_domain__roles
     m_domain__landing --> g_domain__state

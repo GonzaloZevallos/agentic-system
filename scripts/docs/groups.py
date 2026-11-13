@@ -158,7 +158,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.exempt_queue": "machine",
     "domain.experiment": "state",
     "domain.finding_location": "state",
-    "domain.gate_priority": "checks",
+    "domain.gate_priority": "landing",
     "domain.landing": "landing",
     "domain.landing_order": "landing",
     "domain.lead_time": "state",
