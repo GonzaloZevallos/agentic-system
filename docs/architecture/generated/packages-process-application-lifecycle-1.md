@@ -1,4 +1,4 @@
-Esta página muestra los módulos del grupo `lifecycle` de `application` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `application`, `<nombre> (grupo de domain)` un grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. Los imports hacia `domain` se resumen en un solo nodo `domain (paquete)` porque dibujar un nodo por grupo no cabe en el presupuesto de diagramas. El grupo se dividió por cantidad: esta es la parte 1 de 2, con módulos consecutivos en orden alfabético, y las otras partes aparecen como nodos `<grupo> parte <n> (grupo)`.
+Esta página muestra los módulos del grupo `lifecycle` de `application` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `application`, `<nombre> (grupo de domain)` un grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. El grupo se dividió por cantidad: esta es la parte 1 de 2, con módulos consecutivos en orden alfabético, y las otras partes aparecen como nodos `<grupo> parte <n> (grupo)`.
 
 - Padre: [application](packages-process-application.md)
 - Hermanas:
@@ -22,36 +22,42 @@ graph TD
     g_application__lifecycle__2["lifecycle parte 2 (grupo)"]
     g_application__reflection["reflection (grupo)"]
     g_application__support["support (grupo)"]
+    g_domain__checks["checks (grupo de domain)"]
+    g_domain__landing["landing (grupo de domain)"]
+    g_domain__machine["machine (grupo de domain)"]
+    g_domain__roles["roles (grupo de domain)"]
+    g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
-    g_pkg__domain["domain (paquete)"]
     m_application__archive["application.archive"]
     m_application__board_sync["application.board_sync"]
+    m_application__dry_run["application.dry_run"]
     m_application__poll["application.poll"]
     m_application__registration["application.registration"]
     m_application__relabel["application.relabel"]
-    m_application__restore["application.restore"]
     m_application__archive --> g_application__support
-    m_application__archive --> g_pkg__domain
+    m_application__archive --> g_domain__machine
+    m_application__archive --> g_domain__roles
+    m_application__archive --> g_domain__state
     m_application__board_sync --> g_application__support
-    m_application__board_sync --> g_pkg__domain
+    m_application__board_sync --> g_domain__landing
+    m_application__board_sync --> g_domain__state
+    m_application__dry_run --> g_application__support
     m_application__poll --> g_application__build
     m_application__poll --> g_application__checks
     m_application__poll --> g_application__landing
     m_application__poll --> g_application__lifecycle__2
     m_application__poll --> g_application__reflection
     m_application__poll --> g_application__support
+    m_application__poll --> g_domain__checks
+    m_application__poll --> g_domain__landing
+    m_application__poll --> g_domain__machine
+    m_application__poll --> g_domain__state
     m_application__poll --> g_pkg__agentic__shared
-    m_application__poll --> g_pkg__domain
     m_application__poll --> m_application__board_sync
     m_application__poll --> m_application__registration
     m_application__registration --> g_application__support
-    m_application__registration --> g_pkg__domain
+    m_application__registration --> g_domain__state
     m_application__relabel --> g_application__definition
     m_application__relabel --> g_application__support
-    m_application__relabel --> g_pkg__domain
-    m_application__restore --> g_application__landing
-    m_application__restore --> g_application__lifecycle__2
-    m_application__restore --> g_application__support
-    m_application__restore --> g_pkg__domain
-    m_application__restore --> m_application__archive
+    m_application__relabel --> g_domain__state
 ```

@@ -18,11 +18,13 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
 ```mermaid
 classDiagram
     class archive__ArchiveResult["ArchiveResult"]
+    class dry_run__DryRunLog["DryRunLog"]
+    class dry_run__DryRunRefused["DryRunRefused"]
+    class dry_run__ReadOnly["ReadOnly"]
     class poll__Abandoned["Abandoned"]
     class poll__CrashRetake["CrashRetake"]
     class poll__LandingRound["LandingRound"]
     class poll__MergeAssessment["MergeAssessment"]
     class poll__OrderEntry["OrderEntry"]
     class poll__OrderLock["OrderLock"]
-    class poll__RetakesSpent["RetakesSpent"]
 ```
