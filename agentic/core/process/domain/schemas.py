@@ -1093,27 +1093,30 @@ def parts_check(
                 raise ValueError(
                     f"part {number} depends on part {dep}: a part depends only on earlier parts"
                 )
-        _part_size_check(number, part, ratio)
+    _size_pass(parts, ratio)
     _migration_check(parts)
     if one_terminal:
         _terminal_check(parts)
 
 
-def _part_size_check(number: int, part: dict[str, Any], ratio: size_budget.Ratio) -> None:
-    size = declared_size(part)
-    if size is None:
-        return
+def _size_pass(parts: list[dict[str, Any]], ratio: size_budget.Ratio) -> None:
+    """After every structural check: one reason that names each part over the size budget, in
+    part order, each with its own figures (`size_budget.over_text` words them)."""
     # The fit is decided where every fit is (invariant 1): `rules.estimate_fits`, imported
     # where it is used because `rules` imports this module. A part declares no cost of its
-    # own, so only its size is judged; `crossed` only names the limits in the refusal.
+    # own, so only its size is judged; `over_text` only names the limits in the refusal.
     from .rules import estimate_fits
 
-    if not estimate_fits(0.0, 0, None, size, ratio):
-        over = size_budget.crossed(size_budget.judged(size, ratio))
-        raise ValueError(
-            f"part {number} does not fit the size budget ({', '.join(over)} judged over its "
-            "cap): split it into smaller parts, each a task of its own"
-        )
+    refusals = []
+    for number, part in enumerate(parts, 1):
+        size = declared_size(part)
+        if size is not None and not estimate_fits(0.0, 0, None, size, ratio):
+            refusals.append(
+                f"part {number} does not fit the size budget: "
+                + size_budget.over_text(size, ratio, "part")
+            )
+    if refusals:
+        raise ValueError("; ".join(refusals))
 
 
 def _migration_check(parts: list[dict[str, Any]]) -> None:
@@ -1271,6 +1274,19 @@ def plan_fits(
         size,
         judged,
         size_budget.crossed(judged),
+    )
+
+
+def _size_words(fit: FitDecision, ratio: size_budget.Ratio) -> str:
+    """What the plan-level split refusal says of the declared size, with its trailing space;
+    nothing for a plan that declares none."""
+    if fit.size is None:
+        return ""
+    if fit.crossed:
+        return size_budget.over_text(fit.size, ratio, "plan") + ". "
+    return (
+        "The declared size is within its caps, so the cost or the history's reference for "
+        "this size set the verdict. "
     )
 
 
@@ -1444,7 +1460,8 @@ def plan_check_for(
         words = _words(declared, raised, files, (spent_usd, median))
         if subtasks:
             bucket.observe(len(subtasks))
-        fits = plan_fits(judged, history, bucket, size_ratio).fits
+        fit = plan_fits(judged, history, bucket, size_ratio)
+        fits = fit.fits
         if parts:
             if fit_waived:
                 raise ValueError(
@@ -1461,7 +1478,8 @@ def plan_check_for(
             raise ValueError(
                 f"{words} does not fit one task "
                 "(or the history's reference for this size does not): write parts, "
-                f"at least two chained tasks, and no subtasks. {SPLIT_NOT_WAIVED}"
+                f"at least two chained tasks, and no subtasks. {_size_words(fit, size_ratio)}"
+                f"{SPLIT_NOT_WAIVED}"
             )
         if plan_shape != DEFAULT_PLAN_SHAPE:
             _single_check(subtasks, data.get("integration") or "")

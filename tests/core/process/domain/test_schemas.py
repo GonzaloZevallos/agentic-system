@@ -1462,3 +1462,73 @@ def test_the_tech_plan_exposes_tracker_items_and_no_longer_the_checklist():
     # GH-663 flips the guard of GH-620 part 1 on purpose: the writer is on.
     assert "tracker_items" in schemas.TechPlan.model_fields
     assert "tracker_checklist" not in schemas.TechPlan.model_fields
+
+
+# The refusals name the figures (GH-691): the text is `size_budget.over_text`, never written here.
+
+
+def _refusal(parts, ratio=size_budget.UNPROVEN_RATIO):
+    with pytest.raises(ValueError) as caught:
+        schemas.parts_check(parts, ratio)
+    return str(caught.value)
+
+
+def test_a_part_over_hand_lines_is_refused_with_its_figures():
+    text = _refusal([_piece(), _piece(hand_lines=270, depends_on=[1])])
+    assert text.startswith("part 2 does not fit the size budget: ")
+    assert "hand_lines declared 270, judged 405 at x1.5, cap 400" in text
+    assert "fits only at 266 or less" in text
+
+
+def test_a_part_over_test_lines_is_refused_with_its_figures():
+    text = _refusal([_piece(test_lines=700), _piece(depends_on=[1])])
+    assert text.startswith("part 1 does not fit the size budget: ")
+    assert "test_lines declared 700, judged 700 (not scaled), cap 600" in text
+    assert "fits only at 600 or less" in text
+
+
+def test_every_oversized_part_is_named_in_one_reason_in_part_order():
+    text = _refusal(
+        [_piece(hand_lines=270), _piece(depends_on=[1]), _piece(test_lines=700, depends_on=[1])]
+    )
+    assert text.index("part 1 does not fit") < text.index("part 3 does not fit")
+    assert "part 2 does not fit" not in text
+    assert "hand_lines declared 270" in text and "test_lines declared 700" in text
+
+
+def test_a_structural_fault_is_reported_before_a_size_fault():
+    text = _refusal([_piece(hand_lines=270), _piece(title=" ", depends_on=[1])])
+    assert text == "part 2 has no title"
+    assert _refusal([_piece(), _piece(depends_on=[2])]).startswith("part 2 depends on part 2")
+
+
+def test_a_migration_fault_is_still_refused_after_the_size_pass_passes():
+    with pytest.raises(ValueError, match="part 2 is a migration with no neighbour"):
+        schemas.parts_check([_piece(), _piece(kind="migration"), _piece(depends_on=[1])])
+
+
+def test_a_plan_over_the_size_budget_is_refused_with_its_figures_and_no_target():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError) as caught:
+        check(_sized(20.0, 5, 270))
+    text = str(caught.value)
+    assert "hand_lines judged 405 (declared 270 at x1.5), cap 400" in text
+    assert "no more than 266 declared hand-written lines" in text
+    assert "fits only at" not in text
+    assert schemas.SPLIT_NOT_WAIVED in text
+
+
+def test_a_plan_within_its_size_caps_but_over_on_cost_gets_no_figures():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError) as caught:
+        check(_sized(200.0, 5, 100))
+    text = str(caught.value)
+    assert "within its caps" in text
+    assert "fits only at" not in text and "266" not in text and "judged" not in text
+
+
+def test_a_plan_with_no_size_fields_gets_no_added_text():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError) as caught:
+        check(_estimated(150.0, size_budget.LEGACY_FILES + 1))
+    assert "within its caps" not in str(caught.value) and "cap" not in str(caught.value)
