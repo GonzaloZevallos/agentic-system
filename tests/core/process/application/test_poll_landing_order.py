@@ -6,12 +6,15 @@ from __future__ import annotations
 import dataclasses
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from agentic.core.process.application import poll
-from agentic.core.process.application.ports import IssueState, Upstream
+from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
 from agentic.core.process.domain import adr_numbers, rules
 from agentic.core.process.domain import landing as landing_rules
+from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_landing_fix import _stranded_ports
-from tests.core.process.application.test_poll import _Locks
+from tests.core.process.application.test_poll import _Locks, _no_sleep
 from tests.core.process.application.test_poll_merge import (
     HEAD,
     MASTER,
@@ -22,7 +25,7 @@ from tests.core.process.application.test_poll_merge import (
     _pr,
     _ready,
 )
-from tests.fakes import MemoryStack
+from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryStack
 
 OLD, MID, NEW = (
     "2026-11-10T08:00:00+00:00",
@@ -506,3 +509,250 @@ def test_a_delivered_task_stopped_by_agentic_stop_waits_and_the_next_one_leads()
     found, _ = _merges(_three(), lock=_Locks(_dead("GH-7", stopped_deliberately=True)))
 
     assert found == [5]
+
+
+# GH-681: the fast lane. Pull request #7 is the head and a live child of the product works on it;
+# #5 and #6 are clean and green, each with a path of its own and master already in its branch.
+HEAD_SEEN = (NOW - timedelta(minutes=1)).isoformat()
+
+
+def _lane_ports():
+    ports = _three()
+    _distinct(ports, 5, 6, 7)
+    ports.documents.record_closure("GH-7", {"head_seen_at": HEAD_SEEN, "head_turn_at": HEAD_SEEN})
+    for number, path in ((7, "head.py"), (5, "five.py"), (6, "six.py")):
+        ports.workspace.ancestors_by_ref[_head_of(number)] = {MASTER}
+        ports.workspace.touched_by[(MASTER, _head_of(number))] = (path,)
+    return ports
+
+
+def _lane_round(ports, tmp_path, *, now=NOW, master=MASTER, integrating=("GH-7",), **more):
+    lines: list[str] = []
+    found = poll.gather_merges(
+        ports,
+        frozenset(),
+        master,
+        _Locks(),
+        lines,
+        [],
+        now=now,
+        busy=frozenset({"GH-7"}),
+        cfg=Configuration(product_dir=tmp_path),
+        integrating=frozenset(integrating),
+        **more,
+    )
+    return found, lines
+
+
+def _evaluated(ports, tmp_path, *, now=NOW, master=MASTER, integrating=("GH-7",)):
+    return poll.evaluate_landing_order(
+        ports,
+        frozenset(),
+        master,
+        _Locks(),
+        frozenset({"GH-7"}),
+        Configuration(product_dir=tmp_path),
+        now,
+        integrating=frozenset(integrating),
+    )
+
+
+WAITING = "agentic: poll: auto-merge #{} -> waiting (clean) behind #7"
+FAST = "agentic: poll: auto-merge #5 -> fast lane behind busy #7"
+
+
+class TestFastLane:
+    def test_a_clean_green_member_is_found_with_the_fast_lane_line_beside_an_integrating_head(
+        self, tmp_path
+    ):
+        ports = _lane_ports()
+
+        found, lines = _lane_round(ports, tmp_path)
+
+        assert found == [5]  # the head's own child is busy: only the lane member is found
+        assert lines == [FAST, WAITING.format(6)]  # one lane member; #6 is ready and plain
+
+    def test_a_conflicting_member_stays_waiting_and_the_next_one_takes_the_lane(self, tmp_path):
+        ports = _lane_ports()
+        ports.workspace.conflict_answers[(_head_of(5), MASTER)] = True
+
+        found, lines = _lane_round(ports, tmp_path)
+
+        assert found == [6]
+        assert lines[0] == "agentic: poll: auto-merge #5 -> waiting (conflicts) behind #7"
+        assert lines[1] == "agentic: poll: auto-merge #6 -> fast lane behind busy #7"
+
+    def test_members_waiting_on_ci_stay_waiting_and_open_no_lane(self, tmp_path):
+        ports = _missing_ci(_lane_ports())
+
+        found, lines = _lane_round(ports, tmp_path)
+
+        assert found == []
+        assert lines == [WAITING.format(5), WAITING.format(6)]
+
+    def test_a_member_lacking_master_says_so(self, tmp_path):
+        ports = _lane_ports()
+        ports.workspace.ancestors_by_ref[_head_of(5)] = set()
+
+        found, lines = _lane_round(ports, tmp_path)
+
+        assert lines[0] == "agentic: poll: auto-merge #5 -> waiting (clean, lacks master) behind #7"
+        assert found == [6]
+
+    def test_overlapping_paths_say_which_head_they_overlap(self, tmp_path):
+        ports = _lane_ports()
+        ports.workspace.touched_by[(MASTER, _head_of(5))] = ("head.py",)
+
+        _, lines = _lane_round(ports, tmp_path)
+
+        assert lines[0] == (
+            "agentic: poll: auto-merge #5 -> waiting (clean, paths overlap #7) behind #7"
+        )
+
+    def test_a_head_not_integrating_opens_no_lane_and_says_so(self, tmp_path):
+        ports = _lane_ports()  # a live `merge` or `land_checks` child is not in `integrating`
+
+        found, lines = _lane_round(ports, tmp_path, integrating=())
+
+        assert found == []
+        assert lines == [
+            "agentic: poll: auto-merge #5 -> waiting (clean, head not integrating) behind #7",
+            "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7",
+        ]
+
+    def test_a_head_holding_no_turn_leaves_todays_lines_byte_for_byte(self, tmp_path):
+        ports = _lane_ports()
+        lines: list[str] = []
+
+        found = poll.gather_merges(
+            ports,
+            frozenset(),
+            MASTER,
+            _Locks(),
+            lines,
+            [],
+            now=NOW,
+            cfg=Configuration(product_dir=tmp_path),
+            integrating=frozenset({"GH-7"}),
+        )
+
+        assert found == [7]
+        assert lines == [WAITING.format(5), WAITING.format(6)]
+        assert ports.workspace.ancestor_checks == []
+
+    def test_one_lane_member_per_master_movement(self, tmp_path):
+        ports = _lane_ports()
+        first = _lane_round(ports, tmp_path)[0]
+        moved = "d" * 40
+        ports.documents.record_closure("GH-5", {"closed_at": "2026-11-11T00:00:00+00:00"})
+        ports.workspace.upstream_answer = Upstream("origin/master", moved, None)
+        document = ports.documents.load("GH-6")
+        document["merge_checks"] = {"head": _head_of(6), "master": moved, "passed": True}
+        ports.documents.save(document)
+        ports.workspace.conflict_answers[(_head_of(6), moved)] = False
+
+        found, lines = _lane_round(ports, tmp_path, now=NOW + timedelta(minutes=1), master=moved)
+
+        assert first == [5]
+        assert found == []
+        assert lines == ["agentic: poll: auto-merge #6 -> waiting (clean, lacks master) behind #7"]
+
+    def test_a_head_with_one_sync_left_opens_no_lane(self, tmp_path):
+        ports = _lane_ports()
+        spent = [
+            {"step": "sync_master", "head": _head_of(7), "at": f"2026-11-10T10:0{n}:00+00:00"}
+            for n in range(landing_rules.LANDING_SYNCS_MAX - 2)
+        ]
+        ports.documents.record_closure("GH-7", {"landing": spent})
+        assert _evaluated(ports, tmp_path).lane == 5  # two left: the lane opens
+
+        ports.documents.record_closure("GH-7", {"landing": [*spent, {**spent[0], "at": "t9"}]})
+        round_ = _evaluated(ports, tmp_path)
+
+        assert round_.lane is None
+        assert set(round_.lane_reasons.values()) == {"head_sync_budget"}
+        found, lines = _lane_round(ports, tmp_path)
+        assert found == []
+        assert lines == [
+            "agentic: poll: auto-merge #5 -> waiting (clean, head sync budget) behind #7",
+            "agentic: poll: auto-merge #6 -> waiting (clean, head sync budget) behind #7",
+        ]
+
+    def test_a_head_first_seen_in_this_round_opens_the_lane_in_the_next(self, tmp_path):
+        ports = _lane_ports()
+        ports.documents.record_closure("GH-7", {"head_seen_at": None, "head_turn_at": None})
+
+        first_found, first_lines = _lane_round(ports, tmp_path)
+        second_found, second_lines = _lane_round(ports, tmp_path, now=NOW + timedelta(minutes=1))
+
+        assert first_found == []
+        assert first_lines == [WAITING.format(5), WAITING.format(6)]
+        assert second_found == [5]
+        assert second_lines[0] == FAST
+
+    def test_a_member_under_a_merge_refusal_backoff_prints_todays_line(self, tmp_path):
+        ports = _lane_ports()
+        ports.documents.record_closure(
+            "GH-5",
+            {
+                "merge_refusal": {
+                    "reason": "ci_untrusted_no_dispatch",
+                    "head": _head_of(5),
+                    "master": MASTER,
+                    "at": NOW.isoformat(),
+                }
+            },
+        )
+
+        found, lines = _lane_round(ports, tmp_path)
+
+        assert lines[0] == WAITING.format(5)
+        assert found == [6]
+
+    def test_the_lane_changes_no_member_and_writes_nothing_of_its_own(self, tmp_path):
+        with_lane, without = _lane_ports(), _lane_ports()
+
+        _lane_round(with_lane, tmp_path)
+        _lane_round(without, tmp_path, integrating=())
+        a = _evaluated(_lane_ports(), tmp_path)
+        b = _evaluated(_lane_ports(), tmp_path, integrating=())
+
+        assert (a.lane, b.lane) == (5, None)
+        assert [(e.member, e.turned) for e in a.entries] == [
+            (e.member, e.turned) for e in b.entries
+        ]
+        for number in (5, 6, 7):
+            assert with_lane.documents.load(f"GH-{number}") == without.documents.load(
+                f"GH-{number}"
+            )
+            assert "landing" not in with_lane.documents.load(f"GH-{number}")
+
+    @pytest.mark.parametrize(
+        ("kind", "opens"),
+        [("land_model", True), ("role", True), ("merge", False), ("land_checks", False)],
+    )
+    def test_a_live_child_of_the_product_on_the_head_decides_through_the_poller(
+        self, tmp_path, kind, opens
+    ):
+        ports = _lane_ports()
+        launcher = FakeLauncher()
+        live = RunRegistration(1, "h", "product", "GH-7", kind=kind)
+
+        lines = poll.run_once(
+            Configuration(product_dir=tmp_path),
+            ports,
+            MemoryRunRegistry(entries=[live]),
+            launcher,
+            NOW,
+            sleep=_no_sleep,
+            argv0="agentic",
+            lock=_Locks(),
+            current_boot="boot-now",
+        )
+
+        assert (FAST in lines) is opens
+        if not opens:
+            assert (
+                "agentic: poll: auto-merge #5 -> waiting (clean, head not integrating) behind #7"
+                in lines
+            )

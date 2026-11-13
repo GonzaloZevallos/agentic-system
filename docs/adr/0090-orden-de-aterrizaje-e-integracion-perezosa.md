@@ -76,3 +76,22 @@ Una Cabeza que no avanza no retiene el orden. Cada miembro lleva el tiempo que f
 **Lectura de aceptación.** El segundo PR llega a ser Cabeza dentro de un `HEAD_BUDGET` de tiempo observado de la Cabeza, más su propio aterrizaje.
 
 **Límites.** El límite de pasos no ve ciclos que cambian el sha: el freno es el presupuesto de tiempo. La rotación está acotada en el orden, no en el gasto; lo que frena el gasto son los presupuestos de aterrizaje de cada tarea. Una Cabeza libre paga a lo sumo `GAP_MAX` por retención. Un `save` completo de un hijo vivo puede pisar una escritura del poller con un estado anterior: solo cobra de menos.
+
+## Adenda GH-681: el Carril rápido
+
+Mientras la Cabeza mantiene el turno con un hijo vivo que integra (`land_model` o `role`, `landing_order.INTEGRATING_KINDS`; nunca `merge` ni `land_checks`), a lo sumo un pull request que no es la Cabeza puede bajar por el camino normal de merge: decisión `merge` sin backoff, limpio, que contiene el master actual y con rutas disjuntas de las de la Cabeza. El predicado y sus siete razones viven solo en `domain/landing_order.py` (`lane_ready`, `lane_reason`, `Order.lane`); `application/landing_lane.py` solo transcribe los hechos (un fallo de lectura es `None`, nunca `False`) y `poll.py` los pasa y dice el resultado: la línea `fast lane behind busy #H` y `waiting (clean, <razón>) behind #H`. `agentic land` no abre carril: solo lee la Cabeza.
+
+- **Un merge por movimiento de master**, sin tope por turno: tras el merge del carril ningún otro miembro contiene el master nuevo hasta sincronizarse, así que no hay cadena.
+- **Una Cabeza que se ve como Cabeza en la misma ronda en que queda ocupada** espera una ronda: sin `head_seen_at` no mantiene el turno (`holds_turn`).
+- **Sin red nueva**: una lectura `tracker.pull_request` de la Cabeza por ronda; el resto es git local (`is_ancestor`, `touched_paths`). No se usan `fetch_commit`, `contains`, `changed_paths` ni `pushed_head`.
+- **Costo**: rondas × miembros listos en llamadas locales de git (una o dos por candidato), más una lectura del pull request por ronda. Sin Cabeza que integre no se lee nada.
+- **Presupuesto**: el carril se abre solo si a la Cabeza le quedan al menos `LANE_SYNCS_MIN` = 2 sincronizaciones (`LANDING_SYNCS_MAX` menos las `sync_master` de la época, por tarea y no por sha): cada merge del carril le cuesta una `sync_master`, y otra queda para su propio movimiento.
+- **No escribe**: ninguna clave de un documento y nada se agrega a `landing`; `_record_turn` recibe lo mismo que antes.
+
+Riesgos conocidos:
+
+- Rutas disjuntas pueden romperse juntas: lo detecta el CI de la Cabeza en su `sync_master`.
+- Hay una ventana de segundos entre leer el hijo vivo y lanzar el merge; la acota `master_moved`.
+- Las rutas de la Cabeza son las del head empujado: una resolución aún no empujada puede pisarse con el miembro del carril.
+- `role` cuenta como integrando de más, igual que los pases de `land_model` que no sincronizan (`re_review`, `fix`, `diagnose`); cada uno cuesta como mucho una sincronización.
+- Uso esperado bajo: casi toda tarea toca `CONTEXT.md` o `docs/adr/`, así que `paths overlap` será frecuente. Se mide en las líneas del poller, comparando `paths overlap` con `fast lane`.

@@ -62,7 +62,15 @@ sequenceDiagram
    escribe lo que decide `landing_order.py:turn_patch`, registra cada cesión en `head_yields` y
    dice una sola línea `landing order #N -> yielded` después de escribir; una ronda retenida no
    observa nada. Los demás PR esperan aprobados, con una
-   sola línea `waiting`, y un `merge-tree` limpio no pide ningún pase (ADR-0090). Luego
+   sola línea `waiting`, y un `merge-tree` limpio no pide ningún pase (ADR-0090). La excepción es
+   el Carril rápido (ADR-0090, adenda GH-681): con la Cabeza reteniendo el turno y un hijo vivo
+   que integra (`land_model` o `role`, `landing_order.py:integrates`), `evaluate_landing_order`
+   lee los hechos con `agentic/core/process/application/landing_lane.py:lane_facts` y vuelve a
+   llamar a `landing_order.py:order`; lo que sale va en `LandingRound.lane` y `lane_reasons`
+   (el predicado y las razones son de `landing_order.py:lane_ready` y `lane_reason`). A lo sumo
+   un miembro, `lane`, entra en `found` junto a la Cabeza con la línea
+   `fast lane behind busy #H` y sigue el camino normal de merge; un miembro limpio sin carril
+   dice la razón en su línea: `waiting (clean, <texto>) behind #H`. Luego
    `agentic/core/process/application/poll.py:execute` lanza `agentic land --issue N`. El
    verbo es `agentic/cli.py:_land`; corre bajo el lock de la tarea y registrado con el tipo
    de corrida con que se lo lanzó (`land_checks` si no gasta modelo, `land_model` si sí).

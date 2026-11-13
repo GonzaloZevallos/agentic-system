@@ -23,6 +23,7 @@ graph TD
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
     m_application__landing_flakes["application.landing_flakes"]
+    m_application__landing_lane["application.landing_lane"]
     m_application__landing_plan["application.landing_plan"]
     m_application__landing_slice["application.landing_slice"]
     m_application__landing_sync["application.landing_sync"]
@@ -30,6 +31,9 @@ graph TD
     m_application__landing_flakes --> g_application__support
     m_application__landing_flakes --> g_pkg__agentic__shared
     m_application__landing_flakes --> g_pkg__domain
+    m_application__landing_lane --> g_application__support
+    m_application__landing_lane --> g_pkg__domain
+    m_application__landing_lane --> m_application__landing_plan
     m_application__landing_plan --> g_application__build
     m_application__landing_plan --> g_application__lifecycle
     m_application__landing_plan --> g_application__support

@@ -22,6 +22,7 @@ graph TD
     m_domain__lead_time["domain.lead_time"]
     m_domain__legacy_names["domain.legacy_names"]
     m_domain__restart["domain.restart"]
+    m_domain__returns["domain.returns"]
     m_domain__document --> g_domain__landing
     m_domain__document --> g_domain__roles
     m_domain__document --> g_domain__state__2
@@ -31,4 +32,5 @@ graph TD
     m_domain__experiment --> g_pkg__agentic__shared
     m_domain__restart --> g_domain__roles
     m_domain__restart --> g_domain__state__2
+    m_domain__returns --> g_domain__state__2
 ```
