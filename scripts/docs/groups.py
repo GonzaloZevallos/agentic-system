@@ -194,6 +194,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.stack_review": "roles",
     "domain.stack_signals": "roles",
     "domain.stage0_rotation": "machine",
+    "domain.stage0_window": "machine",
     "domain.stall": "machine",
     "domain.suppressions": "checks",
     "domain.system_lessons": "playbook",

@@ -25,13 +25,13 @@ classDiagram
     class ports__CiLogs["CiLogs"]
     class ports__CommandResult["CommandResult"]
     class ports__Commands["Commands"]
+    class ports__CommitCiReader["CommitCiReader"]
     class ports__ExperimentFile["ExperimentFile"]
     class ports__FailurePolicy["FailurePolicy"]
     class ports__FastForwardView["FastForwardView"]
     class ports__FlagVocabulary["FlagVocabulary"]
     class ports__FreeSpace["FreeSpace"]
     class ports__GitError["GitError"]
-    class ports__Grant["Grant"]
 ```
 
 ## Relaciones con otras páginas

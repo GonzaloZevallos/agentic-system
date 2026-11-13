@@ -16,7 +16,10 @@ graph TD
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__application["application (paquete)"]
     g_pkg__domain["domain (paquete)"]
+    m_adapters__git__master_window["adapters.git.master_window"]
     m_adapters__git__workspace["adapters.git.workspace"]
+    m_adapters__git__master_window --> g_pkg__application
+    m_adapters__git__master_window --> g_pkg__domain
     m_adapters__git__workspace --> g_pkg__agentic__shared
     m_adapters__git__workspace --> g_pkg__application
     m_adapters__git__workspace --> g_pkg__domain

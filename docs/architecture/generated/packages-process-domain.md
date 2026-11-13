@@ -31,6 +31,7 @@ graph TD
     g_domain__landing --> g_domain__checks
     g_domain__landing --> g_domain__roles
     g_domain__landing --> g_domain__state
+    g_domain__machine --> g_domain__checks
     g_domain__machine --> g_domain__state
     g_domain__playbook --> g_domain__roles
     g_domain__playbook --> g_domain__state

@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__MergeConflict["MergeConflict"]
     class ports__MergeFailed["MergeFailed"]
     class ports__OwnerRuleEntry["OwnerRuleEntry"]
     class ports__PerfLock["PerfLock"]
@@ -31,12 +32,10 @@ classDiagram
     class ports__RawResult["RawResult"]
     class ports__RemergeDiffUnsupported["RemergeDiffUnsupported"]
     class ports__RiskArea["RiskArea"]
-    class ports__RoleRunner["RoleRunner"]
     ports__Ports --> ports__ProcessReaper
     ports__Ports --> ports__ProductKnowledge
     ports__Ports --> ports__ProductStack
     ports__Ports --> ports__Prompts
-    ports__Ports --> ports__RoleRunner
 ```
 
 ## Relaciones con otras páginas
@@ -56,6 +55,7 @@ classDiagram
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 5)](classes-process-application-support-5.md)
+  - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
 - [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
