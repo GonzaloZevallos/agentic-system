@@ -29,6 +29,8 @@ graph TD
     m_adapters__filesystem__prompts["adapters.filesystem.prompts"]
     m_adapters__filesystem__run_registry["adapters.filesystem.run_registry"]
     m_adapters__filesystem__scratch["adapters.filesystem.scratch"]
+    m_adapters__filesystem__stage0_store["adapters.filesystem.stage0_store"]
+    m_adapters__filesystem__stage0_users["adapters.filesystem.stage0_users"]
     m_adapters__filesystem__board_sent --> g_pkg__application
     m_adapters__filesystem__board_sent --> g_pkg__domain
     m_adapters__filesystem__check_ledger --> g_pkg__application
@@ -51,4 +53,5 @@ graph TD
     m_adapters__filesystem__run_registry --> m_adapters__filesystem__liveness
     m_adapters__filesystem__scratch --> g_pkg__domain
     m_adapters__filesystem__scratch --> m_adapters__filesystem__liveness
+    m_adapters__filesystem__stage0_users --> g_pkg__domain
 ```
