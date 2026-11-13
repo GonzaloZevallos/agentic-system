@@ -348,3 +348,15 @@ def test_with_tracker_items_block_lists_each_question_and_recommendation():
 
 def test_with_tracker_items_block_renders_nothing_without_items():
     assert plan_view.with_tracker_items_block("### Solution\n\nx", []) == "### Solution\n\nx"
+
+
+def test_with_tracker_items_block_lists_only_the_owners_items_of_a_mixed_list():
+    items = [
+        {"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."},
+        {"kind": "comment", "text": "Superseded by #12."},
+        {"kind": "open_issue", "title": "Track the retry", "body": "Line one."},
+    ]
+    out = plan_view.with_tracker_items_block("### Solution\n\nx", items)
+    assert out.endswith("### Decisions for the owner\n\n- Ship it? Recommendation: Yes, ship.")
+    only_system = plan_view.with_tracker_items_block("### Solution\n\nx", items[1:])
+    assert only_system == "### Solution\n\nx"

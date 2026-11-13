@@ -152,3 +152,23 @@ def test_without_pending_items_the_comment_has_no_item_block(cfg):
         state("x", "ci", escalation_cause="ci_gh_unavailable"), cfg, memory_ports()
     )
     assert "also decides" not in text
+
+
+def test_only_the_human_items_pending_are_listed_though_a_system_item_shares_the_pause(
+    cfg, monkeypatch
+):
+    """GH-625: the listing reads the items through `human_items`, so a system item whose hash is
+    pending too is not asked of the owner."""
+    monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human", "comment"}))
+    comment = {"kind": "comment", "text": "Superseded by #12."}
+    pending = [tracker_items.item_hash(ITEM), tracker_items.item_hash(comment)]
+    state = {
+        "id": "GH-12",
+        "escalated": "the plan leaves 1 decision(s) to the owner",
+        "escalation_class": "questions",
+        "tracker_items": [ITEM, comment],
+        "tracker_human": pending,
+    }
+    text = escalate.comment(state, cfg, memory_ports())
+
+    assert tracker_items.question_line(ITEM) in text and "Superseded by #12." not in text
