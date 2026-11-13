@@ -66,6 +66,8 @@ from agentic.core.process.application.ports import (
     SampleAppHandle,
     Scratch,
     SentMemory,
+    SpecReader,
+    SpecUnreadable,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -2422,6 +2424,21 @@ class FakeExperimentFile:
         return self.data
 
 
+class FakeSpecReader:
+    """GH-594: no test reads a real repo through the port. `read` answers the text mapped to
+    `(commit, path)` and otherwise raises `SpecUnreadable("missing")`. It does no confinement:
+    its concrete reason has no authority, only that it raises `SpecUnreadable`."""
+
+    def __init__(self, texts: Mapping[tuple[str, str], str]) -> None:
+        self.texts = dict(texts)
+
+    def read(self, commit: str, path: str) -> str:
+        try:
+            return self.texts[(commit, path)]
+        except KeyError:
+            raise SpecUnreadable("missing") from None
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of
@@ -2660,6 +2677,7 @@ def memory_ports(
     ci_logs: CiLogs | None = None,
     load_reader: LoadReader | None = None,
     experiment: ExperimentFile | None = None,
+    spec_reader: SpecReader | None = None,
     now: Callable[[], str] | None = None,
 ) -> Ports:
     return Ports(
@@ -2688,6 +2706,7 @@ def memory_ports(
         ci_logs=ci_logs,
         load_reader=load_reader,
         experiment=experiment,
+        spec_reader=spec_reader,
     )
 
 

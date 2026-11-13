@@ -67,6 +67,7 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 | `Tracker` | pull requests, comentarios, etiquetas, reescritura del cuerpo de un issue (`update_issue_body`, GH-619: re-apunta las líneas `Blocked by:` de los dependientes de una partida), lectura del CI y despacho del workflow de la rama base (`dispatch_ci`, `dispatched_ci`, GH-462) | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
 | `CiLogs` (opcional, `None` sin adaptador) | los logs de los jobs rojos de la cabeza de un pull request y, para la cabeza que se juzga (`flake_block`, GH-464), las líneas `agentic-flakes:` de los últimos 4 MiB del log de los jobs que nombra el `ci:` del stack | `agentic/core/process/adapters/github/ci_logs.py:GhCiLogs` |
 | `ExperimentFile` (opcional, `None` sin adaptador) | la declaración de experimento del producto, el archivo experiment.yaml de .agentic | `agentic/core/process/adapters/filesystem/experiment_file.py:FilesystemExperimentFile` |
+| `SpecReader` (opcional, `None` sin adaptador; nadie lo llama aún, GH-594) | leer una spec del repo del producto en un commit completo, nunca del worktree; sólo `docs/specs/<nombre>.md`, un blob de a lo sumo 64 KiB en UTF-8, y si no, `SpecUnreadable` con el motivo y nada más | `agentic/core/knowledge/adapters/git/spec_reader.py:GitSpecReader` |
 | `Inbox` | la cola de issues | `agentic/core/process/adapters/github/inbox.py:GhInbox` |
 | `Board` | el espejo del Project | `agentic/core/process/adapters/github/board.py:GhBoard` |
 | `Commands` | correr los chequeos del producto | `agentic/core/process/adapters/shell/commands.py:ShellCommands` |
@@ -109,7 +110,9 @@ y no lo dirige.
   `FilesystemFlags` implementa `FlagVocabulary`
   (`agentic/core/knowledge/adapters/filesystem/flags.py:FilesystemFlags`).
 - `adapters/git/`: `GitStack` implementa `ProductStack`, leyendo el stack del commit base
-  (`agentic/core/knowledge/adapters/git/stack.py:GitStack`).
+  (`agentic/core/knowledge/adapters/git/stack.py:GitStack`); `GitSpecReader` implementa
+  `SpecReader`, leyendo una spec de un commit con git de bajo nivel y un entorno limpio
+  (`agentic/core/knowledge/adapters/git/spec_reader.py:GitSpecReader`).
 
 ## `core/measurement`
 
