@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, lead_time, rules
+from ..domain import document, lead_time, rules, tracker_items
 from ..domain.roles import PJM
 from ..domain.task import TaskState, TrackerPosted
 from .ports import Ports
@@ -73,13 +73,17 @@ def _body(task_id: str, items: Sequence[str], marker: str, replaces: bool) -> st
 
 async def tracker_only(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     task_id = state["id"]
+    # GH-620: typed human items reach the owner as a needs-human escalation and post nothing.
+    if human := tracker_items.escalate_human(state, ports.now()):
+        return finish(state, {"current_role": PJM.name, **human}, ports)
+    record: TrackerPosted | None = None
+    checklist = state.get("tracker_checklist", [])
     try:
-        record = post_tracker_checklist(
-            ports,
-            task_id,
-            state.get("tracker_checklist", []),
-            state.get("tracker_checklist_posted"),
-        )
+        # Typed items all answered and no legacy checklist: nothing is left to post.
+        if checklist or not state.get("tracker_items"):
+            record = post_tracker_checklist(
+                ports, task_id, checklist, state.get("tracker_checklist_posted")
+            )
     except (ValueError, OSError) as exc:
         return _stopped(state, exc, ports)
     reaped = release_task(ports, task_id)

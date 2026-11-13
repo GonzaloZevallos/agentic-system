@@ -280,6 +280,82 @@ def advance(members: Iterable[Member], now: datetime) -> tuple[Order, tuple[Memb
     return result, tuple(folded)
 
 
+def resumed(members: Iterable[Member], now: datetime) -> tuple[Member, ...]:
+    """`members` as the round should read them at `now`: a busy head left unobserved for longer
+    than `GAP_MAX` (a held round, or a poller that stopped, skipped the rounds that would have
+    recorded it) keeps its turn without paying the gap. Only the member with the most recent
+    `seen_at` can be it, and only if it is busy and nobody else was seen within `GAP_MAX`; it
+    comes back with `seen_at=now` and `charged_s` unchanged. Every other member is unchanged.
+    Applied once per call of the evaluation, before `advance`; never by the writer."""
+    given = tuple(members)
+    seen = [m for m in given if m.seen_at is not None]
+    if not seen:
+        return given
+    latest = max(seen, key=lambda m: (m.seen_at or datetime.min, -m.issue))
+    gap = _elapsed(latest.seen_at, now) if latest.seen_at is not None else timedelta(0)
+    if not latest.busy or gap <= GAP_MAX:
+        return given
+    if any(
+        m is not latest and m.seen_at is not None and _elapsed(m.seen_at, now) <= GAP_MAX
+        for m in seen
+    ):
+        return given
+    return tuple(replace(m, seen_at=now) if m is latest else m for m in given)
+
+
+YIELD_MARK = "head_yields"
+"""The key `turn_patch` sets, to the member's new count of yields, when the patch records a yield:
+the caller replaces it with the list of `{at, head, reason}` it appends to."""
+
+
+def turn_patch(before: Member, after: Member, now: datetime) -> dict[str, object]:
+    """The head-budget keys to write for one member of a round: `before` as the document read it
+    and `after` what `advance` made of it, `{}` when nothing is to be written. The only decision
+    of whether and what to write: part 2 callers never build these states by hand.
+
+    - a head with no `seen_at`: `head_seen_at` (and `head_turn_at` if it had none);
+    - a head seen `HEAD_SEEN_EVERY` ago or more (a busy head `resumed` refreshed included):
+      `head_charged_s` and `head_seen_at`; seen less ago: `{}` (the write is throttled);
+    - a member that was head (`seen_at` set) and no longer is, or was skipped: `head_charged_s`
+      folded and `head_seen_at` cleared, the turn and the charge kept;
+    - a yield (`after.yielded_at` newer than `before.yielded_at`): the turn, the charge and the
+      sighting cleared (or set, if it ends the call as head again), `head_yielded_at`, and
+      `YIELD_MARK` for the caller to append the record.
+
+    Instants are ISO strings, `None` clears a key."""
+    if after.yielded_at is not None and (
+        before.yielded_at is None or after.yielded_at > before.yielded_at
+    ):
+        return {
+            "head_turn_at": _iso(after.turn_at),
+            "head_charged_s": _charge(after) or None,
+            "head_seen_at": _iso(after.seen_at),
+            "head_yielded_at": _iso(after.yielded_at),
+            YIELD_MARK: after.yields,
+        }
+    if after.seen_at is None:
+        if before.seen_at is None:
+            return {}
+        return {"head_charged_s": _charge(after), "head_seen_at": None}
+    if before.seen_at is None:
+        patch: dict[str, object] = {"head_seen_at": _iso(after.seen_at)}
+        if before.turn_at is None:
+            patch["head_turn_at"] = _iso(after.turn_at)
+        return patch
+    if _elapsed(before.seen_at, now) < HEAD_SEEN_EVERY:
+        return {}
+    return {"head_charged_s": _charge(after), "head_seen_at": _iso(after.seen_at)}
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _charge(m: Member) -> float:
+    """The charge as the document keeps it: whole seconds."""
+    return float(round(m.charged_s))
+
+
 def _reject_new_facts(members: Iterable[Member]) -> None:
     """Raises `ValueError` naming the issue and the field when a member carries a head-budget fact
     off its default: without `now` nothing could read it."""

@@ -1438,6 +1438,7 @@ CiCause = Literal[
     "unknown_names",
     "checkout_failed",
     "run_unfinished",
+    "ghost_run",
 ]
 
 

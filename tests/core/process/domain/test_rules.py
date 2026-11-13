@@ -66,7 +66,6 @@ def test_escalation_carries_the_reason_and_its_class_together():
         "escalated": "PjM stopped by the task cap",
         "escalation_class": "cap",
         "escalation_cause": None,
-        "tracker_human": [],
     }
 
 
@@ -4954,12 +4953,12 @@ def test_tracker_hash_and_marker_keep_their_values():
     assert rules.tracker_marker("GH-1", ["a", "b"]) == "<!-- agentic-tracker: GH-1 7e18f737311b -->"
 
 
-def test_escalation_with_tracker_human_writes_the_hashes_and_other_escalations_clear_them():
+def test_escalation_with_tracker_human_writes_the_hashes_and_other_escalations_omit_the_key():
     patch = rules.escalation("questions", "Decide.", tracker_human=["aaa", "bbb"])
     assert patch["tracker_human"] == ["aaa", "bbb"]
     assert patch["escalation_cause"] is None
-    assert rules.escalation("questions", "Decide.")["tracker_human"] == []
-    assert rules.escalation("failure", "x", cause="delivery_transient")["tracker_human"] == []
+    assert "tracker_human" not in rules.escalation("questions", "Decide.")
+    assert "tracker_human" not in rules.escalation("failure", "x", cause="delivery_transient")
 
 
 def test_escalation_refuses_tracker_human_with_another_class_or_with_a_cause():
@@ -5030,3 +5029,41 @@ _RESOLVED_PART = ("CLOSED", "COMPLETED", "resolved")
 )
 def test_split_parent_state_reads_state_reason_before_the_verdict(parts, expected):
     assert rules.split_parent_state(parts) == expected
+
+
+def test_resumed_without_tracker_items_keeps_todays_patch():
+    patch = rules.resumed({"status": "waiting_on_human"}, "Yes.", at=_STAMP)
+    assert patch == {
+        "escalated": None,
+        "escalation_class": None,
+        "escalation_cause": None,
+        "tracker_human": [],
+        "status": rules.resumed_status({"status": "waiting_on_human"}),
+        "questions_for_human": [],
+        "pause_log": [rules.resumed_entry(at=_STAMP)],
+        "sections": patch["sections"],
+    }
+    assert "tracker_actions_done" not in patch
+
+
+def test_resumed_answers_every_tracker_hash():
+    state = {"tracker_human": ["aaa", "bbb"]}
+    patch = rules.resumed(state, "Yes to both.", at=_STAMP)
+    assert patch["tracker_human"] == []
+    assert patch["tracker_actions_done"] == {
+        "aaa": {"at": _STAMP, "answered": _STAMP},
+        "bbb": {"at": _STAMP, "answered": _STAMP},
+    }
+
+
+@pytest.mark.parametrize("decision", [None, "", "  \n "])
+def test_resumed_without_a_decision_leaves_the_pending_items_alone(decision):
+    patch = rules.resumed({"tracker_human": ["aaa"]}, decision, at=_STAMP)
+    assert "tracker_human" not in patch
+    assert "tracker_actions_done" not in patch
+
+
+def test_tracker_item_pause_is_true_only_with_pending_hashes():
+    assert rules.tracker_item_pause({"tracker_human": ["aaa"]})
+    assert not rules.tracker_item_pause({"tracker_human": []})
+    assert not rules.tracker_item_pause({})

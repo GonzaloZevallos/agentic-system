@@ -759,19 +759,29 @@ def escalation(
     escalation, so a mechanical cause of an earlier pause cannot outlive it.
 
     `tracker_human` (GH-620) is the hashes of the typed tracker items this `questions` pause
-    raised. It is always written, `[]` for any other pause, for the same reason as `cause`. It
+    raised. It is written only when it is not empty: any other escalation leaves the key out, so
+    the pending hashes survive it through the `last` reducer and only `resumed` clears them. It
     is not a `MechanicalCause`: the pause stays a human's. It is refused with another class or
     with a `cause`, so a mechanical pause never carries a human's items."""
     if tracker_human and cls != "questions":
         raise ValueError(f"tracker_human belongs to a questions escalation, not {cls!r}")
     if tracker_human and cause is not None:
         raise ValueError("tracker_human is a human's pause: it takes no mechanical cause")
-    return {
+    patch: EscalationPatch = {
         "escalated": reason,
         "escalation_class": cls,
         "escalation_cause": cause,
-        "tracker_human": list(tracker_human),
     }
+    if tracker_human:
+        patch["tracker_human"] = list(tracker_human)
+    return patch
+
+
+def tracker_item_pause(state: TaskState) -> bool:
+    """Whether the task is paused on typed tracker items (GH-620): `tracker_human` holds the
+    hashes of the items a person has not answered. The one place that reads it, for its three
+    callers: `resume.py`, the graph's `pause` node and `landing_plan.release`."""
+    return bool(state.get("tracker_human"))
 
 
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> dict[str, Any]:
@@ -3331,7 +3341,6 @@ def resumed(
         "escalated": None,
         "escalation_class": None,
         "escalation_cause": None,
-        "tracker_human": [],
         "status": resumed_status(state),
         "questions_for_human": [],
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
@@ -3344,6 +3353,13 @@ def resumed(
     decided = bool(decision and decision.strip())
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
+    pending = list(state.get("tracker_human", []))
+    if not pending:
+        patch["tracker_human"] = []
+    elif decided:
+        # One decision answers every item the owner was shown; only here is `answered` written.
+        patch["tracker_human"] = []
+        patch["tracker_actions_done"] = {h: {"at": at, "answered": at} for h in pending}
     if state.get("fit_question"):
         # A part at the depth cap asked "narrow it or stop"; a resume is the first answer
         # and waives nothing: the task is planned again with the decision in `Human` and

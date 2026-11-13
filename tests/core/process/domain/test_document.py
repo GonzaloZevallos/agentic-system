@@ -1328,6 +1328,10 @@ _LANDING_SCALAR_KEYS = frozenset(
         "landing_queued_at",
         "head_since_at",
         "head_since_head",
+        "head_turn_at",
+        "head_charged_s",
+        "head_seen_at",
+        "head_yielded_at",
     }
 )
 _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
@@ -1918,6 +1922,23 @@ def test_a_document_without_typed_tracker_keys_is_byte_identical_after_a_load():
     empties = {"tracker_items": [], "tracker_actions_done": {}, "tracker_human": []}
     assert document.render({**parsed, **empties}) == text
     assert document.render(document.parse(text)) == text
+
+
+def test_head_yields_render_as_one_flow_line_that_record_closure_replaces():
+    rendered = document.render(golden_state(head_yields=[_head_yield(1), _head_yield(2)]))
+    lines = [line for line in rendered.split("\n") if line.startswith("head_yields:")]
+    assert len(lines) == 1
+    assert lines[0].startswith("head_yields: [")
+
+    rewritten = document.record_closure(rendered, {"head_yields": [_head_yield(3)]})
+
+    assert document.parse(rewritten)["head_yields"] == [_head_yield(3)]
+    assert rewritten.count("head_yields:") == 1
+
+
+def test_a_flow_line_with_only_invalid_yields_renders_without_the_key_as_a_line():
+    rendered = document.render(golden_state(head_yields=[_head_yield(1, reason="nope")]))
+    assert document.parse(rendered)["head_yields"] == []
 
 
 def test_ci_ghost_dispatch_roundtrips_through_the_frontmatter_and_is_absent_when_unset():

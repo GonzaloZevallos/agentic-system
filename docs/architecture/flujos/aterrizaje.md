@@ -51,8 +51,17 @@ sequenceDiagram
    hallazgos abiertos, cabeza no revisada, master movido, intentos agotados.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
-   de cada producto (`poll.evaluate_landing_order`, que ordena con
-   `agentic/core/process/domain/landing_order.py:head`): los demás PR esperan aprobados, con una
+   de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo
+   lectura) arma los miembros, aplica
+   `agentic/core/process/domain/landing_order.py:resumed` una vez (la Cabeza ocupada que quedó
+   sin observar conserva su turno sin pagar el hueco) y ordena con
+   `agentic/core/process/domain/landing_order.py:advance` (`order`): una Cabeza que agota su
+   presupuesto (`HEAD_BUDGET` de tiempo observado o `HEAD_STEPS_MAX` pasos sin resolver) cede y
+   pasa detrás de los que no cedieron, salvo que esté ocupada o solo le falte el merge. El único
+   escritor del presupuesto es `agentic/core/process/application/poll.py:_record_turn`, que
+   escribe lo que decide `landing_order.py:turn_patch`, registra cada cesión en `head_yields` y
+   dice una sola línea `landing order #N -> yielded` después de escribir; una ronda retenida no
+   observa nada. Los demás PR esperan aprobados, con una
    sola línea `waiting`, y un `merge-tree` limpio no pide ningún pase (ADR-0090). Luego
    `agentic/core/process/application/poll.py:execute` lanza `agentic land --issue N`. El
    verbo es `agentic/cli.py:_land`; corre bajo el lock de la tarea y registrado con el tipo
