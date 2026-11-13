@@ -1184,7 +1184,7 @@ def test_every_process_module_has_a_cluster_and_the_pages_fit_the_caps_and_the_b
         found = {c for q, c in groups.CLUSTERS.items() if q.startswith(layer + ".")}
         assert 0 < len(found) <= most, (layer, found)
     pages = packages.build_pages(on_disk, imported, groups.CLUSTERS)
-    assert len(pages) <= 27
+    assert len(pages) <= 28  # 27 shipped; state splits once it imports landing_order (GH-621)
     texts = render.package_pages(pages)
     for path, text in texts.items():
         assert render.diagram_budget(text) == [], path
