@@ -373,6 +373,10 @@ def test_a_branch_reference_reaches_the_branch_report_and_a_pull_request_url_the
             self.asked.append(("branch", branch))
             return CiUnreadable("gh_unavailable")
 
+        def watched_branch_ci(self, branch):
+            self.asked.append(("watched", branch))
+            return CiUnreadable("gh_unavailable")
+
     tracker = Tracker()
     read = ci_reader(cast(Any, tracker))
     assert read("agentic-ci/GH-1") == CiUnreadable("gh_unavailable")

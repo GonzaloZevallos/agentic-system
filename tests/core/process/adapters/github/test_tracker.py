@@ -2,11 +2,13 @@
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agentic.core.process.adapters.github import GhTracker
+from agentic.core.process.adapters.github import tracker as tracker_module
 from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import (
     MergeCallFailed,
@@ -187,6 +189,47 @@ def test_comment_on_issue_raises_value_error_when_gh_fails_and_removes_its_file(
 
     with pytest.raises(ValueError, match="gh issue comment failed: issue not found"):
         GhTracker(Path("/p"), run).comment_on_issue("https://github.com/o/r/issues/9", "x")
+    assert not Path(seen["path"]).exists()
+
+
+def test_update_issue_body_sends_the_body_in_a_file_and_removes_it():
+    written = {}
+
+    class RecordingRun(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            path = args[args.index("--body-file") + 1]
+            written["path"] = path
+            written["body"] = Path(path).read_bytes().decode("utf-8")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+    run = RecordingRun()
+    body = "Blocked by: #7, #9\n\nnaïve 😀\r\nend\n"
+    GhTracker(Path("/p"), run).update_issue_body(12, body)
+    [call] = run.calls
+    assert call == ["gh", "issue", "edit", "12", "--body-file", written["path"]]
+    assert "-" not in call and "--body" not in call
+    assert written["body"] == body
+    assert not Path(written["path"]).exists()
+
+
+@pytest.mark.parametrize("body", ["", "   ", "\n\t \r\n"])
+def test_update_issue_body_refuses_an_empty_body_before_any_gh_call(body):
+    run = Recorder()
+    with pytest.raises(ValueError, match="empty body"):
+        GhTracker(Path("/p"), run).update_issue_body(12, body)
+    assert run.calls == []
+
+
+def test_update_issue_body_raises_value_error_when_gh_fails_and_removes_its_file():
+    seen = {}
+
+    def run(args, cwd, capture_output, text, check):
+        seen["path"] = args[args.index("--body-file") + 1]
+        raise subprocess.CalledProcessError(1, args, stderr="issue not found")
+
+    with pytest.raises(ValueError, match="gh issue edit failed: issue not found"):
+        GhTracker(Path("/p"), run).update_issue_body(12, "x")
     assert not Path(seen["path"]).exists()
 
 
@@ -1466,6 +1509,7 @@ def _policy():
         lambda t: t.label("GH-12", "x"),
         lambda t: t.unlabel("GH-12", "x"),
         lambda t: t.comment_on_issue("12", "hi"),
+        lambda t: t.update_issue_body(12, "body"),
         lambda t: t.update_pull_request_body(3, "body"),
         lambda t: t.queue(),
         lambda t: t.issue_created_at("GH-12"),
@@ -2183,3 +2227,136 @@ def test_pull_request_body_reads_the_body_of_the_number():
 def test_an_unreadable_body_raises_instead_of_reading_as_empty(stdout):
     with pytest.raises(ValueError):
         GhTracker(Path("/p"), Recorder(stdout=stdout)).pull_request_body(PR)
+
+
+# -- GH-601: the watched branch read, whose suites also say how many check runs they have --
+
+
+def _counted_suite(run_id, status, total):
+    """An Actions suite as the watched query returns it: `total` is its `checkRuns.totalCount`
+    (`None` leaves the field out)."""
+    suite = _suite(run_id, status)
+    if total is not None:
+        suite["checkRuns"] = {"totalCount": total}
+    return suite
+
+
+def _watched(suites, *, whole=True):
+    page = {"pageInfo": {"hasNextPage": not whole}, "nodes": suites}
+    stdout = _branch_graphql(_DONE, suites=page)
+    return GhTracker(Path("/p"), Recorder(stdout=stdout)).watched_branch_ci("master")
+
+
+@pytest.mark.parametrize(
+    ("status", "total", "expected"),
+    [
+        ("QUEUED", 0, frozenset({"7"})),
+        ("QUEUED", 1, frozenset()),
+        ("IN_PROGRESS", 0, frozenset()),
+        ("WAITING", 0, frozenset()),
+        ("PENDING", 0, frozenset()),
+        ("REQUESTED", 0, frozenset()),
+        ("COMPLETED", 0, frozenset()),
+    ],
+)
+def test_watched_branch_ci_lists_only_a_queued_suite_with_no_check_runs(status, total, expected):
+    report = _watched([_counted_suite(7, status, total)])
+    assert isinstance(report, CiReport)
+    assert report.queued_empty_runs == expected
+
+
+def test_watched_branch_ci_lists_the_queued_empty_runs_beside_the_running_ones():
+    report = _watched([_counted_suite(7, "QUEUED", 0), _counted_suite(8, "QUEUED", 2)])
+    assert isinstance(report, CiReport)
+    assert report.running_runs == frozenset({"7", "8"})
+    assert report.queued_empty_runs == frozenset({"7"})
+
+
+@pytest.mark.parametrize(
+    "suite",
+    [
+        {"status": "QUEUED", "workflowRun": {"databaseId": 7}},
+        {"status": "QUEUED", "workflowRun": {"databaseId": 7}, "checkRuns": None},
+        {"status": "QUEUED", "workflowRun": {"databaseId": 7}, "checkRuns": {}},
+        {"status": "QUEUED", "workflowRun": {"databaseId": 7}, "checkRuns": {"totalCount": "0"}},
+        {"status": "QUEUED", "workflowRun": {"databaseId": 7}, "checkRuns": {"totalCount": False}},
+        {"status": "QUEUED", "workflowRun": {"databaseId": 7}, "checkRuns": [0]},
+        {"status": "QUEUED", "workflowRun": {"databaseId": "7"}, "checkRuns": {"totalCount": 0}},
+        {"status": "QUEUED", "workflowRun": None, "checkRuns": {"totalCount": 0}},
+        {"status": 3, "workflowRun": {"databaseId": 7}, "checkRuns": {"totalCount": 0}},
+        "not a suite",
+    ],
+    ids=[
+        "no-check-runs",
+        "check-runs-null",
+        "no-total",
+        "total-is-text",
+        "total-is-bool",
+        "check-runs-is-list",
+        "run-id-is-text",
+        "not-actions",
+        "status-is-int",
+        "node-is-text",
+    ],
+)
+def test_a_field_the_watched_read_cannot_parse_adds_nothing_and_stays_readable(suite):
+    report = _watched([suite])
+    assert isinstance(report, CiReport)  # never a CiUnreadable
+    assert report.queued_empty_runs == frozenset()
+
+
+def test_a_cut_suites_page_lists_no_queued_empty_run_even_with_a_queued_empty_suite():
+    # GH-601: a page cut by `hasNextPage` can hide the live suite, so it never makes a ghost.
+    report = _watched([_counted_suite(7, "QUEUED", 0)], whole=False)
+    assert isinstance(report, CiReport)
+    assert report.running_runs == frozenset({"7"})
+    assert report.queued_empty_runs == frozenset()
+
+
+def test_watched_branch_ci_without_a_suites_field_is_a_readable_report_with_nothing_queued():
+    stdout = _branch_graphql(_DONE)
+    report = GhTracker(Path("/p"), Recorder(stdout=stdout)).watched_branch_ci("master")
+    assert isinstance(report, CiReport) and report.queued_empty_runs == frozenset()
+
+
+def test_watched_branch_ci_is_branch_ci_plus_the_queued_empty_runs():
+    page = {"pageInfo": {"hasNextPage": False}, "nodes": [_counted_suite(7, "QUEUED", 0)]}
+    stdout = _branch_graphql(_DONE, suites=page)
+    plain = GhTracker(Path("/p"), Recorder(stdout=stdout)).branch_ci("master")
+    watched = GhTracker(Path("/p"), Recorder(stdout=stdout)).watched_branch_ci("master")
+    assert isinstance(plain, CiReport) and isinstance(watched, CiReport)
+    assert watched == replace(plain, queued_empty_runs=frozenset({"7"}))
+
+
+def test_branch_ci_still_leaves_queued_empty_runs_empty_on_a_queued_suite_with_no_check_runs():
+    page = {"pageInfo": {"hasNextPage": False}, "nodes": [_counted_suite(7, "QUEUED", 0)]}
+    stdout = _branch_graphql(_DONE, suites=page)
+    report = GhTracker(Path("/p"), Recorder(stdout=stdout)).branch_ci("master")
+    assert isinstance(report, CiReport) and report.queued_empty_runs == frozenset()
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [json.dumps({"data": {"repository": {"ref": None}}}), "not json"],
+    ids=["no-branch", "not-json"],
+)
+def test_watched_branch_ci_that_cannot_be_read_is_unreadable(stdout):
+    read = GhTracker(Path("/p"), Recorder(stdout=stdout)).watched_branch_ci("gone")
+    assert read == CiUnreadable("gh_unreadable")
+
+
+def test_watched_branch_ci_asks_the_watched_query_for_the_branch():
+    run = Recorder(stdout=_branch_graphql(_DONE))
+    GhTracker(Path("/p"), run).watched_branch_ci("master")
+    [call] = run.calls
+    assert "ref=refs/heads/master" in call
+    assert "checkRuns(first: 0) { totalCount }" in " ".join(call)
+
+
+def test_only_the_watched_query_counts_check_runs_per_suite():
+    """The pull request and branch reads keep their shape (GH-601): the watched read is the one
+    place a suite's check runs are counted."""
+    assert "checkRuns" not in tracker_module._PULL_REQUEST_CI_QUERY
+    assert "checkRuns" not in tracker_module._BRANCH_CI_QUERY
+    assert "checkRuns" not in tracker_module._SUITES
+    assert "checkRuns(first: 0) { totalCount }" in tracker_module._WATCHED_BRANCH_CI_QUERY

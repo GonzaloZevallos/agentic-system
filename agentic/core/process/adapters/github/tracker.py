@@ -129,6 +129,16 @@ checkSuites(first: 50) {
 }
 """
 
+# The same suites with how many check runs each has (GH-601): `first: 0` fetches no rows, only the
+# count, so a queued suite with none -- a ghost run, once it has stayed so -- can be told from one
+# that has not reported yet. Only `_WATCHED_BRANCH_CI_QUERY` uses it.
+_WATCHED_SUITES = """
+checkSuites(first: 50) {
+  pageInfo { hasNextPage }
+  nodes { status conclusion workflowRun { databaseId } checkRuns(first: 0) { totalCount } }
+}
+"""
+
 _PULL_REQUEST_CI_QUERY = (
     """
 query($owner: String!, $repo: String!, $number: Int!) {
@@ -154,6 +164,19 @@ query($owner: String!, $repo: String!, $ref: String!) {
     ref(qualifiedName: $ref) { target { ... on Commit { oid """
     + _ROLLUP
     + _SUITES
+    + """ } } }
+  }
+}
+"""
+)
+
+_WATCHED_BRANCH_CI_QUERY = (
+    """
+query($owner: String!, $repo: String!, $ref: String!) {
+  repository(owner: $owner, name: $repo) {
+    ref(qualifiedName: $ref) { target { ... on Commit { oid """
+    + _ROLLUP
+    + _WATCHED_SUITES
     + """ } } }
   }
 }
@@ -276,6 +299,32 @@ def _suite_run_ids(commit: object) -> tuple[frozenset[str], frozenset[str]]:
         if isinstance(status, str) and status != "COMPLETED":
             running.add(str(run_id))
     return frozenset(cancelled), frozenset(running)
+
+
+def _queued_empty_runs(commit: object) -> frozenset[str]:
+    """The Actions run ids of a commit whose check suite is `QUEUED` with zero check runs
+    (GH-601). Best effort, like `_suite_run_ids`: a missing or mistyped field adds nothing and is
+    never an unreadable CI. A suites page that is cut (`hasNextPage` true) lists none: a suite
+    outside the page could be the live one, so no read of a cut page makes or extends a ghost."""
+    suites = commit.get("checkSuites") if isinstance(commit, dict) else None
+    nodes = suites.get("nodes") if isinstance(suites, dict) else None
+    if not isinstance(nodes, list):
+        return frozenset()
+    page = suites.get("pageInfo") if isinstance(suites, dict) else None
+    if isinstance(page, dict) and page.get("hasNextPage") is True:
+        return frozenset()
+    found: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("status") != "QUEUED":
+            continue
+        workflow_run = node.get("workflowRun")
+        run_id = workflow_run.get("databaseId") if isinstance(workflow_run, dict) else None
+        check_runs = node.get("checkRuns")
+        total = check_runs.get("totalCount") if isinstance(check_runs, dict) else None
+        if isinstance(run_id, int) and not isinstance(run_id, bool):
+            if isinstance(total, int) and not isinstance(total, bool) and total == 0:
+                found.add(str(run_id))
+    return frozenset(found)
 
 
 def _ci_check(node: dict) -> CiCheck | None:
@@ -469,6 +518,22 @@ class GhTracker:
             path = h.name
         try:
             self._gh_retrying("issue", "comment", reference, "--body-file", path)
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def update_issue_body(self, number: int, body: str) -> None:
+        # `--body-file <path>`, never `-`: the runner passes `stdin=DEVNULL`, so `-`
+        # would send an empty body. An empty body is refused before any `gh` call.
+        if not body.strip():
+            raise ValueError(f"refusing to write an empty body to issue #{number}")
+        # `newline=""`: the body goes out byte for byte, CRLF lines included.
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".md", delete=False, encoding="utf-8", newline=""
+        ) as h:
+            h.write(body)
+            path = h.name
+        try:
+            self._gh_retrying("issue", "edit", str(number), "--body-file", path)
         finally:
             Path(path).unlink(missing_ok=True)
 
@@ -813,8 +878,23 @@ class GhTracker:
 
     def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
         """See `Tracker.ci_report`: the latest commit of `branch`, and no pull request."""
+        read = self._read_branch(_BRANCH_CI_QUERY, branch)
+        return read if isinstance(read, CiUnreadable) else read[0]
+
+    def watched_branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        """See `Tracker.watched_branch_ci`: `branch_ci` with the queued suites that have no
+        check run (GH-601)."""
+        read = self._read_branch(_WATCHED_BRANCH_CI_QUERY, branch)
+        if isinstance(read, CiUnreadable):
+            return read
+        report, target = read
+        return replace(report, queued_empty_runs=_queued_empty_runs(target))
+
+    def _read_branch(self, query: str, branch: str) -> tuple[CiReport, object] | CiUnreadable:
+        """The latest commit of `branch` read with `query`: its report and the GraphQL commit it
+        was built from, so a caller can read more off the same answer."""
         answer = self._graphql(
-            _BRANCH_CI_QUERY,
+            query,
             ("-F", "owner={owner}", "-F", "repo={repo}", "-f", f"ref=refs/heads/{branch}"),
         )
         if isinstance(answer, CiUnreadable):
@@ -825,7 +905,7 @@ class GhTracker:
         except (_Unreadable, KeyError, TypeError):
             return CiUnreadable("gh_unreadable")
         cancelled_runs, running_runs = _suite_run_ids(target)
-        return CiReport(
+        report = CiReport(
             head_sha=head_sha,
             base_ref=None,
             base_sha=None,
@@ -835,6 +915,7 @@ class GhTracker:
             cancelled_runs=cancelled_runs,
             running_runs=running_runs,
         )
+        return report, target
 
     def dispatch_ci(
         self, workflow: str, ref: str, inputs: Mapping[str, str]

@@ -17,7 +17,7 @@ from .presubmit import FAILED_IDS_MAX, ID_FORBIDDEN
 
 # Defined in `task` (the record that holds it is there); re-exported as the full tier's cause.
 from .task import CiCause as CiCause
-from .task import CiJobTiming, FlakeGate, FlakeRecord
+from .task import CiGhostDispatch, CiJobTiming, FlakeGate, FlakeRecord
 from .task import CiTiming as CiTiming
 from .task import FallbackCause as FallbackCause
 from .task import JobLogCause as JobLogCause
@@ -99,7 +99,9 @@ class CiReport:
     adapter's check-suite read, the dispatched-run builder from `run.status`); None is "not
     known", and is always a wait (GH-485). `cancelled_runs` holds the run ids whose check suite
     concluded `CANCELLED` and `running_runs` those whose suite is not `COMPLETED` (GH-539); both
-    empty when the source does not say, which keeps every verdict as it was."""
+    empty when the source does not say, which keeps every verdict as it was. `queued_empty_runs`
+    holds the Actions run ids whose check suite is `QUEUED` with zero check runs (GH-601); only
+    `Tracker.watched_branch_ci` fills it, every other read leaves it empty."""
 
     head_sha: str
     base_ref: str | None
@@ -109,6 +111,7 @@ class CiReport:
     runs_completed: bool | None = None
     cancelled_runs: frozenset[str] = frozenset()
     running_runs: frozenset[str] = frozenset()
+    queued_empty_runs: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -593,6 +596,10 @@ def full_tier_verdict(
     timeout_s: float,
     grace_s: float,
     confirmed: bool = False,
+    *,
+    maturing: frozenset[str] = frozenset(),
+    watched: frozenset[str] = frozenset(),
+    ceiling_elapsed_s: float | None = None,
 ) -> FullTierVerdict:
     """The verdict of one read of the CI over the declared job `names`, `elapsed_s` into
     a wait bounded by `timeout_s`. A report of another commit than `head` counts as no run
@@ -610,7 +617,11 @@ def full_tier_verdict(
     `_NOT_STARTED` stays for `STARTUP_FAILURE` and a `CANCELLED` of a run that is neither.
     A report of `head` with a live run (`running_runs` not empty) is never `no_run` (GH-564), at
     any elapsed time: no declared name yet only means the run has not reported, so it is
-    `waiting` until `timeout_s` and `timed_out` from there."""
+    `waiting` until `timeout_s` and `timed_out` from there.
+    A ghost still maturing (GH-601) extends that bound: at `timeout_s`, when `maturing` is not
+    empty, every id of `read.running_runs` is in `watched` (the ghost map's ids) and the node's
+    own age (`ceiling_elapsed_s`, `elapsed_s` when not given) is under `2 * timeout_s`, the
+    verdict stays `waiting`. Any other input gives exactly the result without these arguments."""
     at_bound = elapsed_s >= timeout_s
     if isinstance(read, CiUnreadable):
         if at_bound:
@@ -640,9 +651,48 @@ def full_tier_verdict(
     no_run = len(verdict.missing) == len(set(names)) and not read.running_runs
     if no_run and (elapsed_s >= grace_s or at_bound):
         return FullTierVerdict("unreachable", (), pending, "no_run", (), cancelled)
-    if not at_bound:
+    ceiling_s = elapsed_s if ceiling_elapsed_s is None else ceiling_elapsed_s
+    extended = bool(maturing) and read.running_runs <= watched and ceiling_s < 2 * timeout_s
+    if not at_bound or extended:
         return FullTierVerdict("waiting", (), pending, None, (), cancelled)
     return FullTierVerdict("timed_out", (), pending, None, (), cancelled)
+
+
+def ghost_dispatch_due(
+    verdict: FullTierVerdict, read: CiReport | CiUnreadable, ghosts: frozenset[str]
+) -> bool:
+    """Whether a push path that ended `timed_out` is a candidate for a fresh dispatch (GH-601):
+    the read is a report with live runs, none of them anything but a ghost. The ghosts come from
+    `GhostWatch.ghosts`, never from an age compared here. A partial green beside the ghost
+    dispatches too: the dispatched run judges every name."""
+    return (
+        verdict.state == "timed_out"
+        and isinstance(read, CiReport)
+        and bool(read.running_runs)
+        and bool(ghosts)
+        and read.running_runs <= ghosts
+    )
+
+
+def ghost_fact_in_force(fact: CiGhostDispatch | None, head: str) -> bool:
+    """Whether a recorded ghost dispatch (GH-601) is for this very commit and not yet escalated:
+    the node then waits on the dispatched runs instead of dispatching again."""
+    return fact is not None and not fact["escalated"] and rules.same_commit(fact["head"], head)
+
+
+def dispatched_ghost(
+    verdict: FullTierVerdict,
+    runs: list[DispatchedRun] | tuple[DispatchedRun, ...] | CiUnreadable,
+    head: str,
+    ghosts: frozenset[str],
+) -> bool:
+    """Whether a dispatched wait that ended `timed_out` did so on a run that is itself a ghost
+    (GH-601): the run that judges `head` (`chosen_run`, the newest) is one of `ghosts`. Such an end
+    is no verdict of the suite, never red."""
+    if verdict.state != "timed_out" or isinstance(runs, CiUnreadable):
+        return False
+    run = chosen_run(runs, head)
+    return run is not None and str(run.run_id) in ghosts
 
 
 # The margin subtracted from the local instant a workflow was dispatched to form the loose
@@ -773,6 +823,59 @@ def chosen_run(
         if run.event == "workflow_dispatch" and len(head) == 40 and head in run.display_title
     ]
     return max(matching, key=lambda candidate: candidate.created_at) if matching else None
+
+
+@dataclass(frozen=True)
+class GhostWatch:
+    """Which Actions runs are ghosts (GH-601): queued with no job, and for longer than a bound.
+    `seen` maps a run id (always a `str`) to the local instant of the first read that saw it
+    queued with zero jobs. Every `at_s` and `now_s` given to one watch comes from one local clock
+    of the caller and is never compared with an instant GitHub gave (`createdAt`). Each method
+    returns a new watch and never mutates `seen`. The rule is only here: no other module compares
+    a run's age with a bound."""
+
+    seen: Mapping[str, float] = field(default_factory=dict)
+
+    def observe_report(self, read: CiReport | CiUnreadable, at_s: float) -> GhostWatch:
+        """The watch after `read`, taken at `at_s`. The ids of `queued_empty_runs` not yet seen
+        are added at `at_s`; one already seen keeps its first instant. An id that `running_runs`
+        holds but `queued_empty_runs` does not (it has jobs now) and one `running_runs` no
+        longer holds leave the map. An unreadable read changes nothing.
+
+        A cut page (`checkSuites(first: 50)` with `hasNextPage` true) yields an empty
+        `queued_empty_runs` at the adapter, so the map empties: no ghost is born or extended from
+        it. A read with `hasNextPage` absent or false is read as before."""
+        if isinstance(read, CiUnreadable):
+            return self
+        return GhostWatch(
+            {run_id: self.seen.get(run_id, at_s) for run_id in read.queued_empty_runs}
+        )
+
+    def observe_dispatched(
+        self, runs: list[DispatchedRun] | tuple[DispatchedRun, ...], head: str, at_s: float
+    ) -> GhostWatch:
+        """The watch after a listing of dispatched runs, over the one run `chosen_run(runs, head)`
+        picks: queued with no jobs it is added at `at_s` (an id already seen keeps its instant),
+        in any other state it leaves the map. No chosen run, or any other id, changes nothing."""
+        run = chosen_run(runs, head)
+        if run is None:
+            return self
+        key = str(run.run_id)
+        seen = {run_id: instant for run_id, instant in self.seen.items() if run_id != key}
+        if run.status == "queued" and run.jobs == ():
+            seen[key] = self.seen.get(key, at_s)
+        return GhostWatch(seen)
+
+    def ghosts(self, now_s: float, bound_s: float) -> frozenset[str]:
+        """The ids seen queued and empty for at least `bound_s` as of `now_s`."""
+        return frozenset(
+            run_id for run_id, instant in self.seen.items() if now_s - instant >= bound_s
+        )
+
+    def maturing(self, now_s: float, bound_s: float) -> frozenset[str]:
+        """The ids seen queued and empty for less than `bound_s` as of `now_s`; a clock that went
+        back makes the age negative and the id maturing, never an error."""
+        return frozenset(self.seen) - self.ghosts(now_s, bound_s)
 
 
 def dispatch_verdict(

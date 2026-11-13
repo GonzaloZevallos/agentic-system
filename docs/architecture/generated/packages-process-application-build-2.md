@@ -17,6 +17,7 @@ Esta página muestra los módulos del grupo `build` de `application` y los impor
 graph TD
     g_application__checks["checks (grupo)"]
     g_application__landing["landing (grupo)"]
+    g_application__lifecycle["lifecycle (grupo)"]
     g_application__support["support (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
@@ -45,6 +46,7 @@ graph TD
     m_application__shadow_review --> g_pkg__agentic__shared
     m_application__shadow_review --> g_pkg__domain
     m_application__shadow_review --> m_application__review
+    m_application__split --> g_application__lifecycle
     m_application__split --> g_application__support
     m_application__split --> g_pkg__agentic__shared
     m_application__split --> g_pkg__domain

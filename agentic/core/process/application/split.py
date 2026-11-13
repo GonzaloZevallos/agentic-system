@@ -15,25 +15,30 @@ own. A part at the cap does not split; the plan stage asks the human before one 
 if one does, it escalates as `rules.part_over_line` does. The marker's depth is optional when
 read: a part opened before depth existed is found again by a retry, read at depth 1.
 
-Tracker work (GH-350, ADR-0062): a plan with parts may carry a `tracker_checklist`, and the
-task ends `split` without closing its issue, so every open issue that waits on it would wait
-for ever. When the last part is recorded, the same patch saves the plan's items followed by
-those `rules.split_tracker_items` derives for such issues; the list is then posted on the
-original issue through `post_tracker_checklist` before the `Split:` comment. A resume that
-finds every part already recorded never recomposes the list. The system edits no issue: the
-human closes the task's issue or re-points the blocked one."""
+Tracker work (GH-350, ADR-0062): a plan with parts may carry a `tracker_checklist`, posted on
+the original issue through `post_tracker_checklist` before the `Split:` comment. The task ends
+`split` without closing its issue, so every open issue that waits on it with a `Blocked by:`
+line would wait for ever; since the owner's rule of 2026-11-12 the system re-points those lines
+itself (`split_sweep.repoint_dependents`, GH-619), to `rules.last_part_numbers`, once the parts
+exist and before the checklist is posted, on every run, resumes included. A read or an edit that
+fails never stops the split: the `Split:` comment says the re-point did not finish and the sweep
+of part 2 finishes it. The checklist is only the plan's own items; a split in flight before
+GH-619 may still hold derived items in its saved checklist, and posts them on resume."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, lead_time, pull_request, rules
+from ..domain.landing import IssueRef
 from ..domain.roles import PJM
 from ..domain.task import WAITING_ON_HUMAN, PartRecord, TaskState, apply
 from .ports import Ports
 from .run_role import finish
+from .split_sweep import ROUND_STOPPERS, RepointResult, repoint_dependents, repoint_targets
 from .tracker_only import post_tracker_checklist
 
 # The label of the queue itself: the parts are tasks the poller must take up.
@@ -47,18 +52,23 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     part_of = rules.split_part_of(state.get("description", ""))
     if part_of is not None and part_of[2] >= rules.MAX_SPLIT_DEPTH:
         # Defensive: the plan stage asks the human before a part at the cap reaches here.
-        return finish(state, rules.part_over_line(task_id, part_of, None, at=ports.now()), ports)
+        over = _paused(state, rules.part_over_line(task_id, part_of, None, at=ports.now()))
+        over["fit_question"] = True
+        return finish(state, over, ports)
     depth = 1 if part_of is None else part_of[2] + 1
-    parts = [{**part, "depth": part.get("depth", depth)} for part in state.get("parts", [])]
+    parts: list[PartRecord] = [
+        {**part, "depth": part.get("depth", depth)} for part in state.get("parts", [])
+    ]
     current = state
     # What the node returns besides the end: the graph's channels take the checklist and its
     # record from the patch, never from the document `finish` saved (invariant: the record's
     # hash is that of the checklist in the same state).
-    carried: TaskState = {}
+    carried = _base(state)
     if parts != state.get("parts", []):
         # The depth each part is opened at is saved with the record, so a retry opens the
         # same one.
-        stamped: TaskState = {"parts": parts}
+        stamped = _base(current)
+        stamped["parts"] = parts
         finish(current, stamped, ports)
         current = apply(current, stamped)
         carried.update(stamped)
@@ -86,17 +96,11 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
             except (ValueError, OSError) as exc:
                 return _stopped(current, f"opening part {number}", exc, ports, _LEFT_PARTS)
             open_bodies.append((url, body))
-        patch: TaskState = {"split_issues": {key: url}}
-        if len(current.get("split_issues", {})) + 1 == len(parts):
-            # The last part exists: the list is composed once, saved with its URL.
-            items = _checklist(
-                current, ports, open_bodies, {**current.get("split_issues", {}), key: url}
-            )
-            if items:
-                patch["tracker_checklist"] = items
-                carried["tracker_checklist"] = items
+        patch = _base(current)
+        patch["split_issues"] = {key: url}
         finish(current, patch, ports)  # saved as soon as the part exists
         current = apply(current, patch)
+    swept = _repoint(current, parts, ports)
     if items := current.get("tracker_checklist"):
         try:
             record = post_tracker_checklist(
@@ -105,7 +109,8 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         except (ValueError, OSError) as exc:
             return _stopped(current, "posting the tracker checklist", exc, ports, _LEFT_CHECKLIST)
         if record is not None:
-            posted: TaskState = {"tracker_checklist_posted": record}
+            posted = _base(current)
+            posted["tracker_checklist_posted"] = record
             finish(current, posted, ports)  # saved before the split comment can fail
             current = apply(current, posted)
             carried.update(posted)
@@ -113,32 +118,56 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     listed = "\n".join(
         f"{n}. {parts[n - 1]['title']}: {issues[str(n)]}" for n in range(1, len(parts) + 1)
     )
+    unfinished = "" if swept.complete else f"{_unfinished(swept)}\n\n"
     try:
         ports.tracker.comment(
             task_id,
             f"{SPLIT}the estimate does not fit one task, so it was split into {len(parts)} "
             f"chained issues, each with its own pull request:\n\n{listed}\n\n"
             "This task is NOT relaunched: the parts replace it.\n\n"
-            f"Task document: `{document.relative_path(task_id)}`",
+            f"{unfinished}Task document: `{document.relative_path(task_id)}`",
         )
     except (ValueError, OSError) as exc:
         return _stopped(current, "commenting the list of parts", exc, ports, _LEFT_COMMENT)
     ended = rules.finished("split", datetime.now(UTC).isoformat(timespec="seconds"))
-    return finish(
-        current, {"current_role": PJM.name, **carried, **ended, **lead_time.NO_MERGE}, ports
-    )
+    end = _base(current)
+    end.update(carried)
+    end["current_role"] = PJM.name
+    end["status"] = ended["status"]
+    end["finished_at"] = ended["finished_at"]
+    end["lead_time"] = lead_time.NO_MERGE[lead_time.LEAD_TIME_KEY]
+    return finish(current, end, ports)
 
 
-def _checklist(
-    state: TaskState, ports: Ports, open_bodies: list[tuple[str, str]], issues: dict[str, str]
-) -> list[str]:
-    """The plan's items, then the ones the system derives for the issues the split blocks."""
-    parts = state.get("parts", [])
-    urls = [issues[str(n)] for n in range(1, len(parts) + 1)]
-    derived = rules.split_tracker_items(
-        ports.inbox.issue_of(state["id"]), open_bodies, urls, rules.last_part_numbers(parts)
-    )
-    return [*state.get("tracker_checklist", []), *derived]
+def _repoint(state: TaskState, parts: list[PartRecord], ports: Ports) -> RepointResult:
+    """The dependents of the task re-pointed to the last part(s) (GH-619). Never raises: a
+    failed read of the open issues is a result, and the split goes on."""
+    parent = ports.inbox.issue_of(state["id"])
+    if parent is None:
+        return RepointResult()
+    stamped: TaskState = {**state, "parts": parts}
+    found = repoint_targets(stamped)
+    if found is None:
+        return RepointResult(read_failed=True)
+    targets, excluded = found
+    try:
+        refs: list[IssueRef] = ports.inbox.open_issue_refs()
+    except ROUND_STOPPERS as stopper:
+        return RepointResult(stopped=True, stopped_by=type(stopper).__name__)
+    except (ValueError, OSError):
+        return RepointResult(read_failed=True)
+    return repoint_dependents(ports, parent, targets, refs, {*excluded, parent})
+
+
+def _unfinished(swept: RepointResult) -> str:
+    """The one line of the `Split:` comment when the re-point did not finish (no exception
+    text: it is for the human, and part 2's sweep does the rest)."""
+    head = "The re-point of blocked issues did not finish: "
+    if swept.read_failed:
+        return f"{head}the open issues could not be read; the sweep of part 2 finishes it."
+    if swept.stopped:
+        return f"{head}the tracker stopped answering; the sweep of part 2 finishes it."
+    return f"{head}{swept.failed} of {swept.considered} failed; the sweep of part 2 finishes it."
 
 
 # What is left when a step fails, so the human reads what a resume still has to do.
@@ -149,19 +178,41 @@ _LEFT_COMMENT = "the split comment is left"
 
 def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports, left: str) -> TaskState:
     done = len(state.get("split_issues", {}))
-    patch = rules.logged(
-        {
-            "current_role": PJM.name,
-            "status": WAITING_ON_HUMAN,
-            **rules.escalation(
-                "failure",
-                f"split: {step} failed ({exc}); {done} of "
-                f"{len(state.get('parts', []))} parts are open and {left}, resume to finish",
-            ),
-        },
-        at=ports.now(),
+    paused = _paused(
+        state,
+        rules.logged(
+            {
+                "current_role": PJM.name,
+                "status": WAITING_ON_HUMAN,
+                **rules.escalation(
+                    "failure",
+                    f"split: {step} failed ({exc}); {done} of "
+                    f"{len(state.get('parts', []))} parts are open and {left}, resume to finish",
+                ),
+            },
+            at=ports.now(),
+        ),
     )
-    return finish(state, patch, ports)
+    return finish(state, paused, ports)
+
+
+def _paused(state: TaskState, logged: dict[str, Any]) -> TaskState:
+    """The pause `rules.logged` composed, key by key into a typed patch: the rules layer
+    answers a plain dict, so each value is copied to the field it belongs to."""
+    patch = _base(state)
+    patch["current_role"] = logged["current_role"]
+    patch["status"] = logged["status"]
+    patch["escalated"] = logged["escalated"]
+    patch["escalation_class"] = logged["escalation_class"]
+    patch["escalation_cause"] = logged["escalation_cause"]
+    patch["pause_log"] = logged["pause_log"]
+    return patch
+
+
+def _base(state: TaskState) -> TaskState:
+    """The start of every patch of the node: `TaskInput` requires these three keys to type a
+    patch, so they are written back unchanged (as `pre_pr_fix` does)."""
+    return {"id": state["id"], "title": state["title"], "description": state["description"]}
 
 
 def _body(

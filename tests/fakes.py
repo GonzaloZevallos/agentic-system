@@ -66,6 +66,8 @@ from agentic.core.process.application.ports import (
     SampleAppHandle,
     Scratch,
     SentMemory,
+    SpecReader,
+    SpecUnreadable,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -1723,6 +1725,10 @@ class MemoryTracker:
         # `(number, body)` of each body update.
         self.listed: list[ListedPullRequest] = []
         self.updated_bodies: list[tuple[int, str]] = []
+        # GH-619: the issue numbers whose `update_issue_body` raises, and the inbox it
+        # writes through to (none: it only records).
+        self.body_errors: set[int] = set()
+        self.inbox: MemoryInbox | None = None
         # GH-610: the body `pull_request_body` answers per reference (an edit writes it), and
         # the `ValueError` text that makes the read fail.
         self.bodies: dict[str, str] = {}
@@ -1771,6 +1777,9 @@ class MemoryTracker:
         self.branch_reports: dict[str, CiReport | CiUnreadable] = {}
         self.ci_reads: list[str] = []
         self.branch_reads: list[str] = []
+        # GH-601: `watched_branch_ci`'s answer per branch (absent is unreadable) and each ask.
+        self.watched_reports: dict[str, CiReport | CiUnreadable] = {}
+        self.watched_reads: list[str] = []
         # GH-462: `dispatch_ci` answers `dispatch_result` (None is accepted) and records each
         # call; `dispatched_ci` answers the scripted listings in order, the last one for good
         # (an empty list is no run), and records each ask.
@@ -1790,6 +1799,14 @@ class MemoryTracker:
     def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
         self.branch_reads.append(branch)
         return self.branch_reports.get(branch, CiUnreadable("gh_unreadable"))
+
+    def watched_branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        self.watched_reads.append(branch)
+        if branch in self.watched_reports:
+            return self.watched_reports[branch]
+        # GH-601 part 2: the node reads this port, so a test that scripts `branch_ci` (or a
+        # subclass that overrides it) is answered by it, with nothing queued.
+        return self.branch_ci(branch)
 
     def dispatch_ci(
         self, workflow: str, ref: str, inputs: Mapping[str, str]
@@ -1947,6 +1964,31 @@ class MemoryTracker:
         if self.on_lookup is not None:
             self.on_lookup(branch)
         return list(self.on_branch.get(branch, []))
+
+    def update_issue_body(self, number: int, body: str) -> None:
+        """GH-619: a number in `body_errors` raises `ValueError`, `gh`'s own failure shape,
+        recording nothing. Otherwise `(number, body)` joins `updated_bodies` (shared with
+        `update_pull_request_body`; the `events` entry tells them apart) and, when `inbox`
+        is wired, the issue's description, its `open_issue_refs` entry and its
+        `open_issues` pair all answer the new body."""
+        if number in self.body_errors:
+            raise ValueError(f"gh issue edit failed: scripted for #{number}")
+        self.events.append("update_issue_body")
+        self.updated_bodies.append((number, body))
+        inbox = self.inbox
+        if inbox is None:
+            return
+        suffix = f"/{number}"
+        if str(number) in inbox.issues:
+            inbox.issues[str(number)]["description"] = body
+        if inbox.refs is not None:
+            inbox.refs = [
+                IssueRef(ref.url, ref.title, body) if ref.url.endswith(suffix) else ref
+                for ref in inbox.refs
+            ]
+        inbox._open_issues = [
+            (url, body) if url.endswith(suffix) else (url, text) for url, text in inbox._open_issues
+        ]
 
     def update_pull_request_body(self, number: int, body: str) -> None:
         self.events.append("update_pull_request_body")
@@ -2386,6 +2428,21 @@ class FakeExperimentFile:
         return self.data
 
 
+class FakeSpecReader:
+    """GH-594: no test reads a real repo through the port. `read` answers the text mapped to
+    `(commit, path)` and otherwise raises `SpecUnreadable("missing")`. It does no confinement:
+    its concrete reason has no authority, only that it raises `SpecUnreadable`."""
+
+    def __init__(self, texts: Mapping[tuple[str, str], str]) -> None:
+        self.texts = dict(texts)
+
+    def read(self, commit: str, path: str) -> str:
+        try:
+            return self.texts[(commit, path)]
+        except KeyError:
+            raise SpecUnreadable("missing") from None
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of
@@ -2624,6 +2681,7 @@ def memory_ports(
     ci_logs: CiLogs | None = None,
     load_reader: LoadReader | None = None,
     experiment: ExperimentFile | None = None,
+    spec_reader: SpecReader | None = None,
     now: Callable[[], str] | None = None,
 ) -> Ports:
     return Ports(
@@ -2652,6 +2710,7 @@ def memory_ports(
         ci_logs=ci_logs,
         load_reader=load_reader,
         experiment=experiment,
+        spec_reader=spec_reader,
     )
 
 

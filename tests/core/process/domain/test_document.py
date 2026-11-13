@@ -1450,7 +1450,7 @@ def test_a_split_task_writes_and_reads_back_its_checklist_and_record():
         {"title": "One", "body": "b", "depends_on": []},
         {"title": "Two", "body": "b", "depends_on": [1]},
     ]
-    items = [*_CHECKLIST, "#77 is blocked by #53, which this split does not close: close #53"]
+    items = [*_CHECKLIST, "Retitle #77 after the split"]
     posted = {"at": "2026-10-25T10:00:00+00:00", "hash": rules.tracker_hash(items)}
     state = _bare(
         parts=parts,
@@ -1939,3 +1939,16 @@ def test_head_yields_render_as_one_flow_line_that_record_closure_replaces():
 def test_a_flow_line_with_only_invalid_yields_renders_without_the_key_as_a_line():
     rendered = document.render(golden_state(head_yields=[_head_yield(1, reason="nope")]))
     assert document.parse(rendered)["head_yields"] == []
+
+
+def test_ci_ghost_dispatch_roundtrips_through_the_frontmatter_and_is_absent_when_unset():
+    # GH-601: `MemoryDocuments` never renders, so only this seam shows the key is serialised.
+    fact = {
+        "head": "a" * 40,
+        "ghost_run_ids": ["7", "8"],
+        "dispatched_at": "2026-11-13T17:00:00+00:00",
+        "escalated": False,
+    }
+    text = document.render(_speculative_state(ci_ghost_dispatch=fact))
+    assert document.parse(text)["ci_ghost_dispatch"] == fact
+    assert "ci_ghost_dispatch" not in document.render(_speculative_state())

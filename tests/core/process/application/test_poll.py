@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
     Upstream,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
@@ -1673,8 +1674,9 @@ def test_a_comment_failing_with_any_other_value_error_still_escapes():
 
 
 class _ReadsStall(MemoryTracker):
-    """The first `queue()` read of a round is the GH-348 sweep's, outside the registry's lock;
-    the stall this scenario is about is the one inside it, from the second read on."""
+    """The first `queue()` read of a round is the GH-348 sweep's; the second is the round's
+    documents (GH-627), read before the registry's lock is taken. The stall this scenario is
+    about is that second one."""
 
     def __init__(self):
         super().__init__()
@@ -1690,7 +1692,7 @@ class _ReadsStall(MemoryTracker):
         raise TrackerTimedOut("gh pr list timed out after 60 s")
 
 
-def test_a_round_whose_reads_time_out_releases_the_registry_lock_and_acts_on_nothing(tmp_path):
+def test_a_round_whose_reads_time_out_holds_no_registry_lock_and_acts_on_nothing(tmp_path):
     import fcntl
 
     from agentic.core.process.adapters.filesystem import FilesystemRunRegistry
@@ -1701,6 +1703,7 @@ def test_a_round_whose_reads_time_out_releases_the_registry_lock_and_acts_on_not
     launcher = FakeLauncher()
     with pytest.raises(TrackerTimedOut):
         _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    (tmp_path / "runs").mkdir(exist_ok=True)
     with open(tmp_path / "runs" / ".lock", "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
     assert launcher.spawned == [] and ports.tracker.comments == []
@@ -2549,3 +2552,61 @@ def test_a_role_failure_by_network_and_account_limit_are_retaken_as_before():
         assert rules.auto_resumable(state) == reason
     assert rules.auto_resume_limit({}, "network") == len(rules.RETAKE_SCHEDULE)
     assert rules.auto_resume_limit({}, "account_limit") == len(rules.ACCOUNT_LIMIT_SCHEDULE)
+
+
+# --- GH-627: the split sweep inside the round, and the queue read once -----------------
+
+
+def test_a_round_without_a_split_document_makes_no_list_read_and_reads_the_queue_once(
+    tmp_path, monkeypatch
+):
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    reads = []
+    real = poll.queue_documents
+    monkeypatch.setattr(poll, "queue_documents", lambda p: reads.append(1) or real(p))
+
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+
+    assert ports.inbox.refs_calls == 0 and len(reads) == 1
+
+
+def test_a_round_re_points_a_split_parent_once_and_the_next_round_reads_nothing(tmp_path):
+    ports = memory_ports(
+        inbox=MemoryInbox(**{"7": {"id": "GH-7", "title": "t", "description": "Blocked by: #5"}})
+    )
+    ports.tracker.inbox = ports.inbox
+    ports.inbox.refs = [IssueRef("https://github.com/o/r/issues/7", "t", "Blocked by: #5")]
+    ports.documents.save(
+        {
+            "id": "GH-5",
+            "status": "split",
+            "parts": [{"title": "a", "body": "a", "depends_on": []}],
+            "split_issues": {"1": "https://github.com/o/r/issues/8"},
+        }
+    )
+    ports.tracker._queue = [5]
+
+    first = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert first[0] == "agentic: split: GH-5: 1 dependents re-pointed"
+    assert ports.tracker.updated_bodies == [(7, "Blocked by: #8")]
+    assert ports.documents.load("GH-5")["split_repointed_at"]
+
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.inbox.refs_calls == 1
+
+
+def test_a_recorded_launch_attempt_with_no_document_is_not_relaunched_this_round(tmp_path):
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    registry = MemoryRunRegistry()
+    registry.attempts[(ports.stack.product(), 5)] = LaunchAttempt(ESCALATED_AT, 1, None)
+    launcher = FakeLauncher()
+
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+
+    assert launcher.spawned == [] and lines == ["agentic: poll: nothing to do this round"]

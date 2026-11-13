@@ -25,6 +25,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__TaskInput["TaskInput"]
     class task__TaskState["TaskState"]
     class task__TrackerActionDone["TrackerActionDone"]
     class task__TrackerFailure["TrackerFailure"]
@@ -36,6 +37,7 @@ classDiagram
     class task_path__RiskHit["RiskHit"]
     class task_path__RiskNone["RiskNone"]
     class task_path__RiskUnreadable["RiskUnreadable"]
+    task__TaskState --|> task__TaskInput
     task__TaskState --> task_path__Promotion
 ```
 
@@ -48,7 +50,6 @@ classDiagram
   - `task.TaskState` se asocia con `task.FullChecksRecord`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `task.TaskState` se asocia con `task.InterviewStats`
-  - `task.TaskState` se asocia con `task.PlanRoute`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.Subtask` se asocia con `task_path.PromoteRequest`
-  - `task.TaskState` hereda de `task.TaskInput`
+  - `task.TaskState` se asocia con `task.PlanRoute`

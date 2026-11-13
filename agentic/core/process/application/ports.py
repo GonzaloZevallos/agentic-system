@@ -37,6 +37,7 @@ from ..domain.scratch import (
     SweepDecision,
 )
 from ..domain.size_budget import NumstatRow
+from ..domain.spec_delivery import SpecReadCause, SpecReadRefusal
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -1655,6 +1656,14 @@ class Tracker(Protocol):
         `ValueError` when the platform refuses or cannot be reached, as `open_issue`."""
         ...
 
+    def update_issue_body(self, number: int, body: str) -> None:
+        """Replaces the whole body of issue `number` with `body` (GH-619: the split
+        re-points the `Blocked by:` lines of its dependents). Raises `ValueError` for an
+        empty or whitespace-only body or when the platform refuses it, and `OSError` when
+        the body cannot be staged or the platform cannot be reached, like the other
+        verbs."""
+        ...
+
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """Re-runs the failed CI runs of commit `head` of the pull request at `reference`
         (GH-239) and returns the URL of each run it asked to re-run, none when no run on
@@ -1769,6 +1778,13 @@ class Tracker(Protocol):
         """The CI of the latest commit of `branch` (GH-216), the master side of a red
         check's comparison. `base_ref`, `base_sha` and `opened_at` are None. Never raises:
         what cannot be read is a `CiUnreadable`."""
+        ...
+
+    def watched_branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        """The CI of the latest commit of `branch` as `branch_ci` reads it, plus
+        `queued_empty_runs` (GH-601): the Actions runs whose suite is queued with no check run.
+        The contract is `branch_ci`'s otherwise. Never raises: what cannot be read is a
+        `CiUnreadable`."""
         ...
 
     def dispatch_ci(
@@ -2455,6 +2471,27 @@ class ExperimentFile(Protocol):
         ...
 
 
+class SpecReader(Protocol):
+    """A spec as a commit of the product repo holds it (GH-594), never as the worktree does."""
+
+    def read(self, commit: str, path: str) -> str:
+        """The text of `path` at `commit`. `path` is `docs/specs/<name>.md` and `commit` a full
+        lowercase id. Raises `SpecUnreadable` for anything else, or for a file that is not a
+        regular blob of at most `SPEC_MAX_BYTES` bytes of UTF-8."""
+        ...
+
+
+class SpecUnreadable(Exception):
+    """A spec that cannot be read: the reason and the cause, and nothing else. The message is
+    the reason alone, so no git output, path or id ever reaches a log through it. Not a
+    `GitError`: a refused spec is an answer, not a broken checkout."""
+
+    def __init__(self, reason: SpecReadRefusal) -> None:
+        super().__init__(reason)
+        self.reason: SpecReadRefusal = reason
+        self.cause: SpecReadCause = "spec_unreadable"
+
+
 def utc_now() -> str:
     """The instant, ISO-8601 UTC at millisecond precision: the default `Ports.now`, the one
     clock an application node stamps a `pause_log` `at` from. A test hands its own."""
@@ -2507,6 +2544,9 @@ class Ports:
     # The product's experiment declaration (GH-470). `None` declares none and reads nothing,
     # which is how every round ran before it existed.
     experiment: ExperimentFile | None = None
+    # Reads a spec from the product repo at a commit (GH-594). `None` reads no spec, which is how
+    # every round ran before it existed.
+    spec_reader: SpecReader | None = None
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now

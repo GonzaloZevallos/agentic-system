@@ -281,6 +281,8 @@ def render(
         **({"ci_speculation": s} if (s := state.get("ci_speculation")) else {}),
         # The one rerun of a cancelled CI run of a head (GH-539): written only when set.
         **({"ci_cancel_rerun": r} if (r := state.get("ci_cancel_rerun")) else {}),
+        # The fresh run dispatched for a ghost (GH-601): written only when set.
+        **({"ci_ghost_dispatch": g} if (g := state.get("ci_ghost_dispatch")) else {}),
         # What the release reaped when the task closed (GH-282, ADR-0052), written only when
         # something was, so a document without one is byte-identical to one written before.
         **({"reaped_at_cleanup": r} if (r := state.get("reaped_at_cleanup")) else {}),

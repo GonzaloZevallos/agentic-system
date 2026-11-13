@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -3948,15 +3948,38 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
     return log[last_resumed + 1 :]
 
 
+def _terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
+    """`entries` without the failures the run already retried (GH-659), in the same order. A batch
+    is the contiguous `failure` entries before the `escalation` entry that closes them (one
+    `rules.logged` call per `run_role`); inside a batch a failure is superseded only by a later
+    failure of the same non-empty `section`. A failure with an empty or missing `section`, or the
+    last of its batch and section, stays; every other kind passes through. List order decides,
+    never `at`."""
+    kept: list[PauseEntry] = []
+    seen: set[str] = set()
+    for entry in reversed(entries):
+        if entry["kind"] == "escalation":
+            seen = set()
+        elif entry["kind"] == "failure":
+            section = entry.get("section", "")
+            if section and section in seen:
+                continue
+            seen.add(section)
+        kept.append(entry)
+    kept.reverse()
+    return kept
+
+
 def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
     """The key `entries` are retaken by, `None` when a human is needed (GH-593): the one reading
     both `auto_resumable` (the poller's) and `pause_kind` (the measurement's) share, so a cause is
-    mechanical in one place. Every failure is in `EXTERNAL_REASONS`, and every escalation is
-    either a `failure` one (a role broke, the failures say why) or carries a `MechanicalCause`;
-    there is at least one failure or one cause. The key is the most recent entry's own: a
-    failure's reason, or an escalation's cause."""
+    mechanical in one place. Every failure that ended the run (`_terminal_failures`: not one the
+    run already retried) is in `EXTERNAL_REASONS`, and every escalation is either a `failure` one
+    (a role broke, the failures say why) or carries a `MechanicalCause`; there is at least one
+    failure or one cause. The key is the most recent entry's own: a failure's reason, or an
+    escalation's cause."""
     keyed: list[ResumeKey] = []
-    for entry in entries:
+    for entry in _terminal_failures(entries):
         if entry["kind"] == "failure":
             if entry["value"] not in EXTERNAL_REASONS:
                 return None
@@ -4233,21 +4256,98 @@ def blockers_from_body(body: str) -> tuple[int, ...]:
     The result is the union of all matching lines, in order of first appearance and
     without duplicates. Empty when the body has no such line, or no body at all."""
     found: list[int] = []
+    for content, _ending, fenced in _body_lines(body):
+        if fenced:
+            continue
+        match = _BLOCKED_BY_LINE.match(content.strip())
+        if match:
+            found.extend(_issue_numbers(match.group(1)))
+    return tuple(dict.fromkeys(found))
+
+
+def _issue_numbers(listing: str) -> list[int]:
+    return [int(n) for n in re.findall(r"\d+", listing)]
+
+
+def _body_lines(body: str) -> Iterator[tuple[str, str, bool]]:
+    """The one fence-aware walk over an issue body, shared by `blockers_from_body` (the
+    reader) and `repoint_blockers` (the writer) so both agree about code fences. Yields
+    `(content, ending, fenced)` for every line of `body.splitlines(keepends=True)`:
+    the line without its ending, the ending token as written (`\\n`, `\\r\\n`, U+2028,
+    `\\x0c`, ... or `""` on the last line), and whether the line is fenced -- inside a
+    fence or one of its two delimiter lines. The fence rules are those documented on
+    `blockers_from_body`."""
     fence = ""
-    for line in body.splitlines():
-        stripped = line.strip()
+    for line in body.splitlines(keepends=True):
+        content = line.splitlines()[0]
+        ending = line[len(content) :]
+        stripped = content.strip()
         if fence:
             if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):
                 fence = ""
+            yield content, ending, True
             continue
         opener = _FENCE_OPENER.match(stripped)
         if opener:
             fence = opener.group(1)
+            yield content, ending, True
             continue
-        match = _BLOCKED_BY_LINE.match(stripped)
-        if match:
-            found.extend(int(n) for n in re.findall(r"\d+", match.group(1)))
-    return tuple(dict.fromkeys(found))
+        yield content, ending, False
+
+
+def repoint_blockers(body: str, parent: int, targets: Sequence[int]) -> str | None:
+    """`body` with `#parent` replaced by `targets` on every whole `Blocked by:` line
+    outside a code fence that names it (GH-619), or `None` when nothing changed.
+
+    A line is read exactly as `blockers_from_body` reads it (same walker). On a match
+    `parent` is replaced in place by `targets`, the numbers are de-duplicated in
+    first-appearance order (compared as integers, so `#5` never touches `#50`), and the
+    line is rebuilt from what it had: its leading whitespace and prefix up to the first
+    `#`, the list joined with `", "`, its trailing whitespace and its original ending.
+    Every other line keeps its bytes. No `targets` means nothing to point to: `None`."""
+    if not targets:
+        return None
+    rebuilt: list[str] = []
+    changed = False
+    for content, ending, fenced in _body_lines(body):
+        match = None if fenced else _BLOCKED_BY_LINE.match(content.strip())
+        numbers = _issue_numbers(match.group(1)) if match else []
+        if parent in numbers:
+            swapped: list[int] = []
+            for number in numbers:
+                swapped.extend(targets if number == parent else (number,))
+            unique = list(dict.fromkeys(swapped))
+            if unique != numbers:
+                prefix = content[: content.index("#")]
+                trailing = content[len(content.rstrip()) :]
+                content = prefix + ", ".join(f"#{n}" for n in unique) + trailing
+                changed = True
+        rebuilt.append(content + ending)
+    return "".join(rebuilt) if changed else None
+
+
+def repoint_confined(old: str, new: str, parent: int) -> bool:
+    """Whether `new` differs from `old` only on whole `Blocked by:` lines, outside a code
+    fence, that name `parent` (GH-619): the post-condition of a re-point, read with the
+    same walker as the reader and the writer. The two bodies must have the same number
+    of lines, and a line that changed must keep its ending and have been such a line."""
+    before, after = list(_body_lines(old)), list(_body_lines(new))
+    if len(before) != len(after):
+        return False
+    for (content, ending, fenced), (content_after, ending_after, fenced_after) in zip(
+        before, after, strict=True
+    ):
+        if (content, ending, fenced) == (content_after, ending_after, fenced_after):
+            continue
+        match = None if fenced else _BLOCKED_BY_LINE.match(content.strip())
+        if (
+            match is None
+            or parent not in _issue_numbers(match.group(1))
+            or ending != ending_after
+            or fenced_after
+        ):
+            return False
+    return True
 
 
 def blocker_numbers(native: tuple[int, ...] | None, body: Callable[[], str]) -> tuple[int, ...]:
@@ -6318,11 +6418,10 @@ _PARTS_REMEDY = (
 # its placeholder sits on.
 TRACKER_WITH_PARTS = (
     "When you split, tracker work for this task stays in `tracker_checklist` and the split\n"
-    "   posts it on this issue. The system itself lists every open issue whose body has a line,\n"
-    "   outside a code fence, saying `Blocked by: #<this issue>`, with the part to re-point it\n"
-    "   to, so do not write those\n"
-    "   items. Add only other tracker work, such as native blockers you know about. A part's own\n"
-    "   tracker work goes in that part's body."
+    "   posts it on this issue. The system itself re-points to the last part every open issue\n"
+    "   whose body has a line, outside a code fence, saying `Blocked by: #<this issue>`, so\n"
+    "   do not write those items. Add only other tracker work, such as native blockers you\n"
+    "   know about. A part's own tracker work goes in that part's body."
 )
 _PARTS_STEP = (
     "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
@@ -6368,59 +6467,11 @@ def parts_field_text(part_of: tuple[str, int, int] | None) -> str:
     return "- `parts`: always empty, because this task is at the deepest level a split goes."
 
 
-SPLIT_TRACKER_ITEMS = 10
-
-
 def last_part_numbers(parts: Sequence[PartRecord]) -> list[int]:
     """The parts no other part depends on (1 is the first), in order: where an issue that
     waited on the whole task has to wait instead, so it starts when the split is done."""
     needed = {dep for part in parts for dep in part["depends_on"]}
     return [n for n in range(1, len(parts) + 1) if n not in needed]
-
-
-def split_tracker_items(
-    task_issue: int | None,
-    open_issues: Sequence[tuple[str, str]],
-    part_urls: Sequence[str],
-    last_parts: Sequence[int],
-) -> list[str]:
-    """The checklist items the system itself derives for a split (GH-350, ADR-0062): one per
-    open issue, other than the parts, whose body has a line, outside a code fence, saying
-    `Blocked by:` the task's own issue -- the task ends `split` and never closes, so that
-    issue would wait for ever.
-    The human closes the task's issue or re-points the blocked one to the last part(s)
-    (`last_parts`, 1-based numbers into `part_urls`); the system edits no issue.
-
-    Pure over what the split already read. `[]` for a task with no issue. Ordered by issue
-    number, never by URL; items use numbers only, one line each, so they pass the checks of
-    a Tech Lead item. At most `SPLIT_TRACKER_ITEMS`, then one line counting the rest."""
-    if task_issue is None:
-        return []
-    parts = set(part_urls)
-    blocked = sorted(
-        number
-        for url, body in open_issues
-        if url not in parts
-        and task_issue in blockers_from_body(body)
-        and (number := _url_issue_number(url)) is not None
-    )
-    targets = ", ".join(f"#{_url_issue_number(part_urls[n - 1])}" for n in last_parts)
-    items = [
-        f"#{n} is blocked by #{task_issue}, which this split does not close: "
-        f"close #{task_issue} or re-point #{n} to {targets}"
-        for n in blocked[:SPLIT_TRACKER_ITEMS]
-    ]
-    if len(blocked) > SPLIT_TRACKER_ITEMS:
-        items.append(
-            f"and {len(blocked) - SPLIT_TRACKER_ITEMS} more issues blocked by #{task_issue}: "
-            f'run gh issue list --search "Blocked by: #{task_issue}"'
-        )
-    return items
-
-
-def _url_issue_number(url: str) -> int | None:
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
-    return int(tail) if tail.isdigit() else None
 
 
 def tracker_hash(items: Sequence[str]) -> str:

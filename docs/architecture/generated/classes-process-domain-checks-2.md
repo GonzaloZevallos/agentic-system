@@ -25,6 +25,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
+    class ci_workflow__WorkflowNames["WorkflowNames"]
     class ci_workflow__WrongId["WrongId"]
     class coverage__Entry["Entry"]
     class coverage__Parsed["Parsed"]
@@ -39,7 +40,6 @@ classDiagram
     class performance__Scenario["Scenario"]
     class presubmit__AffectedPlan["AffectedPlan"]
     class presubmit__ApiBreakLine["ApiBreakLine"]
-    class presubmit__BudgetBreach["BudgetBreach"]
     coverage__Rejected --> coverage__Refusal
     performance__MetricResult --> performance__Limit
 ```
