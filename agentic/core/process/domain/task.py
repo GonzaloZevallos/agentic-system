@@ -1510,7 +1510,7 @@ class CiCancelRerun(TypedDict):
 
 class CiGhostDispatch(TypedDict):
     """The one fresh run `full_checks` dispatched because every live run of a head was a ghost
-    (GH-601): `head` the whole sha judged, `ghost_run_ids` the ghosts that were seen, `dispatched_at`
+    (GH-601): `head` the whole sha judged, `ghost_run_ids` the ghosts seen, `dispatched_at`
     the ISO instant of the accepted dispatch and `escalated` whether the task already escalated
     for it (set by a later part; a fact with it true never stops a new dispatch). One fact, never a
     list. Carries no verdict."""

@@ -2264,7 +2264,7 @@ def test_a_field_the_watched_read_cannot_parse_adds_nothing_and_stays_readable(s
 
 
 def test_a_cut_suites_page_lists_no_queued_empty_run_even_with_a_queued_empty_suite():
-    # GH-601: a page cut by `hasNextPage` can hide the suite that matters, so it never makes a ghost.
+    # GH-601: a page cut by `hasNextPage` can hide the live suite, so it never makes a ghost.
     report = _watched([_counted_suite(7, "QUEUED", 0)], whole=False)
     assert isinstance(report, CiReport)
     assert report.running_runs == frozenset({"7"})
