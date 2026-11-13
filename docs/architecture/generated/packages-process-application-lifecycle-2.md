@@ -11,8 +11,7 @@ Esta página muestra los módulos del grupo `lifecycle` de `application` y los i
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support (parte 1)](packages-process-application-support-1.md)
-  - [application: support (parte 2)](packages-process-application-support-2.md)
+  - [application: support](packages-process-application-support.md)
 
 ```mermaid
 graph TD
@@ -23,6 +22,7 @@ graph TD
     g_application__support["support (grupo)"]
     g_domain__landing["landing (grupo de domain)"]
     g_domain__machine["machine (grupo de domain)"]
+    g_domain__roles["roles (grupo de domain)"]
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_application__resume["application.resume"]
@@ -31,6 +31,7 @@ graph TD
     m_application__scratch_sweep["application.scratch_sweep"]
     m_application__split_sweep["application.split_sweep"]
     m_application__stop["application.stop"]
+    m_application__tracker_items["application.tracker_items"]
     m_application__resume --> g_application__build
     m_application__resume --> g_application__definition
     m_application__resume --> g_application__landing
@@ -54,4 +55,7 @@ graph TD
     m_application__split_sweep --> g_domain__landing
     m_application__split_sweep --> g_domain__state
     m_application__stop --> g_application__support
+    m_application__tracker_items --> g_application__support
+    m_application__tracker_items --> g_domain__roles
+    m_application__tracker_items --> g_domain__state
 ```

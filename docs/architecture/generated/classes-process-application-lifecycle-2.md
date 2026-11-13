@@ -14,11 +14,9 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
   - [application: support (parte 4)](classes-process-application-support-4.md)
   - [application: support (parte 5)](classes-process-application-support-5.md)
   - [application: support (parte 6)](classes-process-application-support-6.md)
-  - [application: support (parte 7)](classes-process-application-support-7.md)
 
 ```mermaid
 classDiagram
-    class poll__RetakesSpent["RetakesSpent"]
     class poll__Seen["Seen"]
     class poll__StackUnreadable["StackUnreadable"]
     class restore__RestoreResult["RestoreResult"]
@@ -28,4 +26,5 @@ classDiagram
     class resume__WaitingOnHuman["WaitingOnHuman"]
     class schedule__FoldingDocuments["FoldingDocuments"]
     class split_sweep__RepointResult["RepointResult"]
+    class tracker_items__SystemRun["SystemRun"]
 ```
