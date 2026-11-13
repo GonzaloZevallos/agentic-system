@@ -1063,7 +1063,8 @@ async def run_role(
     # With a spec the role is asked for its `*WithAssumptions` schema (GH-594): the guard,
     # the JSON schema and the validation all read the swapped one.
     has_spec = bool(state.get("spec"))
-    role = replace(role, schema=spec_assumptions.schema_for(role.schema, has_spec))
+    if has_spec:  # without one the caller's own role goes through untouched
+        role = replace(role, schema=spec_assumptions.schema_for(role.schema, has_spec))
     vocabulary = ports.flags.load()
     try:
         raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)

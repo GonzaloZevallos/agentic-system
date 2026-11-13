@@ -4,13 +4,16 @@ sessions, the cap, the closing, and what the interviewee cannot decide."""
 import pytest
 
 from agentic.core.process.application.define import define
-from agentic.core.process.application.interview import interview
+from agentic.core.process.application.interview import _escalate_questions, interview
 from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import (
     INTERVIEW_DEFINITION,
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
 )
+from agentic.core.process.domain.schemas import PlatformAnswers
+from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     ScriptedRunner,
@@ -924,3 +927,269 @@ async def test_a_decided_retake_gets_one_new_round_then_the_forced_close(cfg, sp
     assert [c["slug"] for c in spy_run_role] == [TL_ASK, TL_ANSWER, TL_ASK]
     assert [c["round"] for c in spy_run_role] == [3, 3, 3]
     assert [c["max_rounds"] for c in spy_run_role] == [3, 3, 3]
+
+
+# The spec's assumptions in the interview (GH-594 part 2b)
+
+SPEC = {
+    "path": "docs/specs/a.md",
+    "slice": "s1",
+    "commit": "a" * 40,
+    "sha256": "b" * 64,
+    "criteria": [],
+    "screens": [],
+    "risks": [],
+    "touches_ui": False,
+    "touches_copy": False,
+}
+SPEC_TASK = {**CLASSIFIED, "spec": SPEC}
+DOUBT = "Which currency?"
+SETTLED = "spec conflict (conflict) settled by the owner's decision"
+ASKED = {"kind": "escalation", "value": "questions"}
+RESUMED = {"kind": "resumed", "at": "2026-11-13T10:00:00Z"}
+
+
+def _spec_answers(n=1, *, for_human=(), assumptions=(), conflict=None, session="a"):
+    result = answers(n, for_human=for_human, session=session)
+    result.structured_output["assumptions"] = list(assumptions)
+    result.structured_output["spec_conflict"] = conflict
+    return result
+
+
+def _rows_of(state_or_patch: dict) -> list[dict]:
+    return apply({}, state_or_patch).get("assumptions", [])
+
+
+def _platform_runner(asks, replies):
+    return ScriptedRunner(**{TL_ASK_P: asks, TL_ANSWER_P: replies})
+
+
+async def test_with_a_spec_the_interviewees_doubts_become_rows_not_questions(cfg):
+    runner = _platform_runner(
+        [questions(1), questions(done=True)], [_spec_answers(for_human=[DOUBT, f"  {DOUBT}  "])]
+    )
+    transcript, patch = await interview(
+        SPEC_TASK, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None and transcript.questions_for_human == []
+    assert "questions_for_human" not in patch and "escalated" not in patch
+    assert patch["interview_stats"]["questions_to_human"] == 0
+    assert patch["assumptions"] == [{"role": "Tech Lead", "text": DOUBT}]
+    assert transcript.assumptions == patch["assumptions"]
+
+
+async def test_with_a_spec_the_consultants_doubts_become_rows_under_its_name(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(done=True)],
+            TL_ANSWER: [tech_answers(1, for_pm=["Refund window?"])],
+            CONSULT: [consulted(1, for_human=["Refund window?", "Max refund?"])],
+        }
+    )
+    transcript, patch = await interview(
+        {**PLANNED, "spec": SPEC}, INTERVIEW_SOLUTION, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None and transcript.questions_for_human == []
+    assert "questions_for_human" not in patch and "escalated" not in patch
+    assert patch["assumptions"] == [
+        {"role": "PM", "text": "Refund window?"},
+        {"role": "PM", "text": "Max refund?"},
+    ]
+
+
+async def test_without_a_spec_the_doubts_still_go_to_the_human_and_the_base_schema_is_asked(cfg):
+    runner = _platform_runner([questions(1), questions(done=True)], [answers(for_human=[DOUBT])])
+    transcript, patch = await interview(
+        CLASSIFIED, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is None and patch["questions_for_human"] == [DOUBT]
+    assert "assumptions" not in patch and "spec_cause" not in patch
+    assert runner.calls[1]["role"].schema is PlatformAnswers
+
+
+async def test_an_undecided_spec_conflict_escalates_in_that_round_with_its_cause(cfg):
+    runner = _platform_runner(
+        [questions(1), questions(2), questions(done=True)],
+        [_spec_answers(for_human=[DOUBT], conflict="conflict")],
+    )
+    transcript, patch = await interview(
+        SPEC_TASK, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is None
+    assert runner.slugs == [TL_ASK_P, TL_ANSWER_P]
+    assert patch["status"] == "waiting_on_human"
+    assert patch["escalation_class"] == "questions" and patch["spec_cause"] == "conflict"
+    assert patch["escalated"] == "Spec conflict raised in interview round 1"
+    section = patch["sections"]["Interview: Tech Lead efímero→Tech Lead"]
+    assert "### Round 1: questions" in section and "### Round 1: answers" in section
+    assert patch["assumptions"] == [{"role": "Tech Lead", "text": DOUBT}]
+    assert patch["interview_stats"]["rounds"] == 1
+    assert [e["kind"] for e in patch["pause_log"]] == ["escalation"]
+
+
+async def test_a_conflict_with_a_consultant_escalates_before_consulting(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(done=True)],
+            TL_ANSWER: [
+                _tech_conflict(for_pm=["Stored end date?"], conflict="contradiction"),
+            ],
+            CONSULT: [consulted(1)],
+        }
+    )
+    transcript, patch = await interview(
+        {**PLANNED, "spec": SPEC}, INTERVIEW_SOLUTION, cfg, memory_ports(runner)
+    )
+
+    assert transcript is None
+    assert runner.slugs == [TL_ASK, TL_ANSWER]  # no consultant call
+    assert patch["spec_cause"] == "contradiction" and patch["escalation_class"] == "questions"
+    assert patch["interview_stats"]["questions_to_pm"] == 0
+
+
+def _tech_conflict(for_pm=(), conflict="conflict", assumptions=()):
+    result = tech_answers(1, for_pm=for_pm)
+    result.structured_output["assumptions"] = list(assumptions)
+    result.structured_output["spec_conflict"] = conflict
+    return result
+
+
+async def test_escalate_and_resume_runs_on_from_the_conflict_round_and_settles_once(cfg):
+    ports = memory_ports(
+        _platform_runner(
+            [questions(1), questions(2), questions(done=True)],
+            [
+                _spec_answers(1, for_human=[DOUBT], conflict="conflict"),
+                _spec_answers(2, for_human=[DOUBT], conflict="conflict"),
+            ],
+        )
+    )
+    first, patch = await interview(SPEC_TASK, INTERVIEW_SOLUTION_PLATFORM, cfg, ports)
+    assert first is None and patch["spec_cause"] == "conflict"
+
+    resumed = apply(SPEC_TASK, patch)
+    resumed["pause_log"] = [*resumed["pause_log"], RESUMED]
+    resumed["sections"] = {**resumed["sections"], "Human": "### Decision 1\n\nUSD, always."}
+    transcript, second = await interview(resumed, INTERVIEW_SOLUTION_PLATFORM, cfg, ports)
+
+    assert transcript is not None and "escalated" not in second
+    runner = ports.runner
+    assert runner.slugs[:2] == [TL_ASK_P, TL_ANSWER_P]
+    assert "USD, always." in runner.calls[2]["prompt"]  # the retake's first interviewer prompt
+    section = second["sections"]["Interview: Tech Lead efímero→Tech Lead"]
+    assert "### Round 1: answers" in section and "### Round 2: answers" in section
+    assert second["interview_stats"]["rounds"] == 1
+    final = apply(resumed, second)
+    assert final["assumptions"] == [
+        {"role": "Tech Lead", "text": DOUBT},
+        {"role": "Tech Lead", "text": SETTLED},
+    ]
+
+
+@pytest.mark.parametrize(
+    "log",
+    [
+        [ASKED, RESUMED, {"kind": "failure", "value": "schema", "section": "Tech Lead"}],
+        [ASKED, RESUMED],
+    ],
+    ids=["questions, resumed, then a failure", "questions, resumed"],
+)
+async def test_a_decided_conflict_continues_and_records_the_settled_row(cfg, log):
+    runner = _platform_runner(
+        [questions(1), questions(done=True)], [_spec_answers(conflict="conflict")]
+    )
+    state = {**SPEC_TASK, "pause_log": log}
+    transcript, patch = await interview(
+        state, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None and "escalated" not in patch
+    assert patch["assumptions"] == [{"role": "Tech Lead", "text": SETTLED}]
+
+
+async def test_a_resumed_tracker_human_pause_counts_as_decided_too(cfg):
+    # The known over-approximation (`conflict_decided`): any resumed `questions` pause counts.
+    tracker = rules.logged(
+        rules.escalation("questions", "items", tracker_human=["h1"]), at="2026-11-13T09:00:00Z"
+    )
+    state = {**SPEC_TASK, "pause_log": [*tracker["pause_log"], RESUMED]}
+    runner = _platform_runner(
+        [questions(1), questions(done=True)], [_spec_answers(conflict="conflict")]
+    )
+    transcript, patch = await interview(
+        state, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None
+    assert patch["assumptions"] == [{"role": "Tech Lead", "text": SETTLED}]
+
+
+async def test_a_role_failing_in_a_later_round_keeps_the_rows_of_the_earlier_one(cfg):
+    runner = _platform_runner(
+        [questions(1), questions(2)],
+        [
+            _spec_answers(1, for_human=[DOUBT]),
+            AttemptFailed("a", 0.02),
+            AttemptFailed("b", 0.02),
+        ],
+    )
+    transcript, patch = await interview(
+        SPEC_TASK, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is None and "failed 2 times" in patch["escalated"]
+    assert patch["assumptions"] == [{"role": "Tech Lead", "text": DOUBT}]
+
+
+async def test_rows_are_deduplicated_across_rounds_and_a_settled_row_appears_once(cfg):
+    runner = _platform_runner(
+        [questions(1), questions(2), questions(3), questions(done=True)],
+        [
+            _spec_answers(1, for_human=[DOUBT], conflict="conflict"),
+            _spec_answers(2, for_human=[f"  {DOUBT}   "], conflict="conflict"),
+            _spec_answers(3, for_human=[DOUBT], conflict="conflict"),
+        ],
+    )
+    state = {**SPEC_TASK, "pause_log": [ASKED, RESUMED]}
+    transcript, patch = await interview(
+        state, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None
+    assert [r["text"] for r in patch["assumptions"]] == [DOUBT, SETTLED]
+
+
+async def test_two_turns_of_one_role_with_different_texts_keep_both_rows(cfg):
+    runner = _platform_runner(
+        [questions(1), questions(2), questions(done=True)],
+        [_spec_answers(1, assumptions=["First."]), _spec_answers(2, assumptions=["Second."])],
+    )
+    transcript, patch = await interview(
+        SPEC_TASK, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None
+    assert _rows_of(patch) == [
+        {"role": "Tech Lead", "text": "First."},
+        {"role": "Tech Lead", "text": "Second."},
+    ]
+
+
+def test_escalate_questions_needs_a_cause_with_a_spec_and_adds_none_without_one():
+    ports = memory_ports()
+    with pytest.raises(ValueError, match="spec_cause"):
+        _escalate_questions({"spec": SPEC}, {}, "why", ports)
+
+    patch = _escalate_questions({}, {"sections": {"x": "y"}}, "why", ports)
+    assert patch["status"] == "waiting_on_human" and patch["escalated"] == "why"
+    assert patch["escalation_class"] == "questions" and "spec_cause" not in patch
+    assert patch["sections"] == {"x": "y"} and [e["kind"] for e in patch["pause_log"]] == [
+        "escalation"
+    ]
+
+    caused = _escalate_questions({"spec": SPEC}, {}, "why", ports, spec_cause="data_loss")
+    assert caused["spec_cause"] == "data_loss"
