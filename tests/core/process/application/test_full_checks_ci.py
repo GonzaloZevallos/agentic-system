@@ -11,10 +11,16 @@ from typing import get_args
 import pytest
 
 from agentic.core.process.application.checkouts import task_base
-from agentic.core.process.application.full_checks import _DISPATCH_DETAIL
+from agentic.core.process.application.full_checks import _CI_DETAIL, _DISPATCH_DETAIL
 from agentic.core.process.application.ports import CommandResult, GitError, Upstream
 from agentic.core.process.domain import ci_push, rules
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.ci import (
+    CiCheck,
+    CiReport,
+    CiUnreadable,
+    DispatchedRun,
+    ghost_ids_text,
+)
 from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_UNKNOWN_ATTEMPTS
 from agentic.core.process.domain.presubmit import CiCover, CiDispatch
 from agentic.core.process.domain.roles import DEVELOPER_INTEGRATOR
@@ -1089,10 +1095,29 @@ def test_every_ci_cause_has_its_own_dispatch_message_and_none_speaks_of_a_push()
     for cause in get_args(CiCause):
         assert cause in _DISPATCH_DETAIL, cause
         rendered = _DISPATCH_DETAIL[cause].format(
-            ref="ci.yml", min=1.0, stage="checkout", dispatch_ref=DISPATCH_REF, sha="abc1234"
+            ref="ci.yml",
+            min=1.0,
+            stage="checkout",
+            dispatch_ref=DISPATCH_REF,
+            sha="abc1234",
+            ghosts=ghost_ids_text(()),
         )
         assert "push of ci.yml" not in rendered
     assert set(_DISPATCH_DETAIL) == set(get_args(CiCause))
+
+
+def test_the_ghost_run_detail_shows_both_ids_through_both_tables():
+    for table in (_CI_DETAIL, _DISPATCH_DETAIL):
+        rendered = table["ghost_run"].format(
+            ref="ci.yml",
+            min=10.0,
+            stage="checkout",
+            dispatch_ref=DISPATCH_REF,
+            sha="abc1234",
+            ghosts=ghost_ids_text(["11", "22"]),
+        )
+        assert "11" in rendered and "22" in rendered
+        assert "{" not in rendered
 
 
 # GH-539: a declared job red only because its run was cancelled is never a return.

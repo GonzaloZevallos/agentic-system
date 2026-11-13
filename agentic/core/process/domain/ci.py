@@ -878,6 +878,38 @@ class GhostWatch:
         return frozenset(self.seen) - self.ghosts(now_s, bound_s)
 
 
+# The most run ids a `ghost_run` record keeps (GH-652): the first one seen and the newest seven.
+GHOST_IDS_MAX = 8
+
+
+def ghost_run_ids(seen: Sequence[str]) -> list[str]:
+    """The only builder of a ghost run id list (GH-652): `seen` in order with a repeated id kept at
+    its first position, and, when more than `GHOST_IDS_MAX` remain, the first id and the newest
+    `GHOST_IDS_MAX - 1`."""
+    ids = list(dict.fromkeys(seen))
+    if len(ids) > GHOST_IDS_MAX:
+        return ids[:1] + ids[-(GHOST_IDS_MAX - 1) :]
+    return ids
+
+
+def ghost_end(cause: CiCause, ghost_ids: Sequence[str]) -> CiCause:
+    """The cause a `full_checks` wait that ended `cause` is recorded under (GH-652): `no_run` after
+    ghosts were seen is `ghost_run`; with none it stays `no_run`. Every other cause passes."""
+    if cause == "no_run" and ghost_ids:
+        return "ghost_run"
+    return cause
+
+
+def ghost_ids_text(ids: Sequence[str]) -> str:
+    """The one rendering of ghost run ids in prose (GH-652). It states a total only as the count
+    of ids it was given, never as the number of ghosts there were."""
+    if not ids:
+        return "no run id recorded"
+    if len(ids) == 1:
+        return f"run {ids[0]}"
+    return f"runs {ids[0]} … {ids[-1]} ({len(ids)} recorded)"
+
+
 def dispatch_verdict(
     runs: list[DispatchedRun] | tuple[DispatchedRun, ...],
     head: str,
@@ -885,6 +917,8 @@ def dispatch_verdict(
     elapsed_s: float,
     grace_s: float,
     timeout_s: float,
+    ghosts: frozenset[str] = frozenset(),
+    maturing: frozenset[str] = frozenset(),
 ) -> FullTierVerdict:
     """The verdict of the dispatched runs listed for the base's workflow, over the declared job
     `names`, `elapsed_s` into the wait (GH-462). A run counts only when its event is
@@ -897,7 +931,13 @@ def dispatch_verdict(
     failing declared job failed at `setup` or `checkout` is `unreachable/checkout_failed`
     (GH-504; a `suite` or unknown stage anywhere among them is red). A declared name that is a
     matrix id is skipped when any of its expansions is (`runs_of`, GH-535). Then `ci_state`
-    decides: undeclared jobs are ignored. No clock of this machine is compared with a GitHub one."""
+    decides: undeclared jobs are ignored. No clock of this machine is compared with a GitHub one.
+
+    `ghosts` and `maturing` (GH-652) are run ids the node's watch holds, judged on the chosen run
+    only and only while it is not completed. A chosen run in `ghosts` at `timeout_s` is
+    `unreachable/ghost_run` (a ghost wins over maturing; under the bound it is `waiting`); one in
+    `maturing` is `waiting` until `2 * timeout_s` and `timed_out` from then. Any other id, a
+    completed run and the empty defaults give the result above."""
     declared = tuple(dict.fromkeys(names))
     run = chosen_run(runs, head)
     if run is None:
@@ -909,6 +949,13 @@ def dispatch_verdict(
     waiting_on = set(verdict.missing) | set(pending_names(report, declared))
     pending = tuple(name for name in declared if name in waiting_on)
     if run.status != "completed":
+        run_key = str(run.run_id)
+        if run_key in ghosts and elapsed_s >= timeout_s:
+            return FullTierVerdict("unreachable", (), pending, "ghost_run")
+        if run_key in maturing:
+            if elapsed_s >= 2 * timeout_s:
+                return FullTierVerdict("timed_out", (), pending, None)
+            return FullTierVerdict("waiting", (), pending, None)
         if elapsed_s >= timeout_s:
             return FullTierVerdict("timed_out", (), pending, None)
         return FullTierVerdict("waiting", (), pending, None)
