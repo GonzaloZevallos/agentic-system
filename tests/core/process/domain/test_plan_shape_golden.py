@@ -113,10 +113,11 @@ def test_a_control_arm_document_renders_as_it_did():
 # build-whole sentence) and moved them a fourth; everything else about the default path is
 # unchanged. GH-591 part 2 added the `promote` line to the Output list of both, so they
 # moved a fifth time; GH-610 added the `api_break` field to the Output list of both and
-# moved them a sixth.
+# moved them a sixth; GH-619 rewrote `TRACKER_WITH_PARTS` (the system re-points) and moved
+# them a seventh.
 PROMPT_GOLDENS = {
-    "tech_lead": "f6229bafcc8a0f0ad7427b87bc17fd86495de7744fc94dff1147b68bd4783a56",
-    "tech_lead_platform": "b11c6c8569bc199cbbb2c2f1e872f7e7c5a992da6c7db14eb895912a2afd3cff",
+    "tech_lead": "67c5652027d7c5ca003882eb08f366f11657d11115d3957056d17c39f9f8849d",
+    "tech_lead_platform": "7144cbd1ba7c05eb27c7fc87e64293d79244b25639692d9d7400edab711f0576",
 }
 
 
