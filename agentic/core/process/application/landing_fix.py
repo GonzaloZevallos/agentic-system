@@ -1057,6 +1057,12 @@ def diagnose(context: LandingContext) -> None:
             "landing_queued_at": None,
             "head_since_at": None,
             "head_since_head": None,
+            # GH-621: the fresh run starts its head budget again.
+            "head_turn_at": None,
+            "head_charged_s": None,
+            "head_seen_at": None,
+            "head_yielded_at": None,
+            "head_yields": None,
         },
     )
     notice = _restart_notice(saved, reason, carried)

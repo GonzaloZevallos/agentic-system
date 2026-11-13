@@ -11,6 +11,8 @@ import pytest
 from agentic.core.process.domain.landing_order import (
     GAP_MAX,
     HEAD_BUDGET,
+    HEAD_SEEN_EVERY,
+    YIELD_MARK,
     Member,
     advance,
     head,
@@ -21,7 +23,9 @@ from agentic.core.process.domain.landing_order import (
     observed,
     order,
     over_budget,
+    resumed,
     turn_of,
+    turn_patch,
     unproductive_steps,
     yielded,
 )
@@ -429,3 +433,129 @@ def test_unproductive_steps(entries, since, expected):
 )
 def test_instant_is_aware_or_nothing(value, expected):
     assert instant(value) == expected
+
+
+def _ago(minutes: float) -> datetime:
+    return T0 - timedelta(minutes=minutes)
+
+
+def test_resumed_refreshes_a_busy_head_left_unobserved_without_charging_the_gap():
+    stale = Member(5, T0, False, False, busy=True, seen_at=_ago(40), charged_s=600.0)
+    other = Member(6, T0, False, False)
+
+    kept = resumed([stale, other], T0)
+
+    assert kept == (replace(stale, seen_at=T0), other)
+    assert head_time(kept[0], T0) == timedelta(seconds=600)
+
+
+def test_resumed_refreshes_only_the_most_recent_of_two_busy_members():
+    older = Member(5, T0, False, False, busy=True, seen_at=_ago(90))
+    newer = Member(6, T0, False, False, busy=True, seen_at=_ago(40))
+
+    kept = resumed([older, newer], T0)
+
+    assert kept == (older, replace(newer, seen_at=T0))
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        Member(5, T0, False, False, busy=False, seen_at=_ago(40)),
+        Member(5, T0, False, False, busy=True, seen_at=_ago(5)),
+        Member(5, T0, False, False, busy=True, seen_at=None),
+    ],
+    ids=["not busy", "seen within the gap", "never seen"],
+)
+def test_resumed_leaves_every_other_member_as_it_is(member):
+    assert resumed([member], T0) == (member,)
+
+
+def test_resumed_leaves_a_busy_head_alone_when_another_member_was_seen_within_the_gap():
+    busy = Member(5, T0, False, False, busy=True, seen_at=_ago(40))
+    fresh = Member(6, T0, False, False, seen_at=_ago(10))
+    assert resumed([busy, fresh], T0) == (busy, fresh)
+
+
+def test_a_resumed_busy_head_is_the_head_even_behind_an_older_stamp():
+    busy = Member(
+        9, T0 + timedelta(minutes=10), False, False, busy=True, seen_at=_ago(40), turn_at=_ago(60)
+    )
+    older = Member(1, T0 - timedelta(days=1), False, False)
+    assert order([busy, older], T0).head == 1
+    assert order(resumed([busy, older], T0), T0).head == 9
+
+
+def _patch(before: Member, minutes: float = 0.0, **after) -> dict[str, object]:
+    now = T0 + timedelta(minutes=minutes)
+    return turn_patch(before, replace(before, **after), now)
+
+
+def test_a_new_head_records_that_it_was_seen_and_its_turn():
+    before = Member(5, T0, False, False)
+    assert _patch(before, seen_at=T0, turn_at=T0) == {
+        "head_seen_at": T0.isoformat(),
+        "head_turn_at": T0.isoformat(),
+    }
+
+
+def test_a_new_head_that_has_a_turn_keeps_it():
+    before = Member(5, T0, False, False, turn_at=_ago(30), charged_s=60.0)
+    assert _patch(before, seen_at=T0) == {"head_seen_at": T0.isoformat()}
+
+
+@pytest.mark.parametrize(
+    ("minutes_ago", "written"),
+    [(0.0, False), (HEAD_SEEN_EVERY.total_seconds() / 60 - 0.1, False), (5.0, True), (14.0, True)],
+)
+def test_a_head_seen_again_writes_only_every_head_seen_every(minutes_ago, written):
+    before = Member(5, T0, False, False, turn_at=_ago(60), seen_at=_ago(minutes_ago))
+    after = replace(before, seen_at=T0, charged_s=minutes_ago * 60)
+
+    patch = turn_patch(before, after, T0)
+
+    assert patch == (
+        {"head_charged_s": round(minutes_ago * 60), "head_seen_at": T0.isoformat()}
+        if written
+        else {}
+    )
+
+
+def test_a_member_that_stops_being_head_folds_its_charge_and_clears_the_sighting():
+    before = Member(5, T0, False, False, turn_at=_ago(60), seen_at=_ago(3), charged_s=100.0)
+    patch = _patch(before, charged_s=280.0, seen_at=None)
+    assert patch == {"head_charged_s": 280.0, "head_seen_at": None}
+
+
+def test_a_member_that_was_never_head_has_nothing_to_write():
+    before = Member(5, T0, False, False, charged_s=100.0)
+    assert _patch(before) == {}
+
+
+def test_a_yield_clears_the_turn_the_charge_and_the_sighting_and_marks_the_record():
+    before = Member(5, T0, False, False, turn_at=_ago(60), seen_at=_ago(1), charged_s=2700.0)
+    after = yielded(before, "budget_time", T0)
+
+    assert turn_patch(before, after, T0) == {
+        "head_turn_at": None,
+        "head_charged_s": None,
+        "head_seen_at": None,
+        "head_yielded_at": T0.isoformat(),
+        YIELD_MARK: 1,
+    }
+
+
+def test_a_yield_that_ends_the_call_as_head_again_writes_its_new_turn():
+    before = Member(5, T0, False, False, turn_at=_ago(60), seen_at=_ago(1), charged_s=2700.0)
+    after = observed(yielded(before, "budget_time", T0), T0)
+
+    patch = turn_patch(before, after, T0)
+
+    assert patch["head_turn_at"] == T0.isoformat()
+    assert patch["head_seen_at"] == T0.isoformat()
+    assert patch[YIELD_MARK] == 1
+
+
+def test_a_member_that_yielded_long_ago_is_not_a_yield_again():
+    before = Member(5, T0, False, False, yielded_at=_ago(30), yields=1)
+    assert _patch(before) == {}

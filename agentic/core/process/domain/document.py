@@ -105,6 +105,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "flakes",
         "tracker_failures",
         "lead_time",
+        "head_yields",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
@@ -120,6 +121,7 @@ _FLOW_KEYS = (
     "flakes",
     "tracker_failures",
     "lead_time",
+    "head_yields",
 )
 
 
@@ -227,6 +229,7 @@ def render(
     four `str | None` version-record arguments in a row are indistinguishable
     positionally to a reader and to mypy alike, and a swap here would write a baseline
     where the version belongs with nothing to catch it."""
+    head = _head_fields(state)
     frontmatter = {
         "id": state["id"],
         "title": state["title"],
@@ -343,7 +346,10 @@ def render(
         **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
         **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
         **({"head_since_head": q} if (q := state.get("head_since_head")) else {}),
-        **_head_fields(state),
+        **{
+            key: _LANDING_PLACEHOLDER if key == "head_yields" and value else value
+            for key, value in head.items()
+        },
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         # The clean restarts of a task (GH-593): the count per pair, the restart still owed to the
@@ -455,7 +461,7 @@ def render(
 
     dumped = yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()
     for key in _FLOW_KEYS:
-        if value := state.get(key):
+        if value := (head if key == "head_yields" else state).get(key):
             placeholder = yaml.safe_dump({key: _LANDING_PLACEHOLDER}).strip()
             dumped = dumped.replace(placeholder, _flow_line(key, value), 1)
     parts = [
