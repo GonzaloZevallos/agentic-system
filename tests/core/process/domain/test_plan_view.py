@@ -332,3 +332,19 @@ def test_the_raised_estimate_line_says_the_two_figures_and_the_cause():
         "The system raised the estimate from 7.50 to 17.10 USD: "
         "below half the median 17.10 of closed tasks with this many subtasks."
     )
+
+
+def test_with_tracker_items_block_lists_each_question_and_recommendation():
+    items = [
+        {"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."},
+        {"kind": "human", "question": "Rename X?", "recommendation": "Keep X."},
+    ]
+    out = plan_view.with_tracker_items_block("### Solution\n\nx", items)
+    assert out.startswith("### Solution\n\nx\n\n### Decisions for the owner\n\n")
+    assert "- Ship it? Recommendation: Yes, ship." in out
+    assert "- Rename X? Recommendation: Keep X." in out
+    assert "Tracker work for the human" not in out
+
+
+def test_with_tracker_items_block_renders_nothing_without_items():
+    assert plan_view.with_tracker_items_block("### Solution\n\nx", []) == "### Solution\n\nx"

@@ -1432,3 +1432,8 @@ def test_the_plan_check_asks_for_one_terminal_part_only_of_a_part():
     schemas.plan_check_for(_history(1, []), 0.0)(data)
     with pytest.raises(ValueError, match="exactly one terminal part"):
         schemas.plan_check_for(_history(1, []), 0.0, part_of=("GH-1", 1, 1))(data)
+
+
+def test_the_tech_plan_does_not_expose_tracker_items_yet():
+    # The guard of GH-620 part 1: no run can set the key until part 2 flips this on purpose.
+    assert "tracker_items" not in schemas.TechPlan.model_fields

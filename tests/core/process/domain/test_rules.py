@@ -4819,15 +4819,17 @@ def test_add_tracker_actions_adds_a_hash_keeps_the_first_record_and_adds_answere
     first = {"aaa": {"at": "t1", "url": "u1"}}
     joined = task.add_tracker_actions(None, first)
     assert joined == first
-    again = task.add_tracker_actions(joined, {"aaa": {"at": "t2", "url": "u2"}, "bbb": {"at": "t3"}})
+    again = task.add_tracker_actions(
+        joined, {"aaa": {"at": "t2", "url": "u2"}, "bbb": {"at": "t3"}}
+    )
     assert again == {"aaa": {"at": "t1", "url": "u1"}, "bbb": {"at": "t3"}}
     answered = task.add_tracker_actions(again, {"aaa": {"at": "t9", "answered": "t4"}})
     assert answered["aaa"] == {"at": "t1", "url": "u1", "answered": "t4"}
     kept = task.add_tracker_actions(answered, {"aaa": {"at": "t9", "answered": "t5"}})
     assert kept["aaa"]["answered"] == "t4"
-    assert task.apply({"tracker_actions_done": first}, {"tracker_actions_done": {"bbb": {"at": "t"}}})[
-        "tracker_actions_done"
-    ] == {**first, "bbb": {"at": "t"}}
+    assert task.apply(
+        {"tracker_actions_done": first}, {"tracker_actions_done": {"bbb": {"at": "t"}}}
+    )["tracker_actions_done"] == {**first, "bbb": {"at": "t"}}
 
 
 def test_delta_of_tracker_actions_round_trips_through_apply():
