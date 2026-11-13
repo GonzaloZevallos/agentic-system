@@ -1,5 +1,6 @@
 import ast
 from pathlib import Path
+from typing import get_args
 
 import pytest
 import yaml
@@ -15,6 +16,7 @@ from agentic.core.process.domain import (
     task,
 )
 from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain.landing_order import YieldReason
 from tests.gh150_stranded import GH150_STRANDED
 
 
@@ -1793,6 +1795,94 @@ def test_record_closure_replaces_a_lead_time_written_in_block_style():
 def test_path_routed_is_written_only_when_set_and_parsed_back():
     assert "path_routed" not in document.render(_base_state())
     assert document.parse(document.render(_base_state(path_routed=True)))["path_routed"] is True
+
+
+# --- GH-621: the head budget's keys -----------------------------------------------------
+
+_HEAD_AT = "2026-11-12T10:00:00+00:00"
+
+
+def _head_yield(n: int = 0, **over):
+    return {"at": _HEAD_AT, "head": f"sha{n}", "reason": "budget_time", **over}
+
+
+def _head_roundtrip(**head):
+    return document.parse(document.render(golden_state(**head)))
+
+
+def test_the_head_keys_round_trip_as_the_normalized_state():
+    head = {
+        "head_turn_at": _HEAD_AT,
+        "head_charged_s": 90.0,
+        "head_seen_at": "2026-11-12T10:05:00+00:00",
+        "head_yielded_at": "2026-11-12T10:06:00+00:00",
+        "head_yields": [_head_yield(1), _head_yield(2, reason="budget_steps")],
+    }
+    parsed = _head_roundtrip(**head)
+    assert {k: parsed[k] for k in head} == head
+
+
+def test_a_document_without_head_keys_renders_byte_identically_and_adds_none():
+    rendered = document.render(golden_state())
+    assert rendered == GOLDEN_WITHOUT_ASSIGNMENT
+    assert not any(k.startswith("head_") for k in document.parse(rendered))
+
+
+def test_zero_charge_and_an_empty_yield_list_survive_and_an_absent_key_stays_absent():
+    parsed = _head_roundtrip(head_charged_s=0.0, head_yields=[])
+    assert parsed["head_charged_s"] == 0.0
+    assert parsed["head_yields"] == []
+    assert "head_turn_at" not in parsed
+
+
+def test_the_charge_is_whole_seconds_on_write_and_on_read():
+    assert _head_roundtrip(head_charged_s=12.6)["head_charged_s"] == 13.0
+    raw = document.render(golden_state()).replace("\n---\n", "\nhead_charged_s: 12.6\n---\n", 1)
+    assert document.parse(raw)["head_charged_s"] == 13.0
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.0, True, "12"])
+def test_a_charge_that_is_not_a_finite_number_of_seconds_reads_back_absent(bad):
+    assert "head_charged_s" not in _head_roundtrip(head_charged_s=bad)
+
+
+@pytest.mark.parametrize("key", ["head_turn_at", "head_seen_at", "head_yielded_at"])
+def test_a_head_instant_survives_only_when_aware_and_parsable(key):
+    assert _head_roundtrip(**{key: _HEAD_AT})[key] == _HEAD_AT
+    assert key not in _head_roundtrip(**{key: "2026-11-12T10:00:00"})
+    assert key not in _head_roundtrip(**{key: "not a time"})
+
+
+def test_twelve_yields_read_back_as_the_last_ten():
+    yields = [_head_yield(n) for n in range(12)]
+    assert _head_roundtrip(head_yields=yields)["head_yields"] == yields[2:]
+
+
+@pytest.mark.parametrize("reason", get_args(YieldReason))
+def test_every_yield_reason_survives(reason):
+    assert _head_roundtrip(head_yields=[_head_yield(reason=reason)])["head_yields"] == [
+        _head_yield(reason=reason)
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        _head_yield(9, reason="other"),
+        _head_yield(9, head=123),
+        _head_yield(9, at="2026-11-12T10:00:00"),
+    ],
+)
+def test_a_malformed_yield_is_dropped_and_the_rest_are_kept(bad):
+    kept = [_head_yield(1), _head_yield(2)]
+    assert _head_roundtrip(head_yields=[kept[0], bad, kept[1]])["head_yields"] == kept
+
+
+def test_add_head_yield_keeps_the_newest_ten():
+    rows: list = []
+    for n in range(12):
+        rows = task.add_head_yield(rows, _head_yield(n))
+    assert [r["head"] for r in rows] == [f"sha{n}" for n in range(2, 12)]
 
 
 TRACKER_KEYS = {
