@@ -26,7 +26,7 @@ import yaml
 from . import size_budget, tracker_items
 from .landing_order import YieldReason, instant
 from .legacy_names import rename_legacy_roles
-from .task import HEAD_YIELDS_MAX, RoleRun
+from .task import HEAD_YIELDS_MAX, AssumptionRow, RoleRun, assumption_text
 
 TASKS_SUBDIR = Path(".agentic/tasks")
 # Where an evaluation run's document is kept once its root is gone (GH-470): outside
@@ -169,6 +169,20 @@ def _head_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _assumption_rows(raw: object) -> list[AssumptionRow]:
+    """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
+    canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
+    text the rule refuses, is dropped: a hand-edited document never fails to load for it."""
+    rows: dict[str, AssumptionRow] = {}
+    for item in raw if isinstance(raw, list) else []:
+        if not (isinstance(item, Mapping) and isinstance(item.get("role"), str)):
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and (canonical := assumption_text(text)) is not None:
+            rows.setdefault(canonical, {"role": item["role"], "text": canonical})
+    return list(rows.values())
+
+
 def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[str, Any]:
     """The inverse of what `render` writes: the frontmatter under the state's names,
     with the 2026-10-05 role-rename alias applied last (`legacy_names.
@@ -194,6 +208,8 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             state["tracker_items"] = tracker_items.parse(state["tracker_items"])
         except ValueError as error:
             raise ValueError(f"{source}: {error}") from error
+    if "assumptions" in state:
+        state["assumptions"] = _assumption_rows(state["assumptions"])
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -412,6 +428,11 @@ def render(
         **({"tracker_items": e} if (e := state.get("tracker_items")) else {}),
         **({"tracker_actions_done": e} if (e := state.get("tracker_actions_done")) else {}),
         **({"tracker_human": e} if (e := state.get("tracker_human")) else {}),
+        # The delivery assumptions and the cause of a spec delivery's `questions` pause
+        # (GH-594): each written only when set, so a document without a spec is byte-identical.
+        # `from_frontmatter` reads them back through `assumption_text`.
+        **({"spec_cause": e} if (e := state.get("spec_cause")) else {}),
+        **({"assumptions": e} if (e := state.get("assumptions")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),
         "prompts": state.get("prompts", {}),

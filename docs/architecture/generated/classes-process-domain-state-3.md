@@ -29,6 +29,7 @@ classDiagram
     class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
     class task__ArmAssignment["ArmAssignment"]
+    class task__AssumptionRow["AssumptionRow"]
     class task__Carried["Carried"]
     class task__ChangesRequested["ChangesRequested"]
     class task__CheckRun["CheckRun"]
@@ -39,7 +40,6 @@ classDiagram
     class task__CiSpeculation["CiSpeculation"]
     class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
-    class task__DependencyState["DependencyState"]
 ```
 
 ## Relaciones con otras páginas
