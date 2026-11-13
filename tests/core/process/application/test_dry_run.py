@@ -236,6 +236,8 @@ def test_the_reads_of_the_real_filesystem_adapters_leave_the_disk_alone(tmp_path
 def test_the_audits_reject_what_they_should(tmp_path):
     # A neutral value of the wrong type, and a write the tree audit would catch.
     assert not _accepts(list[str], 5) and not _accepts(Path | None, "x")
+    verdict = typing.Literal["yes", "no", "unknown"]
+    assert _accepts(verdict, "unknown") and not _accepts(verdict, "maybe")
     with pytest.raises(AssertionError, match="unhandled"):
         _accepts(typing.Annotated[int, "a"], 1)
     registry = FilesystemRunRegistry(tmp_path / "registry")
