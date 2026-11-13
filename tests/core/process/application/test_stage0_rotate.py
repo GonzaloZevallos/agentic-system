@@ -443,15 +443,21 @@ def test_crash_between_write_switch_and_switch_current_keeps_current_and_retries
 
 def test_crash_after_switch_current_second_run_calls_succeeded_once() -> None:
     w = World()
+
+    class CrashingPolicy(Policy):
+        def succeeded(self, sha: str) -> None:
+            raise Crash("before succeeded")
+
+    with pytest.raises(Crash):
+        w.run(policy=CrashingPolicy(w.log))
+    assert w.store.current() == B
+    # the second run finds B current and nothing newer: up to date, `succeeded` once
+    w.window._entries = [WindowEntry(B, "green", False)]
+    w.out.clear()
     policy = Policy(w.log)
     w.run(policy=policy)
+    assert w.out == ["keep: up_to_date"]
     assert policy.succeeded_calls == [B]
-    # `succeeded` never ran in the crashed run; the second run sees B current, nothing newer
-    w2 = World(current=B, entries=[WindowEntry(B, "green", False)])
-    policy2 = Policy(w2.log)
-    w2.run(policy=policy2)
-    assert w2.out == ["keep: up_to_date"]
-    assert policy2.succeeded_calls == [B]
 
 
 @pytest.mark.parametrize(
