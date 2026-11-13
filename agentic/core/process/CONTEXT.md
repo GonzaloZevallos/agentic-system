@@ -239,12 +239,12 @@ Desde GH-588 solo compite la Cabeza del orden de aterrizaje de cada producto; lo
 _Avoid_: turno, cola de merges
 
 **Orden de aterrizaje**:
-La lista única, por producto, de los pull requests entregados y abiertos, del aprobado hace más tiempo al más reciente (`landing_queued_at`, que escribe `deliver` si falta y `restore`, y solo el reinicio del aterrizaje borra). Solo el primero se integra, se revisa y aterriza; los demás esperan aprobados, con el `merge-tree` de solo lectura como único chequeo (ADR-0090). Es lo que decide `domain/landing_order.head`, y nadie más ordena.
+La lista única, por producto, de los pull requests entregados y abiertos, del aprobado hace más tiempo al más reciente (`landing_queued_at`, que escribe `deliver` si falta y `restore`, y solo el reinicio del aterrizaje borra). Solo el primero se integra, se revisa y aterriza; los demás esperan aprobados, con el `merge-tree` de solo lectura como único chequeo (ADR-0090). Es lo que decide `domain/landing_order.order` (GH-621), y nadie más ordena. Una Cabeza lenta no lo retiene: al agotar su presupuesto cede y pasa detrás de los que no cedieron (ver Cabeza del orden). El único escritor del presupuesto es `_record_turn` del poller.
 _Avoid_: merge queue, merge train, cola de merges
 _Campo_: GitHub merge queue, GitLab merge trains, Bors («not rocket science rule»), Zuul
 
 **Cabeza del orden**:
-El pull request que el orden de aterrizaje pone primero: el que tiene un pase de aterrizaje vivo y, si no, el de `landing_queued_at` más viejo (desempate por issue, sin sello al final), salvo que la tarea sea de una persona (`landing.waits_on_human`: escalada, `needs-human`, parada deliberada (`agentic stop`; un lock muerto sin marca no retiene), o una negativa de `HUMAN_OWNED_REFUSALS`), que nunca es Cabeza. Solo la Cabeza puede ser candidata de `found` o `lands`.
+El pull request que el orden de aterrizaje pone primero: el que tiene un pase de aterrizaje vivo y, si no, el de `landing_queued_at` más viejo (desempate por issue, sin sello al final), salvo que la tarea sea de una persona (`landing.waits_on_human`: escalada, `needs-human`, parada deliberada (`agentic stop`; un lock muerto sin marca no retiene), o una negativa de `HUMAN_OWNED_REFUSALS`), que nunca es Cabeza. Solo la Cabeza puede ser candidata de `found` o `lands`. Desde GH-621 la Cabeza tiene presupuesto: `HEAD_BUDGET` (45 min) de tiempo observado como Cabeza o `HEAD_STEPS_MAX` pasos sin resolver sobre su sha; al agotarlo cede (`head_yields`, una línea del poller) salvo que esté ocupada (un hijo vivo, que conserva el turno vía `resumed`) o solo le falte el merge. Una ronda retenida no observa nada.
 _Avoid_: primero de la cola, turno
 _Campo_: head of the queue
 

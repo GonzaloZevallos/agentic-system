@@ -66,3 +66,13 @@ Las lecturas no crecen salvo en una tarea escalada: una `assess_merge` y una lec
 ### Límites conocidos
 
 Merges fuera del orden (dependabot, el dueño, tramos aterrizados) por encima de `MERGE_ATTEMPTS_MAX` / `CI_STALE_PAIRS_MAX`; documentos en vuelo con `attempts == 3` reciben un `sync_master`; una ventana de CI por PR, en serie.
+
+## Adenda GH-621: presupuesto de la Cabeza
+
+Una Cabeza que no avanza no retiene el orden. Cada miembro lleva el tiempo que fue Cabeza (`head_charged_s` más el tramo desde `head_seen_at`, acotado por `GAP_MAX` = 15 min, para no cobrar un poller parado) y los pasos sin resolver sobre su sha. Al llegar a `HEAD_BUDGET` (45 min) o `HEAD_STEPS_MAX` (2) cede: pasa detrás de todo el que no cedió y su cuenta vuelve a cero. Niveles, el primero que coincide gana: (1) quien conserva el turno (ocupado y visto como Cabeza dentro de `GAP_MAX`); (2) pase vivo entre los que no cedieron; (3) `landing_queued_at` más viejo entre ellos; (4) los que cedieron, menos cesiones primero. Una Cabeza ocupada (hijo vivo) o con solo el merge pendiente no cede: la acotan el vigía de estancamiento (ADR-0057) y el tope por intento.
+
+**Tiempo observado.** Solo cuenta lo que el poller vio. `landing_order.resumed` (una vez por evaluación, antes de `advance`) devuelve el turno a la Cabeza ocupada que quedó sin observar por una ronda retenida o un poller parado, sin cobrarle ese hueco. `landing_order.turn_patch` decide qué claves `head_*` se escriben (la escritura de `head_seen_at` se regula a cada `HEAD_SEEN_EVERY`), y `_record_turn` en `poll.py` es el único escritor, con `record_closure`; el reinicio del aterrizaje solo las borra. Una ronda retenida no observa nada. Cada cesión agrega `{at, head, reason}` a `head_yields` (las últimas 10, idempotente por turno) y se dice en una sola línea, solo tras escribir.
+
+**Lectura de aceptación.** El segundo PR llega a ser Cabeza dentro de un `HEAD_BUDGET` de tiempo observado de la Cabeza, más su propio aterrizaje.
+
+**Límites.** El límite de pasos no ve ciclos que cambian el sha: el freno es el presupuesto de tiempo. La rotación está acotada en el orden, no en el gasto; lo que frena el gasto son los presupuestos de aterrizaje de cada tarea. Una Cabeza libre paga a lo sumo `GAP_MAX` por retención. Un `save` completo de un hijo vivo puede pisar una escritura del poller con un estado anterior: solo cobra de menos.
