@@ -1780,3 +1780,12 @@ candidates:
   sources:
   - human_decision
   added_at: '2026-11-13T23:35:02.784+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When you add writes to shared state or change a flow, update the architecture or flow doc that describes that flow in the same change, listing each new writer and what it touches.
+  confidence: medium
+  seen_in:
+  - GH-683
+  sources:
+  - finding
+  added_at: '2026-11-13T23:45:41.361+00:00'
