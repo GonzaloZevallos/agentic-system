@@ -26,6 +26,7 @@ from ..domain import document, rules
 from ..domain import landing as landing_rules
 from ..domain.retakes import RESUMED_BY_POLLER, RETAKES_SPENT
 from ..domain.task import TaskState, TrackerFailure, TrackerFailureRecord, apply
+from ..domain.tracker_items import DONE, PLAN_NOTE
 from . import landing_plan
 from .archive import STARTED_OVER
 from .deliver import READY
@@ -73,6 +74,8 @@ SYSTEM_COMMENTS = (
     RESTARTED_BY_LANDING,
     TRACKER_WORK,
     PART_BUILT_WHOLE,
+    PLAN_NOTE,
+    DONE,
 )
 # What the document's frontmatter carries that is not state: the version record.
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}

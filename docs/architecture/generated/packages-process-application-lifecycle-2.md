@@ -39,6 +39,7 @@ graph TD
     m_application__resume --> g_application__support
     m_application__resume --> g_domain__landing
     m_application__resume --> g_domain__machine
+    m_application__resume --> g_domain__roles
     m_application__resume --> g_domain__state
     m_application__resume --> g_pkg__agentic__shared
     m_application__risk_net --> g_application__support
