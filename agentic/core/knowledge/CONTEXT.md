@@ -136,3 +136,8 @@ _Campo_: specification document — estándar en ingeniería de requisitos
 Una parte de una Spec con sus propios criterios de aceptación y sus propios riesgos, que una entrega construye sola. Se nombra con el sufijo `#<id>` de la línea `Spec:`, obligatorio cuando la spec tiene más de una.
 _Avoid_: parte, fase, subtarea (la subtarea es del plan del Tech Lead; la rebanada es de la spec)
 _Campo_: vertical slice — estándar en gestión ágil
+
+**Lectura de la spec**:
+Cómo una entrega trae el texto de una Spec (GH-594): por un id de commit completo, solo con bytes commiteados (nunca del working tree), en la forma de ruta `docs/specs/<nombre>.md`, de a lo sumo 64 KiB. Toda falla tiene la causa cerrada `spec_unreadable` y un motivo cerrado, nunca texto de git. En el código son `SpecReader`, `SpecUnreadable` y `spec_path_ok` en Proceso, y `GitSpecReader` (el lector, en `knowledge/adapters/git/spec_reader.py`) en Conocimiento.
+_Avoid_: leer del working tree, leer en HEAD
+_Campo_: sin término de arte
