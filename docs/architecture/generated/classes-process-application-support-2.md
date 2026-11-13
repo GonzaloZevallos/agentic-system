@@ -47,5 +47,5 @@ classDiagram
   - `ports.Ports` se asocia con `ports.Inbox`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
-- [application: support (parte 5)](classes-process-application-support-5.md)
+- [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.UnstageablePath` hereda de `ports.GitError`

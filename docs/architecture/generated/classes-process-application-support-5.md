@@ -22,6 +22,8 @@ classDiagram
     class ports__Scratch["Scratch"]
     class ports__SentEntry["SentEntry"]
     class ports__SentMemory["SentMemory"]
+    class ports__SpecReader["SpecReader"]
+    class ports__SpecUnreadable["SpecUnreadable"]
     class ports__StopFlag["StopFlag"]
     class ports__TaskDocuments["TaskDocuments"]
     class ports__Tracker["Tracker"]
@@ -30,22 +32,18 @@ classDiagram
     class ports__TrackerRefused["TrackerRefused"]
     class ports__TrackerTimedOut["TrackerTimedOut"]
     class ports__TrackerTransient["TrackerTransient"]
-    class ports__TrackerUnreachable["TrackerUnreachable"]
-    class ports__UnstageablePath["UnstageablePath"]
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
     ports__TrackerTimedOut --|> ports__TrackerCallFailed
     ports__TrackerTransient --|> ports__TrackerCallFailed
-    ports__TrackerUnreachable --|> ports__TrackerCallFailed
 ```
 
 ## Relaciones con otras páginas
 
 - [application: reflection](classes-process-application-reflection.md)
   - `reflect_run.SystemRepo` se asocia con `ports.Tracker`
-- [application: support (parte 2)](classes-process-application-support-2.md)
-  - `ports.UnstageablePath` hereda de `ports.GitError`
 - [application: support (parte 3)](classes-process-application-support-3.md)
   - `ports.Ports` se asocia con `ports.TaskDocuments`
   - `ports.Ports` se asocia con `ports.Tracker`
 - [application: support (parte 6)](classes-process-application-support-6.md)
+  - `ports.TrackerUnreachable` hereda de `ports.TrackerCallFailed`
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`

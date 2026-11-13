@@ -6,5 +6,6 @@ Esta página muestra las clases públicas de todos los módulos de `agentic.core
 classDiagram
     class filesystem__flags__FilesystemFlags["FilesystemFlags"]
     class filesystem__knowledge__FilesystemKnowledge["FilesystemKnowledge"]
+    class git__spec_reader__GitSpecReader["GitSpecReader"]
     class git__stack__GitStack["GitStack"]
 ```

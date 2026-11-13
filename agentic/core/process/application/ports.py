@@ -37,6 +37,7 @@ from ..domain.scratch import (
     SweepDecision,
 )
 from ..domain.size_budget import NumstatRow
+from ..domain.spec_delivery import SpecReadCause, SpecReadRefusal
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -2455,6 +2456,27 @@ class ExperimentFile(Protocol):
         ...
 
 
+class SpecReader(Protocol):
+    """A spec as a commit of the product repo holds it (GH-594), never as the worktree does."""
+
+    def read(self, commit: str, path: str) -> str:
+        """The text of `path` at `commit`. `path` is `docs/specs/<name>.md` and `commit` a full
+        lowercase id. Raises `SpecUnreadable` for anything else, or for a file that is not a
+        regular blob of at most `SPEC_MAX_BYTES` bytes of UTF-8."""
+        ...
+
+
+class SpecUnreadable(Exception):
+    """A spec that cannot be read: the reason and the cause, and nothing else. The message is
+    the reason alone, so no git output, path or id ever reaches a log through it. Not a
+    `GitError`: a refused spec is an answer, not a broken checkout."""
+
+    def __init__(self, reason: SpecReadRefusal) -> None:
+        super().__init__(reason)
+        self.reason: SpecReadRefusal = reason
+        self.cause: SpecReadCause = "spec_unreadable"
+
+
 def utc_now() -> str:
     """The instant, ISO-8601 UTC at millisecond precision: the default `Ports.now`, the one
     clock an application node stamps a `pause_log` `at` from. A test hands its own."""
@@ -2507,6 +2529,9 @@ class Ports:
     # The product's experiment declaration (GH-470). `None` declares none and reads nothing,
     # which is how every round ran before it existed.
     experiment: ExperimentFile | None = None
+    # Reads a spec from the product repo at a commit (GH-594). `None` reads no spec, which is how
+    # every round ran before it existed.
+    spec_reader: SpecReader | None = None
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now

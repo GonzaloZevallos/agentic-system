@@ -8,6 +8,8 @@ from agentic.core.process.domain.spec_delivery import (
     derive_flags,
     render_approved_front_matter,
     render_draft_front_matter,
+    spec_commit_ok,
+    spec_path_ok,
     split_front_matter,
 )
 
@@ -106,3 +108,51 @@ def test_approved_render() -> None:
 def test_approved_render_rejects_bad_values(by: str, at: str, sha: str) -> None:
     with pytest.raises(ValueError):
         render_approved_front_matter(by, at, sha)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "..",
+        "docs/specs/../x.md",
+        "/docs/specs/a.md",
+        "docs\\specs\\a.md",
+        "docs/specs/a\x00.md",
+        "docs/specs/a.md\n",
+        "docs/specs/a\x1f.md",
+        "docs/specs/sub/a.md",
+        "docs/specs/a.txt",
+        "docs/other/a.md",
+        "docs/specs/.md",
+        "docs/specs/.hidden.md",
+        "docs/specs/" + "a" * 253 + ".md",
+    ],
+)
+def test_spec_path_refuses_every_other_form(path: str) -> None:
+    assert not spec_path_ok(path)
+
+
+@pytest.mark.parametrize(
+    "path", ["docs/specs/GH-594.md", "docs/specs/a_b-c.1.md", "docs/specs/" + "a" * 240 + ".md"]
+)
+def test_spec_path_accepts_its_one_form(path: str) -> None:
+    assert spec_path_ok(path)
+
+
+def test_spec_path_limit_is_255_characters() -> None:
+    edge = "docs/specs/" + "a" * (255 - len("docs/specs/") - len(".md")) + ".md"
+    assert len(edge) == 255
+    assert spec_path_ok(edge)
+    assert not spec_path_ok(edge[:-3] + "a.md")
+
+
+@pytest.mark.parametrize("commit", ["a" * 40, "0123456789abcdef" * 4])
+def test_spec_commit_accepts_a_full_lowercase_id(commit: str) -> None:
+    assert spec_commit_ok(commit)
+
+
+@pytest.mark.parametrize(
+    "commit", ["abc1234", "A" * 40, "HEAD", "-x", "a" * 41, "a" * 40 + "\n", "", "g" * 40]
+)
+def test_spec_commit_refuses_everything_else(commit: str) -> None:
+    assert not spec_commit_ok(commit)
