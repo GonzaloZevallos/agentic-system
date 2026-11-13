@@ -82,6 +82,9 @@ class Store:
     def remove_partial(self, sha: str) -> None:
         self._call(f"remove_partial {sha}")
 
+    def stages(self) -> list[tuple[str, datetime]]:
+        return []
+
     def current(self) -> str | None:
         return self._current
 
@@ -95,6 +98,27 @@ class Store:
     def write_switch(self, previous: str | None, new: str, switched_at: datetime) -> None:
         self._call(f"write_switch {new}")
         self.switch_written = (previous, new, switched_at)
+
+    def switch_record(self) -> tuple[str | None, str, datetime] | None:
+        return self.switch_written
+
+    def unavailable_record(self) -> tuple[str, int, str] | None:
+        return None
+
+    def write_unavailable(self, sha: str, count: int, cause: str) -> None:
+        self._call(f"write_unavailable {sha}")
+
+    def clear_unavailable(self) -> None:
+        self._call("clear_unavailable")
+
+    def escalation_issue(self) -> str | None:
+        return None
+
+    def write_escalation_issue(self, url: str) -> None:
+        self._call(f"write_escalation_issue {url}")
+
+    def remove(self, name: str) -> None:
+        self._call(f"remove {name}")
 
     def copy_env(self, source: Path, dest: str) -> bytes:
         self.copy_sources.append((source, dest))
