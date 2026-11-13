@@ -220,7 +220,8 @@ def rollback_due(
     """Whether the rotation to `new` must be rolled back. Never while `now - switched_at`
     is within `grace` (the border included). Past it, true when some poller in `expected`
     has no heartbeat showing checkout `new` (missing or unreadable counts as absent; the
-    heartbeat's own `at` is not looked at). A poller outside `expected` never causes a
+    heartbeat's own `at` is not looked at, so a naive `at` on a heartbeat showing `new`
+    still counts as present). A poller outside `expected` never causes a
     rollback. A naive `now` or `switched_at` raises ValueError."""
     if not _aware(now) or not _aware(switched_at):
         raise ValueError("now and switched_at must be timezone-aware")
