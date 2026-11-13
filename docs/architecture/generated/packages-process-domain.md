@@ -16,8 +16,7 @@ Esta página muestra los grupos de módulos de `domain` y una flecha por cada gr
   - [domain: machine](packages-process-domain-machine.md)
   - [domain: playbook](packages-process-domain-playbook.md)
   - [domain: roles](packages-process-domain-roles.md)
-  - [domain: state (parte 1)](packages-process-domain-state-1.md)
-  - [domain: state (parte 2)](packages-process-domain-state-2.md)
+  - [domain: state](packages-process-domain-state.md)
 
 ```mermaid
 graph TD

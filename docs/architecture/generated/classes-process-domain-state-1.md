@@ -38,5 +38,4 @@ classDiagram
     class rules__InterviewProgress["InterviewProgress"]
     class rules__LandCandidate["LandCandidate"]
     class rules__LandWait["LandWait"]
-    class rules__LaunchCandidate["LaunchCandidate"]
 ```
