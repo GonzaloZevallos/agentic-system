@@ -867,3 +867,5 @@ tasks:
   GH-601@decision:
     cost_usd: 0.0479
     decisions: 1
+  GH-635@review:
+    cost_usd: 0.0434
