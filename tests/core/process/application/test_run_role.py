@@ -15,11 +15,11 @@ from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
     Output,
-    render_role_prompt,
     RoleFailure,
     TaskCapReached,
     context_for,
     load_prompt,
+    render_role_prompt,
     run_record,
     run_role,
     run_with_retry,
@@ -27,7 +27,7 @@ from agentic.core.process.application.run_role import (
     with_playbook,
 )
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
-from agentic.core.process.domain import rules, schemas, turn_notice
+from agentic.core.process.domain import rules, schemas, spec_brief, turn_notice
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
@@ -55,7 +55,6 @@ from agentic.core.process.domain.roles import (
 from agentic.core.process.domain.rules import RETRY_TURNS
 from agentic.core.process.domain.schemas import TechAnswers, TechAnswersWithAssumptions
 from agentic.core.process.domain.scratch import SpaceReading
-from agentic.core.process.domain import spec_brief
 from agentic.core.process.domain.spec_brief import fenced_section
 from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
@@ -2276,7 +2275,9 @@ async def test_a_named_block_joins_the_system_prompt_and_its_hash_only_with_a_sp
     assert prompts_plain.block_calls == []  # no spec: the table is not consulted
     with_spec, prompts, _, spec_patch = await _run_with_blocks(tmp_path, blocks, spec=GOOD_SPEC)
     assert prompts.block_calls == ["build"]
-    assert with_spec.calls[0]["system_prompt"] == plain.calls[0]["system_prompt"] + "\n\nBuild rules."
+    assert (
+        with_spec.calls[0]["system_prompt"] == plain.calls[0]["system_prompt"] + "\n\nBuild rules."
+    )
     assert spec_patch["prompts"] != plain_patch["prompts"]
 
 
