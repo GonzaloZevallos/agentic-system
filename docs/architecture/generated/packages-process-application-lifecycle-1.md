@@ -36,6 +36,7 @@ graph TD
     m_application__archive --> g_pkg__domain
     m_application__board_sync --> g_application__support
     m_application__board_sync --> g_pkg__domain
+    m_application__carve_out --> g_application__lifecycle__2
     m_application__carve_out --> g_application__support
     m_application__carve_out --> g_pkg__domain
     m_application__dry_run --> g_application__support
