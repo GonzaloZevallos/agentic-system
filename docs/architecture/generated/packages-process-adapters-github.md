@@ -17,6 +17,7 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_adapters__github__board["adapters.github.board"]
     m_adapters__github__ci_logs["adapters.github.ci_logs"]
+    m_adapters__github__commit_ci["adapters.github.commit_ci"]
     m_adapters__github__inbox["adapters.github.inbox"]
     m_adapters__github__label_timeline["adapters.github.label_timeline"]
     m_adapters__github__run["adapters.github.run"]
@@ -26,6 +27,8 @@ graph TD
     m_adapters__github__board --> m_adapters__github__run
     m_adapters__github__ci_logs --> g_pkg__domain
     m_adapters__github__ci_logs --> m_adapters__github__run
+    m_adapters__github__commit_ci --> g_pkg__domain
+    m_adapters__github__commit_ci --> m_adapters__github__tracker
     m_adapters__github__inbox --> g_pkg__domain
     m_adapters__github__inbox --> m_adapters__github__run
     m_adapters__github__inbox --> m_adapters__github__tracker
