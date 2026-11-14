@@ -2,9 +2,9 @@
 that `settle` repairs what `promote` breaks. A venv built in `<sha>.partial` carries absolute
 paths, so after the rename to `<sha>` its `agentic` does not run; `settle` rebuilds it at the
 final path. The mirror is a local `git clone --mirror` of this checkout's HEAD, and `uv` runs
-offline against the warm cache. Marked `slow`: the affected-only tier leaves it out and the
-full tier (GitHub CI) runs it. Without `uv` or a warm cache it fails under `CI` and skips
-elsewhere."""
+offline against the warm cache (online under `CI`, whose cache is pruned). Marked `slow`: the
+affected-only tier leaves it out and the full tier (GitHub CI) runs it. When `uv` cannot build
+the stage it fails under `CI` and skips elsewhere."""
 
 from __future__ import annotations
 
@@ -41,18 +41,22 @@ class NoProducts:
 
 
 class OfflineRunner:
-    """The default runner with `UV_OFFLINE=1` and the warm cache added: the adapter strips every
-    `UV_*`."""
+    """The default runner with the machine's uv cache and interpreter directory added back (the
+    adapter strips every `UV_*`), and `UV_OFFLINE=1` unless under `CI`: there the cache is
+    pruned after each job and the network is the one dependable source, so uv may download."""
 
     def __init__(self) -> None:
         self._inner = SubprocessRunner()
+        self._extra = {"UV_CACHE_DIR": UV_CACHE}
+        if "UV_PYTHON_INSTALL_DIR" in os.environ:
+            self._extra["UV_PYTHON_INSTALL_DIR"] = os.environ["UV_PYTHON_INSTALL_DIR"]
+        if not os.environ.get("CI"):
+            self._extra["UV_OFFLINE"] = "1"
 
     def run(
         self, argv: Sequence[str], cwd: Path, env: Mapping[str, str], timeout_s: float
     ) -> int | TimedOut | OSError:
-        return self._inner.run(
-            argv, cwd, {**env, "UV_OFFLINE": "1", "UV_CACHE_DIR": UV_CACHE}, timeout_s
-        )
+        return self._inner.run(argv, cwd, {**env, **self._extra}, timeout_s)
 
 
 def unavailable(what: str, outcome: Unavailable) -> None:
