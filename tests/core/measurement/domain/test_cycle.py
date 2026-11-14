@@ -595,14 +595,15 @@ def _module_import(node):
 
 
 def _module_attribute_violations(tree):
-    """Every use of the name `rules` that is not `rules.terminal_failures`."""
+    """Every use of the name `rules` that is not a call `rules.terminal_failures(...)`."""
     allowed = {
-        id(n.value)
+        id(n.func.value)
         for n in ast.walk(tree)
-        if isinstance(n, ast.Attribute)
-        and isinstance(n.value, ast.Name)
-        and n.value.id == "rules"
-        and n.attr == "terminal_failures"
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "rules"
+        and n.func.attr == "terminal_failures"
     }
     return [
         f"line {n.lineno}: rules used beyond terminal_failures"
@@ -646,9 +647,9 @@ MODULE_RULES_IMPORT = "from agentic.core.process.domain import ci, rules\n"
         "import os\n",
         # the module import is no licence to read any other name from `rules`
         PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "x = rules.EXTERNAL_REASONS\n",
-        PAUSE_KIND_IMPORT
-        + MODULE_RULES_IMPORT
-        + "x = rules.terminal_failures\ny = rules.pause_kind\n",
+        PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "y = rules.pause_kind\n",
+        # an attribute read of `terminal_failures` that is no call is a copy in the making
+        PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "x = rules.terminal_failures\n",
         PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "x = getattr(rules, 'EXTERNAL_REASONS')\n",
     ],
 )
