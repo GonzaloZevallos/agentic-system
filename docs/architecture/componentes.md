@@ -112,13 +112,17 @@ por sha, que arma el reporte con `agentic/core/process/adapters/github/tracker.p
 un oid que no son 40 hex en minúscula, o cualquier falla, es `CiUnreadable`. Lo cablea la fábrica
 `agentic/composition.py:stage0_master_window`, que llama `stage0_rotation`. `Stage0Store` es la raíz de rotación
 (lock no bloqueante, `current`, `rejected`, `switch.json` como intención que el lector
-confirma contra `current()`, `promote` y `switch_current`), `Stage0Users` dice qué stages se
+confirma contra `current()` y que guarda `expected`, los pollers que se esperan de vuelta en el stage nuevo, como
+lista ordenada —ausente o mal formada se lee como vacía—, `promote` y `switch_current`), `Stage0Users` dice qué stages se
 usan, `MasterWindow` lee la ventana de commits de origin/master (sobre un espejo en
 `<root>/.mirror`, con el CI de cada commit que entrega el puerto `CommitCiReader`, que ese adaptador
 recibe inyectado y nunca lanza), `Stage0Candidate` prepara y
 prueba un candidato, `Stage0Escalation` escala sin lanzar, y `FailurePolicy` decide qué hacer
 ante un fallo del candidato (por defecto conserva `current` y nunca escribe `rejected`); todos
-en `agentic/core/process/application/ports.py`.
+en `agentic/core/process/application/ports.py`. `Heartbeats` es el puerto de los latidos de los pollers, un archivo
+`<root>/heartbeats/<producto>-<LOCK_KEY>.json` por poller de un producto; lo cumple
+`agentic/core/process/adapters/filesystem/heartbeats.py:FilesystemHeartbeats`, único lector y escritor de ese directorio
+(escritura atómica; un archivo ilegible o con fase `stop` se lee como `Unreadable`). Nada lo cablea todavía.
 
 ## `core/knowledge`
 
