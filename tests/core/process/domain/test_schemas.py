@@ -1637,6 +1637,11 @@ def test_a_valid_carve_out_output_validates_and_its_line_lists_come_back_as_list
     )
 
 
+@pytest.mark.parametrize("kind", carve_out.KINDS)
+def test_every_kind_the_carve_out_module_allows_validates(kind):
+    assert schemas.validate(CarveOutOutput, {**_CARVE, "kind": kind}, {})["kind"] == kind
+
+
 @pytest.mark.parametrize(
     "broken",
     [

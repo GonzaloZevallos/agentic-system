@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from agentic.shared.configuration import DEFAULT_PLAN_SHAPE
 
-from . import ci_workflow, plan_view, size_budget, tracker_items
+from . import carve_out, ci_workflow, plan_view, size_budget, tracker_items
 from .ci_workflow import WorkflowNames
 from .cost_history import History, Raise, bucket_median, raised_estimate, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
@@ -261,7 +261,9 @@ class CarveOutOutput(RoleOutput):
     )
     title: str = Field(description="The follow-up issue's title, one line")
     body: str = Field(description="What the follow-up issue is about, in your own words")
-    kind: Literal["change", "migration"] = Field(description="The follow-up issue's kind")
+    kind: str = Field(
+        description=f"The follow-up issue's kind, one of {', '.join(carve_out.KINDS)}"
+    )
     moved_criteria: list[str] = Field(
         description="The acceptance criteria that move with the extracted steps and leave the "
         "remainder, one per line; an empty string if none"
@@ -290,6 +292,13 @@ class CarveOutOutput(RoleOutput):
         description="One line: what stays green and working once only the remainder is built"
     )
     guard: str = Field(description="What keeps the remainder from changing behaviour on its own")
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, kind: str) -> str:
+        if kind not in carve_out.KINDS:
+            raise ValueError(f"kind {kind!r} is not one of {list(carve_out.KINDS)}")
+        return kind
 
 
 class CritiqueFinding(BaseModel):
