@@ -465,8 +465,8 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 # Re-pinned by GH-472: the plan sizer and the plan critics join `ROLES`, so their role-cost score
 # names join the row.
 UNCHANGED_ROWS = {
-    "agentic-system": "d0b00fb409bc3365f4faa4cd31512a9d208d04513523fa63103713d5b396c83f",
-    "apostrophe": "4c1f89f837c198822f91024aa06bff06afd98101978eb14ae0818f3b39e0b5ef",
+    "agentic-system": "d2cdf761df77dc450a5b8d6aca8bf8fdb9230121cb7d14475257a9f4061f6a14",
+    "apostrophe": "e007ff7983ae3f657cb3f08e3fb426640907d4454f8c9bac1bf9bae5cd4a4ac2",
 }
 
 
