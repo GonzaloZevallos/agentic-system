@@ -6,7 +6,15 @@ import pytest
 
 from agentic.core.process.application import resume
 from agentic.core.process.application.plan import PART_BUILT_WHOLE
-from agentic.core.process.domain import document, legacy_names, retakes, roles, rules, schemas
+from agentic.core.process.domain import (
+    document,
+    legacy_names,
+    retakes,
+    roles,
+    rules,
+    schemas,
+    spec_assumptions,
+)
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -1107,3 +1115,27 @@ def test_a_ci_escalation_on_top_of_a_tracker_pause_is_settled_the_same_way_by_a_
     assert settled["tracker_human"] == [] and not settled.get("escalated")
     assert settled["tracker_actions_done"]["abc123abc123"]["answered"]
     assert ("GH-12", "needs-human") in ports.tracker.unlabeled
+
+
+# --- a spec conflict pause (GH-594): the owner's decision is what `conflict_step` reads ----------
+
+
+def test_a_spec_conflict_pause_needs_a_human_comment_and_then_reads_as_decided(cfg):
+    spec = {"path": "docs/specs/a.md"}
+    patch = spec_assumptions.conflict_escalation(
+        {"spec": spec}, "contradiction", "Spec contradiction", "plan", "2026-11-13T00:00:00Z"
+    )
+    state = {**paused(cost_usd=1.0, subtasks={}, runs=[]), "spec": spec, **patch}
+    assert spec_assumptions.conflict_step(state, "contradiction") == "escalate"
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: Spec contradiction"]
+    with pytest.raises(resume.WaitingOnHuman):
+        resume.prepare("GH-12", state, "checkpoint", cfg, ports)
+    ports.tracker.earlier.append("The first clause holds.")
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, ports)
+    decided = {**state, **r.resumed}
+    assert decided["pause_log"][-1]["kind"] == "resumed"
+    assert spec_assumptions.conflict_step(decided, "contradiction") == (
+        "spec conflict (contradiction) settled by the owner's decision"
+    )
+    assert spec_assumptions.conflict_step(decided, "data_loss") == "escalate"

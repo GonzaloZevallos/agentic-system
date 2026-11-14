@@ -21,6 +21,7 @@ graph TD
     m_domain__signals["domain.signals"]
     m_domain__size_budget["domain.size_budget"]
     m_domain__spec_assumptions["domain.spec_assumptions"]
+    m_domain__spec_brief["domain.spec_brief"]
     m_domain__spec_delivery["domain.spec_delivery"]
     m_domain__task["domain.task"]
     m_domain__task_path["domain.task_path"]
@@ -36,7 +37,9 @@ graph TD
     m_domain__rules --> m_domain__task_path
     m_domain__size_budget --> g_domain__checks
     m_domain__spec_assumptions --> g_domain__roles
+    m_domain__spec_assumptions --> m_domain__rules
     m_domain__spec_assumptions --> m_domain__task
+    m_domain__spec_brief --> m_domain__spec_delivery
     m_domain__task --> g_domain__checks
     m_domain__task --> g_domain__landing
     m_domain__task --> g_domain__machine

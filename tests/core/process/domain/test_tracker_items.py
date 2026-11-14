@@ -478,3 +478,16 @@ def test_failure_block_holds_at_most_max_items_lines():
     seven = [_comment(f"Note {n}.") for n in range(7)]
     block = tracker_items.failure_block(seven, "ValueError", "d.md")
     assert len([line for line in block.splitlines() if line.startswith("- ")]) == 5
+
+
+def test_escalate_human_under_a_spec_raises_instead_of_asking_the_owner():
+    spec = {"path": "docs/specs/a.md"}
+    with pytest.raises(ValueError, match="spec_cause"):
+        tracker_items.escalate_human({"tracker_items": [ITEM], "spec": spec}, AT)
+
+
+def test_escalate_human_with_the_graphs_empty_spec_is_the_patch_of_today():
+    plain = tracker_items.escalate_human({"tracker_items": [ITEM]}, AT)
+    assert tracker_items.escalate_human({"tracker_items": [ITEM], "spec": {}}, AT) == plain
+    assert "spec_cause" not in plain
+    assert plain["pause_log"] == [{"kind": "escalation", "value": "questions", "at": AT}]

@@ -1557,3 +1557,38 @@ def test_the_plan_schema_describes_the_comment_shape_and_what_it_may_not_hold():
     plan = schemas.json_schema(schemas.TechPlan, VOCAB)
     described = plan["properties"]["tracker_items"]["description"]
     assert "{kind: comment, text}" in described and "#N" in described and "GH-N" in described
+
+
+# --- a spec delivery's plan (GH-594): no `human` item, and the `spec_conflict` door ---------------
+
+
+def _human_plan():
+    return {**_estimated(20.0, 3), "tracker_items": ITEMS}
+
+
+def test_plan_check_for_refuses_a_human_item_under_a_spec():
+    check = schemas.plan_check_for(_history(1, []), 0.0, has_spec=True)
+    with pytest.raises(ValueError, match="spec_human_item"):
+        check(_human_plan())
+
+
+def test_plan_check_for_accepts_the_same_plan_without_a_spec():
+    schemas.plan_check_for(_history(1, []), 0.0)(_human_plan())
+    schemas.plan_check_for(_history(1, []), 0.0, has_spec=False)(_human_plan())
+
+
+def test_plan_check_for_accepts_a_human_item_when_the_plan_sets_a_spec_conflict():
+    check = schemas.plan_check_for(_history(1, []), 0.0, has_spec=True)
+    check({**_human_plan(), "spec_conflict": "contradiction"})
+
+
+def test_plan_check_for_under_a_spec_accepts_a_plan_without_a_human_item():
+    check = schemas.plan_check_for(_history(1, []), 0.0, has_spec=True)
+    check(_estimated(20.0, 3))
+
+
+def test_the_spec_conflict_field_is_in_the_spec_plan_schema_and_not_in_the_plain_one():
+    field = "spec_conflict"
+    spec = schemas.TechPlanWithAssumptions.model_json_schema()["properties"]
+    assert "cannot be built as written" in spec[field]["description"]
+    assert field not in schemas.TechPlan.model_json_schema()["properties"]

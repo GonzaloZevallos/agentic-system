@@ -812,6 +812,11 @@ class TechPlanWithAssumptions(TechPlan):
         description="Behaviour decisions taken where the request was silent: one line each, "
         "at most 240 characters",
     )
+    spec_conflict: SpecEscalationCause | None = Field(
+        default=None,
+        description="Set only when the spec cannot be built as written; explain which clause, "
+        "and why, in your section",
+    )
 
 
 class StackProposal(RoleOutput):
@@ -1430,6 +1435,21 @@ def _light_check(data: dict[str, Any], path: str, path_label: str) -> None:
         raise ValueError(LIGHT_CAP_REFUSAL)
 
 
+SPEC_HUMAN_ITEM_REFUSAL = (
+    "spec_human_item: this task has a spec, so the plan asks the owner nothing through a "
+    "`human` tracker item; decide it and record the decision as an assumption, or set "
+    "`spec_conflict` when the spec itself cannot be built as written"
+)
+
+
+def _has_human_item(data: dict[str, Any]) -> bool:
+    """Whether the plan's raw `tracker_items` hold a `human` one. Every item is a dict with a
+    `kind` once `TechPlan` parsed it; anything else is not a `human` item."""
+    return any(
+        isinstance(i, dict) and i.get("kind") == "human" for i in data.get("tracker_items") or []
+    )
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
@@ -1443,6 +1463,7 @@ def plan_check_for(
     path: str = "full",
     path_label: str = "none",
     size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
+    has_spec: bool = False,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1484,7 +1505,11 @@ def plan_check_for(
     light plan over the cap without the label is not refused: the plan node promotes the task.
 
     A plan that declares its hand-written size (GH-592) is judged on it times `size_ratio`,
-    the floor factor of the size budget; a plan with no size fields is judged as before."""
+    the floor factor of the size budget; a plan with no size fields is judged as before.
+
+    With `has_spec` (GH-594: the task carries a spec) a plan with any `human` tracker item is
+    refused with `spec_human_item`, unless it sets `spec_conflict`: a spec delivery never asks
+    the owner a question outside the three spec causes. Without a spec nothing changes."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import MAX_SPLIT_DEPTH, TRACKER_WITH_PARTS
@@ -1497,6 +1522,8 @@ def plan_check_for(
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
         _ci_names_check(data, workflow, stack_ci)
+        if has_spec and not data.get("spec_conflict") and _has_human_item(data):
+            raise ValueError(SPEC_HUMAN_ITEM_REFUSAL)
         if parts and part_of is not None and at_cap:
             raise ValueError(
                 f"this task is part {part_of[1]} of {part_of[0]}, at split depth {part_of[2]}; "

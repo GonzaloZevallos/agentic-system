@@ -30,6 +30,7 @@ from ..domain import (
     rules,
     schemas,
     size_budget,
+    spec_assumptions,
     task_path,
     tracker_items,
 )
@@ -197,10 +198,13 @@ async def _interview_and_plan(
         tracker_item_kinds=tracker_items.kinds_text(),
     )
     output, floored = _floored(output, interviewed, history)
+    gate = _spec_gate(state, output, spec.author.name, ports.now())
+    if _escalated(gate):
+        return finish(state, apply(apply(patch, written), gate or {}), ports)
     delivered = apply(
         patch, _delivered(cfg, output, written, spec.author.name, floored, _revised_from(state))
     )
-    delivered = _covered(state, delivered, floored)
+    delivered = _covered(state, apply(delivered, gate) if gate else delivered, floored)
     judged = _after_delivery(state, delivered, part_of, output, history, at=ports.now())
     return _finished(state, judged, ports)
 
@@ -295,7 +299,31 @@ def _estimate_check(
         path=task_path.path_of(state),
         path_label=task_path.path_label_of(state),
         size_ratio=_size_ratio(history),
+        has_spec=bool(state.get("spec")),
     )
+
+
+def _spec_gate(state: TaskState, output: Output | None, role: str, at: str) -> TaskState | None:
+    """What the spec makes of a plan that raised `spec_conflict` (GH-594). Pure. `None` when the
+    task has no spec, nothing was delivered or the plan raised no conflict: the route then runs
+    exactly as it does without a spec. Otherwise `spec_assumptions.conflict_step` decides: an
+    undecided conflict is the escalation patch (`conflict_escalation` builds it, so the plan
+    builds nothing); one the owner decided is one assumption row under `role`."""
+    if not state.get("spec") or output is None:
+        return None
+    cause = output.data.get("spec_conflict")
+    if not cause:
+        return None
+    step = spec_assumptions.conflict_step(state, cause)
+    if step == spec_assumptions.ESCALATE:
+        return spec_assumptions.conflict_escalation(
+            state, cause, f"Spec {cause} raised in the plan", "plan", at
+        )
+    return {"assumptions": [{"role": role, "text": step}]}
+
+
+def _escalated(gate: TaskState | None) -> bool:
+    return gate is not None and gate.get("escalation_class") is not None
 
 
 def _size_ratio(history: cost_history.History) -> size_budget.Ratio:
@@ -434,11 +462,14 @@ async def _plan_cold(
     base = apply(state, carried) if carried else state
     output, written = await _cold_draft(base, spec, cfg, ports, cwd, history, _SKIPPED_PROPOSAL)
     output, floored = _floored(output, base, history)
+    gate = _spec_gate(state, output, spec.author.name, ports.now())
+    if _escalated(gate):
+        return finish(state, _joined(carried or {}, apply(written, gate or {})), ports)
     delivered = _joined(
         carried or {},
         _delivered(cfg, output, written, spec.author.name, floored, _revised_from(state)),
     )
-    delivered = _covered(state, delivered, floored)
+    delivered = _covered(state, apply(delivered, gate) if gate else delivered, floored)
     judged = _after_delivery(state, delivered, part_of, output, history, at=ports.now())
     return _finished(state, judged, ports)
 
@@ -513,6 +544,10 @@ async def _plan_with_critic(
         return finish(state, carried, ports)
     draft, draft_floored = _floored(draft, drafting, history)
     drafted = apply(state, carried)
+    drafted_gate = _spec_gate(state, draft, name, ports.now())
+    if _escalated(drafted_gate):
+        # An undecided conflict in the draft stops here: no critic, no revision, no interview.
+        return finish(state, apply(carried, drafted_gate or {}), ports)
     regated = plan_route.regate(draft.data["estimated_cost_usd"], cfg.plan_interview_min_usd)
     if not recorded.get("after_promotion") and not plan_route.takes_critic(regated):
         carried = apply(carried, {"plan_route": {**recorded, "route": regated, "misrouted": True}})
@@ -558,7 +593,12 @@ async def _plan_with_critic(
             if stopped:
                 return finish(state, carried, ports)
             written = {"sections": {name: drafted["sections"][name]}}
+    gate = _spec_gate(state, final, name, ports.now())
+    if _escalated(gate):
+        return finish(state, apply(apply(carried, written), gate or {}), ports)
     delivered = _delivered(cfg, final, written, name, floored, _revised_from(state))
+    if gate:
+        delivered = apply(delivered, gate)
     route_state: TaskState = {"plan_route": {**recorded, "critic": critic_state}}
     judged = _after_delivery(
         state,

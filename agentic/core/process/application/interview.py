@@ -296,7 +296,8 @@ async def interview(
                 answers.data["questions_for_human"], has_spec=has_spec, role_name=decider.name
             )
         if has_spec and (cause := answers.data.get("spec_conflict")):
-            if not spec_assumptions.conflict_decided(state.get("pause_log", [])):
+            step = spec_assumptions.conflict_step(state, cause)
+            if step == spec_assumptions.ESCALATE:
                 # Escalates in this round: its questions for PM are dropped, no consultation runs.
                 reason = spec_assumptions.conflict_reason(cause, round_)
                 return None, _escalate_questions(
@@ -306,10 +307,7 @@ async def interview(
                     ports,
                     spec_cause=cause,
                 )
-            transcript.assume(
-                spec.interviewee.name,
-                [f"spec conflict ({cause}) settled by the owner's decision"],
-            )
+            transcript.assume(spec.interviewee.name, [step])
         if spec.consultant is None:
             continue
 
@@ -363,10 +361,12 @@ def _escalate_questions(
 ) -> TaskState:
     """`patch` escalated as a `questions` pause, waiting on the human. The only place of
     this module that raises one, so a spec's `spec_cause` is passed in one place."""
+    if spec_cause is not None:
+        return patch | spec_assumptions.conflict_escalation(
+            state, spec_cause, reason, "interview", ports.now()
+        )
     patch = rules.logged(
-        patch
-        | rules.escalation("questions", reason, spec=state.get("spec"), spec_cause=spec_cause),
-        at=ports.now(),
+        patch | rules.escalation("questions", reason, spec=state.get("spec")), at=ports.now()
     )
     patch["status"] = WAITING_ON_HUMAN
     return patch
