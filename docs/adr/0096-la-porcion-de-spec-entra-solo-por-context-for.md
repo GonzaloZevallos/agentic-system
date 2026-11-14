@@ -62,3 +62,30 @@ Se comparó una vez `load_prompt` de base contra esta cabeza sobre los archivos 
 reales, para los 37 slugs de `ROLES`, con y sin tiers: texto y hash idénticos en las 74
 combinaciones. No se versionan hashes dorados de los prompts reales; las pruebas fijan la
 fórmula sobre un directorio sintético.
+
+## Adenda (GH-718): cómo se carga y se revisa el bloque constante
+
+- **Una instantánea de una sola tabla.** `FilesystemPrompts` lee, al construirse, cada nombre
+  distinto de `SPEC_BLOCKS` (la única tabla; ningún código de producción pasa `blocks=`) y
+  guarda el texto o el error de lectura, como hace con `raw` (GH-409). `Prompts.spec_block`
+  sirve esa instantánea y nunca el disco del momento: editar o borrar el archivo bajo una
+  corrida no cambia nada. Un error de lectura no rompe la construcción; lo levanta la llamada
+  de ese nombre. Un nombre fuera de la instantánea es `ValueError`, nunca `KeyError`.
+- **Qué directorios puede alcanzar un nombre.** `block_name_ok` (`^[a-z0-9][a-z0-9_-]*$`) es la
+  única guarda entre una entrada de la tabla y el sistema de archivos: un nombre que no la pasa
+  se guarda como `ValueError` y no se le arma ruta. Las lecturas llegan solo a
+  `.agentic/prompts/spec/<nombre>.md` del producto (que gana) y a
+  `agentic/core/process/domain/prompts/spec/<nombre>.md` del sistema. No se escribe nada.
+- **Sin tabla no se lee ningún archivo.** Con `SPEC_BLOCKS` vacía, ningún camino abre un archivo
+  bajo `prompts/spec/`, y todo texto y hash de prompt es idéntico al anterior.
+- **El preflight rechaza por cuatro razones**, cada una con un solo productor y un mensaje
+  `spec block <nombre>: <razón>` que nunca incluye el texto del bloque: `name` (decide
+  `block_name_ok`, sin leer el bloque), `missing` (decide el preflight, por el error de lectura),
+  `template` (`{{`) y `fence` (una línea que, recortada, es `SPEC_FENCE`), estas dos de
+  `block_refusal`. El preflight no recibe tabla propia: recorre `spec_block_names()` del puerto.
+- **Por qué `<!--` se permite.** El bloque es texto del dueño del producto, no un dato que una
+  tarea trajo: la guarda de datos (`data_refusal`) rechaza `<!--` porque un campo de la porción
+  puede venir forjado, y un bloque no.
+- **Dónde se lee.** `run_role` pide el bloque dentro del `try` de `PromptFailure`, solo con
+  `state["spec"]` presente, con la tabla nombrando al rol y sin `prompt` del llamador; un fallo
+  escala sin reintento y antes de toda llamada al modelo.
