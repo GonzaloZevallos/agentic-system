@@ -102,6 +102,7 @@ files = [
     "agentic/core/process/adapters/filesystem/stage0_users.py",
     "agentic/core/process/application/stage0_escalation.py",
     "agentic/core/process/application/stage0_failure.py",
+    "agentic/core/process/adapters/shell/stage0_candidate.py",
     "scripts/poll_waits.py",
     "scripts/gate_concurrency.py",
     "scripts/docs/render.py",
