@@ -7,6 +7,7 @@ import pytest
 
 from agentic.core.process.domain import carve_out, rules
 from agentic.core.process.domain.carve_out import CarveOut
+from agentic.core.process.domain.task import CarveRecord
 
 
 def _carve(**over: Any) -> CarveOut:
@@ -246,3 +247,56 @@ def test_carve_out_pending() -> None:
     assert not carve_out.carve_out_pending({"carve_out": {}})
     assert not carve_out.carve_out_pending({"carve_out": "weird"})
     assert not carve_out.carve_out_pending({})
+
+
+def test_marked_by_returns_both_parts_of_the_marker() -> None:
+    assert carve_out.marked_by(carve_out.marker("GH-721", 731)) == ("GH-721", 731)
+    assert carve_out.marked_by(f"body\n{carve_out.marker('GH-1', 5)}\nmore") == ("GH-1", 5)
+
+
+@pytest.mark.parametrize(
+    "body", ["<!-- agentic-split: GH-721 part 1 depth 2 -->", "no marker here", ""]
+)
+def test_marked_by_is_none_for_a_split_marker_or_no_marker(body: str) -> None:
+    assert carve_out.marked_by(body) is None
+    assert carve_out.marked_part_issue(body) is None
+
+
+def test_marked_part_issue_agrees_with_marked_by() -> None:
+    for body in (carve_out.marker("GH-721", 731), "nothing", rules.split_marker("GH-721", 1, 2)):
+        found = carve_out.marked_by(body)
+        assert carve_out.marked_part_issue(body) == (found[1] if found else None)
+
+
+def test_the_carve_out_marker_never_matches_split_part_of() -> None:
+    assert rules.split_part_of(carve_out.marker("GH-721", 731)) is None
+
+
+def test_writes_tracker_is_false_with_an_evaluation_and_true_without() -> None:
+    assert not carve_out.writes_tracker({"evaluation": {"arm": "a"}})
+    assert carve_out.writes_tracker({})
+    assert carve_out.writes_tracker({"evaluation": None})
+
+
+@pytest.mark.parametrize("evaluation", ["absent", None, {}, {"arm": "a"}])
+def test_writes_tracker_is_the_opposite_of_what_after_integrate_reads(evaluation: Any) -> None:
+    """The oracle: `rules.after_integrate` ends at `evaluated` exactly when the run has an
+    evaluation, which is when nothing is written to the tracker."""
+    state: Any = {
+        "type": "feature",
+        "flags": {},
+        "subtasks": {"api": {"status": "approved"}},
+        "runs": [{"role": "Tech Lead", "section": rules.review_section("api"), "cost_usd": 0.1}],
+    }
+    if evaluation != "absent":
+        state["evaluation"] = evaluation
+    reached = rules.after_integrate(state)
+    assert reached in ("evaluated", "deliver")
+    assert (reached == "evaluated") == (not carve_out.writes_tracker(state))
+
+
+def test_carve_out_pending_reads_a_carve_record() -> None:
+    open_record: CarveRecord = {"data": {"steps": ["b"]}, "fit": {}}
+    closed: CarveRecord = {**open_record, "outcome": "applied"}
+    assert carve_out.carve_out_pending({"carve_out": open_record})
+    assert not carve_out.carve_out_pending({"carve_out": closed})

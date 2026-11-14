@@ -2099,3 +2099,63 @@ def test_a_cleared_admission_reads_as_absent():
     cleared = document.record_closure(rendered, {"lane_admitted": None})
     assert "lane_admitted: null" in cleared
     assert "lane_admitted" not in document.parse(cleared)
+
+
+_CARVE_OPEN = {
+    "data": {"steps": ["b"], "title": "Follow-up", "estimated_cost_usd": 4.5},
+    "fit": {"fits": False, "note": "over budget"},
+    "at": "2026-11-14T10:00:00+00:00",
+}
+_CARVE_CLOSED = {
+    **_CARVE_OPEN,
+    "issue_url": "https://github.com/o/r/issues/731",
+    "repointed_at": "2026-11-14T10:01:00+00:00",
+    "commented_at": "2026-11-14T10:02:00+00:00",
+    "outcome": "applied",
+}
+
+
+@pytest.mark.parametrize(
+    "record",
+    [_CARVE_CLOSED, _CARVE_OPEN, {**_CARVE_OPEN, "outcome": "refused", "cause": "no_issue"}],
+)
+def test_the_carve_out_record_round_trips_and_a_second_render_is_identical(record):
+    """GH-719: a complete record, a partial one (no outcome, no cause) and a refused one."""
+    text = document.render(_bare(carve_out=record))
+    parsed = document.parse(text)
+    assert parsed["carve_out"] == record
+    assert document.render({**_bare(), **parsed, "description": "d"}) == text
+
+
+def test_a_carve_out_record_with_an_unknown_key_loads_and_loses_it_on_rerender():
+    text = document.render(_bare(carve_out=_CARVE_OPEN))
+    edited = text.replace("\ncarve_out:\n", "\ncarve_out:\n  future_key: x\n")
+    assert "future_key" in edited
+    parsed = document.parse(edited)
+    assert parsed["carve_out"] == _CARVE_OPEN
+    assert "future_key" not in document.render({**_bare(), **parsed})
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("outcome", "applied2"),
+        ("cause", "other"),
+        ("data", "text"),
+        ("fit", ["x"]),
+        ("issue_url", 7),
+    ],
+)
+def test_a_malformed_carve_out_record_fails_the_load_naming_the_source(key, value):
+    text = document.render(_bare(carve_out={**_CARVE_OPEN, key: value}))
+    with pytest.raises(ValueError, match=r"^T-1\.md: carve_out"):
+        document.parse(text, "T-1.md")
+    with pytest.raises(ValueError, match="carve_out"):
+        document.parse(document.render(_bare(carve_out="text")), "T-1.md")
+
+
+def test_a_state_without_a_carve_out_renders_no_carve_out_key():
+    bare = document.render(_bare())
+    assert "carve_out" not in bare
+    assert document.render(_bare(carve_out={})) == bare
+    assert "carve_out" not in document.parse(bare)

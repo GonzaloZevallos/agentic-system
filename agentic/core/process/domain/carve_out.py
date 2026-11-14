@@ -1,7 +1,9 @@
 """The rules of a depth-2 carve-out (GH-719, ADR-0093 addendum): a part whose plan is over the
 size budget moves whole subtasks into a follow-up issue instead of escalating. Pure: texts and
 mappings in, texts, lists and verdicts out. Imports nothing from `rules`, `schemas`, `task`,
-`application` or `adapters`, and has no caller yet (part 3 of GH-719).
+`measurement`, `application` or `adapters`, and has no caller yet (part 3 of GH-719). The
+persisted record is `task.CarveRecord`, in `TaskState` and the task document; the helpers here
+read it as a `Mapping` so this module never imports `task`.
 
 The marker's `<part_issue>` is the GitHub issue number of the part that extracted the steps,
 never its index, and `rules.split_part_of` never reads the marker: a follow-up is not a part
@@ -60,14 +62,6 @@ class CarveOut(TypedDict):
     integration: str
     remainder_green: str
     guard: str
-
-
-class _CarveOutRecord(TypedDict, total=False):
-    """The task document's `carve_out` record (persisted in part 3, not in `TaskState`):
-    `data` is the declared `CarveOut`, `outcome` is written only at close."""
-
-    data: Mapping[str, object]
-    outcome: str
 
 
 class _Ref(Protocol):
@@ -181,10 +175,23 @@ def marker(task_id: str, part_issue: int) -> str:
     return f"<!-- agentic-carve-out: {task_id} of #{part_issue} -->"
 
 
+def marked_by(body: str) -> tuple[str, int] | None:
+    """The task id and the part issue number the body's carve-out marker names, or `None`: the
+    one place the marker is matched."""
+    found = _MARKER.search(body)
+    return (found.group(1), int(found.group(2))) if found else None
+
+
 def marked_part_issue(body: str) -> int | None:
     """The part issue number the body's carve-out marker names, or `None`."""
-    found = _MARKER.search(body)
-    return int(found.group(2)) if found else None
+    marked = marked_by(body)
+    return marked[1] if marked else None
+
+
+def writes_tracker(state: Mapping[str, object]) -> bool:
+    """Whether the run writes to the tracker: an evaluation run never does. Reads the same key
+    `rules.after_integrate` reads for `evaluated`, so the two cannot drift."""
+    return not state.get("evaluation")
 
 
 def follow_up_body(
