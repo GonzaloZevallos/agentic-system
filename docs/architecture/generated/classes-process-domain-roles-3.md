@@ -36,8 +36,10 @@ classDiagram
     class schemas__PlanCritique["PlanCritique"]
     class schemas__PlanSize["PlanSize"]
     class schemas__PlatformAnswers["PlatformAnswers"]
+    class schemas__PlatformAnswersWithAssumptions["PlatformAnswersWithAssumptions"]
     class schemas__Reflection["Reflection"]
     class schemas__Review["Review"]
+    schemas__PlatformAnswersWithAssumptions --|> schemas__PlatformAnswers
 ```
 
 ## Relaciones con otras páginas

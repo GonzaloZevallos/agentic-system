@@ -21,7 +21,8 @@ Esta página muestra los grupos de módulos de `application` y una flecha por ca
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support](packages-process-application-support.md)
+  - [application: support (parte 1)](packages-process-application-support-1.md)
+  - [application: support (parte 2)](packages-process-application-support-2.md)
 
 ```mermaid
 graph TD
@@ -55,6 +56,7 @@ graph TD
     g_application__lifecycle --> g_application__support
     g_application__reflection --> g_application__definition
     g_application__reflection --> g_application__landing
+    g_application__reflection --> g_application__lifecycle
     g_application__reflection --> g_application__support
     g_application__support --> g_application__checks
     g_application__support --> g_application__landing

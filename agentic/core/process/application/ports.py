@@ -38,6 +38,16 @@ from ..domain.scratch import (
 )
 from ..domain.size_budget import NumstatRow
 from ..domain.spec_delivery import SpecReadCause, SpecReadRefusal
+from ..domain.stage0_rotation import (
+    Green,
+    Prepared,
+    Proceed,
+    Red,
+    Stop,
+    Unavailable,
+    Unreadable,
+    WindowEntry,
+)
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -2552,3 +2562,170 @@ class Ports:
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now
+
+
+class Stage0Store(Protocol):
+    """The state of stage0's rotation root (GH-632), one directory the rotator owns:
+
+    - `<root>/.lock`: the lock `lock` takes, non-blocking;
+    - `<root>/<sha40>`: a stage, a complete checkout, named by its 40 lowercase hex commit;
+    - `<root>/<sha40>.partial`: a candidate being built, never a stage, never smoked in place
+      of a stage: `promote` renames it to `<sha40>`;
+    - `<root>/current`: a symlink to the current stage, changed only by `switch_current`;
+    - `<root>/switch.json` `{previous, new, switched_at}`: an INTENT record written just
+      before `switch_current`. It is not proof that the switch happened: a reader confirms
+      it against `current()`;
+    - `<root>/rejected`: the shas a human or a policy refused;
+    - `<root>/escalations.json`: the issue the rotation escalated to;
+    - `<root>/unavailable.json` `{sha, count, cause}`: how many times in a row `sha` was
+      unavailable, and why;
+    - `<root>/.mirror` and `<root>/.mirror.clone`: the MasterWindow mirror, never a stage nor a
+      candidate.
+
+    Every state method of every part is declared here, so later parts never change the port.
+    A port raises only for an infrastructure fault (a disk that cannot be written), never to
+    say 'no': absence is a return value."""
+
+    def lock(self) -> AbstractContextManager[bool]:
+        """Takes `<root>/.lock` without blocking: yields True while held, False at once when
+        another rotation holds it. Released when the context exits, whatever raised."""
+        ...
+
+    def clear_partials(self) -> None:
+        """Removes every `<root>/*.partial`: what an interrupted run left behind."""
+        ...
+
+    def remove_partial(self, sha: str) -> None:
+        """Removes `<root>/<sha>.partial` if it exists."""
+        ...
+
+    def stages(self) -> list[tuple[str, datetime]]:
+        """Every directory of the root with its mtime, aware, as `prunable` expects."""
+        ...
+
+    def current(self) -> str | None:
+        """The name `<root>/current` points at, or None when there is no link (bootstrap)."""
+        ...
+
+    def rejected(self) -> frozenset[str]:
+        """The shas of `<root>/rejected`; empty when there is none."""
+        ...
+
+    def reject(self, sha: str) -> None:
+        """Adds `sha` to `<root>/rejected`. The default failure policy never calls it."""
+        ...
+
+    def switch_record(self) -> tuple[str | None, str, datetime] | None:
+        """The `(previous, new, switched_at)` of `switch.json`, or None when absent. An
+        intent: confirm it against `current()` before believing it."""
+        ...
+
+    def write_switch(self, previous: str | None, new: str, switched_at: datetime) -> None:
+        """Writes `switch.json`, the intent of the switch `switch_current` is about to make."""
+        ...
+
+    def unavailable_record(self) -> tuple[str, int, str] | None:
+        """The `(sha, count, cause)` of `unavailable.json`, or None when absent."""
+        ...
+
+    def write_unavailable(self, sha: str, count: int, cause: str) -> None:
+        """Writes `unavailable.json`."""
+        ...
+
+    def clear_unavailable(self) -> None:
+        """Removes `unavailable.json` if it exists."""
+        ...
+
+    def escalation_issue(self) -> str | None:
+        """The url in `escalations.json`, or None when the rotation never escalated."""
+        ...
+
+    def write_escalation_issue(self, url: str) -> None:
+        """Writes `escalations.json`."""
+        ...
+
+    def copy_env(self, source: Path, dest: str) -> bytes:
+        """Copies `<source>/.env` into the stage `<root>/<dest>` and returns the sha256 digest
+        of the bytes copied, never printing or parsing them. A missing source `.env` removes
+        any `.env` already in the destination, writes nothing and returns `sha256(b"")`."""
+        ...
+
+    def promote(self, sha: str) -> None:
+        """Renames `<root>/<sha>.partial` to `<root>/<sha>`: the only way a stage gets its
+        `<sha40>` name."""
+        ...
+
+    def switch_current(self, sha: str) -> None:
+        """Points `<root>/current` at `<sha>` atomically: the only way `current` changes."""
+        ...
+
+    def remove(self, name: str) -> None:
+        """Removes the stage directory `<root>/<name>`."""
+        ...
+
+
+class Stage0Users(Protocol):
+    """Which stages something is running from (a poller's checkout, an open process)."""
+
+    def users(self) -> frozenset[str] | Unreadable:
+        """The stage names in use; `Unreadable` when it could not be read."""
+        ...
+
+
+class CommitCiReader(Protocol):
+    """The CI of one commit, read by its sha (GH-632, part 2c): what `MasterWindow` takes for
+    each commit of the window. Another task (#704) implements it."""
+
+    def read(self, oid: str) -> CiReport | CiUnreadable:
+        """The CI of the commit `oid`. Never raises: a read that failed or timed out is
+        `CiUnreadable`."""
+        ...
+
+
+class MasterWindow(Protocol):
+    """The first-parent history of origin/master as the rotation reads it."""
+
+    def entries(self, current: str | None) -> list[WindowEntry] | Unreadable:
+        """At most 10 entries, newest first, each with its CI state and whether it strictly
+        descends from `current`; `Unreadable` when the history could not be read."""
+        ...
+
+
+class Stage0Candidate(Protocol):
+    """Builds and smokes a candidate stage."""
+
+    def prepare(self, sha: str) -> Prepared | Unavailable:
+        """Builds `<root>/<sha40>.partial`, `sha` possibly an abbreviated pin; the `Prepared`
+        carries the 40-hex sha it resolved."""
+        ...
+
+    def smoke(self, stage: str) -> Green | Red | Unavailable:
+        """Smokes the stage directory named `stage` (`<sha40>.partial` for a candidate)."""
+        ...
+
+
+class Stage0Escalation(Protocol):
+    """Escalates what a rotation cannot settle alone (a stage that stays unavailable)."""
+
+    def run(self) -> None:
+        """Never raises."""
+        ...
+
+
+class FailurePolicy(Protocol):
+    """What a rotation does when a candidate fails: a strategy `rotate` takes as a parameter,
+    so how failures are handled changes without editing `rotate`."""
+
+    def prepare_failed(self, sha: str, outcome: Unavailable) -> Stop:
+        """The candidate for `sha` could not be prepared."""
+        ...
+
+    def smoke_failed(self, sha: str, stage: str, outcome: Red | Unavailable) -> Proceed | Stop:
+        """The smoke of `stage` was red or unavailable. `Proceed` carries a `Green` smoke
+        that justifies adopting anyway."""
+        ...
+
+    def succeeded(self, sha: str) -> None:
+        """`sha` is current and healthy. Idempotent: it is called again by every run that
+        finds the rotation up to date."""
+        ...

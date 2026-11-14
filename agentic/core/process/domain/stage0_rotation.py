@@ -28,10 +28,17 @@ KeepCause = Literal[
     "rejected",
     "busy",
     "smoke_failed",
+    "unavailable",
 ]
 """Why stage0 stays where it is. `target` returns only pinned, up_to_date,
-no_green_in_window, unreadable and rejected; busy and smoke_failed are produced by the later
-parts that rotate (a run in flight, a failed smoke test), never by `target`."""
+no_green_in_window, unreadable and rejected; busy, smoke_failed and unavailable are produced
+by the later parts that rotate (a run in flight, a failed smoke test, a candidate that could
+not be prepared or smoked), never by `target`."""
+
+CandidateCause = Literal["clone", "uv", "smoke_timeout", "disk", "control_red"]
+"""Why a candidate stage could not be prepared or smoked: the clone failed, `uv` failed, the
+smoke test ran out of time, the disk was full, or the control smoke on the known-good stage
+was red too (so the candidate is not the one to blame)."""
 
 _PIN = re.compile(r"[0-9a-fA-F]{7,40}")
 _STAGE_NAME = re.compile(r"[0-9a-f]{40}")
@@ -77,6 +84,52 @@ class Heartbeat:
     checkout: Path
     at: datetime
     interval_s: float
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """A candidate built as `<sha>.partial`; `sha` is the 40-hex commit it resolved."""
+
+    sha: str
+
+
+@dataclass(frozen=True)
+class Green:
+    """The smoke test of a partial passed."""
+
+
+@dataclass(frozen=True)
+class Red:
+    """The smoke test of a partial ran and failed."""
+
+
+@dataclass(frozen=True)
+class Unavailable:
+    """The candidate could not be prepared or smoked, for `cause`: nothing is known about
+    the code."""
+
+    cause: CandidateCause
+
+
+@dataclass(frozen=True)
+class Proceed:
+    """A failure policy decided to continue the adoption, holding the `Green` smoke that
+    justifies it; `line` is what to print."""
+
+    line: str
+    smoke: Green
+
+
+@dataclass(frozen=True)
+class Stop:
+    """A failure policy decided to end the adoption; `line` is what to print."""
+
+    line: str
+
+
+def partial_name(sha: str) -> str:
+    """The name of the stage directory a candidate is built in before it is promoted."""
+    return f"{sha}.partial"
 
 
 def _rejected(sha: str, rejected: frozenset[str]) -> bool:

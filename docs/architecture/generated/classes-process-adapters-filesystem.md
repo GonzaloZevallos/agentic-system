@@ -23,4 +23,6 @@ classDiagram
     class filesystem__prompts__FilesystemPrompts["FilesystemPrompts"]
     class filesystem__run_registry__FilesystemRunRegistry["FilesystemRunRegistry"]
     class filesystem__scratch__FilesystemScratch["FilesystemScratch"]
+    class filesystem__stage0_store__FilesystemStage0Store["FilesystemStage0Store"]
+    class filesystem__stage0_users__ProcStage0Users["ProcStage0Users"]
 ```

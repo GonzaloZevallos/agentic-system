@@ -212,6 +212,27 @@ UNCOVERED: dict[str, Uncovered] = {
         (("tests/core/process/application/test_stop.py", "_Process"),),
         _INLINE,
     ),
+    "Stage0Store": Uncovered(
+        (("tests/core/process/application/test_stage0_rotate.py", "Store"),), _INLINE
+    ),
+    "Stage0Users": Uncovered(
+        (("tests/core/process/application/test_stage0_rotate.py", "Users"),), _INLINE
+    ),
+    "CommitCiReader": Uncovered(
+        (("tests/core/process/adapters/git/test_master_window.py", "FakeReader"),), _INLINE
+    ),
+    "MasterWindow": Uncovered(
+        (("tests/core/process/application/test_stage0_rotate.py", "Window"),), _INLINE
+    ),
+    "Stage0Candidate": Uncovered(
+        (("tests/core/process/application/test_stage0_rotate.py", "Candidate"),), _INLINE
+    ),
+    "Stage0Escalation": Uncovered(
+        (("tests/core/process/application/test_stage0_rotate.py", "Escalation"),), _INLINE
+    ),
+    "FailurePolicy": Uncovered(
+        (("tests/core/process/application/test_stage0_rotate.py", "Policy"),), _INLINE
+    ),
 }
 
 

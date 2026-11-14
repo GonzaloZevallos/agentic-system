@@ -92,6 +92,19 @@ etiqueta a un issue, y arranca el tiempo de entrega; la cumple
 `agentic/core/process/adapters/github/label_timeline.py:GhLabelTimeline`, que ante cualquier
 falla devuelve `None`.
 
+Los puertos de la rotación de stage0 (GH-632) tampoco son campos de `Ports`: los recibe
+`agentic/core/process/application/stage0_rotate.py:rotate` como parámetros, y nadie lo llama
+aún; el único adaptador por ahora es `agentic/core/process/adapters/git/master_window.py:GitMasterWindow`
+(el resto llega en partes posteriores). `Stage0Store` es la raíz de rotación
+(lock no bloqueante, `current`, `rejected`, `switch.json` como intención que el lector
+confirma contra `current()`, `promote` y `switch_current`), `Stage0Users` dice qué stages se
+usan, `MasterWindow` lee la ventana de commits de origin/master (sobre un espejo en
+`<root>/.mirror`, con el CI de cada commit que entrega el puerto `CommitCiReader`, que ese adaptador
+recibe inyectado y nunca lanza), `Stage0Candidate` prepara y
+prueba un candidato, `Stage0Escalation` escala sin lanzar, y `FailurePolicy` decide qué hacer
+ante un fallo del candidato (por defecto conserva `current` y nunca escribe `rejected`); todos
+en `agentic/core/process/application/ports.py`.
+
 ## `core/knowledge`
 
 Lo destilado y vigente sobre el producto. Provee al proceso lo que el proceso le pide

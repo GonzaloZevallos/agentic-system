@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 5 de 6, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `support` de `agentic.core.process.application` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 5 de 7, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de application](classes-process-application.md)
 - Hermanas:
@@ -14,9 +14,17 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
   - [application: support (parte 3)](classes-process-application-support-3.md)
   - [application: support (parte 4)](classes-process-application-support-4.md)
   - [application: support (parte 6)](classes-process-application-support-6.md)
+  - [application: support (parte 7)](classes-process-application-support-7.md)
 
 ```mermaid
 classDiagram
+    class ports__RoleRunner["RoleRunner"]
+    class ports__RunLock["RunLock"]
+    class ports__RunProcess["RunProcess"]
+    class ports__RunRegistration["RunRegistration"]
+    class ports__RunRegistry["RunRegistry"]
+    class ports__RunStopped["RunStopped"]
+    class ports__SampleApp["SampleApp"]
     class ports__SampleAppHandle["SampleAppHandle"]
     class ports__SchemaGuard["SchemaGuard"]
     class ports__Scratch["Scratch"]
@@ -24,26 +32,12 @@ classDiagram
     class ports__SentMemory["SentMemory"]
     class ports__SpecReader["SpecReader"]
     class ports__SpecUnreadable["SpecUnreadable"]
-    class ports__StopFlag["StopFlag"]
-    class ports__TaskDocuments["TaskDocuments"]
-    class ports__Tracker["Tracker"]
-    class ports__TrackerCallFailed["TrackerCallFailed"]
-    class ports__TrackerRateLimited["TrackerRateLimited"]
-    class ports__TrackerRefused["TrackerRefused"]
-    class ports__TrackerTimedOut["TrackerTimedOut"]
-    class ports__TrackerTransient["TrackerTransient"]
-    ports__TrackerRateLimited --|> ports__TrackerCallFailed
-    ports__TrackerTimedOut --|> ports__TrackerCallFailed
-    ports__TrackerTransient --|> ports__TrackerCallFailed
 ```
 
 ## Relaciones con otras páginas
 
-- [application: reflection](classes-process-application-reflection.md)
-  - `reflect_run.SystemRepo` se asocia con `ports.Tracker`
-- [application: support (parte 3)](classes-process-application-support-3.md)
-  - `ports.Ports` se asocia con `ports.TaskDocuments`
-  - `ports.Ports` se asocia con `ports.Tracker`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `ports.TrackerUnreachable` hereda de `ports.TrackerCallFailed`
+- [application: support (parte 4)](classes-process-application-support-4.md)
+  - `ports.Ports` se asocia con `ports.RoleRunner`
+  - `ports.Ports` se asocia con `ports.SampleApp`
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`

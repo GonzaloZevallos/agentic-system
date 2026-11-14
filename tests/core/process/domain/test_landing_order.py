@@ -14,6 +14,8 @@ from agentic.core.process.domain.landing_order import (
     GAP_MAX,
     HEAD_BUDGET,
     HEAD_SEEN_EVERY,
+    LANE_MERGES_MAX,
+    LANE_RECORD_WINDOW,
     LANE_SYNCS_MIN,
     YIELD_MARK,
     LaneReason,
@@ -24,6 +26,7 @@ from agentic.core.process.domain.landing_order import (
     holds_turn,
     instant,
     integrates,
+    lane_merge_verdict,
     lane_ready,
     lane_reason,
     left_head,
@@ -911,3 +914,74 @@ def test_head_without_now_rejects_each_lane_fact_off_its_default(name):
     with pytest.raises(ValueError, match=name):
         head([_m(1, **{name: LANE_FIELD_VALUES[name]})])
     assert head([_m(1)]) == 1
+
+
+# --- GH-681 part 2: the verdict on a member's fast-lane merge ------------------------------
+
+SHA, SHA_MASTER = "a" * 40, "b" * 40
+ADMITTED_AT = "2026-11-12T10:00:00+00:00"
+
+
+def _lane_doc(**over):
+    raw = {
+        "lane_admitted": {"head_issue": 7, "pr_head": SHA, "master": SHA_MASTER, "at": ADMITTED_AT},
+        "auto_merged_at": "2026-11-12T10:05:00+00:00",
+        "auto_merge_head": SHA,
+        "auto_merge_master": SHA_MASTER,
+    }
+    raw.update(over)
+    return raw
+
+
+def test_the_verdict_records_a_merge_on_the_admitted_head_and_master_after_the_admission():
+    assert lane_merge_verdict(_lane_doc()) == "record"
+
+
+def test_the_verdict_compares_instants_not_strings():
+    # "Z" and "+00:00" are one instant; a string compare would call the merge earlier.
+    assert lane_merge_verdict(_lane_doc(auto_merged_at="2026-11-12T10:00:01Z")) == "record"
+    assert lane_merge_verdict(_lane_doc(auto_merged_at="2026-11-12T10:00:00Z")) is None
+    earlier = _lane_doc(auto_merged_at="2026-11-12T09:59:59Z")
+    assert lane_merge_verdict(earlier) is None
+
+
+def test_the_verdict_accepts_the_shas_at_any_recorded_length():
+    assert lane_merge_verdict(_lane_doc(auto_merge_head=SHA[:12])) == "record"
+
+
+@pytest.mark.parametrize("field", ["auto_merge_head", "auto_merge_master"])
+def test_the_verdict_marks_a_merge_on_another_sha_or_master_not_lane(field):
+    assert lane_merge_verdict(_lane_doc(**{field: "c" * 40})) == "not_lane"
+    assert lane_merge_verdict(_lane_doc(**{field: None})) == "not_lane"
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"lane_admitted": None},
+        {"lane_admitted": "x"},
+        {"lane_recorded": "2026-11-12T11:00:00+00:00"},
+        {"lane_recorded": "not_lane"},
+        {"auto_merged_at": None},
+        {"auto_merged_at": "not a time"},
+        {"auto_merged_at": "2026-11-12T10:05:00"},
+        {"auto_merged_at": 5},
+    ],
+)
+def test_the_verdict_is_none_unless_an_admission_is_open_and_the_merge_reads(over):
+    assert lane_merge_verdict(_lane_doc(**over)) is None
+
+
+def test_the_verdict_is_none_when_the_admission_instant_does_not_parse():
+    raw = _lane_doc()
+    raw["lane_admitted"] = {**raw["lane_admitted"], "at": "yesterday"}
+    assert lane_merge_verdict(raw) is None
+
+
+def test_the_verdict_is_none_without_any_lane_key():
+    assert lane_merge_verdict({"auto_merged_at": "2026-11-12T10:05:00+00:00"}) is None
+
+
+def test_the_record_limits():
+    assert LANE_MERGES_MAX == 20
+    assert LANE_RECORD_WINDOW == timedelta(days=7)

@@ -14,6 +14,7 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
   - [application: support (parte 4)](classes-process-application-support-4.md)
   - [application: support (parte 5)](classes-process-application-support-5.md)
   - [application: support (parte 6)](classes-process-application-support-6.md)
+  - [application: support (parte 7)](classes-process-application-support-7.md)
 
 ```mermaid
 classDiagram
@@ -22,6 +23,7 @@ classDiagram
     class landing_adr__CheckedTimeout["CheckedTimeout"]
     class landing_adr__OutOfBounds["OutOfBounds"]
     class landing_fix__Fix["Fix"]
+    class landing_lane__LaneHead["LaneHead"]
     class landing_plan__LandingContext["LandingContext"]
     class landing_plan__Release["Release"]
     class landing_plan__RoleRun["RoleRun"]
@@ -32,7 +34,7 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- [application: support (parte 3)](classes-process-application-support-3.md)
+- [application: support (parte 4)](classes-process-application-support-4.md)
   - `landing_plan.LandingContext` se asocia con `ports.Ports`
-- [application: support (parte 6)](classes-process-application-support-6.md)
+- [application: support (parte 7)](classes-process-application-support-7.md)
   - `landing_plan.LandingContext` se asocia con `ports.Upstream`

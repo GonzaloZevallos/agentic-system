@@ -25,7 +25,7 @@ from agentic.core.process.application.run_role import (
     with_context,
 )
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
-from agentic.core.process.domain import rules, turn_notice
+from agentic.core.process.domain import rules, schemas, turn_notice
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
@@ -51,6 +51,7 @@ from agentic.core.process.domain.roles import (
     render,
 )
 from agentic.core.process.domain.rules import RETRY_TURNS
+from agentic.core.process.domain.schemas import TechAnswers, TechAnswersWithAssumptions
 from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
@@ -2002,3 +2003,72 @@ async def test_the_declared_checks_and_the_clock_reach_the_runner():
     call = runner.calls[0]
     assert call["declared_checks"] == {"lint": "ruff check ."}
     assert call["now"]() == "2026-11-06T10:00:00Z"
+
+
+# The spec's schema and assumptions rows (GH-594 part 2b)
+
+SPEC_STATE = {
+    "path": "docs/specs/a.md",
+    "slice": "s1",
+    "commit": "a" * 40,
+    "sha256": "b" * 64,
+    "criteria": [],
+    "screens": [],
+    "risks": [],
+    "touches_ui": False,
+    "touches_copy": False,
+}
+
+
+def _answering(*assumed: str) -> RawResult:
+    result = tech_answers(1)
+    result.structured_output["assumptions"] = list(assumed)
+    return result
+
+
+async def _answer(tmp_path, result: RawResult, **state):
+    runner = ScriptedRunner(tech_lead_interviewee=[result])
+    base = {"id": "T-1", "title": "t", "description": "d", **state}
+    cfg = Configuration(product_dir=tmp_path)
+    output, patch = await run_role(base, TECH_LEAD_INTERVIEWEE, cfg, memory_ports(runner))
+    return runner, output, patch
+
+
+async def test_with_a_spec_the_role_is_asked_for_the_spec_schema_and_its_rows_reach_the_patch(
+    tmp_path,
+):
+    runner, output, patch = await _answer(
+        tmp_path, _answering("  Dates   are UTC ", "Totals in USD"), spec=SPEC_STATE
+    )
+    asked = runner.calls[0]
+    assert asked["role"].schema is TechAnswersWithAssumptions
+    assert asked["json_schema"] == schemas.json_schema(TechAnswersWithAssumptions, {})
+    assert output is not None
+    assert patch["assumptions"] == [
+        {"role": "Tech Lead", "text": "Dates are UTC"},
+        {"role": "Tech Lead", "text": "Totals in USD"},
+    ]
+    # The caller's role is untouched: the swap is per run.
+    assert TECH_LEAD_INTERVIEWEE.schema is TechAnswers
+
+
+async def test_with_a_spec_and_nothing_assumed_the_patch_has_no_assumptions_key(tmp_path):
+    _, _, patch = await _answer(tmp_path, _answering(), spec=SPEC_STATE)
+    assert "assumptions" not in patch
+
+
+async def test_a_text_the_canonical_form_refuses_is_dropped_from_the_rows(tmp_path):
+    _, _, patch = await _answer(
+        tmp_path, _answering("two\nlines", "x" * 241, "ok"), spec=SPEC_STATE
+    )
+    assert patch["assumptions"] == [{"role": "Tech Lead", "text": "ok"}]
+
+
+@pytest.mark.parametrize("spec", [None, {}], ids=["no spec", "empty spec"])
+async def test_without_a_spec_the_schema_is_the_base_class_and_the_patch_has_no_key(tmp_path, spec):
+    state = {} if spec is None else {"spec": spec}
+    runner, output, patch = await _answer(tmp_path, tech_answers(1), **state)
+    assert runner.calls[0]["role"].schema is TechAnswers
+    assert output is not None and "assumptions" not in output.data
+    assert "assumptions" not in patch
+    assert "spec_cause" not in patch
