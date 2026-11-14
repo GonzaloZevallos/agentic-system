@@ -1,8 +1,8 @@
 """The service that rotates stage0 (GH-632, part 2a): holds the rotation lock, reads the
 window of origin/master, builds and smokes the candidate `target` picks, and switches
 `current` to it. Pure application: the filesystem, git, the clock and the environment arrive
-through ports and parameters (`pin`, `now`, `own`), never read here. Nothing outside tests
-calls `rotate` yet; the CLI command of part 2d does."""
+through ports and parameters (`pin`, `now`, `own`), never read here. `agentic stage0 rotate`
+(part 2d) is what calls `rotate`; nothing runs that command automatically yet."""
 
 from __future__ import annotations
 
@@ -97,12 +97,29 @@ def rotate(
             return
         store.clear_partials()
         escalation.run()
-        _adopt(store, window, candidate, policy, pin=pin, now=now, own=own, out=out)
+        _adopt(store, users, window, candidate, policy, pin=pin, now=now, own=own, out=out)
         prune(store, users, own, out)
+
+
+def _leftover_in_use(
+    store: Stage0Store, users: Stage0Users, wanted: str, current: str | None
+) -> bool:
+    """Removes every non-current stage already named for the target (a `promote` that a
+    later step left behind, which would make the next `promote` of the same sha fail), unless
+    something runs from it or `users` cannot say: then True, and nothing is removed."""
+    for name, _ in store.stages():
+        if _SHA40.fullmatch(name) is None or not same_commit(name, wanted) or name == current:
+            continue
+        in_use = users.users()
+        if isinstance(in_use, Unreadable) or name in in_use:
+            return True
+        store.remove(name)
+    return False
 
 
 def _adopt(
     store: Stage0Store,
+    users: Stage0Users,
     window: MasterWindow,
     candidate: Stage0Candidate,
     policy: FailurePolicy,
@@ -123,6 +140,9 @@ def _adopt(
         if wanted.cause == "up_to_date" and current is not None:
             policy.succeeded(current)
         return
+    if _leftover_in_use(store, users, wanted.sha, current):
+        out("keep: busy")
+        return
     prepared = candidate.prepare(wanted.sha)
     if isinstance(prepared, Unavailable):
         out(policy.prepare_failed(wanted.sha, prepared).line)
@@ -140,6 +160,11 @@ def _adopt(
     ):
         return
     store.promote(sha)
+    settled = candidate.settle(sha)
+    if not isinstance(settled, Green):
+        store.remove(sha)
+        out(policy.prepare_failed(sha, settled).line)
+        return
     store.write_switch(previous=current, new=sha, switched_at=now)
     store.switch_current(sha)
     policy.succeeded(sha)
