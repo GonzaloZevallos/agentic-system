@@ -990,3 +990,61 @@ def test_a_plan_review_prompt_with_an_unknown_placeholder_refuses_at_the_start_c
     ports = overlay_ports(tmp_path)
     with pytest.raises(ValueError, match="no_such_placeholder"):
         preflight(Configuration(product_dir=tmp_path), ports)
+
+
+def _preflight_with_blocks(blocks, stage0):
+    ports = memory_ports(prompts=MemoryPrompts(blocks=blocks))
+    preflight(Configuration(product_dir=PRODUCT), ports)
+    return ports
+
+
+def test_a_clean_block_and_the_default_empty_table_pass_preflight(stage0):
+    _preflight_with_blocks({"build": "Build the screens.\n<!-- a note -->"}, stage0)
+    ports = memory_ports()
+    preflight(Configuration(product_dir=PRODUCT), ports)
+    assert ports.prompts.spec_block_names() == ()
+
+
+@pytest.mark.parametrize(
+    ("blocks", "reason"),
+    [
+        ({"ghost": OSError("gone")}, "missing"),
+        ({"bad": UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad start byte")}, "missing"),
+        ({"tpl": "Hello {{date}} SECRET"}, "template"),
+        ({"fenced": "before\n  === spec data ===\nSECRET"}, "fence"),
+    ],
+    ids=["missing", "undecodable", "template", "fence"],
+)
+def test_preflight_refuses_a_block_it_cannot_serve_or_that_is_unsafe(stage0, blocks, reason):
+    (name,) = blocks
+    with pytest.raises(ValueError) as refusal:
+        _preflight_with_blocks(blocks, stage0)
+    assert str(refusal.value) == f"spec block {name}: {reason}"
+    assert "SECRET" not in str(refusal.value)
+
+
+def test_preflight_refuses_a_bad_name_without_reading_it(stage0):
+    ports = memory_ports(prompts=MemoryPrompts(blocks={"../x": "fine text"}))
+    with pytest.raises(ValueError, match=r"spec block \.\./x: name"):
+        preflight(Configuration(product_dir=PRODUCT), ports)
+    assert ports.prompts.block_calls == []
+
+
+def test_preflight_refuses_a_missing_file_of_a_filesystem_table(stage0, tmp_path):
+    system = tmp_path / "system"
+    (system / "spec").mkdir(parents=True)
+    (system / "spec" / "good.md").write_text("Fine.", encoding="utf-8")
+    for slug in {role.slug for role in ROLES}:
+        (system / f"{slug}.md").write_text("A prompt.", encoding="utf-8")
+    table = {"developer": "good", "pm": "absent"}
+    ports = memory_ports(prompts=FilesystemPrompts(tmp_path / "product", system, blocks=table))
+    with pytest.raises(ValueError, match="spec block absent: missing"):
+        preflight(Configuration(product_dir=PRODUCT), ports)
+    (system / "spec" / "absent.md").write_text("{{x}}", encoding="utf-8")  # after the snapshot
+    with pytest.raises(ValueError, match="spec block absent: missing"):
+        preflight(Configuration(product_dir=PRODUCT), ports)
+    ports = memory_ports(
+        prompts=FilesystemPrompts(tmp_path / "product", system, blocks={"developer": "absent"})
+    )
+    with pytest.raises(ValueError, match="spec block absent: template"):
+        preflight(Configuration(product_dir=PRODUCT), ports)
