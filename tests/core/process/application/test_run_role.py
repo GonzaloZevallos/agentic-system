@@ -1,7 +1,7 @@
 """Retry semantics and delivery of one role, against a scripted runner."""
 
 import dataclasses
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast, get_args
 
@@ -28,7 +28,9 @@ from agentic.core.process.application.run_role import (
 )
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
 from agentic.core.process.domain import rules, schemas, spec_brief, turn_notice
+from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.document import HUMAN
+from agentic.core.process.domain.drawing import DRAWING_RULE
 from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import (
@@ -61,6 +63,7 @@ from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryPrompts,
+    MemoryStack,
     ScriptedRunner,
     classified,
     delivered,
@@ -2357,3 +2360,100 @@ async def test_with_a_spec_each_mapped_role_ends_its_system_prompt_with_its_bloc
     assert "### Playbook" in call["system_prompt"] and "### Tiers" in call["system_prompt"]
     assert section in call["prompt"]
     assert section not in call["system_prompt"]
+
+
+# --- {{drawing_rule}}: read from the stack only when the prompt holds it (GH-766) ----------
+
+DRAWING_PROMPT = "Intro\n{{drawing_rule}}\nOutro {{date}}"
+DESIGN = Design(prototype="pantallas", entry="Home", sample_app=None, compare=None)
+
+
+class CountingStack(MemoryStack):
+    def __init__(self, *, design: Design | None = None, error: Exception | None = None) -> None:
+        super().__init__(design=design)
+        self.design_reads = 0
+        self.error = error
+
+    def design(self, revision: str) -> Design | None:
+        self.design_reads += 1
+        if self.error is not None:
+            raise self.error
+        return self.declared_design
+
+
+async def _run_with_stack(stack: CountingStack, raw: str, tmp_path: Path, **placeholders: object):
+    ports = memory_ports(ScriptedRunner(pjm=[OK]), stack=stack)
+    ports.prompts.overrides["pjm"] = raw
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        PJM,
+        Configuration(product_dir=tmp_path),
+        ports,
+        product="x",
+        **placeholders,
+    )
+    return cast(ScriptedRunner, ports.runner), output, patch
+
+
+async def test_an_unreadable_stack_is_a_render_failure_never_no_rule(tmp_path):
+    stack = CountingStack(error=ValueError("stack.yaml: design: bad"))
+    runner, output, patch = await _run_with_stack(stack, DRAWING_PROMPT, tmp_path)
+    assert output is None and runner.calls == []
+    assert patch["escalated"].startswith("prompt of PjM cannot be rendered: ")
+    assert "stack.yaml: design: bad" in patch["escalated"]
+    assert [f["reason"] for f in patch["failures"]] == ["render"]
+    stack = CountingStack(error=OSError("disk gone"))
+    runner, output, patch = await _run_with_stack(stack, DRAWING_PROMPT, tmp_path)
+    assert output is None and runner.calls == []
+    assert [f["reason"] for f in patch["failures"]] == ["render"]
+
+
+async def test_the_stack_is_read_once_with_the_placeholder_and_never_without(tmp_path):
+    with_it = CountingStack()
+    await _run_with_stack(with_it, DRAWING_PROMPT, tmp_path)
+    without = CountingStack()
+    await _run_with_stack(without, "Intro {{date}}", tmp_path)
+    assert (with_it.design_reads, without.design_reads) == (1, 0)
+
+
+async def test_no_design_drops_the_line_and_a_design_shows_the_rule_under_one_hash(tmp_path):
+    none_runner, _, none_patch = await _run_with_stack(CountingStack(), DRAWING_PROMPT, tmp_path)
+    rule_runner, _, rule_patch = await _run_with_stack(
+        CountingStack(design=DESIGN), DRAWING_PROMPT, tmp_path
+    )
+    today = date.today().isoformat()
+    assert none_runner.calls[0]["system_prompt"] == f"Intro\nOutro {today}"
+    assert rule_runner.calls[0]["system_prompt"] == f"Intro\n{DRAWING_RULE}\nOutro {today}"
+    assert none_patch["prompts"] == rule_patch["prompts"] == {"pjm": prompt_hash(DRAWING_PROMPT)}
+
+
+async def test_the_caller_cannot_pass_the_rule_itself(tmp_path):
+    stack = CountingStack(design=DESIGN)
+    runner, output, patch = await _run_with_stack(
+        stack, DRAWING_PROMPT, tmp_path, drawing_rule="mine"
+    )
+    assert output is None and runner.calls == []
+    assert "drawing_rule is supplied only through drawing_rule_for" in patch["escalated"]
+    assert [f["reason"] for f in patch["failures"]] == ["render"]
+    assert stack.design_reads == 0
+
+
+def test_render_role_prompt_refuses_the_rule_and_never_calls_the_supplier(tmp_path):
+    ports = memory_ports()
+    ports.prompts.overrides["pjm"] = DRAWING_PROMPT
+    calls: list[int] = []
+
+    def supplier() -> str:
+        calls.append(1)
+        return "x"
+
+    with pytest.raises(ValueError, match="drawing_rule_for"):
+        render_role_prompt(
+            PJM,
+            Configuration(product_dir=tmp_path),
+            ports,
+            {},
+            drawing_rule_for=supplier,
+            drawing_rule="mine",
+        )
+    assert calls == []
