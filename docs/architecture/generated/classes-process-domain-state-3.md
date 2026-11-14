@@ -35,11 +35,11 @@ classDiagram
     class task__ArmAssignment["ArmAssignment"]
     class task__AssumptionRow["AssumptionRow"]
     class task__Carried["Carried"]
+    class task__CarveRecord["CarveRecord"]
     class task__ChangesRequested["ChangesRequested"]
     class task__CheckRun["CheckRun"]
     class task__CiCancelRerun["CiCancelRerun"]
     class task__CiGhostDispatch["CiGhostDispatch"]
-    class task__CiJobTiming["CiJobTiming"]
 ```
 
 ## Relaciones con otras páginas

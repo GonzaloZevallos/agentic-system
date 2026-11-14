@@ -19,14 +19,23 @@ import math
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 import yaml
 
 from . import size_budget, tracker_items
 from .landing_order import LANE_MERGES_MAX, YieldReason, instant
 from .legacy_names import rename_legacy_roles
-from .task import HEAD_YIELDS_MAX, NOT_LANE, AssumptionRow, RoleRun, assumption_text
+from .task import (
+    HEAD_YIELDS_MAX,
+    NOT_LANE,
+    AssumptionRow,
+    CarveCause,
+    CarveOutcome,
+    CarveRecord,
+    RoleRun,
+    assumption_text,
+)
 
 TASKS_SUBDIR = Path(".agentic/tasks")
 # Where an evaluation run's document is kept once its root is gone (GH-470): outside
@@ -236,6 +245,38 @@ def _assumption_rows(raw: object) -> list[AssumptionRow]:
     return list(rows.values())
 
 
+_CARVE_STRINGS = ("at", "issue_url", "repointed_at", "commented_at")
+_CARVE_MAPPINGS = ("data", "fit")
+_CARVE_CLOSED = {"outcome": get_args(CarveOutcome), "cause": get_args(CarveCause)}
+
+
+def _carve_record(raw: object, source: object) -> CarveRecord:
+    """The `carve_out` record read back (GH-719): only the declared keys of `CarveRecord`, so a key
+    a later part adds is neither refused nor copied forward. Raises `ValueError(f"{source}: ...")`
+    on a record that is not a mapping, a `data`/`fit` that is not one, a string field that is not a
+    `str`, or an `outcome`/`cause` outside its closed set: a closed record never reads back as an
+    unfinished one."""
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{source}: carve_out is not a mapping")
+    out: dict[str, Any] = {}
+    for key in _CARVE_MAPPINGS:
+        if key in raw:
+            if not isinstance(raw[key], Mapping):
+                raise ValueError(f"{source}: carve_out.{key} is not a mapping")
+            out[key] = dict(raw[key])
+    for key in _CARVE_STRINGS:
+        if key in raw:
+            if not isinstance(raw[key], str):
+                raise ValueError(f"{source}: carve_out.{key} is not a string")
+            out[key] = raw[key]
+    for key, allowed in _CARVE_CLOSED.items():
+        if key in raw:
+            if raw[key] not in allowed:
+                raise ValueError(f"{source}: carve_out.{key} {raw[key]!r} is not one of {allowed}")
+            out[key] = raw[key]
+    return cast(CarveRecord, out)
+
+
 def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[str, Any]:
     """The inverse of what `render` writes: the frontmatter under the state's names,
     with the 2026-10-05 role-rename alias applied last (`legacy_names.
@@ -264,6 +305,8 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
             state["tracker_items"] = tracker_items.parse(state["tracker_items"])
         except ValueError as error:
             raise ValueError(f"{source}: {error}") from error
+    if "carve_out" in state:
+        state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
     # The size records come back as `size_budget`'s own types; one that is not whole is
@@ -480,6 +523,10 @@ def render(
         # The partition of a plan that did not fit (ADR-0054), written only when set.
         **({"parts": e} if (e := state.get("parts")) else {}),
         **({"split_issues": e} if (e := state.get("split_issues")) else {}),
+        # The depth-2 carve-out record (GH-719), written only when non-empty so a document
+        # without one is byte-identical to one written before; `parse` reads it back through
+        # `_carve_record`.
+        **({"carve_out": e} if (e := state.get("carve_out")) else {}),
         # What the human must do on the issue tracker (GH-336), written only when non-empty so
         # a document of a plan without one is byte-identical to one written before. Read back
         # by `parse` under the same name: the state's key is the frontmatter's.

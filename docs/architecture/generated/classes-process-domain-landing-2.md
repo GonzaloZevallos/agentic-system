@@ -41,5 +41,5 @@ classDiagram
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`

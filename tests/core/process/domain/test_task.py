@@ -73,6 +73,7 @@ def test_reducers_are_read_from_the_annotations():
         "tracker_checklist",
         "tracker_checklist_posted",
         "split_issues",
+        "carve_out",
         "fit_waived",
         "fit_question",
         "proposed_invariants",
@@ -90,6 +91,7 @@ def test_reducers_are_read_from_the_annotations():
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
     assert REDUCERS["experiment"] is last
+    assert REDUCERS["carve_out"] is merge
 
 
 def test_apply_uses_the_reducers_and_overrides_the_rest():
@@ -276,3 +278,30 @@ def test_a_cold_plan_patch_never_introduces_the_solution_interview_section():
     merged = apply(state, patch)
     assert SOLUTION_INTERVIEW not in merged["sections"]
     assert merged["sections"] == {"PM": "def", "Tech Lead": "plan text"}
+
+
+def test_a_carve_out_patch_with_only_issue_url_keeps_data_and_fit():
+    """GH-719: the record only grows; the shallow merge keeps what a later patch does not name."""
+    record = {"data": {"steps": ["a"]}, "fit": {"fits": False}}
+    assert merge(record, {"issue_url": "https://github.com/o/r/issues/9"}) == {
+        **record,
+        "issue_url": "https://github.com/o/r/issues/9",
+    }
+    assert apply({"carve_out": record}, {"carve_out": {"issue_url": "u"}})["carve_out"] == {
+        "data": {"steps": ["a"]},
+        "fit": {"fits": False},
+        "issue_url": "u",
+    }
+
+
+def test_a_growing_carve_out_record_round_trips_through_delta_and_apply():
+    opened = {"data": {"steps": ["a"]}, "fit": {"fits": False}}
+    posted = {**opened, "issue_url": "https://github.com/o/r/issues/9"}
+    closed = {**posted, "outcome": "applied"}
+    states = [{"id": "T-1", "carve_out": opened}, {"carve_out": posted}, {"carve_out": closed}]
+    for before, after in zip(states, states[1:], strict=False):
+        before = {"id": "T-1", **before}
+        after = {"id": "T-1", **after}
+        assert apply(before, delta(before, after)) == after
+    first = {"id": "T-1"}
+    assert apply(first, delta(first, states[0])) == states[0]

@@ -1485,6 +1485,31 @@ class PartRecord(TypedDict):
     guard: NotRequired[str]
 
 
+CarveOutcome = Literal["applied", "refused", "failed"]
+CarveCause = Literal["evaluation", "no_issue"]
+
+
+class CarveRecord(TypedDict, total=False):
+    """The task document's depth-2 carve-out record (GH-719): `data` is the declared
+    `carve_out.CarveOut`, `fit` the size judgement it was made against, `at` the ISO time,
+    `issue_url` the follow-up issue, `repointed_at` and `commented_at` the ISO times of the
+    re-point and of the comment on the part.
+
+    `outcome` is written only when the record closes: a record with `data` and no `outcome` is
+    an unfinished carve-out. `refused` is terminal and carries only the causes `evaluation` or
+    `no_issue`; `failed` is written by the plan node (part 3 of GH-719). The record only
+    grows: the shallow `merge` cannot remove a key and no writer does."""
+
+    data: dict[str, object]
+    fit: dict[str, object]
+    at: str
+    issue_url: str
+    repointed_at: str
+    commented_at: str
+    outcome: CarveOutcome
+    cause: CarveCause
+
+
 # Why a `full_checks` run that wanted GitHub CI ran the local full tier instead (GH-376): a
 # closed value decided by the system, never text parsed from `gh`. Lives here, not in `ci`,
 # because the record below needs it and `ci` reaches this module through `rules`; `ci`
@@ -1822,6 +1847,10 @@ class TaskState(TaskInput, total=False):
     # The issue URL of each part already opened, keyed by the part's number as text: written
     # part by part, so a `gh` cut in the middle resumes without opening a part twice.
     split_issues: Annotated[dict[str, str], merge]
+    # The depth-2 carve-out record (GH-719, `CarveRecord`): the shallow `merge` folds a patch
+    # over it, so one with only `issue_url` keeps `data` and `fit`. Read with `.get`: a document
+    # written before it has none. Nothing writes it yet (part 3 of GH-719).
+    carve_out: Annotated[CarveRecord, merge]
     # The split sweep's own record (GH-619), ISO UTC strings, read with `.get`. A `split`
     # document is terminal and never goes back through `finish`, so the sweep writes these only
     # through `Documents.record_closure`: `split_repointed_at` once every open dependent of the

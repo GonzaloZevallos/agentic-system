@@ -26,6 +26,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__CiJobTiming["CiJobTiming"]
     class task__CiLogRecord["CiLogRecord"]
     class task__CiSpeculation["CiSpeculation"]
     class task__CiTiming["CiTiming"]
@@ -39,7 +40,6 @@ classDiagram
     class task__EvaluatedPatch["EvaluatedPatch"]
     class task__EvaluationRef["EvaluationRef"]
     class task__Failure["Failure"]
-    class task__FailurePauseEntry["FailurePauseEntry"]
 ```
 
 ## Relaciones con otras páginas

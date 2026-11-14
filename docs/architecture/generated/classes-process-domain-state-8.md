@@ -26,6 +26,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__TrackerFailure["TrackerFailure"]
     class task__TrackerFailureRecord["TrackerFailureRecord"]
     class task__TrackerPosted["TrackerPosted"]
     class task_path__PathDecision["PathDecision"]
