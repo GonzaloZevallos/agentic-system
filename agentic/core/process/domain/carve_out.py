@@ -154,7 +154,7 @@ def rules_text() -> str:
             + ", ".join(_CLOSING_WORDS[:-1])
             + f" and {_CLOSING_WORDS[-1]}, in any case.",
             "- `title` is one line.",
-            "- The system writes the marker, the `Blocked by:` line, the context line and "
+            f"- The system writes the marker, the `{_BLOCKED}` line, the context line and "
             "`Kind:` itself; never write them.",
         ]
     )
