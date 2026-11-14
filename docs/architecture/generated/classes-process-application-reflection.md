@@ -26,7 +26,6 @@ classDiagram
     class stack_review__StackReview["StackReview"]
     class stage0_escalation__Stage0Escalation["Stage0Escalation"]
     class stage0_failure__SmokeFailurePolicy["SmokeFailurePolicy"]
-    class tracker_items__SystemRun["SystemRun"]
 ```
 
 ## Relaciones con otras páginas

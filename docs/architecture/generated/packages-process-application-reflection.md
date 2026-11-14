@@ -31,7 +31,6 @@ graph TD
     m_application__stage0_escalation["application.stage0_escalation"]
     m_application__stage0_failure["application.stage0_failure"]
     m_application__stage0_prune["application.stage0_prune"]
-    m_application__tracker_items["application.tracker_items"]
     m_application__owner_rules --> g_application__support
     m_application__owner_rules --> g_domain__roles
     m_application__owner_rules --> g_domain__state
@@ -62,7 +61,4 @@ graph TD
     m_application__stage0_prune --> g_application__lifecycle
     m_application__stage0_prune --> g_application__support
     m_application__stage0_prune --> g_domain__machine
-    m_application__tracker_items --> g_application__support
-    m_application__tracker_items --> g_domain__roles
-    m_application__tracker_items --> g_domain__state
 ```

@@ -139,7 +139,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.stage0_prune": "reflection",
     "application.stage0_rotate": "lifecycle",
     "application.stop": "lifecycle",
-    "application.tracker_items": "reflection",
+    "application.tracker_items": "landing",
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
     "application.verifiers": "checks",

@@ -18,6 +18,7 @@ graph TD
     g_application__build__2["build parte 2 (grupo)"]
     g_application__checks["checks (grupo)"]
     g_application__definition["definition (grupo)"]
+    g_application__landing["landing (grupo)"]
     g_application__lifecycle["lifecycle (grupo)"]
     g_application__reflection["reflection (grupo)"]
     g_application__support["support (grupo)"]
@@ -32,7 +33,7 @@ graph TD
     m_application__plan["application.plan"]
     m_application__deliver --> g_application__build__2
     m_application__deliver --> g_application__checks
-    m_application__deliver --> g_application__reflection
+    m_application__deliver --> g_application__landing
     m_application__deliver --> g_application__support
     m_application__deliver --> g_pkg__agentic__shared
     m_application__deliver --> g_pkg__domain
