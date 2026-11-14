@@ -68,6 +68,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.api_break": "checks",
     "application.archive": "lifecycle",
     "application.board_sync": "lifecycle",
+    "application.carve_out": "lifecycle",
     "application.checkouts": "support",
     "application.ci_flakes": "checks",
     "application.ci_push": "support",

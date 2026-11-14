@@ -19,6 +19,8 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
 ```mermaid
 classDiagram
     class archive__ArchiveResult["ArchiveResult"]
+    class carve_out__CarveData["CarveData"]
+    class carve_out__CarveRefused["CarveRefused"]
     class dry_run__DryRunLog["DryRunLog"]
     class dry_run__DryRunRefused["DryRunRefused"]
     class dry_run__ReadOnly["ReadOnly"]
@@ -28,5 +30,4 @@ classDiagram
     class poll__MergeAssessment["MergeAssessment"]
     class poll__OrderEntry["OrderEntry"]
     class poll__OrderLock["OrderLock"]
-    class poll__RetakesSpent["RetakesSpent"]
 ```
