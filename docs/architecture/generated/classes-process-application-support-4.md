@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__MergeCallFailed["MergeCallFailed"]
     class ports__MergeConflict["MergeConflict"]
     class ports__MergeFailed["MergeFailed"]
     class ports__OwnerRuleEntry["OwnerRuleEntry"]
@@ -31,7 +32,6 @@ classDiagram
     class ports__Prompts["Prompts"]
     class ports__RawResult["RawResult"]
     class ports__RemergeDiffUnsupported["RemergeDiffUnsupported"]
-    class ports__RiskArea["RiskArea"]
     ports__Ports --> ports__ProcessReaper
     ports__Ports --> ports__ProductKnowledge
     ports__Ports --> ports__ProductStack

@@ -6,10 +6,10 @@ Generada por `scripts/docs/generate.py` recorriendo `agentic.cli.build_parser()`
 
 ```text
 usage: agentic [-h]
-               {run,resume,close,merge,land,restore,stop,eval,stack,scores,dashboards,poll,reflect,perf} ...
+               {run,resume,close,merge,land,restore,stop,eval,stack,stage0,scores,dashboards,poll,reflect,perf} ...
 
 positional arguments:
-  {run,resume,close,merge,land,restore,stop,eval,stack,scores,dashboards,poll,reflect,perf}
+  {run,resume,close,merge,land,restore,stop,eval,stack,stage0,scores,dashboards,poll,reflect,perf}
     run                 run one task through the feature path
     resume              resume the task of issue N where it paused
     close               record the human's verdict on a task's pull request and close it
@@ -25,6 +25,7 @@ positional arguments:
                         it (GH-466); `agentic resume --issue N` continues it
     eval                drive or score README.md 9's fixed five-task evaluation set
     stack               the product's own stack (ADR-0034)
+    stage0              the stage0 checkouts the pollers run from (GH-622)
     scores              a task's numbers as Langfuse scores (GH-273)
     dashboards          the Langfuse dashboards as code (GH-274)
     poll                a long-lived process per product (GH-137): closes merged pull requests,
@@ -290,6 +291,30 @@ options:
                         verbatim among the signals in the issue body
   --dry-run             show which signals hold, the anchor and what would be opened; spends
                         nothing, takes no lock, writes no file and makes no `gh` call
+```
+
+## `agentic stage0`
+
+```text
+usage: agentic stage0 [-h] {rotate} ...
+
+positional arguments:
+  {rotate}
+    rotate    move stage0's `current` to the newest green commit of master, smoked first; every
+              outcome that keeps `current` exits 0
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `agentic stage0 rotate`
+
+```text
+usage: agentic stage0 rotate [-h] [--root DIR]
+
+options:
+  -h, --help  show this help message and exit
+  --root DIR  the rotation root (default ~/.agentic-stage0s)
 ```
 
 ## `agentic scores`

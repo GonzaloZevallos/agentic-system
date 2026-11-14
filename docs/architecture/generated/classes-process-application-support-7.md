@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__UnstageablePath["UnstageablePath"]
     class ports__Upstream["Upstream"]
     class ports__UpstreamMerge["UpstreamMerge"]
     class ports__Workspace["Workspace"]
@@ -42,6 +43,7 @@ classDiagram
 - [application: landing](classes-process-application-landing.md)
   - `landing_plan.LandingContext` se asocia con `ports.Upstream`
 - [application: support (parte 2)](classes-process-application-support-2.md)
+  - `ports.UnstageablePath` hereda de `ports.GitError`
   - `run_role.Output` se asocia con `ports.CheckRuns`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.Ports` se asocia con `ports.Workspace`

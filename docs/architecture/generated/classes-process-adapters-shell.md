@@ -15,6 +15,10 @@ classDiagram
     class shell__perf_runner__PerfShellRunner["PerfShellRunner"]
     class shell__reaper__ShellReaper["ShellReaper"]
     class shell__sample_app__ShellSampleApp["ShellSampleApp"]
+    class shell__stage0_candidate__Runner["Runner"]
+    class shell__stage0_candidate__ShellStage0Candidate["ShellStage0Candidate"]
+    class shell__stage0_candidate__SubprocessRunner["SubprocessRunner"]
+    class shell__stage0_candidate__TimedOut["TimedOut"]
     class shell__stop__EventStopFlag["EventStopFlag"]
     class shell__stop__NullStopFlag["NullStopFlag"]
 ```

@@ -22,6 +22,7 @@ graph TD
     m_adapters__shell__perf_runner["adapters.shell.perf_runner"]
     m_adapters__shell__reaper["adapters.shell.reaper"]
     m_adapters__shell__sample_app["adapters.shell.sample_app"]
+    m_adapters__shell__stage0_candidate["adapters.shell.stage0_candidate"]
     m_adapters__shell__stop["adapters.shell.stop"]
     m_adapters__shell__commands --> g_pkg__agentic__shared
     m_adapters__shell__commands --> g_pkg__application
@@ -34,4 +35,7 @@ graph TD
     m_adapters__shell__sample_app --> g_pkg__application
     m_adapters__shell__sample_app --> g_pkg__domain
     m_adapters__shell__sample_app --> m_adapters__shell__load_reader
+    m_adapters__shell__stage0_candidate --> g_pkg__agentic__shared
+    m_adapters__shell__stage0_candidate --> g_pkg__application
+    m_adapters__shell__stage0_candidate --> g_pkg__domain
 ```
