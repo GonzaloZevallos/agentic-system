@@ -39,6 +39,25 @@ PARAGRAPH_WITH_COMMENT = (
 )
 
 
+PARAGRAPH_WITH_OPEN_ISSUE = (
+    "`tracker_items`: tracker work is a `human` item, `{kind: human, question, recommendation}` "
+    "or a `comment` item, `{kind: comment, text}` or a `open_issue` item, "
+    "`{kind: open_issue, title, body}`. Its `question` asks the owner to do or approve the work "
+    '(for\n   example "Close #12 as superseded?") and its `recommendation` says what to do. Its '
+    "`text` is a comment the system posts on this issue, with no URL, link, HTML tag or issue "
+    "reference (`#N`, `owner/repo#N`, `GH-N`). Its `title` and `body` are plain text with the "
+    "same prohibitions as a comment (no URL, link, HTML tag or issue reference) and no label: "
+    "the system opens the issue labelled `needs-triage` and links it to this task. Each field\n"
+    "   is one line of at most 240 characters with no @-mention, except the `open_issue` `body`, "
+    "which may run to 2000 characters over several lines, and a plan\n   carries at most 5 items."
+)
+
+
+@pytest.fixture
+def human_and_comment(monkeypatch):
+    monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human", "comment"}))
+
+
 @pytest.fixture
 def human_only(monkeypatch):
     monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human"}))
@@ -48,7 +67,7 @@ def test_kinds_text_is_the_paragraph_the_prompts_carried_with_the_limits_filled_
     assert tracker_items.kinds_text() == PARAGRAPH_TODAY
 
 
-def test_kinds_text_names_the_comment_kind_and_what_it_may_not_hold():
+def test_kinds_text_names_the_comment_kind_and_what_it_may_not_hold(human_and_comment):
     assert tracker_items.kinds_text() == PARAGRAPH_WITH_COMMENT
 
 
@@ -72,5 +91,5 @@ def test_the_prompt_renders_as_it_did_before_the_placeholder(name, human_only):
     assert "{kind:" not in raw and "{{tracker_items_max}}" not in raw
 
 
-def test_the_placeholder_values_the_prompts_get_hold_the_comment_paragraph():
-    assert preflight.PLACEHOLDERS["tracker_item_kinds"] == PARAGRAPH_WITH_COMMENT
+def test_the_placeholder_values_the_prompts_get_hold_the_open_issue_paragraph():
+    assert preflight.PLACEHOLDERS["tracker_item_kinds"] == PARAGRAPH_WITH_OPEN_ISSUE

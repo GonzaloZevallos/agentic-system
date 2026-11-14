@@ -107,11 +107,11 @@ def test_parse_judges_the_count_before_the_items_and_the_items_before_the_repeat
         tracker_items.parse([ITEM, broken, ITEM])
 
 
-def test_kinds_holds_only_human_and_comment():
-    assert tracker_items.KINDS == frozenset({"human", "comment"})
+def test_kinds_holds_human_comment_and_open_issue():
+    assert tracker_items.KINDS == frozenset({"human", "comment", "open_issue"})
 
 
-@pytest.mark.parametrize("kind", ["open_issue", "", None])
+@pytest.mark.parametrize("kind", ["delete_issue", "", None])
 def test_parse_rejects_an_unknown_kind_and_says_to_write_it_as_human(kind):
     with pytest.raises(ValueError, match="human") as error:
         tracker_items.parse([{**ITEM, "kind": kind}])
@@ -282,7 +282,8 @@ def test_item_hash_is_pinned_for_every_kind(item, expected):
     assert tracker_items.item_hash(item) == expected
 
 
-def test_parse_still_refuses_a_kind_that_is_not_performed_yet():
+def test_parse_refuses_a_kind_of_the_table_that_KINDS_does_not_hold(monkeypatch):
+    monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human", "comment"}))
     with pytest.raises(ValueError, match="unknown tracker item kind") as error:
         tracker_items.parse([OPEN_ISSUE])
     assert "open_issue" in str(error.value) and WAY_OUT in str(error.value)

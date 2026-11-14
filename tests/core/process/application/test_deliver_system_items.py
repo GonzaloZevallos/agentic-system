@@ -127,3 +127,24 @@ def test_a_resume_does_not_read_a_system_prefix_as_a_decision(prefix):
 def test_a_human_comment_holding_the_prefix_mid_text_is_a_decision():
     comments = ["Ready for review: x", "I read the Plan note: it is fine.", "Also fine."]
     assert human_decision(comments) == "I read the Plan note: it is fine.\n\nAlso fine."
+
+
+# --- GH-690: the `open_issue` kind through the node ----------------------------------------
+
+
+async def test_an_open_issue_is_opened_needs_triage_and_its_url_is_in_the_ready_comment(cfg):
+    issue = {"kind": "open_issue", "title": "Track the retry", "body": "The retry is lost."}
+    ports = memory_ports()
+    ports.tracker.issue_numbers_from = 61
+    patch = await deliver({**TASK, "tracker_items": [issue]}, cfg, ports)
+
+    url = "https://github.com/o/r/issues/61"
+    assert patch["status"] == "ready_for_review"
+    assert ports.tracker.opened_labels == [items.TRIAGE_LABEL]
+    assert ports.tracker.created_labels == [items.TRIAGE_LABEL]
+    ((title, body),) = ports.tracker.opened_issues
+    assert title == issue["title"] and "From task: #12\n\n" in body
+    (ready,) = [b for _, b in ports.tracker.comments if b.startswith(READY)]
+    assert f"- issue opened ({url})" in ready
+    assert patch["tracker_actions_done"][items.item_hash(issue)]["url"] == url
+    _assert_system_comments(ports)

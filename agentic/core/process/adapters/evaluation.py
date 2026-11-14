@@ -20,7 +20,7 @@ raises, because an evaluation reaching it is a bug in the wiring, not a thing to
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -71,9 +71,7 @@ class EvaluationTracker:
             "close_pull_request",
             "comment_on_issue",
             "dispatch_ci",
-            "ensure_label",
             "merge",
-            "open_issue",
             "open_pull_request",
             "reopen_pull_request",
             "update_issue_body",
@@ -108,6 +106,21 @@ class EvaluationTracker:
 
     def drop_label(self, task_id: str, label: str) -> TrackerFailure | None:
         return None
+
+    def open_issue(
+        self,
+        title: str,
+        body: str,
+        *,
+        label: str | None = None,
+        labels: Sequence[str] = (),
+    ) -> str:
+        """A new issue is a write an evaluation run does not make; it is a `ValueError`, the
+        failure shape the executor of an `open_issue` item already stops on (GH-690)."""
+        raise ValueError("evaluation runs write nothing")
+
+    def ensure_label(self, name: str) -> None:
+        raise ValueError("evaluation runs write nothing")
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):

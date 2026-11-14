@@ -4,9 +4,10 @@ free prose. A leaf at module level: the standard library and `typing` only, so `
 `rules` inside its body, so importing this module never imports `rules`.
 
 The one place that decides what kind an item is, and the one table that says what each kind
-holds (GH-625). Only `human` is performed so far: a question for the owner with the author's
-recommendation, which reaches a human as an escalation, and `comment`, a note the system posts
-on the task's own issue (GH-689), from a delivery and from a tracker-only plan (GH-705). A kind
+holds (GH-625). Three kinds are performed: `human`, a question for the owner with the author's
+recommendation, which reaches a human as an escalation; `comment`, a note the system posts on
+the task's own issue (GH-689), from a delivery and from a tracker-only plan (GH-705); and
+`open_issue`, a plain-text issue the system opens labelled `needs-triage` (GH-690). A kind
 is added to `KINDS` only in the diff that adds the code that performs it; its row and its type
 may exist before. A `system` row's fields are also kept from naming anything outside this issue,
 so what the system posts links nowhere."""
@@ -43,7 +44,7 @@ class OpenIssueItem(TypedDict):
 TrackerItem = HumanItem | CommentItem | OpenIssueItem
 Kind = Literal["human", "comment", "open_issue"]
 
-KINDS: frozenset[str] = frozenset({"human", "comment"})
+KINDS: frozenset[str] = frozenset({"human", "comment", "open_issue"})
 
 # The label the system puts on an issue it opens for an `open_issue` item. No item field names it.
 TRIAGE_LABEL = "needs-triage"
