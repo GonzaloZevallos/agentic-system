@@ -34,7 +34,10 @@ _ISSUE_BODY = (
     "Stage0's rotation escalates here the commits it rejected and the commits it could not "
     "prepare or smoke. One comment per commit; delete a marker line to escalate it again."
 )
-_ESCALATED_TEXT = "Stage0 rejected commit {sha}: its smoke failed beside a green control."
+_ESCALATED_TEXT = (
+    "Stage0 rejected commit {sha}. The cause may be a failed smoke or a rollback after its "
+    "pollers did not come back; remove the sha from the rejected list to allow it again."
+)
 _UNAVAILABLE_TEXT = (
     "Stage0 could not prepare or smoke commit {sha} on {count} passes in a row; "
     "the cause class is {cause}."

@@ -87,6 +87,19 @@ class Heartbeat:
 
 
 @dataclass(frozen=True)
+class SwitchRecord:
+    """The intent record of a switch (`switch.json`): the stage `current` pointed at before
+    (`previous`, None on bootstrap), the stage switched to (`new`), when (`switched_at`,
+    aware) and the pollers expected to come back on `new` (`expected`, empty when the record
+    carries none)."""
+
+    previous: str | None
+    new: str
+    switched_at: datetime
+    expected: frozenset[str]
+
+
+@dataclass(frozen=True)
 class Prepared:
     """A candidate built as `<sha>.partial`; `sha` is the 40-hex commit it resolved."""
 

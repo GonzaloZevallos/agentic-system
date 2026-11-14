@@ -4,6 +4,7 @@ the atomic link swap, state files replaced whole, the `.env` copy mode and the c
 spied on or made to fail where the test is about them."""
 
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -13,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
+from agentic.core.process.domain.stage0_rotation import SwitchRecord
 
 A = "a" * 40
 B = "b" * 40
@@ -124,11 +126,11 @@ def test_a_missing_root_reads_as_empty_and_absent(root):
 
 
 def test_state_files_are_written_whole_by_replace_and_read_back(store, root, replaced):
-    store.write_switch(None, A, NOW)
+    store.write_switch(None, A, NOW, frozenset())
     store.write_unavailable(B, 2, "uv")
     store.write_escalation_issue("https://example.test/issues/1")
     store.reject(C)
-    assert store.switch_record() == (None, A, NOW)
+    assert store.switch_record() == SwitchRecord(None, A, NOW, frozenset())
     assert store.unavailable_record() == (B, 2, "uv")
     assert store.escalation_issue() == "https://example.test/issues/1"
     assert store.rejected() == frozenset({C})
@@ -160,6 +162,25 @@ def test_empty_or_corrupt_records_read_as_absent(store, root, content):
     assert store.switch_record() is None
     assert store.unavailable_record() is None
     assert store.escalation_issue() is None
+
+
+def test_expected_round_trips_as_a_frozenset_and_is_written_sorted(store, root):
+    store.write_switch(A, B, NOW, frozenset({"b-poll", "a-poll"}))
+    assert store.switch_record() == SwitchRecord(A, B, NOW, frozenset({"a-poll", "b-poll"}))
+    assert json.loads((root / "switch.json").read_text())["expected"] == ["a-poll", "b-poll"]
+
+
+@pytest.mark.parametrize("expected", [None, "a-poll", ["a-poll", 1], {"a": 1}, 5, [["x"]]])
+def test_a_malformed_expected_reads_as_the_empty_set(store, root, expected):
+    record = {"previous": A, "new": B, "switched_at": NOW.isoformat(), "expected": expected}
+    (root / "switch.json").write_text(json.dumps(record))
+    assert store.switch_record() == SwitchRecord(A, B, NOW, frozenset())
+
+
+def test_a_switch_record_with_no_expected_reads_as_the_empty_set(store, root):
+    record = {"previous": A, "new": B, "switched_at": NOW.isoformat()}
+    (root / "switch.json").write_text(json.dumps(record))
+    assert store.switch_record() == SwitchRecord(A, B, NOW, frozenset())
 
 
 def test_a_naive_switch_instant_reads_as_absent(store, root):

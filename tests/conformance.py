@@ -218,6 +218,11 @@ UNCOVERED: dict[str, Uncovered] = {
     "Stage0Users": Uncovered(
         (("tests/core/process/application/test_stage0_rotate.py", "Users"),), _INLINE
     ),
+    "Heartbeats": Uncovered(
+        (("agentic/core/process/adapters/filesystem/heartbeats.py", "FilesystemHeartbeats"),),
+        "no in-memory double exists yet (the rollback of #738 brings the first consumer); "
+        "the filesystem adapter is the only implementation, so only its member names are checked",
+    ),
     "CommitCiReader": Uncovered(
         (("tests/core/process/adapters/git/test_master_window.py", "FakeReader"),), _INLINE
     ),

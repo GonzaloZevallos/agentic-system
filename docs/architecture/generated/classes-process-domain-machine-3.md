@@ -30,6 +30,7 @@ classDiagram
     class stage0_rotation__Proceed["Proceed"]
     class stage0_rotation__Red["Red"]
     class stage0_rotation__Stop["Stop"]
+    class stage0_rotation__SwitchRecord["SwitchRecord"]
     class stage0_rotation__Target["Target"]
     class stage0_rotation__Unavailable["Unavailable"]
     class stage0_rotation__Unreadable["Unreadable"]

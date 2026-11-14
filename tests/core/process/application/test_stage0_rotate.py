@@ -23,6 +23,7 @@ from agentic.core.process.domain.stage0_rotation import (
     Proceed,
     Red,
     Stop,
+    SwitchRecord,
     Unavailable,
     Unreadable,
     WindowEntry,
@@ -62,7 +63,7 @@ class Store:
         self._digests = list(digests or [EMPTY_ENV, EMPTY_ENV])
         self._fail_on = fail_on
         self.copy_sources: list[tuple[Path, str]] = []
-        self.switch_written: tuple[str | None, str, datetime] | None = None
+        self.switch_written: SwitchRecord | None = None
         self.rejected_calls: list[str] = []
 
     def _call(self, entry: str) -> None:
@@ -97,11 +98,13 @@ class Store:
         self.rejected_calls.append(sha)
         self._call(f"reject {sha}")
 
-    def write_switch(self, previous: str | None, new: str, switched_at: datetime) -> None:
+    def write_switch(
+        self, previous: str | None, new: str, switched_at: datetime, expected: frozenset[str]
+    ) -> None:
         self._call(f"write_switch {new}")
-        self.switch_written = (previous, new, switched_at)
+        self.switch_written = SwitchRecord(previous, new, switched_at, expected)
 
-    def switch_record(self) -> tuple[str | None, str, datetime] | None:
+    def switch_record(self) -> SwitchRecord | None:
         return self.switch_written
 
     def unavailable_record(self) -> tuple[str, int, str] | None:
@@ -278,7 +281,7 @@ def test_newest_green_is_adopted_in_order() -> None:
         f"succeeded {B}",
     ]
     assert w.out == [f"switched: {B}"]
-    assert w.store.switch_written == (A, B, NOW)
+    assert w.store.switch_written == SwitchRecord(A, B, NOW, frozenset())
 
 
 def test_busy_lock_changes_nothing() -> None:
@@ -356,7 +359,7 @@ def test_bootstrap_adopts_newest_green_and_copies_from_own() -> None:
     w.run()
     assert w.window.asked_with == [None]
     assert w.out == [f"switched: {B}"]
-    assert w.store.switch_written == (None, B, NOW)
+    assert w.store.switch_written == SwitchRecord(None, B, NOW, frozenset())
     assert w.store.copy_sources == [(OWN, f"{B}.partial")] * 2
 
 

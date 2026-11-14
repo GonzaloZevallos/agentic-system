@@ -32,12 +32,16 @@ classDiagram
     class ports__BranchPullRequest["BranchPullRequest"]
     class ports__CheckRequest["CheckRequest"]
     class ports__CheckResults["CheckResults"]
+    class ports__CheckRuns["CheckRuns"]
+    ports__AttemptFailed --> ports__CheckRuns
 ```
 
 ## Relaciones con otras páginas
 
 - [application: support (parte 2)](classes-process-application-support-2.md)
   - `ci_push.PushFailed` hereda de `ports.GitError`
-  - `ports.AttemptFailed` se asocia con `ports.CheckRuns`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.Ports` se asocia con `limits.RunLimits`
+  - `ports.RawResult` se asocia con `ports.CheckRuns`
+- [application: support (parte 7)](classes-process-application-support-7.md)
+  - `run_role.Output` se asocia con `ports.CheckRuns`

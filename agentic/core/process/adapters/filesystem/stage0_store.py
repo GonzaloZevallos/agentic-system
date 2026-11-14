@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ...domain.stage0_rotation import SwitchRecord
+
 _NAME = re.compile(r"[0-9a-f]{40}(\.partial)?")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -148,7 +150,7 @@ class FilesystemStage0Store:
         shas = sorted(self.rejected() | {_check(sha)})
         self._write("rejected", "".join(f"{line}\n" for line in shas).encode())
 
-    def switch_record(self) -> tuple[str | None, str, datetime] | None:
+    def switch_record(self) -> SwitchRecord | None:
         record = self._json("switch.json")
         if record is None:
             return None
@@ -159,10 +161,25 @@ class FilesystemStage0Store:
             return None
         if (previous is not None and not isinstance(previous, str)) or not isinstance(new, str):
             return None
-        return (previous, new, switched_at) if switched_at.tzinfo is not None else None
+        if switched_at.tzinfo is None:
+            return None
+        listed = record.get("expected")
+        expected = (
+            frozenset(listed)
+            if isinstance(listed, list) and all(isinstance(item, str) for item in listed)
+            else frozenset()
+        )
+        return SwitchRecord(previous, new, switched_at, expected)
 
-    def write_switch(self, previous: str | None, new: str, switched_at: datetime) -> None:
-        record = {"previous": previous, "new": new, "switched_at": switched_at.isoformat()}
+    def write_switch(
+        self, previous: str | None, new: str, switched_at: datetime, expected: frozenset[str]
+    ) -> None:
+        record = {
+            "previous": previous,
+            "new": new,
+            "switched_at": switched_at.isoformat(),
+            "expected": sorted(expected),
+        }
         self._write("switch.json", json.dumps(record).encode())
 
     def unavailable_record(self) -> tuple[str, int, str] | None:

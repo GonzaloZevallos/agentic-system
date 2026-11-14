@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application.stage0_prune import make_prune
-from agentic.core.process.domain.stage0_rotation import Unreadable
+from agentic.core.process.domain.stage0_rotation import SwitchRecord, Unreadable
 
 NAMES = [c * 40 for c in "0123456789"]
 START = datetime(2026, 11, 1, tzinfo=UTC)
@@ -52,7 +52,7 @@ def run(store, users, own=ROOT / "none"):
 
 
 def test_it_spares_in_use_current_own_previous_new_and_the_two_newest():
-    record = (NAMES[3], NAMES[4], START)
+    record = SwitchRecord(NAMES[3], NAMES[4], START, frozenset())
     store = Store(current=NAMES[1], record=record)
     lines = run(store, frozenset({NAMES[0]}), own=ROOT / NAMES[2] / "sub")
     assert sorted(store.removed) == NAMES[5:8]
@@ -92,7 +92,7 @@ def test_a_missing_switch_record_protects_only_what_the_rules_do():
 
 def test_a_failing_delete_is_counted_and_the_rest_are_still_tried():
     store = Store(current=NAMES[9], failing={NAMES[0]})
-    store._record = (NAMES[8], NAMES[9], START)
+    store._record = SwitchRecord(NAMES[8], NAMES[9], START, frozenset())
     lines = run(store, frozenset({NAMES[7], NAMES[6], NAMES[5], NAMES[4]}))
     assert sorted(store.removed) == NAMES[1:4]
     assert lines == ["prune: failed 1", "pruned: 3"]
