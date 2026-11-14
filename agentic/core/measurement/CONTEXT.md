@@ -83,8 +83,8 @@ _Avoid_: espera humana, bloqueo, tiempo muerto
 _Campo_: sin término de arte — el vecino más cercano es el tiempo bloqueado (blocked time) del flujo Kanban
 
 **Etapa del ciclo**:
-Una de las diez partes en que se reparte el ciclo de una tarea (`CycleStage`): cola, definición, plan, desarrollo, revisión, checks, espera humana, límite de cuenta, aterrizaje y otro. Cada rol corre en una sola, según `ROLE_STAGES` (el único mapa de rol a etapa, por `Role.slug`). Cuando dos Reclamos cubren el mismo instante gana el de menor rango y, entre rangos iguales, la etapa más cercana al merge (`STAGE_PRECEDENCE`: espera humana, límite de cuenta, checks, aterrizaje, revisión, desarrollo, plan, definición, cola, otro).
-_Avoid_: Etapa (a secas: es la de la Tarjeta, de siete valores)
+Una de las diez partes en que se reparte el ciclo de una tarea (`CycleStage`): cola, definición, plan, desarrollo, revisión, checks, espera humana, límite de cuenta, aterrizaje y otro. Cada rol corre en una sola, según `ROLE_STAGES` (el único mapa de rol a etapa, por `Role.slug`). Cuando dos Reclamos cubren el mismo instante gana el de menor rango y, entre rangos iguales, la etapa más cercana al merge (`STAGE_PRECEDENCE`: espera humana, límite de cuenta, checks, aterrizaje, revisión, desarrollo, plan, definición, cola, otro). La cola es el tiempo antes de la primera corrida más las esperas de cupo que ningún otro Reclamo cubre. El aterrizaje es el pull request abierto hasta el merge, que se parte después por Resultado de entrega, e incluye el trabajo de los roles mientras el pull request está abierto. `stage_split` es la única cifra de segundos por etapa (ADR-0099).
+_Avoid_: Etapa (a secas: es la de la Tarjeta, de siete valores), Aterrizaje, Cola exenta, Cola de escalados, Cupo de chequeo
 _Campo_: stage — el vecino más cercano son las fases del tiempo de ciclo en un value stream map
 
 **Reclamo**:
