@@ -1865,3 +1865,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-14T15:40:46.101+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: For every test or check you write, include an input it must reject, and build expected keys or paths with the production helper, not by hand, so the test fails if the behaviour breaks.
+  confidence: medium
+  seen_in:
+  - GH-736
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T20:43:39.189+00:00'
