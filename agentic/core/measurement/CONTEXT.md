@@ -82,6 +82,16 @@ Los segundos entre que una tarea se pausa y la siguiente reanudación (`resumed`
 _Avoid_: espera humana, bloqueo, tiempo muerto
 _Campo_: sin término de arte — el vecino más cercano es el tiempo bloqueado (blocked time) del flujo Kanban
 
+**Etapa del ciclo**:
+Una de las diez partes en que se reparte el ciclo de una tarea (`CycleStage`): cola, definición, plan, desarrollo, revisión, checks, espera humana, límite de cuenta, aterrizaje y otro. Cada rol corre en una sola, según `ROLE_STAGES` (el único mapa de rol a etapa, por `Role.slug`). Cuando dos Reclamos cubren el mismo instante gana el de menor rango y, entre rangos iguales, la etapa más cercana al merge (`STAGE_PRECEDENCE`: espera humana, límite de cuenta, checks, aterrizaje, revisión, desarrollo, plan, definición, cola, otro).
+_Avoid_: Etapa (a secas: es la de la Tarjeta, de siete valores)
+_Campo_: stage — el vecino más cercano son las fases del tiempo de ciclo en un value stream map
+
+**Reclamo**:
+Un intervalo que una parte del documento de la tarea reclama para una Etapa del ciclo (`Claim`): `[inicio, fin]` con un rango y una etapa, recortado a `[creación del issue, merge]`; el que queda vacío se descarta. Una pausa humana, una pausa de límite de cuenta, otras pausas, el aterrizaje, las esperas de CI, las corridas y fallos, y la cola son los siete rangos, de más fuerte a más débil. Si una entrada no se puede leer, no hay Reclamos: la tarea queda desconocida (`StageUnknown`), nunca en cero.
+_Avoid_: tramo, segmento
+_Campo_: sin término de arte — el vecino más cercano es el intervalo de un timeline que se resuelve por prioridad
+
 **Tiempo fallido**:
 La unión de los intervalos `[started_at, ended_at]` de los fallos de una tarea: el tiempo de los intentos que no llegaron a nada. Es 0 sólo en una tarea sin fallos; un fallo sin sus dos instantes deja la cifra desconocida, y con ella las de espera, pausa y sin atribuir, que se restan después de esta (una clase sólo se conoce si se conocen las anteriores).
 _Avoid_: tiempo perdido, retrabajo (el retrabajo se mide en costo)

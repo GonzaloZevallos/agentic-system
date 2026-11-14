@@ -18,6 +18,7 @@ classDiagram
     class evaluation__EvalEntry["EvalEntry"]
     class evaluation__EvalSet["EvalSet"]
     class evaluation__EvalTaskId["EvalTaskId"]
+    class evaluation__EvaluationRecord["EvaluationRecord"]
 ```
 
 ## Relaciones con otras páginas

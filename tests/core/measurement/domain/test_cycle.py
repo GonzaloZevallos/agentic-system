@@ -582,11 +582,44 @@ def _imports_rules(node):
     return isinstance(node, ast.Import) and any(a.name.endswith("rules") for a in node.names)
 
 
+def _module_import(node):
+    """`from agentic.core.process.domain import ..., rules`, the one other way `cycle` reaches
+    `rules` (GH-757): it calls `rules.terminal_failures` through the module, so the reasons that
+    subdivide a pause come from the filter `pause_kind` reads and from no copy of it. Only that
+    attribute may be used: `_module_attribute_violations` rejects any other use of the name."""
+    return (
+        isinstance(node, ast.ImportFrom)
+        and node.module == "agentic.core.process.domain"
+        and ("rules", None) in [(a.name, a.asname) for a in node.names]
+    )
+
+
+def _module_attribute_violations(tree):
+    """Every use of the name `rules` that is not a call `rules.terminal_failures(...)`."""
+    allowed = {
+        id(n.func.value)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "rules"
+        and n.func.attr == "terminal_failures"
+    }
+    return [
+        f"line {n.lineno}: rules used beyond terminal_failures"
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and n.id == "rules" and id(n) not in allowed
+    ]
+
+
 def only_pause_kind_violations(source):
     """Where `source` reaches `core.process.domain.rules` other than by exactly one
-    `from ...rules import pause_kind` with no alias; a missing import is a violation too."""
-    nodes = [n for n in ast.walk(ast.parse(source)) if _imports_rules(n)]
-    found = [
+    `from ...rules import pause_kind` with no alias, plus the module import used only as
+    `rules.terminal_failures`; a missing import is a violation too."""
+    tree = ast.parse(source)
+    nodes = [n for n in ast.walk(tree) if _imports_rules(n) and not _module_import(n)]
+    found = _module_attribute_violations(tree)
+    found += [
         f"line {n.lineno}"
         for n in nodes
         if not isinstance(n, ast.ImportFrom)
@@ -598,6 +631,7 @@ def only_pause_kind_violations(source):
 
 
 PAUSE_KIND_IMPORT = "from agentic.core.process.domain.rules import pause_kind\n"
+MODULE_RULES_IMPORT = "from agentic.core.process.domain import ci, rules\n"
 
 
 @pytest.mark.parametrize(
@@ -611,6 +645,12 @@ PAUSE_KIND_IMPORT = "from agentic.core.process.domain.rules import pause_kind\n"
         PAUSE_KIND_IMPORT + "from agentic.core.process.domain.rules import EXTERNAL_REASONS\n",
         PAUSE_KIND_IMPORT * 2,
         "import os\n",
+        # the module import is no licence to read any other name from `rules`
+        PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "x = rules.EXTERNAL_REASONS\n",
+        PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "y = rules.pause_kind\n",
+        # an attribute read of `terminal_failures` that is no call is a copy in the making
+        PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "x = rules.terminal_failures\n",
+        PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "x = getattr(rules, 'EXTERNAL_REASONS')\n",
     ],
 )
 def test_the_pause_kind_guard_rejects_anything_but_one_plain_import_of_pause_kind(source):
@@ -621,6 +661,11 @@ def test_the_pause_kind_guard_accepts_exactly_one_plain_import_of_pause_kind():
     assert only_pause_kind_violations(PAUSE_KIND_IMPORT + "import os\n") == []
 
 
+def test_the_pause_kind_guard_accepts_the_module_import_used_only_for_terminal_failures():
+    source = PAUSE_KIND_IMPORT + MODULE_RULES_IMPORT + "x = rules.terminal_failures([])\n"
+    assert only_pause_kind_violations(source) == []
+
+
 def test_the_time_split_modules_import_only_pause_kind_from_process_rules():
     from pathlib import Path
 
@@ -628,7 +673,8 @@ def test_the_time_split_modules_import_only_pause_kind_from_process_rules():
         return Path(cycle.__file__).with_name(f"{name}.py").read_text()
 
     # GH-593: whether a pause is mechanical is `rules.pause_kind`'s call alone, so `cycle` takes
-    # that one name and nothing else from `rules`.
+    # that one name and, through the module, the one attribute `terminal_failures` (GH-757): the
+    # filter `pause_kind` reads, for the reasons that subdivide a pause. Nothing else from `rules`.
     assert only_pause_kind_violations(source("cycle")) == []
     # parallel_factor keeps its older `rules` import; only the new helpers must not reach it.
     assert rules_violations(source("parallel_factor"), {"clip", "difference"}) == []

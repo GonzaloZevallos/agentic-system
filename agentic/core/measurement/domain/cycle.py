@@ -14,9 +14,9 @@ from datetime import UTC, datetime, timedelta
 from statistics import median
 from typing import Any, Literal, cast, get_args
 
-from agentic.core.process.domain import ci, task_path
+from agentic.core.process.domain import ci, rules, task_path
 from agentic.core.process.domain.rules import pause_kind
-from agentic.core.process.domain.task import PauseEntry, RoleRun, Status
+from agentic.core.process.domain.task import FailureReason, PauseEntry, RoleRun, Status
 
 from . import parallel_factor
 
@@ -31,7 +31,7 @@ def _runs(document: Mapping[str, Any]) -> list[RoleRun]:
     return list(document.get("runs") or [])
 
 
-def _moment(value: object) -> datetime | None:
+def moment(value: object) -> datetime | None:
     """An ISO-8601 timestamp as an aware datetime (naive reads as UTC), `None` when it is
     not one."""
     if not isinstance(value, str) or not value:
@@ -68,13 +68,13 @@ def cycle_seconds(document: Mapping[str, Any]) -> float | None:
     if klass == "excluded":
         return None
     runs = _runs(document)
-    starts = [m for run in runs if (m := _moment(run.get("started_at")))]
+    starts = [m for run in runs if (m := moment(run.get("started_at")))]
     if not starts:
         return None
     if klass == "closed":
-        end = _moment(document.get("closed_at"))
+        end = moment(document.get("closed_at"))
     else:
-        ends = [m for run in runs if (m := _moment(run.get("ended_at")))]
+        ends = [m for run in runs if (m := moment(run.get("ended_at")))]
         end = max(ends) if ends else None
     if end is None:
         return None
@@ -94,7 +94,7 @@ def active_seconds(document: Mapping[str, Any]) -> float | None:
         return None
 
 
-# What a task's cycle is made of (GH-467). Every instant below enters through `_moment`, so the
+# What a task's cycle is made of (GH-467). Every instant below enters through `moment`, so the
 # intervals are aware and `parallel_factor.clip`, `difference` and `union_seconds` can order them.
 # The CI wait is read from `process.domain.ci.waited_seconds`, the one place it is derived.
 
@@ -112,6 +112,10 @@ class Pause:
     # What the pause waited on: the last escalation's cause, else its class, `failure` for an
     # epoch with no escalation (GH-593).
     cause: str = "failure"
+    # The reasons of the failure entries that ended the run (`rules.terminal_failures`, the filter
+    # `rules.pause_kind` reads), in log order: what subdivides an external pause (GH-750). Not read
+    # by `time_split`.
+    failure_reasons: tuple[FailureReason, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -140,7 +144,7 @@ _UNKNOWN = TimeSplit(None, None, None, None, None)
 
 
 def _span(first: object, last: object) -> Interval | None:
-    start, end = _moment(first), _moment(last)
+    start, end = moment(first), moment(last)
     return (start, end) if start and end else None
 
 
@@ -150,13 +154,13 @@ def _bounds(document: Mapping[str, Any]) -> Interval | None:
     if klass == "excluded":
         return None
     runs = _runs(document)
-    starts = [m for run in runs if (m := _moment(run.get("started_at")))]
+    starts = [m for run in runs if (m := moment(run.get("started_at")))]
     if not starts:
         return None
     if klass == "closed":
-        end = _moment(document.get("closed_at"))
+        end = moment(document.get("closed_at"))
     else:
-        ends = [m for run in runs if (m := _moment(run.get("ended_at")))]
+        ends = [m for run in runs if (m := moment(run.get("ended_at")))]
         end = max(ends) if ends else None
     if end is None or end < min(starts):
         return None
@@ -191,14 +195,14 @@ def _ci_records(document: Mapping[str, Any]) -> list[tuple[Any, str | None]]:
     return records
 
 
-def _waiting(document: Mapping[str, Any]) -> list[Interval] | None:
+def waiting_intervals(document: Mapping[str, Any]) -> list[Interval] | None:
     """The CI waits as `[end - wait, end]`; `None` when one is unknown. A clamped wait is an
     empty interval."""
     waits: list[Interval] = []
     for timing, until in _ci_records(document):
         try:
             seconds, _clamped = ci.waited_seconds(timing, until)
-            end = _moment(timing["run_ended_at"] if timing["run_ended_at"] is not None else until)
+            end = moment(timing["run_ended_at"] if timing["run_ended_at"] is not None else until)
         except (KeyError, TypeError):
             return None
         if seconds is None or end is None:
@@ -224,7 +228,7 @@ def pause_intervals(document: Mapping[str, Any]) -> Pauses:
         if entry["kind"] != "resumed":
             epoch.append(entry)
             continue
-        end = _moment(entry.get("at"))
+        end = moment(entry.get("at"))
         if _opened(epoch):
             found = _epoch_pause(document, epoch, lower, lower_unreadable, end)
             if found:
@@ -253,10 +257,12 @@ def _epoch_pause(
     if failure_entries and not lower_unreadable:
         start = _failure_start(document, failure_entries, lower)
     if start is None:
-        start = _moment(opening.get("at"))
+        start = moment(opening.get("at"))
     if start is None or end is None or end < start:
         return None
-    return Pause(start, end, pause_kind(cast(Sequence[PauseEntry], epoch)), _cause(epoch))
+    entries = cast(Sequence[PauseEntry], epoch)
+    reasons = tuple(e["value"] for e in rules.terminal_failures(entries) if e["kind"] == "failure")
+    return Pause(start, end, pause_kind(entries), _cause(epoch), reasons)
 
 
 def _cause(epoch: list[Mapping[str, Any]]) -> str:
@@ -272,11 +278,11 @@ def _failure_start(
 ) -> datetime | None:
     found: list[datetime] = []
     for failure in document.get("failures") or []:
-        ended = _moment(failure.get("ended_at"))
+        ended = moment(failure.get("ended_at"))
         if ended is None or (lower is not None and ended <= lower):
             continue
         for entry in failure_entries:
-            at = _moment(entry.get("at"))
+            at = moment(entry.get("at"))
             if (
                 at is not None
                 and ended <= at
@@ -319,7 +325,11 @@ def time_split(document: Mapping[str, Any]) -> TimeSplit:
     bounds, active = _bounds(document), _active(document)
     if bounds is None:
         return _UNKNOWN
-    failed, waiting, pauses = _failed(document), _waiting(document), pause_intervals(document)
+    failed, waiting, pauses = (
+        _failed(document),
+        waiting_intervals(document),
+        pause_intervals(document),
+    )
     external = [(p.start, p.end) for p in pauses.closed if p.kind == "external"]
     human = [(p.start, p.end) for p in pauses.closed if p.kind == "human"]
     try:
@@ -439,7 +449,7 @@ def _lead_class(value: object) -> tuple[LeadTimeClass, float | None]:
     if "unknown" in value:
         reason = value["unknown"]
         return (reason, None) if reason in ("no_merge", "unreadable") else ("missing", None)
-    labeled, merged = _moment(value.get("labeled_at")), _moment(value.get("merged_at"))
+    labeled, merged = moment(value.get("labeled_at")), moment(value.get("merged_at"))
     if labeled is None or merged is None:
         return "missing", None
     seconds = (merged - labeled).total_seconds()

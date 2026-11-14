@@ -8,7 +8,6 @@ Esta página muestra las clases públicas de los módulos del grupo `scorecard` 
 
 ```mermaid
 classDiagram
-    class evaluation__EvaluationRecord["EvaluationRecord"]
     class evaluation__Score["Score"]
     class evaluation__TaskDocument["TaskDocument"]
     class scorecard__CauseCount["CauseCount"]
@@ -17,6 +16,8 @@ classDiagram
     class scorecard__ScorecardDocument["ScorecardDocument"]
     class scorecard__TaskFigures["TaskFigures"]
     class scorecard__Verdict["Verdict"]
+    class stages__Claim["Claim"]
+    class stages__StageUnknown["StageUnknown"]
     scorecard__Scorecard --> scorecard__Figure
 ```
 
