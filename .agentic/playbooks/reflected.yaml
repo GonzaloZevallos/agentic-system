@@ -1013,3 +1013,5 @@ tasks:
       - GH-683
   GH-702@review:
     cost_usd: 0.0
+  GH-696@review:
+    cost_usd: 0.0711
