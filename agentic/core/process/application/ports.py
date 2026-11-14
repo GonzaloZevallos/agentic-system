@@ -40,10 +40,12 @@ from ..domain.size_budget import NumstatRow
 from ..domain.spec_delivery import SpecReadCause, SpecReadRefusal
 from ..domain.stage0_rotation import (
     Green,
+    Heartbeat,
     Prepared,
     Proceed,
     Red,
     Stop,
+    SwitchRecord,
     Unavailable,
     Unreadable,
     WindowEntry,
@@ -2592,7 +2594,7 @@ class Stage0Store(Protocol):
     - `<root>/<sha40>.partial`: a candidate being built, never a stage, never smoked in place
       of a stage: `promote` renames it to `<sha40>`;
     - `<root>/current`: a symlink to the current stage, changed only by `switch_current`;
-    - `<root>/switch.json` `{previous, new, switched_at}`: an INTENT record written just
+    - `<root>/switch.json` `{previous, new, switched_at, expected}`: an INTENT record written just
       before `switch_current`. It is not proof that the switch happened: a reader confirms
       it against `current()`;
     - `<root>/rejected`: the shas a human or a policy refused;
@@ -2635,13 +2637,17 @@ class Stage0Store(Protocol):
         """Adds `sha` to `<root>/rejected`. The default failure policy never calls it."""
         ...
 
-    def switch_record(self) -> tuple[str | None, str, datetime] | None:
-        """The `(previous, new, switched_at)` of `switch.json`, or None when absent. An
-        intent: confirm it against `current()` before believing it."""
+    def switch_record(self) -> SwitchRecord | None:
+        """The `SwitchRecord` of `switch.json`, or None when absent. `expected` is empty when
+        the file carries none or a malformed one. An intent: confirm it against `current()`
+        before believing it."""
         ...
 
-    def write_switch(self, previous: str | None, new: str, switched_at: datetime) -> None:
-        """Writes `switch.json`, the intent of the switch `switch_current` is about to make."""
+    def write_switch(
+        self, previous: str | None, new: str, switched_at: datetime, expected: frozenset[str]
+    ) -> None:
+        """Writes `switch.json`, the intent of the switch `switch_current` is about to make,
+        with the pollers `expected` to come back on `new` (stored as a sorted list)."""
         ...
 
     def unavailable_record(self) -> tuple[str, int, str] | None:
@@ -2681,6 +2687,32 @@ class Stage0Store(Protocol):
 
     def remove(self, name: str) -> None:
         """Removes the stage directory `<root>/<name>`."""
+        ...
+
+
+class Heartbeats(Protocol):
+    """What the pollers of one rotation root say about themselves: one file per key, written
+    only by the adapter and read only by it. A key names ONE poller of ONE product
+    (`<product>-<LOCK_KEY>`); no code builds a key from `poll.LOCK_KEY` alone, because two
+    products share that lock key. A port never raises for what it reads: a file it cannot
+    trust is `Unreadable`."""
+
+    def write(
+        self,
+        key: str,
+        checkout: Path,
+        at: datetime,
+        phase: Literal["start", "end", "stop"],
+        interval_s: float,
+    ) -> None:
+        """Replaces the heartbeat of `key` whole. Raises ValueError, writing nothing, for a key
+        that is not a slug, a relative `checkout`, a naive `at`, an unknown `phase` or an
+        `interval_s` that is not a finite number in (0, 86400]."""
+        ...
+
+    def read_all(self) -> Mapping[str, Heartbeat | Unreadable]:
+        """Every heartbeat by key; a `stop` beat and anything unreadable is `Unreadable`, so a
+        clean stop drops that poller from `expected_pollers`. Empty when there are none."""
         ...
 
 

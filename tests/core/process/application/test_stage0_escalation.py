@@ -127,6 +127,18 @@ def test_nothing_pending_makes_no_call() -> None:
     assert tracker.calls == [] and inbox.calls == 0 and out == []
 
 
+def test_the_rejected_text_names_no_cause_and_says_how_to_undo_it() -> None:
+    tracker, inbox = Tracker(), Inbox()
+    escalation, _ = build(tracker, inbox, Store(rejected={A}))
+
+    escalation.run()
+
+    (text,) = tracker.posted()
+    assert f"rejected commit {A}." in text
+    assert "its smoke failed beside" not in text
+    assert "remove the sha from the rejected list to allow it again" in text
+
+
 def test_a_rejected_sha_escalates_exactly_once_over_three_passes() -> None:
     tracker, inbox = Tracker(fail=("comment_on_issue",)), Inbox()
     store = Store(rejected={A})

@@ -18,9 +18,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__RiskArea["RiskArea"]
-    class ports__RoleRunner["RoleRunner"]
-    class ports__RunLock["RunLock"]
     class ports__RunProcess["RunProcess"]
     class ports__RunRegistration["RunRegistration"]
     class ports__RunRegistry["RunRegistry"]
@@ -32,12 +29,15 @@ classDiagram
     class ports__SentEntry["SentEntry"]
     class ports__SentMemory["SentMemory"]
     class ports__SpecReader["SpecReader"]
+    class ports__SpecUnreadable["SpecUnreadable"]
+    class ports__Stage0Candidate["Stage0Candidate"]
+    class ports__Stage0Escalation["Stage0Escalation"]
+    class ports__Stage0Store["Stage0Store"]
 ```
 
 ## Relaciones con otras páginas
 
 - [application: support (parte 4)](classes-process-application-support-4.md)
-  - `ports.Ports` se asocia con `ports.RoleRunner`
   - `ports.Ports` se asocia con `ports.SampleApp`
 - [application: support (parte 7)](classes-process-application-support-7.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`

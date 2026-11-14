@@ -23,7 +23,7 @@ def make_prune(root: Path) -> Prune:
             parts = ()
         try:
             record = store.switch_record()
-            previous, new = (record[0], record[1]) if record is not None else (None, None)
+            previous, new = (record.previous, record.new) if record else (None, None)
             in_use = users.users()
             if not isinstance(in_use, Unreadable) and new is not None:
                 in_use = in_use | {new}

@@ -165,7 +165,8 @@ def _adopt(
         store.remove(sha)
         out(policy.prepare_failed(sha, settled).line)
         return
-    store.write_switch(previous=current, new=sha, switched_at=now)
+    # #738 computes `expected` from the heartbeats; until then no rotation expects a poller.
+    store.write_switch(previous=current, new=sha, switched_at=now, expected=frozenset())
     store.switch_current(sha)
     policy.succeeded(sha)
     out(f"switched: {sha}")

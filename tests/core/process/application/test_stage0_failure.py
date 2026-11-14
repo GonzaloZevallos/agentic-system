@@ -20,6 +20,7 @@ from agentic.core.process.domain.stage0_rotation import (
     Proceed,
     Red,
     Stop,
+    SwitchRecord,
     Unavailable,
     Unreadable,
     WindowEntry,
@@ -80,10 +81,12 @@ class Store:
         self.log.append(f"reject {sha}")
         self.rejected_set.add(sha)
 
-    def switch_record(self) -> tuple[str | None, str, datetime] | None:
+    def switch_record(self) -> SwitchRecord | None:
         return None
 
-    def write_switch(self, previous: str | None, new: str, switched_at: datetime) -> None:
+    def write_switch(
+        self, previous: str | None, new: str, switched_at: datetime, expected: frozenset[str]
+    ) -> None:
         self.log.append(f"write_switch {new}")
 
     def unavailable_record(self) -> tuple[str, int, str] | None:

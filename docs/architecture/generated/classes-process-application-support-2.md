@@ -18,7 +18,6 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
-    class ports__CheckRuns["CheckRuns"]
     class ports__CheckScheduler["CheckScheduler"]
     class ports__CheckTool["CheckTool"]
     class ports__Checkout["Checkout"]
@@ -32,19 +31,18 @@ classDiagram
     class ports__FlagVocabulary["FlagVocabulary"]
     class ports__FreeSpace["FreeSpace"]
     class ports__GitError["GitError"]
+    class ports__Grant["Grant"]
+    class ports__Heartbeats["Heartbeats"]
 ```
 
 ## Relaciones con otras páginas
 
 - [application: support (parte 1)](classes-process-application-support-1.md)
   - `ci_push.PushFailed` hereda de `ports.GitError`
-  - `ports.AttemptFailed` se asocia con `ports.CheckRuns`
 - [application: support (parte 4)](classes-process-application-support-4.md)
   - `ports.Ports` se asocia con `ports.CheckScheduler`
   - `ports.Ports` se asocia con `ports.Commands`
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
-  - `ports.RawResult` se asocia con `ports.CheckRuns`
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
-- [application: support (parte 7)](classes-process-application-support-7.md)
+- [application: support (parte 6)](classes-process-application-support-6.md)
   - `ports.UnstageablePath` hereda de `ports.GitError`
-  - `run_role.Output` se asocia con `ports.CheckRuns`
