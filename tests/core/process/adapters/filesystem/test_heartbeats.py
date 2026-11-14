@@ -161,3 +161,22 @@ def test_a_failing_replace_leaves_no_temp_file(beats, root, monkeypatch):
     with pytest.raises(OSError):
         beats.write("a-poll", Path("/x"), NOW, "start", 60)
     assert list((root / "heartbeats").iterdir()) == []
+
+
+def test_a_beat_written_through_a_moving_link_keeps_the_stage_it_named(beats, tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    current = tmp_path / "current"
+    current.symlink_to(a)
+    beats.write("a-poll", current, NOW, "end", 60)
+    current.unlink()
+    current.symlink_to(b)
+    assert beats.read_all() == {"a-poll": Heartbeat("a-poll", a, NOW, 60.0)}
+
+
+def test_a_beat_written_with_a_resolved_path_reads_back_identical(beats, tmp_path):
+    stage = (tmp_path / "stage").resolve()
+    stage.mkdir()
+    beats.write("a-poll", stage, NOW, "start", 60)
+    assert beats.read_all() == {"a-poll": Heartbeat("a-poll", stage, NOW, 60.0)}

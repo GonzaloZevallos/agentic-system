@@ -701,6 +701,16 @@ Las reglas que deciden cuándo y a dónde se mueve stage0 sin que una persona lo
 _Avoid_: actualización de stage0 (eso es mover stage0 a mano, sin reglas), auto-update
 _Campo_: sin término de arte
 
+**Latido**:
+El archivo `<raíz>/heartbeats/<clave>.json` con `checkout`, `at`, `phase` e `interval_s`: lo que un poller dice de sí mismo. Las fases son `start`, `end` y `stop`. La clave es `<producto>-<LOCK_KEY>`: un poller de un producto. Solo quien tiene `poll.LOCK_KEY` lo escribe, y ese escritor es el trabajo de GH-736; `<raíz>` es la misma raíz resuelta que usa el store de la rotación, y el escritor la toma de `stage0_paths` en vez de calcularla. `FilesystemHeartbeats` es su único lector y escritor y guarda `checkout` resuelto; un `stop`, un valor corrupto o fuera de rango se lee como `Unreadable`. Nombres en el código: `Heartbeats`, `FilesystemHeartbeats`, `expected_pollers`.
+_Avoid_: pulso, heartbeat (el nombre en el código, no el concepto), estado del poller
+_Campo_: sin término de arte
+
+**Reversa de stage0**:
+Volver al stage anterior cuando un poller esperado no volvió al sha nuevo pasada la gracia (`rollback_due`). `expected` se guarda en `switch.json` (`SwitchRecord`) y sale de la misma lectura del reloj que `switched_at`. El orden es rechazar, intercambiar, escalar. El registro queda inerte cuando `current` ya no es `new`. Sin `previous`, o con uno ausente, la corrida lo dice y sigue a adoptar. Un reinicio de la máquina o una parada deliberada pasada la gracia se ven igual que un commit malo. Se deshace sacando el sha de `rejected`. Está inerte mientras nadie escriba latidos.
+_Avoid_: rollback (el nombre en el código, no el concepto), deshacer a mano (eso es sacar el sha de `rejected`)
+_Campo_: sin término de arte
+
 **Tope de turnos**:
 Máximo de turnos que un rol tiene para entregar en un intento. Se dimensiona por el trabajo que la entrega de ese rol exige, no por lo que le alcanza a otro rol que comparte el prompt base. Agotarlo sin resultado es un fallo de rol, y continuar la sesión en el reintento no lo repone. Un rol listado en `RETRY_TURNS` tiene su propio tope absoluto en el reintento posterior a un corte por turnos, y cada intento registra el tope con el que corrió.
 _Avoid_: presupuesto (eso es lo que se espera gastar), max_turns (el nombre en el código, no el concepto)

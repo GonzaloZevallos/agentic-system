@@ -7,18 +7,23 @@ import ast
 import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from agentic.core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
+from agentic.core.process.application.stage0_prune import make_prune
 from agentic.core.process.application.stage0_rotate import (
     DefaultFailurePolicy,
     NoEscalation,
+    Prune,
     rotate,
 )
 from agentic.core.process.domain.stage0_rotation import (
     Green,
+    Heartbeat,
     Prepared,
     Proceed,
     Red,
@@ -37,6 +42,8 @@ B = "b" * 40
 C = "c" * 40
 NOW = datetime(2026, 11, 13, tzinfo=UTC)
 OWN = Path("/own")
+ROOT = Path("/stage0-root")
+T0 = NOW - timedelta(minutes=20)
 EMPTY_ENV = hashlib.sha256(b"").digest()
 GREEN_B = [WindowEntry(B, "green", True), WindowEntry(C, "green", True)]
 
@@ -55,6 +62,7 @@ class Store:
         digests: list[bytes] | None = None,
         fail_on: str | None = None,
         staged: list[str] | None = None,
+        record: SwitchRecord | None = None,
     ) -> None:
         self.log = log
         self._staged = staged or []
@@ -63,8 +71,9 @@ class Store:
         self._digests = list(digests or [EMPTY_ENV, EMPTY_ENV])
         self._fail_on = fail_on
         self.copy_sources: list[tuple[Path, str]] = []
-        self.switch_written: SwitchRecord | None = None
+        self.switch_written = record
         self.rejected_calls: list[str] = []
+        self.rejected_set: set[str] = set()
 
     def _call(self, entry: str) -> None:
         self.log.append(entry)
@@ -92,10 +101,11 @@ class Store:
         return self._current
 
     def rejected(self) -> frozenset[str]:
-        return frozenset()
+        return frozenset(self.rejected_set)
 
     def reject(self, sha: str) -> None:
         self.rejected_calls.append(sha)
+        self.rejected_set.add(sha)
         self._call(f"reject {sha}")
 
     def write_switch(
@@ -146,6 +156,29 @@ class Users:
         return self.in_use
 
 
+class Beats:
+    """In-memory `Heartbeats` that applies the adapter's rules: `stop` reads as `Unreadable`,
+    the checkout is stored resolved, and what the adapter refuses raises here too."""
+
+    def __init__(self, log: list[str]) -> None:
+        self.log = log
+        self.stored: dict[str, Heartbeat | Unreadable] = {}
+
+    def write(self, key: str, checkout: Path, at: datetime, phase: str, interval_s: float) -> None:
+        refused = not checkout.is_absolute() or at.utcoffset() is None
+        if refused or phase not in ("start", "end", "stop") or not 0 < interval_s <= 86400:
+            raise ValueError("refused")
+        self.stored[key] = (
+            Unreadable()
+            if phase == "stop"
+            else Heartbeat(key, checkout.resolve(), at, float(interval_s))
+        )
+
+    def read_all(self) -> dict[str, Heartbeat | Unreadable]:
+        self.log.append("read_all")
+        return dict(self.stored)
+
+
 class Window:
     def __init__(self, log: list[str], entries: list[WindowEntry] | Unreadable) -> None:
         self.log = log
@@ -190,9 +223,14 @@ class Candidate:
 class Escalation:
     def __init__(self, log: list[str]) -> None:
         self.log = log
+        self.runs = 0
+        self.crash_at: int | None = None
 
     def run(self) -> None:
+        self.runs += 1
         self.log.append("escalation")
+        if self.runs == self.crash_at:
+            raise Crash("escalation")
 
 
 class Policy:
@@ -232,12 +270,22 @@ class World:
         staged: list[str] | None = None,
         in_use: frozenset[str] | Unreadable = frozenset(),
         settles: list[Green | Unavailable] | None = None,
+        record: SwitchRecord | None = None,
     ) -> None:
         self.log: list[str] = []
         self.out: list[str] = []
         self.store = Store(
-            self.log, current=current, held=held, digests=digests, fail_on=fail_on, staged=staged
+            self.log,
+            current=current,
+            held=held,
+            digests=digests,
+            fail_on=fail_on,
+            staged=staged,
+            record=record,
         )
+        self.beats: Any = Beats(self.log)
+        self.clock_at = NOW
+        self.clock_calls = 0
         self.users = Users(in_use)
         self.window = Window(self.log, GREEN_B if entries is None else entries)
         self.candidate = Candidate(self.log, smokes=smokes, prepared=prepared, settles=settles)
@@ -247,7 +295,19 @@ class World:
     def prune(self, store: object, users: object, own: Path, out: object) -> None:
         self.pruned.append((own, list(self.log)))
 
-    def run(self, *, pin: str | None = None, policy: Policy | None = None) -> None:
+    def clock(self) -> datetime:
+        self.clock_calls += 1
+        self.log.append("clock")
+        return self.clock_at
+
+    def run(
+        self,
+        *,
+        pin: str | None = None,
+        policy: Policy | None = None,
+        now: datetime = NOW,
+        prune: Prune | None = None,
+    ) -> None:
         rotate(
             self.store,
             self.users,
@@ -255,10 +315,13 @@ class World:
             self.candidate,
             self.escalation,
             pin=pin,
-            now=NOW,
+            now=now,
             own=OWN,
+            heartbeats=self.beats,
+            clock=self.clock,
+            root=ROOT,
             failure_policy=policy,
-            prune=self.prune,
+            prune=prune or self.prune,
             out=self.out.append,
         )
 
@@ -647,3 +710,174 @@ def test_a_remove_that_raises_propagates_and_the_lock_is_released() -> None:
 
     assert w.log[-1] == "unlock"
     assert w.calls("prepare") == []
+
+
+# --- the rollback step (GH-738) ----------------------------------------------------------
+
+MIN = timedelta(minutes=1)
+
+
+def adopted(
+    *pollers: str,
+    phase: str = "end",
+    age: timedelta = MIN / 2,
+    current: str | None = A,
+    staged: list[str] | None = None,
+) -> World:
+    """A World whose first rotation adopted B at `T0`, after each of `pollers` beat on A
+    `age` before it (written through the double)."""
+    w = World(current=current, staged=[A] if staged is None else staged)
+    w.clock_at = T0
+    for poller in pollers:
+        w.beats.write(poller, ROOT / A, T0 - age, phase, 60)
+    w.run(now=T0)
+    assert w.out == [f"switched: {B}"]
+    return w
+
+
+def again(w: World, entries: list[WindowEntry], *, now: datetime = NOW) -> list[str]:
+    """Another rotation on the same World over `entries`; its output."""
+    w.window._entries = entries
+    w.store._digests = [EMPTY_ENV, EMPTY_ENV]
+    w.candidate.smokes = [Green()]
+    w.out.clear()
+    w.run(now=now)
+    return w.out
+
+
+def test_rollback_fires_for_an_expected_poller_still_on_the_old_checkout() -> None:
+    w = adopted("a-poll")
+    assert w.store.switch_written == SwitchRecord(A, B, T0, frozenset({"a-poll"}))
+    w.beats.write("a-poll", ROOT / A, NOW - MIN, "end", 60)
+    runs, calls = w.escalation.runs, w.clock_calls
+    assert again(w, GREEN_B) == [f"rollback: {B} -> {A}"]
+    assert w.store.current() == A
+    assert w.store.rejected() == {B}
+    assert w.escalation.runs == runs + 2  # the one every run does, and the one after the swap
+    assert w.clock_calls == calls
+    assert w.calls("prepare") == [f"prepare {B}"]  # only the first rotation's
+    steps = [w.log.index(f"reject {B}"), w.log.index(f"switch_current {A}")]
+    assert steps == sorted(steps) and w.log.index("escalation", steps[1]) > steps[1]
+
+
+@pytest.mark.parametrize(
+    ("pollers", "phase", "age", "wait"),
+    [
+        pytest.param(("a-poll",), "stop", MIN / 2, 20 * MIN, id="last-beat-was-stop"),
+        pytest.param(("a-poll",), "end", 3 * MIN, 20 * MIN, id="beat-older-than-twice-interval"),
+        pytest.param(("a-poll",), "end", MIN / 2, 10 * MIN, id="grace-not-passed"),
+        pytest.param((), "end", MIN / 2, 20 * MIN, id="switch-json-has-no-expected"),
+    ],
+)
+def test_rollback_does_not_fire(
+    pollers: tuple[str, ...], phase: str, age: timedelta, wait: timedelta
+) -> None:
+    w = adopted(*pollers, phase=phase, age=age)
+    for poller in pollers:
+        w.beats.write(poller, ROOT / A, T0 + wait - MIN, "end", 60)  # still beating on A
+    assert again(w, [WindowEntry(B, "green", False)], now=T0 + wait) == ["keep: up_to_date"]
+    assert w.store.current() == B and w.store.rejected_calls == []
+
+
+def test_no_repeat_after_a_rollback() -> None:
+    w = adopted("a-poll")
+    w.beats.write("a-poll", ROOT / A, NOW - MIN, "end", 60)
+    assert again(w, GREEN_B) == [f"rollback: {B} -> {A}"]
+    assert again(w, [WindowEntry(A, "green", False)]) == ["keep: up_to_date"]
+    assert w.store.rejected_calls == [B] and w.store.current() == A
+
+
+def test_previous_none_says_so_and_goes_on_to_adopt() -> None:
+    w = adopted("a-poll", current=None)
+    assert w.store.switch_written == SwitchRecord(None, B, T0, frozenset({"a-poll"}))
+    assert again(w, [WindowEntry(C, "green", True)]) == ["rollback: no previous", f"switched: {C}"]
+    assert w.store.rejected_calls == []
+
+
+def test_a_missing_previous_says_so_and_goes_on_to_adopt() -> None:
+    w = adopted("a-poll", staged=[])
+    assert again(w, [WindowEntry(C, "green", True)]) == [
+        "rollback: previous missing",
+        f"switched: {C}",
+    ]
+    assert w.store.rejected_calls == []
+
+
+def test_a_crash_after_reject_is_finished_by_the_next_run() -> None:
+    w = adopted("a-poll")
+    w.store._fail_on = "switch_current"
+    with pytest.raises(Crash):
+        again(w, GREEN_B)
+    assert w.store.rejected() == {B} and w.store.current() == B
+    w.store._fail_on = None
+    assert again(w, GREEN_B) == [f"rollback: {B} -> {A}"]
+    assert w.store.current() == A
+
+
+def test_a_crash_after_switch_current_leaves_the_next_run_inert_and_it_escalates_first() -> None:
+    w = adopted("a-poll")
+    w.escalation.crash_at = w.escalation.runs + 2
+    with pytest.raises(Crash):
+        again(w, GREEN_B)
+    assert w.store.current() == A
+    runs, rejects = w.escalation.runs, list(w.store.rejected_calls)
+    assert again(w, [WindowEntry(A, "green", False)]) == ["keep: up_to_date"]
+    assert w.escalation.runs == runs + 1
+    assert w.log.index("escalation", -12) < w.log.index("window", -12)
+    assert w.store.rejected_calls == rejects
+
+
+@pytest.mark.parametrize(("offset", "expected"), [(30, {"a-poll"}), (90, set())])
+def test_the_switch_is_dated_by_the_clock_and_a_beat_up_to_then_is_expected(
+    offset: int, expected: set[str]
+) -> None:
+    w = World()
+    w.clock_at = NOW + MIN
+    w.beats.write("a-poll", ROOT / A, NOW + timedelta(seconds=offset), "end", 60)
+    w.run()
+    assert w.store.switch_written == SwitchRecord(A, B, NOW + MIN, frozenset(expected))
+    assert w.clock_calls == 1
+    seen = [e for e in w.log if e in {"read_all", "clock", f"write_switch {B}"}]
+    assert seen == ["read_all", "clock", f"write_switch {B}"]
+
+
+def test_one_silent_poller_of_two_triggers_the_rollback() -> None:
+    w = adopted("a-poll", "b-poll")
+    assert w.store.switch_written == SwitchRecord(A, B, T0, frozenset({"a-poll", "b-poll"}))
+    w.beats.write("a-poll", ROOT / B, NOW - MIN, "end", 60)  # a came back, b is silent
+    w.beats.write("b-poll", ROOT / A, NOW - MIN, "end", 60)
+    assert again(w, GREEN_B) == [f"rollback: {B} -> {A}"]
+
+
+def test_known_risk_stale_beat_on_new_counts_as_arrived() -> None:
+    w = adopted("a-poll")
+    w.beats.write("a-poll", ROOT / B, T0 + MIN, "end", 60)  # it came, beat once and died
+    assert again(w, [WindowEntry(B, "green", False)]) == ["keep: up_to_date"]
+    assert w.store.rejected_calls == []
+
+
+def test_prune_after_a_rollback_spares_both_stages_and_the_record() -> None:
+    d = "0" * 40
+    w = adopted("a-poll")
+    w.store._staged = [A, B, C, d]
+    w.users.in_use = frozenset({B})
+    w.beats.write("a-poll", ROOT / A, NOW - MIN, "end", 60)
+    w.window._entries = GREEN_B
+    w.out.clear()
+    w.log.clear()
+    w.run(prune=make_prune(ROOT))
+    assert w.out[0] == f"rollback: {B} -> {A}"
+    assert w.calls("remove ") == [f"remove {d}"]
+    assert w.store.switch_record() == SwitchRecord(A, B, T0, frozenset({"a-poll"}))
+
+
+def test_an_infinity_in_a_heartbeat_file_does_not_make_rotate_raise(tmp_path: Path) -> None:
+    (tmp_path / "heartbeats").mkdir()
+    (tmp_path / "heartbeats" / "a-poll.json").write_text(
+        '{"checkout": "/x", "at": "2026-11-13T00:00:00+00:00", "phase": "end", '
+        '"interval_s": Infinity}'
+    )
+    w = World(current=B, staged=[A], record=SwitchRecord(A, B, T0, frozenset({"a-poll"})))
+    w.beats = FilesystemHeartbeats(tmp_path)
+    w.run()
+    assert w.out == [f"rollback: {B} -> {A}"]
