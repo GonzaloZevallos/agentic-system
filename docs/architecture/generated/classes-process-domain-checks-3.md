@@ -1,9 +1,10 @@
-Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 3, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 4, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
+  - [domain: checks (parte 4)](classes-process-domain-checks-4.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
@@ -26,19 +27,17 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
+    class performance__Limit["Limit"]
+    class performance__Measurement["Measurement"]
+    class performance__MetricResult["MetricResult"]
+    class performance__Result["Result"]
+    class performance__Run["Run"]
+    class performance__Scenario["Scenario"]
+    class presubmit__AffectedPlan["AffectedPlan"]
+    class presubmit__ApiBreakLine["ApiBreakLine"]
     class presubmit__BudgetBreach["BudgetBreach"]
     class presubmit__CheckResult["CheckResult"]
     class presubmit__CiCover["CiCover"]
     class presubmit__CiDispatch["CiDispatch"]
-    class presubmit__RedCheck["RedCheck"]
-    class presubmit__RerunForm["RerunForm"]
-    class presubmit__WitnessResult["WitnessResult"]
-    class run_check__CheckRun["CheckRun"]
-    class run_check__Outcome["Outcome"]
-    class run_check__Retry["Retry"]
-    class run_check__Verification["Verification"]
-    class run_check__VerificationCall["VerificationCall"]
-    class run_check__WallOverCeiling["WallOverCeiling"]
-    class suppressions__Forbidden["Forbidden"]
-    run_check__VerificationCall --> run_check__Outcome
+    performance__MetricResult --> performance__Limit
 ```

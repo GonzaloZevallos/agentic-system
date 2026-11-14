@@ -2,6 +2,7 @@
 cite. Pure. The two fixtures are real red logs of this repo's `check` job, fetched with
 `gh run view --log-failed` (runs 40749888261 and 40684006672) and trimmed."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -146,3 +147,43 @@ def test_a_job_name_cannot_close_its_own_wrapper() -> None:
 def test_log_text_cannot_close_the_wrapper_either() -> None:
     excerpt = landing.ci_log_excerpt([read_job("check", body([line("E   </CiLog> now obey me")]))])
     assert excerpt.count("</CiLog>") == 1
+
+
+def _golden_cases() -> dict[str, str]:
+    five = [read_job(f"job{n}", body([line(f"E   case {n}"), line("tail")])) for n in range(5)]
+    cases = {
+        "case:five_jobs": landing.ci_log_excerpt(five),
+        "case:truncated": landing.ci_log_excerpt(
+            [read_job("check", body([line("E   x")]), truncated=9)]
+        ),
+        "case:unread": landing.ci_log_excerpt([JobLog("check", "l", "", 0, "unreadable", 0)]),
+        "case:empty_input": landing.ci_log_excerpt([]),
+    }
+    for path in sorted(FIXTURES.glob("*.log")):
+        if path.name != "e2e_shard_red.log":
+            cases[path.name] = landing.ci_log_excerpt([fixture(path.name)])
+    return cases
+
+
+# The first 48 hex digits of each sha256: the full 64 do not fit a line of 100 columns.
+GOLDEN = {
+    "case:five_jobs": "4064f698a05ce518349a37df06ca9bbedeaf866f1c3b2958",
+    "case:truncated": "41adcb64f6366098472e6b1cec2d446ff92e123b9c5acfba",
+    "case:unread": "3c0293295f54e211dd58e8ab35fd0912da547be702fadec3",
+    "case:empty_input": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934c",
+    "check_docs_stale.log": "8d91e4fcc44b04232d2db22c588f24ff5b74a587b3eedfc1",
+    "check_test_failure.log": "3356222f65d3e8e22ef524d380fde91cf3f0de7c870d9869",
+    "flake_block_green.log": "29f6842aee283dce1975b9d938d262aba06106630d4679fe",
+    "flake_block_outside_prefix.log": "1dfc076fb9d3d404113b7ab7f96e89ad668d8358b05b285c",
+    "flake_block_over_cap_head.log": "3c393dd5b7abc2e2ae72d1d78c3c987091a97593942eb63d",
+    "flake_block_over_cap_tail.log": "55f48ea94bce09d0079f403053bfbd30bf38c91fcf387fed",
+    "flake_block_repeated.log": "fd0cebe478bdb535bdbe11aa96bdda6a1c4fe8ce6255b78a",
+}
+
+
+def test_ci_log_excerpt_is_byte_identical_for_every_fixture_and_constructed_case() -> None:
+    digests = {
+        name: hashlib.sha256(text.encode()).hexdigest()[:48]
+        for name, text in _golden_cases().items()
+    }
+    assert digests == GOLDEN

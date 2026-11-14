@@ -20,14 +20,12 @@ from tests.fakes import MemoryStack, MemoryTracker, MemoryWorkspace
 REFUSED_TRACKER_CALLS = {
     "open_pull_request": ("EVAL-1-aaaaaaaa-default-1", "branch", "t", "b"),
     "close_issue": ("EVAL-1-aaaaaaaa-default-1",),
-    "open_issue": ("title", "body"),
     "comment_on_issue": ("7", "text"),
     "update_issue_body": (7, "body"),
     "rerun_failed_ci": ("https://github.com/o/r/pull/7", "abc"),
     "rerun_ci_run": ("123456",),
     "close_pull_request": ("https://github.com/o/r/pull/7",),
     "reopen_pull_request": (7,),
-    "ensure_label": ("agentic",),
     "update_pull_request_body": (7, "body"),
     "dispatch_ci": ("ci.yml", "ref", {}),
     "merge": ("https://github.com/o/r/pull/7", "abc"),
@@ -66,13 +64,22 @@ def test_a_tracker_write_keyed_by_task_id_does_nothing_and_reaches_no_tracker():
     assert (inner.comments, inner.labels, inner.unlabeled) == ([], [], [])
 
 
-def test_open_issue_with_labels_is_still_refused():
+def test_open_issue_with_labels_is_still_refused_as_a_value_error():
     inner = MemoryTracker()
 
-    with pytest.raises(EvaluationWrite, match="open_issue"):
+    with pytest.raises(ValueError, match="evaluation runs write nothing"):
         EvaluationTracker(inner).open_issue("t", "b", label="agentic", labels=["bug"])
 
     assert inner.opened_issues == [] and inner.opened_label_sets == []
+
+
+def test_ensure_label_is_refused_as_a_value_error_and_creates_nothing():
+    inner = MemoryTracker()
+
+    with pytest.raises(ValueError, match="evaluation runs write nothing"):
+        EvaluationTracker(inner).ensure_label("needs-triage")
+
+    assert inner.created_labels == []
 
 
 @pytest.mark.parametrize("name", sorted(REFUSED_TRACKER_CALLS))

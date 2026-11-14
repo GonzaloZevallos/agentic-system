@@ -161,6 +161,11 @@ class Users:
         return frozenset()
 
 
+class NoBeats:
+    def read_all(self) -> dict[str, Unreadable]:
+        return {}
+
+
 class World:
     def __init__(
         self,
@@ -187,6 +192,9 @@ class World:
             pin=pin,
             now=NOW,
             own=OWN,
+            heartbeats=NoBeats(),
+            clock=lambda: NOW,
+            root=Path("/root"),
             failure_policy=self.policy,
             out=self.out.append,
         )

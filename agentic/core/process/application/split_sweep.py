@@ -30,6 +30,7 @@ from .ports import IssueState, Ports, TrackerRateLimited, TrackerTimedOut, Track
 ROUND_STOPPERS = (TrackerRateLimited, TrackerUnreachable, TrackerTimedOut)
 
 Rewrite = Callable[[str, int, Sequence[int]], str | None]
+Comment = Callable[[int, Sequence[int]], str]
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,16 @@ class RepointResult:
         return not self.read_failed and not self.stopped and self.failed == 0
 
 
+def _split_comment(parent: int, targets: Sequence[int]) -> str:
+    """What a dependent is told when a split's parent is replaced by its last part(s)."""
+    listed = ", ".join(f"#{n}" for n in targets)
+    return (
+        f"#{parent} was replaced by {listed} in this issue's blockers: #{parent} ended "
+        "split into parts and is not closed by them, so this issue waits on the last "
+        "part(s) instead."
+    )
+
+
 def repoint_dependents(
     ports: Ports,
     parent: int,
@@ -59,11 +70,12 @@ def repoint_dependents(
     refs: Sequence[IssueRef],
     excluded: Collection[int],
     rewrite: Rewrite = rules.repoint_blockers,
+    comment: Comment = _split_comment,
 ) -> RepointResult:
     """Re-points the `Blocked by:` lines naming `parent` in every issue of `refs` (from
     `Inbox.open_issue_refs`) that is not in `excluded` (the split's parts and the task's own
-    issue). One edit and one comment per issue changed; a failure on one issue never stops
-    the others."""
+    issue). One edit and one comment per issue changed (the text is `comment(parent, targets)`,
+    the split's own by default); a failure on one issue never stops the others."""
     considered = changed = failed = 0
     stopped = ""
     for ref in refs:
@@ -72,7 +84,7 @@ def repoint_dependents(
             continue
         considered += 1
         try:
-            done = _repoint(ports, parent, targets, ref, number, rewrite)
+            done = _repoint(ports, parent, targets, ref, number, rewrite, comment)
         except ROUND_STOPPERS as stopper:
             stopped = type(stopper).__name__
             break
@@ -90,7 +102,13 @@ def repoint_dependents(
 
 
 def _repoint(
-    ports: Ports, parent: int, targets: Sequence[int], ref: IssueRef, number: int, rewrite: Rewrite
+    ports: Ports,
+    parent: int,
+    targets: Sequence[int],
+    ref: IssueRef,
+    number: int,
+    rewrite: Rewrite,
+    comment: Comment,
 ) -> bool:
     """Whether the issue is done: edited and commented, or found already pointing past the
     parent. A failed read, edit or comment, or a refused post-condition, is `False`; a
@@ -112,14 +130,8 @@ def _repoint(
         raise
     except (ValueError, OSError):
         return False
-    listed = ", ".join(f"#{n}" for n in targets)
     try:
-        ports.tracker.comment_on_issue(
-            ref.url,
-            f"#{parent} was replaced by {listed} in this issue's blockers: #{parent} ended "
-            "split into parts and is not closed by them, so this issue waits on the last "
-            "part(s) instead.",
-        )
+        ports.tracker.comment_on_issue(ref.url, comment(parent, targets))
     except ROUND_STOPPERS:
         raise
     except (ValueError, OSError):

@@ -122,7 +122,11 @@ ante un fallo del candidato (por defecto conserva `current` y nunca escribe `rej
 en `agentic/core/process/application/ports.py`. `Heartbeats` es el puerto de los latidos de los pollers, un archivo
 `<root>/heartbeats/<producto>-<LOCK_KEY>.json` por poller de un producto; lo cumple
 `agentic/core/process/adapters/filesystem/heartbeats.py:FilesystemHeartbeats`, único lector y escritor de ese directorio
-(escritura atómica; un archivo ilegible o con fase `stop` se lee como `Unreadable`). Nada lo cablea todavía.
+(escritura atómica, con el `checkout` guardado resuelto; un archivo ilegible o con fase `stop` se lee como `Unreadable`).
+`agentic/composition.py:stage0_rotation` lo construye con la misma raíz resuelta que el store y lo expone como
+`Stage0Rotation.heartbeats` y `Stage0Rotation.root`; `agentic/core/process/application/stage0_rotate.py:rotate` recibe
+`heartbeats`, `clock` y `root`, y su paso de reversa puede llamar a `reject` y `switch_current`. Ningún poller escribe
+latidos todavía, así que la reversa no dispara.
 
 ## `core/knowledge`
 

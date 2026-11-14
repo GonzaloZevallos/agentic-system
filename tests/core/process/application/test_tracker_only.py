@@ -358,3 +358,28 @@ async def test_nothing_is_read_when_no_system_item_was_done(tmp_path):
     state = {**typed(_ITEM), "tracker_actions_done": answered}
     patch = await tracker_only(state, cfg(tmp_path), memory_ports(tracker=tracker))
     assert tracker.reads == 0 and patch["status"] == "tracker_only"
+
+
+# --- GH-690: the `open_issue` kind through the node ----------------------------------------
+
+OPEN_ISSUE = {"kind": "open_issue", "title": "Track the retry", "body": "The retry is lost."}
+
+
+async def test_an_open_issue_and_a_human_item_open_the_issue_link_it_then_raise_the_human(
+    tmp_path,
+):
+    ports = memory_ports()
+    ports.tracker.issue_numbers_from = 61
+    patch = await tracker_only(typed(OPEN_ISSUE, _ITEM), cfg(tmp_path), ports)
+
+    ((title, body),) = ports.tracker.opened_issues
+    assert title == "Track the retry" and ports.tracker.opened_labels == [items.TRIAGE_LABEL]
+    assert body.endswith(f"From task: #307\n\n{items.marker(OPEN_ISSUE, 'GH-307')}")
+    ((task_id, report),) = ports.tracker.comments
+    url = "https://github.com/o/r/issues/61"
+    assert task_id == "GH-307"
+    assert report == f"{items.DONE}\n- issue opened ({url})\n\n{done_line(OPEN_ISSUE)}"
+    assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
+    done = patch["tracker_actions_done"]
+    assert done[items.item_hash(OPEN_ISSUE)]["url"] == url
+    assert set(done[items.item_hash(_ITEM)]) == {"at"}

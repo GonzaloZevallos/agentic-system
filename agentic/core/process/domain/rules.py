@@ -801,6 +801,13 @@ def escalation(
     return patch
 
 
+def spec_delivery(state: TaskState) -> bool:
+    """Whether the task is a spec delivery (GH-594): `state["spec"]` is non-empty. The graph's
+    empty default (`{}`) is no spec. `escalation` reads the same signal, `bool(spec)`, so the
+    two cannot disagree: there is no second key such as a `spec_delivery` flag."""
+    return bool(state.get("spec"))
+
+
 def tracker_item_pause(state: TaskState) -> bool:
     """Whether the task is paused on typed tracker items (GH-620): `tracker_human` holds the
     hashes of the items a person has not answered. The one place that reads it, for its three

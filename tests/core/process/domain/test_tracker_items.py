@@ -107,11 +107,11 @@ def test_parse_judges_the_count_before_the_items_and_the_items_before_the_repeat
         tracker_items.parse([ITEM, broken, ITEM])
 
 
-def test_kinds_holds_only_human_and_comment():
-    assert tracker_items.KINDS == frozenset({"human", "comment"})
+def test_kinds_holds_human_comment_and_open_issue():
+    assert tracker_items.KINDS == frozenset({"human", "comment", "open_issue"})
 
 
-@pytest.mark.parametrize("kind", ["open_issue", "", None])
+@pytest.mark.parametrize("kind", ["delete_issue", "", None])
 def test_parse_rejects_an_unknown_kind_and_says_to_write_it_as_human(kind):
     with pytest.raises(ValueError, match="human") as error:
         tracker_items.parse([{**ITEM, "kind": kind}])
@@ -282,7 +282,8 @@ def test_item_hash_is_pinned_for_every_kind(item, expected):
     assert tracker_items.item_hash(item) == expected
 
 
-def test_parse_still_refuses_a_kind_that_is_not_performed_yet():
+def test_parse_refuses_a_kind_of_the_table_that_KINDS_does_not_hold(monkeypatch):
+    monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human", "comment"}))
     with pytest.raises(ValueError, match="unknown tracker item kind") as error:
         tracker_items.parse([OPEN_ISSUE])
     assert "open_issue" in str(error.value) and WAY_OUT in str(error.value)
@@ -505,3 +506,102 @@ def test_done_marker_does_not_depend_on_the_order_and_differs_for_another_set():
     assert tracker_items.done_marker("GH-7", [a, b]) == tracker_items.done_marker("GH-7", [b, a])
     assert tracker_items.done_marker("GH-7", [a]) != tracker_items.done_marker("GH-7", [a, b])
     assert tracker_items.done_marker("GH-7", [a]) != tracker_items.done_marker("GH-8", [a])
+
+
+# --- GH-690 domain: open_issue rules -------------------------------------------------------
+
+LINKING_WORDS = ["Blocked by: #5", "Closes the loop", "Fixes it", "Resolves it"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        *LINKING_WORDS,
+        "   Blocked by: #5",
+        "BLOCKED BY: #5",
+        "closes it",
+        "fixes it",
+        "resolves it",
+        "\tResolves it",
+    ],
+)
+def test_open_issue_body_refuses_a_line_that_starts_with_a_linking_word(every_kind, line):
+    with pytest.raises(ValueError, match="body") as error:
+        tracker_items.parse([{**OPEN_ISSUE, "body": f"First line.\n{line}"}])
+    assert WAY_OUT in str(error.value)
+
+
+def test_open_issue_body_refuses_the_word_inside_a_code_fence(every_kind):
+    body = "Text.\n```\nCloses nothing\n```"
+    with pytest.raises(ValueError, match="Closes|closes"):
+        tracker_items.parse([{**OPEN_ISSUE, "body": body}])
+
+
+@pytest.mark.parametrize("separator", ["\x0b", "\x0c", "\x1c", "\x85", " ", " ", "\r"])
+def test_open_issue_body_refuses_a_linking_line_after_any_line_boundary(every_kind, separator):
+    with pytest.raises(ValueError, match="body"):
+        tracker_items.parse([{**OPEN_ISSUE, "body": f"First.{separator}Blocked by: #5"}])
+
+
+def test_open_issue_body_accepts_the_word_mid_line_or_inside_another_word(every_kind):
+    body = "This is Blocked by nothing.\nIt closes nothing, it fixes nothing.\nResolved later."
+    assert tracker_items.parse([{**OPEN_ISSUE, "body": body}])[0]["body"] == body
+
+
+def test_the_linking_rule_leaves_the_one_line_title_and_the_comment_alone(every_kind):
+    assert tracker_items.parse([{**OPEN_ISSUE, "title": "Closes the gap"}])
+    assert tracker_items.parse([{"kind": "comment", "text": "Closes nothing."}])
+
+
+def test_parse_refuses_two_open_issues_with_the_same_normalized_title(every_kind):
+    twin = {**OPEN_ISSUE, "title": "Track  THE retry", "body": "Another body."}
+    with pytest.raises(ValueError, match="same title") as error:
+        tracker_items.parse([{**OPEN_ISSUE, "title": "track the Retry"}, twin])
+    assert WAY_OUT in str(error.value)
+
+
+def test_parse_refuses_a_repeated_item_before_it_judges_the_title(every_kind):
+    with pytest.raises(ValueError, match="twice"):
+        tracker_items.parse([OPEN_ISSUE, dict(OPEN_ISSUE)])
+
+
+def test_triage_label_is_needs_triage():
+    assert tracker_items.TRIAGE_LABEL == "needs-triage"
+
+
+def test_a_comment_marker_keeps_its_bytes():
+    # Computed on the code before `marker_key` existed.
+    item = {"kind": "comment", "text": "Superseded by this issue."}
+    assert tracker_items.marker(item, "GH-690") == "<!-- agentic-item: GH-690 af0ac5890018 -->"
+    assert tracker_items.marker_key(item) == tracker_items.item_hash(item)
+
+
+def test_an_open_issue_marker_follows_the_normalized_title_only(every_kind):
+    first = {**OPEN_ISSUE, "title": "Track  the Retry"}
+    reworded_body = {**OPEN_ISSUE, "title": "track the retry", "body": "Quite another body."}
+    other = {**OPEN_ISSUE, "title": "Track the retries"}
+    assert tracker_items.marker(first, "GH-1") == tracker_items.marker(reworded_body, "GH-1")
+    assert tracker_items.marker(first, "GH-1") != tracker_items.marker(other, "GH-1")
+    assert tracker_items.marker_key(first) == tracker_items.digest(["track the retry"])
+    assert tracker_items.marker(first, "GH-1").endswith(f" {tracker_items.marker_key(first)} -->")
+
+
+def test_report_renders_an_opened_issue_with_its_url():
+    done = {tracker_items.item_hash(OPEN_ISSUE): {"kind": "open_issue", "url": "http://x/9"}}
+    assert tracker_items.report([OPEN_ISSUE], done) == "- issue opened (http://x/9)"
+
+
+def test_kinds_text_describes_open_issue_when_it_is_performed(every_kind):
+    text = tracker_items.kinds_text()
+    assert "{kind: open_issue, title, body}" in text
+    assert "needs-triage" in text
+    assert f"{tracker_items.MAX_BODY_CHARS} characters over several lines" in text
+
+
+def test_the_plan_schema_describes_open_issue():
+    from agentic.core.process.domain import schemas
+
+    description = schemas.TechPlan.model_fields["tracker_items"].description or ""
+    assert tracker_items.shape("open_issue") in description
+    assert str(tracker_items.MAX_BODY_CHARS) in description
+    assert tracker_items.TRIAGE_LABEL in description
