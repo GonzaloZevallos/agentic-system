@@ -29,7 +29,8 @@ _ISSUE_REF = r"(?:[\w.-]+/[\w.-]+)?#\d+|https?://github\.com/\S+/(?:issues|pull)
 _CLOSING = re.compile(
     rf"\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[:\s]*(?:{_ISSUE_REF})", re.IGNORECASE
 )
-_CLOSING_WORD = re.compile(r"\b(?:closes|fixes|resolves)\b", re.IGNORECASE)
+_CLOSING_WORDS = ("Closes", "Fixes", "Resolves")
+_CLOSING_WORD = re.compile(rf"\b(?:{'|'.join(_CLOSING_WORDS)})\b", re.IGNORECASE)
 _BLOCKED_LINE = re.compile(r"^(\s*Blocked by:\s*)(#\d+(?:\s*,\s*#\d+)*)(\s*)$", re.IGNORECASE)
 _FENCE = re.compile(r"^(`{3,}|~{3,})")
 _REDECLARED = (
@@ -121,6 +122,12 @@ def validate(carve: CarveOut, plan_output: Mapping[str, object]) -> list[str]:
     for step in steps:
         if re.search(rf"(?<![\w-]){re.escape(step)}(?![\w-])", integration):
             refusals.append(f"the redeclared integration names the extracted id {step!r}")
+    for field in ("required_paths", "ci_required"):
+        original = plan_output.get(field)
+        held = original if isinstance(original, list) else []
+        extra = [entry for entry in carve[field] if entry not in held]
+        if extra:
+            refusals.append(f"{field} holds entries the original plan does not: {extra}")
     if carve["kind"] not in KINDS:
         refusals.append(f"kind {carve['kind']!r} is not one of {list(KINDS)}")
     if "\n" in carve["remainder_green"]:
@@ -133,6 +140,24 @@ def validate(carve: CarveOut, plan_output: Mapping[str, object]) -> list[str]:
             if reason:
                 refusals.append(f"{sub.get('id')!r}: {reason}")
     return refusals
+
+
+def rules_text() -> str:
+    """The rules of a carve-out as the prompt's `{{carve_rules}}`, built from this module's own
+    constants so the prompt never retypes them: what `validate` and `text_refused` refuse."""
+    return "\n".join(
+        [
+            f"- `kind` is one of {', '.join(f'`{kind}`' for kind in KINDS)}.",
+            "- `title` and `body` never contain "
+            + ", ".join(f"`{token}`" for token in (_OPEN, _CLOSE, _BLOCKED))
+            + " or the words "
+            + ", ".join(_CLOSING_WORDS[:-1])
+            + f" and {_CLOSING_WORDS[-1]}, in any case.",
+            "- `title` is one line.",
+            "- The system writes the marker, the `Blocked by:` line, the context line and "
+            "`Kind:` itself; never write them.",
+        ]
+    )
 
 
 def text_refused(title: str, body: str) -> str | None:

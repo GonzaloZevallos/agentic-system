@@ -55,6 +55,8 @@ def _carve(**over: Any) -> Any:
 
 PLAN: Any = {
     "integration": "wire a and b",
+    "required_paths": ["src/a.py"],
+    "ci_required": ["tests"],
     "subtasks": [
         {"id": "a", "title": "A", "brief": "Build a.", "depends_on": []},
         {"id": "b", "title": "B", "brief": "Build b.", "invariants": ["b is pure"]},

@@ -40,12 +40,13 @@ classDiagram
     class schemas__Finding["Finding"]
     class schemas__FitBucket["FitBucket"]
     class schemas__FitDecision["FitDecision"]
+    class schemas__GlossaryTerm["GlossaryTerm"]
     schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+- [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`
   - `schemas.Delivery` hereda de `schemas.RoleOutput`

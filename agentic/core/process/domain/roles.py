@@ -24,6 +24,7 @@ from .document import ORIGINAL  # pseudo-section every role may declare: the tas
 from .schemas import (
     PRD,
     Answers,
+    CarveOutOutput,
     Classification,
     Consolidation,
     Consultation,
@@ -599,6 +600,20 @@ TECH_LEAD_PLATFORM = replace(
     TECH_LEAD, slug="tech_lead_platform", reads=(ORIGINAL, PJM.name, SOLUTION_INTERVIEW)
 )
 
+# The carve-out (GH-719, GH-722): a Tech Lead spec, not a 20th role, so it keeps the Tech Lead's
+# name and the role label gains no value. It declares which whole subtasks a depth-2 part over
+# the budget moves into a follow-up issue; it reads the plan through `{{carve_plan}}`, so it
+# needs no tools.
+TECH_LEAD_CARVE_OUT = Role(
+    name=TECH_LEAD.name,
+    slug="tech_lead_carve_out",
+    kind="actor",
+    schema=CarveOutOutput,
+    reads=(ORIGINAL, PJM.name),
+    effort="low",
+    max_turns=4,
+)
+
 # The plan_review arm (GH-472, ADR-0086). The sizer reads the request alone and says what the
 # task will cost, before any plan exists; the critic reviews the Tech Lead's cold draft once,
 # adversarially. Neither is an interview seat, and neither writes: the sizer has no tools and
@@ -849,6 +864,7 @@ ROLES = (
     PLAN_SIZER,
     TECH_LEAD_CRITIC,
     TECH_LEAD_CRITIC_PLATFORM,
+    TECH_LEAD_CARVE_OUT,
     LANDING_DIAGNOSER,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
