@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict, Unpack, cast
 
 from ..domain import carve_out, document, rules
 from ..domain.carve_out import CarveOut
@@ -99,6 +99,8 @@ def apply_carve(
             return _save(current, ports, outcome="refused", cause="evaluation")
         current = _record(current, ports, data=dict(data), fit=_figures(fit), at=ports.now())
     saved = _read(current["carve_out"])
+    if saved is None:
+        return _stopped(current, "reading the saved record", ValueError(), ports)
     part = ports.inbox.issue_of(task_id)
     if part is None:
         return _save(current, ports, outcome="refused", cause="no_issue")
@@ -154,9 +156,16 @@ def _open(
         return None, _stopped(current, "opening the follow-up", exc, ports)
 
 
-def _read(record: CarveRecord) -> CarveData:
-    """The saved `data` as `CarveData`: the document keeps it as a plain mapping."""
-    return cast(CarveData, record["data"])
+def _read(record: CarveRecord) -> CarveData | None:
+    """The saved `data` as `CarveData`, or `None` when the document holds a record that does not
+    have its shape (the document only checks that `data` is a mapping)."""
+    raw = record.get("data", {})
+    carve, plan = raw.get("carve"), raw.get("plan_output")
+    if not (isinstance(carve, dict) and isinstance(plan, dict)):
+        return None
+    if not all(key in carve for key in ("steps", "title", "body", "kind")):
+        return None
+    return cast(CarveData, raw)
 
 
 def _figures(fit: FitDecision) -> dict[str, object]:
@@ -165,15 +174,15 @@ def _figures(fit: FitDecision) -> dict[str, object]:
     return figures
 
 
-def _record(state: TaskState, ports: Ports, **fields: Any) -> TaskState:
+def _record(state: TaskState, ports: Ports, **fields: Unpack[CarveRecord]) -> TaskState:
     """`state` with `fields` folded into its record, saved to the document before any effect."""
     patch = _base(state)
-    patch["carve_out"] = cast(CarveRecord, fields)
+    patch["carve_out"] = fields
     finish(state, patch, ports)
     return apply(state, patch)
 
 
-def _save(state: TaskState, ports: Ports, **fields: Any) -> TaskState:
+def _save(state: TaskState, ports: Ports, **fields: Unpack[CarveRecord]) -> TaskState:
     """Saves `fields` and answers the patch with the whole record."""
     return _carried(_record(state, ports, **fields))
 

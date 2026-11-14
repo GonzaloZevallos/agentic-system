@@ -2,13 +2,14 @@
 what it refuses, what it writes before the tracker is touched, how it finds or opens the
 follow-up, and what a tracker failure may put in the document."""
 
+import inspect
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from agentic.core.process.adapters.evaluation import EvaluationTracker
+from agentic.core.process.application import plan
 from agentic.core.process.application.carve_out import CarveRefused, apply_carve, refusals
 from agentic.core.process.application.ports import IssueState
 from agentic.core.process.domain import carve_out, rules
@@ -230,6 +231,16 @@ def test_a_record_with_its_issue_url_resumes_with_no_call_at_all() -> None:
     assert calls == [] and inner.opened_issues == [] and inner.created_labels == []
 
 
+def test_a_record_with_data_of_the_wrong_shape_pauses_instead_of_raising() -> None:
+    ports, calls, _ = _setup()
+    state = {**STATE, "carve_out": {"data": {"carve": {}}, "at": NOW}}
+
+    patch = _run(ports, state)
+
+    assert patch["status"] == WAITING_ON_HUMAN and "reading the saved record" in patch["escalated"]
+    assert [c for c in calls if c.startswith("tracker.")] == []
+
+
 @pytest.mark.parametrize("where", ["reading the open issues", "creating a label", "opening"])
 def test_a_port_error_pauses_with_its_class_and_never_its_text(where: str) -> None:
     inbox = LeakyInbox() if where.startswith("reading") else None
@@ -267,5 +278,4 @@ def test_a_port_error_pauses_with_its_class_and_never_its_text(where: str) -> No
 
 
 def test_plan_py_does_not_name_apply_carve() -> None:
-    source = Path("agentic/core/process/application/plan.py").read_text()
-    assert "apply_carve" not in source
+    assert "apply_carve" not in inspect.getsource(plan)
