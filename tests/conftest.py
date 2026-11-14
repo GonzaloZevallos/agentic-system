@@ -3,6 +3,11 @@ from pathlib import Path
 
 import pytest
 
+from agentic.shared import stage0 as stage0_paths
+
+REAL_STAGE0_ROOT = stage0_paths.DEFAULT_ROOT
+"""What `DEFAULT_ROOT` is on import, before `no_real_stage0_root` replaces it."""
+
 
 @pytest.fixture
 def anyio_backend():
@@ -71,6 +76,15 @@ def no_real_scratch_root(tmp_path, monkeypatch):
     cache = tmp_path / "xdg-cache"
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
     monkeypatch.setenv("AGENTIC_SCRATCH_DIR", str(cache / "agentic" / "scratch"))
+
+
+@pytest.fixture(autouse=True)
+def no_real_stage0_root(tmp_path, monkeypatch):
+    """GH-736: `agentic poll`'s dispatch wires the rotation store and the heartbeats on
+    `stage0.DEFAULT_ROOT`, read at call time, and a poller on a real argv0 re-execs onto its
+    `current`. Pointing it into the test's own `tmp_path` means no test reads or writes under
+    the real `~/.agentic-stage0s`. A test of the real default reads `REAL_STAGE0_ROOT`."""
+    monkeypatch.setattr(stage0_paths, "DEFAULT_ROOT", tmp_path / "stage0s")
 
 
 @pytest.fixture(autouse=True)

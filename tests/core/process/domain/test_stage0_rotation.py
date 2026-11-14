@@ -305,6 +305,93 @@ def test_rollback_due_naive_datetime_raises(switched_at: datetime, now: datetime
         rollback_due(switched_at, P2, frozenset({"p"}), {}, now)
 
 
+@pytest.mark.parametrize(
+    ("product", "key"),
+    [
+        ("apostrophe", "apostrophe-poll"),
+        ("agentic", "agentic-poll"),
+        ("my-app2", "my-app2-poll"),
+        ("Apostrophe", None),
+        ("my app", None),
+        ("", None),
+        ("a_b", None),
+    ],
+)
+def test_heartbeat_key(product: str, key: str | None) -> None:
+    assert sr.heartbeat_key(product, "poll") == key
+
+
+EXE = Path("/rot/aaa/.venv/bin/agentic")
+PRODUCT = Path("/work/product")
+
+
+def test_reexec_argv_is_absolute_and_never_detaches() -> None:
+    argv = sr.reexec_argv(EXE, PRODUCT, 60.0)
+    assert argv == [str(EXE), "poll", "--product-dir", str(PRODUCT), "--interval", "60.0"]
+    assert "--detach" not in argv and "--dry-run" not in argv
+
+
+@pytest.mark.parametrize(("exe", "product"), [(Path("agentic"), PRODUCT), (EXE, Path("product"))])
+def test_reexec_argv_refuses_a_relative_path(exe: Path, product: Path) -> None:
+    with pytest.raises(ValueError, match="absolute"):
+        sr.reexec_argv(exe, product, 60.0)
+
+
+OLD_BIN = Path("/old/.venv/bin")
+TARGET = Path("/rot/aaa")
+RESOLVED = {
+    "AGENTIC_PRODUCT_DIR": PRODUCT,
+    "AGENTIC_LOG_FILE": Path("/work/log/poll.log"),
+    "AGENTIC_SCRATCH_DIR": Path("/work/scratch"),
+    "AGENTIC_RUN_REGISTRY_DIR": Path("/work/runs"),
+}
+
+
+def test_reexec_env_drops_the_venv_and_marks_the_origin() -> None:
+    before = {
+        "VIRTUAL_ENV": "/old/.venv",
+        "PATH": "/old/.venv/bin:/usr/bin:/bin",
+        "HOME": "/home/x",
+        "AGENTIC_PRODUCT_DIR": "relative/product",
+        "AGENTIC_LOG_FILE": "poll.log",
+        "AGENTIC_MAX_CONCURRENT_RUNS": "3",
+    }
+    snapshot = dict(before)
+    env = sr.reexec_env(before, RESOLVED, OLD_BIN, TARGET)
+    assert before == snapshot  # a copy, never the caller's mapping
+    assert "VIRTUAL_ENV" not in env
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HOME"] == "/home/x" and env["AGENTIC_MAX_CONCURRENT_RUNS"] == "3"
+    assert env["AGENTIC_REEXEC_FROM"] == str(TARGET)
+    for name in sr.REEXEC_PATH_VARS:
+        assert env[name] == str(RESOLVED[name])
+
+
+def test_reexec_env_without_a_log_file_leaves_none() -> None:
+    resolved = {k: v for k, v in RESOLVED.items() if k != "AGENTIC_LOG_FILE"}
+    env = sr.reexec_env({"AGENTIC_LOG_FILE": "poll.log"}, resolved, OLD_BIN, TARGET)
+    assert "AGENTIC_LOG_FILE" not in env and "PATH" not in env
+
+
+def test_reexec_env_refuses_a_relative_resolved_path() -> None:
+    with pytest.raises(ValueError, match="absolute"):
+        sr.reexec_env({}, {"AGENTIC_PRODUCT_DIR": Path("p")}, OLD_BIN, TARGET)
+
+
+@pytest.mark.parametrize(
+    ("marker", "blocked"),
+    [(str(TARGET), True), (None, False), ("/rot/bbb", False), ("", False)],
+)
+def test_reexec_blocked(marker: str | None, blocked: bool) -> None:
+    assert sr.reexec_blocked(TARGET, marker) is blocked
+
+
+def test_inherited_zombies() -> None:
+    states = {1: "Z", 2: "S", 3: "Z", 9: "Z"}
+    assert sr.inherited_zombies(frozenset({1, 2, 3, 4}), states) == frozenset({1, 3})
+    assert sr.inherited_zombies(frozenset(), states) == frozenset()
+
+
 FORBIDDEN_CALLS = {"resolve", "exists", "is_symlink", "stat", "open", "now", "utcnow"}
 CI_MODULE = "agentic.core.process.domain.ci"
 

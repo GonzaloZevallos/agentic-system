@@ -701,8 +701,13 @@ Las reglas que deciden cuándo y a dónde se mueve stage0 sin que una persona lo
 _Avoid_: actualización de stage0 (eso es mover stage0 a mano, sin reglas), auto-update
 _Campo_: sin término de arte
 
+**Re-exec del poller**:
+El poller se reemplaza a sí mismo por el del stage al que apunta `current`, al empezar una ronda y sin que una persona lo reinicie. `reexec_due` decide el destino (resuelto, nunca por `current`), `reexec_argv` y `reexec_env` arman argv y entorno con rutas absolutas, y `reexec_blocked` corta el ciclo cuando el proceso ya viene de ese destino (`AGENTIC_REEXEC_FROM`). El lock se suelta antes del `execve` porque el pid se conserva; si el exec falla se vuelve al cwd y al lock y la ronda sigue en el código viejo. Un poller con `heartbeat_key` escribe un latido por ronda mientras tiene el lock; solo una parada señalada escribe `stop`.
+_Avoid_: reinicio del poller (eso es el servicio de systemd), hot reload
+_Campo_: `exec` de POSIX (reemplazo del proceso conservando el pid)
+
 **Latido**:
-El archivo `<raíz>/heartbeats/<clave>.json` con `checkout`, `at`, `phase` e `interval_s`: lo que un poller dice de sí mismo. Las fases son `start`, `end` y `stop`. La clave es `<producto>-<LOCK_KEY>`: un poller de un producto. Solo quien tiene `poll.LOCK_KEY` lo escribe, y ese escritor es el trabajo de GH-736; `<raíz>` es la misma raíz resuelta que usa el store de la rotación, y el escritor la toma de `stage0_paths` en vez de calcularla. `FilesystemHeartbeats` es su único lector y escritor y guarda `checkout` resuelto; un `stop`, un valor corrupto o fuera de rango se lee como `Unreadable`. Nombres en el código: `Heartbeats`, `FilesystemHeartbeats`, `expected_pollers`.
+El archivo `<raíz>/heartbeats/<clave>.json` con `checkout`, `at`, `phase` e `interval_s`: lo que un poller dice de sí mismo. Las fases son `start`, `end` y `stop`. La clave es `<producto>-<LOCK_KEY>`: un poller de un producto. Solo quien tiene `poll.LOCK_KEY` lo escribe, y ese escritor es el poller (GH-736), que lo hace en cada ronda; `<raíz>` es la misma raíz resuelta que usa el store de la rotación, y el escritor la toma de `stage0_paths` en vez de calcularla. `FilesystemHeartbeats` es su único lector y escritor y guarda `checkout` resuelto; un `stop`, un valor corrupto o fuera de rango se lee como `Unreadable`. Nombres en el código: `Heartbeats`, `FilesystemHeartbeats`, `expected_pollers`.
 _Avoid_: pulso, heartbeat (el nombre en el código, no el concepto), estado del poller
 _Campo_: sin término de arte
 
