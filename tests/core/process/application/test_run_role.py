@@ -47,6 +47,7 @@ from agentic.core.process.domain.roles import (
     UI_LEAD,
     UX_DESIGNER,
     UX_LEAD,
+    Role,
     describe_flags,
     prompt_hash,
     reads_by_index,
@@ -2038,6 +2039,13 @@ async def _answer(tmp_path, result: RawResult, **state):
     return runner, output, patch
 
 
+@pytest.fixture
+def empty_table(monkeypatch):
+    """The mechanism tests below predate the shipped table: they run with no block named."""
+    monkeypatch.setattr(spec_brief, "SPEC_BLOCKS", {})
+
+
+@pytest.mark.usefixtures("empty_table")
 async def test_with_a_spec_the_role_is_asked_for_the_spec_schema_and_its_rows_reach_the_patch(
     tmp_path,
 ):
@@ -2061,6 +2069,7 @@ async def test_with_a_spec_and_nothing_assumed_the_patch_has_no_assumptions_key(
     assert "assumptions" not in patch
 
 
+@pytest.mark.usefixtures("empty_table")
 async def test_a_text_the_canonical_form_refuses_is_dropped_from_the_rows(tmp_path):
     _, _, patch = await _answer(
         tmp_path, _answering("two\nlines", "x" * 241, "ok"), spec=SPEC_STATE
@@ -2197,6 +2206,7 @@ async def _run_tech_lead(tmp_path, **state):
     return runner, output, patch
 
 
+@pytest.mark.usefixtures("empty_table")
 async def test_with_the_empty_table_a_spec_changes_the_message_and_nothing_else(tmp_path):
     plain, _, plain_patch = await _run_tech_lead(tmp_path)
     with_spec, _, spec_patch = await _run_tech_lead(tmp_path, spec=GOOD_SPEC)
@@ -2256,6 +2266,7 @@ async def _run_with_blocks(tmp_path, blocks, table=None, **state):
     return runner, prompts, output, patch
 
 
+@pytest.mark.usefixtures("empty_table")
 async def test_with_the_empty_table_no_block_is_read_and_the_prompt_is_the_one_without_spec(
     tmp_path,
 ):
@@ -2281,7 +2292,7 @@ async def test_a_named_block_joins_the_system_prompt_and_its_hash_only_with_a_sp
     assert spec_patch["prompts"] != plain_patch["prompts"]
 
 
-async def test_a_role_the_table_does_not_name_reads_no_block(tmp_path, monkeypatch):
+async def test_a_role_the_table_does_not_name_reads_no_block(tmp_path, monkeypatch, empty_table):
     monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "developer", "build")
     _, prompts, _, _ = await _run_with_blocks(tmp_path, {"build": "x"}, spec=GOOD_SPEC)
     assert prompts.block_calls == []
@@ -2315,3 +2326,34 @@ async def test_a_caller_that_passes_a_prompt_reads_no_block(tmp_path, monkeypatc
     )
     assert prompts.block_calls == []
     assert "Build rules." not in runner.calls[0]["system_prompt"]
+
+
+class _PlaybookPrompts(FilesystemPrompts):
+    """The real prompt and block files, with a non-empty playbook for every role."""
+
+    def playbook(self, role: Role) -> Playbook:
+        return dataclasses.replace(lessons("Run the checks first."), slug=role.slug)
+
+
+@pytest.mark.parametrize("slug", sorted(spec_brief.SPEC_BLOCKS))
+async def test_with_a_spec_each_mapped_role_ends_its_system_prompt_with_its_block(tmp_path, slug):
+    role = next(role for role in ROLES if role.slug == slug)
+    prompts = _PlaybookPrompts(tmp_path)
+    block = prompts.spec_block(spec_brief.SPEC_BLOCKS[slug])
+    runner = ScriptedRunner()
+    state = {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC}
+    with pytest.raises(AssertionError, match="no scripted result"):  # the call was recorded
+        await run_role(
+            cast(Any, state),
+            role,
+            Configuration(product_dir=tmp_path),
+            memory_ports(runner, prompts=prompts),
+            tiers="### Tiers\nx",
+            **PLACEHOLDERS,
+        )
+    call = runner.calls[0]
+    section = fenced_section(cast(Any, GOOD_SPEC))
+    assert call["system_prompt"].endswith("\n\n" + block)
+    assert "### Playbook" in call["system_prompt"] and "### Tiers" in call["system_prompt"]
+    assert section in call["prompt"]
+    assert section not in call["system_prompt"]

@@ -1048,3 +1048,24 @@ def test_preflight_refuses_a_missing_file_of_a_filesystem_table(stage0, tmp_path
     )
     with pytest.raises(ValueError, match="spec block absent: template"):
         preflight(Configuration(product_dir=PRODUCT), ports)
+
+
+def test_preflight_passes_with_the_five_shipped_blocks(tmp_path):
+    ports = memory_ports(prompts=FilesystemPrompts(tmp_path))
+    assert ports.prompts.spec_block_names() == (
+        "copy_review",
+        "plan",
+        "pm_consultant",
+        "pm_final",
+        "review",
+    )
+    module.refuse_unservable_spec_blocks(ports)
+
+
+def test_preflight_refuses_an_overlay_block_that_would_read_a_placeholder(tmp_path):
+    overlay = tmp_path / ".agentic/prompts/spec"
+    overlay.mkdir(parents=True)
+    (overlay / "plan.md").write_text("Rules {{date}}", encoding="utf-8")
+    ports = memory_ports(prompts=FilesystemPrompts(tmp_path))
+    with pytest.raises(ValueError, match="spec block plan: template"):
+        module.refuse_unservable_spec_blocks(ports)

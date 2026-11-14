@@ -3,8 +3,8 @@
 
 The slice reaches a role only through `run_role.context_for`, as the fenced section this
 module builds: never through `render`, the system prompt or its hash (ADR-0096). What the
-system prompt may carry is a constant block per role group, named in `SPEC_BLOCKS`, which
-ships empty until a later part fills it.
+system prompt may carry is a constant block per role group, named in `SPEC_BLOCKS` (GH-594
+part 3c): the texts live under `prompts/spec/`.
 
 Pure: it reads nothing, neither the spec file nor the front matter, only the `SpecContract`
 a caller hands it. `data_refusal` duplicates, on purpose, the data rules the Knowledge
@@ -26,8 +26,23 @@ HEADING = "## Approved Spec slice"
 # A block name is a file stem under `prompts/spec/`: no separator, no dot, no capital.
 BLOCK_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
-# Role slug -> name of the constant block its system prompt carries. Closed and empty here.
-SPEC_BLOCKS: dict[str, str] = {}
+# Role slug -> name of the constant block its system prompt carries. Closed: a role with no entry
+# carries none. The `_stack` variants have none, because stack review has no task document.
+SPEC_BLOCKS: dict[str, str] = {
+    "tech_lead": "plan",
+    "tech_lead_platform": "plan",
+    "tech_lead_interviewee": "plan",
+    "tech_lead_interviewee_platform": "plan",
+    "tech_lead_ephemeral": "plan",
+    "tech_lead_ephemeral_platform": "plan",
+    "tech_lead_critic": "plan",
+    "tech_lead_critic_platform": "plan",
+    "tech_lead_review": "review",
+    "tech_lead_review_light": "review",
+    "pm_final": "pm_final",
+    "pm_consultant": "pm_consultant",
+    "tech_writer_review": "copy_review",
+}
 
 DataRefusal = Literal["line_break", "fence", "template", "comment", "oversize"]
 BlockRefusal = Literal["template", "fence"]
