@@ -1484,3 +1484,384 @@ candidates:
   - finding
   - return
   added_at: '2026-11-10T09:26:06.578+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a flow's outcomes or behaviour, search docs/architecture for hand-written descriptions of it and update them in the same change; generated docs alone do not count.
+  confidence: medium
+  seen_in:
+  - GH-585
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-10T12:26:50.332+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: 'For each plan invariant, check every call in the path that can raise: what state is left if it fails before assignment? Add a test where that exact call fails and assert the invariant''s outcome.'
+  confidence: medium
+  seen_in:
+  - GH-589
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-11T18:52:23.958+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan names one function as the only definition of a rule, route every input through it and never rewrite its result afterward. Test each edge case (unreadable, escalated, released) against that single call.
+  confidence: medium
+  seen_in:
+  - GH-588
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T01:57:21.098+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: Check each test the brief asks for at the level and with the inputs it names (for example two items, not one, at render level). A test at a lower level or with fewer cases does not satisfy it.
+  confidence: medium
+  seen_in:
+  - GH-597
+  sources:
+  - finding
+  added_at: '2026-11-12T05:02:42.464+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your diff changes a flow, a module dependency or a documented behaviour, update the hand-written docs under docs/architecture and any comment that states the old behaviour, in the same change.
+  confidence: medium
+  seen_in:
+  - GH-593
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T10:39:44.956+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, check each plan invariant against your diff with a grep. When you move a limit or rule, delete the old copy. Decide and word it only through the single owning module's helper.
+  confidence: medium
+  seen_in:
+  - GH-592
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T11:58:10.458+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: For each integration acceptance criterion, write the end-to-end test that covers every branch it names (task and each subtask) and asserts exact values and absent side effects, not just truthiness.
+  confidence: medium
+  seen_in:
+  - GH-598
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T13:54:43.855+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before you deliver, list every non-code deliverable the brief names (ADR addenda, glossary entries, docs) and confirm each one is in the diff, using git diff --stat on its path.
+  confidence: medium
+  seen_in:
+  - GH-603
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T16:10:01.614+00:00'
+- slug: developer_integrator
+  category: standard-seams
+  lesson: Never edit enforcement artefacts (guard allowance registries, check configs) to make your change pass. Change your own test input instead so the guard stays untouched, unless that artefact is a declared seam.
+  confidence: medium
+  seen_in:
+  - GH-603
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T16:10:01.614+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When your change alters a key flow, update the matching docs/architecture flow document in the same change, and check the diff touches docs before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-611
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T20:47:24.349+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each plan invariant, grep the whole repo for every caller and every hand-built form of what it names, in every subtask layer, and route them through the single function it designates before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-610
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-12T22:42:40.058+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change alters a flow's behaviour or wiring, update the hand-written flow page in docs/architecture in the same change. Regenerated pages alone do not count.
+  confidence: medium
+  seen_in:
+  - GH-610
+  sources:
+  - finding
+  added_at: '2026-11-12T22:42:40.058+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you write logic that reads or writes a document field, search for an existing writer or helper and reuse it. Two copies of the same read or write logic drift apart.
+  confidence: medium
+  seen_in:
+  - GH-599
+  sources:
+  - finding
+  added_at: '2026-11-12T22:52:14.008+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: When the diff adds a port, adapter or module, update the hand-written architecture docs (tables, notes, adapter lists) as well as the generated pages, and grep the docs for sibling mentions.
+  confidence: medium
+  seen_in:
+  - GH-599
+  sources:
+  - finding
+  added_at: '2026-11-12T22:52:14.008+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before you state that a closed set of files is the only change, check which declared checks (docs, registries, generated pages) require extra files for new modules, and list those files in the plan.
+  confidence: medium
+  seen_in:
+  - GH-637
+  sources:
+  - finding
+  added_at: '2026-11-13T04:24:48.312+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Never loosen a guard test (a cap, count or threshold) outside your declared seams to make a change pass; keep the limit, and if it cannot hold, record the evidence and escalate for a decision.
+  confidence: medium
+  seen_in:
+  - GH-636
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T06:02:59.480+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change adds or alters a port, adapter or other contract between modules, update the hand-written architecture docs that list them in the same change, before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-660
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T06:47:48.022+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When code reports or logs a failure, use the concrete exception or value actually caught, not its base class or a generic label, and add a test that asserts the reported text for a subclass case.
+  confidence: low
+  seen_in:
+  - GH-627
+  sources:
+  - finding
+  added_at: '2026-11-13T08:54:14.623+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change alters a key flow, update the architecture docs that describe it in the same change, and grep them for the names of the functions you replaced before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-630
+  sources:
+  - finding
+  added_at: '2026-11-13T09:41:09.748+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: For each input or fact the brief says a component must feed, trace it from the production entry point to its consumer and confirm no call drops it; do not remove wiring a brief requires.
+  confidence: medium
+  seen_in:
+  - GH-630
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T09:41:09.748+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a change adds a new entry path to shared message or template text, trace every path that now renders it and check the wording is true for each, including zero or unknown values.
+  confidence: medium
+  seen_in:
+  - GH-670
+  sources:
+  - finding
+  added_at: '2026-11-13T14:23:08.539+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: After a message or template changes on the branch, re-read the docs sentences that quote or describe it and check they still match the final code.
+  confidence: low
+  seen_in:
+  - GH-670
+  sources:
+  - finding
+  added_at: '2026-11-13T14:23:08.539+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When you add a branch to a test helper or checker, add a test that feeds it a value it must reject and one it must accept, so a branch that accepts everything fails.
+  confidence: medium
+  seen_in:
+  - GH-638
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T15:22:44.994+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters a documented flow, lock, dependency or CLI mode, update the architecture docs that describe it in the same change, and check the docs diff is not empty.
+  confidence: medium
+  seen_in:
+  - GH-638
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T15:22:44.994+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief orders checks or validations, implement them in that order, and add a test with an input that breaks two rules at once to prove which error comes first.
+  confidence: medium
+  seen_in:
+  - GH-663
+  sources:
+  - finding
+  added_at: '2026-11-13T15:31:59.780+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: When you merge branches, re-check the brief's stated order of checks against the merged code and test an input that breaks two rules at once, so the first reported error is the one the brief names.
+  confidence: medium
+  seen_in:
+  - GH-663
+  sources:
+  - finding
+  added_at: '2026-11-13T15:31:59.780+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the brief says a condition lives in one place, do not restate it in callers to narrow types. Have the single helper return the narrowed value too, and grep for the condition before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-685
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T15:58:10.395+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change ports, modules or use cases, update the architecture docs that list them (e.g. the ports listing) in the same change, including entries nothing calls yet.
+  confidence: medium
+  seen_in:
+  - GH-692
+  sources:
+  - finding
+  added_at: '2026-11-13T18:52:47.163+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When a change alters behavior that a flow or architecture doc describes, update that doc in the same change and check that the docs diff is not empty before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-686
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-13T19:23:39.276+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a port or adapter, search the hand-written architecture docs for text that describes that area and update it in the same change, so no paragraph still says the adapter is missing.
+  confidence: medium
+  seen_in:
+  - GH-694
+  sources:
+  - finding
+  added_at: '2026-11-13T23:35:02.784+00:00'
+- slug: tech_lead_platform
+  category: human-decision
+  lesson: For a part at split depth 2, which cannot split again, keep the plan under the 400 hand-written line cap. If it is over, propose moving one whole step into a new issue that blocks the same later parts.
+  confidence: low
+  seen_in:
+  - GH-694
+  sources:
+  - human_decision
+  added_at: '2026-11-13T23:35:02.784+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When you add writes to shared state or change a flow, update the architecture or flow doc that describes that flow in the same change, listing each new writer and what it touches.
+  confidence: medium
+  seen_in:
+  - GH-683
+  sources:
+  - finding
+  added_at: '2026-11-13T23:45:41.361+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change adds or replaces a component, adapter or factory, update the hand-written architecture docs in the same change and check that no sentence there is now false, such as 'the only adapter'.
+  confidence: medium
+  seen_in:
+  - GH-704
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T03:19:20.199+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: On the integrated branch, enumerate every branch of each new gate or route, including escalation after a revision, and confirm a test reaches each one before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-714
+  sources:
+  - finding
+  added_at: '2026-11-14T04:28:57.680+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: Type each new function parameter with the exact type the caller's state holds, not a looser Mapping, and run the type check on the call site even when its package is outside the checked files.
+  confidence: medium
+  seen_in:
+  - GH-689
+  sources:
+  - finding
+  added_at: '2026-11-14T05:32:38.065+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: For each plan invariant, trace every input that can reach the guarded value, including text a later step redeclares or replaces, and make validation check each source, with a test that passes a violating value through it.
+  confidence: medium
+  seen_in:
+  - GH-720
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T06:21:11.813+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a port, a public interface or a readable directory, update its row in the architecture docs in the same change, and check the docs diff before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-718
+  sources:
+  - finding
+  added_at: '2026-11-14T06:34:09.754+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When a new test reads a repo file, run the repo-wide guard tests that map test reads to files, such as the affected-tests coverage guard, and register the read before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-732
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T11:56:31.470+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a port, adapter or record, search the hand-written docs that describe that component and update them in the same change; regenerated pages alone are not enough.
+  confidence: medium
+  seen_in:
+  - GH-735
+  sources:
+  - finding
+  added_at: '2026-11-14T12:29:27.628+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your diff changes a module's contract or wiring (a new port consumer, a new composition wiring), update the architecture docs in the same change and check that no sentence in them is now false.
+  confidence: medium
+  seen_in:
+  - GH-738
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T15:40:46.101+00:00'
