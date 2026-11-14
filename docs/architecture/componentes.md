@@ -94,8 +94,12 @@ falla devuelve `None`.
 
 Los puertos de la rotación de stage0 (GH-632) tampoco son campos de `Ports`: los recibe
 `agentic/core/process/application/stage0_rotate.py:rotate` como parámetros, y nadie lo llama
-aún; el único adaptador por ahora es `agentic/core/process/adapters/git/master_window.py:GitMasterWindow`
-(el resto llega en partes posteriores). `Stage0Store` es la raíz de rotación
+aún; los adaptadores por ahora son `agentic/core/process/adapters/git/master_window.py:GitMasterWindow`
+y `agentic/core/process/adapters/github/commit_ci.py:GhCommitCi` (el resto llega en partes
+posteriores). `GhCommitCi` cumple `CommitCiReader`: una sola llamada `gh api graphql` por commit,
+por sha, que arma el reporte con `agentic/core/process/adapters/github/tracker.py:commit_report`;
+un oid que no son 40 hex en minúscula, o cualquier falla, es `CiUnreadable`. Lo cablea la fábrica
+`agentic/composition.py:stage0_master_window`, que nadie llama hasta 2d (#697). `Stage0Store` es la raíz de rotación
 (lock no bloqueante, `current`, `rejected`, `switch.json` como intención que el lector
 confirma contra `current()`, `promote` y `switch_current`), `Stage0Users` dice qué stages se
 usan, `MasterWindow` lee la ventana de commits de origin/master (sobre un espejo en
