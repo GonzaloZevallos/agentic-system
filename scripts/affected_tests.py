@@ -173,6 +173,11 @@ TABLE: tuple[Row, ...] = (
         "the declared GraphQL types of the board's mutations are checked against it",
     ),
     Row(
+        "tests/core/process/adapters/github/fixtures/commit_ci_synthetic.json",
+        ("tests/core/process/adapters/github/test_commit_ci.py",),
+        "the synthetic answer to COMMIT_CI_QUERY the by-sha CI reader is run against",
+    ),
+    Row(
         "tests/fixtures/presubmit/*",
         ("tests/core/process/application/test_presubmit_rerun.py",),
         "a real pytest output past the failed-ids window: the form rerun must not trust it",
