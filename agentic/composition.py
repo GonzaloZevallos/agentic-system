@@ -46,6 +46,7 @@ from .core.process.adapters.filesystem.check_results import FilesystemCheckResul
 from .core.process.adapters.filesystem.experiment_file import FilesystemExperimentFile
 from .core.process.adapters.filesystem.file_inbox import FileInbox, frozen_input_path
 from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
+from .core.process.adapters.filesystem.installed_products import SystemdUnitInstalledProducts
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
 from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
@@ -103,6 +104,7 @@ from .core.process.application.stage0_rotate import Prune
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
 from .core.process.domain.ci import CiReport, CiUnreadable
+from .core.process.domain.poller_units import unit_dir
 from .core.process.domain.presubmit import ApiBreakLine
 from .core.process.domain.stage0_rotation import Unreadable
 from .shared import stage0
@@ -251,14 +253,6 @@ def stage0_master_window(
 _GITHUB_URL = re.compile(r"(https://github\.com/|git@github\.com:)[\w.-]+/[\w.-]+?(\.git)?")
 
 
-class NoInstalledProducts:
-    """The `InstalledProducts` of a rotation that reads no unit: the smoke runs only `--help`
-    until #726 reads the installed pollers' product directories."""
-
-    def read(self) -> tuple[Path, ...]:
-        return ()
-
-
 @dataclass(frozen=True)
 class Stage0Rotation:
     """Everything `agentic stage0 rotate` hands to `rotate`."""
@@ -270,7 +264,7 @@ class Stage0Rotation:
     failure_policy: FailurePolicy
     escalation: Stage0EscalationPort
     prune: Prune
-    products: InstalledProducts
+    products: tuple[Path, ...]
 
 
 def _origin_of(checkout: Path) -> str | None:
@@ -291,20 +285,32 @@ def _origin_of(checkout: Path) -> str | None:
     return url if done.returncode == 0 and _GITHUB_URL.fullmatch(url) else None
 
 
-def stage0_rotation(root: Path, environ: Mapping[str, str]) -> Stage0Rotation | Unreadable:
+def stage0_rotation(
+    root: Path, environ: Mapping[str, str], products: InstalledProducts | None = None
+) -> Stage0Rotation | Unreadable:
     """The pieces of one rotation over `root` (GH-632, part 2d), or `Unreadable` when the
-    origin of the stage0 checkout is not a GitHub URL: checked before anything is built."""
+    origin of the stage0 checkout is not a GitHub URL or the installed products cannot be read
+    (GH-726): both checked before anything is built. The one place that reads `products`, once
+    per rotation, so the candidate, rerun and control smokes use the same tuple. With `None`
+    they come from the user's `agentic-poll*.service` units under `unit_dir(environ)`."""
     origin = _origin_of(stage0.CHECKOUT)
     if origin is None:
+        return Unreadable()
+    if products is None:
+        units = unit_dir(environ)
+        if isinstance(units, Unreadable):
+            return Unreadable()
+        products = SystemdUnitInstalledProducts(units)
+    installed = products.read()
+    if isinstance(installed, Unreadable):
         return Unreadable()
     # The rotation has no product: the configuration is read only for the scratch directory.
     cfg = Configuration.from_sources({"product_dir": str(stage0.CHECKOUT)}, environ)
     store = FilesystemStage0Store(root)
     stack = GitStack(root / MIRROR)
     window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci)
-    products = NoInstalledProducts()
     scratch = FilesystemScratch(cfg.scratch_dir, "stage0", stage0.CHECKOUT)
-    candidate = ShellStage0Candidate(root, scratch, products, origin)
+    candidate = ShellStage0Candidate(root, scratch, installed, origin)
     repo = system_repo()
     return Stage0Rotation(
         store=store,
@@ -314,7 +320,7 @@ def stage0_rotation(root: Path, environ: Mapping[str, str]) -> Stage0Rotation | 
         failure_policy=SmokeFailurePolicy(store, candidate),
         escalation=Stage0Escalation(repo.tracker, repo.inbox, store, print),
         prune=make_prune(root),
-        products=products,
+        products=installed,
     )
 
 

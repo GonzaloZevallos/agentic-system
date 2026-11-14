@@ -73,16 +73,6 @@ class RecordingRunner:
         return result
 
 
-class Products:
-    def __init__(self, *dirs: str) -> None:
-        self.dirs = tuple(Path(d) for d in dirs)
-        self.reads = 0
-
-    def read(self) -> tuple[Path, ...]:
-        self.reads += 1
-        return self.dirs
-
-
 def succeed(argv: Sequence[str]) -> Answer:
     return 0
 
@@ -93,13 +83,13 @@ def failing(word: str, result: Answer) -> Answerer:
 
 
 def build(
-    tmp_path: Path, answer: Answerer = succeed, products: Products | None = None
-) -> tuple[ShellStage0Candidate, RecordingRunner, MemoryScratch, Products]:
+    tmp_path: Path, answer: Answerer = succeed, products: tuple[str, ...] = ()
+) -> tuple[ShellStage0Candidate, RecordingRunner, MemoryScratch]:
     scratch = MemoryScratch(root=tmp_path / "scratch")
     runner = RecordingRunner(scratch, answer)
-    held = products if products is not None else Products()
+    held = tuple(Path(d) for d in products)
     candidate = ShellStage0Candidate(tmp_path, scratch, held, ORIGIN, runner)
-    return candidate, runner, scratch, held
+    return candidate, runner, scratch
 
 
 def venv_agentic(root: Path, stage: str) -> str:
@@ -107,7 +97,13 @@ def venv_agentic(root: Path, stage: str) -> str:
 
 
 def test_smoke_runs_help_then_one_dry_poll_per_product_in_the_stage(tmp_path: Path) -> None:
-    candidate, runner, _, _ = build(tmp_path, products=Products("/srv/a", "/srv/b"))
+    candidate, runner, _ = build(
+        tmp_path,
+        products=(
+            "/srv/a",
+            "/srv/b",
+        ),
+    )
     stage = tmp_path / SHA
     agentic = venv_agentic(tmp_path, SHA)
 
@@ -130,18 +126,17 @@ def test_smoke_runs_help_then_one_dry_poll_per_product_in_the_stage(tmp_path: Pa
 
 
 def test_smoke_with_no_products_runs_only_help(tmp_path: Path) -> None:
-    candidate, runner, _, products = build(tmp_path)
+    candidate, runner, _ = build(tmp_path)
 
     assert candidate.smoke(SHA) == Green()
 
     assert [c.argv for c in runner.calls] == [(venv_agentic(tmp_path, SHA), "--help")]
-    assert products.reads == 1
 
 
 def test_smoke_of_the_candidate_and_of_current_differ_only_in_the_stage_path(
     tmp_path: Path,
 ) -> None:
-    candidate, runner, _, products = build(tmp_path, products=Products("/srv/a"))
+    candidate, runner, _ = build(tmp_path, products=("/srv/a",))
     partial = f"{SHA}.partial"
 
     candidate.smoke(partial)
@@ -156,12 +151,16 @@ def test_smoke_of_the_candidate_and_of_current_differ_only_in_the_stage_path(
         )
         for c in second
     ]
-    assert products.reads == 2
 
 
 def test_a_timeout_of_the_poll_is_smoke_timeout(tmp_path: Path) -> None:
-    candidate, runner, _, _ = build(
-        tmp_path, failing("poll", TimedOut()), Products("/srv/a", "/srv/b")
+    candidate, runner, _ = build(
+        tmp_path,
+        failing("poll", TimedOut()),
+        (
+            "/srv/a",
+            "/srv/b",
+        ),
     )
 
     assert candidate.smoke(SHA) == Unavailable("smoke_timeout")
@@ -169,35 +168,33 @@ def test_a_timeout_of_the_poll_is_smoke_timeout(tmp_path: Path) -> None:
 
 
 def test_a_timeout_of_help_is_smoke_timeout(tmp_path: Path) -> None:
-    candidate, _, _, _ = build(tmp_path, failing("--help", TimedOut()))
+    candidate, _, _ = build(tmp_path, failing("--help", TimedOut()))
 
     assert candidate.smoke(SHA) == Unavailable("smoke_timeout")
 
 
 @pytest.mark.parametrize("flag", ["--help", "poll"])
 def test_a_non_zero_exit_of_the_smoke_is_red(tmp_path: Path, flag: str) -> None:
-    candidate, _, _, _ = build(tmp_path, failing(flag, 3), Products("/srv/a"))
+    candidate, _, _ = build(tmp_path, failing(flag, 3), ("/srv/a",))
 
     assert candidate.smoke(SHA) == Red()
 
 
 @pytest.mark.parametrize("code", [errno.ENOSPC, errno.EDQUOT])
 def test_a_full_disk_during_the_smoke_is_disk(tmp_path: Path, code: int) -> None:
-    candidate, _, _, _ = build(tmp_path, failing("--help", OSError(code, "full")))
+    candidate, _, _ = build(tmp_path, failing("--help", OSError(code, "full")))
 
     assert candidate.smoke(SHA) == Unavailable("disk")
 
 
 def test_a_smoke_that_cannot_start_is_unavailable_never_red(tmp_path: Path) -> None:
-    candidate, _, _, _ = build(
-        tmp_path, failing("--help", FileNotFoundError(errno.ENOENT, "no venv"))
-    )
+    candidate, _, _ = build(tmp_path, failing("--help", FileNotFoundError(errno.ENOENT, "no venv")))
 
     assert candidate.smoke(SHA) == Unavailable("uv")
 
 
 def test_prepare_clones_the_mirror_detached_and_syncs_with_its_origin_set(tmp_path: Path) -> None:
-    candidate, runner, _, _ = build(tmp_path)
+    candidate, runner, _ = build(tmp_path)
     partial = tmp_path / f"{SHA}.partial"
 
     assert candidate.prepare(SHA) == Prepared(SHA)
@@ -217,7 +214,7 @@ def test_prepare_clones_the_mirror_detached_and_syncs_with_its_origin_set(tmp_pa
 def test_prepare_of_an_abbreviated_pin_names_the_partial_by_the_resolved_commit(
     tmp_path: Path,
 ) -> None:
-    candidate, runner, _, _ = build(tmp_path)
+    candidate, runner, _ = build(tmp_path)
     runner.head = "ab" * 20
 
     assert candidate.prepare("abababa") == Prepared("ab" * 20)
@@ -231,7 +228,7 @@ def test_prepare_of_an_abbreviated_pin_names_the_partial_by_the_resolved_commit(
 def test_prepare_refuses_a_name_that_is_not_a_commit_prefix_before_touching_anything(
     tmp_path: Path, bad: str
 ) -> None:
-    candidate, runner, _, _ = build(tmp_path)
+    candidate, runner, _ = build(tmp_path)
 
     assert candidate.prepare(bad) == Unavailable("clone")
     assert runner.calls == []
@@ -245,7 +242,7 @@ def test_prepare_refuses_a_name_that_is_not_a_commit_prefix_before_touching_anyt
 def test_prepare_maps_a_failed_or_timed_out_step_to_its_cause(
     tmp_path: Path, step: str, cause: CandidateCause, failure: int | TimedOut
 ) -> None:
-    candidate, _, _, _ = build(tmp_path, failing(step, failure))
+    candidate, _, _ = build(tmp_path, failing(step, failure))
 
     assert candidate.prepare(SHA) == Unavailable(cause)
 
@@ -255,22 +252,22 @@ def test_prepare_maps_a_failed_or_timed_out_step_to_its_cause(
 def test_prepare_maps_a_full_disk_to_disk_whichever_step_hits_it(
     tmp_path: Path, code: int, step: str
 ) -> None:
-    candidate, _, _, _ = build(tmp_path, failing(step, OSError(code, "full")))
+    candidate, _, _ = build(tmp_path, failing(step, OSError(code, "full")))
 
     assert candidate.prepare(SHA) == Unavailable("disk")
 
 
 def test_prepare_maps_another_oserror_to_the_cause_of_its_step(tmp_path: Path) -> None:
     denied = OSError(errno.EACCES, "denied")
-    on_clone, _, _, _ = build(tmp_path / "a", failing("clone", denied))
-    on_sync, _, _, _ = build(tmp_path / "b", failing("sync", denied))
+    on_clone, _, _ = build(tmp_path / "a", failing("clone", denied))
+    on_sync, _, _ = build(tmp_path / "b", failing("sync", denied))
 
     assert on_clone.prepare(SHA) == Unavailable("clone")
     assert on_sync.prepare(SHA) == Unavailable("uv")
 
 
 def test_prepare_never_removes_the_partial_it_leaves(tmp_path: Path) -> None:
-    candidate, _, _, _ = build(tmp_path, failing("sync", 1))
+    candidate, _, _ = build(tmp_path, failing("sync", 1))
 
     assert candidate.prepare(SHA) == Unavailable("uv")
     assert (tmp_path / f"{SHA}.partial").is_dir()
@@ -279,7 +276,7 @@ def test_prepare_never_removes_the_partial_it_leaves(tmp_path: Path) -> None:
 def test_settle_rebuilds_the_venv_at_its_final_path_and_runs_it(tmp_path: Path) -> None:
     stage = tmp_path / SHA
     (stage / ".venv" / "bin").mkdir(parents=True)
-    candidate, runner, _, products = build(tmp_path, products=Products("/srv/a"))
+    candidate, runner, _ = build(tmp_path, products=("/srv/a",))
     venv_present: list[bool] = []
 
     def answer(argv: Sequence[str]) -> Answer:
@@ -295,7 +292,6 @@ def test_settle_rebuilds_the_venv_at_its_final_path_and_runs_it(tmp_path: Path) 
         ((venv_agentic(tmp_path, SHA), "--help"), stage, HELP_TIMEOUT_S),
     ]
     assert venv_present[0] is False  # the old venv, with its absolute paths, went before the sync
-    assert products.reads == 0  # settle runs `--help` only: the products are the smoke's
 
 
 @pytest.mark.parametrize(
@@ -313,7 +309,7 @@ def test_settle_maps_each_failure_to_its_cause(
     tmp_path: Path, answer: Answerer, cause: CandidateCause
 ) -> None:
     (tmp_path / SHA).mkdir()
-    candidate, _, _, _ = build(tmp_path, answer)
+    candidate, _, _ = build(tmp_path, answer)
 
     assert candidate.settle(SHA) == Unavailable(cause)
 
@@ -327,7 +323,7 @@ def test_every_child_gets_the_clean_environment_and_a_scratch_tmpdir(
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/own/venv")
     monkeypatch.setenv("KEEP_ME", "yes")
     (tmp_path / SHA).mkdir()
-    candidate, runner, scratch, _ = build(tmp_path, products=Products("/srv/a"))
+    candidate, runner, scratch = build(tmp_path, products=("/srv/a",))
 
     candidate.prepare(SHA)
     candidate.smoke(SHA)
@@ -347,14 +343,14 @@ def test_every_child_gets_the_clean_environment_and_a_scratch_tmpdir(
 
 
 def test_the_scratch_is_gone_after_a_step_that_timed_out_or_raised(tmp_path: Path) -> None:
-    timed_out, _, scratch, _ = build(tmp_path, failing("--help", TimedOut()))
+    timed_out, _, scratch = build(tmp_path, failing("--help", TimedOut()))
     timed_out.smoke(SHA)
     assert not scratch.live
 
     def explode(argv: Sequence[str]) -> Answer:
         raise RuntimeError("runner bug")
 
-    broken, _, scratch2, _ = build(tmp_path, explode)
+    broken, _, scratch2 = build(tmp_path, explode)
     with pytest.raises(RuntimeError):
         broken.smoke(SHA)
     assert not scratch2.live

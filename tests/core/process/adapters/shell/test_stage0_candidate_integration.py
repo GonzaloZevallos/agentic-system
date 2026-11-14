@@ -35,11 +35,6 @@ UV_CACHE = os.environ.get("UV_CACHE_DIR") or str(
 )
 
 
-class NoProducts:
-    def read(self) -> tuple[Path, ...]:
-        return ()
-
-
 class OfflineRunner:
     """The default runner with the machine's uv cache and interpreter directory added back (the
     adapter strips every `UV_*`), and `UV_OFFLINE=1` unless under `CI`: there the cache is
@@ -91,7 +86,7 @@ def test_settle_makes_a_renamed_stage_run_from_its_final_path(tmp_path: Path) ->
         [*git, "-C", str(ROOT), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
     ).stdout.strip()
     scratch = FilesystemScratch(tmp_path / "scratch", "stage0-it", tmp_path)
-    candidate = ShellStage0Candidate(rotation, scratch, NoProducts(), ORIGIN, OfflineRunner())
+    candidate = ShellStage0Candidate(rotation, scratch, (), ORIGIN, OfflineRunner())
 
     prepared = candidate.prepare(sha)
     if isinstance(prepared, Unavailable):

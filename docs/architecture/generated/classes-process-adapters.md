@@ -2,7 +2,8 @@ Esta página es el índice de los diagramas de clases de `agentic.core.process.a
 
 - Páginas:
   - [adapters: claude_sdk](classes-process-adapters-claude_sdk.md)
-  - [adapters: filesystem](classes-process-adapters-filesystem.md)
+  - [adapters: filesystem (parte 1)](classes-process-adapters-filesystem-1.md)
+  - [adapters: filesystem (parte 2)](classes-process-adapters-filesystem-2.md)
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: github](classes-process-adapters-github.md)
   - [adapters: shell](classes-process-adapters-shell.md)

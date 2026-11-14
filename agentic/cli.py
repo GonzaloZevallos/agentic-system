@@ -1106,8 +1106,8 @@ def _stage0_rotate(root: Path) -> int:
     if isinstance(rotation, Unreadable):
         print("keep: unreadable")
         return 0
-    if isinstance(rotation.products, composition.NoInstalledProducts):
-        print("smoke: --help only (installed products are read by #726)")
+    if rotation.products == ():
+        print("smoke: --help only (no installed pollers)")
     rotate(
         rotation.store,
         rotation.users,

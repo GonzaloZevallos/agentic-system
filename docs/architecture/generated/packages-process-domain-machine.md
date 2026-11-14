@@ -16,6 +16,7 @@ graph TD
     m_domain__account_reset["domain.account_reset"]
     m_domain__boot["domain.boot"]
     m_domain__exempt_queue["domain.exempt_queue"]
+    m_domain__poller_units["domain.poller_units"]
     m_domain__reaping["domain.reaping"]
     m_domain__retakes["domain.retakes"]
     m_domain__scratch["domain.scratch"]
@@ -24,6 +25,7 @@ graph TD
     m_domain__stall["domain.stall"]
     m_domain__account_reset --> g_domain__state
     m_domain__exempt_queue --> g_domain__state
+    m_domain__poller_units --> m_domain__stage0_rotation
     m_domain__stage0_rotation --> g_domain__state
     m_domain__stage0_window --> g_domain__checks
     m_domain__stage0_window --> m_domain__stage0_rotation

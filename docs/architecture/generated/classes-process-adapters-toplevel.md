@@ -3,7 +3,8 @@ Esta página muestra las clases públicas de los módulos del grupo `toplevel` d
 - Padre: [Clases de adapters](classes-process-adapters.md)
 - Hermanas:
   - [adapters: claude_sdk](classes-process-adapters-claude_sdk.md)
-  - [adapters: filesystem](classes-process-adapters-filesystem.md)
+  - [adapters: filesystem (parte 1)](classes-process-adapters-filesystem-1.md)
+  - [adapters: filesystem (parte 2)](classes-process-adapters-filesystem-2.md)
   - [adapters: git](classes-process-adapters-git.md)
   - [adapters: github](classes-process-adapters-github.md)
   - [adapters: shell](classes-process-adapters-shell.md)

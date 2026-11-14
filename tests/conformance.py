@@ -227,9 +227,7 @@ UNCOVERED: dict[str, Uncovered] = {
     "Stage0Candidate": Uncovered(
         (("tests/core/process/application/test_stage0_rotate.py", "Candidate"),), _INLINE
     ),
-    "InstalledProducts": Uncovered(
-        (("tests/core/process/adapters/shell/test_stage0_candidate.py", "Products"),), _INLINE
-    ),
+    "InstalledProducts": Uncovered((("tests/test_cli_stage0.py", "Products"),), _INLINE),
     "Stage0Escalation": Uncovered(
         (("tests/core/process/application/test_stage0_rotate.py", "Escalation"),), _INLINE
     ),
