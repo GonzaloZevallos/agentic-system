@@ -71,6 +71,7 @@ from ..domain import (
     rules,
     schemas,
     spec_assumptions,
+    spec_brief,
     task_path,
     turn_notice,
 )
@@ -285,10 +286,18 @@ def context_for(
     (`plan_view.for_reader`), to the reader's own brief plus a sister index instead of
     every subtask's; every other declared section, and every other reader, is
     untouched. `None` (the default) keeps today's full reading, and so does an id the
-    projection cannot use (`plan_view.for_reader`'s own degrade rule)."""
+    projection cannot use (`plan_view.for_reader`'s own degrade rule).
+
+    With `state["spec"]` the fenced Spec slice (`spec_brief.fenced_section`) comes after those
+    sections and before the human's decisions; without one the output is what it was."""
     sections = state.get("sections", {})
     parts = [text for text in (standards, design, product_knowledge) if text]
+    spec = state.get("spec")
     for name in (*role.reads, *extra_sections, HUMAN):
+        if name == HUMAN and spec:
+            # The approved slice (GH-594) goes after the declared sections and before the
+            # human's decisions: the one way it reaches a role (ADR-0096).
+            parts.append(spec_brief.fenced_section(spec))
         if name == ORIGINAL:
             request = document.demote(state["description"])
             parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{request}")
@@ -393,14 +402,22 @@ def render_role_prompt(
     return raw, rendered
 
 
-def with_playbook(raw: str, rendered: Prompt, role: Role, ports: Ports, tiers: str) -> Prompt:
-    """`rendered` with the role's playbook and the product's tiers section appended
-    (`load_prompt`'s own doc has the hash rule)."""
+def with_playbook(
+    raw: str,
+    rendered: Prompt,
+    role: Role,
+    ports: Ports,
+    tiers: str,
+    spec_block: str = "",
+) -> Prompt:
+    """`rendered` with the role's playbook, the product's tiers section and the constant
+    Spec block appended, in that order (`load_prompt`'s own doc has the hash rule). The block
+    is covered by the hash like the tiers; with all three empty it is `rendered` itself."""
     source = rendered.source
     text = playbook.section(ports.prompts.playbook(role))
-    if not text and not tiers:
+    if not text and not tiers and not spec_block:
         return rendered
-    appended = "\n\n".join(part for part in (text, tiers) if part)
+    appended = "\n\n".join(part for part in (text, tiers, spec_block) if part)
     return Prompt(
         text=rendered.text + "\n\n" + appended,
         hash=prompt_hash(raw + "\n" + appended),
@@ -1067,10 +1084,16 @@ async def run_role(
         role = replace(role, schema=spec_assumptions.schema_for(role.schema, has_spec))
     vocabulary = ports.flags.load()
     try:
+        spec = state.get("spec")
+        if spec and (refusal := spec_brief.data_refusal(spec)):
+            # The data returns from the task document on a resume: checked before any prompt
+            # is built, so a forged slice never reaches a model (no retry, no echo of the text).
+            raise ValueError(f"spec data refused: {refusal}")
         raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)
     except (ValueError, OSError) as exc:
         # Only the prompt's own text: `render`'s ValueError and the read error the snapshot
-        # kept (`raw()` re-raises it). The playbook, the flags and the tiers stay outside.
+        # kept (`raw()` re-raises it), and the spec data refusal. The playbook, the flags and
+        # the tiers stay outside.
         return None, {
             "current_role": role.name,
             **escalation(PromptFailure(role, exc, section), at=ports.now()),
