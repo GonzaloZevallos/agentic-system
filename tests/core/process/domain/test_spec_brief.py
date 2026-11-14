@@ -7,7 +7,14 @@ from typing import cast
 import pytest
 
 from agentic.core.process.domain import spec_brief
-from agentic.core.process.domain.spec_brief import block_for, data_refusal, fenced_section
+from agentic.core.process.domain.roles import ROLES
+from agentic.core.process.domain.spec_brief import (
+    block_for,
+    block_name_ok,
+    block_refusal,
+    data_refusal,
+    fenced_section,
+)
 from agentic.core.process.domain.spec_delivery import SPEC_FENCE, SPEC_MAX_BYTES, SpecContract
 
 
@@ -118,3 +125,40 @@ def test_block_for_reads_the_table(monkeypatch):
     monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "developer", "build")
     assert block_for("developer") == "build"
     assert block_for("pm") is None
+
+
+@pytest.mark.parametrize("name", ["build", "a", "0x", "build-ui", "build_ui", "a1-b_2"])
+def test_a_block_name_of_the_pattern_is_ok(name):
+    assert block_name_ok(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["", "../x", "a/b", "A", "Build", "-a", "_a", "a.md", "a b", "é", "a\nb", "a\n"]
+)
+def test_a_block_name_off_the_pattern_is_refused(name):
+    assert not block_name_ok(name)
+
+
+def test_a_clean_block_is_not_refused_and_a_comment_is_allowed():
+    assert block_refusal("Build the screens.\n\n- keep copy\n<!-- the owner's note -->") is None
+
+
+def test_a_block_with_a_placeholder_is_refused_as_template():
+    assert block_refusal("Hello {{date}}") == "template"
+
+
+@pytest.mark.parametrize(
+    "text", [SPEC_FENCE, f"before\n{SPEC_FENCE}\nafter", f"before\n  {SPEC_FENCE}  \nafter"]
+)
+def test_a_block_with_a_fence_line_is_refused_as_fence(text):
+    assert block_refusal(text) == "fence"
+
+
+def test_a_fence_inside_a_longer_line_is_not_a_fence_line():
+    assert block_refusal(f"see {SPEC_FENCE} above") is None
+
+
+def test_every_key_of_the_shipped_table_is_a_role_and_every_value_a_valid_name():
+    slugs = {role.slug for role in ROLES}
+    assert set(spec_brief.SPEC_BLOCKS) <= slugs
+    assert all(block_name_ok(name) for name in spec_brief.SPEC_BLOCKS.values())

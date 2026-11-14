@@ -15,6 +15,7 @@ prompt is built.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from typing import Literal
 
@@ -22,10 +23,31 @@ from .spec_delivery import SPEC_FENCE, SPEC_MAX_BYTES, SpecContract
 
 HEADING = "## Approved Spec slice"
 
+# A block name is a file stem under `prompts/spec/`: no separator, no dot, no capital.
+BLOCK_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
 # Role slug -> name of the constant block its system prompt carries. Closed and empty here.
 SPEC_BLOCKS: dict[str, str] = {}
 
 DataRefusal = Literal["line_break", "fence", "template", "comment", "oversize"]
+BlockRefusal = Literal["template", "fence"]
+
+
+def block_name_ok(name: str) -> bool:
+    """Whether `name` may name a block: the only test a name passes before it becomes a path."""
+    return BLOCK_NAME.fullmatch(name) is not None
+
+
+def block_refusal(text: str) -> BlockRefusal | None:
+    """Why the text of a block may not enter a system prompt, or `None`. `template`: it holds
+    `{{`, which the prompt's own placeholders would read. `fence`: a line that, stripped, is
+    `SPEC_FENCE`, which would forge the edge of the slice. `<!--` is allowed: the block is the
+    owner's own text, not data a task carried. The reason is a bare word, never the text."""
+    if "{{" in text:
+        return "template"
+    if any(line.strip() == SPEC_FENCE for line in text.splitlines()):
+        return "fence"
+    return None
 
 
 def block_for(slug: str) -> str | None:
