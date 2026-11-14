@@ -15,6 +15,7 @@ from agentic import cli, composition
 from agentic.core.process.adapters.shell import stage0_candidate
 from agentic.core.process.domain.stage0_rotation import Unreadable
 from agentic.shared import stage0
+from tests.conftest import REAL_STAGE0_ROOT
 
 GITHUB = "https://github.com/acme/system.git"
 
@@ -104,7 +105,7 @@ def test_the_root_defaults_to_the_stage0s_directory(
     invoke(monkeypatch, tmp_path, factory)
 
     assert roots == [stage0.DEFAULT_ROOT]
-    assert stage0.DEFAULT_ROOT == Path.home() / ".agentic-stage0s"
+    assert REAL_STAGE0_ROOT == Path.home() / ".agentic-stage0s"
 
 
 def test_an_installed_products_source_prints_no_help_only_line(

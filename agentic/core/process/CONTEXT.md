@@ -701,6 +701,11 @@ Las reglas que deciden cuándo y a dónde se mueve stage0 sin que una persona lo
 _Avoid_: actualización de stage0 (eso es mover stage0 a mano, sin reglas), auto-update
 _Campo_: sin término de arte
 
+**Re-exec del poller**:
+El poller se reemplaza a sí mismo por el del stage al que apunta `current`, al empezar una ronda y sin que una persona lo reinicie. `reexec_due` decide el destino (resuelto, nunca por `current`), `reexec_argv` y `reexec_env` arman argv y entorno con rutas absolutas, y `reexec_blocked` corta el ciclo cuando el proceso ya viene de ese destino (`AGENTIC_REEXEC_FROM`). El lock se suelta antes del `execve` porque el pid se conserva; si el exec falla se vuelve al cwd y al lock y la ronda sigue en el código viejo. Un poller con `heartbeat_key` escribe un latido por ronda mientras tiene el lock; solo una parada señalada escribe `stop`.
+_Avoid_: reinicio del poller (eso es el servicio de systemd), hot reload
+_Campo_: `exec` de POSIX (reemplazo del proceso conservando el pid)
+
 **Tope de turnos**:
 Máximo de turnos que un rol tiene para entregar en un intento. Se dimensiona por el trabajo que la entrega de ese rol exige, no por lo que le alcanza a otro rol que comparte el prompt base. Agotarlo sin resultado es un fallo de rol, y continuar la sesión en el reintento no lo repone. Un rol listado en `RETRY_TURNS` tiene su propio tope absoluto en el reintento posterior a un corte por turnos, y cada intento registra el tope con el que corrió.
 _Avoid_: presupuesto (eso es lo que se espera gastar), max_turns (el nombre en el código, no el concepto)

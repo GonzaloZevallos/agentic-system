@@ -67,6 +67,8 @@ from .core.process.adapters.filesystem import (
     liveness,
 )
 from .core.process.adapters.filesystem.file_inbox import FileInbox
+from .core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
+from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import EventStopFlag, inhibitor
@@ -91,6 +93,7 @@ from .core.process.application.ports import (
     RunLock,
     RunRegistry,
     RunStopped,
+    Stage0Store,
     StopFlag,
     TrackerCallFailed,
     Upstream,
@@ -129,7 +132,17 @@ from .core.process.domain import landing as landing_rules
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
-from .core.process.domain.stage0_rotation import Unreadable, heartbeat_key
+from .core.process.domain.stage0_rotation import (
+    REEXEC_MARKER,
+    REEXEC_PATH_VARS,
+    Unreadable,
+    heartbeat_key,
+    inherited_zombies,
+    reexec_argv,
+    reexec_blocked,
+    reexec_due,
+    reexec_env,
+)
 from .core.process.domain.task import (
     ArmAssignment,
     Carried,
@@ -963,6 +976,7 @@ def main() -> None:
         elif args.command == "poll":
             # A dry round writes no log file: `_log_file_for` mkdirs `.agentic/logs`.
             log_file = None if args.dry_run else _log_file_for(cfg, "poll")
+            rotation_store, rotation_heartbeats = _stage0_wiring(stage0_paths.DEFAULT_ROOT)
             work = partial(
                 _poll,
                 cfg,
@@ -972,6 +986,8 @@ def main() -> None:
                 detach=args.detach,
                 child_argv=_child_argv(),
                 dry_run=args.dry_run,
+                stage0=rotation_store,
+                heartbeats=rotation_heartbeats,
             )
         else:
             if args.issue_input is not None:
@@ -1682,6 +1698,9 @@ async def _poll(
     sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
     dry_run: bool = False,
     heartbeats: Heartbeats | None = None,
+    stage0: Stage0Store | None = None,
+    execve: Callable[..., NoReturn] = os.execve,
+    proc: _Proc | None = None,
 ) -> None:
     """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
     product, one `poll.run_once` round every `interval_s` seconds, under the same
@@ -1707,7 +1726,13 @@ async def _poll(
 
     `heartbeats` (GH-736) is where the holder of the lock says it is alive: `start` and `end`
     around each round and `stop` when anyio cancels it, written only while `hold.held`. With
-    it `None` nothing is written."""
+    it `None` nothing is written.
+
+    `stage0` (GH-736) makes the poller follow the rotation: at the start of every round
+    `_reexec` compares its own checkout with the stage `current` names and, when they differ,
+    replaces this process with the poller of that stage through `execve`. With it `None` there
+    is no re-exec and no path is resolved. `proc` is where the zombies inherited across an exec
+    are read and reaped (only a process that carries `AGENTIC_REEXEC_FROM` has any)."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
@@ -1718,12 +1743,21 @@ async def _poll(
         return
     real_launcher = launcher if launcher is not None else SpawnLauncher(cfg)
     executable = argv0 if argv0 is not None else _self_executable()
+    # With a rotation no spawn goes through the `current` link, whatever argv0 says.
+    spawn_as = os.path.realpath(executable) if stage0 is not None else executable
+    proc = proc if proc is not None else _Proc()
+    inherited = proc.children() if os.environ.get(REEXEC_MARKER) else frozenset[int]()
+    told: set[Path] = set()
     hold = _PollHold()
     with _locked(lock, pollmod.LOCK_KEY, hold=hold):
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
         try:
             while True:
+                if stage0 is not None:
+                    if not _reexec(cfg, stage0, lock, hold, execve, executable, interval_s, told):
+                        return  # a live holder took the lock while this process was away
+                inherited = _reap_inherited(inherited, proc)
                 beat("start")
                 try:
                     # The round's one `upstream()` (GH-420): the warning and the eval set read it.
@@ -1737,7 +1771,7 @@ async def _poll(
                         registry,
                         real_launcher,
                         datetime.now(UTC),
-                        executable,
+                        spawn_as,
                         lock=lock,
                         current_boot=liveness.current_boot_id(),
                         eval_set=_round_eval_set(ports, upstream),
@@ -1751,6 +1785,190 @@ async def _poll(
         except anyio.get_cancelled_exc_class():
             beat("stop")  # a clean stop, inside the lock: before `_locked` releases it
             raise
+
+
+def _stage0_wiring(root: Path) -> tuple[Stage0Store, Heartbeats]:
+    """The store and the heartbeats of the rotation root `root` (GH-736): the one place the
+    real ones are built for the poller, called only by `main`'s poll dispatch."""
+    return FilesystemStage0Store(root), FilesystemHeartbeats(root)
+
+
+def _proc_children() -> frozenset[int]:
+    """The pids of this process's children, from `/proc/self/task/*/children`."""
+    pids: set[int] = set()
+    for path in Path("/proc/self/task").glob("*/children"):
+        try:
+            pids.update(int(pid) for pid in path.read_text().split())
+        except (OSError, ValueError):
+            continue
+    return frozenset(pids)
+
+
+def _proc_states(pids: frozenset[int]) -> dict[int, str]:
+    """The state letter of each of `pids` from `/proc/<pid>/stat`; a pid it cannot read is
+    left out."""
+    states: dict[int, str] = {}
+    for pid in pids:
+        try:
+            after_name = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()
+        except OSError:
+            continue
+        if after_name:
+            states[pid] = after_name[0]
+    return states
+
+
+def _reap_pid(pid: int) -> object:
+    return os.waitpid(pid, os.WNOHANG)
+
+
+@dataclass(frozen=True)
+class _Proc:
+    """What the poller reads of `/proc` and reaps with (GH-736), injectable for a test."""
+
+    children: Callable[[], frozenset[int]] = _proc_children
+    states: Callable[[frozenset[int]], Mapping[int, str]] = _proc_states
+    reap: Callable[[int], object] = _reap_pid
+
+
+def _reap_inherited(inherited: frozenset[int], proc: _Proc) -> frozenset[int]:
+    """One round's reap of the children this process inherited across an exec: the ones now
+    in state `Z` are reaped by pid with WNOHANG (never `waitpid(-1)`: that would take a child
+    the poller's own code waits for). Returns the pids still worth watching."""
+    if not inherited:
+        return inherited
+    states = proc.states(inherited)
+    dead = inherited_zombies(inherited, states)
+    for pid in sorted(dead):
+        try:
+            proc.reap(pid)
+        except OSError:
+            pass  # not our child after all: nothing to reap
+    return frozenset(pid for pid in inherited if pid in states and pid not in dead)
+
+
+def _reexec_failed(why: object) -> None:
+    print(f"agentic: poll: reexec_failed: {why}", flush=True)
+
+
+def _flush_before_exec() -> None:
+    """Stdout, stderr and the telemetry out before the image is replaced, on a daemon thread
+    joined with `_STOP_FLUSH_CAP_S`: a flush that raises or hangs says one line and the
+    re-exec goes on (the spans of the round may be lost then)."""
+    problems: list[Exception] = []
+
+    def flush() -> None:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            telemetry.flush()
+        except Exception as exc:  # whatever a flush raises must not stop the re-exec
+            problems.append(exc)
+
+    flusher = threading.Thread(target=flush, daemon=True)
+    flusher.start()
+    flusher.join(_STOP_FLUSH_CAP_S)
+    if flusher.is_alive():
+        print("agentic: poll: flush before the re-exec timed out", flush=True)
+    elif problems:
+        print(f"agentic: poll: flush before the re-exec failed: {problems[0]}", flush=True)
+
+
+def _reexec_plan(
+    cfg: Configuration, due: Path, interval_s: float
+) -> tuple[str, list[str], dict[str, str], str] | None:
+    """Everything a re-exec into `due` needs, checked before any side effect: the executable
+    (a file the process may execute), the argv and env from the pure builders over absolute
+    paths of the Configuration, and the cwd to come back to. None, with `reexec_failed`
+    said, when any of it cannot be had."""
+    exe = due / ".venv" / "bin" / "agentic"
+    wanted = {
+        "AGENTIC_PRODUCT_DIR": cfg.product_dir,
+        "AGENTIC_LOG_FILE": cfg.log_file,
+        "AGENTIC_SCRATCH_DIR": cfg.scratch_dir,
+        "AGENTIC_RUN_REGISTRY_DIR": cfg.run_registry_dir,
+    }
+    try:
+        if not (exe.is_file() and os.access(exe, os.X_OK)):
+            raise OSError(f"{exe} is not an executable file")
+        cwd = os.getcwd()
+        resolved = {
+            name: Path(os.path.abspath(path))
+            for name, path in wanted.items()
+            if name in REEXEC_PATH_VARS and path is not None
+        }
+        argv = reexec_argv(exe, resolved["AGENTIC_PRODUCT_DIR"], interval_s)
+        env = reexec_env(os.environ, resolved, Path(sys.executable).parent, due)
+    except (OSError, ValueError, KeyError) as exc:
+        _reexec_failed(exc)
+        return None
+    return str(exe), argv, env, cwd
+
+
+def _reexec(
+    cfg: Configuration,
+    stage0: Stage0Store,
+    lock: RunLock,
+    hold: _PollHold,
+    execve: Callable[..., NoReturn],
+    argv0: str,
+    interval_s: float,
+    told: set[Path],
+) -> bool:
+    """The re-exec check at the start of a round (GH-736): when `current` names a stage this
+    process is not running from (or it was started through the `current` link), replace it
+    with that stage's poller. Order: decide, pre-checks (no side effect), flush, release the
+    lock and say so (`hold.held`), `chdir` and `execve` -- the pid survives an exec, so a lock
+    kept across it would look held by a live process that is no longer the poller. A failure
+    anywhere says `reexec_failed` and the round goes on on the old code, the next round
+    retries; after a failed exec the cwd and the lock are put back (the environment was
+    never touched: the builders work on a copy). False only when a live holder refuses the
+    lock back: this process holds nothing then and must end (exit 0), releasing and beating
+    nothing."""
+    try:
+        sha = stage0.current()
+        target = (stage0_paths.DEFAULT_ROOT / sha).resolve() if sha is not None else None
+        due = reexec_due(
+            Path(os.path.abspath(argv0)),
+            Path(os.path.realpath(argv0)),
+            target,
+            stage0_paths.CHECKOUT,
+        )
+    except (OSError, ValueError) as exc:
+        _reexec_failed(exc)
+        return True
+    if due is None:
+        return True
+    if reexec_blocked(due, os.environ.get(REEXEC_MARKER)):
+        if due not in told:  # this process already came from there: a loop, said once
+            told.add(due)
+            _reexec_failed(f"already running from {due}")
+        return True
+    if (plan := _reexec_plan(cfg, due, interval_s)) is None:
+        return True
+    exe, argv, env, cwd = plan
+    _flush_before_exec()
+    try:
+        lock.release(pollmod.LOCK_KEY)
+    except OSError as exc:
+        _reexec_failed(f"the lock could not be released: {exc}")
+        return True
+    hold.held = False
+    try:
+        os.chdir(due)
+        execve(exe, argv, env)
+    except (OSError, ValueError) as exc:
+        _reexec_failed(exc)
+        try:
+            os.chdir(cwd)
+            _acquire(lock, pollmod.LOCK_KEY)
+        except (CannotStart, OSError) as problem:
+            print(
+                f"agentic: poll: not holding the lock after a failed re-exec: {problem}", flush=True
+            )
+            return False
+        hold.held = True
+    return True
 
 
 def _beats(
