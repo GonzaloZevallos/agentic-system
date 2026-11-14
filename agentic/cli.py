@@ -81,6 +81,7 @@ from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
+    Heartbeats,
     LabelTimeline,
     Launcher,
     LockHeld,
@@ -128,7 +129,7 @@ from .core.process.domain import landing as landing_rules
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
-from .core.process.domain.stage0_rotation import Unreadable
+from .core.process.domain.stage0_rotation import Unreadable, heartbeat_key
 from .core.process.domain.task import (
     ArmAssignment,
     Carried,
@@ -1566,9 +1567,22 @@ def _print_lock(lock: RunLock, task_id: str) -> None:
         )
 
 
+@dataclass
+class _PollHold:
+    """Whether this process holds `poll.LOCK_KEY` right now (GH-736): the one flag the
+    poller's lock exit, its heartbeats and its re-exec agree on. A process that does not hold
+    the lock never releases it and never writes a heartbeat."""
+
+    held: bool = True
+
+
 @contextmanager
 def _locked(
-    lock: RunLock, task_id: str, stop: StopCause | None = None
+    lock: RunLock,
+    task_id: str,
+    stop: StopCause | None = None,
+    *,
+    hold: _PollHold | None = None,
 ) -> Iterator[LockRecord | None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
     releases whether the invocation delivers, escalates or raises -- except three cases where
@@ -1580,6 +1594,8 @@ def _locked(
     so the poller can retake it -- the dying process's own memoised system version is the
     right one, it is a fresh process. A `CannotStart` or an exception outside `app.ainvoke`
     releases.
+    `hold` (only `_poll` passes it) gates the plain release: with `hold.held` false this
+    process gave the lock away and does not release it again.
     Yields the record of the dead run it took over, if any
     (`RunLock.acquire` only ever hands back a record of this host's own, never probing
     another host's)."""
@@ -1595,7 +1611,8 @@ def _locked(
         yield taken_over
     finally:
         if stop is None:
-            lock.release(task_id)
+            if hold is None or hold.held:
+                lock.release(task_id)
         else:
             # Once: the hard deadline may have settled it already (`StopCause.settle_lock`).
             stop.settle_lock(lock, task_id)
@@ -1664,6 +1681,7 @@ async def _poll(
     argv0: str | None = None,
     sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
     dry_run: bool = False,
+    heartbeats: Heartbeats | None = None,
 ) -> None:
     """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
     product, one `poll.run_once` round every `interval_s` seconds, under the same
@@ -1685,7 +1703,11 @@ async def _poll(
     it died. `sleep` replaces the bare `anyio.sleep` call between rounds, injectable
     the same way `poll.run_once`'s own `sleep` already is, for a test to prove every
     line of a round is flushed before this ever awaits it. `dry_run` (GH-622) is `--dry-run
-    --once`: one round over `read_only_ports`, no lock taken, no launcher, no sleep."""
+    --once`: one round over `read_only_ports`, no lock taken, no launcher, no sleep.
+
+    `heartbeats` (GH-736) is where the holder of the lock says it is alive: `start` and `end`
+    around each round and `stop` when anyio cancels it, written only while `hold.held`. With
+    it `None` nothing is written."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
@@ -1696,31 +1718,63 @@ async def _poll(
         return
     real_launcher = launcher if launcher is not None else SpawnLauncher(cfg)
     executable = argv0 if argv0 is not None else _self_executable()
-    with _locked(lock, pollmod.LOCK_KEY):
+    hold = _PollHold()
+    with _locked(lock, pollmod.LOCK_KEY, hold=hold):
+        beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
-        while True:
-            try:
-                # The round's one `upstream()` (GH-420): the warning and the eval set read it.
-                upstream = ports.workspace.upstream()
-                said, notice = _fast_forward_notice(ports, upstream, said)
-                for line in notice:
-                    print(line, flush=True)
-                for line in pollmod.run_once(
-                    cfg,
-                    ports,
-                    registry,
-                    real_launcher,
-                    datetime.now(UTC),
-                    executable,
-                    lock=lock,
-                    current_boot=liveness.current_boot_id(),
-                    eval_set=_round_eval_set(ports, upstream),
-                    system_version=telemetry.fresh_system_version,
-                ):
-                    print(line, flush=True)
-            except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
-                print(f"agentic: poll: round ended early: {exc}", flush=True)
-            await sleep(interval_s)
+        try:
+            while True:
+                beat("start")
+                try:
+                    # The round's one `upstream()` (GH-420): the warning and the eval set read it.
+                    upstream = ports.workspace.upstream()
+                    said, notice = _fast_forward_notice(ports, upstream, said)
+                    for line in notice:
+                        print(line, flush=True)
+                    for line in pollmod.run_once(
+                        cfg,
+                        ports,
+                        registry,
+                        real_launcher,
+                        datetime.now(UTC),
+                        executable,
+                        lock=lock,
+                        current_boot=liveness.current_boot_id(),
+                        eval_set=_round_eval_set(ports, upstream),
+                        system_version=telemetry.fresh_system_version,
+                    ):
+                        print(line, flush=True)
+                except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
+                    print(f"agentic: poll: round ended early: {exc}", flush=True)
+                beat("end")
+                await sleep(interval_s)
+        except anyio.get_cancelled_exc_class():
+            beat("stop")  # a clean stop, inside the lock: before `_locked` releases it
+            raise
+
+
+def _beats(
+    heartbeats: Heartbeats | None, ports: Ports, interval_s: float, hold: _PollHold
+) -> Callable[[Literal["start", "end", "stop"]], None]:
+    """The poller's one way to write a heartbeat (GH-736): the key is built once, by
+    `stage0_rotation.heartbeat_key`; a beat is written only while `hold.held`, with this
+    stage0's checkout; a write that fails says one line and never ends the round. With no
+    `heartbeats`, or no key, it writes nothing."""
+    key = None
+    if heartbeats is not None:
+        key = heartbeat_key(product_name(ports), pollmod.LOCK_KEY)
+        if key is None:
+            print("agentic: poll: no heartbeats: the product name is not a slug", flush=True)
+
+    def beat(phase: Literal["start", "end", "stop"]) -> None:
+        if heartbeats is None or key is None or not hold.held:
+            return
+        try:
+            heartbeats.write(key, stage0_paths.CHECKOUT, datetime.now(UTC), phase, interval_s)
+        except (OSError, ValueError) as exc:
+            print(f"agentic: poll: heartbeat {phase} not written: {exc}", flush=True)
+
+    return beat
 
 
 DRY_RUN_BANNER = (
