@@ -790,8 +790,9 @@ class Inbox(Protocol):
         """Every open issue as an `IssueRef` (url, title, body) (GH-464), for the flake path,
         which matches an issue by its marker or its exact title (`landing.flake_issue_for`).
         One call with no label and no search filter, so a titled issue whose body lost its
-        marker is still found. Raises `ValueError` when the list is as long as the limit it
-        asked for -- the issue could be past it -- or when the tracker fails."""
+        marker is still found. Raises `ListMayBeCut` (a `ValueError`) when the list is as long as
+        the limit it asked for -- the issue could be past it -- or `ValueError` when the
+        tracker fails."""
         ...
 
 
@@ -847,6 +848,13 @@ class MergeCallFailed(ValueError):
     def __init__(self, failure: MergeFailure, message: str):
         super().__init__(message)
         self.failure = failure
+
+
+class ListMayBeCut(ValueError):
+    """`Inbox.open_issue_refs` returned as many rows as the limit it asked for, so the list
+    may be cut and an issue could be past it. A `ValueError`, so every handler that already
+    treats an unreadable read as harmless absorbs it unchanged; a caller that must tell a cut
+    list from a failed read (the carve-out's dedupe) catches it first."""
 
 
 class TrackerCallFailed(ValueError):

@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__Stage0Store["Stage0Store"]
     class ports__Stage0Users["Stage0Users"]
     class ports__StopFlag["StopFlag"]
     class ports__TaskDocuments["TaskDocuments"]
@@ -32,7 +33,6 @@ classDiagram
     class ports__Upstream["Upstream"]
     class ports__UpstreamMerge["UpstreamMerge"]
     class ports__Workspace["Workspace"]
-    class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
     ports__TrackerRateLimited --|> ports__TrackerCallFailed
     ports__TrackerTimedOut --|> ports__TrackerCallFailed
     ports__TrackerTransient --|> ports__TrackerCallFailed

@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__RunLock["RunLock"]
     class ports__RunProcess["RunProcess"]
     class ports__RunRegistration["RunRegistration"]
     class ports__RunRegistry["RunRegistry"]
@@ -32,7 +33,6 @@ classDiagram
     class ports__SpecUnreadable["SpecUnreadable"]
     class ports__Stage0Candidate["Stage0Candidate"]
     class ports__Stage0Escalation["Stage0Escalation"]
-    class ports__Stage0Store["Stage0Store"]
 ```
 
 ## Relaciones con otras páginas
