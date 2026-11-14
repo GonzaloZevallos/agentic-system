@@ -113,6 +113,7 @@ from .core.process.application.registration import REGISTER_WAIT_S, await_regist
 from .core.process.application.restore import restore_task
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
+from .core.process.application.stage0_rotate import rotate
 from .core.process.domain import document as task_document
 from .core.process.domain import (
     experiment,
@@ -127,6 +128,7 @@ from .core.process.domain import landing as landing_rules
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
+from .core.process.domain.stage0_rotation import Unreadable
 from .core.process.domain.task import (
     ArmAssignment,
     Carried,
@@ -136,6 +138,7 @@ from .core.process.domain.task import (
     TrackerFailure,
     TrackerFailureRecord,
 )
+from .shared import stage0 as stage0_paths
 from .shared.configuration import (
     ENV_PREFIX,
     LOGS_DIR,
@@ -540,6 +543,24 @@ def build_parser() -> CommandTree:
         help="show which signals hold, the anchor and what would be opened; spends "
         "nothing, takes no lock, writes no file and makes no `gh` call",
     )
+    stage0_parser = add(
+        ("stage0",), sub, "stage0", help="the stage0 checkouts the pollers run from (GH-622)"
+    )
+    stage0_sub = stage0_parser.add_subparsers(dest="stage0_command", required=True)
+    stage0_rotate = add(
+        ("stage0", "rotate"),
+        stage0_sub,
+        "rotate",
+        help="move stage0's `current` to the newest green commit of master, smoked first; "
+        "every outcome that keeps `current` exits 0",
+    )
+    stage0_rotate.add_argument(
+        "--root",
+        type=Path,
+        default=stage0_paths.DEFAULT_ROOT,
+        metavar="DIR",
+        help="the rotation root (default ~/.agentic-stage0s)",
+    )
     scores = add(("scores",), sub, "scores", help="a task's numbers as Langfuse scores (GH-273)")
     scores_sub = scores.add_subparsers(dest="scores_command", required=True)
     scores_backfill = add(
@@ -697,6 +718,8 @@ def main() -> None:
 
     if args.command == "perf":
         sys.exit(_perf_main(args))
+    if args.command == "stage0":
+        sys.exit(_stage0_rotate(args.root))
     if args.command == "run":
         if args.issue_input is not None:
             if args.issue is not None or args.title is not None:
@@ -1072,6 +1095,33 @@ def _arm_for_run(
 def _perf_usage_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
     parser.print_usage(sys.stderr)
     parser.exit(int(perfmod.PerfExit.REFUSED), f"agentic perf: error: {message}\n")
+
+
+def _stage0_rotate(root: Path) -> int:
+    """`agentic stage0 rotate`: one rotation by hand. `.env` was loaded by `main` into the
+    environment; the pin is read from there and `.env` is never read or printed here. Every
+    keep outcome exits 0."""
+    pin = os.environ.get("AGENTIC_STAGE0_PIN") or None
+    rotation = composition.stage0_rotation(root, os.environ)
+    if isinstance(rotation, Unreadable):
+        print("keep: unreadable")
+        return 0
+    if isinstance(rotation.products, composition.NoInstalledProducts):
+        print("smoke: --help only (installed products are read by #726)")
+    rotate(
+        rotation.store,
+        rotation.users,
+        rotation.window,
+        rotation.candidate,
+        rotation.escalation,
+        pin=pin,
+        now=datetime.now(UTC),
+        own=stage0_paths.CHECKOUT,
+        failure_policy=rotation.failure_policy,
+        prune=rotation.prune,
+        out=print,
+    )
+    return 0
 
 
 def _perf_main(args: argparse.Namespace) -> int:
