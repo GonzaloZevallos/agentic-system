@@ -1208,6 +1208,9 @@ class EscalationPauseEntry(TypedDict):
     # The mechanical cause the raise site knew (GH-593), from the error's class and recorded
     # type; absent when it was not known or the escalation is a judgment, which reads as one.
     cause: NotRequired[MechanicalCause]
+    # Why a spec delivery's `questions` pause was raised (GH-594): written only when the patch
+    # carried one, which needs a spec; never `None`, so a pause without a spec reads as before.
+    spec_cause: NotRequired[SpecEscalationCause]
 
 
 class FailurePauseEntry(TypedDict):

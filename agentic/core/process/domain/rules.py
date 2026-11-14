@@ -3924,13 +3924,17 @@ def escalation_entry(
     at: str | None = None,
     ci: CiTiming | None = None,
     cause: MechanicalCause | None = None,
+    spec_cause: SpecEscalationCause | None = None,
 ) -> EscalationPauseEntry:
     """The one constructor of the `escalation` entry. `at`, `ci` (the CI timing of a `ci`
-    escalation) and `cause` (GH-593) are omitted when unknown, never written as `None`; `ci` is
-    kept only on the `ci` class."""
+    escalation), `cause` (GH-593) and `spec_cause` (GH-594, the cause of a spec delivery's
+    `questions` pause) are omitted when unknown, never written as `None`; `ci` is kept only on
+    the `ci` class."""
     entry = EscalationPauseEntry(kind="escalation", value=value)
     if cause is not None:
         entry["cause"] = cause
+    if spec_cause is not None:
+        entry["spec_cause"] = spec_cause
     if at is not None:
         entry["at"] = at
     if ci is not None and value == "ci":
@@ -3975,7 +3979,9 @@ def logged(
     entries (never the lapses); `ci` is the CI timing, kept on a `ci` escalation only."""
     entries: list[PauseEntry] = [_failure_entry(f, at) for f in failures]
     if (cls := patch.get("escalation_class")) is not None:
-        entries.append(escalation_entry(cls, at, ci, patch.get("escalation_cause")))
+        entries.append(
+            escalation_entry(cls, at, ci, patch.get("escalation_cause"), patch.get("spec_cause"))
+        )
     entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)
     return {**patch, "pause_log": entries}
 

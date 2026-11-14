@@ -296,7 +296,7 @@ async def interview(
                 answers.data["questions_for_human"], has_spec=has_spec, role_name=decider.name
             )
         if has_spec and (cause := answers.data.get("spec_conflict")):
-            if not spec_assumptions.conflict_decided(state.get("pause_log", [])):
+            if not spec_assumptions.conflict_decided(state.get("pause_log", []), cause):
                 # Escalates in this round: its questions for PM are dropped, no consultation runs.
                 reason = spec_assumptions.conflict_reason(cause, round_)
                 return None, _escalate_questions(
