@@ -76,6 +76,11 @@ TABLE: tuple[Row, ...] = (
         "`pull_request` or `merge`",
     ),
     Row(
+        "docs/adr/*",
+        ("tests/test_poll_reexec.py",),
+        "it lists docs/adr and asserts the ADR of the poller's re-exec exists once, by slug",
+    ),
+    Row(
         "agentic/core/process/adapters/filesystem/heartbeats.py",
         (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
@@ -201,6 +206,14 @@ TABLE: tuple[Row, ...] = (
         "real tail stream",
     ),
     Row(
+        "tests/fixtures/ci_logs/*",
+        (
+            "tests/core/process/domain/test_ci_log_excerpt.py",
+            "tests/core/process/domain/test_test_failure_excerpt.py",
+        ),
+        "red CI log captures: the excerpt golden digests and the failing-test excerpt read them",
+    ),
+    Row(
         "tests/core/process/domain/fixtures/GH-484.yaml",
         (
             "tests/core/process/domain/test_landing_pass_rules.py",
@@ -220,9 +233,12 @@ TABLE: tuple[Row, ...] = (
     ),
     Row(
         "tests/core/process/domain/fixtures/playwright_list_failure.txt",
-        ("tests/core/process/domain/test_presubmit.py",),
+        (
+            "tests/core/process/domain/test_presubmit.py",
+            "tests/core/process/domain/test_ci_failing_headers.py",
+        ),
         "a Playwright list-reporter tail with one failure: the `{failed_ids}` expansion test "
-        "reads it",
+        "and the CI header reader's real-line test read it",
     ),
     Row(
         "tests/core/process/domain/fixtures/spec_schemas_golden.json",

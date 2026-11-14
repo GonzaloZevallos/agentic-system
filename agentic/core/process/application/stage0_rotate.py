@@ -20,11 +20,14 @@ from ..domain.stage0_rotation import (
     Stop,
     Unavailable,
     Unreadable,
+    expected_pollers,
     partial_name,
+    rollback_due,
     target,
 )
 from .ports import (
     FailurePolicy,
+    Heartbeats,
     MasterWindow,
     Stage0Candidate,
     Stage0Escalation,
@@ -80,6 +83,9 @@ def rotate(
     pin: str | None,
     now: datetime,
     own: Path,
+    heartbeats: Heartbeats,
+    clock: Callable[[], datetime],
+    root: Path,
     failure_policy: FailurePolicy | None = None,
     prune: Prune = no_prune,
     out: Out,
@@ -87,6 +93,10 @@ def rotate(
     """One rotation. Everything but the lock runs inside it; a lock held elsewhere prints
     `keep: busy` and touches nothing. `users` exists only to be handed to `prune`. Catches
     nothing: a port that raises propagates, and the lock is released on the way out.
+
+    `root` is the already-resolved root of the `store` passed in; a different root makes no
+    heartbeat match `new`. `now` dates the rollback; `clock` is read once per adoption, for
+    `switched_at` and `expected`.
 
     `current` changes only in `switch_current`, after `promote` of a partial smoked green
     and `write_switch` (an intent record, confirmed against `current()` by its readers)."""
@@ -97,8 +107,61 @@ def rotate(
             return
         store.clear_partials()
         escalation.run()
-        _adopt(store, users, window, candidate, policy, pin=pin, now=now, own=own, out=out)
+        if not _rollback(store, escalation, heartbeats, root, now=now, out=out):
+            _adopt(
+                store,
+                users,
+                window,
+                candidate,
+                policy,
+                heartbeats,
+                clock,
+                pin=pin,
+                own=own,
+                out=out,
+            )
         prune(store, users, own, out)
+
+
+def _rollback(
+    store: Stage0Store,
+    escalation: Stage0Escalation,
+    heartbeats: Heartbeats,
+    root: Path,
+    *,
+    now: datetime,
+    out: Out,
+) -> bool:
+    """Whether the last switch was undone. Acts only while `current` is still the record's
+    `new`, and only when `rollback_due` says an expected poller never came back to it. The
+    order is reject, swap, escalate, so a crash between two steps is finished by the next
+    run. `switch.json` is deliberately kept: it protects `new` from `prune` until the next
+    adoption, and it is inert once `current` is no longer `new`."""
+    record = store.switch_record()
+    current = store.current()
+    if record is None or current is None or not same_commit(record.new, current):
+        return False
+    due = rollback_due(
+        record.switched_at,
+        (root / record.new).resolve(),
+        record.expected,
+        heartbeats.read_all(),
+        now,
+    )
+    if not due:
+        return False
+    previous = record.previous
+    if previous is None:
+        out("rollback: no previous")
+        return False
+    if previous not in {name for name, _ in store.stages()}:
+        out("rollback: previous missing")
+        return False
+    store.reject(record.new)
+    store.switch_current(previous)
+    escalation.run()
+    out(f"rollback: {record.new} -> {previous}")
+    return True
 
 
 def _leftover_in_use(
@@ -123,9 +186,10 @@ def _adopt(
     window: MasterWindow,
     candidate: Stage0Candidate,
     policy: FailurePolicy,
+    heartbeats: Heartbeats,
+    clock: Callable[[], datetime],
     *,
     pin: str | None,
-    now: datetime,
     own: Path,
     out: Out,
 ) -> None:
@@ -165,8 +229,11 @@ def _adopt(
         store.remove(sha)
         out(policy.prepare_failed(sha, settled).line)
         return
-    # #738 computes `expected` from the heartbeats; until then no rotation expects a poller.
-    store.write_switch(previous=current, new=sha, switched_at=now, expected=frozenset())
+    beats = heartbeats.read_all()
+    at = clock()
+    store.write_switch(
+        previous=current, new=sha, switched_at=at, expected=expected_pollers(beats, at)
+    )
     store.switch_current(sha)
     policy.succeeded(sha)
     out(f"switched: {sha}")

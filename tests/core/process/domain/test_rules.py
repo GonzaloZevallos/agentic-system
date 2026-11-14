@@ -5146,3 +5146,41 @@ def test_the_fit_question_after_a_carve_out_quotes_the_remainders_figures_and_it
     # The plan's own figures are still quoted once, in their own sentence.
     assert text.count("200.00 USD") == 1
     assert "Narrow the task" in text and "do not resume" in text
+
+
+# --- GH-594 part 4a: rules.spec_delivery and its agreement with rules.escalation -----------
+
+_SPEC_CONTRACT = {
+    "path": "docs/specs/a.md",
+    "slice": "first",
+    "commit": "a" * 40,
+    "sha256": "b" * 64,
+    "criteria": ["It works"],
+    "screens": [],
+    "risks": [],
+    "touches_ui": False,
+    "touches_copy": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [({}, False), ({"spec": {}}, False), ({"spec": _SPEC_CONTRACT}, True)],
+)
+def test_spec_delivery_is_a_non_empty_spec(state, expected):
+    assert rules.spec_delivery(cast(Any, state)) is expected
+
+
+def test_spec_delivery_and_escalation_read_the_same_signal():
+    with_spec = cast(Any, {"spec": _SPEC_CONTRACT})
+    without = cast(Any, {"spec": {}})
+    assert rules.spec_delivery(with_spec)
+    patch = rules.escalation(
+        "questions", "doubt", spec=with_spec["spec"], spec_cause="contradiction"
+    )
+    assert patch["spec_cause"] == "contradiction"
+    assert not rules.spec_delivery(without)
+    assert "spec_cause" not in rules.escalation("questions", "doubt", spec=without["spec"])
+    assert "spec_cause" not in rules.escalation("questions", "doubt")
+    with pytest.raises(ValueError):
+        rules.escalation("questions", "doubt", spec=with_spec["spec"])

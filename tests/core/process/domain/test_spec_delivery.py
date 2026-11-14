@@ -1,15 +1,24 @@
 import hashlib
+from typing import Any
 
 import pytest
 
 from agentic.core.process.domain.spec_delivery import (
+    SLICE_SLUG,
     Screen,
+    SpecLine,
+    SpecLineMalformed,
+    SpecRefusal,
     body_sha256,
     derive_flags,
+    normalize_text,
+    parse_spec_line,
     render_approved_front_matter,
     render_draft_front_matter,
     spec_commit_ok,
     spec_path_ok,
+    spec_state_patch,
+    spec_unchanged,
     split_front_matter,
 )
 
@@ -156,3 +165,132 @@ def test_spec_commit_accepts_a_full_lowercase_id(commit: str) -> None:
 )
 def test_spec_commit_refuses_everything_else(commit: str) -> None:
     assert not spec_commit_ok(commit)
+
+
+# --- GH-594 part 4a: the pure delivery rules ---------------------------------------------
+
+SPEC = "docs/specs/a.md"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("", None),
+        ("No line here\nat all", None),
+        (f"Intro\nSpec: {SPEC}\nMore", SpecLine(SPEC, None)),
+        (f"Spec: {SPEC}#first-slice", SpecLine(SPEC, "first-slice")),
+        (f"Intro\r\nSpec: {SPEC}#s1\r\nEnd", SpecLine(SPEC, "s1")),
+        (f"Intro\rSpec: {SPEC}\rEnd", SpecLine(SPEC, None)),
+        (f"Spec: {SPEC} ", SpecLineMalformed()),
+        (f"Spec: {SPEC}#", SpecLineMalformed()),
+        (f"Spec: {SPEC}#Bad_Slug", SpecLineMalformed()),
+        (f"Spec: {SPEC}#a--b", SpecLineMalformed()),
+        (f"Spec: {SPEC}#s ", SpecLineMalformed()),
+        ("Spec: docs/specs/../a.md", SpecLineMalformed()),
+        ("Spec: README.md", SpecLineMalformed()),
+        ("Spec: ", SpecLineMalformed()),
+        ("Spec:", SpecLineMalformed()),
+        (f"Spec:  {SPEC}", SpecLineMalformed()),
+        (f"Spec:{SPEC}", SpecLineMalformed()),
+        (f"spec: {SPEC}", None),
+        (f" Spec: {SPEC}", None),
+        (f"Spec: {SPEC}\nSpec: {SPEC}", SpecLineMalformed()),
+        (f"Spec: {SPEC}\nSpec: docs/specs/b.md", SpecLineMalformed()),
+        (f"```\nSpec: {SPEC}\n```", SpecLine(SPEC, None)),
+        (f"<!--\nSpec: {SPEC}\n-->", SpecLine(SPEC, None)),
+        (f"Spec: {SPEC} ", SpecLineMalformed()),
+        (f"Spec: {SPEC}\x0b", SpecLineMalformed()),
+        (f"Spec: {SPEC}\x85", SpecLineMalformed()),
+        (f"Spec: {SPEC} Spec: {SPEC}", SpecLineMalformed()),
+        (f"Spec: {SPEC}\x85#s", SpecLineMalformed()),
+    ],
+)
+def test_parse_spec_line(body: str, expected: object) -> None:
+    assert parse_spec_line(body) == expected
+
+
+def test_slice_slug_is_the_one_literal() -> None:
+    assert SLICE_SLUG == r"[a-z0-9]+(?:-[a-z0-9]+)*"
+
+
+def test_normalize_text() -> None:
+    assert normalize_text("a\r\nb\rc\nd") == "a\nb\nc\nd"
+    assert normalize_text("﻿a\r\n") == "a\n"
+    assert normalize_text("﻿﻿a") == "﻿a"
+    assert normalize_text("a b\x0bc\x85d") == "a b\x0bc\x85d"
+    assert normalize_text("") == ""
+
+
+def _contract(**over: Any) -> Any:
+    base: dict[str, Any] = {
+        "path": SPEC,
+        "slice": "first",
+        "commit": "a" * 40,
+        "sha256": "b" * 64,
+        "criteria": ["It works"],
+        "screens": [],
+        "risks": [],
+        "touches_ui": True,
+        "touches_copy": True,
+    }
+    return {**base, **over}
+
+
+@pytest.mark.parametrize(
+    ("screens", "ui", "copy"),
+    [
+        ([], False, False),
+        ([{"name": "Home", "copy": []}], True, False),
+        ([{"name": "Home", "copy": ["  ", ""]}], True, False),
+        ([{"name": "Home", "copy": ["Hello"]}], True, True),
+        ([{"name": "A", "copy": []}, {"name": "B", "copy": ["x"]}], True, True),
+    ],
+)
+def test_state_patch_derives_the_flags_over_contrary_ones(
+    screens: list[Any], ui: bool, copy: bool
+) -> None:
+    contract = _contract(screens=screens, touches_ui=not ui, touches_copy=not copy)
+    patch = spec_state_patch(contract)
+    assert not isinstance(patch, SpecRefusal)
+    assert patch["flags"] == {"touches_ui": ui, "touches_copy": copy}
+    assert patch["spec"] == {**contract, "touches_ui": ui, "touches_copy": copy}
+    assert set(patch) == {"spec", "flags"}
+    assert contract["touches_ui"] is not ui  # the input is not mutated
+
+
+@pytest.mark.parametrize(
+    ("over", "field"),
+    [
+        ({"path": "README.md"}, "path"),
+        ({"path": 3}, "path"),
+        ({"commit": "abc"}, "commit"),
+        ({"commit": "A" * 40}, "commit"),
+        ({"sha256": "b" * 63}, "sha256"),
+        ({"sha256": "B" * 64}, "sha256"),
+        ({"slice": "Bad_Slug"}, "slice"),
+        ({"slice": ""}, "slice"),
+        ({"screens": [{"name": "x"}]}, "screens"),
+        ({"screens": "none"}, "screens"),
+        ({"criteria": "x"}, "criteria"),
+        ({"risks": [3]}, "risks"),
+    ],
+)
+def test_state_patch_refuses_an_invalid_field_naming_it(over: dict[str, Any], field: str) -> None:
+    assert spec_state_patch(_contract(**over)) == SpecRefusal("spec_invalid", (field,))
+
+
+def test_state_patch_refuses_missing_keys_and_several_fields() -> None:
+    contract = _contract(slice="BAD", commit="x")
+    del contract["risks"]
+    assert spec_state_patch(contract) == SpecRefusal("spec_invalid", ("slice", "commit", "risks"))
+    assert spec_state_patch({}).cause == "spec_invalid"  # type: ignore[arg-type]
+
+
+def test_spec_unchanged() -> None:
+    text = "---\nstatus: draft\n---\n" + BODY
+    assert spec_unchanged(_sha(BODY), text)
+    assert spec_unchanged(_sha(BODY), text.replace("\n", "\r\n"))
+    assert not spec_unchanged(_sha(BODY), text.replace("Text.", "Other."))
+    assert not spec_unchanged(_sha(BODY), BODY)
+    assert not spec_unchanged(_sha(BODY), "---\nstatus: draft\n---\n\ud800")
+    assert not spec_unchanged("", text)

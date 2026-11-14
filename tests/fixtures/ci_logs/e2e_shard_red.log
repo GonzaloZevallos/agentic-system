@@ -1,0 +1,244 @@
+# Synthetic log: hand-written to mimic `gh run view --log-failed` with Playwright's list reporter. Not a real run.
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z Running 80 tests using 4 workers
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  1) [chromium] › e2e/checkout.spec.ts:21:5 › checkout › saves the form, case 1 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  2) [chromium] › e2e/checkout.spec.ts:22:5 › checkout › saves the form, case 2 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  3) [chromium] › e2e/checkout.spec.ts:23:5 › checkout › saves the form, case 3 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  4) [chromium] › e2e/checkout.spec.ts:24:5 › checkout › saves the form, case 4 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  5) [chromium] › e2e/checkout.spec.ts:25:5 › checkout › saves the form, case 5 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  6) [chromium] › e2e/checkout.spec.ts:26:5 › checkout › saves the form, case 6 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  7) [chromium] › e2e/checkout.spec.ts:27:5 › checkout › saves the form, case 7 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  8) [chromium] › e2e/checkout.spec.ts:28:5 › checkout › saves the form, case 8 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  9) [chromium] › e2e/checkout.spec.ts:29:5 › checkout › saves the form, case 9 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  10) [chromium] › e2e/checkout.spec.ts:30:5 › checkout › saves the form, case 10 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  11) [chromium] › e2e/checkout.spec.ts:31:5 › checkout › saves the form, case 11 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  12) [chromium] › e2e/checkout.spec.ts:32:5 › checkout › saves the form, case 12 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  13) [chromium] › e2e/checkout.spec.ts:33:5 › checkout › saves the form, case 13 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  14) [chromium] › e2e/checkout.spec.ts:34:5 › checkout › saves the form, case 14 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  15) [chromium] › e2e/checkout.spec.ts:35:5 › checkout › saves the form, case 15 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  16) [chromium] › e2e/checkout.spec.ts:36:5 › checkout › saves the form, case 16 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  17) [chromium] › e2e/checkout.spec.ts:37:5 › checkout › saves the form, case 17 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  18) [chromium] › e2e/checkout.spec.ts:38:5 › checkout › saves the form, case 18 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  19) [chromium] › e2e/checkout.spec.ts:39:5 › checkout › saves the form, case 19 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  20) [chromium] › e2e/checkout.spec.ts:40:5 › checkout › saves the form, case 20 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  21) [chromium] › e2e/checkout.spec.ts:41:5 › checkout › saves the form, case 21 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  22) [chromium] › e2e/checkout.spec.ts:42:5 › checkout › saves the form, case 22 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  23) [chromium] › e2e/checkout.spec.ts:43:5 › checkout › saves the form, case 23 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  24) [chromium] › e2e/checkout.spec.ts:44:5 › checkout › saves the form, case 24 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  25) [chromium] › e2e/checkout.spec.ts:45:5 › checkout › saves the form, case 25 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  26) [chromium] › e2e/checkout.spec.ts:46:5 › checkout › saves the form, case 26 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  27) [chromium] › e2e/checkout.spec.ts:47:5 › checkout › saves the form, case 27 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  28) [chromium] › e2e/checkout.spec.ts:48:5 › checkout › saves the form, case 28 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  29) [chromium] › e2e/checkout.spec.ts:49:5 › checkout › saves the form, case 29 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  30) [chromium] › e2e/checkout.spec.ts:50:5 › checkout › saves the form, case 30 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  31) [chromium] › e2e/checkout.spec.ts:51:5 › checkout › saves the form, case 31 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  32) [chromium] › e2e/checkout.spec.ts:52:5 › checkout › saves the form, case 32 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  33) [chromium] › e2e/checkout.spec.ts:53:5 › checkout › saves the form, case 33 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  34) [chromium] › e2e/checkout.spec.ts:54:5 › checkout › saves the form, case 34 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  35) [chromium] › e2e/checkout.spec.ts:55:5 › checkout › saves the form, case 35 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  36) [chromium] › e2e/checkout.spec.ts:56:5 › checkout › saves the form, case 36 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  37) [chromium] › e2e/checkout.spec.ts:57:5 › checkout › saves the form, case 37 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  38) [chromium] › e2e/checkout.spec.ts:58:5 › checkout › saves the form, case 38 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  39) [chromium] › e2e/checkout.spec.ts:59:5 › checkout › saves the form, case 39 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  40) [chromium] › e2e/checkout.spec.ts:60:5 › checkout › saves the form, case 40 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  41) [chromium] › e2e/checkout.spec.ts:61:5 › checkout › saves the form, case 41 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  42) [chromium] › e2e/checkout.spec.ts:62:5 › checkout › saves the form, case 42 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  43) [chromium] › e2e/checkout.spec.ts:63:5 › checkout › saves the form, case 43 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  44) [chromium] › e2e/checkout.spec.ts:64:5 › checkout › saves the form, case 44 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  45) [chromium] › e2e/checkout.spec.ts:65:5 › checkout › saves the form, case 45 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  46) [chromium] › e2e/checkout.spec.ts:66:5 › checkout › saves the form, case 46 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  47) [chromium] › e2e/checkout.spec.ts:67:5 › checkout › saves the form, case 47 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  48) [chromium] › e2e/checkout.spec.ts:68:5 › checkout › saves the form, case 48 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  49) [chromium] › e2e/checkout.spec.ts:69:5 › checkout › saves the form, case 49 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  50) [chromium] › e2e/checkout.spec.ts:70:5 › checkout › saves the form, case 50 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  51) [chromium] › e2e/checkout.spec.ts:71:5 › checkout › saves the form, case 51 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  52) [chromium] › e2e/checkout.spec.ts:72:5 › checkout › saves the form, case 52 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  53) [chromium] › e2e/checkout.spec.ts:73:5 › checkout › saves the form, case 53 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  54) [chromium] › e2e/checkout.spec.ts:74:5 › checkout › saves the form, case 54 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  55) [chromium] › e2e/checkout.spec.ts:75:5 › checkout › saves the form, case 55 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  56) [chromium] › e2e/checkout.spec.ts:76:5 › checkout › saves the form, case 56 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  57) [chromium] › e2e/checkout.spec.ts:77:5 › checkout › saves the form, case 57 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  58) [chromium] › e2e/checkout.spec.ts:78:5 › checkout › saves the form, case 58 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  59) [chromium] › e2e/checkout.spec.ts:79:5 › checkout › saves the form, case 59 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  60) [chromium] › e2e/checkout.spec.ts:80:5 › checkout › saves the form, case 60 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  61) [chromium] › e2e/checkout.spec.ts:81:5 › checkout › saves the form, case 61 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  62) [chromium] › e2e/checkout.spec.ts:82:5 › checkout › saves the form, case 62 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  63) [chromium] › e2e/checkout.spec.ts:83:5 › checkout › saves the form, case 63 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  64) [chromium] › e2e/checkout.spec.ts:84:5 › checkout › saves the form, case 64 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  65) [chromium] › e2e/checkout.spec.ts:85:5 › checkout › saves the form, case 65 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  66) [chromium] › e2e/checkout.spec.ts:86:5 › checkout › saves the form, case 66 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  67) [chromium] › e2e/checkout.spec.ts:87:5 › checkout › saves the form, case 67 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  68) [chromium] › e2e/checkout.spec.ts:88:5 › checkout › saves the form, case 68 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  69) [chromium] › e2e/checkout.spec.ts:89:5 › checkout › saves the form, case 69 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  70) [chromium] › e2e/checkout.spec.ts:90:5 › checkout › saves the form, case 70 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  71) [chromium] › e2e/checkout.spec.ts:91:5 › checkout › saves the form, case 71 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  72) [chromium] › e2e/checkout.spec.ts:92:5 › checkout › saves the form, case 72 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  73) [chromium] › e2e/checkout.spec.ts:93:5 › checkout › saves the form, case 73 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  74) [chromium] › e2e/checkout.spec.ts:94:5 › checkout › saves the form, case 74 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  75) [chromium] › e2e/checkout.spec.ts:95:5 › checkout › saves the form, case 75 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  76) [chromium] › e2e/checkout.spec.ts:96:5 › checkout › saves the form, case 76 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  77) [chromium] › e2e/checkout.spec.ts:97:5 › checkout › saves the form, case 77 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  78) [chromium] › e2e/checkout.spec.ts:98:5 › checkout › saves the form, case 78 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  79) [chromium] › e2e/checkout.spec.ts:99:5 › checkout › saves the form, case 79 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  80) [chromium] › e2e/checkout.spec.ts:100:5 › checkout › saves the form, case 80 ─────────[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m    TimeoutError: locator.click: Timeout 5000ms exceeded.[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [2m       at helpers/form.ts:31:12 waiting for getByTestId('save')[22m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z [31m  80 failed[39m
+e2e (3/6)	Run e2e shard 3/6	2026-11-10T10:21:07.5112345Z ##[error]Process completed with exit code 1.

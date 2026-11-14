@@ -2673,14 +2673,11 @@ CI_LOG_JOBS = 4
 CI_LOG_PER_JOB_BYTES = 16 * 1024
 CI_LOG_TOTAL_BYTES = 48 * 1024
 _CI_LOG_CONTEXT = 2
-# `<job>\t<step>\t<timestamp> <text>` is how `gh run view --log-failed` prints a line, with a
-# byte order mark before the first timestamp. The markers below are anchored after that prefix,
-# so a line that merely quotes one (an `echo`) is no hit. Evidence: runs 40749888261 and
-# 40684006672 of this repo, kept under `tests/fixtures/ci_logs/`.
-_CI_LOG_PREFIX = re.compile(
-    r"^(?:(?P<job>[^\t]*)\t(?P<step>[^\t]*)\t)?\ufeff?"
-    r"(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?)?"
-)
+# `<job>\t<step>\t<timestamp> <text>` is how `gh run view --log-failed` prints a line; the
+# pattern lives in `ci` (GH-740), the markers below are anchored after that prefix, so a line that
+# merely quotes one (an `echo`) is no hit. Evidence: runs 40749888261 and 40684006672 of this
+# repo, kept under `tests/fixtures/ci_logs/`.
+_CI_LOG_PREFIX = ci.LOG_PREFIX
 # `##[error]` is the Actions annotation of a failed step, `FAILED tests/` and `E   ` are pytest's
 # summary and assertion lines, and the last three are what the `docs` check prints on stdout
 # (`DOCS_STALE` and its two other exits in `.agentic/stack.yaml`) plus the hint `check.py` adds.
@@ -2746,12 +2743,13 @@ def _ci_log_body(log: ci.JobLog, room: int) -> tuple[list[str], int]:
     return [_ci_log_text(rows[i][1]) for i in shown], left_out
 
 
-def ci_log_excerpt(logs: Sequence[ci.JobLog]) -> str:
-    """The failed jobs' logs as one text a diagnosis can cite (GH-449): at most `CI_LOG_JOBS`
-    jobs, each in `<CiLog job="...">` and capped at `CI_LOG_PER_JOB_BYTES`, all together at
-    `CI_LOG_TOTAL_BYTES`. A log that was read gives its marker lines, then the tail of its failed
-    step, then `bytes omitidos: N`; one that was not gives `log no leído: <cause>`. Empty input
-    gives the empty string. Pure; the text is for the prompt and is never stored."""
+def _ci_log_blocks(
+    logs: Sequence[ci.JobLog], body: Callable[[ci.JobLog, int], tuple[list[str], int]]
+) -> str:
+    """The per-job shell both excerpts share: at most `CI_LOG_JOBS` jobs, each capped at its
+    share of `CI_LOG_TOTAL_BYTES`, in its `<CiLog job="...">` wrapper, a log that was not read
+    as `log no leído: <cause>`, a read one as what `body(log, room)` chose to show, then
+    `bytes omitidos: N`. `body` returns the lines and the bytes of the original left out."""
     chosen = list(logs[:CI_LOG_JOBS])
     if not chosen:
         return ""
@@ -2766,8 +2764,79 @@ def ci_log_excerpt(logs: Sequence[ci.JobLog]) -> str:
             continue
         footer_room = len("bytes omitidos: 18446744073709551616\n")
         room = cap - len(opening.encode()) - len(closing) - footer_room
-        lines, left_out = _ci_log_body(log, max(room, 0))
+        lines, left_out = body(log, max(room, 0))
         omitted = left_out + log.truncated_bytes
-        body = "".join(f"{text}\n" for text in lines)
-        blocks.append(f"{opening}{body}bytes omitidos: {omitted}\n{closing}")
+        text = "".join(f"{line}\n" for line in lines)
+        blocks.append(f"{opening}{text}bytes omitidos: {omitted}\n{closing}")
     return "".join(blocks)
+
+
+def ci_log_excerpt(logs: Sequence[ci.JobLog]) -> str:
+    """The failed jobs' logs as one text a diagnosis can cite (GH-449): at most `CI_LOG_JOBS`
+    jobs, each in `<CiLog job="...">` and capped at `CI_LOG_PER_JOB_BYTES`, all together at
+    `CI_LOG_TOTAL_BYTES`. A log that was read gives its marker lines, then the tail of its failed
+    step, then `bytes omitidos: N`; one that was not gives `log no leído: <cause>`. Empty input
+    gives the empty string. Pure; the text is for the prompt and is never stored."""
+    return _ci_log_blocks(logs, _ci_log_body)
+
+
+# How many failing tests `test_failure_excerpt` shows with their error; the rest are counted.
+_CI_LOG_HEADERS_SHOWN = 5
+
+
+def _header_rows(
+    rows: Sequence[tuple[str, str, int]], headers: Sequence[ci.FailingHeader]
+) -> list[int]:
+    """The rows of the first `_CI_LOG_HEADERS_SHOWN` headers in the order they matter: each
+    header line, then the first error line after it and before the next header, with its
+    context, none twice."""
+    starts = {header.line for header in headers}
+    order: list[int] = []
+    for header in headers[:_CI_LOG_HEADERS_SHOWN]:
+        end = next((i for i in range(header.line + 1, len(rows)) if i in starts), len(rows))
+        error = next(
+            (i for i in range(header.line + 1, end) if ci.ERROR_LINE.match(rows[i][1])), None
+        )
+        order.append(header.line)
+        if error is not None:
+            order += range(
+                max(error - _CI_LOG_CONTEXT, header.line + 1),
+                min(error + _CI_LOG_CONTEXT, end - 1) + 1,
+            )
+    return list(dict.fromkeys(order))
+
+
+def _test_failure_body(log: ci.JobLog, room: int) -> tuple[list[str], int]:
+    """The lines of one read log to show within `room` bytes when it names failing tests: the
+    first few headers, each with its error, a count of the others, then the tail of the failed
+    step. A log with no header is `_ci_log_body`'s."""
+    scan = ci.scan_headers(log.text)
+    if not scan.headers and not scan.dropped:
+        return _ci_log_body(log, room)
+    rows = [(step, ci.strip_ansi(text), size) for step, text, size in _ci_log_rows(log.text)]
+    more = max(len(scan.headers) - _CI_LOG_HEADERS_SHOWN, 0) + scan.dropped
+    count = ""
+    if more:
+        count = f"{more} failing headers more"
+        if scan.dropped:
+            count += f" ({scan.dropped} without a usable id)"
+        room = max(room - len(count.encode()) - 1, 0)
+    marked = _within(rows, _header_rows(rows, scan.headers), room)
+    room -= sum(len(rows[i][1].encode()) + 1 for i in marked)
+    failed_step = rows[-1][0]
+    tail_order = [
+        i for i in range(len(rows) - 1, -1, -1) if rows[i][0] == failed_step and i not in marked
+    ]
+    tail = _within(rows, tail_order, room) if room > 0 else []
+    kept = {*marked, *tail}
+    left_out = sum(row[2] for i, row in enumerate(rows) if i not in kept)
+    shown = [rows[i][1] for i in marked] + ([count] if count else []) + [rows[i][1] for i in tail]
+    return [_ci_log_text(text) for text in shown], left_out
+
+
+def test_failure_excerpt(logs: Sequence[ci.JobLog]) -> str:
+    """The failed jobs' logs as `ci_log_excerpt` does, for a log that names its failing tests
+    (GH-740): the first few failing headers, each with its first error line and context, how
+    many headers more, then the tail of the failed step. A log with no recognised header gives
+    what `ci_log_excerpt` gives. Pure; the text is for the prompt and is never stored."""
+    return _ci_log_blocks(logs, _test_failure_body)

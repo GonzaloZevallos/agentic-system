@@ -46,6 +46,7 @@ import yaml
 
 from agentic.core.process.domain.spec_delivery import (
     SHA256,
+    SLICE_SLUG,
     SPEC_FENCE,
     SPEC_MAX_BYTES,
     Screen,
@@ -67,7 +68,7 @@ SECTIONS = (
 )
 _FRONT_MAX = 1024  # a real front matter is ~200 chars; PyYAML is superlinear on deep nesting
 _APPROVAL_KEYS = ("approved_by", "approved_at", "approved_sha256")
-_SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+_SLUG = SLICE_SLUG
 _FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
 _HEADING = re.compile(r"(#{2,4}) +(.+?)(?: +#+)?")
 _TITLE = re.compile(r"# +\S.*")

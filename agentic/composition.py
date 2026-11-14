@@ -46,6 +46,7 @@ from .core.process.adapters.filesystem.check_results import FilesystemCheckResul
 from .core.process.adapters.filesystem.experiment_file import FilesystemExperimentFile
 from .core.process.adapters.filesystem.file_inbox import FileInbox, frozen_input_path
 from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
+from .core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
 from .core.process.adapters.filesystem.installed_products import SystemdUnitInstalledProducts
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
@@ -81,6 +82,7 @@ from .core.process.adapters.shell.perf_runner import PerfShellRunner
 from .core.process.adapters.shell.stage0_candidate import ShellStage0Candidate
 from .core.process.application.ports import (
     FailurePolicy,
+    Heartbeats,
     Inbox,
     InstalledProducts,
     LabelTimeline,
@@ -265,6 +267,9 @@ class Stage0Rotation:
     escalation: Stage0EscalationPort
     prune: Prune
     products: tuple[Path, ...]
+    heartbeats: Heartbeats
+    root: Path
+    """The resolved root the store and the heartbeats were built with."""
 
 
 def _origin_of(checkout: Path) -> str | None:
@@ -306,6 +311,7 @@ def stage0_rotation(
         return Unreadable()
     # The rotation has no product: the configuration is read only for the scratch directory.
     cfg = Configuration.from_sources({"product_dir": str(stage0.CHECKOUT)}, environ)
+    root = root.resolve()
     store = FilesystemStage0Store(root)
     stack = GitStack(root / MIRROR)
     window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci)
@@ -321,6 +327,8 @@ def stage0_rotation(
         escalation=Stage0Escalation(repo.tracker, repo.inbox, store, print),
         prune=make_prune(root),
         products=installed,
+        heartbeats=FilesystemHeartbeats(root),
+        root=root,
     )
 
 

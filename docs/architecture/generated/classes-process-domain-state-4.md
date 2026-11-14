@@ -5,6 +5,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
   - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
+  - [domain: checks (parte 4)](classes-process-domain-checks-4.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
@@ -26,6 +27,10 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__ChangesRequested["ChangesRequested"]
+    class task__CheckRun["CheckRun"]
+    class task__CiCancelRerun["CiCancelRerun"]
+    class task__CiGhostDispatch["CiGhostDispatch"]
     class task__CiJobTiming["CiJobTiming"]
     class task__CiLogRecord["CiLogRecord"]
     class task__CiSpeculation["CiSpeculation"]
@@ -36,15 +41,4 @@ classDiagram
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
-    class task__EstimateRevision["EstimateRevision"]
-    class task__EvaluatedPatch["EvaluatedPatch"]
-    class task__EvaluationRef["EvaluationRef"]
-    class task__Failure["Failure"]
 ```
-
-## Relaciones con otras páginas
-
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
