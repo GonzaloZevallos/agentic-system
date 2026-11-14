@@ -67,8 +67,14 @@ def test_remaining_depends_on_an_extracted_id_is_refused() -> None:
 
 
 def test_integration_naming_an_extracted_id_is_refused_as_a_whole_word() -> None:
-    assert any("integration" in r for r in carve_out.validate(_carve(), _plan()))
-    assert carve_out.validate(_carve(), _plan("wire a baby")) == []
+    refused = carve_out.validate(_carve(integration="wire a and b"), _plan(""))
+    assert any("integration" in r for r in refused)
+    assert carve_out.validate(_carve(integration="wire a baby"), _plan("")) == []
+
+
+def test_original_plan_integration_naming_extracted_ids_is_not_refused() -> None:
+    # The original integration wires every subtask; only the redeclared one is judged.
+    assert carve_out.validate(_carve(integration="wire a"), _plan()) == []
 
 
 def test_invalid_kind_and_multiline_green_are_refused() -> None:

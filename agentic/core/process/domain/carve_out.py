@@ -119,10 +119,12 @@ def validate(carve: CarveOut, plan_output: Mapping[str, object]) -> list[str]:
         named = [d for d in deps if d in extracted] if isinstance(deps, list) else []
         if named:
             refusals.append(f"remaining subtask {sub.get('id')!r} depends on extracted {named}")
-    integration = str(plan_output.get("integration") or "")
+    # The original plan's integration usually wires every subtask; what becomes the
+    # remainder's integration is the redeclared text, so that is what must not name them.
+    integration = str(carve.get("integration") or "")
     for step in steps:
         if re.search(rf"(?<![\w-]){re.escape(step)}(?![\w-])", integration):
-            refusals.append(f"the plan's integration names the extracted id {step!r}")
+            refusals.append(f"the redeclared integration names the extracted id {step!r}")
     if carve["kind"] not in KINDS:
         refusals.append(f"kind {carve['kind']!r} is not one of {list(KINDS)}")
     if "\n" in carve["remainder_green"]:
