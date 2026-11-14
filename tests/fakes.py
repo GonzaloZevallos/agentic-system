@@ -105,7 +105,7 @@ from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.size_budget import NumstatRow
-from agentic.core.process.domain.spec_brief import block_name_ok
+from agentic.core.process.domain.spec_brief import SPEC_BLOCKS, block_name_ok
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -394,7 +394,10 @@ class MemoryPrompts:
     `blocks` are the Spec blocks by name: a text is served, an exception is raised. They are
     read live on every `spec_block`, on purpose, so a test can change one mid-run; the
     snapshot is `FilesystemPrompts`'s own and its adapter test shows it. Every requested name
-    lands in `block_calls`, so a test can assert that no call happened."""
+    lands in `block_calls`, so a test can assert that no call happened. Built with no `blocks`,
+    the double serves an empty block for any valid name the shipped table names, so a run with a
+    spec keeps the system prompt it would have without one; a test about the blocks passes its
+    own `blocks`, and a name that table does not hold is refused as in the adapter."""
 
     def __init__(
         self,
@@ -405,6 +408,7 @@ class MemoryPrompts:
     ):
         self.overrides = overrides
         self.blocks: dict[str, str | OSError | ValueError] = {} if blocks is None else blocks
+        self._shipped = frozenset(SPEC_BLOCKS.values()) if blocks is None else frozenset()
         self.block_calls: list[str] = []
         self._read: dict[str, tuple[str, Path] | OSError | UnicodeDecodeError] = {}
         for slug in {role.slug for role in ROLES}:
@@ -424,6 +428,8 @@ class MemoryPrompts:
         if not block_name_ok(name):
             raise ValueError(f"{name!r} is not a valid spec block name")
         if name not in self.blocks:
+            if name in self._shipped:
+                return ""
             raise ValueError(f"no spec block {name!r}")
         held = self.blocks[name]
         if isinstance(held, (OSError, ValueError)):
