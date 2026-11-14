@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 21
-summarised: 212
+summaries: 22
+summarised: 222
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -1082,3 +1082,13 @@ tasks:
     cost_usd: 0.044
   GH-737@review:
     cost_usd: 0.0424
+  GH-644@review:
+    cost_usd: 0.0726
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-644
