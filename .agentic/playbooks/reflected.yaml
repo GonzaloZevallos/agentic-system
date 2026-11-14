@@ -1058,3 +1058,5 @@ tasks:
     decisions: 2
   GH-705@review:
     cost_usd: 0.0
+  GH-731@review:
+    cost_usd: 0.0
