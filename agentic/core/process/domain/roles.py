@@ -53,6 +53,9 @@ from .task import INTEGRATION
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
+# Placeholders that, alone on their line with an empty value, take the whole line and its
+# break with them (`render`); every other placeholder is filled in place, empty or not.
+LINE_PLACEHOLDERS = frozenset({"drawing_rule"})
 
 
 # The families of criteria documents a role may read (ADR-0055).
@@ -145,7 +148,15 @@ def render(raw: str, source: Path, **placeholders: object) -> Prompt:
             raise ValueError(f"{source}: no value for placeholder {{{{{key}}}}}")
         return str(values[key])
 
-    return Prompt(text=_PLACEHOLDER.sub(fill, raw), hash=prompt_hash(raw), source=source)
+    text = raw
+    for name in sorted(LINE_PLACEHOLDERS):
+        if name in values and str(values[name]) == "":
+            text = _line_pattern(name).sub("", text)
+    return Prompt(text=_PLACEHOLDER.sub(fill, text), hash=prompt_hash(raw), source=source)
+
+
+def _line_pattern(name: str) -> re.Pattern[str]:
+    return re.compile(rf"(?m)^[ \t]*\{{\{{{re.escape(name)}\}}\}}[ \t]*(?:\r?\n|\Z)")
 
 
 def prompt_hash(raw: str) -> str:

@@ -66,6 +66,7 @@ from ..domain import (
     account_reset,
     cost_history,
     document,
+    drawing,
     plan_view,
     playbook,
     rules,
@@ -377,17 +378,36 @@ def load_prompt(
     return with_playbook(raw, rendered, role, ports, tiers)
 
 
+def _base(state: TaskState, ports: Ports) -> str:
+    """What `checkouts.task_base` answers: the commit the task started from, the product's
+    HEAD without one. Not imported from there, so that the support page of the package docs
+    does not split in two for one edge; the two are one line each."""
+    return ports.workspace.base_of(rules.task_branch(state["id"])) or "HEAD"
+
+
 def render_role_prompt(
     role: Role,
     cfg: Configuration,
     ports: Ports,
     vocabulary: dict[str, str],
+    *,
+    drawing_rule_for: Callable[[], str] | None = None,
     **placeholders: object,
 ) -> tuple[str, Prompt]:
     """The raw text the port holds for the role and what `render` made of it: the one step
     of `load_prompt` that fails on the prompt's own text (a placeholder nobody fills, a
-    file the snapshot could not read) and not on the playbook, which is read live."""
+    file the snapshot could not read) and not on the playbook, which is read live.
+
+    `{{drawing_rule}}` reaches a prompt only through `drawing_rule_for`, called once and
+    only when the raw text holds the placeholder, so a stack that is never needed is never
+    read; whatever it raises propagates to the caller's `try`. Without the placeholder, or
+    without a supplier, the value is empty and `render` drops the line."""
+    if "drawing_rule" in placeholders:
+        raise ValueError("drawing_rule is supplied only through drawing_rule_for")
     raw, source = ports.prompts.raw(role)
+    if drawing_rule_for is not None and "{{drawing_rule}}" in raw:
+        placeholders["drawing_rule"] = drawing_rule_for()
+    placeholders.setdefault("drawing_rule", "")
     # PjM's `{{risk_areas}}` is the product's own menu when `classify` passes it, the built-in
     # one otherwise: a role run that never reads the stack still renders (GH-591).
     placeholders.setdefault("risk_areas", task_path.risk_menu(()))
@@ -1090,7 +1110,14 @@ async def run_role(
             # The data returns from the task document on a resume: checked before any prompt
             # is built, so a forged slice never reaches a model (no retry, no echo of the text).
             raise ValueError(f"spec data refused: {refusal}")
-        raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)
+        raw, rendered = render_role_prompt(
+            role,
+            cfg,
+            ports,
+            vocabulary,
+            drawing_rule_for=lambda: drawing.rule_for(ports.stack.design(_base(state, ports))),
+            **placeholders,
+        )
         # The constant block the table names for the role (ADR-0096): only with a spec and only
         # when this call builds the context itself (a caller that passes `prompt` is resuming
         # a session that already holds it). The empty table never gets here.
