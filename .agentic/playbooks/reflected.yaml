@@ -1045,3 +1045,14 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-718
+  GH-697@review:
+    cost_usd: 0.0982
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-697
+    decisions: 2
