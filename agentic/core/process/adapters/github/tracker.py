@@ -170,6 +170,21 @@ query($owner: String!, $repo: String!, $ref: String!) {
 """
 )
 
+# The CI of one commit by its oid, for the stage0 window's reader (GH-704): the same rollup and
+# suites as a branch read, without `_WATCHED_SUITES`: the window does not look for ghost runs.
+COMMIT_CI_QUERY = (
+    """
+query($owner: String!, $repo: String!, $oid: GitObjectID!) {
+  repository(owner: $owner, name: $repo) {
+    object(oid: $oid) { ... on Commit { oid """
+    + _ROLLUP
+    + _SUITES
+    + """ } }
+  }
+}
+"""
+)
+
 _WATCHED_BRANCH_CI_QUERY = (
     """
 query($owner: String!, $repo: String!, $ref: String!) {
@@ -299,6 +314,24 @@ def _suite_run_ids(commit: object) -> tuple[frozenset[str], frozenset[str]]:
         if isinstance(status, str) and status != "COMPLETED":
             running.add(str(run_id))
     return frozenset(cancelled), frozenset(running)
+
+
+def commit_report(target: object) -> CiReport:
+    """The `CiReport` of a GraphQL `Commit` object, with no pull request: `base_ref`, `base_sha`
+    and `opened_at` are None. The one place a branch read and a by-sha read build it. Raises
+    `_Unreadable`, `KeyError` or `TypeError` for an answer that is not whole: the caller maps it."""
+    head_sha, checks = _commit_ci(target)
+    cancelled_runs, running_runs = _suite_run_ids(target)
+    return CiReport(
+        head_sha=head_sha,
+        base_ref=None,
+        base_sha=None,
+        opened_at=None,
+        checks=checks,
+        runs_completed=_runs_completed(target),
+        cancelled_runs=cancelled_runs,
+        running_runs=running_runs,
+    )
 
 
 def _queued_empty_runs(commit: object) -> frozenset[str]:
@@ -841,7 +874,7 @@ class GhTracker:
             number = pull_request_number(reference)
         except ValueError:
             return CiUnreadable("gh_unreadable")
-        answer = self._graphql(
+        answer = self.graphql(
             _PULL_REQUEST_CI_QUERY,
             ("-F", "owner={owner}", "-F", "repo={repo}", "-F", f"number={number}"),
         )
@@ -880,7 +913,7 @@ class GhTracker:
             if check.name != declared.check or check.conclusion not in _RED or run_id is None:
                 out.append(check)
                 continue
-            answer = self._graphql(_STEPS_QUERY, ("-F", f"id={run_id}"))
+            answer = self.graphql(_STEPS_QUERY, ("-F", f"id={run_id}"))
             step = None if isinstance(answer, CiUnreadable) else _failed_step_in(answer)
             out.append(replace(check, failed_step=step))
         return tuple(out)
@@ -902,7 +935,7 @@ class GhTracker:
     def _read_branch(self, query: str, branch: str) -> tuple[CiReport, object] | CiUnreadable:
         """The latest commit of `branch` read with `query`: its report and the GraphQL commit it
         was built from, so a caller can read more off the same answer."""
-        answer = self._graphql(
+        answer = self.graphql(
             query,
             ("-F", "owner={owner}", "-F", "repo={repo}", "-f", f"ref=refs/heads/{branch}"),
         )
@@ -910,20 +943,9 @@ class GhTracker:
             return answer
         try:
             target = answer["data"]["repository"]["ref"]["target"]
-            head_sha, checks = _commit_ci(target)
+            report = commit_report(target)
         except (_Unreadable, KeyError, TypeError):
             return CiUnreadable("gh_unreadable")
-        cancelled_runs, running_runs = _suite_run_ids(target)
-        report = CiReport(
-            head_sha=head_sha,
-            base_ref=None,
-            base_sha=None,
-            opened_at=None,
-            checks=checks,
-            runs_completed=_runs_completed(target),
-            cancelled_runs=cancelled_runs,
-            running_runs=running_runs,
-        )
         return report, target
 
     def dispatch_ci(
@@ -1033,7 +1055,7 @@ class GhTracker:
         except json.JSONDecodeError:
             return CiUnreadable("gh_unreadable")
 
-    def _graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
+    def graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
         """One `gh api graphql` call, its JSON object or the class of its failure."""
         answer = self._read_json("api", "graphql", "-f", f"query={query}", *fields)
         return answer if isinstance(answer, dict | CiUnreadable) else CiUnreadable("gh_unreadable")

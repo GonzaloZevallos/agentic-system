@@ -24,6 +24,7 @@ classDiagram
     class reflect_run__Outcome["Outcome"]
     class reflect_run__SystemRepo["SystemRepo"]
     class stack_review__StackReview["StackReview"]
+    class stage0_escalation__Stage0Escalation["Stage0Escalation"]
     class stage0_failure__SmokeFailurePolicy["SmokeFailurePolicy"]
 ```
 
