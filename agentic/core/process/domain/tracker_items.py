@@ -281,7 +281,12 @@ def question_line(item: HumanItem) -> str:
 def escalate_human(state: Mapping[str, Any], at: str) -> dict[str, Any]:
     """The patch that raises the unanswered `human` items as a `questions` escalation, `{}` when
     there is nothing new to raise. Pure: `at` is the instant the caller stamped. An item whose
-    hash is already in `tracker_human` is not raised twice; the pending hashes stay pending."""
+    hash is already in `tracker_human` is not raised twice; the pending hashes stay pending.
+
+    The second fence of GH-594: it passes `spec=state.get("spec")` and no `spec_cause`, so under
+    a spec `rules.escalation` raises `ValueError`. That is deliberate: a spec delivery never asks
+    the owner through a `human` item, `schemas.plan_check_for` refuses such a plan first, and a
+    document that reached this point under a spec has a bug to see, not a question to ask."""
     from . import rules
 
     pending: list[str] = list(state.get("tracker_human", []))
@@ -299,7 +304,12 @@ def escalate_human(state: Mapping[str, Any], at: str) -> dict[str, Any]:
     return rules.logged(
         {
             "status": "waiting_on_human",
-            **rules.escalation("questions", reason, tracker_human=[*pending, *hashes]),
+            **rules.escalation(
+                "questions",
+                reason,
+                tracker_human=[*pending, *hashes],
+                spec=state.get("spec"),
+            ),
             "questions_for_human": [question_line(item) for item in fresh],
             "tracker_actions_done": {h: {"at": at} for h in hashes},
         },

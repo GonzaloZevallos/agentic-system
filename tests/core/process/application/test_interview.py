@@ -1023,6 +1023,7 @@ async def test_an_undecided_spec_conflict_escalates_in_that_round_with_its_cause
     assert runner.slugs == [TL_ASK_P, TL_ANSWER_P]
     assert patch["status"] == "waiting_on_human"
     assert patch["escalation_class"] == "questions" and patch["spec_cause"] == "conflict"
+    assert len(patch["questions_for_human"]) == 1
     assert patch["escalated"] == "Spec conflict raised in interview round 1"
     section = patch["sections"]["Interview: Tech Lead efímero→Tech Lead"]
     assert "### Round 1: questions" in section and "### Round 1: answers" in section

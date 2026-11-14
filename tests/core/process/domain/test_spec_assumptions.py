@@ -19,10 +19,14 @@ from agentic.core.process.domain.schemas import (
     TechPlanWithAssumptions,
 )
 from agentic.core.process.domain.spec_assumptions import (
+    ESCALATE,
     SPEC_SCHEMAS,
     assumption_rows,
     conflict_decided,
+    conflict_escalation,
+    conflict_question,
     conflict_reason,
+    conflict_step,
     interview_doubts,
     schema_for,
 )
@@ -61,7 +65,7 @@ BASE_INPUT = {
     },
 }
 NEW_FIELDS = {
-    TechPlan: {"assumptions"},
+    TechPlan: {"assumptions", "spec_conflict"},
     FinalValidation: {"assumptions"},
     TechAnswers: {"assumptions", "spec_conflict"},
     PlatformAnswers: {"assumptions", "spec_conflict"},
@@ -232,14 +236,93 @@ FAILURE = {"kind": "failure", "value": "rate_limit", "section": "s"}
     ],
 )
 def test_conflict_decided_reads_a_questions_escalation_followed_by_a_resume(log, decided):
-    assert conflict_decided(log) is decided
+    assert conflict_decided(log, "contradiction") is decided
 
 
-def test_conflict_decided_counts_a_questions_escalation_from_any_raiser_over_approximation():
-    # EscalationPauseEntry has no spec cause: a landing or interview question that was resumed
-    # counts as a decided conflict too. Narrowing it needs a cause field (separate task).
+def test_conflict_decided_counts_a_legacy_questions_escalation_from_any_raiser():
+    # An entry with no spec_cause keeps the old reading: any resumed `questions` pause counts.
     log = [{**esc("questions"), "cause": "no_verdict"}, RESUMED]
-    assert conflict_decided(log) is True
+    assert conflict_decided(log, "data_loss") is True
+
+
+def spec_esc(cause):
+    return {**esc("questions"), "spec_cause": cause}
+
+
+C, D, K = spec_esc("contradiction"), spec_esc("data_loss"), spec_esc("conflict")
+LEGACY = esc("questions")
+
+
+@pytest.mark.parametrize(
+    ("log", "cause", "decided"),
+    [
+        ([C, RESUMED, D], "data_loss", False),
+        ([C, RESUMED, D], "contradiction", True),
+        ([C, RESUMED, C], "contradiction", False),
+        ([C, RESUMED, C, RESUMED], "contradiction", True),
+        ([D, RESUMED, C], "contradiction", False),
+        ([LEGACY, RESUMED], "contradiction", True),
+        ([LEGACY, RESUMED], "conflict", True),
+        ([LEGACY], "data_loss", False),
+        ([], "data_loss", False),
+        ([LEGACY, RESUMED, D], "data_loss", False),
+        ([K, RESUMED, LEGACY], "conflict", True),  # entries carrying the cause alone decide
+        ([K, LEGACY, RESUMED], "conflict", True),
+        ([K, RESUMED, K, LEGACY, RESUMED], "conflict", True),
+        ([LEGACY, RESUMED, K], "conflict", False),
+    ],
+)
+def test_conflict_decided_is_keyed_on_the_cause(log, cause, decided):
+    assert conflict_decided(log, cause) is decided
+
+
+def test_conflict_step_escalates_until_the_owner_decided_and_then_names_the_cause():
+    undecided = {"pause_log": [C]}
+    decided = {"pause_log": [C, RESUMED]}
+    assert conflict_step(undecided, "contradiction") == ESCALATE == "escalate"
+    assert (
+        conflict_step(decided, "contradiction")
+        == "spec conflict (contradiction) settled by the owner's decision"
+    )
+    assert conflict_step(decided, "data_loss") == ESCALATE
+    assert conflict_step({}, "conflict") == ESCALATE
+
+
+@pytest.mark.parametrize("cause", ["contradiction", "conflict", "data_loss"])
+@pytest.mark.parametrize("where", ["plan", "interview"])
+def test_conflict_question_is_one_fixed_line_naming_the_cause(cause, where):
+    line = conflict_question(cause, where)
+    assert line.startswith(f"Spec {cause}: ")
+    assert len(line) <= 240
+    assert "\n" not in line
+    pointer = (
+        "see the Tech Lead section of the task document"
+        if where == "plan"
+        else "see the solution interview in the task document"
+    )
+    assert line.endswith(f"({pointer})")
+
+
+def test_conflict_escalation_writes_the_cause_the_status_and_one_question_line():
+    state = {"spec": {"path": "spec.md"}}
+    patch = conflict_escalation(state, "data_loss", "why", "plan", "2026-11-13T00:00:00Z")
+    assert patch["spec_cause"] == "data_loss"
+    assert patch["escalation_class"] == "questions"
+    assert patch["status"] == "waiting_on_human"
+    assert patch["questions_for_human"] == [conflict_question("data_loss", "plan")]
+    assert patch["pause_log"] == [
+        {
+            "kind": "escalation",
+            "value": "questions",
+            "at": "2026-11-13T00:00:00Z",
+            "spec_cause": "data_loss",
+        }
+    ]
+
+
+def test_conflict_escalation_needs_a_spec():
+    with pytest.raises(KeyError):
+        conflict_escalation({}, "conflict", "why", "plan", "2026-11-13T00:00:00Z")
 
 
 def test_conflict_reason_is_one_line_naming_the_cause_and_the_round():

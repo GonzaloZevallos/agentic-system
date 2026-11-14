@@ -351,3 +351,16 @@ def test_the_keys_of_the_kind_are_the_only_ones_a_performed_kind_takes(every_kin
         tracker_items.parse([{**COMMENT, "question": "q"}])
     with pytest.raises(ValueError, match="missing its body"):
         tracker_items.parse([{"kind": "open_issue", "title": "t"}])
+
+
+def test_escalate_human_under_a_spec_raises_instead_of_asking_the_owner():
+    spec = {"path": "docs/specs/a.md"}
+    with pytest.raises(ValueError, match="spec_cause"):
+        tracker_items.escalate_human({"tracker_items": [ITEM], "spec": spec}, AT)
+
+
+def test_escalate_human_with_the_graphs_empty_spec_is_the_patch_of_today():
+    plain = tracker_items.escalate_human({"tracker_items": [ITEM]}, AT)
+    assert tracker_items.escalate_human({"tracker_items": [ITEM], "spec": {}}, AT) == plain
+    assert "spec_cause" not in plain
+    assert plain["pause_log"] == [{"kind": "escalation", "value": "questions", "at": AT}]
