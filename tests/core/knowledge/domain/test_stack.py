@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
-from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.design import Capture, Design
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.presubmit import FAILED_IDS_TOKEN
 from agentic.core.process.domain.suppressions import Forbidden
@@ -237,6 +237,79 @@ def test_a_broken_design_declaration_raises_at_load(design):
     declared = {"checks": {"tests": "pytest"}, "design": design}
     with pytest.raises(ValueError, match="stack.yaml: expected|unknown"):
         stack.design(declared, "stack.yaml")
+
+
+def _with_captures(captures):
+    return {
+        "checks": {"tests": "pytest"},
+        "design": {"prototype": "pantallas", "entry": "Home", "captures": captures},
+    }
+
+
+def test_the_blocks_without_captures_load_with_none():
+    declared = {"design": {"prototype": "pantallas", "entry": "Home"}}
+    found = stack.design(declared, "x")
+    assert found is not None
+    assert found.captures == ()
+
+
+def test_captures_load_with_and_without_paths():
+    declared = _with_captures(
+        [
+            {"image": "docs/shots/./home.png", "screen": "Home"},
+            {"image": "docs/shots/list.png", "screen": "List", "paths": ["app/list/*", "ui/*.tsx"]},
+        ]
+    )
+    found = stack.design(declared, "x")
+    assert found is not None
+    assert found.captures == (
+        Capture(image="docs/shots/home.png", screen="Home"),
+        Capture(image="docs/shots/list.png", screen="List", paths=("app/list/*", "ui/*.tsx")),
+    )
+
+
+def test_the_captures_check_is_textual_and_never_touches_the_filesystem(tmp_path, monkeypatch):
+    # The image does not exist, and no filesystem call is made to find out.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "link.png").symlink_to(tmp_path / "missing.png")
+    found = stack.design(_with_captures([{"image": "link.png", "screen": "Home"}]), "x")
+    assert found is not None
+    assert found.captures[0].image == "link.png"
+
+
+@pytest.mark.parametrize(
+    "captures",
+    [
+        [],  # empty list
+        {"image": "a.png", "screen": "A"},  # not a list
+        "a.png",  # not a list
+        ["a.png"],  # an entry that is not a mapping
+        [{"image": "a.png", "screen": "A", "alt": "x"}],  # unknown key
+        [{"image": "", "screen": "A"}],  # empty image
+        [{"image": "  ", "screen": "A"}],  # blank image
+        [{"screen": "A"}],  # missing image
+        [{"image": "a.png", "screen": ""}],  # empty screen
+        [{"image": "a.png"}],  # missing screen
+        [{"image": "a.png", "screen": "A", "paths": []}],  # empty paths
+        [{"image": "a.png", "screen": "A", "paths": "app/*"}],  # paths not a list
+        [{"image": "a.png", "screen": "A", "paths": ["app/*", 3]}],  # non-string path
+        [{"image": "a.png", "screen": "A", "paths": [""]}],  # blank path
+        [{"image": "a.png", "screen": "A"}, {"image": "./a.png", "screen": "B"}],  # dup image
+        [{"image": "a.png", "screen": "A"}, {"image": "b.png", "screen": "A"}],  # dup screen
+        [{"image": "/abs/a.png", "screen": "A"}],  # absolute image
+        [{"image": "../a.png", "screen": "A"}],  # escapes with ..
+        [{"image": "x/../../a.png", "screen": "A"}],  # escapes after normpath
+        [{"image": ".", "screen": "A"}],  # normalises to .
+        [{"image": "x/..", "screen": "A"}],  # normalises to .
+        [{"image": "shots/", "screen": "A"}],  # a directory
+        [{"image": "shots\\a.png", "screen": "A"}],  # backslash
+        [{"image": "a.png", "screen": "A", "paths": ["/app/*"]}],  # absolute glob
+        [{"image": "a.png", "screen": "A", "paths": ["app/../../*"]}],  # glob escapes
+    ],
+)
+def test_a_broken_captures_declaration_raises_at_load(captures):
+    with pytest.raises(ValueError, match="stack.yaml: .*captures"):
+        stack.design(_with_captures(captures), "stack.yaml")
 
 
 def test_the_template_declares_no_design_block(tmp_path):

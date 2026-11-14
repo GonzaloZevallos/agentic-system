@@ -96,6 +96,11 @@ Lo que el producto declara en su stack para que UX y UI Lead vean pantallas: dó
 _Avoid_: design system (es una parte del diseño, la de tokens y componentes), mockups
 _Campo_: sin término de arte; la clave se llama `design` en el archivo
 
+**Dibujo aprobado**:
+El prototipo declarado en `design` más sus capturas (`captures`), leídos del commit base de la tarea y no de la rama: una tarea que edita el bloque no cambia el dibujo contra el que se mide. En el código son `Design.prototype` y `Design.captures` (`Capture`: imagen, pantalla y, opcional, los globs de los archivos que la implementan). La comprobación de rutas es solo textual: no toca el sistema de archivos, no resuelve enlaces simbólicos y no verifica que la imagen exista.
+_Avoid_: mockup, diseño del humano (es el dibujo, no el diseño del producto)
+_Campo_: sin término de arte
+
 **Prototipo**:
 Las pantallas del diseño del humano, estáticas y enlazadas entre sí, que se pueden recorrer en un navegador sin la app. Es el diseño que manda: el sistema nunca lo cambia por su cuenta.
 _Avoid_: mockup, maqueta, lienzo (el lienzo es donde el humano lo diseñó; el prototipo es lo que el producto guarda en su repo)
