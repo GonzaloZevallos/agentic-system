@@ -1,9 +1,10 @@
-Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 3, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 1 de 4, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
   - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
+  - [domain: checks (parte 4)](classes-process-domain-checks-4.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
@@ -38,9 +39,6 @@ classDiagram
     class ci__CiUnreadable["CiUnreadable"]
     class ci__CiVerdict["CiVerdict"]
     class ci__DispatchedRun["DispatchedRun"]
-    class ci__FullTierVerdict["FullTierVerdict"]
-    class ci__GhostWatch["GhostWatch"]
-    class ci__JobLog["JobLog"]
     check_schedule__Entry --> check_schedule__CheckPriority
     check_schedule__Request --> check_schedule__CheckPriority
 ```

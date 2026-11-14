@@ -1,9 +1,10 @@
-Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 3, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `checks` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 4, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
   - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
+  - [domain: checks (parte 4)](classes-process-domain-checks-4.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)
@@ -26,6 +27,11 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
 
 ```mermaid
 classDiagram
+    class ci__FailingHeader["FailingHeader"]
+    class ci__FullTierVerdict["FullTierVerdict"]
+    class ci__GhostWatch["GhostWatch"]
+    class ci__HeaderScan["HeaderScan"]
+    class ci__JobLog["JobLog"]
     class ci_workflow__WorkflowNames["WorkflowNames"]
     class ci_workflow__WrongId["WrongId"]
     class coverage__Entry["Entry"]
@@ -33,14 +39,5 @@ classDiagram
     class coverage__Refusal["Refusal"]
     class coverage__Rejected["Rejected"]
     class merge_ci__PairCounts["PairCounts"]
-    class performance__Limit["Limit"]
-    class performance__Measurement["Measurement"]
-    class performance__MetricResult["MetricResult"]
-    class performance__Result["Result"]
-    class performance__Run["Run"]
-    class performance__Scenario["Scenario"]
-    class presubmit__AffectedPlan["AffectedPlan"]
-    class presubmit__ApiBreakLine["ApiBreakLine"]
     coverage__Rejected --> coverage__Refusal
-    performance__MetricResult --> performance__Limit
 ```

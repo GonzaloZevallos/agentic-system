@@ -4,6 +4,7 @@ Esta página es el índice de los diagramas de clases de `agentic.core.process.d
   - [domain: checks (parte 1)](classes-process-domain-checks-1.md)
   - [domain: checks (parte 2)](classes-process-domain-checks-2.md)
   - [domain: checks (parte 3)](classes-process-domain-checks-3.md)
+  - [domain: checks (parte 4)](classes-process-domain-checks-4.md)
   - [domain: landing (parte 1)](classes-process-domain-landing-1.md)
   - [domain: landing (parte 2)](classes-process-domain-landing-2.md)
   - [domain: landing (parte 3)](classes-process-domain-landing-3.md)

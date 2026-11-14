@@ -140,6 +140,15 @@ class JobLog:
     truncated_bytes: int
 
 
+# `<job>\t<step>\t<timestamp> <text>` is how `gh run view --log-failed` prints a line, with a
+# byte order mark before the first timestamp (GH-449). Moved here unchanged from `landing`: the
+# one copy, shared by the excerpt and the header reader.
+LOG_PREFIX = re.compile(
+    r"^(?:(?P<job>[^\t]*)\t(?P<step>[^\t]*)\t)?\ufeff?"
+    r"(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?)?"
+)
+
+
 @dataclass(frozen=True)
 class CiVerdict:
     """`failing` is the red runs of the declared checks, in declared order; `missing` the
@@ -443,6 +452,14 @@ def red_checks(report: CiReport) -> tuple[CiCheck, ...]:
         for check in current_runs(report)
         if _is_red(check) and not cancelled_run(report, check)
     )
+
+
+def log_candidates(report: CiReport, declared: tuple[str, ...]) -> tuple[CiCheck, ...]:
+    """The runs a log is worth fetching for: `red_checks(report)` with the runs whose name is
+    exactly a declared `ci:` name after all the others (the aggregate says less than the
+    shards it waits on), report order inside each group."""
+    red = red_checks(report)
+    return (*(c for c in red if c.name not in declared), *(c for c in red if c.name in declared))
 
 
 def pending_names(report: CiReport, declared: tuple[str, ...]) -> tuple[str, ...]:
@@ -1171,3 +1188,136 @@ def parse_flake_blocks(
             for check, ids in last.items()
         ]
     return records
+
+
+# What the failing tests of a red job's log are called, read from the two formats the product's
+# CI prints (GH-740): pytest's short summary and Playwright's list reporter. Fixed formats, not
+# the `test_id` pattern a product declares: `presubmit.failed_ids` stays the one reader of that.
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_PYTEST_SESSION = re.compile(r"^=+ test session starts\b")
+_PYTEST_SUMMARY = re.compile(r"^=+ short test summary info\b")
+_BANNER = re.compile(r"^=+ .* =+\s*$")
+_PLAYWRIGHT_HEADER = re.compile(r"^\s*\d+\) (\[[^\]]*\] › .*)$")
+_PLAYWRIGHT_RULE = re.compile(r"\s*─+\s*$")
+_PLAYWRIGHT_RETRY = re.compile(r"\s*\(retry #\d+\)\s*$")
+_PLAYWRIGHT_POSITION = re.compile(r":\d+:\d+$")
+# Anchored at the start of a line already stripped of gh's prefix and ANSI: the first line of a
+# test's error under a header, in pytest (`E   `) and Playwright (`TimeoutError:`).
+ERROR_LINE = re.compile(r"^\s*(?:E   |\w*Error:)")
+
+
+def strip_ansi(text: str) -> str:
+    """`text` without ANSI CSI escape sequences (colours, cursor moves)."""
+    return _ANSI.sub("", text)
+
+
+@dataclass(frozen=True)
+class FailingHeader:
+    """One failing test's header in a log: the index of its line in `text.splitlines()` and
+    its id."""
+
+    line: int
+    id: str
+
+
+@dataclass(frozen=True)
+class HeaderScan:
+    """The headers of a log in log order, each id once, and how many ids were `dropped` for
+    being unfit to travel (too long, or holding a forbidden token or a control character)."""
+
+    headers: tuple[FailingHeader, ...]
+    dropped: int
+
+
+def _clean_lines(text: str) -> list[str]:
+    """Each line of `text` without gh's prefix and without ANSI escapes."""
+    lines: list[str] = []
+    for raw in text.splitlines():
+        found = LOG_PREFIX.match(raw)
+        assert found is not None  # every group of the pattern is optional
+        lines.append(strip_ansi(raw[found.end() :]))
+    return lines
+
+
+def _pytest_ids(lines: Sequence[str]) -> list[tuple[int, str]]:
+    """`(line, id)` of the `FAILED` lines of the last session's short summary, none when that
+    session printed no summary."""
+    start = max((i for i, text in enumerate(lines) if _PYTEST_SESSION.match(text)), default=-1)
+    summary = next(
+        (i for i in range(start + 1, len(lines)) if _PYTEST_SUMMARY.match(lines[i])), None
+    )
+    if start < 0 or summary is None:
+        return []
+    found: list[tuple[int, str]] = []
+    for i in range(summary + 1, len(lines)):
+        if _BANNER.match(lines[i]):
+            break
+        if lines[i].startswith("FAILED "):
+            found.append((i, lines[i][len("FAILED ") :].partition(" - ")[0].strip()))
+    return found
+
+
+def _playwright_id(text: str) -> str | None:
+    """The id of a Playwright header line, without the trailing rule, the `(retry #N)` suffix
+    and the `:line:col` of its path; `None` for a line that is not a numbered header."""
+    found = _PLAYWRIGHT_HEADER.match(text)
+    if found is None:
+        return None
+    title = _PLAYWRIGHT_RETRY.sub("", _PLAYWRIGHT_RULE.sub("", found.group(1)))
+    project, _, rest = title.partition(" › ")
+    path, sep, tail = rest.partition(" › ")
+    path = _PLAYWRIGHT_POSITION.sub("", path)
+    return f"{project} › {path}{sep}{tail}".rstrip()
+
+
+def _fit_to_travel(item: str) -> bool:
+    return (
+        0 < len(item) <= FLAKE_ID_MAX_CHARS
+        and not any(bad in item for bad in ID_FORBIDDEN)
+        and not any(ord(c) < 32 or ord(c) == 127 for c in item)
+    )
+
+
+def scan_headers(text: str) -> HeaderScan:
+    """The failing tests a log names, pytest's and Playwright's, in log order and each id once.
+    An id that is too long or holds a forbidden token or a control character is dropped, never
+    truncated (a cut id could be another test's), and counted in `dropped`. Pure."""
+    lines = _clean_lines(text)
+    found = _pytest_ids(lines)
+    for i, clean in enumerate(lines):
+        playwright = _playwright_id(clean)
+        if playwright is not None:
+            found.append((i, playwright))
+    headers: list[FailingHeader] = []
+    seen: set[str] = set()
+    dropped = 0
+    for i, item in sorted(found):
+        if item in seen:
+            continue
+        seen.add(item)
+        if _fit_to_travel(item):
+            headers.append(FailingHeader(i, item))
+        else:
+            dropped += 1
+    return HeaderScan(tuple(headers), dropped)
+
+
+def failing_headers(text: str) -> tuple[FailingHeader, ...]:
+    """The headers `scan_headers` recognises, in log order."""
+    return scan_headers(text).headers
+
+
+def failed_tests(text: str) -> frozenset[str]:
+    """The ids of `failing_headers(text)`; the empty set for a format not recognised."""
+    return frozenset(header.id for header in failing_headers(text))
+
+
+def failing_set(log: JobLog) -> frozenset[str] | None:
+    """The failing test ids of one job's log, or `None` when the log cannot say: it was not
+    read, was cut short, is empty, shows no header, or showed an id that was dropped."""
+    if log.cause != "read" or log.truncated_bytes > 0 or not log.text:
+        return None
+    scan = scan_headers(log.text)
+    if not scan.headers or scan.dropped:
+        return None
+    return frozenset(header.id for header in scan.headers)
