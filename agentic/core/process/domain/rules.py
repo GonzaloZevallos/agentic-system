@@ -1071,8 +1071,12 @@ def design_step(state: TaskState) -> str | None:
     The last rung is the texts (`write_copy`, README.md 4): due on a feature that touches
     copy once the design branch, when it applies, is done, and no `Tech Writer` run is
     newer than the latest Product Analyst run and the latest consolidation. The name stays
-    though the ladder is no longer only the design's."""
-    if not (design_applies(state) or copy_applies(state)):
+    though the ladder is no longer only the design's.
+
+    `None` for a spec delivery (GH-594): the slice carries the screens, so no design node or
+    texts run. It reads `spec_delivery`, not `skips_definition`: the light path must not
+    silence the ladder for a task promoted to full."""
+    if spec_delivery(state) or not (design_applies(state) or copy_applies(state)):
         return None
     prd_idx = _latest_index(state, PRODUCT_ANALYST.name)
     if design_applies(state) and (step := _design_ladder(state, prd_idx)):
@@ -2522,7 +2526,11 @@ def promotion_pending(state: TaskState) -> bool:
     """Whether a promotion still owes the task the full path's first role (GH-591): `promotion`
     is set, the task is a feature or a bug and no run of the Product Analyst started after
     `promotion.at`. Always false for a platform task (nothing reruns, the cap is just lifted),
-    and for a promotion whose instant cannot be read (it could never be settled)."""
+    and for a promotion whose instant cannot be read (it could never be settled). Also false
+    for a spec delivery (GH-594): it has no definition stage to go back to, so the promotion
+    records `path: full` and nothing more."""
+    if spec_delivery(state):
+        return False
     promotion = state.get("promotion")
     role = _FIRST_ROLE.get(state.get("type", ""))
     if not promotion or role is None:
@@ -2540,10 +2548,12 @@ def promotion_pending(state: TaskState) -> bool:
 def promotion_route(state: TaskState) -> str | None:
     """The node a promoted task goes back to: the full path's first role while it is owed
     (`promotion_pending`), else `None`. The one place that answers it; `after_plan`,
-    `after_integrate` and the resume router call it first."""
+    `after_integrate` and the resume router call it first. `None` as well when the entry is
+    `plan` (`definition_entry`): going back there would loop the plan."""
     if not promotion_pending(state):
         return None
-    return FIRST_NODE[state["type"]]
+    entry = definition_entry(state, "define", light=False)
+    return None if entry == "plan" else entry
 
 
 def plan_over_cap_request(state: TaskState) -> task_path.PromoteRequest | None:
@@ -2565,16 +2575,29 @@ def after_classify(state: TaskState) -> str | None:
     definition stage and goes straight to the plan."""
     if state.get("escalated"):
         return None
-    if _light_skips_definition(state):
+    return definition_entry(state, "plan")
+
+
+def skips_definition(state: TaskState, *, light: bool = True) -> bool:
+    """Whether this task skips the definition stage and its design ladder (GH-591, GH-594).
+    The order of the reading: the type set (a feature or a bug; a task with no type never
+    skips, and a platform enhancement has no definition stage to skip), then a spec delivery,
+    then the light path. The one place the routers read both for it. `light=False` leaves the
+    light path out: a PM return and a promotion's way back never read it (GH-591), only a spec
+    delivery skips them."""
+    if state.get("type") not in ("feature", "bug"):
+        return False
+    return spec_delivery(state) or (light and task_path.path_of(state) == "light")
+
+
+def definition_entry(state: TaskState, default: str, *, light: bool = True) -> str:
+    """The first definition node of a task, or `plan` when it skips the definition
+    (`skips_definition`, which `light` passes on). The order: type set, spec, light path, then
+    the `FIRST_NODE` map with `default` for a type it does not hold. The only reader of
+    `FIRST_NODE`."""
+    if skips_definition(state, light=light):
         return "plan"
-    return FIRST_NODE.get(state.get("type", ""), "plan")
-
-
-def _light_skips_definition(state: TaskState) -> bool:
-    """Whether the light path skips the definition stage for this task (GH-591): a feature or a
-    bug on `light`. The one place the three routers below read the path for it; a platform
-    enhancement has no definition stage to skip."""
-    return task_path.path_of(state) == "light" and state.get("type") in ("feature", "bug")
+    return FIRST_NODE.get(state.get("type", ""), default)
 
 
 def after_define(state: TaskState) -> str | None:
@@ -2594,9 +2617,9 @@ def after_validate(state: TaskState) -> str | None:
         return None
     status = state.get("status", "")
     if status == "returned":
-        return FIRST_NODE.get(state.get("type", ""), "define")
+        return definition_entry(state, "define", light=False)
     if status == "definition_ready":
-        return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
+        return "plan" if skips_definition(state) else (design_step(state) or "plan")
     return {"discarded": "discard"}.get(status)
 
 
@@ -2624,8 +2647,8 @@ def after_consolidate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
     if state.get("status") == "returned":
-        return FIRST_NODE.get(state.get("type", ""), "define")
-    return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
+        return definition_entry(state, "define", light=False)
+    return "plan" if skips_definition(state) else (design_step(state) or "plan")
 
 
 def after_write_copy(state: TaskState) -> str | None:
@@ -3687,18 +3710,17 @@ def resume_target(state: TaskState) -> str | None:
     if status == "open":
         # The same fork as `after_classify`, plus the road back to PjM for a task that
         # paused before it had a type: only PjM turns the human's answer into one. A light
-        # feature or bug goes to the plan, as `after_classify` does (GH-591).
-        if _light_skips_definition(state):
-            return "plan"
-        return FIRST_NODE.get(state.get("type", ""), "classify")
+        # feature or bug goes to the plan, as `after_classify` does (GH-591), and so does a
+        # typed spec delivery (GH-594).
+        return definition_entry(state, "classify")
     if status == "returned":
-        return FIRST_NODE.get(state.get("type", ""), "define")
+        return definition_entry(state, "define", light=False)
     if status == "definition_ready":
         # Through the design branch first, on a feature PM flagged `touches_ui`
         # (ADR-0040): the same one function `after_validate` and every design node's
         # own `after_*` already call, so a resume lands exactly where the live routing
         # would have, however many lead returns or PRD versions came before the pause.
-        if _light_skips_definition(state):
+        if skips_definition(state):
             return "plan"
         return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
