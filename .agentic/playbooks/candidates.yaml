@@ -1836,3 +1836,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-14T06:34:09.754+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When a new test reads a repo file, run the repo-wide guard tests that map test reads to files, such as the affected-tests coverage guard, and register the read before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-732
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T11:56:31.470+00:00'
