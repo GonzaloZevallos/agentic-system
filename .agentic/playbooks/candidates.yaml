@@ -1855,3 +1855,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-14T12:29:27.628+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your diff changes a module's contract or wiring (a new port consumer, a new composition wiring), update the architecture docs in the same change and check that no sentence in them is now false.
+  confidence: medium
+  seen_in:
+  - GH-738
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T15:40:46.101+00:00'
