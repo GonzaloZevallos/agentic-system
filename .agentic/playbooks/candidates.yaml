@@ -1827,3 +1827,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-14T06:21:11.813+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a port, a public interface or a readable directory, update its row in the architecture docs in the same change, and check the docs diff before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-718
+  sources:
+  - finding
+  added_at: '2026-11-14T06:34:09.754+00:00'
