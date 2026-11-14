@@ -1030,3 +1030,6 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-714
+  GH-689@review:
+    cost_usd: 0.1012
+    decisions: 1

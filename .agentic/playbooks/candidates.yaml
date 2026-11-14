@@ -1808,3 +1808,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-14T04:28:57.680+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: Type each new function parameter with the exact type the caller's state holds, not a looser Mapping, and run the type check on the call site even when its package is outside the checked files.
+  confidence: medium
+  seen_in:
+  - GH-689
+  sources:
+  - finding
+  added_at: '2026-11-14T05:32:38.065+00:00'
