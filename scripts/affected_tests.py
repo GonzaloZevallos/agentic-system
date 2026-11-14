@@ -62,11 +62,6 @@ WALKERS = (
 )
 KNOWLEDGE = "agentic.core.knowledge.domain"
 TABLE: tuple[Row, ...] = (
-    Row(
-        "uv.lock",
-        ("tests/core/process/adapters/shell/test_stage0_candidate_integration.py",),
-        "the slow stage0 candidate test syncs the committed lock offline into a clone",
-    ),
     Row("agentic/*.py", WALKERS, "these walk every source file of the package with ast"),
     Row(
         "agentic/*.py",
