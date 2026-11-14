@@ -1846,3 +1846,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-14T11:56:31.470+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add or change a port, adapter or record, search the hand-written docs that describe that component and update them in the same change; regenerated pages alone are not enough.
+  confidence: medium
+  seen_in:
+  - GH-735
+  sources:
+  - finding
+  added_at: '2026-11-14T12:29:27.628+00:00'
