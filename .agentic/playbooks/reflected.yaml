@@ -1078,3 +1078,5 @@ tasks:
   GH-735@review:
     cost_usd: 0.0601
     decisions: 1
+  GH-690@review:
+    cost_usd: 0.044
