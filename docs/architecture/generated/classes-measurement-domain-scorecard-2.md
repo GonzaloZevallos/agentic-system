@@ -17,6 +17,7 @@ classDiagram
     class scorecard__TaskFigures["TaskFigures"]
     class scorecard__Verdict["Verdict"]
     class stages__Claim["Claim"]
+    class stages__StageSplit["StageSplit"]
     class stages__StageUnknown["StageUnknown"]
     scorecard__Scorecard --> scorecard__Figure
 ```
