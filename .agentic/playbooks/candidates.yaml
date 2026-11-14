@@ -1817,3 +1817,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-14T05:32:38.065+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: For each plan invariant, trace every input that can reach the guarded value, including text a later step redeclares or replaces, and make validation check each source, with a test that passes a violating value through it.
+  confidence: medium
+  seen_in:
+  - GH-720
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T06:21:11.813+00:00'
