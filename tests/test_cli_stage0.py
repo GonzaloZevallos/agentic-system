@@ -3,6 +3,7 @@ port doubles, so these tests pin the wiring and the exit codes, not the rotation
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -150,3 +151,38 @@ def test_the_origin_check_refuses_a_non_github_url_and_accepts_the_two_github_fo
         "",
     ):
         assert pattern.fullmatch(bad) is None
+
+
+def _checkout_with_origin(tmp_path: Path, url: str | None) -> Path:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    if url is not None:
+        subprocess.run(["git", "-C", str(checkout), "remote", "add", "origin", url], check=True)
+    return checkout
+
+
+def test_the_factory_wires_the_rotation_from_the_origin_of_the_checkout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    url = "https://github.com/acme/system.git"
+    monkeypatch.setattr(stage0, "CHECKOUT", _checkout_with_origin(tmp_path, url))
+
+    rotation = composition.stage0_rotation(tmp_path / "stages", {})
+
+    assert isinstance(rotation, composition.Stage0Rotation)
+    assert isinstance(rotation.products, composition.NoInstalledProducts)
+    assert rotation.window.remote_url == url
+    assert rotation.window.root == tmp_path / "stages"
+
+
+@pytest.mark.parametrize(
+    "url", ["https://example.com/acme/system.git", "git@alias:acme/s.git", None]
+)
+def test_the_factory_refuses_an_origin_that_is_not_github_before_building_anything(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, url: str | None
+) -> None:
+    monkeypatch.setattr(stage0, "CHECKOUT", _checkout_with_origin(tmp_path, url))
+
+    assert composition.stage0_rotation(tmp_path / "stages", {}) == Unreadable()
+    assert not (tmp_path / "stages").exists()

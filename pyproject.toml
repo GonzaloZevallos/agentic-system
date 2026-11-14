@@ -49,7 +49,10 @@ testpaths = ["tests"]
 # `llm` tests call the SDK with the subscription; CI does not have it (README.md, 14).
 # Run them on purpose: `uv run pytest -m llm`.
 addopts = "-m 'not llm'"
-markers = ["llm: calls a real model through the Claude Agent SDK"]
+markers = [
+    "llm: calls a real model through the Claude Agent SDK",
+    "slow: needs real git and a warm uv cache; the affected-only tier leaves it out, the full tier runs it",
+]
 
 [tool.mypy]
 # The command (`checks.types` in .agentic/stack.yaml, the CI step) carries no paths:

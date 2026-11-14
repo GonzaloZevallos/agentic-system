@@ -271,7 +271,7 @@ def test_the_real_pytest_invocation_is_an_argv_list_with_the_llm_marker_deselect
     monkeypatch.setattr(script.subprocess, "run", fake_run)
     assert script._run_pytest(["tests/test_a.py"], REPO) == 3
     ((argv, kwargs),) = calls
-    assert argv[1:] == ["-m", "pytest", "-m", "not llm", "tests/test_a.py"]
+    assert argv[1:] == ["-m", "pytest", "-m", "not llm and not slow", "tests/test_a.py"]
     assert kwargs.get("shell") is None
 
 

@@ -236,7 +236,7 @@ def stage0_master_window(
 ) -> GitMasterWindow:
     """The stage0 rotation's view of master (GH-632, part 2c): a mirror under `root` of
     `remote_url`, each commit's CI read by sha through `gh` run in `product_dir`. Nothing calls it
-    until part 2d (#697) wires the CLI.
+    until `stage0_rotation` (part 2d, #697) builds it.
 
     The tracker has no `GhRetry`: one `gh api graphql` call per commit, ten per window, in series,
     no cache and no failed-step lookup. A `gh` that hangs on every call costs up to ten times
@@ -297,7 +297,8 @@ def stage0_rotation(root: Path, environ: Mapping[str, str]) -> Stage0Rotation | 
     origin = _origin_of(stage0.CHECKOUT)
     if origin is None:
         return Unreadable()
-    cfg = Configuration.from_sources({}, environ)
+    # The rotation has no product: the configuration is read only for the scratch directory.
+    cfg = Configuration.from_sources({"product_dir": str(stage0.CHECKOUT)}, environ)
     store = FilesystemStage0Store(root)
     stack = GitStack(root / MIRROR)
     window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci)
