@@ -205,7 +205,7 @@ def test_a_name_outside_the_snapshot_is_a_value_error_not_a_key_error(tmp_path):
     assert prompts.spec_block_names() == ()
 
 
-def test_the_shipped_table_is_empty_so_construction_opens_nothing_under_spec(monkeypatch, tmp_path):
+def test_an_empty_table_means_construction_opens_nothing_under_spec(monkeypatch, tmp_path):
     opened = []
     real = Path.read_text
 
@@ -214,7 +214,7 @@ def test_the_shipped_table_is_empty_so_construction_opens_nothing_under_spec(mon
         return real(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", spy)
-    prompts = FilesystemPrompts(tmp_path)
+    prompts = FilesystemPrompts(tmp_path, blocks={})
     assert prompts.spec_block_names() == ()
     assert not [p for p in opened if "spec" in p.parts]
 
