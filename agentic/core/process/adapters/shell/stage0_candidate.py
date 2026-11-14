@@ -27,7 +27,7 @@ from typing import Protocol
 
 from agentic.shared.environment import without_own_configuration, without_own_toolchain
 
-from ...application.ports import InstalledProducts, Scratch
+from ...application.ports import Scratch
 from ...domain.stage0_rotation import CandidateCause, Green, Prepared, Red, Unavailable
 
 CLONE_TIMEOUT_S = 600
@@ -134,7 +134,7 @@ class ShellStage0Candidate:
         self,
         root: Path,
         scratch: Scratch,
-        products: InstalledProducts,
+        products: tuple[Path, ...],
         origin_url: str,
         runner: Runner | None = None,
     ) -> None:
@@ -176,7 +176,7 @@ class ShellStage0Candidate:
 
     def smoke(self, stage: str) -> Green | Red | Unavailable:
         directory = self._root / stage
-        steps = (_help(directory), *(_poll(directory, p) for p in self._products.read()))
+        steps = (_help(directory), *(_poll(directory, p) for p in self._products))
         for step in steps:
             result = self._run(step)
             if isinstance(result, Unavailable):

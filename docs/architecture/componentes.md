@@ -99,9 +99,15 @@ aún; los adaptadores por ahora son `agentic/core/process/adapters/git/master_wi
 `agentic/core/process/adapters/shell/stage0_candidate.py:ShellStage0Candidate` (prepara el parcial
 desde el espejo, prueba un stage y, tras `promote`, `settle` reconstruye el venv en su ruta final;
 cada hijo pasa por un solo ejecutor inyectado). La fuente de productos instalados es el puerto
-`InstalledProducts`; hasta #726 la fábrica `agentic/composition.py:stage0_rotation` cablea
-`NoInstalledProducts` y el smoke corre solo `--help`. El comando `agentic stage0 rotate` lo
-llama a mano. `GhCommitCi` cumple `CommitCiReader`: una sola llamada `gh api graphql` por commit,
+`InstalledProducts`, que cumple `agentic/core/process/adapters/filesystem/installed_products.py:SystemdUnitInstalledProducts`:
+lee el `--product-dir` de las unidades `agentic-poll*.service` de `~/.config/systemd/user`
+(`$XDG_CONFIG_HOME` si es absoluto), con la gramática que emite `scripts/install-poller.sh` y
+que fija `agentic/core/process/domain/poller_units.py` (los drop-ins no se leen). Su consumidor
+es la fábrica `agentic/composition.py:stage0_rotation`, que lo lee una sola vez por rotación y
+pasa la tupla al candidato, de modo que el smoke del candidato, el de la repetición y el de
+control usan la misma lista; un directorio o una unidad ilegible da `Unreadable` antes de
+construir nada, y `agentic stage0 rotate` imprime `keep: unreadable` sin rechazar nada. Sin
+unidades el smoke corre solo `--help`. El comando `agentic stage0 rotate` lo llama a mano. `GhCommitCi` cumple `CommitCiReader`: una sola llamada `gh api graphql` por commit,
 por sha, que arma el reporte con `agentic/core/process/adapters/github/tracker.py:commit_report`;
 un oid que no son 40 hex en minúscula, o cualquier falla, es `CiUnreadable`. Lo cablea la fábrica
 `agentic/composition.py:stage0_master_window`, que llama `stage0_rotation`. `Stage0Store` es la raíz de rotación

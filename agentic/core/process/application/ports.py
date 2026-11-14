@@ -2721,8 +2721,9 @@ class Stage0Candidate(Protocol):
 
     def smoke(self, stage: str) -> Green | Red | Unavailable:
         """Smokes the stage directory named `stage` (`<sha40>.partial` for a candidate). The
-        installed products it runs `poll` for come from the adapter's `InstalledProducts`,
-        read inside this call, so the control smoke and the candidate smoke read one source."""
+        installed products it runs `poll` for are a fixed tuple the adapter got when it was
+        built, read once per rotation, so the candidate, rerun and control smokes all use the
+        same list."""
         ...
 
     def settle(self, sha: str) -> Green | Unavailable:
@@ -2733,13 +2734,13 @@ class Stage0Candidate(Protocol):
 
 
 class InstalledProducts(Protocol):
-    """The product directories the smoke runs `poll --dry-run --once` for. #726 widens the
-    return to `tuple[Path, ...] | Unreadable` and adds the handling of unreadable units in
-    the adapter and the CLI; until then the source is `NoInstalledProducts` and the smoke
-    runs only `--help`."""
+    """The product directories the smoke runs `poll --dry-run --once` for. Its consumer is the
+    composition root, not `application`: `stage0_rotation` reads it once per rotation and hands
+    the tuple to the candidate."""
 
-    def read(self) -> tuple[Path, ...]:
-        """The product directories, empty when there are none."""
+    def read(self) -> tuple[Path, ...] | Unreadable:
+        """The product directories, empty when there are none; `Unreadable` when they could
+        not be read, which keeps the rotation."""
         ...
 
 
