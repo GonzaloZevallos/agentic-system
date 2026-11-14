@@ -143,6 +143,10 @@ class Candidate:
         self.stages_smoked.append(stage)
         return self.smokes[stage].pop(0)
 
+    def settle(self, sha: str) -> Green | Unavailable:
+        self.log.append(f"settle {sha}")
+        return Green()
+
 
 class Window:
     def entries(self, current: str | None) -> list[WindowEntry] | Unreadable:

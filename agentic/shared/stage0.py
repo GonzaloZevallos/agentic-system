@@ -20,3 +20,7 @@ from pathlib import Path
 
 # agentic/shared/stage0.py -> agentic/ -> the checkout the package was installed from.
 CHECKOUT = Path(__file__).resolve().parents[2]
+
+# Where the rotation keeps its stages (`agentic stage0 rotate`, GH-632): one directory per commit,
+# a `current` link, and the mirror it builds them from.
+DEFAULT_ROOT = Path.home() / ".agentic-stage0s"

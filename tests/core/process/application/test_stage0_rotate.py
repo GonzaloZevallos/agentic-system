@@ -53,8 +53,10 @@ class Store:
         held: bool = True,
         digests: list[bytes] | None = None,
         fail_on: str | None = None,
+        staged: list[str] | None = None,
     ) -> None:
         self.log = log
+        self._staged = staged or []
         self._current = current
         self._held = held
         self._digests = list(digests or [EMPTY_ENV, EMPTY_ENV])
@@ -83,7 +85,7 @@ class Store:
         self._call(f"remove_partial {sha}")
 
     def stages(self) -> list[tuple[str, datetime]]:
-        return []
+        return [(name, NOW) for name in self._staged]
 
     def current(self) -> str | None:
         return self._current
@@ -134,8 +136,11 @@ class Store:
 
 
 class Users:
+    def __init__(self, in_use: frozenset[str] | Unreadable = frozenset()) -> None:
+        self.in_use = in_use
+
     def users(self) -> frozenset[str] | Unreadable:
-        return frozenset()
+        return self.in_use
 
 
 class Window:
@@ -157,9 +162,11 @@ class Candidate:
         *,
         smokes: list[Green | Red | Unavailable] | None = None,
         prepared: Prepared | Unavailable | None = None,
+        settles: list[Green | Unavailable] | None = None,
     ) -> None:
         self.log = log
         self.smokes = list(smokes if smokes is not None else [Green()])
+        self.settles = list(settles if settles is not None else [Green()] * 4)
         self.prepared = prepared
         self.stages_smoked: list[str] = []
 
@@ -171,6 +178,10 @@ class Candidate:
         self.log.append(f"smoke {stage}")
         self.stages_smoked.append(stage)
         return self.smokes.pop(0)
+
+    def settle(self, sha: str) -> Green | Unavailable:
+        self.log.append(f"settle {sha}")
+        return self.settles.pop(0)
 
 
 class Escalation:
@@ -215,12 +226,18 @@ class World:
         smokes: list[Green | Red | Unavailable] | None = None,
         prepared: Prepared | Unavailable | None = None,
         fail_on: str | None = None,
+        staged: list[str] | None = None,
+        in_use: frozenset[str] | Unreadable = frozenset(),
+        settles: list[Green | Unavailable] | None = None,
     ) -> None:
         self.log: list[str] = []
         self.out: list[str] = []
-        self.store = Store(self.log, current=current, held=held, digests=digests, fail_on=fail_on)
+        self.store = Store(
+            self.log, current=current, held=held, digests=digests, fail_on=fail_on, staged=staged
+        )
+        self.users = Users(in_use)
         self.window = Window(self.log, GREEN_B if entries is None else entries)
-        self.candidate = Candidate(self.log, smokes=smokes, prepared=prepared)
+        self.candidate = Candidate(self.log, smokes=smokes, prepared=prepared, settles=settles)
         self.escalation = Escalation(self.log)
         self.pruned: list[tuple[Path, list[str]]] = []
 
@@ -230,7 +247,7 @@ class World:
     def run(self, *, pin: str | None = None, policy: Policy | None = None) -> None:
         rotate(
             self.store,
-            Users(),
+            self.users,
             self.window,
             self.candidate,
             self.escalation,
@@ -559,3 +576,71 @@ def test_the_import_check_rejects_forbidden_imports(source: str) -> None:
 )
 def test_the_import_check_accepts_other_imports(source: str) -> None:
     assert _forbidden_imports(source) == []
+
+
+def test_settle_runs_after_promote_and_before_current_moves() -> None:
+    w = World()
+    w.run(policy=Policy(w.log))
+
+    steps = [
+        e.split()[0]
+        for e in w.log
+        if e.split()[0] in {"smoke", "promote", "settle", "write_switch", "switch_current"}
+    ]
+    assert steps == ["smoke", "promote", "settle", "write_switch", "switch_current"]
+    assert w.out == [f"switched: {B}"]
+
+
+def test_a_failed_settle_removes_the_stage_counts_it_unavailable_and_keeps_current() -> None:
+    w = World(settles=[Unavailable("uv")])
+    policy = Policy(w.log)
+    w.run(policy=policy)
+
+    assert w.calls("remove ") == [f"remove {B}"]
+    assert policy.prepare_calls == [(B, Unavailable("uv"))]
+    assert w.store.rejected_calls == []
+    assert w.calls("write_switch") == [] and w.calls("switch_current") == []
+    assert w.store.current() == A
+    assert w.out == ["prepare stopped"]
+
+
+def test_an_unused_leftover_of_the_target_is_removed_before_prepare() -> None:
+    w = World(staged=[A, B])
+    w.run(policy=Policy(w.log))
+
+    assert w.log.index(f"remove {B}") < w.log.index(f"prepare {B}")
+    assert w.calls("remove ") == [f"remove {B}"]  # never `current`
+    assert w.out == [f"switched: {B}"]
+
+
+def test_a_leftover_named_in_users_is_kept_and_the_rotation_says_busy() -> None:
+    w = World(staged=[A, B], in_use=frozenset({B}))
+    w.run(policy=Policy(w.log))
+
+    assert w.out == ["keep: busy"]
+    assert w.calls("remove ") == [] and w.calls("prepare") == []
+
+
+def test_a_leftover_with_unreadable_users_is_kept_and_the_rotation_says_busy() -> None:
+    w = World(staged=[A, B], in_use=Unreadable())
+    w.run(policy=Policy(w.log))
+
+    assert w.out == ["keep: busy"]
+    assert w.calls("remove ") == [] and w.calls("prepare") == []
+
+
+def test_a_leftover_of_another_commit_is_left_alone() -> None:
+    w = World(staged=[A, C])
+    w.run(policy=Policy(w.log))
+
+    assert w.calls("remove ") == []
+    assert w.out == [f"switched: {B}"]
+
+
+def test_a_remove_that_raises_propagates_and_the_lock_is_released() -> None:
+    w = World(staged=[A, B], fail_on="remove")
+    with pytest.raises(Crash):
+        w.run(policy=Policy(w.log))
+
+    assert w.log[-1] == "unlock"
+    assert w.calls("prepare") == []

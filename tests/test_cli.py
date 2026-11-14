@@ -5839,6 +5839,8 @@ COMMAND_PATHS = [
     ("eval", "shadow"),
     ("stack",),
     ("stack", "review"),
+    ("stage0",),
+    ("stage0", "rotate"),
     ("scores",),
     ("scores", "backfill"),
     ("dashboards",),

@@ -20,6 +20,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 classDiagram
     class ports__Grant["Grant"]
     class ports__Inbox["Inbox"]
+    class ports__InstalledProducts["InstalledProducts"]
     class ports__IssueComment["IssueComment"]
     class ports__IssueRow["IssueRow"]
     class ports__IssueState["IssueState"]
@@ -31,7 +32,6 @@ classDiagram
     class ports__LockHeld["LockHeld"]
     class ports__LockRecord["LockRecord"]
     class ports__MasterWindow["MasterWindow"]
-    class ports__MergeCallFailed["MergeCallFailed"]
     ports__LockHeld o-- ports__LockRecord
 ```
 

@@ -2720,7 +2720,26 @@ class Stage0Candidate(Protocol):
         ...
 
     def smoke(self, stage: str) -> Green | Red | Unavailable:
-        """Smokes the stage directory named `stage` (`<sha40>.partial` for a candidate)."""
+        """Smokes the stage directory named `stage` (`<sha40>.partial` for a candidate). The
+        installed products it runs `poll` for come from the adapter's `InstalledProducts`,
+        read inside this call, so the control smoke and the candidate smoke read one source."""
+        ...
+
+    def settle(self, sha: str) -> Green | Unavailable:
+        """Rebuilds the venv of the stage `<sha40>` where it now lives, after `promote`, and
+        runs it: a venv carries absolute paths, so the one built in `<sha40>.partial` is not
+        the one that works at `<sha40>`."""
+        ...
+
+
+class InstalledProducts(Protocol):
+    """The product directories the smoke runs `poll --dry-run --once` for. #726 widens the
+    return to `tuple[Path, ...] | Unreadable` and adds the handling of unreadable units in
+    the adapter and the CLI; until then the source is `NoInstalledProducts` and the smoke
+    runs only `--help`."""
+
+    def read(self) -> tuple[Path, ...]:
+        """The product directories, empty when there are none."""
         ...
 
 

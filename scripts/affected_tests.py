@@ -27,7 +27,8 @@ REFUSED = 9
 
 ROOTS = ("agentic/", "tests/")
 # Not part of the graph: the skills plugin is a pinned submodule (ADR-0013), and the
-# `llm` tests are deselected by `-m "not llm"`.
+# `llm` tests are deselected by `-m "not llm and not slow"`; `slow` ones only here: the full
+# tier (`-m "not llm"`) runs them.
 EXCLUDED = ("agentic/plugins/", "tests/llm/")
 LOADERS = frozenset({"import_module", "__import__", "spec_from_file_location"})
 DOTTED = re.compile(r"^agentic(?:\.\w+)+")
@@ -454,7 +455,7 @@ def select(
 
 
 def _run_pytest(files: Sequence[str], root: Path) -> int:
-    argv = [sys.executable, "-m", "pytest", "-m", "not llm", *files]
+    argv = [sys.executable, "-m", "pytest", "-m", "not llm and not slow", *files]
     return subprocess.run(argv, cwd=root, check=False).returncode
 
 

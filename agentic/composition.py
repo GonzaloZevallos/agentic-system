@@ -13,10 +13,12 @@ from `core.measurement` and is handed to the process adapters here, so
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+import subprocess
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -46,8 +48,10 @@ from .core.process.adapters.filesystem.file_inbox import FileInbox, frozen_input
 from .core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.filesystem.scratch import FilesystemScratch
+from .core.process.adapters.filesystem.stage0_store import FilesystemStage0Store
+from .core.process.adapters.filesystem.stage0_users import ProcStage0Users
 from .core.process.adapters.git import GitWorkspace
-from .core.process.adapters.git.master_window import GitMasterWindow
+from .core.process.adapters.git.master_window import MIRROR, GitMasterWindow
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhLabelTimeline, GhTracker
 from .core.process.adapters.github.board import (
@@ -73,16 +77,35 @@ from .core.process.adapters.shell import (
     ShellSampleApp,
 )
 from .core.process.adapters.shell.perf_runner import PerfShellRunner
-from .core.process.application.ports import Inbox, LabelTimeline, Ports, StopFlag
+from .core.process.adapters.shell.stage0_candidate import ShellStage0Candidate
+from .core.process.application.ports import (
+    FailurePolicy,
+    Inbox,
+    InstalledProducts,
+    LabelTimeline,
+    Ports,
+    Stage0Store,
+    Stage0Users,
+    StopFlag,
+)
+from .core.process.application.ports import (
+    Stage0Escalation as Stage0EscalationPort,
+)
 from .core.process.application.preflight import (
     refuse_its_own_checkout,
     refuse_scratch_in_a_repository,
 )
 from .core.process.application.reflect_run import SystemRepo
+from .core.process.application.stage0_escalation import Stage0Escalation
+from .core.process.application.stage0_failure import SmokeFailurePolicy
+from .core.process.application.stage0_prune import make_prune
+from .core.process.application.stage0_rotate import Prune
 from .core.process.domain import reaping
 from .core.process.domain.check_schedule import Limits
 from .core.process.domain.ci import CiReport, CiUnreadable
 from .core.process.domain.presubmit import ApiBreakLine
+from .core.process.domain.stage0_rotation import Unreadable
+from .shared import stage0
 from .shared.configuration import STATE_FILE, Configuration, arm_input, state_file_for
 from .shared.environment import own_configuration_unset
 
@@ -213,7 +236,7 @@ def stage0_master_window(
 ) -> GitMasterWindow:
     """The stage0 rotation's view of master (GH-632, part 2c): a mirror under `root` of
     `remote_url`, each commit's CI read by sha through `gh` run in `product_dir`. Nothing calls it
-    until part 2d (#697) wires the CLI.
+    until `stage0_rotation` (part 2d, #697) builds it.
 
     The tracker has no `GhRetry`: one `gh api graphql` call per commit, ten per window, in series,
     no cache and no failed-step lookup. A `gh` that hangs on every call costs up to ten times
@@ -222,6 +245,76 @@ def stage0_master_window(
     the same one: neither is derived from the other here, 2d checks it."""
     return GitMasterWindow(
         root, remote_url, ci=GhCommitCi(GhTracker(product_dir)), stack_ci=stack_ci
+    )
+
+
+_GITHUB_URL = re.compile(r"(https://github\.com/|git@github\.com:)[\w.-]+/[\w.-]+?(\.git)?")
+
+
+class NoInstalledProducts:
+    """The `InstalledProducts` of a rotation that reads no unit: the smoke runs only `--help`
+    until #726 reads the installed pollers' product directories."""
+
+    def read(self) -> tuple[Path, ...]:
+        return ()
+
+
+@dataclass(frozen=True)
+class Stage0Rotation:
+    """Everything `agentic stage0 rotate` hands to `rotate`."""
+
+    store: Stage0Store
+    users: Stage0Users
+    window: GitMasterWindow
+    candidate: ShellStage0Candidate
+    failure_policy: FailurePolicy
+    escalation: Stage0EscalationPort
+    prune: Prune
+    products: InstalledProducts
+
+
+def _origin_of(checkout: Path) -> str | None:
+    """The `origin` of `checkout` when it is a GitHub URL, else None. The one place the
+    rotation learns a URL: the mirror, every clone and `gh` all use it."""
+    try:
+        done = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=checkout,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    url = done.stdout.strip()
+    return url if done.returncode == 0 and _GITHUB_URL.fullmatch(url) else None
+
+
+def stage0_rotation(root: Path, environ: Mapping[str, str]) -> Stage0Rotation | Unreadable:
+    """The pieces of one rotation over `root` (GH-632, part 2d), or `Unreadable` when the
+    origin of the stage0 checkout is not a GitHub URL: checked before anything is built."""
+    origin = _origin_of(stage0.CHECKOUT)
+    if origin is None:
+        return Unreadable()
+    # The rotation has no product: the configuration is read only for the scratch directory.
+    cfg = Configuration.from_sources({"product_dir": str(stage0.CHECKOUT)}, environ)
+    store = FilesystemStage0Store(root)
+    stack = GitStack(root / MIRROR)
+    window = stage0_master_window(root, origin, stage0.CHECKOUT, stack.ci)
+    products = NoInstalledProducts()
+    scratch = FilesystemScratch(cfg.scratch_dir, "stage0", stage0.CHECKOUT)
+    candidate = ShellStage0Candidate(root, scratch, products, origin)
+    repo = system_repo()
+    return Stage0Rotation(
+        store=store,
+        users=ProcStage0Users(root),
+        window=window,
+        candidate=candidate,
+        failure_policy=SmokeFailurePolicy(store, candidate),
+        escalation=Stage0Escalation(repo.tracker, repo.inbox, store, print),
+        prune=make_prune(root),
+        products=products,
     )
 
 

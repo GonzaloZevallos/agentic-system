@@ -45,7 +45,6 @@ classDiagram
   - `ports.Ports` se asocia con `ports.FlagVocabulary`
   - `ports.RawResult` se asocia con `ports.CheckRuns`
   - `ports.RemergeDiffUnsupported` hereda de `ports.GitError`
-- [application: support (parte 6)](classes-process-application-support-6.md)
-  - `ports.UnstageablePath` hereda de `ports.GitError`
 - [application: support (parte 7)](classes-process-application-support-7.md)
+  - `ports.UnstageablePath` hereda de `ports.GitError`
   - `run_role.Output` se asocia con `ports.CheckRuns`
