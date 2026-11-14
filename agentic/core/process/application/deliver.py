@@ -24,6 +24,7 @@ from .ports import BranchPullRequest, GitError, Ports, TrackerCallFailed
 from .preflight import over_cap
 from .release import release_task
 from .run_role import finish
+from .tracker_items import run_system_items
 from .tracker_only import post_tracker_checklist
 
 # How the delivery comment starts: a resume looks past the system's comments.
@@ -106,6 +107,19 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             except Exception as failed:
                 # The comment is on the issue and the record travels in the terminal patch.
                 _lapsed(lapses, "tracker record save", failed)
+    # GH-689: the plan's `comment` items are posted on this issue before the pull request, each
+    # once (a record, then its marker). A failure is a lapse and a block in the body; the pull
+    # request opens all the same, and a re-delivery tries again.
+    items_done: TaskState = {}
+    undone = ""
+    sent = run_system_items(state, ports)
+    lapses.extend(sent.lapses)
+    if sent.failed is not None:
+        _lapsed(lapses, "tracker item comment", sent.failed)
+        undone = tracker_items.failure_block(sent.left, type(sent.failed).__name__, relative)
+    if sent.state is not state:
+        items_done = {"tracker_actions_done": sent.state.get("tracker_actions_done", {})}
+        state = sent.state
     replaced = rules.replace_record(recorded, plan, kept)
     # Only the key's own value moves: a state with no replace keeps being the very object
     # the node received, and is written as it always has been.
@@ -126,6 +140,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             _perf_preface(state),
             _landing_preface(state, ports),
             unconfirmed,
+            undone,
         )
         if part
     )
@@ -177,7 +192,12 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     except (GitError, ValueError) as failed:
         return _ended(
             state,
-            {**_undelivered(step, failed, state, replaced, at=ports.now()), **record, **posted},
+            {
+                **_undelivered(step, failed, state, replaced, at=ports.now()),
+                **record,
+                **posted,
+                **items_done,
+            },
             ports,
         )
     patch: TaskState = {
@@ -191,6 +211,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         **({} if state.get("landing_queued_at") else {"landing_queued_at": ports.now()}),
         **record,
         **posted,
+        **items_done,
         **({"criteria_over_cap": over} if over else {}),
         **({"landing": state["landing"]} if state.get("landing") else {}),
     }
@@ -204,6 +225,13 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             ready += f"\n\n{replaced_note}"
         if unconfirmed:
             ready += f"\n\n{unconfirmed}"
+        if undone:
+            ready += f"\n\n{undone}"
+        if did := tracker_items.report(
+            tracker_items.system_items(tracker_items.parse(state.get("tracker_items", []))),
+            state.get("tracker_actions_done", {}),
+        ):
+            ready += f"\n\nTracker work done by the system:\n{did}"
         if elsewhere := rules.owner_rules_block(state.get("owner_rules_elsewhere", [])):
             ready += f"\n\n{elsewhere}"
         ports.tracker.comment(state["id"], ready)

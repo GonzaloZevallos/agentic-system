@@ -22,15 +22,12 @@ graph TD
     g_application__support["support (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     g_pkg__domain["domain (paquete)"]
-    m_application__landing_flakes["application.landing_flakes"]
     m_application__landing_lane["application.landing_lane"]
     m_application__landing_plan["application.landing_plan"]
     m_application__landing_slice["application.landing_slice"]
     m_application__landing_sync["application.landing_sync"]
     m_application__merge["application.merge"]
-    m_application__landing_flakes --> g_application__support
-    m_application__landing_flakes --> g_pkg__agentic__shared
-    m_application__landing_flakes --> g_pkg__domain
+    m_application__tracker_items["application.tracker_items"]
     m_application__landing_lane --> g_application__support
     m_application__landing_lane --> g_pkg__domain
     m_application__landing_lane --> m_application__landing_plan
@@ -56,6 +53,7 @@ graph TD
     m_application__merge --> g_application__support
     m_application__merge --> g_pkg__agentic__shared
     m_application__merge --> g_pkg__domain
-    m_application__merge --> m_application__landing_flakes
     m_application__merge --> m_application__landing_plan
+    m_application__tracker_items --> g_application__support
+    m_application__tracker_items --> g_pkg__domain
 ```

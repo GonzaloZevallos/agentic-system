@@ -160,7 +160,7 @@ def test_only_the_human_items_pending_are_listed_though_a_system_item_shares_the
     """GH-625: the listing reads the items through `human_items`, so a system item whose hash is
     pending too is not asked of the owner."""
     monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human", "comment"}))
-    comment = {"kind": "comment", "text": "Superseded by #12."}
+    comment = {"kind": "comment", "text": "Superseded by the newer item."}
     pending = [tracker_items.item_hash(ITEM), tracker_items.item_hash(comment)]
     state = {
         "id": "GH-12",
@@ -171,4 +171,4 @@ def test_only_the_human_items_pending_are_listed_though_a_system_item_shares_the
     }
     text = escalate.comment(state, cfg, memory_ports())
 
-    assert tracker_items.question_line(ITEM) in text and "Superseded by #12." not in text
+    assert tracker_items.question_line(ITEM) in text and "Superseded by the newer item." not in text

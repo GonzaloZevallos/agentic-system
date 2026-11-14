@@ -224,3 +224,33 @@ coherente con sus propios splits.
   (el `upstream` propio del barrido, solo si hay un commit de fusión que juzgar). Crece
   linealmente con la cantidad de padres `split` abiertos. Un padre que sigue `waiting` aparece
   como "Necesita humano" en el tablero: hallazgo externo, no se cambia acá.
+
+## Addendum (GH-689): el sistema hace los ítems `comment`
+
+Regla del dueño (GH-620): el trabajo de tracker que el sistema puede hacer con su propio acceso se
+hace en la misma corrida y se informa.
+
+- **Qué hace:** `deliver` publica los ítems `comment` del plan, antes de abrir el pull request y
+  solo en el issue de la propia tarea (`Tracker.comment(state["id"], …)`). El plan los muestra
+  primero, bajo `### Comments the system posts`, porque es el único lugar donde el dueño ve el
+  texto que se publicará.
+- **La guarda:** primero el registro, luego el marcador. Un ítem con registro en
+  `tracker_actions_done` se salta; si no, se leen los comentarios del issue (una vez) y, si ya
+  tienen su marcador `<!-- agentic-item: <tarea> <hash> -->`, solo se registra; si no, se publica.
+  El registro `{at, kind}` se escribe solo tras el éxito y se guarda de inmediato. Se detiene en
+  el primer fallo.
+- **Prefijos:** `Plan note: ` para cada comentario y `Tracker work done by the system: `
+  (declarado ya, para #705); ambos están en `SYSTEM_COMMENTS`, así que una reanudación no los lee
+  como decisión del humano, y un comentario humano con ese texto a mitad de línea sí cuenta.
+- **Texto que no enlaza fuera:** un campo del sistema rechaza esquemas de URL, `www.`, `![` y
+  `](`, etiquetas HTML, `#N` suelto, `owner/repo#N` y `GH-N`; menciones y marcadores ya se
+  rechazaban. El tipo `human` no cambia.
+- **La lista de casillas** (`tracker_checklist`) queda solo para documentos antiguos; el comentario
+  «Tracker work for you» no se publica para ítems tipados.
+- **Si falla en `deliver`:** queda un lapso `tracker item comment: <Clase>` y el bloque de lo
+  pendiente va en el cuerpo del pull request y en el comentario de listo; el pull request se abre.
+  Un ítem así solo se reintenta si `deliver` corre de nuevo; si no, sigue listado en el cuerpo y en
+  el documento de la tarea. Una nueva entrega repite el informe.
+- **Hasta #705:** `tracker_only` no ejecuta ítems del sistema, así que el validador del plan
+  rechaza un plan sin subtareas ni partes que los lleve, para que nada se pierda en silencio.
+

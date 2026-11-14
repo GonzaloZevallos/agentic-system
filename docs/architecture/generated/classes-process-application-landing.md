@@ -30,6 +30,7 @@ classDiagram
     class landing_sync__Merges["Merges"]
     class landing_sync__ResumeContext["ResumeContext"]
     class merge__MergeResult["MergeResult"]
+    class tracker_items__SystemRun["SystemRun"]
 ```
 
 ## Relaciones con otras páginas

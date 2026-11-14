@@ -107,11 +107,11 @@ def test_parse_judges_the_count_before_the_items_and_the_items_before_the_repeat
         tracker_items.parse([ITEM, broken, ITEM])
 
 
-def test_kinds_holds_only_human():
-    assert tracker_items.KINDS == frozenset({"human"})
+def test_kinds_holds_only_human_and_comment():
+    assert tracker_items.KINDS == frozenset({"human", "comment"})
 
 
-@pytest.mark.parametrize("kind", ["comment", "open_issue", "", None])
+@pytest.mark.parametrize("kind", ["open_issue", "", None])
 def test_parse_rejects_an_unknown_kind_and_says_to_write_it_as_human(kind):
     with pytest.raises(ValueError, match="human") as error:
         tracker_items.parse([{**ITEM, "kind": kind}])
@@ -282,11 +282,10 @@ def test_item_hash_is_pinned_for_every_kind(item, expected):
     assert tracker_items.item_hash(item) == expected
 
 
-@pytest.mark.parametrize("item", [COMMENT, OPEN_ISSUE], ids=["comment", "open_issue"])
-def test_parse_still_refuses_a_kind_that_is_not_performed_yet(item):
+def test_parse_still_refuses_a_kind_that_is_not_performed_yet():
     with pytest.raises(ValueError, match="unknown tracker item kind") as error:
-        tracker_items.parse([item])
-    assert item["kind"] in str(error.value) and WAY_OUT in str(error.value)
+        tracker_items.parse([OPEN_ISSUE])
+    assert "open_issue" in str(error.value) and WAY_OUT in str(error.value)
 
 
 def test_human_items_and_system_items_split_a_mixed_list_and_keep_its_order():
@@ -320,6 +319,7 @@ def test_the_duplicate_error_names_the_item_by_its_summary():
 
 
 def test_kinds_text_names_only_the_kinds_in_kinds_and_in_the_tables_order(monkeypatch):
+    monkeypatch.setattr(tracker_items, "KINDS", frozenset({"human"}))
     sole = tracker_items.kinds_text()
     assert "and no other kind exists" in sole and "`comment`" not in sole
     monkeypatch.setattr(tracker_items, "KINDS", frozenset({"open_issue", "human"}))
@@ -330,7 +330,6 @@ def test_kinds_text_names_only_the_kinds_in_kinds_and_in_the_tables_order(monkey
 
 def test_a_several_lines_field_takes_lines_and_every_other_rule_still_holds(every_kind):
     assert tracker_items.parse([OPEN_ISSUE]) == [OPEN_ISSUE]
-    assert tracker_items.parse([COMMENT]) == [COMMENT]
     body = tracker_items.MAX_BODY_CHARS
     assert tracker_items.parse([{**OPEN_ISSUE, "body": "x" * body}])[0]["body"] == "x" * body
     for bad, match in [
@@ -340,7 +339,6 @@ def test_a_several_lines_field_takes_lines_and_every_other_rule_still_holds(ever
         ({**OPEN_ISSUE, "body": "one\nask @bob"}, "mention"),
         ({**OPEN_ISSUE, "title": "one\ntwo"}, "one non-empty line"),
         ({**OPEN_ISSUE, "title": "x" * 241}, "at most 240"),
-        ({**COMMENT, "text": "a\n" + "x" * 240}, "at most 240"),
     ]:
         with pytest.raises(ValueError, match=match):
             tracker_items.parse([bad])
@@ -351,6 +349,135 @@ def test_the_keys_of_the_kind_are_the_only_ones_a_performed_kind_takes(every_kin
         tracker_items.parse([{**COMMENT, "question": "q"}])
     with pytest.raises(ValueError, match="missing its body"):
         tracker_items.parse([{"kind": "open_issue", "title": "t"}])
+
+
+# --- GH-689: the comment kind, the system-field rejections, marker, report, failure_block ----
+
+
+def test_the_human_item_is_byte_for_byte_what_it_was_whatever_KINDS_holds(monkeypatch):
+    """Invariant 1: pins `parse`, `item_hash` and `question_line` of a human item, under both
+    the performed set of today and the single kind of before."""
+    for kinds in (frozenset({"human"}), tracker_items.KINDS):
+        monkeypatch.setattr(tracker_items, "KINDS", kinds)
+        hard = {**ITEM, "question": "Close #12 as superseded? See https://x.io and www.y.io <b>"}
+        assert tracker_items.parse([hard]) == [hard]
+        assert tracker_items.parse([ITEM]) == [ITEM]
+        assert tracker_items.item_hash(ITEM) == "28383afe2b80"
+        assert tracker_items.question_line(ITEM) == "Ship it? — Recommended: Yes, ship."
+
+
+NOTE = {"kind": "comment", "text": "Superseded by the newer item."}
+
+
+def test_a_one_line_comment_parses_and_a_several_lines_one_does_not():
+    assert tracker_items.parse([NOTE]) == [NOTE]
+    with pytest.raises(ValueError, match="one non-empty line"):
+        tracker_items.parse([{**COMMENT, "text": "a\nb"}])
+    with pytest.raises(ValueError, match="at most 240"):
+        tracker_items.parse([{**COMMENT, "text": "x" * 241}])
+
+
+def _comment(text):
+    return {"kind": "comment", "text": text}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "see https://x",
+        "see HTTP://x",
+        "see git+ssh://x",
+        "see www.x.io",
+        "see (www.x.io)",
+        "see ![a]",
+        "see [a](b)",
+        "see ](b)",
+        "see <b>",
+        "see </x",
+        "see #12",
+        "#12 first",
+        "owner/repo#12",
+        "a.b-c/d_e#3",
+        "see GH-12",
+        "see gh-7",
+    ],
+)
+def test_a_comment_text_that_could_link_outside_the_issue_is_refused(text):
+    with pytest.raises(ValueError) as error:
+        tracker_items.parse([_comment(text)])
+    assert WAY_OUT in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "uses actions/checkout@v4",
+        "bump pkg@1.2",
+        "issue 12",
+        "a < b and 3 > 2",
+        "the www is wide",
+        "a&#12 entity-ish",
+    ],
+)
+def test_a_comment_text_without_a_link_shape_passes(text):
+    assert tracker_items.parse([_comment(text)])[0]["text"] == text
+
+
+def test_the_link_rejections_apply_only_to_system_fields():
+    with pytest.raises(ValueError, match="link|reference"):
+        tracker_items.parse([_comment("see #12")])
+    assert tracker_items.parse([{**ITEM, "recommendation": "Do #12, see GH-3"}])
+
+
+def test_system_items_over_a_non_empty_parsed_list():
+    parsed = tracker_items.parse([ITEM, NOTE, OTHER])
+    assert tracker_items.system_items(parsed) == [NOTE]
+    assert tracker_items.human_items(parsed) == [ITEM, OTHER]
+
+
+def test_the_marker_names_the_task_and_the_item_hash():
+    assert tracker_items.marker(COMMENT, "GH-7") == (
+        f"<!-- agentic-item: GH-7 {tracker_items.item_hash(COMMENT)} -->"
+    )
+
+
+def test_the_two_prefixes_are_the_ones_the_resume_knows():
+    assert tracker_items.PLAN_NOTE == "Plan note: "
+    assert tracker_items.DONE == "Tracker work done by the system: "
+
+
+def test_report_lists_only_the_system_items_with_a_record_and_a_url_only_when_it_has_one():
+    other = _comment("Second note.")
+    h1, h2 = tracker_items.item_hash(COMMENT), tracker_items.item_hash(other)
+    items = [ITEM, COMMENT, other]
+    done = {H: {"at": AT}, h1: {"at": AT, "kind": "comment"}}
+    assert tracker_items.report(items, done) == "- comment posted on this issue"
+    done[h2] = {"at": AT, "kind": "comment", "url": "https://x.io/c/1"}
+    assert tracker_items.report(items, done) == (
+        "- comment posted on this issue\n- comment posted on this issue (https://x.io/c/1)"
+    )
+    assert tracker_items.report(items, {H: {"at": AT}}) == ""
+    assert tracker_items.report([], {}) == ""
+
+
+def test_failure_block_is_capped_never_a_body_and_ends_with_the_pointer():
+    many = [_comment(f"Note {n}.") for n in range(tracker_items.MAX_ITEMS)]
+    block = tracker_items.failure_block(many, "ValueError", ".agentic/tasks/GH-7.md")
+    lines = block.splitlines()
+    assert "ValueError" in lines[0]
+    assert lines[-1] == "The task document at `.agentic/tasks/GH-7.md` holds them whole."
+    assert [line for line in lines if line.startswith("- ")] == [
+        f"- {tracker_items.summary_line(item)}" for item in many
+    ]
+    long_item = _comment("x" * 200)
+    block = tracker_items.failure_block([long_item], "OSError", "d.md")
+    assert "x" * 200 not in block and "x" * 80 in block
+
+
+def test_failure_block_holds_at_most_max_items_lines():
+    seven = [_comment(f"Note {n}.") for n in range(7)]
+    block = tracker_items.failure_block(seven, "ValueError", "d.md")
+    assert len([line for line in block.splitlines() if line.startswith("- ")]) == 5
 
 
 def test_escalate_human_under_a_spec_raises_instead_of_asking_the_owner():

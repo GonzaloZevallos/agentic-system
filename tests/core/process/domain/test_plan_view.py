@@ -360,3 +360,23 @@ def test_with_tracker_items_block_lists_only_the_owners_items_of_a_mixed_list():
     assert out.endswith("### Decisions for the owner\n\n- Ship it? Recommendation: Yes, ship.")
     only_system = plan_view.with_tracker_items_block("### Solution\n\nx", items[1:])
     assert only_system == "### Solution\n\nx"
+
+
+def test_with_system_items_block_lists_only_the_system_items_and_the_owners_block_only_theirs():
+    items = [
+        {"kind": "human", "question": "Ship it?", "recommendation": "Yes, ship."},
+        {"kind": "comment", "text": "Superseded by the newer item."},
+    ]
+    both = plan_view.with_system_items_block(
+        plan_view.with_tracker_items_block("### Solution\n\nx", items), items
+    )
+    owner, system = both.split(f"### {plan_view.SYSTEM_ITEMS_TITLE}\n\n")
+    assert owner.endswith("- Ship it? Recommendation: Yes, ship.\n\n")
+    assert system == "- Superseded by the newer item."
+    assert "Ship it?" not in system and "Superseded" not in owner
+
+
+def test_with_system_items_block_renders_nothing_without_system_items():
+    human = [{"kind": "human", "question": "Ship it?", "recommendation": "Yes."}]
+    assert plan_view.with_system_items_block("### Solution\n\nx", human) == "### Solution\n\nx"
+    assert plan_view.with_system_items_block("### Solution\n\nx", []) == "### Solution\n\nx"

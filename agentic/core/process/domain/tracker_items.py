@@ -5,13 +5,15 @@ free prose. A leaf at module level: the standard library and `typing` only, so `
 
 The one place that decides what kind an item is, and the one table that says what each kind
 holds (GH-625). Only `human` is performed so far: a question for the owner with the author's
-recommendation, which reaches a human as an escalation. A kind is added to `KINDS` only in the
-diff that adds the code that performs it; its row and its type may exist before."""
+recommendation, which reaches a human as an escalation, and `comment`, a note the system posts on
+the task's own issue (GH-689). A kind is added to `KINDS` only in the diff that adds the code
+that performs it; its row and its type may exist before. A `system` row's fields are also kept
+from naming anything outside this issue, so what the system posts links nowhere."""
 
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal, NamedTuple, TypedDict, assert_never
+from typing import Any, Literal, NamedTuple, TypedDict, TypeGuard, assert_never
 
 
 class HumanItem(TypedDict):
@@ -40,7 +42,12 @@ class OpenIssueItem(TypedDict):
 TrackerItem = HumanItem | CommentItem | OpenIssueItem
 Kind = Literal["human", "comment", "open_issue"]
 
-KINDS: frozenset[str] = frozenset({"human"})
+KINDS: frozenset[str] = frozenset({"human", "comment"})
+
+# How a comment the system posts for an item starts, and how the report of the items it did
+# starts: a resume looks past both (`resume.SYSTEM_COMMENTS`).
+PLAN_NOTE = "Plan note: "
+DONE = "Tracker work done by the system: "
 
 # The one definition of the limits: no other module or prompt states them as its own literal.
 MAX_ITEMS = 5
@@ -51,6 +58,21 @@ _MARKERS = ("<!--", "-->", "{{")
 # An `@` that starts a word: `actions/checkout@v4`, `pkg@1.2` and `a@b.com` have a word
 # character, a `/` or a `.` before it and pass.
 _MENTION = re.compile(r"(?<![\w/.])@[A-Za-z]")
+
+# What a system field may not hold, since the issue tracker would turn it into a link, a
+# reference or markup that leaves this issue: checked in order, and only for a `system` row.
+_NOT_FOR_SYSTEM: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern), message)
+    for pattern, message in (
+        (r"(?i)[a-z][a-z0-9+.-]*://", "a URL, which would link outside this issue"),
+        (r"(?i)(?<!\w)www\.", "a web address (www.), which would link outside this issue"),
+        (r"!\[|\]\(", "Markdown link or image syntax, which would link outside this issue"),
+        (r"<[A-Za-z/]", "an HTML tag, which the issue tracker would read as markup"),
+        (r"(?<![\w/&])#\d+", "an issue reference (#N), which would link to another issue"),
+        (r"[\w.-]+/[\w.-]+#\d+", "a reference (owner/repo#N), which would link to another issue"),
+        (r"(?i)\bGH-\d+\b", "a task reference (GH-N), which would link to another issue"),
+    )
+)
 
 
 class _Field(NamedTuple):
@@ -63,6 +85,7 @@ class _Row(NamedTuple):
     fields: tuple[_Field, ...]
     label: str  # the field `summary_line` shows
     does: str  # one sentence: what the kind is for, as the prompt says it
+    system: bool = False  # performed by the system itself, not raised to the owner
 
 
 # Every kind, in the order the prompt names them. A loop over kinds walks this table, never
@@ -75,23 +98,27 @@ _TABLE: Mapping[Kind, _Row] = {
         '   example "Close #12 as superseded?") and its `recommendation` says what to do.',
     ),
     "comment": _Row(
-        (_Field("text", several_lines=True),),
+        (_Field("text"),),
         "text",
-        "Its `text` is a comment the system posts on the issue.",
+        "Its `text` is a comment the system posts on this issue, with no URL, link, HTML tag or "
+        "issue reference (`#N`, `owner/repo#N`, `GH-N`).",
+        system=True,
     ),
     "open_issue": _Row(
         (_Field("title"), _Field("body", several_lines=True, cap=MAX_BODY_CHARS)),
         "title",
         "Its `title` and `body` are the issue the system opens.",
+        system=True,
     ),
 }
 
 
-def _shape(kind: Kind) -> str:
+def shape(kind: Kind) -> str:
+    """How an item of `kind` is written: `{kind: comment, text}`."""
     return f"{{kind: {kind}, {', '.join(field.name for field in _TABLE[kind].fields)}}}"
 
 
-_WRITE_AS_HUMAN = f"write the item as {_shape('human')}"
+_WRITE_AS_HUMAN = f"write the item as {shape('human')}"
 
 
 def _one_line(text: str, what: str) -> None:
@@ -125,15 +152,24 @@ def item_hash(item: TrackerItem) -> str:
     return digest([item["kind"], *_texts(item).values()])
 
 
+def _for_owner(item: TrackerItem) -> TypeGuard[HumanItem]:
+    """Whether `item` is a `human` one, the only kind the system does not perform."""
+    return item["kind"] == "human" and not _TABLE[item["kind"]].system
+
+
+def _by_system(item: TrackerItem) -> TypeGuard[CommentItem | OpenIssueItem]:
+    return _TABLE[item["kind"]].system
+
+
 def human_items(items: Sequence[TrackerItem]) -> list[HumanItem]:
     """The items for the owner, in order: one of the two filters, and with `system_items` the
     only place that tells a human item from a system one."""
-    return [item for item in items if item["kind"] == "human"]
+    return [item for item in items if _for_owner(item)]
 
 
 def system_items(items: Sequence[TrackerItem]) -> list[CommentItem | OpenIssueItem]:
     """The items the system performs itself, in order: what `human_items` leaves."""
-    return [item for item in items if item["kind"] != "human"]
+    return [item for item in items if _by_system(item)]
 
 
 def summary_line(item: TrackerItem) -> str:
@@ -141,7 +177,7 @@ def summary_line(item: TrackerItem) -> str:
     (newlines read as spaces, an ellipsis only when something was cut)."""
     row = _TABLE[item["kind"]]
     label = _texts(item)[row.label]
-    if any(field.name == row.label and field.several_lines for field in row.fields):
+    if row.system:
         flat = label.replace("\n", " ")
         label = f"{flat[:80]}…" if len(flat) > 80 else flat
     return f"{item['kind']}: {label}"
@@ -203,7 +239,7 @@ def _parse_item(entry: object) -> TrackerItem:
                 raise ValueError(f"{what} must not be empty")
         else:
             _one_line(value, what)
-        texts[field.name] = _field_text(value.strip(), field)
+        texts[field.name] = _field_text(value.strip(), field, _TABLE[kind].system)
     return _build(kind, texts)
 
 
@@ -223,7 +259,7 @@ def _build(kind: Kind, texts: Mapping[str, str]) -> TrackerItem:
             assert_never(kind)
 
 
-def _field_text(text: str, field: _Field) -> str:
+def _field_text(text: str, field: _Field, system: bool) -> str:
     if len(text) > field.cap:
         raise ValueError(
             f"a tracker item's {field.name} is {len(text)} characters, at most {field.cap} "
@@ -239,7 +275,46 @@ def _field_text(text: str, field: _Field) -> str:
             f"a tracker item's {field.name} holds a mention (@name), which would notify a "
             f"person: write the name without the @; {_WRITE_AS_HUMAN}"
         )
+    if system:
+        for pattern, what in _NOT_FOR_SYSTEM:
+            if pattern.search(text):
+                raise ValueError(
+                    f"a tracker item's {field.name} holds {what}: say it in plain words; "
+                    f"{_WRITE_AS_HUMAN}"
+                )
     return text
+
+
+def marker(item: TrackerItem, task_id: str) -> str:
+    """The line a posted item's comment ends with, so a run that lost its record finds the
+    comment on the issue and posts nothing again. `parse` keeps `<!--` out of every field."""
+    return f"<!-- agentic-item: {task_id} {item_hash(item)} -->"
+
+
+def report(items: Sequence[TrackerItem], done: Mapping[str, Mapping[str, object]]) -> str:
+    """One line per system item whose record in `done` carries a `kind`, in plan order: what
+    the system did, and where only when the record has a url. `''` when there is none."""
+    lines = []
+    for item in system_items(items):
+        record = done.get(item_hash(item), {})
+        if "kind" not in record:
+            continue
+        what = "comment posted on this issue" if record["kind"] == "comment" else "done"
+        lines.append(f"- {what} ({record['url']})" if "url" in record else f"- {what}")
+    return "\n".join(lines)
+
+
+def failure_block(items: Sequence[TrackerItem], error_class: str, relative: str) -> str:
+    """What a delivery carries when the system could not do `items`: at most `MAX_ITEMS` lines
+    through `summary_line`, never a body, and the task document that holds them whole. `''`
+    when there are no items. Names the exception class only."""
+    if not items:
+        return ""
+    lines = "\n".join(f"- {summary_line(item)}" for item in items[:MAX_ITEMS])
+    return (
+        f"The system could not do these tracker items (`{error_class}`); they are not done:\n\n"
+        f"{lines}\n\nThe task document at `{relative}` holds them whole."
+    )
 
 
 def kinds_text() -> str:
@@ -248,7 +323,7 @@ def kinds_text() -> str:
     paragraph the prompts carried before the table (the continuation lines are indented three
     spaces, as the prompts' list item is)."""
     kinds = [kind for kind in _TABLE if kind in KINDS]
-    shapes = " or ".join(f"a `{kind}` item, `{_shape(kind)}`" for kind in kinds)
+    shapes = " or ".join(f"a `{kind}` item, `{shape(kind)}`" for kind in kinds)
     closing = ",\n   and no other kind exists." if len(kinds) == 1 else "."
     does = " ".join(_TABLE[kind].does for kind in kinds)
     wide = "".join(
