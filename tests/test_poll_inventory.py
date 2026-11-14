@@ -131,24 +131,46 @@ def _module_mutables(path: Path) -> list[str]:
     return found
 
 
-def _local_caches(path: Path) -> list[str]:
-    """`poll.<name>` for every name assigned a `functools.cache(...)` object anywhere."""
+def _cache_in(value: ast.AST | None) -> bool:
+    """Whether `value` holds a `functools.cache(...)` call anywhere (`y or functools.cache(f)`)."""
+    return value is not None and any(_is_cache_call(n) for n in ast.walk(value))
+
+
+def _caches_of(tree: ast.AST, module: str) -> list[str]:
+    """`<module>.<name>` for every name bound to a cache object anywhere in `tree`: a plain or
+    annotated assignment whose value holds a `functools.cache(...)` call, and a function,
+    nested or not, decorated with a cache."""
     found: list[str] = []
-    for node in ast.walk(_tree(path)):
-        if isinstance(node, ast.Assign) and _is_cache_call(node.value):
-            found += [f"{path.stem}.{t.id}" for t in node.targets if isinstance(t, ast.Name)]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign | ast.AnnAssign) and _cache_in(node.value):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            found += [f"{module}.{t.id}" for t in targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            if any(
+                _cache_in(d) or ast.unparse(d) in {"cache", "functools.cache"}
+                for d in node.decorator_list
+            ):
+                found.append(f"{module}.{node.name}")
     return found
 
 
-def _poll_locals() -> set[str]:
-    """Every name `_poll` binds: assignments, loop targets and `except ... as` names."""
+def _local_caches(path: Path) -> list[str]:
+    return _caches_of(_tree(path), path.stem)
+
+
+def _locals_of(function: ast.AST) -> set[str]:
+    """Every name a function binds: assignments, loop targets and `except ... as` names."""
     names: set[str] = set()
-    for n in ast.walk(_poll_function()):
+    for n in ast.walk(function):
         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
             names.add(n.id)
         elif isinstance(n, ast.ExceptHandler) and n.name:
             names.add(n.name)
     return {f"_poll.{name}" for name in names}
+
+
+def _poll_locals() -> set[str]:
+    return _locals_of(_poll_function())
 
 
 def test_every_row_has_a_known_kind_and_a_reason() -> None:
@@ -228,3 +250,37 @@ def test_the_board_sent_memory_is_on_disk(tmp_path) -> None:
     FilesystemBoardSent(tmp_path / "sent.json").save(memory)
     loaded = FilesystemBoardSent(tmp_path / "sent.json").load()
     assert loaded.project_id == "P" and loaded.issues[3].fingerprint == "fp"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import functools\ndef f(g):\n    x = functools.cache(g)\n",
+        "import functools\ndef f():\n    @functools.cache\n    def inner(): ...\n",
+        "import functools\ndef f(g, y=None):\n    x = y or functools.cache(g)\n",
+        "import functools\ndef f(g):\n    x: object = functools.lru_cache(g)\n",
+    ],
+)
+def test_the_scan_rejects_a_function_local_cache_that_is_not_a_row(source) -> None:
+    found = _caches_of(ast.parse(source), "newmod")
+    assert found and all(n not in ROWS for n in found)
+
+
+def test_the_scan_of_poll_py_sees_the_or_form_of_a_cache() -> None:
+    assert "poll.upstream" in _local_caches(SCANNED[0])
+
+
+def test_a_new_poll_local_without_a_row_is_reported() -> None:
+    source = (
+        "async def _poll():\n"
+        "    brand_new = 1\n"
+        "    for item in []:\n"
+        "        pass\n"
+        "    try:\n"
+        "        pass\n"
+        "    except OSError as problem:\n"
+        "        pass\n"
+    )
+    found = _locals_of(ast.parse(source))
+    assert found == {"_poll.brand_new", "_poll.item", "_poll.problem"}
+    assert {n for n in found if n not in ROWS} == found

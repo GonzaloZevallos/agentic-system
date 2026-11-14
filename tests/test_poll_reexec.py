@@ -7,6 +7,7 @@ order of a `stop` and a `release` is a fact of the log."""
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import anyio
@@ -16,6 +17,8 @@ from agentic import cli
 from agentic.core.process.adapters.filesystem.heartbeats import FilesystemHeartbeats
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import LockHeld, LockRecord
+from agentic.core.process.application.preflight import product_name
+from agentic.core.process.domain.stage0_rotation import heartbeat_key
 from agentic.shared import stage0 as stage0_paths
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeLauncher, MemoryRunRegistry, memory_ports
@@ -158,9 +161,9 @@ async def test_a_dry_round_writes_no_heartbeat(tmp_path):
 async def test_a_second_poller_refused_at_the_lock_leaves_the_holders_heartbeat_alone(tmp_path):
     root = tmp_path / "rotation"
     beats = FilesystemHeartbeats(root)
-    key = "unknown-poll"
-    from datetime import UTC, datetime
-
+    # The key the refused poller would write: the same one `_poll` builds from the same ports.
+    key = heartbeat_key(product_name(memory_ports()), poll.LOCK_KEY)
+    assert key is not None
     beats.write(key, tmp_path, datetime(2026, 11, 1, tzinfo=UTC), "end", 60.0)
     file = root / "heartbeats" / f"{key}.json"
     before = file.read_bytes()
@@ -170,6 +173,22 @@ async def test_a_second_poller_refused_at_the_lock_leaves_the_holders_heartbeat_
     assert file.read_bytes() == before
     assert json.loads(before)["phase"] == "end"
     assert log.events == []  # no release either: it never held the lock
+
+
+@pytest.mark.anyio
+async def test_the_refused_poller_test_would_notice_a_write_to_the_holders_key(tmp_path):
+    """The same setup with a poller that did get the lock: it overwrites that very file."""
+    root = tmp_path / "rotation"
+    beats = FilesystemHeartbeats(root)
+    key = heartbeat_key(product_name(memory_ports()), poll.LOCK_KEY)
+    assert key is not None
+    beats.write(key, tmp_path, datetime(2026, 11, 1, tzinfo=UTC), "end", 60.0)
+    file = root / "heartbeats" / f"{key}.json"
+    before = file.read_bytes()
+    log = Log()
+    with pytest.raises(Stop):
+        await run_poll(tmp_path, log, beats, sleeper(log, [Stop()]))
+    assert file.read_bytes() != before
 
 
 @pytest.mark.parametrize(
