@@ -1011,3 +1011,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-683
+  GH-702@review:
+    cost_usd: 0.0
