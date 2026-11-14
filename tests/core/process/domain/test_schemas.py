@@ -1534,16 +1534,22 @@ def test_a_plan_with_no_size_fields_gets_no_added_text():
     assert "within its caps" not in str(caught.value) and "cap" not in str(caught.value)
 
 
-# --- GH-689: a comment item is posted from a delivery, not (yet) from a tracker-only plan -----
+# --- GH-689, GH-705: a comment item is posted from a delivery and from a tracker-only plan ------
 
 NOTE_ITEM = {"kind": "comment", "text": "Superseded by the newer item."}
 
 
-def test_a_tracker_only_plan_with_a_comment_item_is_refused_naming_705():
+def test_a_tracker_only_plan_accepts_comment_items_with_or_without_human_ones():
     check = schemas.plan_check_for(_history(1, []), 0.0)
-    with pytest.raises(ValueError, match="#705"):
-        check(_tracker_only(items=[ITEMS[0], NOTE_ITEM]))
-    check(_tracker_only(items=ITEMS))  # human items alone stay accepted
+    check(_tracker_only(items=[ITEMS[0], NOTE_ITEM]))  # does not raise
+    check(_tracker_only(items=[NOTE_ITEM]))
+    check(_tracker_only(items=ITEMS))
+
+
+def test_a_tracker_only_plan_with_a_comment_item_still_changes_no_file():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="estimated_files must be 0"):
+        check({**_tracker_only(items=[NOTE_ITEM]), "estimated_files": 2})
 
 
 def test_the_same_comment_item_is_accepted_in_a_plan_with_subtasks():

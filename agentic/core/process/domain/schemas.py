@@ -702,7 +702,9 @@ class TechPlan(RoleOutput):
         "and no `<!--`, `-->` or `{{`; a `comment` text holds no URL, `www.`, Markdown link, "
         "HTML tag, `#N`, `owner/repo#N` or `GH-N`. Never a subtask: no role has `gh`. A task "
         "whose only work is a `human` item has no subtasks, no parts and `estimated_files: 0`; "
-        "a `comment` needs subtasks beside it (a tracker-only plan cannot post it yet, #705); "
+        "a task whose only work is `comment` items, or those and `human` ones, is a tracker-only "
+        "plan too (no subtasks, no parts, `estimated_files: 0`): the system posts the comments "
+        "and then raises the `human` items; "
         "items may sit next to subtasks, never next to `parts`. Empty when there is none",
     )
 
@@ -1214,12 +1216,6 @@ def _tracker_only_check(data: dict[str, Any]) -> None:
     """Shape (C): the plan's only work is on the issue tracker. It changes no file, so a
     positive `estimated_files` contradicts the items. Its cost has no fit to judge; a
     figure below what the task spent is raised by the plan stage, never refused (GH-529)."""
-    if tracker_items.system_items(tracker_items.parse(data["tracker_items"])):
-        raise ValueError(
-            "a plan whose only work is on the tracker cannot carry a comment item yet: the system "
-            "posts it only from a delivery, so put the comment in a plan that builds something "
-            "(subtasks), or leave it until #705 performs it in a tracker-only plan"
-        )
     if data["estimated_files"] != 0:
         raise ValueError(
             f"a plan whose only work is on the tracker changes no file: estimated_files must "
