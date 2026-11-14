@@ -20,6 +20,7 @@ from agentic.core.process.domain.task import (
     add,
     add_assumptions,
     add_flakes,
+    add_full_checks_reads,
     add_merge_ci,
     add_restorations,
     add_review_scopes,
@@ -469,6 +470,10 @@ def value_for(key: str, branch: str, n: int):
                 "superseded": [],
             }
         ]
+    if reducer is add_full_checks_reads:
+        # One row per version, a function of the version alone: the last row seen wins, so a
+        # row that differed by branch would depend on which branch landed first.
+        return [{"version": n % 3 + 1, "head": "h", "jobs": [], "tests": ["aaaaaaaa"]}]
     if reducer is last:
         return f"{branch}:{key}:{n}"
     return f"{branch}:{key}:{n}"
@@ -485,6 +490,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             first,
             add_assumptions,
             add_flakes,
+            add_full_checks_reads,
             add_merge_ci,
             add_restorations,
             add_review_scopes,
