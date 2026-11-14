@@ -33,7 +33,8 @@ Sin subtareas, sin partes, con `tracker_checklist` no vacío y `estimated_files 
 nodo terminal `tracker_only`, con el estado `tracker_only`: postea la lista y termina sin
 llamar a un rol, sin pull request y sin `delivery_outcome`. Un fallo del comentario escala
 con la clase `failure` y la reanudación vuelve a `tracker_only`, nunca a `plan`. Todo plan sin
-lista se comporta igual que antes.
+lista se comporta igual que antes. Desde GH-705 la misma forma admite ítems tipados
+(`comment` y `human`) en lugar de la lista; ver el addendum de GH-689.
 
 ## Consecuencias
 
@@ -240,7 +241,7 @@ hace en la misma corrida y se informa.
   El registro `{at, kind}` se escribe solo tras el éxito y se guarda de inmediato. Se detiene en
   el primer fallo.
 - **Prefijos:** `Plan note: ` para cada comentario y `Tracker work done by the system: `
-  (declarado ya, para #705); ambos están en `SYSTEM_COMMENTS`, así que una reanudación no los lee
+  (el informe lo postea `tracker_only` desde GH-705); ambos están en `SYSTEM_COMMENTS`, así que una reanudación no los lee
   como decisión del humano, y un comentario humano con ese texto a mitad de línea sí cuenta.
 - **Texto que no enlaza fuera:** un campo del sistema rechaza esquemas de URL, `www.`, `![` y
   `](`, etiquetas HTML, `#N` suelto, `owner/repo#N` y `GH-N`; menciones y marcadores ya se
@@ -251,6 +252,17 @@ hace en la misma corrida y se informa.
   pendiente va en el cuerpo del pull request y en el comentario de listo; el pull request se abre.
   Un ítem así solo se reintenta si `deliver` corre de nuevo; si no, sigue listado en el cuerpo y en
   el documento de la tarea. Una nueva entrega repite el informe.
-- **Hasta #705:** `tracker_only` no ejecuta ítems del sistema, así que el validador del plan
-  rechaza un plan sin subtareas ni partes que los lleve, para que nada se pierda en silencio.
+- **Camino de `tracker_only` (GH-705):** el nodo hace, en este orden, `run_system_items` (la
+  misma guarda y los mismos registros que en `deliver`), el informe `DONE`, el escalado de los
+  ítems `human` y, solo para documentos antiguos, la lista de casillas. El informe se arma solo
+  con `tracker_items.report` y termina en `<!-- agentic-done: <tarea> <digest> -->`, calculado
+  con `done_marker` sobre los `item_hash` de los ítems hechos (nunca sobre el texto del informe);
+  antes de postearlo se buscan los comentarios del issue y, si el marcador ya está, no se postea.
+  Sin ítems hechos no se lee ni se postea nada. Un plan de solo ítems `comment` termina sin
+  escalar; con ítems `human` escala `questions` después del informe, y el parche une los
+  registros de ambas fuentes con `task.add_tracker_actions`. Un posteo fallido escala con
+  `failure`: el paso que falló no deja registro, los anteriores viajan en el parche, el motivo
+  nombra el paso y solo la clase de la excepción, y la reanudación vuelve al nodo. El validador
+  del plan ya no rechaza ítems del sistema en un plan solo de tracker; la regla de
+  `estimated_files == 0` se mantiene.
 

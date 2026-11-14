@@ -51,6 +51,7 @@ graph TD
     m_application__split --> g_pkg__agentic__shared
     m_application__split --> g_pkg__domain
     m_application__split --> m_application__tracker_only
+    m_application__tracker_only --> g_application__landing
     m_application__tracker_only --> g_application__support
     m_application__tracker_only --> g_pkg__agentic__shared
     m_application__tracker_only --> g_pkg__domain
