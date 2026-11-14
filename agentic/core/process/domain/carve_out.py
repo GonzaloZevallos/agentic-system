@@ -69,8 +69,11 @@ class _CarveOutRecord(TypedDict, total=False):
 
 
 class _Ref(Protocol):
-    url: str
-    body: str
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def body(self) -> str: ...
 
 
 def _subtasks(plan_output: Mapping[str, object]) -> list[Mapping[str, object]]:

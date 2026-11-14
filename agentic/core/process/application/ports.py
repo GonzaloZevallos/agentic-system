@@ -1650,7 +1650,14 @@ class Tracker(Protocol):
         when the platform cannot do it; a task with no issue is ignored, like the other calls."""
         ...
 
-    def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
+    def open_issue(
+        self,
+        title: str,
+        body: str,
+        *,
+        label: str | None = None,
+        labels: Sequence[str] = (),
+    ) -> str:
         """Open a new issue and return its URL (ADR-0034): the stack review's own way
         of telling the human, with no task id to key off of. It passes no `label`: the
         absence of the `agentic` label (README.md, 5) is what keeps a proposal from
@@ -1658,7 +1665,9 @@ class Tracker(Protocol):
         the product repo does not have, which would throw away a paid interview for one
         word. The landing (GH-239, ADR-0048) is the caller that passes one, `agentic`, for
         the follow-ups and flakes it files, which the product repo always has: it is the
-        queue's own label. Any state a reader needs goes in `title` instead."""
+        queue's own label. Any state a reader needs goes in `title` instead. `labels` adds
+        more, one `--label` each after `label`, without repeats (GH-719); none at all sends
+        no `--label`."""
         ...
 
     def comment_on_issue(self, reference: str, text: str) -> None:

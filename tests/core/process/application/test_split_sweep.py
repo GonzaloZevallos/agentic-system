@@ -11,7 +11,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 from agentic.core.process.application.split_sweep import RepointResult, repoint_dependents
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import carve_out, rules
 from agentic.core.process.domain.landing import IssueRef
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryInbox, memory_ports
@@ -484,3 +484,93 @@ def test_split_closed_at_and_split_abandoned_at_survive_a_real_document_round_tr
     assert documents.load("GH-5")["split_closed_at"].endswith("+00:00")
     assert documents.load("GH-6")["split_abandoned_at"].endswith("+00:00")
     assert isinstance(poll.queue_documents(ports)[5]["split_closed_at"], str)
+
+
+# -- carve-out follow-ups as re-point targets (GH-719) -----------------------------------------
+
+LAST = 9  # the last part of `split_state()`
+FOLLOW_UP = 20
+
+
+def carved(**bodies):
+    """The ports of a split parent GH-5 (parts #8, #9) and an open carve-out follow-up #20 whose
+    marker names the last part."""
+    follow_up = f"## Carved-out steps\n\nBlocked by: #{LAST}\n\n{carve_out.marker('GH-5', LAST)}"
+    return {str(FOLLOW_UP): follow_up, **bodies}
+
+
+def test_a_dependent_still_on_the_parent_is_re_pointed_to_the_last_part_and_the_follow_up():
+    ports = sweep_ports(split_state(), **carved(**{"7": "Blocked by: #5\n\nbody"}))
+
+    lines = split_sweep.sweep(ports, queued(ports))
+
+    assert lines == ["agentic: split: GH-5: 1 dependents re-pointed"]
+    assert ports.tracker.updated_bodies == [(7, "Blocked by: #9, #20\n\nbody")]
+    assert ports.documents.load("GH-5")["split_repointed_at"]
+
+
+def test_the_follow_up_is_never_edited_even_when_its_own_line_names_the_parent():
+    follow_up = f"Blocked by: #5\n\n{carve_out.marker('GH-5', LAST)}"
+    ports = sweep_ports(split_state(), **{str(FOLLOW_UP): follow_up, "7": "Blocked by: #5"})
+
+    split_sweep.sweep(ports, queued(ports))
+
+    assert [n for n, _ in ports.tracker.updated_bodies] == [7]
+
+
+def test_a_marker_naming_another_issue_is_not_a_target():
+    other = f"Blocked by: #77\n\n{carve_out.marker('GH-5', 77)}"
+    ports = sweep_ports(split_state(), **{str(FOLLOW_UP): other, "7": "Blocked by: #5"})
+
+    split_sweep.sweep(ports, queued(ports))
+
+    assert ports.tracker.updated_bodies == [(7, "Blocked by: #9")]
+
+
+def test_a_re_pointed_parent_whose_dependent_still_names_it_is_re_pointed_before_the_close():
+    state = split_state(split_repointed_at="t")
+    ports = close_ports(state, **carved(**{"7": "Blocked by: #5\n\nbody"}))
+
+    lines = judge(ports)
+
+    assert ports.tracker.updated_bodies == [(7, "Blocked by: #9, #20\n\nbody")]
+    assert lines == ["agentic: split: GH-5: parent closed"]
+    assert ports.tracker.closed_issues == ["GH-5"]
+
+
+def test_without_a_follow_up_the_re_point_is_the_last_part_alone():
+    ports = sweep_ports(split_state(), **{"7": "Blocked by: #5\n\nbody"})
+
+    split_sweep.sweep(ports, queued(ports))
+
+    assert ports.tracker.updated_bodies == [(7, "Blocked by: #9\n\nbody")]
+    assert "#20" not in ports.tracker.commented_issues[0][1]
+
+
+def test_a_dependent_already_on_the_last_part_is_left_alone_while_a_follow_up_is_open():
+    state = split_state(split_repointed_at="t")
+    ports = sweep_ports(state, **carved(**{"7": "Blocked by: #9"}))
+
+    assert split_sweep.sweep(ports, queued(ports)) == []
+
+    assert ports.tracker.updated_bodies == [] and ports.tracker.commented_issues == []
+
+
+def test_append_blocker_through_the_real_re_point_adds_the_follow_up_once():
+    ports = ports_with(**{"7": "Blocked by: #9\n\nx", "8": "Blocked by: #9, #11"})
+
+    first = repoint_dependents(
+        ports, LAST, [LAST, FOLLOW_UP], refs_of(ports), {LAST}, rewrite=carve_out.append_blocker
+    )
+
+    assert first == RepointResult(considered=2, changed=2, failed=0)
+    assert sorted(ports.tracker.updated_bodies) == [
+        (7, "Blocked by: #9, #20\n\nx"),
+        (8, "Blocked by: #9, #20, #11"),
+    ]
+
+    writes = len(ports.tracker.updated_bodies)
+    again = repoint_dependents(
+        ports, LAST, [LAST, FOLLOW_UP], refs_of(ports), {LAST}, rewrite=carve_out.append_blocker
+    )
+    assert again.complete and len(ports.tracker.updated_bodies) == writes

@@ -1213,6 +1213,28 @@ def test_open_issue_sends_the_label_only_when_one_is_given():
     assert "--label" not in plain
 
 
+def _labels_sent(**kwargs):
+    run = Recorder()
+    GhTracker(Path("/p"), run).open_issue("t", "b", **kwargs)
+    [call] = run.calls
+    return [call[i + 1] for i, arg in enumerate(call) if arg == "--label"]
+
+
+def test_open_issue_sends_one_label_flag_per_label_in_order_without_repeats():
+    assert _labels_sent(label="agentic") == ["agentic"]
+    assert _labels_sent(labels=["agentic", "bug"]) == ["agentic", "bug"]
+    assert _labels_sent(label="agentic", labels=["bug", "agentic", "bug"]) == ["agentic", "bug"]
+    assert _labels_sent(label=None, labels=()) == []
+
+
+def test_open_issue_without_any_label_sends_the_argv_it_always_did():
+    run = Recorder()
+    GhTracker(Path("/p"), run).open_issue("t", "b", label=None, labels=())
+    [call] = run.calls
+    assert call[:6] == ["gh", "issue", "create", "--title", "t", "--body-file"]
+    assert len(call) == 7
+
+
 # -- a stalled gh call (GH-266) ------------------------------------------------------------
 
 
