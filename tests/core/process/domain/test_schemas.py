@@ -1622,7 +1622,9 @@ _CARVE: dict = {
 
 
 def test_the_carve_out_output_has_the_fields_of_the_carve_out_and_nothing_else():
-    assert set(CarveOutOutput.model_fields) - {"markdown"} == set(carve_out.CarveOut.__annotations__)
+    assert set(CarveOutOutput.model_fields) - {"markdown"} == set(
+        carve_out.CarveOut.__annotations__
+    )
 
 
 def test_a_valid_carve_out_output_validates_and_its_line_lists_come_back_as_lists():
