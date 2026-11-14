@@ -1062,3 +1062,5 @@ tasks:
     cost_usd: 0.0
   GH-726@review:
     cost_usd: 0.0693
+  GH-715@review:
+    cost_usd: 0.073
