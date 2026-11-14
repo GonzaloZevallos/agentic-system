@@ -76,6 +76,17 @@ TABLE: tuple[Row, ...] = (
         "`pull_request` or `merge`",
     ),
     Row(
+        "agentic/core/process/adapters/filesystem/heartbeats.py",
+        (
+            "tests/core/process/adapters/filesystem/test_perf_lock.py",
+            "tests/core/process/adapters/filesystem/test_prompts.py",
+            "tests/core/process/adapters/shell/test_perf_runner.py",
+            "tests/test_conformance_scope.py",
+        ),
+        "no module imports it until the rollback of #738 wires it, and these scan the adapter "
+        "directory or name it as the stand-in of the `Heartbeats` port",
+    ),
+    Row(
         "agentic/core/process/application/landing*.py",
         ("tests/core/process/domain/test_document.py",),
         "its guard reads the keys the landing writes through `record_closure` and requires "
