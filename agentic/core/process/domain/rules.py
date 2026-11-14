@@ -3266,16 +3266,9 @@ _CROSSED_TEXT = {
 }
 
 
-def fit_question_text(task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None) -> str:
-    """What the human reads when a part at the depth cap has a plan over the line: the
-    figures the decision used (`FitDecision`), the limits, which one was crossed, and the
-    ways out. Building it whole is not one. No way out stops the task by resuming it:
-    stopping is the absence of a resume."""
-    origin, number, depth = part_of
-    head = (
-        f"{task_id} is part {number} of {origin}, at split depth {depth}; a split goes at "
-        f"most {MAX_SPLIT_DEPTH} levels deep, so it cannot split again. "
-    )
+def fit_figures_text(fit: FitDecision | None) -> str:
+    """The figures a `FitDecision` used, the limits and which one it crossed, as one sentence
+    pair ending in a space; `None` says they are not known."""
     if fit is None:
         figures = "The plan's figures are not known, so which limit it crossed is not either. "
     else:
@@ -3318,6 +3311,34 @@ def fit_question_text(task_id: str, part_of: tuple[str, int, int], fit: FitDecis
         figures = (
             f"Its plan declares {declared}, and {reference}. "
             f"One task holds at most {limits}: {verdict}. "
+        )
+    return figures
+
+
+def fit_question_text(
+    task_id: str,
+    part_of: tuple[str, int, int],
+    fit: FitDecision | None,
+    *,
+    remainder: FitDecision | None = None,
+) -> str:
+    """What the human reads when a part at the depth cap has a plan over the line: the
+    figures the decision used (`FitDecision`), the limits, which one was crossed, and the
+    ways out. Building it whole is not one. No way out stops the task by resuming it:
+    stopping is the absence of a resume. After a carve-out, `remainder` is the fit of what
+    was left, and one paragraph quotes its figures and the limit it crossed."""
+    origin, number, depth = part_of
+    head = (
+        f"{task_id} is part {number} of {origin}, at split depth {depth}; a split goes at "
+        f"most {MAX_SPLIT_DEPTH} levels deep, so it cannot split again. "
+    )
+    figures = fit_figures_text(fit)
+    if remainder is not None:
+        figures = (
+            f"{figures.rstrip()}\n\n"
+            "A carve-out moved steps into a follow-up issue, and the remainder still does "
+            f"not fit. For the remainder: {fit_figures_text(remainder)}".rstrip()
+            + "\n\n"
         )
     return (
         f"{head}{figures}Choose one:\n"
