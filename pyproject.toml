@@ -99,6 +99,7 @@ files = [
     "agentic/core/process/application/stage0_prune.py",
     "agentic/core/process/adapters/filesystem/stage0_store.py",
     "agentic/core/process/adapters/filesystem/stage0_users.py",
+    "agentic/core/process/application/stage0_escalation.py",
     "agentic/core/process/application/stage0_failure.py",
     "scripts/poll_waits.py",
     "scripts/gate_concurrency.py",
