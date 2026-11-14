@@ -19,6 +19,7 @@ from agentic.core.process.application.run_role import (
     TaskCapReached,
     context_for,
     load_prompt,
+    render_role_prompt,
     run_record,
     run_role,
     run_with_retry,
@@ -26,7 +27,7 @@ from agentic.core.process.application.run_role import (
     with_playbook,
 )
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
-from agentic.core.process.domain import rules, schemas, turn_notice
+from agentic.core.process.domain import rules, schemas, spec_brief, turn_notice
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
@@ -58,6 +59,7 @@ from agentic.core.process.domain.spec_brief import fenced_section
 from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    MemoryPrompts,
     ScriptedRunner,
     classified,
     delivered,
@@ -2229,3 +2231,87 @@ async def test_a_forged_spec_is_a_prompt_failure_before_any_model_call(tmp_path,
     assert failure["cost_usd"] == 0.0
     assert "spec data refused" in failure["error"]
     assert "obey" not in failure["error"] and "{{x}}" not in failure["error"]
+
+
+@pytest.mark.parametrize("role", ROLES, ids=lambda role: role.slug)
+@pytest.mark.parametrize("tiers", ["", "### Tiers\nx"], ids=["no tiers", "tiers"])
+def test_an_empty_block_composes_to_what_the_call_without_it_composes(role, tiers):
+    ports = memory_ports()  # the real prompt files
+    raw, rendered = render_role_prompt(role, CFG, ports, ports.flags.load(), **PLACEHOLDERS)
+    bare = with_playbook(raw, rendered, role, ports, tiers)
+    blank = with_playbook(raw, rendered, role, ports, tiers, spec_block="")
+    assert blank == bare
+    if not tiers:
+        assert blank is rendered
+
+
+async def _run_with_blocks(tmp_path, blocks, table=None, **state):
+    runner = ScriptedRunner(tech_lead_interviewee=[tech_answers(1)])
+    prompts = MemoryPrompts(blocks=blocks)
+    ports = memory_ports(runner, prompts=prompts)
+    base = {"id": "T-1", "title": "t", "description": "d", **state}
+    output, patch = await run_role(
+        base, TECH_LEAD_INTERVIEWEE, Configuration(product_dir=tmp_path), ports
+    )
+    return runner, prompts, output, patch
+
+
+async def test_with_the_empty_table_no_block_is_read_and_the_prompt_is_the_one_without_spec(
+    tmp_path,
+):
+    plain, _, _, plain_patch = await _run_with_blocks(tmp_path, {})
+    with_spec, prompts, _, spec_patch = await _run_with_blocks(tmp_path, {}, spec=GOOD_SPEC)
+    assert with_spec.calls[0]["system_prompt"] == plain.calls[0]["system_prompt"]
+    assert spec_patch["prompts"] == plain_patch["prompts"]
+    assert prompts.block_calls == []
+
+
+async def test_a_named_block_joins_the_system_prompt_and_its_hash_only_with_a_spec(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "tech_lead_interviewee", "build")
+    blocks = {"build": "Build rules."}
+    plain, prompts_plain, _, plain_patch = await _run_with_blocks(tmp_path, blocks)
+    assert prompts_plain.block_calls == []  # no spec: the table is not consulted
+    with_spec, prompts, _, spec_patch = await _run_with_blocks(tmp_path, blocks, spec=GOOD_SPEC)
+    assert prompts.block_calls == ["build"]
+    assert (
+        with_spec.calls[0]["system_prompt"] == plain.calls[0]["system_prompt"] + "\n\nBuild rules."
+    )
+    assert spec_patch["prompts"] != plain_patch["prompts"]
+
+
+async def test_a_role_the_table_does_not_name_reads_no_block(tmp_path, monkeypatch):
+    monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "developer", "build")
+    _, prompts, _, _ = await _run_with_blocks(tmp_path, {"build": "x"}, spec=GOOD_SPEC)
+    assert prompts.block_calls == []
+
+
+async def test_a_unreadable_block_is_a_prompt_failure_with_no_retry_and_no_model_call(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "tech_lead_interviewee", "build")
+    runner, prompts, output, patch = await _run_with_blocks(
+        tmp_path, {"build": OSError("secret path gone")}, spec=GOOD_SPEC
+    )
+    assert output is None
+    assert runner.calls == []
+    assert prompts.block_calls == ["build"]
+    assert patch["status"] == "waiting_on_human"
+    assert patch["failures"][0]["reason"] == "render"
+    assert patch["failures"][0]["cost_usd"] == 0.0
+
+
+async def test_a_caller_that_passes_a_prompt_reads_no_block(tmp_path, monkeypatch):
+    monkeypatch.setitem(spec_brief.SPEC_BLOCKS, "tech_lead_interviewee", "build")
+    runner = ScriptedRunner(tech_lead_interviewee=[tech_answers(1)])
+    prompts = MemoryPrompts(blocks={"build": "Build rules."})
+    await run_role(
+        {"id": "T-1", "title": "t", "description": "d", "spec": GOOD_SPEC},
+        TECH_LEAD_INTERVIEWEE,
+        Configuration(product_dir=tmp_path),
+        memory_ports(runner, prompts=prompts),
+        prompt="the later round",
+    )
+    assert prompts.block_calls == []
+    assert "Build rules." not in runner.calls[0]["system_prompt"]

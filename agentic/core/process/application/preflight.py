@@ -8,7 +8,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
-from ..domain import docs, rules, size_budget, task_path, tracker_items
+from ..domain import docs, rules, size_budget, spec_brief, task_path, tracker_items
 from ..domain.roles import ROLES
 from ..domain.run_check import resolve_wall
 from ..domain.task import TaskState
@@ -76,7 +76,8 @@ def preflight(cfg: Configuration, ports: Ports) -> None:
     """The run's own checkout first, then the scratch root, then the product's stack and its
     name, then the vocabulary and every role's prompt rendered: a product that declares no stack, no
     name, a bad flags file or an overlay with a stray placeholder fails here, not in the
-    middle of a task."""
+    middle of a task. Then every
+    Spec block the port holds (`refuse_unservable_spec_blocks`); the function takes no table."""
     refuse_its_own_checkout(cfg, ports)
     refuse_scratch_in_a_repository(cfg, ports)
     declared_stack(ports)
@@ -87,6 +88,28 @@ def preflight(cfg: Configuration, ports: Ports) -> None:
     vocabulary = ports.flags.load()
     for role in ROLES:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
+    refuse_unservable_spec_blocks(ports)
+
+
+def refuse_unservable_spec_blocks(ports: Ports) -> None:
+    """Refuse a Spec block the snapshot names and a run could not use (ADR-0096, GH-718): `name`
+    when it fails `block_name_ok` (checked first, the block is not read), `missing` when reading
+    it raised, `template` or `fence` from `block_refusal`. The message is `spec block <name>:
+    <reason>` and never holds the block's text. The port holds the only table; with none, nothing
+    is read."""
+    for name in ports.prompts.spec_block_names():
+        reason: str | None
+        if not spec_brief.block_name_ok(name):
+            reason = "name"
+        else:
+            try:
+                text = ports.prompts.spec_block(name)
+            except (OSError, UnicodeDecodeError):
+                reason = "missing"
+            else:
+                reason = spec_brief.block_refusal(text)
+        if reason is not None:
+            raise ValueError(f"spec block {name}: {reason}")
 
 
 def refuse_walls_over_ceiling(cfg: Configuration, ports: Ports, revision: str = "HEAD") -> None:

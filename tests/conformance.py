@@ -296,3 +296,28 @@ def prompts_keep_an_unreadable_file_for_its_role(
     except UnicodeDecodeError:
         return
     raise AssertionError("Prompts.raw answered for a file that is not UTF-8")
+
+
+def prompts_serve_spec_blocks(
+    factory: Callable[[Path, Mapping[str, str]], Prompts], tmp: Path
+) -> None:
+    """What every `Prompts` shares for the Spec blocks: `factory(tmp, table)` builds a port
+    whose blocks are the values of `table` (slug -> block name), with each block's text being
+    `text of <name>`. The table holds one invalid name (`../x`). A known name returns its text; a
+    name outside the table and the invalid one held by the table both raise `ValueError`; and
+    `spec_block_names` is the table's names, sorted, the invalid one included. It
+    asserts neither the snapshot nor the overlay: those are the filesystem adapter's own.
+    Raises `AssertionError` for a port that answers otherwise."""
+    table = {"pm": "zeta", "developer": "alpha", "qa": "../x"}
+    prompts = factory(tmp, table)
+    for name in ("zeta", "alpha"):
+        if (text := prompts.spec_block(name)) != f"text of {name}":
+            raise AssertionError(f"Prompts.spec_block({name!r}) answered {text!r}")
+    for bad in ("outside", "../x"):
+        try:
+            prompts.spec_block(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"Prompts.spec_block({bad!r}) answered instead of raising ValueError")
+    if prompts.spec_block_names() != ("../x", "alpha", "zeta"):
+        raise AssertionError(f"Prompts.spec_block_names answered {prompts.spec_block_names()!r}")

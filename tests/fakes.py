@@ -105,6 +105,7 @@ from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.size_budget import NumstatRow
+from agentic.core.process.domain.spec_brief import block_name_ok
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -388,10 +389,23 @@ class MemoryPrompts:
 
     What comes from disk is a snapshot, as in `FilesystemPrompts` (GH-409): read when the
     double is built, a read error kept and raised by `raw` for that role. `overrides` is
-    not: it is consulted on every `raw`, so a test can change a prompt mid-run."""
+    not: it is consulted on every `raw`, so a test can change a prompt mid-run.
 
-    def __init__(self, *, system_dir: Path = PROMPTS_DIR, **overrides: str):
+    `blocks` are the Spec blocks by name: a text is served, an exception is raised. They are
+    read live on every `spec_block`, on purpose, so a test can change one mid-run; the
+    snapshot is `FilesystemPrompts`'s own and its adapter test shows it. Every requested name
+    lands in `block_calls`, so a test can assert that no call happened."""
+
+    def __init__(
+        self,
+        *,
+        system_dir: Path = PROMPTS_DIR,
+        blocks: dict[str, str | OSError | ValueError] | None = None,
+        **overrides: str,
+    ):
         self.overrides = overrides
+        self.blocks: dict[str, str | OSError | ValueError] = {} if blocks is None else blocks
+        self.block_calls: list[str] = []
         self._read: dict[str, tuple[str, Path] | OSError | UnicodeDecodeError] = {}
         for slug in {role.slug for role in ROLES}:
             path = system_dir / f"{slug}.md"
@@ -404,6 +418,20 @@ class MemoryPrompts:
 
     def playbook(self, role: Role) -> Playbook:
         return self.playbooks.get(role.slug, Playbook(slug=role.slug))
+
+    def spec_block(self, name: str) -> str:
+        self.block_calls.append(name)
+        if not block_name_ok(name):
+            raise ValueError(f"{name!r} is not a valid spec block name")
+        if name not in self.blocks:
+            raise ValueError(f"no spec block {name!r}")
+        held = self.blocks[name]
+        if isinstance(held, (OSError, ValueError)):
+            raise held
+        return held
+
+    def spec_block_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self.blocks))
 
     def raw(self, role: Role) -> tuple[str, Path]:
         if role.slug in self.overrides:

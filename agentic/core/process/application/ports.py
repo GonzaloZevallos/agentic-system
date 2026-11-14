@@ -493,6 +493,17 @@ class Prompts(Protocol):
         product that has none; a malformed one raises `ValueError`."""
         ...
 
+    def spec_block(self, name: str) -> str:
+        """The constant Spec block `name` (ADR-0096), from the snapshot taken when the port
+        was built. A name that fails `spec_brief.block_name_ok`, a name the snapshot does not
+        hold, and a file that could not be read all raise (`ValueError` or the read error)."""
+        ...
+
+    def spec_block_names(self) -> tuple[str, ...]:
+        """The names the snapshot holds, sorted, the invalid and the unreadable ones
+        included: preflight reads each and refuses the ones it cannot serve."""
+        ...
+
 
 class FlagVocabulary(Protocol):
     def load(self) -> dict[str, str]: ...

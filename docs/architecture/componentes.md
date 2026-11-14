@@ -62,7 +62,7 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 |---|---|---|
 | `RoleRunner` | correr un rol y devolver su resultado | `agentic/core/process/adapters/claude_sdk/runner.py:ClaudeSdkRunner` |
 | `TaskDocuments` | leer y escribir el documento de la tarea | `agentic/core/process/adapters/filesystem/documents.py:FilesystemTaskDocuments` |
-| `Prompts` | el prompt de cada rol, con overlay del producto | `agentic/core/process/adapters/filesystem/prompts.py:FilesystemPrompts` |
+| `Prompts` | el prompt de cada rol, con overlay del producto, y el bloque de spec constante por nombre (`spec_block`, `spec_block_names`; GH-718, ADR-0096): una instantánea tomada al construir el adaptador, que lee `.agentic/prompts/spec/<nombre>.md` del producto (gana) o `prompts/spec/<nombre>.md` del sistema, y nunca otro directorio, porque el nombre debe pasar `block_name_ok` | `agentic/core/process/adapters/filesystem/prompts.py:FilesystemPrompts` |
 | `Workspace` | ramas, worktrees, commits y upstream | `agentic/core/process/adapters/git/workspace.py:GitWorkspace` |
 | `Tracker` | pull requests, comentarios, etiquetas, reescritura del cuerpo de un issue (`update_issue_body`, GH-619: re-apunta las líneas `Blocked by:` de los dependientes de una partida), lectura del CI y despacho del workflow de la rama base (`dispatch_ci`, `dispatched_ci`, GH-462) | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
 | `CiLogs` (opcional, `None` sin adaptador) | los logs de los jobs rojos de la cabeza de un pull request y, para la cabeza que se juzga (`flake_block`, GH-464), las líneas `agentic-flakes:` de los últimos 4 MiB del log de los jobs que nombra el `ci:` del stack | `agentic/core/process/adapters/github/ci_logs.py:GhCiLogs` |

@@ -1083,6 +1083,7 @@ async def run_role(
     if has_spec:  # without one the caller's own role goes through untouched
         role = replace(role, schema=spec_assumptions.schema_for(role.schema, has_spec))
     vocabulary = ports.flags.load()
+    block_text = ""
     try:
         spec = state.get("spec")
         if spec and (refusal := spec_brief.data_refusal(spec)):
@@ -1090,6 +1091,11 @@ async def run_role(
             # is built, so a forged slice never reaches a model (no retry, no echo of the text).
             raise ValueError(f"spec data refused: {refusal}")
         raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)
+        # The constant block the table names for the role (ADR-0096): only with a spec and only
+        # when this call builds the context itself (a caller that passes `prompt` is resuming
+        # a session that already holds it). The empty table never gets here.
+        if spec and prompt is None and (block := spec_brief.block_for(role.slug)) is not None:
+            block_text = ports.prompts.spec_block(block)
     except (ValueError, OSError) as exc:
         # Only the prompt's own text: `render`'s ValueError and the read error the snapshot
         # kept (`raw()` re-raises it), and the spec data refusal. The playbook, the flags and
@@ -1098,7 +1104,7 @@ async def run_role(
             "current_role": role.name,
             **escalation(PromptFailure(role, exc, section), at=ports.now()),
         }
-    loaded = with_playbook(raw, rendered, role, ports, tiers)
+    loaded = with_playbook(raw, rendered, role, ports, tiers, block_text)
     patch: TaskState = {
         "current_role": role.name,
         "prompts": {role.slug: loaded.hash},
