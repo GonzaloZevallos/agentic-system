@@ -7,7 +7,8 @@ The files can be written by any local process, so the reader trusts nothing in t
 type, an unknown phase, a relative checkout, a naive `at` or an `interval_s` that is not a
 finite number in (0, `HEARTBEAT_INTERVAL_MAX_S`] reads as `Unreadable`, and nothing read from
 a file raises out of `read_all`. Every write replaces the file whole: temp file, fsync,
-`os.replace`."""
+`os.replace`. A write stores the checkout resolved, so a symlink such as `current` is pinned to
+its target at that moment and a later move of the link does not change what the beat says."""
 
 from __future__ import annotations
 
@@ -68,7 +69,7 @@ class FilesystemHeartbeats:
             raise ValueError(f"not a heartbeat interval: {interval_s!r}")
         data = json.dumps(
             {
-                "checkout": str(checkout),
+                "checkout": str(checkout.resolve()),
                 "at": at.isoformat(),
                 "phase": phase,
                 "interval_s": interval_s,

@@ -56,6 +56,8 @@ def bundle(products: tuple[Path, ...] = ()) -> composition.Stage0Rotation:
         escalation=idle(),
         prune=lambda store, users, own, out: None,
         products=products,
+        heartbeats=idle(),
+        root=Path("/resolved/root"),
     )
 
 
@@ -134,6 +136,37 @@ def test_the_pin_comes_from_the_environment_and_empty_means_none(
     invoke(monkeypatch, tmp_path, lambda root, environ: bundle())
 
     assert pins == [pin]
+
+
+def test_rotate_gets_the_rotations_own_root_heartbeats_and_a_clock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(cli, "rotate", lambda *a, **kw: seen.update(kw))
+    rotation = bundle()
+
+    invoke(monkeypatch, tmp_path, lambda root, environ: rotation, "--root", str(tmp_path / "x"))
+
+    assert seen["root"] is rotation.root
+    assert seen["heartbeats"] is rotation.heartbeats
+    assert seen["clock"]().tzinfo is not None
+
+
+def test_the_factory_resolves_the_root_once_for_the_heartbeats_and_the_rotation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(stage0, "CHECKOUT", _checkout_with_origin(tmp_path, GITHUB))
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+
+    rotation = composition.stage0_rotation(link, {}, Products())
+
+    assert isinstance(rotation, composition.Stage0Rotation)
+    assert rotation.root == real
+    heartbeats: Any = rotation.heartbeats
+    assert heartbeats._dir == real / "heartbeats"
 
 
 def test_an_absent_pin_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
