@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -19,6 +20,7 @@ from agentic.core.process.domain.schemas import (
     TechPlanWithAssumptions,
 )
 from agentic.core.process.domain.spec_assumptions import (
+    _CONFLICT_QUESTIONS,
     ESCALATE,
     SPEC_SCHEMAS,
     assumption_rows,
@@ -30,6 +32,7 @@ from agentic.core.process.domain.spec_assumptions import (
     interview_doubts,
     schema_for,
 )
+from agentic.core.process.domain.task import SpecConflictCause, SpecEscalationCause
 
 VOCAB = {"touches_ui": "a", "touches_copy": "b"}
 GOLDEN = Path(__file__).parent / "fixtures" / "spec_schemas_golden.json"
@@ -331,3 +334,30 @@ def test_conflict_reason_is_one_line_naming_the_cause_and_the_round():
     assert "3" in reason
     assert "\n" not in reason
     assert "\r" not in reason
+
+
+def test_the_wide_cause_is_the_narrow_one_plus_drawing():
+    flat = tuple(value for part in get_args(SpecEscalationCause) for value in get_args(part))
+    assert flat == (*get_args(SpecConflictCause), "drawing")
+
+
+def test_the_conflict_table_has_exactly_the_narrow_causes():
+    assert set(_CONFLICT_QUESTIONS) == set(get_args(SpecConflictCause))
+    assert "drawing" not in _CONFLICT_QUESTIONS
+
+
+@pytest.mark.parametrize(
+    "sub, base",
+    [
+        (TechAnswersWithAssumptions, TechAnswers),
+        (PlatformAnswersWithAssumptions, PlatformAnswers),
+        (TechPlanWithAssumptions, TechPlan),
+    ],
+)
+def test_spec_conflict_enum_of_each_schema_is_the_three_narrow_causes(sub, base):
+    prop = schemas.json_schema(sub, VOCAB)["properties"]["spec_conflict"]
+    values = [v for branch in prop.get("anyOf", [prop]) for v in branch.get("enum", [])]
+    assert sorted(values) == sorted(["contradiction", "conflict", "data_loss"])
+    assert "drawing" not in json.dumps(prop)
+    with pytest.raises(ValueError):
+        schemas.validate(sub, {**BASE_INPUT[base], "spec_conflict": "drawing"}, VOCAB)

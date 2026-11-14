@@ -130,3 +130,12 @@ def test_a_document_round_trip_keeps_the_pause_entries_with_and_without_the_caus
         assert document.parse(document.render({**base, "pause_log": log}))["pause_log"] == log
     assert "spec_cause" not in document.render({**base, "pause_log": plain})
     assert "spec_cause: data_loss" in document.render({**base, "pause_log": caused})
+
+
+def test_the_drawing_cause_round_trips_through_the_document():
+    """`drawing` is in the wide cause only: an escalation carrying it survives render and parse."""
+    patch = rules.escalation("questions", "why", spec=SPEC, spec_cause="drawing")
+    assert patch["spec_cause"] == "drawing"
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}, **patch}
+    loaded = document.parse(document.render(state))
+    assert loaded["spec_cause"] == "drawing"

@@ -40,7 +40,7 @@ from .task import (
     FindingCategory,
     FindingScope,
     Severity,
-    SpecEscalationCause,
+    SpecConflictCause,
 )
 from .task_path import TEXT_MAX, Size, validate_request
 from .tracker_items import TrackerItem
@@ -230,7 +230,7 @@ class TechAnswersWithAssumptions(TechAnswers):
         description="Behaviour decisions taken where the request was silent: one line each, "
         "at most 240 characters",
     )
-    spec_conflict: SpecEscalationCause | None = None
+    spec_conflict: SpecConflictCause | None = None
 
 
 class PlanSize(RoleOutput):
@@ -317,7 +317,7 @@ class PlatformAnswersWithAssumptions(PlatformAnswers):
         description="Behaviour decisions taken where the request was silent: one line each, "
         "at most 240 characters",
     )
-    spec_conflict: SpecEscalationCause | None = None
+    spec_conflict: SpecConflictCause | None = None
 
 
 class Consultation(RoleOutput):
@@ -820,7 +820,7 @@ class TechPlanWithAssumptions(TechPlan):
         description="Behaviour decisions taken where the request was silent: one line each, "
         "at most 240 characters",
     )
-    spec_conflict: SpecEscalationCause | None = Field(
+    spec_conflict: SpecConflictCause | None = Field(
         default=None,
         description="Set only when the spec cannot be built as written; explain which clause, "
         "and why, in your section",
