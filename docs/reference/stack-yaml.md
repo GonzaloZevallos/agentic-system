@@ -79,8 +79,8 @@ Generada por `scripts/docs/generate.py` desde `KEY_REFERENCE` en `agentic/core/k
 - **Presencia**: opcional
 - **Se lee como**: `Design | None`
 - **Si falta**: ausente = desactivado (el lector devuelve `None`)
-- **Subclaves**: `prototype`, `entry`, `sample_app`, `compare`
-- **Qué es**: mapping of `prototype`, `entry`, `sample_app` and `compare`: the static prototype
+- **Subclaves**: `prototype`, `entry`, `sample_app`, `compare`, `captures`
+- **Qué es**: mapping of `prototype`, `entry`, `sample_app`, `compare` and `captures`: the static prototype and its approved captures
 - **Lector**: `agentic.core.knowledge.domain.stack.design`
 
 ## `ci`
