@@ -2,6 +2,8 @@
 re-pointed to the last part(s) and told so, once; the parts and the task's own issue are
 never edited; a rewrite that breaks the post-condition writes nothing."""
 
+import pytest
+
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application import poll, split_sweep
 from agentic.core.process.application.ports import (
@@ -574,3 +576,62 @@ def test_append_blocker_through_the_real_re_point_adds_the_follow_up_once():
         ports, LAST, [LAST, FOLLOW_UP], refs_of(ports), {LAST}, rewrite=carve_out.append_blocker
     )
     assert again.complete and len(ports.tracker.updated_bodies) == writes
+
+
+def test_the_default_comment_is_todays_split_text_byte_for_byte():
+    ports = ports_with(**{"7": "Blocked by: #5"})
+    repoint_dependents(ports, 5, [8, 9], refs_of(ports), {5})
+
+    assert ports.tracker.commented_issues == [
+        (
+            URL.format(7),
+            "#5 was replaced by #8, #9 in this issue's blockers: #5 ended split into parts and "
+            "is not closed by them, so this issue waits on the last part(s) instead.",
+        )
+    ]
+
+
+def test_a_custom_comment_is_posted_with_the_parent_and_the_targets():
+    ports = ports_with(**{"7": "Blocked by: #5"})
+    seen = []
+
+    def comment(parent, targets):
+        seen.append((parent, list(targets)))
+        return "custom text"
+
+    repoint_dependents(
+        ports, 5, [5, 9], refs_of(ports), {9}, rewrite=carve_out.append_blocker, comment=comment
+    )
+
+    assert seen == [(5, [5, 9])]
+    assert ports.tracker.commented_issues == [(URL.format(7), "custom text")]
+
+
+@pytest.mark.parametrize(
+    "old",
+    [
+        "Blocked by: #5",
+        "  Blocked by: #5  ",
+        "Blocked by: #5, #6",
+        "```\nBlocked by: #5\n```\nBlocked by: #5",
+        "~~~\nBlocked by: #5\n~~~\nBlocked by: #5\n",
+        "x\r\nBlocked by: #5\r\ny\r\n",
+        "Blocked by: #5\n\nBlocked by: #5, #6",
+        "Blocked by: #5\nBlocked by: #9",
+    ],
+)
+def test_append_blocker_output_passes_both_readers_of_the_re_point(old):
+    new = carve_out.append_blocker(old, 5, [5, 9])
+
+    assert new is not None
+    assert split_sweep._post_condition(old, new, 5, [5, 9])
+    assert rules.repoint_confined(old, new, 5)
+    assert carve_out.append_blocker(new, 5, [5, 9]) is None
+
+
+def test_append_blocker_leaves_a_fenced_line_untouched():
+    old = "```\nBlocked by: #5\n```\nBlocked by: #5"
+
+    assert (
+        carve_out.append_blocker(old, 5, [5, 9]) == "```\nBlocked by: #5\n```\nBlocked by: #5, #9"
+    )
