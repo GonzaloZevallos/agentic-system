@@ -1789,3 +1789,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-13T23:45:41.361+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change adds or replaces a component, adapter or factory, update the hand-written architecture docs in the same change and check that no sentence there is now false, such as 'the only adapter'.
+  confidence: medium
+  seen_in:
+  - GH-704
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-14T03:19:20.199+00:00'
