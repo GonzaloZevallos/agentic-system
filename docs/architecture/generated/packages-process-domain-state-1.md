@@ -15,6 +15,7 @@ graph TD
     g_domain__roles["roles (grupo)"]
     g_domain__state__2["state parte 2 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
+    m_domain__carve_out["domain.carve_out"]
     m_domain__document["domain.document"]
     m_domain__escalation_prompts["domain.escalation_prompts"]
     m_domain__experiment["domain.experiment"]

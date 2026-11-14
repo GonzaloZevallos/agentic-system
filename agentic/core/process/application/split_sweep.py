@@ -20,7 +20,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ..domain import rules
+from ..domain import carve_out, rules
 from ..domain.landing import IssueRef
 from ..domain.task import TaskState
 from .ports import IssueState, Ports, TrackerRateLimited, TrackerTimedOut, TrackerUnreachable
@@ -169,6 +169,18 @@ def repoint_targets(state: TaskState) -> tuple[list[int], set[int]] | None:
     return [numbers[n - 1] for n in rules.last_part_numbers(state["parts"])], set(numbers)
 
 
+def _with_followups(
+    targets: list[int], parts: set[int], refs: Sequence[IssueRef]
+) -> tuple[list[int], set[int]]:
+    """`targets` followed by the open carve-out follow-ups (GH-719) whose marker names one of
+    them, and `parts` with those follow-ups added: a follow-up is a target, never edited. Reads
+    only the `refs` the round already holds. This covers just the dependents that still name the
+    parent (one created after the re-point, or a re-point left unfinished); a dependent already
+    on the last part gets the follow-up through `carve_out.append_blocker`, not here."""
+    found = [n for n in carve_out.followups_of(refs, targets) if n not in targets]
+    return [*targets, *found], {*parts, *found}
+
+
 def _judges_nothing(number: int) -> rules.BlockerVerdict:
     return "unknown"
 
@@ -248,7 +260,8 @@ def sweep(
             parent = ports.inbox.issue_of(task_id)
             if parent is None:
                 continue
-            result = repoint_dependents(ports, parent, targets, shared, {*parts, parent})
+            where, kept = _with_followups(targets, parts, shared)
+            result = repoint_dependents(ports, parent, where, shared, {*kept, parent})
             if result.stopped:
                 return [*lines, *_skipped(result.stopped_by, report_failures)]
             if result.complete:
@@ -347,7 +360,9 @@ def _close(
     if parent is None:
         return []
     if not repointed:
-        result = repoint_dependents(ports, parent, targets, refs.get(), {*parts, parent})
+        read = refs.get()
+        where, kept = _with_followups(targets, parts, read)
+        result = repoint_dependents(ports, parent, where, read, {*kept, parent})
         if result.stopped:
             raise _RoundStopped(result.stopped_by)
     unfinished = [f"agentic: split: {task_id}: close unfinished"] if report_failures else []

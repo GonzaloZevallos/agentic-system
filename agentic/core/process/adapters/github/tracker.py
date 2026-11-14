@@ -11,7 +11,7 @@ import json
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -530,14 +530,22 @@ class GhTracker:
         finally:
             Path(path).unlink(missing_ok=True)
 
-    def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
+    def open_issue(
+        self,
+        title: str,
+        body: str,
+        *,
+        label: str | None = None,
+        labels: Sequence[str] = (),
+    ) -> str:
         # `--body-file`, never `--body`: the one limit that can bite is GitHub's own,
         # never argv's (ADR-0034). The temp file is this call's alone; nothing reads it
         # back.
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
             handle.write(body)
             path = handle.name
-        extra = ("--label", label) if label else ()
+        merged = dict.fromkeys(name for name in (label, *labels) if name)
+        extra = tuple(part for name in merged for part in ("--label", name))
         try:
             return self._gh("issue", "create", "--title", title, "--body-file", path, *extra)
         finally:

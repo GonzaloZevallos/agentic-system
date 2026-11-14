@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 6 de 7, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 6 de 8, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -22,9 +22,16 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - [domain: state (parte 7)](classes-process-domain-state-7.md)
+  - [domain: state (parte 8)](classes-process-domain-state-8.md)
 
 ```mermaid
 classDiagram
+    class task__MergeCiRecord["MergeCiRecord"]
+    class task__MergeConflictRecord["MergeConflictRecord"]
+    class task__MergeOutcome["MergeOutcome"]
+    class task__MergeRefusalRecord["MergeRefusalRecord"]
+    class task__OutOfBoundsLine["OutOfBoundsLine"]
+    class task__OwnerRuleElsewhere["OwnerRuleElsewhere"]
     class task__PartRecord["PartRecord"]
     class task__PathRevision["PathRevision"]
     class task__PendingCloseDocs["PendingCloseDocs"]
@@ -33,13 +40,6 @@ classDiagram
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
     class task__ReleasePatch["ReleasePatch"]
-    class task__RestartPending["RestartPending"]
-    class task__RestartSettledRow["RestartSettledRow"]
-    class task__Restoration["Restoration"]
-    class task__ResumedPauseEntry["ResumedPauseEntry"]
-    class task__ReviewScopeRecord["ReviewScopeRecord"]
-    class task__RoleRun["RoleRun"]
-    class task__SettledRow["SettledRow"]
 ```
 
 ## Relaciones con otras páginas

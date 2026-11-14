@@ -1693,6 +1693,8 @@ class MemoryTracker:
         # every `rerun_failed_ci` and the run links it answers, its `ValueError` text and
         # every reference `close_pull_request` closed.
         self.opened_labels: list[str | None] = []
+        # The merged `label` + `labels` of each call, in order and without repeats.
+        self.opened_label_sets: list[tuple[str, ...]] = []
         # `(reference, text)` of every `comment_on_issue` that succeeded, and the calls
         # (0-based, failed ones counted) that raise `ValueError` instead.
         self.commented_issues: list[tuple[str, str]] = []
@@ -1860,7 +1862,14 @@ class MemoryTracker:
         self.pull_requests.append((branch, title, body))
         return self.url
 
-    def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
+    def open_issue(
+        self,
+        title: str,
+        body: str,
+        *,
+        label: str | None = None,
+        labels: Sequence[str] = (),
+    ) -> str:
         """`open_issue_fails_on` lists the calls (0-based, failed ones counted) that raise
         `ValueError`, `gh`'s own failure shape; `issue_numbers_from` makes each opened issue
         answer its own URL, numbered in order, instead of the shared one (ADR-0054)."""
@@ -1870,6 +1879,7 @@ class MemoryTracker:
             raise ValueError("gh: could not create the issue")
         self.opened_issues.append((title, body))
         self.opened_labels.append(label)
+        self.opened_label_sets.append(tuple(dict.fromkeys(n for n in (label, *labels) if n)))
         if self.issue_numbers_from is None:
             return self.url
         return (

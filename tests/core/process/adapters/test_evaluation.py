@@ -66,6 +66,15 @@ def test_a_tracker_write_keyed_by_task_id_does_nothing_and_reaches_no_tracker():
     assert (inner.comments, inner.labels, inner.unlabeled) == ([], [], [])
 
 
+def test_open_issue_with_labels_is_still_refused():
+    inner = MemoryTracker()
+
+    with pytest.raises(EvaluationWrite, match="open_issue"):
+        EvaluationTracker(inner).open_issue("t", "b", label="agentic", labels=["bug"])
+
+    assert inner.opened_issues == [] and inner.opened_label_sets == []
+
+
 @pytest.mark.parametrize("name", sorted(REFUSED_TRACKER_CALLS))
 def test_every_other_tracker_write_raises_evaluation_write(name):
     inner = MemoryTracker()

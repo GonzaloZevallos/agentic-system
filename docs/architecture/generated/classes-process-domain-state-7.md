@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 7 de 7, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 7 de 8, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -22,9 +22,17 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
+  - [domain: state (parte 8)](classes-process-domain-state-8.md)
 
 ```mermaid
 classDiagram
+    class task__RestartPending["RestartPending"]
+    class task__RestartSettledRow["RestartSettledRow"]
+    class task__Restoration["Restoration"]
+    class task__ResumedPauseEntry["ResumedPauseEntry"]
+    class task__ReviewScopeRecord["ReviewScopeRecord"]
+    class task__RoleRun["RoleRun"]
+    class task__SettledRow["SettledRow"]
     class task__ShadowRecord["ShadowRecord"]
     class task__SlicesClosedPatch["SlicesClosedPatch"]
     class task__Subtask["Subtask"]
@@ -32,17 +40,7 @@ classDiagram
     class task__TaskState["TaskState"]
     class task__TrackerActionDone["TrackerActionDone"]
     class task__TrackerFailure["TrackerFailure"]
-    class task__TrackerFailureRecord["TrackerFailureRecord"]
-    class task__TrackerPosted["TrackerPosted"]
-    class task_path__PathDecision["PathDecision"]
-    class task_path__PromoteRequest["PromoteRequest"]
-    class task_path__Promotion["Promotion"]
-    class task_path__RiskHit["RiskHit"]
-    class task_path__RiskNone["RiskNone"]
-    class task_path__RiskUnreadable["RiskUnreadable"]
-    task__Subtask --> task_path__PromoteRequest
     task__TaskState --|> task__TaskInput
-    task__TaskState --> task_path__Promotion
 ```
 
 ## Relaciones con otras páginas
@@ -51,8 +49,11 @@ classDiagram
   - `task.TaskState` se asocia con `task.ArmAssignment`
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `task.TaskState` se asocia con `task.EvaluationRef`
-  - `task.TaskState` se asocia con `task.FullChecksRecord`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.TaskState` se asocia con `task.PlanRoute`
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - `task.Subtask` se asocia con `task_path.PromoteRequest`
+  - `task.TaskState` se asocia con `task_path.Promotion`

@@ -11,6 +11,7 @@ doubles, the same two the other tests of those nodes use.
 """
 
 from collections import Counter
+from collections.abc import Sequence
 
 import pytest
 
@@ -68,9 +69,16 @@ class CountingTracker(MemoryTracker):
         self.calls["issue_comments"] += 1
         return super().issue_comments(task_id)
 
-    def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
+    def open_issue(
+        self,
+        title: str,
+        body: str,
+        *,
+        label: str | None = None,
+        labels: Sequence[str] = (),
+    ) -> str:
         self.calls["open_issue"] += 1
-        return super().open_issue(title, body, label=label)
+        return super().open_issue(title, body, label=label, labels=labels)
 
     def ensure_label(self, name: str) -> None:
         self.calls["ensure_label"] += 1
