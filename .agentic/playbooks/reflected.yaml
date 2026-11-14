@@ -1017,3 +1017,6 @@ tasks:
     cost_usd: 0.0711
   GH-704@review:
     cost_usd: 0.085
+  GH-713@review:
+    cost_usd: 0.0596
+    decisions: 2
