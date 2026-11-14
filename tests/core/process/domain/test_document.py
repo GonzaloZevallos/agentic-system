@@ -2117,7 +2117,12 @@ _CARVE_CLOSED = {
 
 @pytest.mark.parametrize(
     "record",
-    [_CARVE_CLOSED, _CARVE_OPEN, {**_CARVE_OPEN, "outcome": "refused", "cause": "no_issue"}],
+    [
+        _CARVE_CLOSED,
+        _CARVE_OPEN,
+        {**_CARVE_OPEN, "outcome": "refused", "cause": "no_issue"},
+        {**_CARVE_OPEN, "labels_unread": True},
+    ],
 )
 def test_the_carve_out_record_round_trips_and_a_second_render_is_identical(record):
     """GH-719: a complete record, a partial one (no outcome, no cause) and a refused one."""
@@ -2144,6 +2149,7 @@ def test_a_carve_out_record_with_an_unknown_key_loads_and_loses_it_on_rerender()
         ("data", "text"),
         ("fit", ["x"]),
         ("issue_url", 7),
+        ("labels_unread", "yes"),
     ],
 )
 def test_a_malformed_carve_out_record_fails_the_load_naming_the_source(key, value):

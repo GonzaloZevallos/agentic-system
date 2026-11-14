@@ -247,6 +247,7 @@ def _assumption_rows(raw: object) -> list[AssumptionRow]:
 
 _CARVE_STRINGS = ("at", "issue_url", "repointed_at", "commented_at")
 _CARVE_MAPPINGS = ("data", "fit")
+_CARVE_BOOLS = ("labels_unread",)
 _CARVE_CLOSED = {"outcome": get_args(CarveOutcome), "cause": get_args(CarveCause)}
 
 
@@ -254,8 +255,8 @@ def _carve_record(raw: object, source: object) -> CarveRecord:
     """The `carve_out` record read back (GH-719): only the declared keys of `CarveRecord`, so a key
     a later part adds is neither refused nor copied forward. Raises `ValueError(f"{source}: ...")`
     on a record that is not a mapping, a `data`/`fit` that is not one, a string field that is not a
-    `str`, or an `outcome`/`cause` outside its closed set: a closed record never reads back as an
-    unfinished one."""
+    `str`, a flag that is not a `bool`, or an `outcome`/`cause` outside its closed set: a closed
+    record never reads back as an unfinished one."""
     if not isinstance(raw, Mapping):
         raise ValueError(f"{source}: carve_out is not a mapping")
     out: dict[str, Any] = {}
@@ -268,6 +269,11 @@ def _carve_record(raw: object, source: object) -> CarveRecord:
         if key in raw:
             if not isinstance(raw[key], str):
                 raise ValueError(f"{source}: carve_out.{key} is not a string")
+            out[key] = raw[key]
+    for key in _CARVE_BOOLS:
+        if key in raw:
+            if not isinstance(raw[key], bool):
+                raise ValueError(f"{source}: carve_out.{key} is not a boolean")
             out[key] = raw[key]
     for key, allowed in _CARVE_CLOSED.items():
         if key in raw:

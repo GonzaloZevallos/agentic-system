@@ -1493,7 +1493,8 @@ class CarveRecord(TypedDict, total=False):
     """The task document's depth-2 carve-out record (GH-719): `data` is the declared
     `carve_out.CarveOut`, `fit` the size judgement it was made against, `at` the ISO time,
     `issue_url` the follow-up issue, `repointed_at` and `commented_at` the ISO times of the
-    re-point and of the comment on the part.
+    re-point and of the comment on the part. `labels_unread` is `True` when the part's labels could
+    not be read, so the follow-up got only `agentic` and the comment on the part says so.
 
     `outcome` is written only when the record closes: a record with `data` and no `outcome` is
     an unfinished carve-out. `refused` is terminal and carries only the causes `evaluation` or
@@ -1506,6 +1507,7 @@ class CarveRecord(TypedDict, total=False):
     issue_url: str
     repointed_at: str
     commented_at: str
+    labels_unread: bool
     outcome: CarveOutcome
     cause: CarveCause
 
