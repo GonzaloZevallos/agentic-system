@@ -5,10 +5,11 @@ free prose. A leaf at module level: the standard library and `typing` only, so `
 
 The one place that decides what kind an item is, and the one table that says what each kind
 holds (GH-625). Only `human` is performed so far: a question for the owner with the author's
-recommendation, which reaches a human as an escalation, and `comment`, a note the system posts on
-the task's own issue (GH-689), from a delivery and from a tracker-only plan (GH-705). A kind is added to `KINDS` only in the diff that adds the code
-that performs it; its row and its type may exist before. A `system` row's fields are also kept
-from naming anything outside this issue, so what the system posts links nowhere."""
+recommendation, which reaches a human as an escalation, and `comment`, a note the system posts
+on the task's own issue (GH-689), from a delivery and from a tracker-only plan (GH-705). A kind
+is added to `KINDS` only in the diff that adds the code that performs it; its row and its type
+may exist before. A `system` row's fields are also kept from naming anything outside this issue,
+so what the system posts links nowhere."""
 
 import hashlib
 import re
