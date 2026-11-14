@@ -1799,3 +1799,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-14T03:19:20.199+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: On the integrated branch, enumerate every branch of each new gate or route, including escalation after a revision, and confirm a test reaches each one before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-714
+  sources:
+  - finding
+  added_at: '2026-11-14T04:28:57.680+00:00'
