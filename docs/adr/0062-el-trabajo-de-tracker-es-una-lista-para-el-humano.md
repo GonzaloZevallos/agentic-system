@@ -266,3 +266,48 @@ hace en la misma corrida y se informa.
   del plan ya no rechaza ítems del sistema en un plan solo de tracker; la regla de
   `estimated_files == 0` se mantiene.
 
+### Extensión (GH-690): el sistema abre los ítems `open_issue`
+
+Tercer tipo de ítem que el sistema realiza, además de `comment` y `human`.
+
+- **Qué hace:** abre un issue de texto plano con la etiqueta `needs-triage`, sin la etiqueta
+  `agentic`, así que no arranca ninguna corrida; lo leen el dueño y PjM. El modelo nunca elige la
+  etiqueta: ningún campo, esquema o prompt la nombra, y solo el ejecutor pasa `TRIAGE_LABEL`.
+  Tras validar, el sistema agrega al cuerpo el pie `From task: #N` y el marcador. `#N` es el issue
+  del que vino la tarea (en una parte de un split, el issue de la parte) y sale solo de
+  `ports.inbox.issue_of`, nunca del texto del modelo.
+- **Reglas de texto:** `title` es de una línea; `body` admite varias, con el tope
+  `MAX_BODY_CHARS`. Rigen las mismas prohibiciones de texto plano que en `comment` (URL, `![`,
+  `](`, HTML, `#N`, `owner/repo#N`, `GH-N`, menciones y marcadores). Además se rechaza toda línea
+  de un campo de varias líneas que empiece (sin distinguir mayúsculas, tras `strip()`) por
+  `Blocked by:`, `Closes`, `Fixes` o `Resolves`; las líneas se cortan con `splitlines()` y no se
+  salta ninguna valla de código.
+- **Marcador:** `<!-- agentic-item: <tarea> <clave> -->`. La clave de un `open_issue` es el título
+  normalizado (minúsculas, espacios colapsados), de una sola función, usada por `parse` y por
+  `marker`; el marcador de un `comment` conserva sus bytes. `parse` rechaza dos ítems `open_issue`
+  con el mismo título normalizado.
+- **La guarda:** un ítem con registro se salta. Si no, se lee `ports.inbox.open_issue_refs()`
+  (una vez por corrida); esa lectura levanta `ValueError` cuando la lista puede estar cortada, y
+  entonces no se actúa ni se registra (el ítem queda como fallo, igual que en `comment`). Si un
+  issue abierto tiene el marcador en su cuerpo, solo se registra `{at, kind, url}` con la URL de ese
+  issue. Si no, se llama a `ensure_label(TRIAGE_LABEL)` y luego a `open_issue(...)`. El registro se
+  escribe solo tras el éxito y se guarda de inmediato. El issue se identifica solo por el marcador,
+  nunca por el título.
+- **Informe:** la URL del issue abierto aparece en el comentario de listo de `deliver` y en el
+  informe `DONE` de `tracker_only`; en un plan con `open_issue` y `human`, el issue se abre, se
+  enlaza en el informe y después se escala `questions`.
+- **Evaluación:** `EvaluationTracker.open_issue` y `ensure_label` son métodos explícitos que
+  levantan `ValueError("evaluation runs write nothing")`: una corrida de evaluación no deja
+  registro de `open_issue`.
+- **Cambio de §8:** la salida del Tech Lead ahora puede publicar texto plano en su propio issue
+  (`Plan note: `) y abrir issues `needs-triage` de texto plano. Nada más.
+- **Límites conocidos:**
+  1. La lectura acotada cuesta disponibilidad, no duplicados: con la lista posiblemente cortada no
+     se abre nada.
+  2. Un issue que el dueño cerró después de perderse su registro puede abrirse de nuevo, porque la
+     lectura solo ve los issues abiertos.
+  3. Un título reformulado tras un reinicio desde cero puede abrir un duplicado, porque la clave es
+     el título.
+  4. Un `open_issue` titulado como un issue de flake (`Flaky check: <check>`) puede ser adoptado por
+     el camino de flakes, que también busca por título exacto.
+
