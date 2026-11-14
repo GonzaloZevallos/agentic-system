@@ -491,3 +491,17 @@ def test_escalate_human_with_the_graphs_empty_spec_is_the_patch_of_today():
     assert tracker_items.escalate_human({"tracker_items": [ITEM], "spec": {}}, AT) == plain
     assert "spec_cause" not in plain
     assert plain["pause_log"] == [{"kind": "escalation", "value": "questions", "at": AT}]
+
+
+def test_done_marker_names_the_task_and_the_digest_of_the_sorted_hashes():
+    a, b = tracker_items.item_hash(COMMENT), tracker_items.item_hash(_comment("Second note."))
+    assert tracker_items.done_marker("GH-7", [a, b]) == (
+        f"<!-- agentic-done: GH-7 {tracker_items.digest(sorted([a, b]))} -->"
+    )
+
+
+def test_done_marker_does_not_depend_on_the_order_and_differs_for_another_set():
+    a, b = tracker_items.item_hash(COMMENT), tracker_items.item_hash(_comment("Second note."))
+    assert tracker_items.done_marker("GH-7", [a, b]) == tracker_items.done_marker("GH-7", [b, a])
+    assert tracker_items.done_marker("GH-7", [a]) != tracker_items.done_marker("GH-7", [a, b])
+    assert tracker_items.done_marker("GH-7", [a]) != tracker_items.done_marker("GH-8", [a])

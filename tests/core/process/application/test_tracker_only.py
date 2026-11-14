@@ -14,6 +14,7 @@ from agentic.core.process.application.tracker_only import (
     tracker_only,
 )
 from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import tracker_items as items
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryTracker, memory_ports
@@ -219,3 +220,141 @@ async def test_a_legacy_checklist_next_to_unanswered_typed_items_waits_for_the_d
     patch = await tracker_only({**STATE, "tracker_items": [_ITEM]}, cfg(tmp_path), ports)
     assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
     assert not any(text.startswith(TRACKER_WORK) for _, text in ports.tracker.comments)
+
+
+# --- GH-705: the node performs the plan's system items, reports them, then raises the human ones
+
+
+NOTE = {"kind": "comment", "text": "Superseded by the newer item."}
+SECOND = {"kind": "comment", "text": "The retry is tracked elsewhere."}
+TYPED = {k: v for k, v in STATE.items() if k != "tracker_checklist"}
+
+
+def typed(*plan):
+    return {**TYPED, "tracker_items": list(plan)}
+
+
+def done_line(*plan):
+    return items.done_marker("GH-307", [items.item_hash(item) for item in plan])
+
+
+class FailingOnCall(MemoryTracker):
+    """`comment` raises `ValueError` on the calls (0-based) in `fails_on`, with a text that must
+    never reach an escalation; every `issue_comments` read is counted."""
+
+    SECRET = "gh said: token ghp_SECRET rejected"
+
+    def __init__(self, fails_on):
+        super().__init__()
+        self.fails_on = set(fails_on)
+        self.calls = 0
+        self.reads = 0
+
+    def comment(self, task_id, text):
+        call, self.calls = self.calls, self.calls + 1
+        if call in self.fails_on:
+            raise ValueError(self.SECRET)
+        super().comment(task_id, text)
+
+    def issue_comments(self, task_id):
+        self.reads += 1
+        return super().issue_comments(task_id)
+
+
+async def test_a_comment_and_a_human_item_post_the_note_and_the_report_then_raise_the_human(
+    tmp_path,
+):
+    ports = memory_ports()
+    patch = await tracker_only(typed(NOTE, _ITEM), cfg(tmp_path), ports)
+
+    (_, note), (task_id, report) = ports.tracker.comments
+    assert note == f"{items.PLAN_NOTE}{NOTE['text']}\n\n{items.marker(NOTE, 'GH-307')}"
+    assert task_id == "GH-307"
+    assert report == (f"{items.DONE}\n- comment posted on this issue\n\n{done_line(NOTE)}")
+    assert report.startswith(items.DONE)
+    assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
+    done = patch["tracker_actions_done"]
+    assert done[items.item_hash(NOTE)]["kind"] == "comment"
+    assert set(done[items.item_hash(_ITEM)]) == {"at"}
+    assert patch["tracker_human"] == [items.item_hash(_ITEM)]
+    assert set(done) == {items.item_hash(NOTE), items.item_hash(_ITEM)}
+
+
+async def test_a_plan_of_only_comment_items_ends_tracker_only_without_escalating(tmp_path):
+    ports = memory_ports()
+    patch = await tracker_only(typed(NOTE, SECOND), cfg(tmp_path), ports)
+
+    assert patch["status"] == "tracker_only" and patch["current_role"] == "PjM"
+    assert "escalation_class" not in patch and "tracker_human" not in patch
+    assert set(patch["tracker_actions_done"]) == {items.item_hash(NOTE), items.item_hash(SECOND)}
+    *_, (_, report) = ports.tracker.comments
+    assert report.count("- comment posted on this issue") == 2
+    assert report.splitlines()[-1] == done_line(NOTE, SECOND)
+    assert ports.tracker.pull_requests == [] and "delivery_outcome" not in patch
+
+
+async def test_a_second_run_over_the_resulting_state_posts_nothing(tmp_path):
+    ports = memory_ports()
+    first = await tracker_only(typed(NOTE, _ITEM), cfg(tmp_path), ports)
+    posted = list(ports.tracker.comments)
+    again = await tracker_only(apply(typed(NOTE, _ITEM), first), cfg(tmp_path), ports)
+    assert ports.tracker.comments == posted and len(posted) == 2
+    assert again["status"] == "tracker_only" and "escalation_class" not in again
+
+
+async def test_a_lost_checkpoint_records_the_items_and_the_report_without_posting(tmp_path):
+    ports = memory_ports()
+    await tracker_only(typed(NOTE), cfg(tmp_path), ports)  # its record and checkpoint are lost
+    assert len(ports.tracker.comments) == 2
+    patch = await tracker_only(typed(NOTE), cfg(tmp_path), ports)
+    assert len(ports.tracker.comments) == 2
+    assert patch["tracker_actions_done"][items.item_hash(NOTE)]["kind"] == "comment"
+    assert patch["status"] == "tracker_only"
+
+
+@pytest.mark.parametrize(
+    ("call", "step", "recorded"),
+    [
+        (0, "posting a plan note", 0),
+        (1, "posting a plan note", 1),
+        (2, "posting the done report", 2),
+    ],
+)
+async def test_a_failed_post_escalates_failure_and_the_failed_step_leaves_no_record(
+    tmp_path, call, step, recorded
+):
+    tracker = FailingOnCall({call})
+    ports = memory_ports(tracker=tracker)
+    patch = await tracker_only(typed(NOTE, SECOND, _ITEM), cfg(tmp_path), ports)
+
+    assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "failure"
+    assert step in patch["escalated"] and "ValueError" in patch["escalated"]
+    assert FailingOnCall.SECRET not in str(patch)  # invariant: the class only, never the text
+    assert len(patch.get("tracker_actions_done", {})) == recorded
+    assert items.item_hash(_ITEM) not in patch.get("tracker_actions_done", {})
+    assert "tracker_human" not in patch  # the human items are not raised on a failure
+    if call == 2:
+        assert len(ports.tracker.comments) == 2  # both notes are on the issue, no DONE
+        assert all(not text.startswith(items.DONE) for _, text in ports.tracker.comments)
+    resumed = apply(typed(NOTE, SECOND, _ITEM), patch)
+    done = await tracker_only(resumed, cfg(tmp_path), ports)
+    assert done["escalation_class"] == "questions"
+    assert [t for _, t in ports.tracker.comments if t.startswith(items.DONE)] != []
+
+
+async def test_a_plan_of_only_human_items_makes_no_tracker_call_at_all(tmp_path):
+    tracker = FailingOnCall(set())
+    ports = memory_ports(tracker=tracker)
+    patch = await tracker_only(typed(_ITEM), cfg(tmp_path), ports)
+    assert tracker.reads == 0 and tracker.calls == 0 and ports.tracker.comments == []
+    assert patch["tracker_actions_done"] == {
+        items.item_hash(_ITEM): {"at": patch["pause_log"][0]["at"]}
+    }
+
+
+async def test_nothing_is_read_when_no_system_item_was_done(tmp_path):
+    tracker = FailingOnCall(set())
+    answered = {items.item_hash(_ITEM): {"at": "t", "answered": "t"}}
+    state = {**typed(_ITEM), "tracker_actions_done": answered}
+    patch = await tracker_only(state, cfg(tmp_path), memory_ports(tracker=tracker))
+    assert tracker.reads == 0 and patch["status"] == "tracker_only"

@@ -5,14 +5,15 @@ free prose. A leaf at module level: the standard library and `typing` only, so `
 
 The one place that decides what kind an item is, and the one table that says what each kind
 holds (GH-625). Only `human` is performed so far: a question for the owner with the author's
-recommendation, which reaches a human as an escalation, and `comment`, a note the system posts on
-the task's own issue (GH-689). A kind is added to `KINDS` only in the diff that adds the code
-that performs it; its row and its type may exist before. A `system` row's fields are also kept
-from naming anything outside this issue, so what the system posts links nowhere."""
+recommendation, which reaches a human as an escalation, and `comment`, a note the system posts
+on the task's own issue (GH-689), from a delivery and from a tracker-only plan (GH-705). A kind
+is added to `KINDS` only in the diff that adds the code that performs it; its row and its type
+may exist before. A `system` row's fields are also kept from naming anything outside this issue,
+so what the system posts links nowhere."""
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal, NamedTuple, TypedDict, TypeGuard, assert_never
 
 
@@ -289,6 +290,13 @@ def marker(item: TrackerItem, task_id: str) -> str:
     """The line a posted item's comment ends with, so a run that lost its record finds the
     comment on the issue and posts nothing again. `parse` keeps `<!--` out of every field."""
     return f"<!-- agentic-item: {task_id} {item_hash(item)} -->"
+
+
+def done_marker(task_id: str, hashes: Iterable[str]) -> str:
+    """The line the DONE report ends with: the task and a digest of the `item_hash` of the items
+    it reports, in sorted order. Never computed over the report's text, so a rewording of the
+    report cannot make a repeated run post it again."""
+    return f"<!-- agentic-done: {task_id} {digest(sorted(hashes))} -->"
 
 
 def report(items: Sequence[TrackerItem], done: Mapping[str, Mapping[str, object]]) -> str:
