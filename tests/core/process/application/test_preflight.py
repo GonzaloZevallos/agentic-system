@@ -444,6 +444,16 @@ def test_a_filled_slot_reaches_the_rendered_prompt(tmp_path):
     assert "{{" not in text
 
 
+def test_the_carve_out_prompt_renders_in_the_gate_with_its_three_placeholders(tmp_path):
+    role = next(r for r in ROLES if r.slug == "tech_lead_carve_out")
+    text = load_prompt(
+        role, Configuration(product_dir=tmp_path), memory_ports(), {}, **PLACEHOLDERS
+    ).text
+    assert "{{" not in text
+    assert "a plan output" in text and PLACEHOLDERS["carve_rules"] in text
+    assert PLACEHOLDERS["carve_fit"].strip() in text
+
+
 POST_MERGE_SENTENCE = "is still a subtask of this task, never a part"
 
 

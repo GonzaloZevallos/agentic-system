@@ -250,6 +250,48 @@ class PlanSize(RoleOutput):
     )
 
 
+class CarveOutOutput(RoleOutput):
+    """What the Tech Lead declares when it carves whole subtasks out of a plan that is over the
+    size budget (GH-719): `carve_out.CarveOut` field for field. Which declaration is valid for
+    which plan is `carve_out.validate`'s call; this is its shape."""
+
+    steps: list[str] = Field(
+        description="The ids of the subtasks to extract, whole with their tests: a strict "
+        "non-empty subset of the plan's subtask ids"
+    )
+    title: str = Field(description="The follow-up issue's title, one line")
+    body: str = Field(description="What the follow-up issue is about, in your own words")
+    kind: Literal["change", "migration"] = Field(description="The follow-up issue's kind")
+    moved_criteria: list[str] = Field(
+        description="The acceptance criteria that move with the extracted steps and leave the "
+        "remainder, one per line; an empty string if none"
+    )
+    estimated_cost_usd: float = Field(
+        ge=0, description="The remainder's TOTAL cost in USD, redeclared for what is left"
+    )
+    estimated_files: int = Field(
+        ge=0, description="The files the remainder's pull request will show as changed"
+    )
+    hand_files: int = Field(ge=0, description="The remainder's hand-written files")
+    hand_lines: int = Field(ge=0, description="The remainder's hand-written lines")
+    test_lines: int = Field(ge=0, description="The remainder's test lines")
+    required_paths: list[str] = Field(
+        description="The remainder's required paths: a subset of the original plan's, one per "
+        "line; an empty string if none"
+    )
+    ci_required: list[str] = Field(
+        description="The remainder's required CI checks: a subset of the original plan's, one "
+        "per line; an empty string if none"
+    )
+    integration: str = Field(
+        description="The remainder's integration, redeclared: it names no extracted id"
+    )
+    remainder_green: str = Field(
+        description="One line: what stays green and working once only the remainder is built"
+    )
+    guard: str = Field(description="What keeps the remainder from changing behaviour on its own")
+
+
 class CritiqueFinding(BaseModel):
     """One objection of the plan critic, with what backs it (GH-472)."""
 

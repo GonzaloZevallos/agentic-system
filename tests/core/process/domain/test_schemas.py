@@ -3,10 +3,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentic.core.process.domain import rules, schemas, size_budget
+from agentic.core.process.domain import carve_out, rules, schemas, size_budget
 from agentic.core.process.domain.schemas import (
     PRD,
     Answers,
+    CarveOutOutput,
     Classification,
     TechAnswers,
     TechPlan,
@@ -1598,3 +1599,52 @@ def test_the_spec_conflict_field_is_in_the_spec_plan_schema_and_not_in_the_plain
     spec = schemas.TechPlanWithAssumptions.model_json_schema()["properties"]
     assert "cannot be built as written" in spec[field]["description"]
     assert field not in schemas.TechPlan.model_json_schema()["properties"]
+
+
+_CARVE: dict = {
+    "markdown": "### Carve",
+    "steps": ["b"],
+    "title": "Carved steps",
+    "body": "Does the rest.",
+    "kind": "change",
+    "moved_criteria": ["it works"],
+    "estimated_cost_usd": 10.0,
+    "estimated_files": 5,
+    "hand_files": 3,
+    "hand_lines": 100,
+    "test_lines": 50,
+    "required_paths": ["src/a.py"],
+    "ci_required": ["tests"],
+    "integration": "wire a",
+    "remainder_green": "the app still builds",
+    "guard": "nothing calls it",
+}
+
+
+def test_the_carve_out_output_has_the_fields_of_the_carve_out_and_nothing_else():
+    assert set(CarveOutOutput.model_fields) - {"markdown"} == set(carve_out.CarveOut.__annotations__)
+
+
+def test_a_valid_carve_out_output_validates_and_its_line_lists_come_back_as_lists():
+    assert schemas.validate(CarveOutOutput, _CARVE, {}) == _CARVE
+    as_text = {**_CARVE, "steps": "b\nc", "required_paths": "src/a.py\nsrc/b.py"}
+    out = schemas.validate(CarveOutOutput, as_text, {})
+    assert out["steps"] == ["b", "c"] and out["required_paths"] == ["src/a.py", "src/b.py"]
+    assert {"steps", "moved_criteria", "required_paths", "ci_required"} <= set(
+        schemas.line_lists(CarveOutOutput)
+    )
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {k: v for k, v in _CARVE.items() if k != "guard"},
+        {**_CARVE, "kind": "refactor"},
+        {**_CARVE, "hand_lines": -1},
+        {**_CARVE, "estimated_cost_usd": -0.5},
+    ],
+    ids=["missing field", "unknown kind", "negative size", "negative cost"],
+)
+def test_an_invalid_carve_out_output_is_refused(broken):
+    with pytest.raises(ValueError):
+        schemas.validate(CarveOutOutput, broken, {})
