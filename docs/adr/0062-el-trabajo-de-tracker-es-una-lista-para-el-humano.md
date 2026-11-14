@@ -309,5 +309,5 @@ Tercer tipo de ítem que el sistema realiza, además de `comment` y `human`.
   3. Un título reformulado tras un reinicio desde cero puede abrir un duplicado, porque la clave es
      el título.
   4. Un `open_issue` titulado como un issue de flake (`Flaky check: <check>`) puede ser adoptado por
-     el camino de flakes, que también busca por título exacto.
+     el camino de flakes (`landing.flake_issue_for`), que también busca por título exacto.
 
