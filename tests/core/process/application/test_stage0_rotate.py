@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -165,7 +166,8 @@ class Beats:
         self.stored: dict[str, Heartbeat | Unreadable] = {}
 
     def write(self, key: str, checkout: Path, at: datetime, phase: str, interval_s: float) -> None:
-        refused = not checkout.is_absolute() or at.utcoffset() is None
+        slug = re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", key) is not None
+        refused = not slug or not checkout.is_absolute() or at.utcoffset() is None
         if refused or phase not in ("start", "end", "stop") or not 0 < interval_s <= 86400:
             raise ValueError("refused")
         self.stored[key] = (
@@ -881,3 +883,20 @@ def test_an_infinity_in_a_heartbeat_file_does_not_make_rotate_raise(tmp_path: Pa
     w.beats = FilesystemHeartbeats(tmp_path)
     w.run()
     assert w.out == [f"rollback: {B} -> {A}"]
+
+
+@pytest.mark.parametrize(
+    ("key", "checkout", "at", "interval_s"),
+    [
+        ("A-poll", ROOT, NOW, 60),
+        ("../x", ROOT, NOW, 60),
+        ("a-poll", Path("rel"), NOW, 60),
+        ("a-poll", ROOT, datetime(2026, 1, 1), 60),
+        ("a-poll", ROOT, NOW, 0),
+    ],
+)
+def test_the_beats_double_refuses_what_the_adapter_refuses(
+    key: str, checkout: Path, at: datetime, interval_s: float
+) -> None:
+    with pytest.raises(ValueError):
+        Beats([]).write(key, checkout, at, "end", interval_s)
