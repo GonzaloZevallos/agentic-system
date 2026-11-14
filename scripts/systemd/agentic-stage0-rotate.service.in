@@ -1,0 +1,20 @@
+# The stage0 rotator, as a `systemd --user` oneshot started by agentic-stage0-rotate.timer.
+# There is one per machine, not one per product: it rotates the shared <root>/current.
+# `scripts/install-poller.sh --rotate` renders the placeholders into absolute paths.
+#
+# `.env`, AGENTIC_STAGE0_PIN included, is read from current's working directory, which is
+# why WorkingDirectory= is <root>/current.
+#
+# TimeoutStartSec= covers the rotator's own wall caps (adapters/shell/stage0_candidate.py):
+# 600 + 2x60 + 900 + 60 + 300 per installed product seconds, about 38 min with two products.
+## Template-only note: no After= on the pollers; expected_pollers and the 15 min rollback
+## grace already cover the first run after a boot.
+[Unit]
+Description=agentic stage0 rotation for @ROOT@
+
+[Service]
+Type=oneshot
+TimeoutStartSec=60min
+WorkingDirectory=@ROOT@/current
+Environment="PATH=@PATH@"
+ExecStart="@ROOT@/current/.venv/bin/agentic" stage0 rotate --root "@ROOT@"

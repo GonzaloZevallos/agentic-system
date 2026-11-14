@@ -9,6 +9,14 @@
 #
 # There is no EnvironmentFile=: the poller reads `.env` itself with `load_dotenv()` from
 # its working directory, which is why WorkingDirectory= is the stage0 checkout.
+## Lines starting with `## ` are notes for whoever edits this template: install-poller.sh
+## deletes them before rendering, so they never reach the installed unit.
+## - Pollers run from <root>/current, a symlink (install-poller.sh --rotate keeps the link
+##   path in WorkingDirectory= and ExecStart=, it does not resolve it).
+## - At the start of a round the poller re-execs onto the resolved real path of that
+##   link (reexec_due, ADR-0098), so a rotation takes hold without restarting the unit.
+## - KillMode=process keeps the live runs on their own stage0: the poller restarting on a
+##   new stage0 does not touch them.
 [Unit]
 Description=agentic poller for @PRODUCT_DIR@
 StartLimitIntervalSec=0
