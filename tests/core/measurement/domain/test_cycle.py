@@ -582,10 +582,21 @@ def _imports_rules(node):
     return isinstance(node, ast.Import) and any(a.name.endswith("rules") for a in node.names)
 
 
+def _module_import(node):
+    """`from agentic.core.process.domain import ..., rules`, the one other way `cycle` reaches
+    `rules` (GH-757): it calls `rules.terminal_failures` through the module, so the reasons that
+    subdivide a pause come from the filter `pause_kind` reads and from no copy of it."""
+    return (
+        isinstance(node, ast.ImportFrom)
+        and node.module == "agentic.core.process.domain"
+        and ("rules", None) in [(a.name, a.asname) for a in node.names]
+    )
+
+
 def only_pause_kind_violations(source):
     """Where `source` reaches `core.process.domain.rules` other than by exactly one
     `from ...rules import pause_kind` with no alias; a missing import is a violation too."""
-    nodes = [n for n in ast.walk(ast.parse(source)) if _imports_rules(n)]
+    nodes = [n for n in ast.walk(ast.parse(source)) if _imports_rules(n) and not _module_import(n)]
     found = [
         f"line {n.lineno}"
         for n in nodes

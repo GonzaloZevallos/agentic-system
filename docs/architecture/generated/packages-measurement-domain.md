@@ -20,6 +20,7 @@ graph TD
     m_domain__role_usage["domain.role_usage"]
     m_domain__scorecard["domain.scorecard"]
     m_domain__shadow_report["domain.shadow_report"]
+    m_domain__stages["domain.stages"]
     m_domain__task_scores["domain.task_scores"]
     m_domain__cycle --> g_pkg__agentic__core__process
     m_domain__cycle --> m_domain__parallel_factor
@@ -44,6 +45,8 @@ graph TD
     m_domain__scorecard --> m_domain__planning
     m_domain__shadow_report --> g_pkg__agentic__core__process
     m_domain__shadow_report --> m_domain__cycle
+    m_domain__stages --> m_domain__cycle
+    m_domain__stages --> m_domain__parallel_factor
     m_domain__task_scores --> g_pkg__agentic__core__process
     m_domain__task_scores --> m_domain__metrics
 ```

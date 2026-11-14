@@ -3998,7 +3998,7 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
     return log[last_resumed + 1 :]
 
 
-def _terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
+def terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
     """`entries` without the failures the run already retried (GH-659), in the same order. A batch
     is the contiguous `failure` entries before the `escalation` entry that closes them (one
     `rules.logged` call per `run_role`); inside a batch a failure is superseded only by a later
@@ -4023,13 +4023,13 @@ def _terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
 def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
     """The key `entries` are retaken by, `None` when a human is needed (GH-593): the one reading
     both `auto_resumable` (the poller's) and `pause_kind` (the measurement's) share, so a cause is
-    mechanical in one place. Every failure that ended the run (`_terminal_failures`: not one the
+    mechanical in one place. Every failure that ended the run (`terminal_failures`: not one the
     run already retried) is in `EXTERNAL_REASONS`, and every escalation is either a `failure` one
     (a role broke, the failures say why) or carries a `MechanicalCause`; there is at least one
     failure or one cause. The key is the most recent entry's own: a failure's reason, or an
     escalation's cause."""
     keyed: list[ResumeKey] = []
-    for entry in _terminal_failures(entries):
+    for entry in terminal_failures(entries):
         if entry["kind"] == "failure":
             if entry["value"] not in EXTERNAL_REASONS:
                 return None
