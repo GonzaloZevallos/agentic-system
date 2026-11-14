@@ -76,6 +76,11 @@ TABLE: tuple[Row, ...] = (
         "`pull_request` or `merge`",
     ),
     Row(
+        "*docs/adr/*",
+        ("tests/test_poll_reexec.py",),
+        "it lists docs/adr and asserts the ADR of the poller's re-exec exists once, by slug",
+    ),
+    Row(
         "agentic/core/process/adapters/filesystem/heartbeats.py",
         (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",

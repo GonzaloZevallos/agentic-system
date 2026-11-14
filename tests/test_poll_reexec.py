@@ -630,6 +630,7 @@ def test_the_adr_of_the_re_exec_exists_once_with_its_known_risks():
         "el-poller-sigue-la-rotacion-de-stage0-con-un-re-exec-"
         "y-el-rotador-revierte-lo-que-nadie-adopto"
     )
-    found = list(Path(cli.__file__).resolve().parents[1].glob(f"docs/adr/*-{slug}.md"))
+    adrs = Path(cli.__file__).resolve().parents[1] / "docs" / "adr"
+    found = [path for path in adrs.iterdir() if path.name.endswith(f"-{slug}.md")]
     assert len(found) == 1
     assert "## Riesgos conocidos" in found[0].read_text()
