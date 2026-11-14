@@ -23,7 +23,7 @@ el poller se pasa al stage vigente y cómo el rotador deshace un cambio que ning
   Ante un `OSError` se vuelve al cwd guardado, se retoma el lock por el mismo camino que `_locked`
   y la ronda sigue en el código viejo; la siguiente reintenta. Si el lock lo tiene ya un poller
   vivo, el proceso termina con 0 sin soltarlo ni escribir latidos (`_PollHold.held` es falso).
-- **`AGENTIC_REEXEC_FROM`.** El proceso nuevo recibe el stage de origen; si `current` apunta ahí
+- **`AGENTIC_REEXEC_FROM`.** El proceso nuevo recibe el stage destino (el del exec); si `current` apunta ahí
   otra vez (`reexec_blocked`) no vuelve a hacer exec: dice `reexec_failed` una vez y sigue. Solo
   un proceso con esa marca hereda hijos: lee una vez `/proc/self/task/*/children` y en cada ronda
   recoge con `waitpid(pid, WNOHANG)` los que pasaron a `Z`. Nunca `waitpid(-1)`.
