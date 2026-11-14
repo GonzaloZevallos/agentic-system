@@ -1776,11 +1776,11 @@ class FullChecksRead(TypedDict):
 FULL_CHECKS_READS_KEPT = 4
 
 
-def _is_read(row: Any) -> bool:
+def _is_read(row: object) -> bool:
     return isinstance(row, dict) and type(row.get("version")) is int
 
 
-def _valid_reads(rows: Any) -> list[FullChecksRead]:
+def _valid_reads(rows: object) -> list[FullChecksRead]:
     """The rows of `rows` that are a dict with an int `version` (a bool is not one): the one
     filter the reducer and `delta` share, so a malformed row is dropped and never raises."""
     if not isinstance(rows, list):
@@ -2199,9 +2199,10 @@ class TaskState(TaskInput, total=False):
     # no verdict, gate or landing step reads it. Only `landing.scope_patch` writes it.
     review_scopes: Annotated[list[ReviewScopeRecord], add_review_scopes]
     # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),
-    # `add_full_checks_reads`: sorted by version, only the 4 highest versions are kept or ever
-    # emitted by `delta`. Read with `.get("full_checks_reads", [])`: a document written before
-    # it has none. Hashes only, never log text.
+    # `add_full_checks_reads`: sorted by version, only the 4 highest versions are kept (`delta`
+    # emits the valid rows of those, or `after` as it is when `before` has no key, which `apply`
+    # folds back through the reducer). Read with `.get("full_checks_reads", [])`: a document
+    # written before it has none. Hashes only, never log text.
     full_checks_reads: Annotated[list[FullChecksRead], add_full_checks_reads]
 
 
