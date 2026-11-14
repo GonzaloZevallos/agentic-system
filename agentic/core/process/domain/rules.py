@@ -2968,7 +2968,8 @@ def recorded_tests(
 ) -> list[str] | None:
     """The hashes of the failing tests of a red full tier, or `None` when the logs cannot say.
     The only producer of `FullChecksRead.tests`. `candidates` is the whole `ci.log_candidates`
-    result, before any slice; a log belongs to the check of the same name.
+    result, before any slice; a log belongs to the check of the same name (the first log of a
+    job when `logs` holds two).
 
     A candidate that is not a declared name counts only through a log `ci.failing_set` could
     read whole: any other answer makes the whole result `None`. A declared candidate (the
