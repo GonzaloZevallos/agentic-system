@@ -1,6 +1,6 @@
 With an Approved Spec slice, the rules below replace any conflicting rule above.
 
-The task document carries a section headed "## Approved Spec slice". Only the one section below that names your role applies to you, together with the first one.
+The task document carries a section headed "## Approved Spec slice". Besides the first section below, apply the one that matches what you are doing now: writing the plan, answering the interview questions about the solution, or interviewing the Tech Lead or critiquing the plan. The other two do not apply to you.
 
 ### Every role
 
