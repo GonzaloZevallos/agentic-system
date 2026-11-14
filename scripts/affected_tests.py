@@ -76,7 +76,7 @@ TABLE: tuple[Row, ...] = (
         "`pull_request` or `merge`",
     ),
     Row(
-        "*docs/adr/*",
+        "docs/adr/*",
         ("tests/test_poll_reexec.py",),
         "it lists docs/adr and asserts the ADR of the poller's re-exec exists once, by slug",
     ),

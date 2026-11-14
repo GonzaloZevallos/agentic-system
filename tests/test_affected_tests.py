@@ -398,6 +398,12 @@ class Allowance(NamedTuple):
 
 ALLOWANCES: tuple[Allowance, ...] = (
     Allowance(
+        "tests/test_poll_reexec.py",
+        "agentic/core/*/docs/adr/*",
+        "lists the repo's docs/adr by file name; the guard also matches the module ADR "
+        "directories by suffix, which it never opens",
+    ),
+    Allowance(
         "tests/core/process/domain/test_rules.py",
         "docs/architecture/generated/*",
         "names the owned glob as a string of a `docs:` block; it never reads the files",
