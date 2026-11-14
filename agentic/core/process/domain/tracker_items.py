@@ -45,6 +45,9 @@ Kind = Literal["human", "comment", "open_issue"]
 
 KINDS: frozenset[str] = frozenset({"human", "comment"})
 
+# The label the system puts on an issue it opens for an `open_issue` item. No item field names it.
+TRIAGE_LABEL = "needs-triage"
+
 # How a comment the system posts for an item starts, and how the report of the items it did
 # starts: a resume looks past both (`resume.SYSTEM_COMMENTS`).
 PLAN_NOTE = "Plan note: "
@@ -74,6 +77,11 @@ _NOT_FOR_SYSTEM: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"(?i)\bGH-\d+\b", "a task reference (GH-N), which would link to another issue"),
     )
 )
+
+# A line of a several-lines field that the poller would read as a link between issues
+# (`Blocked by:`) or as a closing keyword. Matched on each `splitlines()` line, stripped, whatever
+# its case, as a prefix: a code fence does not hide it.
+_LINKING_LINE = re.compile(r"^(blocked by:|closes|fixes|resolves)", re.IGNORECASE)
 
 
 class _Field(NamedTuple):
@@ -108,7 +116,9 @@ _TABLE: Mapping[Kind, _Row] = {
     "open_issue": _Row(
         (_Field("title"), _Field("body", several_lines=True, cap=MAX_BODY_CHARS)),
         "title",
-        "Its `title` and `body` are the issue the system opens.",
+        "Its `title` and `body` are plain text with the same prohibitions as a comment (no URL, "
+        "link, HTML tag or issue reference) and no label: the system opens the issue labelled "
+        f"`{TRIAGE_LABEL}` and links it to this task.",
         system=True,
     ),
 }
@@ -146,11 +156,25 @@ def _texts(item: TrackerItem) -> dict[str, str]:
     assert_never(item)
 
 
+def _normal_title(title: str) -> str:
+    """A title in lower case with its whitespace collapsed: what makes two titles one."""
+    return " ".join(title.lower().split())
+
+
 def item_hash(item: TrackerItem) -> str:
     """What tells one item from another. It covers the kind and the fields in their order, and
     it is a stored key (`tracker_actions_done`, `tracker_human`), so its input is fixed: for a
     `human` item `[kind, question, recommendation]`."""
     return digest([item["kind"], *_texts(item).values()])
+
+
+def marker_key(item: TrackerItem) -> str:
+    """The key a published item's marker carries, from this one function: for an `open_issue`
+    the digest of its normalized title, so a reworded body finds its own issue; for every other
+    kind `item_hash`."""
+    if item["kind"] == "open_issue":
+        return digest([_normal_title(item["title"])])
+    return item_hash(item)
 
 
 def _for_owner(item: TrackerItem) -> TypeGuard[HumanItem]:
@@ -191,8 +215,9 @@ def parse(raw: object) -> list[TrackerItem]:
     silently.
 
     The checks run in a fixed order: a list, at most `MAX_ITEMS`, each item in turn, and last
-    that no `item_hash` repeats. This is the only validator of item text: it reaches a comment
-    or a question for the owner only after passing here (GH-663)."""
+    that no `item_hash` repeats and no two `open_issue` titles are one. This is the only
+    validator of item text: it reaches a comment or a question for the owner only after passing
+    here (GH-663)."""
     if not isinstance(raw, list):
         raise ValueError(f"tracker_items must be a list of items; {_WRITE_AS_HUMAN}")
     if len(raw) > MAX_ITEMS:
@@ -209,6 +234,16 @@ def parse(raw: object) -> list[TrackerItem]:
                 f"{_WRITE_AS_HUMAN}"
             )
         seen.add(key)
+    titles: set[str] = set()
+    for item in items:
+        if item["kind"] != "open_issue":
+            continue
+        if (title := _normal_title(item["title"])) in titles:
+            raise ValueError(
+                f"tracker_items opens two issues with the same title ({item['title']!r}, "
+                f"whitespace and case aside): keep one; {_WRITE_AS_HUMAN}"
+            )
+        titles.add(title)
     return items
 
 
@@ -276,6 +311,14 @@ def _field_text(text: str, field: _Field, system: bool) -> str:
             f"a tracker item's {field.name} holds a mention (@name), which would notify a "
             f"person: write the name without the @; {_WRITE_AS_HUMAN}"
         )
+    if field.several_lines:
+        for line in text.splitlines():
+            if found := _LINKING_LINE.match(line.strip()):
+                raise ValueError(
+                    f"a tracker item's {field.name} has a line that starts with "
+                    f"{found.group(1)!r}, which the poller would read as a link or a closing "
+                    f"keyword: say it in plain words; {_WRITE_AS_HUMAN}"
+                )
     if system:
         for pattern, what in _NOT_FOR_SYSTEM:
             if pattern.search(text):
@@ -288,8 +331,9 @@ def _field_text(text: str, field: _Field, system: bool) -> str:
 
 def marker(item: TrackerItem, task_id: str) -> str:
     """The line a posted item's comment ends with, so a run that lost its record finds the
-    comment on the issue and posts nothing again. `parse` keeps `<!--` out of every field."""
-    return f"<!-- agentic-item: {task_id} {item_hash(item)} -->"
+    comment on the issue and posts nothing again, and ends in `marker_key(item)`: for a comment its
+    `item_hash`, the bytes it always had. `parse` keeps `<!--` out of every field."""
+    return f"<!-- agentic-item: {task_id} {marker_key(item)} -->"
 
 
 def done_marker(task_id: str, hashes: Iterable[str]) -> str:
@@ -307,7 +351,9 @@ def report(items: Sequence[TrackerItem], done: Mapping[str, Mapping[str, object]
         record = done.get(item_hash(item), {})
         if "kind" not in record:
             continue
-        what = "comment posted on this issue" if record["kind"] == "comment" else "done"
+        what = {"comment": "comment posted on this issue", "open_issue": "issue opened"}.get(
+            str(record["kind"]), "done"
+        )
         lines.append(f"- {what} ({record['url']})" if "url" in record else f"- {what}")
     return "\n".join(lines)
 
