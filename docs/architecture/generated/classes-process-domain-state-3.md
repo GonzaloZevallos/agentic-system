@@ -32,17 +32,18 @@ classDiagram
     class size_budget__PlanSize["PlanSize"]
     class spec_delivery__Screen["Screen"]
     class spec_delivery__SpecContract["SpecContract"]
+    class spec_delivery__SpecLine["SpecLine"]
+    class spec_delivery__SpecLineMalformed["SpecLineMalformed"]
+    class spec_delivery__SpecRefusal["SpecRefusal"]
+    class spec_delivery__SpecStatePatch["SpecStatePatch"]
     class task__ArmAssignment["ArmAssignment"]
     class task__AssumptionRow["AssumptionRow"]
     class task__Carried["Carried"]
     class task__CarveRecord["CarveRecord"]
-    class task__ChangesRequested["ChangesRequested"]
-    class task__CheckRun["CheckRun"]
-    class task__CiCancelRerun["CiCancelRerun"]
-    class task__CiGhostDispatch["CiGhostDispatch"]
+    spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.ArmAssignment`

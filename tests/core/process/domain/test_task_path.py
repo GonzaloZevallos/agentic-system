@@ -4,6 +4,7 @@ import pytest
 
 from agentic.core.knowledge.domain import stack
 from agentic.core.process.domain import document, task_path
+from agentic.core.process.domain.spec_delivery import SpecRefusal
 from agentic.core.process.domain.task_path import decide, owner_label, promote
 
 TYPES = ("bug", "feature", "platform_enhancement")
@@ -282,3 +283,52 @@ def test_relabel_none_and_a_full_task_change_nothing():
     assert task_path.relabel(light_state(), None, "now") == ({}, None)
     assert task_path.relabel({"path": "full"}, (FULL,), "now") == ({}, None)
     assert task_path.relabel({}, (FULL,), "now") == ({}, None)
+
+
+# --- GH-594 part 4a: the slice's risks replace PjM's ------------------------------------
+
+KNOWN = frozenset({"billing"})
+
+
+def test_spec_decide_uses_the_slice_risks_not_pjms() -> None:
+    # PjM's own `risk` is not an input at all: an empty slice risk list on a small task is light.
+    assert task_path.spec_decide("feature", "small", [], (), KNOWN) == task_path.PathDecision(
+        "light", "small_no_risk"
+    )
+    assert task_path.spec_decide(
+        "feature", "small", ["data-migration"], (), KNOWN
+    ) == task_path.PathDecision("full", "risk_flag")
+    assert task_path.spec_decide("feature", "small", ["billing"], (), KNOWN) == (
+        task_path.PathDecision("full", "risk_flag")
+    )
+
+
+def test_spec_decide_refuses_an_unknown_risk_naming_the_ids() -> None:
+    refusal = task_path.spec_decide(
+        "feature", "small", ["billing", "nope", "data-migration", "nada"], (), KNOWN
+    )
+    assert refusal == SpecRefusal("spec_invalid", ("nope", "nada"))
+
+
+def test_spec_decide_without_the_stack_is_decide_unchanged() -> None:
+    assert task_path.spec_decide("feature", "small", ["whatever"], (), None) == task_path.decide(
+        "feature", "small", ["whatever"], (), None
+    )
+    assert task_path.spec_decide("feature", "small", [], (), None) == task_path.PathDecision(
+        "full", "stack_unreadable"
+    )
+
+
+def test_spec_decide_keeps_the_owner_labels() -> None:
+    assert task_path.spec_decide(
+        "feature", "small", [], (task_path.LABEL_FULL,), KNOWN
+    ) == task_path.PathDecision("full", "owner_full")
+    assert task_path.spec_decide(
+        "feature", "normal", ["billing"], (task_path.LABEL_LIGHT,), KNOWN
+    ) == task_path.PathDecision("light", "owner_light")
+    assert task_path.spec_decide(
+        "feature", "small", [], (task_path.LABEL_LIGHT, task_path.LABEL_FULL), KNOWN
+    ) == task_path.PathDecision("full", "label_both")
+    assert task_path.spec_decide("feature", None, [], (), KNOWN) == task_path.PathDecision(
+        "full", "missing_size"
+    )

@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Sequence
-from typing import Literal, TypedDict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal, TypedDict
 
 SPEC_FENCE = "=== spec data ==="
 SPEC_MAX_BYTES = 65536
@@ -38,6 +39,9 @@ SPEC_COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _LOGIN = re.compile(r"[A-Za-z0-9]+(-[A-Za-z0-9]+)*")
 _AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+# A slice id, and a risk id's shape: declared only here, matched with `fullmatch`.
+SLICE_SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+_SLICE = re.compile(SLICE_SLUG)
 
 
 class Screen(TypedDict):
@@ -67,10 +71,16 @@ def spec_commit_ok(commit: str) -> bool:
     return SPEC_COMMIT.fullmatch(commit) is not None
 
 
+def normalize_text(text: str) -> str:
+    """The one line-ending normalisation of spec text: one leading U+FEFF stripped, then `\\r\\n`
+    and `\\r` become `\\n`. Other separators (U+2028, `\\x0b`, `\\x85`) are left alone."""
+    return text.removeprefix("﻿").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def split_front_matter(text: str) -> tuple[str, str] | None:
     """(front matter text, body) of a spec, or `None` without an opening and a closing `---`
     line. One leading U+FEFF is stripped and line endings become `\\n` before looking."""
-    lines = text.removeprefix("﻿").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = normalize_text(text).split("\n")
     if lines[0] != "---":
         return None
     for index in range(1, len(lines)):
@@ -90,6 +100,113 @@ def body_sha256(text: str) -> str | None:
 def derive_flags(screens: Sequence[Screen]) -> tuple[bool, bool]:
     """(touches_ui, touches_copy): any screen at all; any screen with a non-blank copy string."""
     return bool(screens), any(c.strip() for s in screens for c in s["copy"])
+
+
+@dataclass(frozen=True)
+class SpecRefusal:
+    """A typed refusal: `cause` and `detail`, the failing field names or risk ids (never text)."""
+
+    cause: SpecCause
+    detail: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SpecLine:
+    path: str
+    slice: str | None
+
+
+@dataclass(frozen=True)
+class SpecLineMalformed:
+    pass
+
+
+class SpecStatePatch(TypedDict):
+    """What a spec delivery writes to the state: the contract (`state["spec"]`; its being
+    non-empty is the whole signal, see `rules.spec_delivery`) and the flags that
+    `design_applies` and `copy_applies` read (`state["flags"]`)."""
+
+    spec: SpecContract
+    flags: dict[str, bool]
+
+
+def parse_spec_line(body: str) -> SpecLine | SpecLineMalformed | None:
+    """The `Spec: <path>` or `Spec: <path>#<slice>` line of an issue body: `None` without a
+    line that starts at column 0 with `Spec:`, malformed with two or more of them (even equal
+    ones) or one that is not exactly one of the two forms. Fences and comments are not looked
+    at; only `\\n` splits lines."""
+    candidates = [line for line in normalize_text(body).split("\n") if line.startswith("Spec:")]
+    if not candidates:
+        return None
+    if len(candidates) > 1 or not candidates[0].startswith("Spec: "):
+        return SpecLineMalformed()
+    path, hash_, slice_id = candidates[0].removeprefix("Spec: ").partition("#")
+    if not spec_path_ok(path) or (hash_ and not _SLICE.fullmatch(slice_id)):
+        return SpecLineMalformed()
+    return SpecLine(path, slice_id if hash_ else None)
+
+
+_TEXT_FIELDS: dict[str, re.Pattern[str]] = {
+    "path": SPEC_PATH,
+    "slice": _SLICE,
+    "commit": SPEC_COMMIT,
+    "sha256": SHA256,
+}
+
+
+def _contract_invalid_fields(contract: Mapping[str, Any]) -> tuple[str, ...]:
+    """The names of the `SpecContract` fields that are missing or have the wrong form."""
+    bad: list[str] = []
+    for name in SpecContract.__annotations__:
+        if name not in contract:
+            bad.append(name)
+            continue
+        value = contract[name]
+        if name == "path":
+            ok = isinstance(value, str) and spec_path_ok(value)
+        elif name in _TEXT_FIELDS:
+            ok = isinstance(value, str) and _TEXT_FIELDS[name].fullmatch(value) is not None
+        elif name in ("criteria", "risks"):
+            ok = isinstance(value, list) and all(isinstance(x, str) for x in value)
+        elif name == "screens":
+            ok = isinstance(value, list) and all(_screen_ok(x) for x in value)
+        else:
+            ok = isinstance(value, bool)
+        if not ok:
+            bad.append(name)
+    return tuple(bad)
+
+
+def _screen_ok(screen: object) -> bool:
+    return (
+        isinstance(screen, dict)
+        and isinstance(screen.get("name"), str)
+        and isinstance(screen.get("copy"), list)
+        and all(isinstance(c, str) for c in screen["copy"])
+    )
+
+
+def spec_state_patch(contract: SpecContract) -> SpecStatePatch | SpecRefusal:
+    """The state patch of a spec delivery, or `SpecRefusal("spec_invalid", fields)` naming the
+    fields of `contract` that are missing or malformed. The flags come only from
+    `derive_flags` over the screens, and overwrite whatever the contract carried."""
+    bad = _contract_invalid_fields(contract)
+    if bad:
+        return SpecRefusal("spec_invalid", bad)
+    ui, copy = derive_flags(contract["screens"])
+    return SpecStatePatch(
+        spec={**contract, "touches_ui": ui, "touches_copy": copy},
+        flags={"touches_ui": ui, "touches_copy": copy},
+    )
+
+
+def spec_unchanged(recorded_sha256: str, text: str) -> bool:
+    """True only when the body hash of `text` equals `recorded_sha256`; `False` without front
+    matter, on a body that cannot be encoded, or on a mismatch. The caller reads `text`."""
+    try:
+        return body_sha256(text) == recorded_sha256
+    except UnicodeError:
+        return False
 
 
 def render_draft_front_matter() -> str:

@@ -48,4 +48,5 @@ graph TD
     m_domain__task --> m_domain__size_budget
     m_domain__task --> m_domain__spec_delivery
     m_domain__task --> m_domain__task_path
+    m_domain__task_path --> m_domain__spec_delivery
 ```

@@ -18,6 +18,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, TypedDict, get_args
 
+from .spec_delivery import SpecRefusal
+
 Size = Literal["small", "normal", "large"]
 Path = Literal["light", "full"]
 # What the issue's owner label said: `none` is the common case, `unreadable` a label set the
@@ -129,6 +131,23 @@ def decide(
     if size != "small":
         return PathDecision("full", "not_small")
     return PathDecision("light", "small_no_risk")
+
+
+def spec_decide(
+    type_: str,
+    size: Size | None,
+    contract_risks: Sequence[str],
+    labels: tuple[str, ...] | None,
+    known_risks: frozenset[str] | None,
+) -> PathDecision | SpecRefusal:
+    """`decide` for a spec delivery (GH-594): the slice's risk ids replace PjM's `risk`. An id
+    that is neither built-in nor declared by the product is `SpecRefusal("spec_invalid", ids)`,
+    never a `PathCause`. Without the product's risks (`None`) it is `decide` unchanged."""
+    if known_risks is not None:
+        unknown = unknown_risks(contract_risks, known_risks)
+        if unknown:
+            return SpecRefusal("spec_invalid", unknown)
+    return decide(type_, size, contract_risks, labels, known_risks)
 
 
 def path_for(
