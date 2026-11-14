@@ -17,6 +17,7 @@ graph TD
     g_domain__roles["roles (grupo)"]
     g_domain__state__1["state parte 1 (grupo)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
+    m_domain__returns["domain.returns"]
     m_domain__rules["domain.rules"]
     m_domain__signals["domain.signals"]
     m_domain__size_budget["domain.size_budget"]
@@ -24,6 +25,8 @@ graph TD
     m_domain__spec_delivery["domain.spec_delivery"]
     m_domain__task["domain.task"]
     m_domain__task_path["domain.task_path"]
+    m_domain__returns --> m_domain__rules
+    m_domain__returns --> m_domain__task
     m_domain__rules --> g_domain__checks
     m_domain__rules --> g_domain__landing
     m_domain__rules --> g_domain__machine

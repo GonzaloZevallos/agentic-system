@@ -123,3 +123,32 @@ grande ya no es una opción. La línea de 150 USD queda como chequeo secundario.
 ADR-0054 queda enmendado (ver su adenda del 2026-11-11): su adenda de "una parte se construye
 entera" y la línea de 40 archivos para planes nuevos quedan reemplazadas. El tope de dos veces la
 estimación, la clase `estimate` y la línea de 150 USD siguen.
+
+## Addendum (GH-719, 2026-11-13): las reglas del carve-out (D-b111a2ac)
+
+Una parte de profundidad 2 cuyo plan sigue por encima del presupuesto mueve subtareas enteras a
+un issue de seguimiento en lugar de escalar. Esta primera parte de GH-719 deja solo las reglas
+puras (`domain/carve_out.py`), `open_issue` con varias etiquetas y los seguimientos como destino
+del barrido de partidas. Nada en `plan` lo llama todavía.
+
+- **Marcador:** `<!-- agentic-carve-out: <tarea> of #<n> -->`, donde `<n>` es el número de issue
+  de la parte que extrae, nunca su índice. `rules.split_part_of` no lo lee: el seguimiento no es
+  una partida y no tiene profundidad.
+- **Línea de bloqueo:** exactamente `Blocked by: #<parte>`, compuesta por el sistema.
+- **Sección:** `## Carved-out steps` copia el brief y los invariantes de cada subtarea extraída,
+  textuales.
+- **Etiquetas:** el seguimiento lleva `agentic` y copia las de la parte salvo `needs-human`,
+  `agentic-hold`, la de parada, la de partida y las que empiezan con `path:`.
+- **Rechazo en dos niveles, sin limpiar nunca:** el texto del modelo (`text_refused`) rechaza
+  `<!--`, `-->`, `Blocked by:`, `Closes`/`Fixes`/`Resolves` y un salto de línea en el título; los
+  briefs e invariantes copiados (`validate`) rechazan `<!--`, `-->`, `Blocked by:` y una palabra
+  de cierre de GitHub seguida de una referencia a un issue.
+- **Re-apunte:** `append_blocker` recibe `targets=[L, *seguimientos]` y agrega los que faltan
+  justo después de `#L` en la línea `Blocked by:`.
+- **Tamaño:** lo decide solo la función `fits` inyectada (`rules.estimate_fits` o
+  `schemas.plan_fits`); el módulo no tiene ningún número.
+
+La parte 3 debe: persistir la clave `carve_out` y su serialización, escrita antes de cada
+escritura al tracker; escribir `outcome` solo al cerrar; parametrizar el comentario de `_repoint`
+(hoy dice que la tarea se partió en partes); y no escribir en el tracker en corridas de
+evaluación.

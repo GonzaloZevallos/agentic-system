@@ -22,6 +22,7 @@ Esta página muestra las clases públicas de los módulos del grupo `checks` de 
   - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - [domain: state (parte 7)](classes-process-domain-state-7.md)
+  - [domain: state (parte 8)](classes-process-domain-state-8.md)
 
 ```mermaid
 classDiagram

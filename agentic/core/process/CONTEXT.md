@@ -532,6 +532,11 @@ El final de una tarea cuyo plan no cabe (por encima del presupuesto de tamaño, 
 _Avoid_: descartado (acá sí hay algo que construir, en las partes), dividida (la unidad es la parte, no la tarea), subtarea (esas se construyen dentro de una tarea; las partes son tareas)
 _Campo_: sin término de arte
 
+**Seguimiento de carve-out**:
+El issue que abre una partida de profundidad 2 con las subtareas enteras que extrae de su plan cuando este sigue por encima del presupuesto (GH-719, ADR-0093). Lleva el marcador `agentic-carve-out` con el número de issue de la partida y la línea `Blocked by: #<partida>`; no es una partida y no tiene profundidad. Todavía no lo abre nadie (parte 3 de GH-719).
+_Avoid_: partida (no se parte ni se cuenta), subtarea (es una tarea)
+_Campo_: sin término de arte
+
 **Solo tracker**:
 El final de una tarea cuyo plan es solo trabajo del tracker (sin subtareas, sin partes, con una lista y cero archivos; ADR-0062): el sistema comenta la lista una vez en el issue, con un marcador de contenido, y termina la corrida sin llamar a un rol, sin pull request y sin resultado de entrega (`tracker_only`). Es un final, no una pausa: no se reanuda, salvo que el comentario haya fallado, y entonces vuelve a este nodo, nunca al plan.
 _Avoid_: descartado (acá sí hay algo que hacer, pero lo hace el humano), partida (no se abren issues)
