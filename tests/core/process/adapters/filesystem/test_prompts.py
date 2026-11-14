@@ -231,3 +231,22 @@ def test_both_implementations_serve_spec_blocks_alike(tmp_path):
 
     prompts_serve_spec_blocks(filesystem, tmp_path / "fs")
     prompts_serve_spec_blocks(memory, tmp_path / "memory")
+
+
+class _UncheckedNames(MemoryPrompts):
+    """A port that looks a name up without `block_name_ok`: what the contract refuses."""
+
+    def spec_block(self, name: str) -> str:
+        if name not in self.blocks:
+            raise ValueError(f"no spec block {name!r}")
+        held = self.blocks[name]
+        assert isinstance(held, str)
+        return held
+
+
+def test_the_spec_block_contract_refuses_a_port_that_serves_an_invalid_name(tmp_path):
+    def unchecked(tmp: Path, table: Mapping[str, str]) -> Prompts:
+        return _UncheckedNames(blocks={name: f"text of {name}" for name in set(table.values())})
+
+    with pytest.raises(AssertionError, match=r"\.\./x"):
+        prompts_serve_spec_blocks(unchecked, tmp_path)

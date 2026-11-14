@@ -105,6 +105,7 @@ from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.size_budget import NumstatRow
+from agentic.core.process.domain.spec_brief import block_name_ok
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -420,6 +421,8 @@ class MemoryPrompts:
 
     def spec_block(self, name: str) -> str:
         self.block_calls.append(name)
+        if not block_name_ok(name):
+            raise ValueError(f"{name!r} is not a valid spec block name")
         if name not in self.blocks:
             raise ValueError(f"no spec block {name!r}")
         held = self.blocks[name]
