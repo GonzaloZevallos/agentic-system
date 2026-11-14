@@ -225,6 +225,18 @@ async def test_a_conflict_in_the_critic_draft_stops_before_the_critic_and_the_re
     assert patch["spec_cause"] == "data_loss"
 
 
+async def test_a_conflict_raised_only_by_the_critic_revision_escalates_and_builds_nothing(tmp_path):
+    runner, patch = await _route(tmp_path, "critic", planned(), _conflicting("conflict"), spec=SPEC)
+
+    assert runner.slugs == ["plan_sizer", "tech_lead", "tech_lead_critic", "tech_lead"]
+    assert patch["escalation_class"] == "questions" and patch["spec_cause"] == "conflict"
+    assert patch["status"] == "waiting_on_human"
+    assert len(patch["questions_for_human"]) == 1
+    assert not [key for key in NOT_BUILT if key in patch]
+    assert TECH_LEAD.name in patch["sections"]
+    assert {"tech_lead", "tech_lead_critic"} <= {r["slug"] for r in patch["runs"]}
+
+
 @pytest.mark.parametrize("route", ROUTES)
 async def test_a_conflict_the_owner_decided_becomes_one_assumption_row(tmp_path, route):
     log = [ASKED_BY, RESUMED_ENTRY]
