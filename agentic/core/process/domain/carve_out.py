@@ -16,6 +16,8 @@ from typing import Protocol, TypedDict
 KINDS = ("change", "migration")
 # Literal copies of the labels a follow-up must not inherit: `needs-human`, the hold label, the
 # stop label and the split part label (`split.PART_LABEL`); `copied_labels` adds `agentic` itself.
+# `agentic-stop` is a reserved literal: no code defines a stop label today, so it matches nothing
+# real yet; it is kept so a stop label added later is never inherited by a follow-up.
 LABEL_EXCLUDED = frozenset({"needs-human", "agentic-hold", "agentic-stop", "agentic"})
 LABEL_EXCLUDED_PREFIX = "path:"
 _SYSTEM_LABEL = "agentic"
