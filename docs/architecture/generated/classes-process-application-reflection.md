@@ -25,6 +25,7 @@ classDiagram
     class reflect_run__SystemRepo["SystemRepo"]
     class stack_review__StackReview["StackReview"]
     class stage0_failure__SmokeFailurePolicy["SmokeFailurePolicy"]
+    class tracker_items__SystemRun["SystemRun"]
 ```
 
 ## Relaciones con otras páginas

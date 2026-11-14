@@ -31,7 +31,6 @@ classDiagram
     class run_role__PromptFailure["PromptFailure"]
     class run_role__RoleFailure["RoleFailure"]
     class run_role__TaskCapReached["TaskCapReached"]
-    class tracker_items__SystemRun["SystemRun"]
     run_role__EstimateCapReached --|> run_role__Escalating
     run_role__PromptFailure --|> run_role__Escalating
     run_role__RoleFailure --|> run_role__Escalating

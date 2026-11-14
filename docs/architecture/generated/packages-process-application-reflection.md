@@ -11,8 +11,7 @@ Esta página muestra los módulos del grupo `reflection` de `application` y los 
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
-  - [application: support (parte 1)](packages-process-application-support-1.md)
-  - [application: support (parte 2)](packages-process-application-support-2.md)
+  - [application: support](packages-process-application-support.md)
 
 ```mermaid
 graph TD
@@ -31,6 +30,7 @@ graph TD
     m_application__stack_review["application.stack_review"]
     m_application__stage0_failure["application.stage0_failure"]
     m_application__stage0_prune["application.stage0_prune"]
+    m_application__tracker_items["application.tracker_items"]
     m_application__owner_rules --> g_application__support
     m_application__owner_rules --> g_domain__roles
     m_application__owner_rules --> g_domain__state
@@ -58,4 +58,7 @@ graph TD
     m_application__stage0_prune --> g_application__lifecycle
     m_application__stage0_prune --> g_application__support
     m_application__stage0_prune --> g_domain__machine
+    m_application__tracker_items --> g_application__support
+    m_application__tracker_items --> g_domain__roles
+    m_application__tracker_items --> g_domain__state
 ```
