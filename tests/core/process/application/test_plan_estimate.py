@@ -597,6 +597,52 @@ async def test_both_render_sites_tell_the_tech_lead_the_kinds_with_the_limits_fi
     assert PARAGRAPH_WITH_OPEN_ISSUE in told and "tracker_item_kinds" not in told
 
 
+# GH-798: a decided resume owes a re-plan (`plan_due`); only a delivered plan clears it.
+
+AT = "2026-11-06T12:00:00+00:00"
+
+
+async def test_a_part_over_the_line_leaves_no_tracker_items_alive_and_resumes_to_a_replan(tmp_path):
+    runner, cfg = arm_of("cold", tmp_path, planned(estimated_cost_usd=200.0, tracker_items=[ITEM1]))
+    patch = await plan(PART, cfg, over_the_line_by_reference(memory_ports(runner)))
+    assert "tracker_items" not in patch and "plan_due" not in patch
+    paused = apply({**PART, "type": "platform_enhancement"}, patch)
+    assert not paused.get("tracker_items")
+
+    resumed = apply(paused, rules.resumed(paused, "narrow it", at=AT))
+    assert resumed["plan_due"] is True
+    assert rules.tracker_only_plan(resumed) is False
+    assert rules.resume_target(resumed) == "plan"
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_the_plan_that_stands_clears_plan_due_and_the_subtask_is_built_with_its_item(
+    arm, tmp_path
+):
+    runner, cfg = arm_of(arm, tmp_path, planned(tracker_items=[ITEM1]))
+    due = {**TASK, "status": "planned", "plan_due": True}
+    patch = await plan(due, cfg, memory_ports(runner))
+    state = apply(due, patch)
+
+    assert state["plan_due"] is False
+    assert list(state["subtasks"]) == ["api"] and state["tracker_items"] == [ITEM1]
+    # The item rides the delivery next to the subtask: the plan goes to the fan-in.
+    assert rules.after_plan(state) == "integrate"
+    assert rules.resume_target(state) == "integrate"
+
+
+async def test_a_plan_node_that_escalates_leaves_plan_due_true(tmp_path):
+    runner, cfg = arm_of("cold", tmp_path, planned(estimated_cost_usd=200.0))
+    due = {**PART, "plan_due": True}
+    patch = await plan(due, cfg, over_the_line_by_reference(memory_ports(runner)))
+
+    assert patch["escalation_class"] == "estimate" and "plan_due" not in patch
+    paused = apply(due, patch)
+    assert paused["plan_due"] is True
+    resumed = apply(paused, rules.resumed(paused, "narrow it", at=AT))
+    assert rules.resume_target(resumed) == "plan"
+
+
 # -- the depth-2 carve-out, wired into the three branches of the plan node (GH-722) -----------
 
 ARMS = ["cold", "interview", "critic"]

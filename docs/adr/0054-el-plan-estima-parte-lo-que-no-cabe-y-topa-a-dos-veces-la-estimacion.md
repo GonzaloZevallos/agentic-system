@@ -219,3 +219,20 @@ líneas. El ADR-0093 cambia lo que esta decisión dice sobre el tamaño de una p
 - **Sigue igual:** el tope de dos veces la estimación (`ESTIMATE_CAP_FACTOR`), la clase `estimate`,
   el marcador idempotente (que ahora puede llevar `depth D`; sin él es profundidad 1) y el
   histórico del plan.
+
+## Adenda (2026-11-15, GH-798): una decisión sobre un ajuste lleva siempre a `plan`
+
+Dos tareas (GH-762, GH-789) reanudadas tras la decisión del dueño sobre una pregunta de ajuste
+terminaron `tracker_only` sin construir nada: la pausa de una parte sobre la línea
+(`rules.part_over_line`) quita las subtareas pero dejaba los `tracker_items`, y al reanudar el
+estado parecía un plan solo de tracker. Se decide:
+
+- Una reanudación con decisión de una pregunta de ajuste (`fit_question`), o de una estimación
+  con `parts`, escribe `plan_due` (`rules.resumed`, el único que lo escribe) y la tarea va a
+  `plan`, con la decisión en `Human` y el mismo presupuesto (`rules.resume_target`).
+- `rules.tracker_only_plan` es falso con `plan_due`, y un final `tracker_only` nunca sale de un
+  estado con `plan_due`. Solo el parche exitoso del nodo plan lo limpia; un plan que escala lo
+  deja, y la reanudación siguiente vuelve a `plan`.
+- Un plan que no se construye (`part_over_line`) no deja `tracker_items` vivos.
+
+Cita el ADR-0062 sin enmendarlo.

@@ -17,6 +17,7 @@ from typing import Protocol
 from ...domain import rules
 from ...domain.ci import (
     FLAKE_BLOCK_PREFIX,
+    JOB_LINK,
     CiCheck,
     CiReport,
     CiUnreadable,
@@ -36,9 +37,6 @@ CI_LOG_JOB_BYTES = 1024 * 1024
 CI_FLAKE_LOG_BYTES = 4 * 1024 * 1024
 # One job's wait; the longest a landing waits on this is `CI_LOG_JOBS` times it.
 CI_LOG_TIMEOUT_S = 30.0
-# `https://github.com/<owner>/<repo>/actions/runs/<run>/job/<job>`: what a check run of Actions
-# links to. Anything else (a commit status of another service) has no log to read here.
-_JOB_LINK = re.compile(r"/actions/runs/(\d+)/job/(\d+)(?:[/?#]|$)")
 # What `gh run view --log` prints per line: `<job>\t<step>\t<timestamp> <text>`, the first line of
 # a log with a byte-order mark before the timestamp. Only a line with all three columns has a
 # `<text>` to look at.
@@ -93,7 +91,7 @@ class GhCiLogs:
         return [self._read(check) for check in red]
 
     def _read(self, check: CiCheck) -> JobLog:
-        ids = _JOB_LINK.search(check.link)
+        ids = JOB_LINK.search(check.link)
         if ids is None:
             return _unread(check.name, check.link, "unreadable")
         args = ["gh", "run", "view", ids.group(1), "--job", ids.group(2), "--log-failed"]
@@ -142,7 +140,7 @@ class GhCiLogs:
         return found
 
     def _read_flake_lines(self, check: CiCheck) -> list[str] | None:
-        ids = _JOB_LINK.search(check.link)
+        ids = JOB_LINK.search(check.link)
         if ids is None:
             return None
         args = ["gh", "run", "view", ids.group(1), "--job", ids.group(2), "--log"]

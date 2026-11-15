@@ -7,9 +7,10 @@ can never reach an effect. A port with no table at all is wrapped with empty tab
 is refused.
 
 What a dry round does differently from a live one (also in `agentic poll --help`):
-- The five sweeps (`close_issues.sweep`, `split_sweep.sweep`, `scratch_sweep.sweep`,
-  `ci_ref_sweep.sweep`, `board_sync.mirror`) are skipped (GH-348: a blocker the live close
-  sweep would close this round stays open, so its dependent is not launched).
+- The six sweeps (`close_issues.sweep`, `split_sweep.sweep`, `scratch_sweep.sweep`,
+  `ci_ref_sweep.sweep`, `poll.flag_stranded`, `board_sync.mirror`) are skipped (GH-348: a
+  blocker the live close sweep would close this round stays open, so its dependent is not
+  launched).
 - No first-seen exempt stamp is recorded, so the exempt order can differ.
 - `publish_spend` returns `[]`: this product's own spend is not published.
 - The land and exempt waits the round would publish are not visible to other pollers.

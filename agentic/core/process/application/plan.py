@@ -451,7 +451,14 @@ def _after_delivery(
     fit = schemas.plan_fits(output.data, history, size_ratio=_size_ratio(history))
     if fit.fits:
         return patch
-    unbuilt = {key: value for key, value in patch.items() if key != "subtasks"}
+    # A plan that is not built leaves nothing alive: no subtasks, no tracker items (GH-798;
+    # they would read as a tracker-only plan once the question is answered) and no cleared
+    # `plan_due`, which only a plan that stands writes.
+    unbuilt = {
+        key: value
+        for key, value in patch.items()
+        if key not in ("subtasks", "tracker_items", "plan_due")
+    }
     return apply(unbuilt, rules.part_over_line(state["id"], part_of, fit, at=at))
 
 
@@ -774,6 +781,8 @@ def _delivered(
                 f"{written['sections'][section].rstrip()}\n\n{floored.line}"
             )
         written["status"] = "planned"
+        # The re-plan the owner's decision owed is done (GH-798); only a delivered plan clears it.
+        written["plan_due"] = False
         # A promotion the Tech Lead asks for (GH-591): stored, never applied here; the plan
         # node's serialized system step applies it after the model ran.
         written.update(promotion.plan_requested(written, section, output.data.get("promote")))

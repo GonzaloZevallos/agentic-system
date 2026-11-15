@@ -53,6 +53,17 @@ def _read(reader: SpecReader, commit: str, path: str) -> tuple[str | None, SpecR
         return None, exc.reason
 
 
+def read_at(ports: Ports, commit: str, path: str) -> str:
+    """The text of `path` at `commit`, for a read that has no `state["spec"]` yet (the intake).
+    Raises `SpecUnreadable`: `git` with no reader, `commit` when `commit` is not a full id."""
+    reader = ports.spec_reader
+    if reader is None:
+        raise SpecUnreadable("git")
+    if not rules.full_commit_id(commit):
+        raise SpecUnreadable("commit")
+    return reader.read(commit.strip(), path)
+
+
 def _upstream_detail(
     reader: SpecReader, ports: Ports, path: str, head_text: str | None
 ) -> tuple[str, ...]:

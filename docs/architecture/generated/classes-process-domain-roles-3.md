@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `roles` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 4, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `roles` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 5, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -16,6 +16,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
@@ -27,52 +28,30 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__Diagnosis["Diagnosis"]
+    class schemas__DrawingCheck["DrawingCheck"]
+    class schemas__DrawingDeparture["DrawingDeparture"]
+    class schemas__FinalValidation["FinalValidation"]
+    class schemas__FinalValidationWithAssumptions["FinalValidationWithAssumptions"]
+    class schemas__Finding["Finding"]
+    class schemas__FitBucket["FitBucket"]
+    class schemas__FitDecision["FitDecision"]
     class schemas__GlossaryTerm["GlossaryTerm"]
     class schemas__InterviewTurn["InterviewTurn"]
     class schemas__LandingDiagnosis["LandingDiagnosis"]
     class schemas__LessonDelta["LessonDelta"]
     class schemas__PRD["PRD"]
-    class schemas__Part["Part"]
-    class schemas__PerfBudget["PerfBudget"]
-    class schemas__PerfScenario["PerfScenario"]
-    class schemas__PlanCritique["PlanCritique"]
-    class schemas__PlanSize["PlanSize"]
-    class schemas__PlatformAnswers["PlatformAnswers"]
-    class schemas__PlatformAnswersWithAssumptions["PlatformAnswersWithAssumptions"]
-    class schemas__Reflection["Reflection"]
-    class schemas__Review["Review"]
-    class schemas__RoleOutput["RoleOutput"]
-    schemas__InterviewTurn --|> schemas__RoleOutput
-    schemas__LandingDiagnosis --|> schemas__RoleOutput
-    schemas__PRD --|> schemas__RoleOutput
-    schemas__PlanCritique --|> schemas__RoleOutput
-    schemas__PlanSize --|> schemas__RoleOutput
-    schemas__PlatformAnswers --|> schemas__RoleOutput
-    schemas__PlatformAnswersWithAssumptions --|> schemas__PlatformAnswers
-    schemas__Reflection --|> schemas__RoleOutput
-    schemas__Review --|> schemas__RoleOutput
+    schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: roles (parte 1)](classes-process-domain-roles-1.md)
-  - `schemas.Answers` hereda de `schemas.RoleOutput`
-  - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`
-  - `schemas.Classification` hereda de `schemas.RoleOutput`
-  - `schemas.Consolidation` hereda de `schemas.RoleOutput`
-  - `schemas.Consultation` hereda de `schemas.RoleOutput`
 - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
-  - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
-  - `schemas.CopyReview` hereda de `schemas.RoleOutput`
-  - `schemas.Delivery` hereda de `schemas.RoleOutput`
-  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
-  - `schemas.DesignReview` hereda de `schemas.RoleOutput`
+  - `schemas.DefinitionTurn` hereda de `schemas.InterviewTurn`
+- [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
   - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
-- [domain: roles (parte 4)](classes-process-domain-roles-4.md)
-  - `schemas.Ruling` hereda de `schemas.RoleOutput`
+  - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
+  - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
+  - `schemas.PRD` hereda de `schemas.RoleOutput`
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`
-  - `schemas.StackProposal` hereda de `schemas.RoleOutput`
-  - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
-  - `schemas.TechPlan` hereda de `schemas.RoleOutput`
-  - `schemas.Verdict` hereda de `schemas.RoleOutput`

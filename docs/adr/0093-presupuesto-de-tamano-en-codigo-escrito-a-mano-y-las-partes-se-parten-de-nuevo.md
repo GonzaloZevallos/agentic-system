@@ -152,3 +152,5 @@ La parte 3 debe: persistir la clave `carve_out` y su serialización, escrita ant
 escritura al tracker; escribir `outcome` solo al cerrar; parametrizar el comentario de `_repoint`
 (hoy dice que la tarea se partió en partes); y no escribir en el tracker en corridas de
 evaluación.
+
+Enmendado por ADR-0101: el paso de carve-out de profundidad 2.

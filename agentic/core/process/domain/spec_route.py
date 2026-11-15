@@ -24,6 +24,8 @@ from .task import EscalationPatch
 SPEC_REFUSAL_DETAIL_MAX = 16
 _SLUG_MAX_CHARS = 64
 _SLUG = re.compile(SLICE_SLUG)
+# `unreachable`: the upstream could not be read; `owner_login`: the configuration key that is empty.
+_KEYS_NAMED = ("unreachable", "owner_login")
 
 
 class SpecRefusalPatch(EscalationPatch):
@@ -36,7 +38,7 @@ def _detail_ok(item: str) -> bool:
     return (
         item in SpecContract.__annotations__
         or item in get_args(SpecReadRefusal)
-        or item == "unreachable"
+        or item in _KEYS_NAMED
         or spec_path_ok(item)
         or (len(item) <= _SLUG_MAX_CHARS and _SLUG.fullmatch(item) is not None)
     )
@@ -50,7 +52,7 @@ def refusal_escalation(
     `SpecRouteCause`, for more than 16 items, or for any item that is not one of the closed
     classes below (an issue body is editable, so no free text reaches the document):
     - a field name of `SpecContract`;
-    - a member of `SpecReadRefusal`, or `unreachable`;
+    - a member of `SpecReadRefusal`, or `unreachable` or `owner_login`;
     - a spec path for which `spec_path_ok` holds;
     - a lowercase slug (`SLICE_SLUG`, at most 64 characters): a slice id or a risk id.
     An empty `detail` is valid."""

@@ -469,6 +469,10 @@ def render(
             if (waited := state.get("shadow_wait_s")) is not None
             else {}
         ),
+        # The departures from an approved drawing (GH-766), numbered rows written only when
+        # there is one, so every document without one is byte-identical to one written before;
+        # parsed back under the same name.
+        **({"drawing_departures": d} if (d := state.get("drawing_departures")) else {}),
         # The landing order's stamp and the head's anchor (GH-588), written only when set.
         **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
         **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
@@ -556,6 +560,9 @@ def render(
         **({"assumptions": e} if (e := state.get("assumptions")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),
+        # A re-plan owed after the owner's decision (GH-798): written only when true, so a
+        # document without it is byte-identical to one written before; absent reads false.
+        **({"plan_due": True} if state.get("plan_due") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

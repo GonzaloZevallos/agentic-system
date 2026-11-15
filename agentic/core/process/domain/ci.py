@@ -1143,6 +1143,36 @@ def clean_flake_ids(ids: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(clean))[:FAILED_IDS_MAX]
 
 
+# `https://github.com/<owner>/<repo>/actions/runs/<run>/job/<job>`: what a check run of Actions
+# links to. Anything else (a commit status of another service) has no log to read.
+JOB_LINK = re.compile(r"/actions/runs/(\d+)/job/(\d+)(?:[/?#]|$)")
+# The one link a task record may keep: anchored, ASCII, https, `github.com`, an Actions job.
+JOB_LINK_STORED = re.compile(
+    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+/job/[0-9]+"
+    r"(?:\?pr=[0-9]+)?$"
+)
+RECORD_JOB_MAX_CHARS = 120
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def record_link(url: str) -> str:
+    """`url` when it is an Actions job link of `github.com` that a task record may keep (anchored,
+    ASCII, `https`, an optional `?pr=<n>`), else the empty string. A GitHub Enterprise host is out
+    of scope: its link is stored as `""`, which loses information, not safety."""
+    return url if JOB_LINK_STORED.fullmatch(url) else ""
+
+
+def record_job(name: str) -> str:
+    """The job name a task record may keep: without control characters (newlines included) and
+    without any `ID_FORBIDDEN` sequence, cut to `RECORD_JOB_MAX_CHARS`. Two long names may come
+    out equal, so a reader never keys by it; matching a job to its log uses the raw name."""
+    clean = _CONTROL.sub("", name)
+    while any(bad in clean for bad in ID_FORBIDDEN):
+        for bad in ID_FORBIDDEN:
+            clean = clean.replace(bad, "")
+    return clean[:RECORD_JOB_MAX_CHARS]
+
+
 def _flake_ids(value: object) -> list[str] | None:
     """The clean, bounded ids of a block's `tests`, `None` when it is not a list of strings."""
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):

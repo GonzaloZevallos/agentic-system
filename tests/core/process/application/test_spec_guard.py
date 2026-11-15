@@ -154,3 +154,31 @@ def test_a_deleted_spec_at_the_cut_is_changed_not_unreadable():
     reader = Reader({RECORDED: TEXT})
     patch = spec_guard.cut(STATE, _ports(reader, base=HEAD))
     assert patch["spec_refusal"]["cause"] == "spec_changed"
+
+
+def test_read_at_gives_the_text_at_a_full_commit():
+    reader = Reader({HEAD: TEXT})
+    assert spec_guard.read_at(_ports(reader), HEAD, PATH) == TEXT
+    assert reader.calls == [(HEAD, PATH)]
+
+
+@pytest.mark.parametrize("commit", ["abc123", "", "b" * 39, "z" * 40])
+def test_read_at_refuses_a_commit_that_is_not_a_full_id_without_reading(commit: str):
+    with pytest.raises(SpecUnreadable) as caught:
+        spec_guard.read_at(_ports(Spy()), commit, PATH)
+    assert caught.value.reason == "commit"
+
+
+def test_read_at_without_a_reader_is_unreadable_git():
+    with pytest.raises(SpecUnreadable) as caught:
+        spec_guard.read_at(_ports(None), HEAD, PATH)
+    assert caught.value.reason == "git"
+
+
+def test_no_other_application_module_calls_the_spec_reader():
+    """Invariant 4: the intake of `classify` reads through `spec_guard.read_at` too."""
+    from pathlib import Path
+
+    root = Path(spec_guard.__file__).parent
+    callers = {p.name for p in root.glob("*.py") if "reader.read(" in p.read_text()}
+    assert callers == {"spec_guard.py"}
