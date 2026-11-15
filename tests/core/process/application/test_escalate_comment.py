@@ -2,10 +2,13 @@
 question, a recommended answer and the options right under the reason, from the table the domain
 closes by (class, cause). It is presentation only: the rest of the comment is what it was."""
 
+from typing import get_args
+
 import pytest
 
 from agentic.core.process.application import escalate
 from agentic.core.process.domain import rules, task, tracker_items
+from agentic.core.process.domain.spec_delivery import SpecRouteCause
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -172,3 +175,29 @@ def test_only_the_human_items_pending_are_listed_though_a_system_item_shares_the
     text = escalate.comment(state, cfg, memory_ports())
 
     assert tracker_items.question_line(ITEM) in text and "Superseded by the newer item." not in text
+
+
+@pytest.mark.parametrize("cause", get_args(SpecRouteCause))
+def test_a_refused_spec_asks_its_own_question_not_which_type(cfg, cause):
+    refused = state(
+        "The spec is refused.",
+        "classification",
+        spec_refusal={"cause": cause, "detail": []},
+    )
+    text = escalate.comment(refused, cfg, memory_ports())
+
+    assert "Which type is this task?" not in text
+    question, recommended, _ = rules.ESCALATION_PROMPTS[("classification", cause)]
+    assert f"Question: {question}" in text
+    shown = recommended.format(issue=12)
+    assert f"Recommended: {shown}" in text or f"Recommended: `{shown}`" in text
+    if cause == "spec_type":
+        assert "Remove the line, or decide that it is a feature?" in text
+    else:
+        assert f"({cause}, see the reason above)" in text
+
+
+def test_a_classification_pause_without_a_refusal_still_asks_which_type(cfg):
+    text = escalate.comment(state("unclear", "classification"), cfg, memory_ports())
+
+    assert "Question: Which type is this task?" in text
