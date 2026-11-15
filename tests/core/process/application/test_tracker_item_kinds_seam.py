@@ -139,7 +139,8 @@ async def test_deliver_with_a_legacy_checklist_patches_and_posts_these_literals(
     assert _without_clock(patch) == {
         "branch": "agentic/GH-307",
         "current_role": "PjM",
-        "landing_queued_at": RAISED_AT,
+        # The fence reads the clock once before the delivery stamps the queue position.
+        "landing_queued_at": "2026-11-06T12:00:02.000+00:00",
         "pull_request": "https://github.com/o/r/pull/7",
         "pushed_head": "base",
         "status": "ready_for_review",
@@ -151,23 +152,15 @@ async def test_deliver_with_a_legacy_checklist_patches_and_posts_these_literals(
     ]
 
 
-async def test_deliver_with_only_human_items_opens_the_pr_then_escalates_with_these_literals(cfg):
+async def test_deliver_with_only_human_items_is_a_fence_and_opens_nothing_with_these_literals(cfg):
     ports = memory_ports()
     patch = await deliver({**BASE, "tracker_items": HUMAN}, cfg, ports)
-    later = "2026-11-06T12:00:02.000+00:00"
     assert _without_clock(patch) == {
-        **ESCALATION,
-        "branch": "agentic/GH-307",
-        "landing_queued_at": RAISED_AT,
-        "pause_log": [{"at": later, "kind": "escalation", "value": "questions"}],
-        "pull_request": "https://github.com/o/r/pull/7",
-        "pushed_head": "base",
-        "tracker_actions_done": {ITEM_HASH: {"at": later}},
+        **{k: v for k, v in ESCALATION.items() if k != "current_role"},
+        "pause_log": [{"at": RAISED_AT, "kind": "escalation", "value": "questions"}],
+        "tracker_actions_done": {ITEM_HASH: {"at": RAISED_AT}},
     }
-    assert ports.tracker.comments == [("GH-307", READY_COMMENT)]
-    assert ports.tracker.pull_requests == [
-        ("agentic/GH-307", "Triage the follow-ups", "## PM\n\n### Consolidated definition\n\nX.")
-    ]
+    assert ports.tracker.comments == [] and ports.tracker.pull_requests == []
 
 
 @pytest.mark.parametrize("node", [tracker_only, deliver], ids=["tracker_only", "deliver"])

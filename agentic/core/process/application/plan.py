@@ -151,7 +151,7 @@ def _finished(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
     request = patch.get("plan_promote_request") or _plan_over_cap(landed)
     kept: TaskState = {k: v for k, v in patch.items() if k != "plan_promote_request"}
     if request is None:
-        return finish(state, kept, ports)
+        return finish(state, _asked(state, kept, False, ports), ports)
     moved, notice = task_path.promote(
         landed, request["from_role"], request["kind"], ports.now(), request["text"]
     )
@@ -161,7 +161,26 @@ def _finished(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
         request["from_role"] if request["from_role"] != "system" else promotion.NOTICE_FALLBACK
     )
     kept = apply(kept, promotion.refusal_notice(apply(state, kept), section, notice))
-    return finish(state, kept, ports)
+    return finish(state, _asked(state, kept, "promotion" in moved, ports), ports)
+
+
+def _asked(state: TaskState, kept: TaskState, applied: bool, ports: Ports) -> TaskState:
+    """`kept` with the plan's `human` tracker items raised as a `questions` escalation (GH-784):
+    the owner is asked at the end of a plan that stands, before anything is built. A plan that
+    escalated, split into parts, was promoted (it is re-planned), has only tracker work, or
+    belongs to a spec task asks nothing here. A refused or no-op promotion request still asks.
+    The guards read `landed`, the state after the patch: a standing plan has cleared `plan_due`."""
+    landed = apply(state, kept)
+    if (
+        kept.get("escalated")
+        or landed.get("parts")
+        or applied
+        or rules.tracker_only_plan(landed)
+        or state.get("spec")
+    ):
+        return kept
+    human = tracker_items.escalate_human(landed, ports.now())
+    return apply(kept, human) if human else kept
 
 
 async def _interview_and_plan(

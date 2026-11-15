@@ -79,6 +79,10 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     refused = _uncovered(state, task.path, relative, ports)
     if refused is not None:
         return _ended(state, refused, ports)
+    # GH-784: the plan asks its owner decisions at its end; this fence only catches one left
+    # unasked, before anything is posted, saved or pushed (the checkout stays for the resume).
+    if human := tracker_items.escalate_human(state, ports.now()):
+        return _ended(state, human, ports)
     # A plan with a tracker checklist tells the human before the pull request exists; the pull
     # request closes the issue all the same (GH-336, ADR-0062, addendum GH-344). None of this
     # runs without one.
@@ -244,11 +248,6 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         _lapsed(lapses, "release task", failed)
     if reaped:
         patch["reaped_at_cleanup"] = list(reaped)
-    # GH-620: the plan's human items reach the owner as a needs-human escalation, after the PR
-    # and the READY comment. Last over the keys above (its status wins), before the lapses
-    # because `rules.logged` replaces `pause_log`. Read from the state deliver received.
-    if human := tracker_items.escalate_human(state, ports.now()):
-        patch = {**patch, **human}
     if lapses:
         patch = _with_lapses(patch, lapses, at=ports.now())
     done = _ended(state, patch, ports)

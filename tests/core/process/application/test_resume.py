@@ -1123,6 +1123,25 @@ def test_a_ci_escalation_on_top_of_a_tracker_pause_is_settled_the_same_way_by_a_
     assert ("GH-12", "needs-human") in ports.tracker.unlabeled
 
 
+def test_a_plan_time_pause_on_tracker_items_resumes_through_the_normal_road_to_the_fan_in(cfg):
+    """GH-784: the owner is asked at the end of the plan, before a pull request exists, so the
+    answer goes through `rules.resumed` (not the settled branch): `owner_decision_unbuilt` is
+    never written and the task goes on to build."""
+    asked = {
+        **_held_pr(),
+        "subtasks": {"api": sub("api", "pending", "agentic/GH-12.api", "b0")},
+    }
+    del asked["pull_request"]
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: the plan leaves 1 decision(s)", "Yes, ship it"]
+    r = resume.prepare("GH-12", asked, "checkpoint", cfg, ports)
+
+    assert not r.settled and r.decision == "Yes, ship it"
+    assert r.resumed["tracker_human"] == [] and not r.resumed.get("escalated")
+    assert "owner_decision_unbuilt" not in r.resumed
+    assert rules.resume_target(r.resumed) == "integrate"
+
+
 # --- a spec conflict pause (GH-594): the owner's decision is what `conflict_step` reads ----------
 
 
