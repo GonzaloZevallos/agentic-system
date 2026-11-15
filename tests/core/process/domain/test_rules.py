@@ -5,6 +5,7 @@ from typing import Any, cast, get_args
 
 import pytest
 
+from agentic.core.process.application import resume
 from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import (
     ci,
@@ -5288,9 +5289,20 @@ def test_resume_target_of_a_state_with_plan_due_is_always_plan(status, items, pa
 
 
 def test_a_crash_after_resumed_reaches_plan_from_the_document():
-    saved = {"id": "GH-9", "status": "planned", "plan_due": True, "tracker_items": _GH762_ITEMS}
-    assert rules.resume_target(saved) == "plan"
-    assert rules.resume_target({**saved, "plan_due": False}) == "tracker_only"
-    assert (
-        rules.resume_target({k: v for k, v in saved.items() if k != "plan_due"}) == "tracker_only"
-    )
+    """The document the resume saved before the crash, rendered and read back as the
+    from-document path reads it, reaches `plan`; only a document without `plan_due` ends."""
+    saved = {
+        "id": "GH-9",
+        "title": "t",
+        "description": "d",
+        "type": "feature",
+        "sections": {},
+        "status": "planned",
+        "plan_due": True,
+        "tracker_items": _GH762_ITEMS,
+    }
+    loaded = resume.state_from(document.parse(document.render(saved)))
+    assert loaded["plan_due"] is True and not loaded.get("subtasks")
+    assert rules.resume_target(loaded) == "plan"
+    without = resume.state_from(document.parse(document.render({**saved, "plan_due": False})))
+    assert rules.resume_target(without) == "tracker_only"
