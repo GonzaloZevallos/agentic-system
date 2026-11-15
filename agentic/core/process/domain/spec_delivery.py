@@ -30,6 +30,18 @@ SPEC_MAX_BYTES = 65536
 SpecCause = Literal["spec_invalid", "spec_unapproved", "slice_unknown", "slice_missing"]
 SpecReadRefusal = Literal["path", "commit", "missing", "not_blob", "oversize", "encoding", "git"]
 SpecReadCause = Literal["spec_unreadable"]
+# Every cause a spec refusal can escalate with (GH-594): the validator's four, the read's one and
+# the intake's three. Closed; `spec_route.refusal_escalation` refuses any other.
+SpecRouteCause = Literal[
+    "spec_invalid",
+    "spec_unapproved",
+    "slice_unknown",
+    "slice_missing",
+    "spec_unreadable",
+    "spec_line_malformed",
+    "spec_type",
+    "spec_changed",
+]
 
 # The forms a spec read accepts (GH-594): declared only here, always matched with `fullmatch`.
 SPEC_PATH = re.compile(r"docs/specs/[A-Za-z0-9][A-Za-z0-9._-]*\.md")
@@ -59,6 +71,12 @@ class SpecContract(TypedDict):
     risks: list[str]
     touches_ui: bool
     touches_copy: bool
+
+
+def honoured(reader: object | None, validator: object | None) -> bool:
+    """True only when a spec can be read and validated: both ports are present. With either
+    missing, a `Spec:` line in an issue is not looked at, as before it existed."""
+    return reader is not None and validator is not None
 
 
 def spec_path_ok(path: str) -> bool:
@@ -119,6 +137,14 @@ class SpecLine:
 @dataclass(frozen=True)
 class SpecLineMalformed:
     pass
+
+
+class SpecRefusalRecord(TypedDict):
+    """The `spec_refusal` key of a task: why a spec was refused and what it names, never text
+    (see `spec_route.refusal_escalation` for what `detail` may hold)."""
+
+    cause: SpecRouteCause
+    detail: list[str]
 
 
 class SpecStatePatch(TypedDict):

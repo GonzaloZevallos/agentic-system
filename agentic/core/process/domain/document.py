@@ -551,6 +551,8 @@ def render(
         # (GH-594): each written only when set, so a document without a spec is byte-identical.
         # `from_frontmatter` reads them back through `assumption_text`.
         **({"spec_cause": e} if (e := state.get("spec_cause")) else {}),
+        # Why a spec was refused (GH-594), written only when set.
+        **({"spec_refusal": e} if (e := state.get("spec_refusal")) else {}),
         **({"assumptions": e} if (e := state.get("assumptions")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),

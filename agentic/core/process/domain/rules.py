@@ -3559,6 +3559,9 @@ def resumed(
     }
     if state.get("spec"):
         patch["spec_cause"] = None
+    if state.get("spec_refusal"):
+        # An intake refusal comes before any `spec` exists, so it has its own condition.
+        patch["spec_refusal"] = None
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
     decided = bool(decision and decision.strip())

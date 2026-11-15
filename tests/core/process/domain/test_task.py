@@ -87,6 +87,7 @@ def test_reducers_are_read_from_the_annotations():
         "review_scopes",
         "shadow_reviews",
         "spec_cause",
+        "spec_refusal",
         "spec",
         "assumptions",
     }

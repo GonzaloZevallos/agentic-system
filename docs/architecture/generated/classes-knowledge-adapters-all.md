@@ -8,4 +8,5 @@ classDiagram
     class filesystem__knowledge__FilesystemKnowledge["FilesystemKnowledge"]
     class git__spec_reader__GitSpecReader["GitSpecReader"]
     class git__stack__GitStack["GitStack"]
+    class spec_validator__DomainSpecValidator["DomainSpecValidator"]
 ```
