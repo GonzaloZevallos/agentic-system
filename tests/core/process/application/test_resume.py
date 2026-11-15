@@ -1,12 +1,16 @@
 """What a resume decides before it spends, against in-memory ports (ADR-0003, addendum)."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agentic.core.process.application import resume
 from agentic.core.process.application.plan import PART_BUILT_WHOLE, plan
+from agentic.core.process.application.ports import ListMayBeCut
 from agentic.core.process.domain import (
+    carve_out,
+    cost_history,
     document,
     legacy_names,
     retakes,
@@ -15,9 +19,10 @@ from agentic.core.process.domain import (
     schemas,
     spec_assumptions,
 )
+from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_plan_estimate import carve_ports, carve_result, two_steps
-from tests.fakes import ScriptedRunner, memory_ports
+from tests.fakes import MemoryInbox, ScriptedRunner, memory_ports
 
 CAP = "Developer stopped by the task cap: 106.27 of 100.00 USD spent"
 USD = {"cost_usd": 25.0}
@@ -1159,8 +1164,8 @@ def cut_carve_out(**record):
         "id": "GH-346",
         "title": "Dashboard",
         "description": f"Second half.\n\n{rules.split_marker('GH-316', 2, 2)}",
-        "type": "feature",
-        "status": "waiting_on_human",
+        "type": "platform_enhancement",
+        "status": "definition_ready",
         "sections": {"Tech Lead": section},
         "carve_out": {**saved, **record},
     }
@@ -1205,3 +1210,60 @@ async def test_a_carve_out_whose_remainder_no_longer_fits_stays_applied_and_asks
     with pytest.raises(resume.WaitingOnHuman):
         resume.prepare("GH-346", paused, "checkpoint", Configuration(product_dir=tmp_path), ports)
     assert runner.calls == []
+
+
+class CutInbox(MemoryInbox):
+    """An inbox whose list of open issues is cut: the re-point cannot say it saw them all."""
+
+    def open_issue_refs(self):
+        raise ListMayBeCut("the list may be cut")
+
+
+@pytest.mark.anyio
+async def test_a_cut_open_issue_read_pauses_as_a_human_failure_and_a_plain_resume_finishes(
+    tmp_path,
+):
+    state = cut_carve_out(issue_url="https://github.com/o/r/issues/800")
+    runner = ScriptedRunner()
+    ports = carve_ports(runner)
+    inbox = CutInbox()
+    cfg = Configuration(product_dir=tmp_path)
+
+    patch = await plan(state, cfg, replace(ports, inbox=inbox))
+
+    assert patch["escalation_class"] == "failure" and "fit_question" not in patch
+    assert "outcome" not in patch["carve_out"] and "subtasks" not in patch
+    assert rules.pause_kind(patch["pause_log"]) == "human"
+    paused = apply(state, patch)
+    assert rules.auto_resumable(paused) is None
+    resumption = resume.prepare("GH-346", paused, "checkpoint", cfg, ports)
+    assert resumption.decision is None and rules.resume_target(resumption.resumed) == "plan"
+    finished = await plan(apply(paused, resumption.resumed), cfg, ports)
+
+    assert runner.calls == [] and ports.tracker.opened_issues == []
+    assert finished["carve_out"]["outcome"] == "applied" and list(finished["subtasks"]) == ["api"]
+
+
+@pytest.mark.anyio
+async def test_a_pending_record_whose_check_would_refuse_the_remainder_still_finishes(tmp_path):
+    state = cut_carve_out(
+        issue_url="https://github.com/o/r/issues/800", repointed_at=NOW, commented_at=NOW
+    )
+    third = {"id": "c", "title": "C", "brief": "Build c.", "seams": [], "depends_on": []}
+    saved = state["carve_out"]["data"]
+    saved["plan_output"]["subtasks"].append(third)
+    saved["carve"]["steps"] = ["c"]
+    cfg = Configuration(product_dir=tmp_path, plan_shape="single")
+    remainder = carve_out.remainder(saved["plan_output"], saved["carve"])
+    check = schemas.plan_check_for(
+        cost_history.build([]), 0.0, part_of=("GH-316", 2, 2), plan_shape="single"
+    )
+    with pytest.raises(ValueError):
+        check(remainder)
+
+    runner = ScriptedRunner()
+    patch = await plan(state, cfg, carve_ports(runner))
+
+    assert runner.calls == []
+    assert patch["carve_out"]["outcome"] == "applied" and list(patch["subtasks"]) == ["api", "b"]
+    assert patch.get("escalation_class") is None
