@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `lifecycle` 
 
 ```mermaid
 classDiagram
+    class poll__OrderLock["OrderLock"]
     class poll__RetakesSpent["RetakesSpent"]
     class poll__Seen["Seen"]
     class poll__StackUnreadable["StackUnreadable"]

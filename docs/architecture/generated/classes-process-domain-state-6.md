@@ -28,6 +28,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__LandedSliceRef["LandedSliceRef"]
+    class task__LandingEntry["LandingEntry"]
     class task__LaneAdmitted["LaneAdmitted"]
     class task__LaneMerge["LaneMerge"]
     class task__LapsePauseEntry["LapsePauseEntry"]
@@ -41,11 +43,9 @@ classDiagram
     class task__PathRevision["PathRevision"]
     class task__PendingCloseDocs["PendingCloseDocs"]
     class task__PlanRoute["PlanRoute"]
-    class task__PlanSettledRow["PlanSettledRow"]
-    class task__PullRequest["PullRequest"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.PlanRoute`

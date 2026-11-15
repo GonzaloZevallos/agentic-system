@@ -28,6 +28,8 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__EvaluatedPatch["EvaluatedPatch"]
+    class task__EvaluationRef["EvaluationRef"]
     class task__Failure["Failure"]
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
@@ -41,15 +43,14 @@ classDiagram
     class task__HeadYield["HeadYield"]
     class task__InterviewStats["InterviewStats"]
     class task__LandedSlice["LandedSlice"]
-    class task__LandedSliceRef["LandedSliceRef"]
-    class task__LandingEntry["LandingEntry"]
+    task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
   - `task.FullChecksJob` hereda de `task.CiLogRecord`
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - `task.TaskState` se asocia con `task.EvaluationRef`
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`

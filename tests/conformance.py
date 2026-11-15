@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+from agentic.core.knowledge.adapters.spec_validator import DomainSpecValidator
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     Board,
@@ -44,6 +45,7 @@ from agentic.core.process.application.ports import (
     SampleApp,
     Scratch,
     SpecReader,
+    SpecValidator,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -64,6 +66,7 @@ from tests.fakes import (
     FakePerfRunner,
     FakeReaper,
     FakeSpecReader,
+    FakeSpecValidator,
     FakeStopFlag,
     MemoryCheckResults,
     MemoryCommands,
@@ -105,6 +108,8 @@ _free_space: FreeSpace = FakeFreeSpace()
 _ci_logs: CiLogs = FakeCiLogs()
 _experiment_file: ExperimentFile = FakeExperimentFile()
 _spec_reader: SpecReader = FakeSpecReader({})
+_spec_validator: SpecValidator = FakeSpecValidator()
+_domain_spec_validator: SpecValidator = DomainSpecValidator()
 _stop_flag: StopFlag = FakeStopFlag()
 _board: Board = FakeBoard()
 _board_sent: BoardSent = FakeBoardSent()
@@ -131,6 +136,7 @@ def ports_of_doubles() -> Ports:
         scratch=_scratch,
         free_space=_free_space,
         spec_reader=_spec_reader,
+        spec_validator=_spec_validator,
     )
 
 
@@ -160,6 +166,7 @@ COVERED: dict[str, type] = {
     "CiLogs": FakeCiLogs,
     "ExperimentFile": FakeExperimentFile,
     "SpecReader": FakeSpecReader,
+    "SpecValidator": FakeSpecValidator,
     "StopFlag": FakeStopFlag,
     "Board": FakeBoard,
     "BoardSent": FakeBoardSent,

@@ -18,6 +18,7 @@ Esta página muestra las clases públicas de los módulos del grupo `support` de
 
 ```mermaid
 classDiagram
+    class ports__Workspace["Workspace"]
     class preflight__RunsOnItsOwnCheckout["RunsOnItsOwnCheckout"]
     class preflight__ScratchInARepository["ScratchInARepository"]
     class run_role__Escalating["Escalating"]
@@ -36,7 +37,11 @@ classDiagram
 
 ## Relaciones con otras páginas
 
+- [application: lifecycle (parte 1)](classes-process-application-lifecycle-1.md)
+  - `plan_carve_out.Judged` se asocia con `run_role.Output`
 - [application: support (parte 1)](classes-process-application-support-1.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`
+- [application: support (parte 4)](classes-process-application-support-4.md)
+  - `ports.Ports` se asocia con `ports.Workspace`
 - [application: support (parte 5)](classes-process-application-support-5.md)
   - `run_role.GuardChain` agrega a `ports.SchemaGuard`

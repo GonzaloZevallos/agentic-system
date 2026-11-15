@@ -7,6 +7,7 @@ from typing import get_args
 import pytest
 
 from agentic.core.measurement.domain import task_scores as ts
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.landing import FOLLOWUP_TITLE_PREFIX
 from agentic.core.process.domain.roles import ROLES
 from agentic.core.process.domain.schemas import TaskType
@@ -573,3 +574,160 @@ def test_assignment_alone_gives_one_arm_to_arm_of_eligibility_and_the_score_labe
     assert metrics.arm_of(plain) == "default"
     assert ts.dimensions(plain).arm == "default"
     assert playbook_window._eligible(plain, "developer") is True
+
+
+# --- stage_h.* (GH-752) ----------------------------------------------------------------------
+
+ISSUE_AT = "2026-10-01T09:00:00+00:00"
+PR_AT = "2026-10-01T12:30:00+00:00"
+MERGED_AT = "2026-10-01T13:00:00+00:00"
+STAGE_NAMES = ts.FAMILIES["stage_h"]
+
+
+def stage_names(scores):
+    return {s.name for s in scores if s.name.startswith("stage_h.")}
+
+
+def staged_document(resumed=True):
+    """A run, a failure, a human pause (closed unless `resumed` is false) and a CI wait."""
+    pause_log = rules.logged(rules.escalation("questions", "q"), [], at="2026-10-01T11:00:00Z")
+    if resumed:
+        pause_log["pause_log"].append(rules.resumed_entry(at="2026-10-01T11:20:00Z"))
+    return document(
+        runs=[
+            run(
+                started="2026-10-01T09:30:00+00:00",
+                ended="2026-10-01T10:30:00+00:00",
+                slug="developer",
+            )
+        ],
+        failures=[
+            {
+                "cost_usd": 0.25,
+                "slug": "developer",
+                "started_at": "2026-10-01T10:30:00+00:00",
+                "ended_at": "2026-10-01T10:40:00+00:00",
+            }
+        ],
+        ci_timing={
+            "pushed_at": "2026-10-01T12:00:00Z",
+            "node_started_at": "2026-10-01T12:00:00Z",
+            "run_started_at": "2026-10-01T12:05:00Z",
+            "run_ended_at": "2026-10-01T12:25:00Z",
+            "verdict": "green",
+        },
+        **pause_log,
+    )
+
+
+def staged_scores(doc=None, **times):
+    return ts.task_scores(
+        doc if doc is not None else staged_document(),
+        issue_created_at=times.get("issue", ISSUE_AT),
+        pr_created_at=times.get("pr", PR_AT),
+        pr_merged_at=times.get("merged", MERGED_AT),
+    )
+
+
+def test_the_stage_family_is_the_ten_cycle_stages_and_follows_the_base_names():
+    assert [n.removeprefix("stage_h.") for n in STAGE_NAMES] == [
+        "queue",
+        "definition",
+        "plan",
+        "development",
+        "review",
+        "checks",
+        "human_wait",
+        "account_limit",
+        "landing",
+        "other",
+    ]
+    assert ts.SCORE_NAMES[: len(ts.BASE_SCORE_NAMES)] == ts.BASE_SCORE_NAMES
+
+
+def test_a_merged_document_emits_the_ten_stage_hours_numeric_under_the_identity():
+    ids = ts.identity("p", "GH-1", START)
+    scores = ts.task_scores(
+        staged_document(),
+        issue_created_at=ISSUE_AT,
+        pr_created_at=PR_AT,
+        pr_merged_at=MERGED_AT,
+        identity=ids,
+    )
+    staged = [s for s in scores if s.name in STAGE_NAMES]
+    assert [s.name for s in staged] == list(STAGE_NAMES)
+    assert {s.data_type for s in staged} == {"NUMERIC"}
+    assert all(s.id == ids.score_id(s.name) for s in staged)
+
+
+def test_the_stage_hours_sum_to_the_cycle_and_other_is_the_sum_of_its_causes():
+    doc = staged_document()
+    got = by_name(staged_scores(doc))
+    assert sum(got[n].value for n in STAGE_NAMES) == pytest.approx(got["cycle_h"].value, abs=1e-9)
+    assert got["stage_h.human_wait"].value == pytest.approx(20 / 60)
+    split = ts.stage_outcome(
+        doc, issue_created_at=ISSUE_AT, pr_created_at=PR_AT, pr_merged_at=MERGED_AT
+    )
+    assert got["stage_h.other"].value == pytest.approx(sum(split.other_by_cause.values()) / 3600)
+
+
+def test_no_merge_or_no_pr_creation_emits_no_stage_hours_never_zero():
+    for times in ({"merged": None}, {"pr": None}, {"issue": None}):
+        scores = staged_scores(**times)
+        assert stage_names(scores) == set()
+
+
+def test_an_open_pause_is_unknown_and_emits_none_of_the_family():
+    scores = staged_scores(staged_document(resumed=False))
+    assert stage_names(scores) == set()
+
+
+def test_the_emitted_stage_names_are_the_whole_family_or_none():
+    for scores in (staged_scores(), staged_scores(merged=None), ts.task_scores(document())):
+        assert stage_names(scores) in (set(STAGE_NAMES), set())
+
+
+def test_the_close_and_the_backfill_calls_give_equal_stage_hours():
+    """`_write_scores` and `_backfill_one` both pass the three timestamps the same way."""
+    first = {s.name: s.value for s in staged_scores() if s.name in STAGE_NAMES}
+    second = {
+        s.name: s.value
+        for s in ts.task_scores(
+            staged_document(),
+            pr_merged_at=MERGED_AT,
+            issue_created_at=ISSUE_AT,
+            pr_created_at=PR_AT,
+        )
+        if s.name in STAGE_NAMES
+    }
+    assert first == second and len(first) == 10
+
+
+def test_stage_outcome_reads_the_strings_only_with_parse():
+    unreadable = ts.stage_outcome(
+        staged_document(), issue_created_at="nope", pr_created_at=PR_AT, pr_merged_at=MERGED_AT
+    )
+    assert unreadable.cause == "no_issue_created"
+
+
+def test_stage_row_never_raises_on_a_legacy_document():
+    for runs in ("oops", ["x"], {"a": 1}, [{"started_at": 3, "queue_wait_s": "x"}]):
+        row = ts.stage_row(
+            "GH-1",
+            document(runs=runs),
+            issue_created_at=ISSUE_AT,
+            pr_created_at=PR_AT,
+            pr_merged_at=MERGED_AT,
+        )
+        assert row.task_id == "GH-1" and row.active_h is None
+
+
+def test_stage_row_carries_the_active_hours_of_a_readable_document():
+    row = ts.stage_row(
+        "GH-1",
+        staged_document(),
+        issue_created_at=ISSUE_AT,
+        pr_created_at=PR_AT,
+        pr_merged_at=MERGED_AT,
+    )
+    assert row.active_h == pytest.approx(1.0)

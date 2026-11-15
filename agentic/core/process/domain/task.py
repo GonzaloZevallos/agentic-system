@@ -41,7 +41,7 @@ from .plan_route import CriticState, Route
 from .presubmit import FAILED_IDS_MAX, BudgetBreach, CheckResult, FlakeGate, RedCheck
 from .reaping import ReapedProcess
 from .size_budget import ActualSize, PlanSize
-from .spec_delivery import SpecContract
+from .spec_delivery import SpecContract, SpecRefusalRecord
 from .task_path import Path as TaskPath
 from .task_path import PathCause, PathLabel, PromoteRequest, Promotion
 from .task_path import Size as TaskSize
@@ -1980,6 +1980,9 @@ class TaskState(TaskInput, total=False):
     # Why a spec delivery's `questions` pause was raised (GH-594): written only by
     # `rules.escalation`, with a spec in the state; never a `MechanicalCause`.
     spec_cause: Annotated[SpecEscalationCause | None, last]
+    # Why a spec was refused and what it names (GH-594): written only by
+    # `spec_route.refusal_escalation`, cleared by `rules.resumed`; never by `record_closure`.
+    spec_refusal: Annotated[SpecRefusalRecord | None, last]
     # The spec a delivery is built against (GH-594). Nothing sets it yet; its document
     # round-trip belongs to the part that does.
     spec: Annotated[SpecContract, last]

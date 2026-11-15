@@ -2202,3 +2202,19 @@ def test_a_non_empty_departure_record_round_trips_intact():
     rows = [_departure_row(1, "hero", "accept"), _departure_row(2, "footer")]
     parsed = document.parse(document.render({**_departure_base(), "drawing_departures": rows}))
     assert parsed["drawing_departures"] == rows
+
+
+SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}
+
+
+def test_a_document_without_spec_refusal_renders_byte_identically_to_the_golden():
+    assert document.render(golden_state(spec_refusal=None)) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert "spec_refusal" not in document.render(golden_state())
+
+
+def test_spec_refusal_survives_render_parse_render_byte_for_byte():
+    rendered = document.render(golden_state(spec_refusal=SPEC_REFUSAL))
+    assert "\nspec_refusal:" in rendered
+    parsed = document.parse(rendered)
+    assert parsed["spec_refusal"] == SPEC_REFUSAL
+    assert document.render({**golden_state(), **parsed}) == rendered
