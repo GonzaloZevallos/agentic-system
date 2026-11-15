@@ -278,7 +278,7 @@ def merge_task(
             number,
             master,
             touched,
-            escalation_hold(document, comments),
+            comments,
         )
         # GitHub's reading of a conflict on this head and master (GH-326), git-free; the
         # probe is the last look's, immediately before the merge call.
@@ -1087,13 +1087,11 @@ def _facts(
     number: int,
     master: str,
     touched: tuple[str, ...] | None,
-    open_escalation: bool | None,
+    comments: Sequence[IssueComment] | None,
 ) -> rules.MergeFacts:
     pr_head = pull_request.head_oid if pull_request is not None else None
     return replace(
-        _merge_facts(
-            task_id, raw, pull_request, eval_set, number, master, open_escalation=open_escalation
-        ),
+        _merge_facts(task_id, raw, pull_request, eval_set, number, master, comments=comments),
         touched_paths=touched,
         ci_untrusted=rules.ci_untrusted(touched),
         # GH-462: whether the recorded dispatched run of the base's workflow stands for this head.
@@ -1111,9 +1109,9 @@ def settlement_facts(
     """The facts `merge_task` starts from before it reads any diff, a worktree or the CI --
     the builder `agentic restore` asks `plan_settlement.settleable` over, so a settlement
     and a merge never read a document two ways. No eval set is read (`in_eval_set` is `None`)."""
-    # Settling reads no `open_escalation` (`plan_settlement.settleable` ignores it): the fact is
-    # the unknown one, which no decision over these facts would take for clear.
-    return _merge_facts(task_id, raw, pull_request, None, number, master, open_escalation=None)
+    # Settling reads no thread (`plan_settlement.settleable` ignores `open_escalation`): without
+    # comments the fact is the unknown one, which no decision over these facts takes for clear.
+    return _merge_facts(task_id, raw, pull_request, None, number, master, comments=None)
 
 
 def run_checks(

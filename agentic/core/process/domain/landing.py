@@ -1507,9 +1507,8 @@ def landing_pass_live(state: TaskState) -> bool:
     return rules.landing_pass_live(state)
 
 
-_ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger", "escalate_api_break")
+ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger", "escalate_api_break")
 """The steps that ask a person once and leave the task to them until it is released."""
-ESCALATING_STEPS = _ESCALATING_STEPS
 
 
 def waits_on_human(
@@ -1536,7 +1535,7 @@ def waits_on_human(
     asked = [
         entry
         for entry in live_entries(state)
-        if entry.get("step") in _ESCALATING_STEPS and entry.get("head") == head
+        if entry.get("step") in ESCALATING_STEPS and entry.get("head") == head
     ]
     return head is not None and bool(asked) and not asked[-1].get("released_at")
 

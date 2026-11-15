@@ -148,13 +148,11 @@ def test_the_github_reading_is_filled_by_the_one_rules_function_in_poller_and_ve
     pull_request = ports.tracker.prs[url]
     raw = ports.documents.load("GH-5")
 
-    polled = poll._merge_facts(
-        "GH-5", raw, pull_request, frozenset(), 5, MASTER, open_escalation=False
-    )
+    polled = poll._merge_facts("GH-5", raw, pull_request, frozenset(), 5, MASTER, comments=[])
     assert polled.github_conflicting is rules.github_conflicting(pull_request, HEAD) is True
 
     _read(ports, "MERGEABLE")
     polled = poll._merge_facts(
-        "GH-5", raw, ports.tracker.prs[url], frozenset(), 5, MASTER, open_escalation=False
+        "GH-5", raw, ports.tracker.prs[url], frozenset(), 5, MASTER, comments=[]
     )
     assert polled.github_conflicting is False

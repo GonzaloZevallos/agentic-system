@@ -281,7 +281,7 @@ def test_attempts_count_only_for_the_current_head():
 
 
 def _facts_of(raw):
-    return poll._merge_facts("GH-5", raw, _pr(), frozenset(), 5, MASTER, open_escalation=False)
+    return poll._merge_facts("GH-5", raw, _pr(), frozenset(), 5, MASTER, comments=[])
 
 
 def _important(scope: str, subtask: str = "only") -> dict[str, str]:
@@ -937,9 +937,7 @@ def _reloaded(**more):
 
 
 def _decision(raw):
-    facts = poll._merge_facts(
-        "GH-5", raw, _docs_pr(), frozenset(), 5, MASTER, open_escalation=False
-    )
+    facts = poll._merge_facts("GH-5", raw, _docs_pr(), frozenset(), 5, MASTER, comments=[])
     return rules.auto_merge_decision(facts)
 
 
@@ -1108,3 +1106,15 @@ def test_escalation_hold_is_true_on_a_tracker_pause_or_an_unbuilt_decision_and_n
     assert merge.escalation_hold(_state(), None) is None
     bad = _state(pause_log=[{"kind": "resumed"}])
     assert merge.escalation_hold(bad, [_at("Escalated: x", "2026-11-01T11:00:00Z")]) is None
+
+
+def test_the_marker_a_settled_resume_stamped_still_refuses_the_merge_after_a_later_resume(
+    tmp_path,
+):
+    ports = _ports(5, owner_decision_unbuilt="2026-11-01T12:00:00+00:00")
+    _thread(ports, 5, ("Ready for review: the pull request", "2026-11-02T10:00:00Z"))
+    ports.documents.record_closure(
+        "GH-5", {"pause_log": [{"kind": "resumed", "at": "2026-11-03T10:00:00+00:00"}]}
+    )
+    assert _verb(ports, tmp_path) == merge.MergeResult("refused", "open_escalation")
+    assert ports.tracker.merge_calls == []
