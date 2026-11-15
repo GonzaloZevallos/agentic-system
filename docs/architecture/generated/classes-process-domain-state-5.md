@@ -27,6 +27,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__Failure["Failure"]
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
@@ -41,7 +42,6 @@ classDiagram
     class task__LandedSlice["LandedSlice"]
     class task__LandedSliceRef["LandedSliceRef"]
     class task__LandingEntry["LandingEntry"]
-    class task__LaneAdmitted["LaneAdmitted"]
 ```
 
 ## Relaciones con otras páginas

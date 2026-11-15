@@ -33,6 +33,7 @@ classDiagram
     class task__CiSpeculation["CiSpeculation"]
     class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
+    class task__DepartureRecord["DepartureRecord"]
     class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]
     class task__EscalationPatch["EscalationPatch"]
@@ -41,7 +42,6 @@ classDiagram
     class task__EstimateRevision["EstimateRevision"]
     class task__EvaluatedPatch["EvaluatedPatch"]
     class task__EvaluationRef["EvaluationRef"]
-    class task__Failure["Failure"]
 ```
 
 ## Relaciones con otras páginas

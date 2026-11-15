@@ -86,6 +86,7 @@ def test_reducers_are_read_from_the_annotations():
         "restorations",
         "review_scopes",
         "shadow_reviews",
+        "drawing_departures",
         "spec_cause",
         "spec",
         "assumptions",
