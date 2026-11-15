@@ -452,7 +452,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
-        ci_logs=GhCiLogs(cfg.product_dir, ci_reader(tracker)),
+        ci_logs=GhCiLogs(
+            cfg.product_dir, ci_reader(tracker), declared=lambda: tuple(stack.ci("HEAD"))
+        ),
         # GH-470: the product's experiment declaration, read once per poller round.
         experiment=FilesystemExperimentFile(cfg.product_dir),
         stack=stack,
