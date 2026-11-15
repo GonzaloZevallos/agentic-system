@@ -1324,10 +1324,13 @@ async def test_deliver_with_a_human_item_ends_waiting_on_human(cfg):
     ports = memory_ports()
     patch = await deliver(state, cfg, ports)
 
+    # GH-784: the fence refuses before anything is pushed, opened, saved or said.
+    assert ports.workspace.pushes == []
+    assert ports.tracker.pull_requests == [] and ports.tracker.comments == []
+    assert [d["status"] for d in ports.documents.saved] == ["waiting_on_human"]  # finish alone
     assert patch["status"] == "waiting_on_human"
-    assert patch["pull_request"] == "https://github.com/o/r/pull/7"
+    assert "pull_request" not in patch
     assert patch["escalation_class"] == "questions" and patch["tracker_human"] == [h]
-    assert patch.get("landing_queued_at")
     assert [e["kind"] for e in patch["pause_log"]].count("escalation") == 1
     await escalate({**state, **patch}, cfg, ports)
     posted = ports.tracker.comments[-1][1]
@@ -1336,13 +1339,14 @@ async def test_deliver_with_a_human_item_ends_waiting_on_human(cfg):
     assert ("GH-12", "needs-human") in ports.tracker.labels
 
 
-async def test_deliver_with_an_item_and_a_failed_ready_comment_keeps_both_log_entries(cfg):
+async def test_deliver_with_an_item_and_a_failing_ready_comment_writes_one_escalation_entry(cfg):
     state = {k: v for k, v in _held().items() if k != "_h"}
     ports = memory_ports()
     ports.tracker.comment_failures = 1
     patch = await deliver(state, cfg, ports)
-    kinds = [e["kind"] for e in patch["pause_log"]]
-    assert kinds.count("escalation") == 1 and kinds.count("lapse") == 1
+    assert [e["kind"] for e in patch["pause_log"]] == ["escalation"]
+    # The failing comment was never attempted: its one failure is still armed.
+    assert ports.tracker.comment_failures == 1
 
 
 async def test_deliver_on_a_state_already_holding_the_hash_does_not_escalate_again(cfg):
@@ -1385,19 +1389,16 @@ async def test_a_state_with_no_tracker_items_gives_byte_identical_comments_body_
     assert ports.tracker.updated_bodies == []
 
 
-async def test_deliver_with_a_checklist_and_an_item_posts_the_checklist_and_escalates(cfg):
+async def test_deliver_with_a_checklist_and_an_item_posts_no_checklist_before_the_answer(cfg):
     items = ["Post the verdict table on #307"]
     state = {k: v for k, v in _held().items() if k != "_h"}
-    plain = memory_ports()
-    await deliver({**TASK, "tracker_checklist": items}, cfg, plain)
     ports = memory_ports()
     patch = await deliver({**state, "tracker_checklist": items}, cfg, ports)
 
-    legacy = [c for _, c in plain.tracker.comments if c.startswith(TRACKER_WORK)]
-    assert len(legacy) == 1 and legacy[0].endswith(rules.tracker_marker("GH-12", items))
-    assert [c for _, c in ports.tracker.comments if c.startswith(TRACKER_WORK)] == legacy
+    assert [c for _, c in ports.tracker.comments if c.startswith(TRACKER_WORK)] == []
+    assert ports.tracker.comments == []
     assert patch["status"] == "waiting_on_human" and patch["escalation_class"] == "questions"
-    assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(items)
+    assert "tracker_checklist_posted" not in patch
 
 
 async def test_deliver_with_an_item_then_a_resume_opens_one_pull_request_and_one_ready_comment(cfg):
@@ -1412,9 +1413,11 @@ async def test_deliver_with_an_item_then_a_resume_opens_one_pull_request_and_one
     ports.tracker.comments.append(("GH-12", "Yes, ship the flag"))
 
     r = resume.prepare("GH-12", paused, "checkpoint", cfg, ports)
-    settled = resume.settle(r, ports)
+    assert not r.settled
+    assert r.resumed["tracker_human"] == []
+    delivered = await deliver(r.resumed, cfg, ports)
 
-    assert r.settled and settled["tracker_human"] == []
+    assert delivered["status"] == "ready_for_review"
     assert len(ports.tracker.pull_requests) == 1
     assert len([c for _, c in ports.tracker.comments if c.startswith(READY)]) == 1
     assert ports.tracker.updated_bodies == []
