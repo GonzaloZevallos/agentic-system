@@ -1133,3 +1133,6 @@ tasks:
     cost_usd: 0.0
   GH-780@review:
     cost_usd: 0.0453
+  GH-789@decision:
+    cost_usd: 0.0534
+    decisions: 1
