@@ -1980,3 +1980,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-15T19:07:21.375+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When you add a test that enforces a rule (import boundary, invariant, lint-like check), also add negative cases that feed it violating input and prove it fails, not only a pass on the real code.
+  confidence: medium
+  seen_in:
+  - GH-812
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T19:21:54.859+00:00'
