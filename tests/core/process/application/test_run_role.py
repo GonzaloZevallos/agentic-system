@@ -2219,6 +2219,7 @@ def test_context_for_gives_a_developer_without_a_spec_no_protected_line(spec):
         f"## PM\n\nthe definition\n\n## {HUMAN}\n\nDecision 1"
     )
 
+
 def test_context_for_puts_the_section_last_when_there_are_no_human_decisions():
     role = dataclasses.replace(TECH_LEAD_REVIEWER, reads=("PM",))
     state = _state(spec=GOOD_SPEC)

@@ -259,7 +259,7 @@ def protected(state: Mapping[str, Any], path: str) -> bool:
     own spec path: the one file no unit of the task may change unseen. `rules.forbidden_paths`
     and `UNSTAGEABLE` do not know it, on purpose: outside a delivery it is an ordinary path."""
     spec = state.get("spec")
-    return bool(spec) and path == spec["path"]
+    return spec is not None and path == spec.get("path")
 
 
 def spec_intact(recorded_sha256: str, recorded_text: str | None, head_text: str | None) -> bool:

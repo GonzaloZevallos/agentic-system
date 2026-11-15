@@ -1503,7 +1503,7 @@ def _spec_protected_refusal(path: str) -> str:
 
 
 def _names_path(data: dict[str, Any], path: str) -> bool:
-    """Whether a subtask's `files` (when it lists any) or the plan's `required_paths` name `path`."""
+    """Whether a subtask's `files` (when listed) or the plan's `required_paths` name `path`."""
     files = [f for s in data.get("subtasks") or [] for f in s.get("files") or []]
     return path in files or path in (data.get("required_paths") or [])
 
