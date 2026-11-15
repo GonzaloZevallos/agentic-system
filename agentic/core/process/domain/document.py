@@ -452,6 +452,9 @@ def render(
         # reviewed before it is byte-identical to one written before; parsed back under the
         # same name. Nothing reads it to decide.
         **({"review_scopes": r} if (r := state.get("review_scopes")) else {}),
+        # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
+        # causes only, written only when there is a row, parsed back under the same name.
+        **({"full_checks_reads": r} if (r := state.get("full_checks_reads")) else {}),
         # The shadow reviews of the integration review under `review_mode` `single` (GH-473) and
         # how long the node waited for them: written only when set, so every document under
         # another mode is byte-identical to one written before them. Parsed back under the

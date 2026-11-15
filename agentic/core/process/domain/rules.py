@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -94,6 +94,7 @@ from .task import (
     FindingRecord,
     FindingStatus,
     FinishedPatch,
+    FullChecksRead,
     FullChecksRecord,
     LapsePauseEntry,
     MechanicalCause,
@@ -1071,8 +1072,12 @@ def design_step(state: TaskState) -> str | None:
     The last rung is the texts (`write_copy`, README.md 4): due on a feature that touches
     copy once the design branch, when it applies, is done, and no `Tech Writer` run is
     newer than the latest Product Analyst run and the latest consolidation. The name stays
-    though the ladder is no longer only the design's."""
-    if not (design_applies(state) or copy_applies(state)):
+    though the ladder is no longer only the design's.
+
+    `None` for a spec delivery (GH-594): the slice carries the screens, so no design node or
+    texts run. It reads `spec_delivery`, not `skips_definition`: the light path must not
+    silence the ladder for a task promoted to full."""
+    if spec_delivery(state) or not (design_applies(state) or copy_applies(state)):
         return None
     prd_idx = _latest_index(state, PRODUCT_ANALYST.name)
     if design_applies(state) and (step := _design_ladder(state, prd_idx)):
@@ -2522,7 +2527,11 @@ def promotion_pending(state: TaskState) -> bool:
     """Whether a promotion still owes the task the full path's first role (GH-591): `promotion`
     is set, the task is a feature or a bug and no run of the Product Analyst started after
     `promotion.at`. Always false for a platform task (nothing reruns, the cap is just lifted),
-    and for a promotion whose instant cannot be read (it could never be settled)."""
+    and for a promotion whose instant cannot be read (it could never be settled). Also false
+    for a spec delivery (GH-594): it has no definition stage to go back to, so the promotion
+    records `path: full` and nothing more."""
+    if spec_delivery(state):
+        return False
     promotion = state.get("promotion")
     role = _FIRST_ROLE.get(state.get("type", ""))
     if not promotion or role is None:
@@ -2540,10 +2549,12 @@ def promotion_pending(state: TaskState) -> bool:
 def promotion_route(state: TaskState) -> str | None:
     """The node a promoted task goes back to: the full path's first role while it is owed
     (`promotion_pending`), else `None`. The one place that answers it; `after_plan`,
-    `after_integrate` and the resume router call it first."""
+    `after_integrate` and the resume router call it first. `None` as well when the entry is
+    `plan` (`definition_entry`): going back there would loop the plan."""
     if not promotion_pending(state):
         return None
-    return FIRST_NODE[state["type"]]
+    entry = definition_entry(state, "define", light=False)
+    return None if entry == "plan" else entry
 
 
 def plan_over_cap_request(state: TaskState) -> task_path.PromoteRequest | None:
@@ -2565,16 +2576,29 @@ def after_classify(state: TaskState) -> str | None:
     definition stage and goes straight to the plan."""
     if state.get("escalated"):
         return None
-    if _light_skips_definition(state):
+    return definition_entry(state, "plan")
+
+
+def skips_definition(state: TaskState, *, light: bool = True) -> bool:
+    """Whether this task skips the definition stage and its design ladder (GH-591, GH-594).
+    The order of the reading: the type set (a feature or a bug; a task with no type never
+    skips, and a platform enhancement has no definition stage to skip), then a spec delivery,
+    then the light path. The one place the routers read both for it. `light=False` leaves the
+    light path out: a PM return and a promotion's way back never read it (GH-591), only a spec
+    delivery skips them."""
+    if state.get("type") not in ("feature", "bug"):
+        return False
+    return spec_delivery(state) or (light and task_path.path_of(state) == "light")
+
+
+def definition_entry(state: TaskState, default: str, *, light: bool = True) -> str:
+    """The first definition node of a task, or `plan` when it skips the definition
+    (`skips_definition`, which `light` passes on). The order: type set, spec, light path, then
+    the `FIRST_NODE` map with `default` for a type it does not hold. The only reader of
+    `FIRST_NODE`."""
+    if skips_definition(state, light=light):
         return "plan"
-    return FIRST_NODE.get(state.get("type", ""), "plan")
-
-
-def _light_skips_definition(state: TaskState) -> bool:
-    """Whether the light path skips the definition stage for this task (GH-591): a feature or a
-    bug on `light`. The one place the three routers below read the path for it; a platform
-    enhancement has no definition stage to skip."""
-    return task_path.path_of(state) == "light" and state.get("type") in ("feature", "bug")
+    return FIRST_NODE.get(state.get("type", ""), default)
 
 
 def after_define(state: TaskState) -> str | None:
@@ -2594,9 +2618,9 @@ def after_validate(state: TaskState) -> str | None:
         return None
     status = state.get("status", "")
     if status == "returned":
-        return FIRST_NODE.get(state.get("type", ""), "define")
+        return definition_entry(state, "define", light=False)
     if status == "definition_ready":
-        return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
+        return "plan" if skips_definition(state) else (design_step(state) or "plan")
     return {"discarded": "discard"}.get(status)
 
 
@@ -2624,8 +2648,8 @@ def after_consolidate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
     if state.get("status") == "returned":
-        return FIRST_NODE.get(state.get("type", ""), "define")
-    return "plan" if _light_skips_definition(state) else (design_step(state) or "plan")
+        return definition_entry(state, "define", light=False)
+    return "plan" if skips_definition(state) else (design_step(state) or "plan")
 
 
 def after_write_copy(state: TaskState) -> str | None:
@@ -2939,6 +2963,137 @@ def full_checks_return(
         stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))}, at=at)
         patch = {**patch, **stopped, "status": WAITING_ON_HUMAN}
     return patch
+
+
+FULL_CHECKS_TESTS_MAX = 16
+
+
+def test_hashes(ids: Iterable[str]) -> list[str]:
+    """The first 16 of the sorted `ids`, each as the first 8 hex characters of its sha256: what
+    `FullChecksRead.tests` holds in place of a test id."""
+    return [
+        hashlib.sha256(item.encode("utf-8")).hexdigest()[:8]
+        for item in sorted(ids)[:FULL_CHECKS_TESTS_MAX]
+    ]
+
+
+def _log_says_nothing(log: ci.JobLog) -> bool:
+    """Whether a declared job's log that gave no set shows nothing it could have said: empty,
+    or read (cut short or not) with no header and no dropped id."""
+    if log.cause == "empty":
+        return True
+    scan = ci.scan_headers(log.text)
+    return log.cause == "read" and not scan.headers and scan.dropped == 0
+
+
+def recorded_tests(
+    logs: Sequence[ci.JobLog], candidates: Sequence[ci.CiCheck], declared: Sequence[str]
+) -> list[str] | None:
+    """The hashes of the failing tests of a red full tier, or `None` when the logs cannot say.
+    The only producer of `FullChecksRead.tests`. `candidates` is the whole `ci.log_candidates`
+    result, before any slice; a log belongs to the check of the same name (the first log of a
+    job when `logs` holds two).
+
+    A candidate that is not a declared name counts only through a log `ci.failing_set` could
+    read whole: any other answer makes the whole result `None`. A declared candidate (the
+    aggregate, which says less than the shards it waits on) is ignored when it has no log, an
+    empty log, or a read log with no header and no dropped id; when its log yields a set it
+    counts; any other log of it (unreadable, timed out, another head, or a cut or read log that
+    shows a header or a dropped id) makes the result `None`. No counted candidate, or more than
+    16 ids in the union, is `None`.
+
+    The accepted residual risk: a declared job that runs its own suite, truncated before any
+    header, next to red shards, is ignored and the shards' set stands for the failure."""
+    by_job: dict[str, ci.JobLog] = {}
+    for read in logs:
+        by_job.setdefault(read.job, read)
+    union: set[str] = set()
+    counted = False
+    for check in candidates:
+        log = by_job.get(check.name)
+        is_declared = check.name in declared
+        if log is None:
+            if is_declared:
+                continue
+            return None
+        ids = ci.failing_set(log)
+        if ids is not None:
+            union |= ids
+            counted = True
+        elif not is_declared:
+            return None
+        elif not _log_says_nothing(log):
+            return None
+    if not counted or len(union) > FULL_CHECKS_TESTS_MAX:
+        return None
+    return test_hashes(union)
+
+
+def _read_tests(row: FullChecksRead) -> frozenset[str] | None:
+    tests = row.get("tests")
+    if not isinstance(tests, list) or not tests or not all(isinstance(t, str) for t in tests):
+        return None
+    return frozenset(tests)
+
+
+def repeated_ci_failure(
+    reads: Sequence[FullChecksRead],
+) -> Literal["repeat", "no_repeat", "unknown"]:
+    """Whether the newest read of `full_checks` failed on the same tests as the latest earlier
+    read of another version: `repeat` when the overlap of their recorded ids is at least half
+    of the smaller set, else `no_repeat`. `unknown` with fewer than two versions, or when
+    either has no recorded tests (absent, empty, or not a list of str). Never raises on a
+    malformed row. Note a single id shared with a set of 16 reads `repeat`."""
+    valid = sorted(
+        (r for r in reads if type(r) is dict and type(r.get("version")) is int),
+        key=lambda r: r["version"],
+    )
+    if not valid:
+        return "unknown"
+    newest = valid[-1]
+    earlier = [r for r in valid if r["version"] != newest["version"]]
+    if not earlier:
+        return "unknown"
+    a, b = _read_tests(newest), _read_tests(earlier[-1])
+    if a is None or b is None:
+        return "unknown"
+    return "repeat" if len(a & b) * 2 >= min(len(a), len(b)) else "no_repeat"
+
+
+def repetition_sentence(prev_version: int) -> str:
+    """The one sentence that says a failure repeats: only a version number."""
+    return (
+        f"Same failing tests as full_checks v{prev_version} (overlap of recorded failing-test ids)."
+    )
+
+
+def full_checks_excerpt_due(
+    state: TaskState, unit: str, head: str
+) -> Literal["read", "dispatch", "none"]:
+    """Whether the CI logs of a red `full_checks` run are to be read for `unit` on `head`, and
+    through which record: `read` for a run `ci` judged, `dispatch` for one `ci_dispatch` did.
+    `none` without a failed record, when `unit` is not the reviewed unit or is not `returned`,
+    or when the record is of another commit. Independent of `returned_by`.
+
+    For part 1c: with 2+ subtasks and no integration, `full_checks_return` reopens the first
+    subtask while `reviewed_unit_name` is `None`, and this says `none` on purpose."""
+    record = state.get("full_checks")
+    if record is None or record.get("passed") is not False:
+        return "none"
+    name = reviewed_unit_name(state)
+    if name is None or unit != name:
+        return "none"
+    if state.get("subtasks", {}).get(unit, {}).get("status") != "returned":
+        return "none"
+    if not same_commit(record.get("head"), head):
+        return "none"
+    match record.get("ran_on"):
+        case "ci":
+            return "read"
+        case "ci_dispatch":
+            return "dispatch"
+        case _:
+            return "none"
 
 
 # The verifiers that read the integrated head (GH-469), in the one order their deltas and
@@ -3273,16 +3428,9 @@ _CROSSED_TEXT = {
 }
 
 
-def fit_question_text(task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None) -> str:
-    """What the human reads when a part at the depth cap has a plan over the line: the
-    figures the decision used (`FitDecision`), the limits, which one was crossed, and the
-    ways out. Building it whole is not one. No way out stops the task by resuming it:
-    stopping is the absence of a resume."""
-    origin, number, depth = part_of
-    head = (
-        f"{task_id} is part {number} of {origin}, at split depth {depth}; a split goes at "
-        f"most {MAX_SPLIT_DEPTH} levels deep, so it cannot split again. "
-    )
+def fit_figures_text(fit: FitDecision | None) -> str:
+    """The figures a `FitDecision` used, the limits and which one it crossed, as one sentence
+    pair ending in a space; `None` says they are not known."""
     if fit is None:
         figures = "The plan's figures are not known, so which limit it crossed is not either. "
     else:
@@ -3325,6 +3473,34 @@ def fit_question_text(task_id: str, part_of: tuple[str, int, int], fit: FitDecis
         figures = (
             f"Its plan declares {declared}, and {reference}. "
             f"One task holds at most {limits}: {verdict}. "
+        )
+    return figures
+
+
+def fit_question_text(
+    task_id: str,
+    part_of: tuple[str, int, int],
+    fit: FitDecision | None,
+    *,
+    remainder: FitDecision | None = None,
+) -> str:
+    """What the human reads when a part at the depth cap has a plan over the line: the
+    figures the decision used (`FitDecision`), the limits, which one was crossed, and the
+    ways out. Building it whole is not one. No way out stops the task by resuming it:
+    stopping is the absence of a resume. After a carve-out, `remainder` is the fit of what
+    was left, and one paragraph quotes its figures and the limit it crossed."""
+    origin, number, depth = part_of
+    head = (
+        f"{task_id} is part {number} of {origin}, at split depth {depth}; a split goes at "
+        f"most {MAX_SPLIT_DEPTH} levels deep, so it cannot split again. "
+    )
+    figures = fit_figures_text(fit)
+    if remainder is not None:
+        figures = (
+            f"{figures.rstrip()}\n\n"
+            "A carve-out moved steps into a follow-up issue, and the remainder still does "
+            f"not fit. For the remainder: {fit_figures_text(remainder)}".rstrip()
+            + "\n\n"
         )
     return (
         f"{head}{figures}Choose one:\n"
@@ -3687,18 +3863,17 @@ def resume_target(state: TaskState) -> str | None:
     if status == "open":
         # The same fork as `after_classify`, plus the road back to PjM for a task that
         # paused before it had a type: only PjM turns the human's answer into one. A light
-        # feature or bug goes to the plan, as `after_classify` does (GH-591).
-        if _light_skips_definition(state):
-            return "plan"
-        return FIRST_NODE.get(state.get("type", ""), "classify")
+        # feature or bug goes to the plan, as `after_classify` does (GH-591), and so does a
+        # typed spec delivery (GH-594).
+        return definition_entry(state, "classify")
     if status == "returned":
-        return FIRST_NODE.get(state.get("type", ""), "define")
+        return definition_entry(state, "define", light=False)
     if status == "definition_ready":
         # Through the design branch first, on a feature PM flagged `touches_ui`
         # (ADR-0040): the same one function `after_validate` and every design node's
         # own `after_*` already call, so a resume lands exactly where the live routing
         # would have, however many lead returns or PRD versions came before the pause.
-        if _light_skips_definition(state):
+        if skips_definition(state):
             return "plan"
         return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
@@ -4005,7 +4180,7 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
     return log[last_resumed + 1 :]
 
 
-def _terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
+def terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
     """`entries` without the failures the run already retried (GH-659), in the same order. A batch
     is the contiguous `failure` entries before the `escalation` entry that closes them (one
     `rules.logged` call per `run_role`); inside a batch a failure is superseded only by a later
@@ -4030,13 +4205,13 @@ def _terminal_failures(entries: Sequence[PauseEntry]) -> list[PauseEntry]:
 def _resume_key(entries: Sequence[PauseEntry]) -> ResumeKey | None:
     """The key `entries` are retaken by, `None` when a human is needed (GH-593): the one reading
     both `auto_resumable` (the poller's) and `pause_kind` (the measurement's) share, so a cause is
-    mechanical in one place. Every failure that ended the run (`_terminal_failures`: not one the
+    mechanical in one place. Every failure that ended the run (`terminal_failures`: not one the
     run already retried) is in `EXTERNAL_REASONS`, and every escalation is either a `failure` one
     (a role broke, the failures say why) or carries a `MechanicalCause`; there is at least one
     failure or one cause. The key is the most recent entry's own: a failure's reason, or an
     escalation's cause."""
     keyed: list[ResumeKey] = []
-    for entry in _terminal_failures(entries):
+    for entry in terminal_failures(entries):
         if entry["kind"] == "failure":
             if entry["value"] not in EXTERNAL_REASONS:
                 return None

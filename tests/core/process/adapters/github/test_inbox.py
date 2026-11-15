@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from agentic.core.process.adapters.github import GhInbox
-from agentic.core.process.application.ports import TrackerTimedOut
+from agentic.core.process.application.ports import ListMayBeCut, TrackerTimedOut
 
 
 def fake_gh(*, stdout="", returncode=0, stderr=""):
@@ -198,8 +198,13 @@ def test_the_flake_issue_is_found_when_it_is_the_120th_of_150(tmp_path):
 
 def test_a_list_as_long_as_the_limit_is_a_value_error_never_a_partial_answer(tmp_path):
     run = _Recorder(stdout=json.dumps(_issues(1000, marker_at=5)))
-    with pytest.raises(ValueError, match="1000"):
+    with pytest.raises(ListMayBeCut, match="1000") as cut:
         GhInbox(tmp_path, run=run).open_issue_refs()
+    assert isinstance(cut.value, ValueError)
+    assert str(cut.value) == (
+        "gh issue list returned 1000 issues, the limit it was asked for: "
+        "the list may be cut, so no flake issue is matched against it"
+    )
 
 
 def test_a_list_one_short_of_the_limit_is_returned_whole(tmp_path):

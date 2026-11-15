@@ -1759,6 +1759,63 @@ def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> lis
     return list(joined.values())
 
 
+class FullChecksJob(CiLogRecord):
+    """One red job of a `full_checks` read (GH-741): what `CiLogRecord` keeps (job, bytes, the
+    closed `JobLogCause`) and the link of its run. Never the text of the log."""
+
+    link: str
+
+
+class FullChecksRead(TypedDict):
+    """What reading the CI logs of the red jobs of `full_checks` run `version` gave, on `head`:
+    the jobs and, when every candidate's log said so, the hashes of the failing tests
+    (`rules.recorded_tests`, the only producer of `tests`). Hashes only, never log text."""
+
+    version: int
+    head: str
+    jobs: list[FullChecksJob]
+    tests: NotRequired[list[str]]
+
+
+FULL_CHECKS_READS_KEPT = 4
+
+
+def _is_read(row: object) -> bool:
+    return isinstance(row, dict) and type(row.get("version")) is int
+
+
+def _valid_reads(rows: object) -> list[FullChecksRead]:
+    """The rows of `rows` that are a dict with an int `version` (a bool is not one): the one
+    filter the reducer and `delta` share, so a malformed row is dropped and never raises."""
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if _is_read(row)]
+
+
+def _known_tests(row: FullChecksRead) -> bool:
+    tests = row.get("tests")
+    return isinstance(tests, list) and bool(tests)
+
+
+def add_full_checks_reads(
+    existing: list[FullChecksRead], new: list[FullChecksRead]
+) -> list[FullChecksRead]:
+    """The reads of `existing` and `new` folded by `version`, sorted by version ascending, the
+    4 highest kept: a function of its entries alone, independent of branch and list order. A
+    row without an int `version` is dropped. A version may be written twice (the `ci` read then
+    the `ci_dispatch` read of the same record, or a retry after `ci_cancel_rerun`): the new row
+    replaces the held one, except that a row without a set never erases known hashes; between
+    two rows that both have tests, or neither, the last wins, which assumes the single
+    serialized writer (the `full_checks` node)."""
+    held: dict[int, FullChecksRead] = {}
+    for row in (*_valid_reads(existing), *_valid_reads(new)):
+        prior = held.get(row["version"])
+        if prior is not None and _known_tests(prior) and not _known_tests(row):
+            continue
+        held[row["version"]] = row
+    return [held[version] for version in sorted(held)][-FULL_CHECKS_READS_KEPT:]
+
+
 class RestartPending(TypedDict):
     """A clean restart (GH-593) the system started and has not finished: the subtask and the head
     of the attempt it archives. Written by `restart.restart_patch`, so a stopped run resumes the
@@ -2145,6 +2202,12 @@ class TaskState(TaskInput, total=False):
     # Read with `.get("review_scopes", [])`: a document written before this field has none, and
     # no verdict, gate or landing step reads it. Only `landing.scope_patch` writes it.
     review_scopes: Annotated[list[ReviewScopeRecord], add_review_scopes]
+    # What reading the CI logs of a red `full_checks` run gave (GH-741, `FullChecksRead`),
+    # `add_full_checks_reads`: sorted by version, only the 4 highest versions are kept (`delta`
+    # emits the valid rows of those, or `after` as it is when `before` has no key, which `apply`
+    # folds back through the reducer). Read with `.get("full_checks_reads", [])`: a document
+    # written before it has none. Hashes only, never log text.
+    full_checks_reads: Annotated[list[FullChecksRead], add_full_checks_reads]
 
 
 def _reducers() -> dict[str, object]:
@@ -2234,6 +2297,12 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             prior = {(r["head"], r["master"]): r for r in old}
             if grown := [r for r in value if prior.get((r["head"], r["master"])) != r]:
                 patch[key] = grown
+        elif reducer is add_full_checks_reads:
+            known_reads = {r["version"]: r for r in _valid_reads(old)}
+            if fresh_reads := [
+                r for r in add_full_checks_reads([], value) if known_reads.get(r["version"]) != r
+            ]:
+                patch[key] = fresh_reads
         elif reducer is add_shadow_reviews:
             held_shadows = {r["subtask"] for r in old}
             if fresh_shadows := [r for r in value if r["subtask"] not in held_shadows]:

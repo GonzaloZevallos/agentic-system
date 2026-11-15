@@ -43,6 +43,19 @@ was red too (so the candidate is not the one to blame)."""
 _PIN = re.compile(r"[0-9a-fA-F]{7,40}")
 _STAGE_NAME = re.compile(r"[0-9a-f]{40}")
 _POLLER_BEAT_FACTOR = 2
+_KEY_SLUG = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")  # what `FilesystemHeartbeats.write` accepts
+
+REEXEC_PATH_VARS = (
+    "AGENTIC_PRODUCT_DIR",
+    "AGENTIC_LOG_FILE",
+    "AGENTIC_SCRATCH_DIR",
+    "AGENTIC_RUN_REGISTRY_DIR",
+)
+"""The variables a re-exec writes from the resolved Configuration, so a relative value never
+survives the `chdir`: the closed set of path-valued `AGENTIC_*` names `reexec_env` owns."""
+REEXEC_MARKER = "AGENTIC_REEXEC_FROM"
+"""Set by `reexec_env` to the checkout the process came from: the new process knows it was
+re-exec'ed (`reexec_blocked`, the reap of inherited children)."""
 
 
 @dataclass(frozen=True)
@@ -298,3 +311,66 @@ def rollback_due(
         if not isinstance(beat, Heartbeat) or beat.checkout != new:
             return True
     return False
+
+
+def heartbeat_key(product: str, lock_key: str) -> str | None:
+    """The heartbeat key of the poller of `product`: `<product>-<lock_key>`, or None when
+    that is not a slug `FilesystemHeartbeats` accepts (the caller then writes no heartbeat).
+    The only place a key is built: two products share `lock_key`."""
+    key = f"{product}-{lock_key}"
+    return key if _KEY_SLUG.fullmatch(key) else None
+
+
+def _absolute(path: Path) -> str:
+    if not path.is_absolute():
+        raise ValueError(f"a re-exec path must be absolute: {path}")
+    return str(path)
+
+
+def reexec_argv(executable: Path, product_dir: Path, interval_s: float) -> list[str]:
+    """The argv of the re-exec'ed poller: `executable poll --product-dir <abs> --interval N`.
+    Both paths come resolved and absolute (ValueError otherwise), never the operator's
+    spelling; `--detach` and `--dry-run` are never carried (a poller that re-execs is the
+    foreground one, and a dry round never re-execs). The log file travels in
+    `AGENTIC_LOG_FILE` (`reexec_env`), `poll` has no option for it."""
+    return [
+        _absolute(executable),
+        "poll",
+        "--product-dir",
+        _absolute(product_dir),
+        "--interval",
+        str(interval_s),
+    ]
+
+
+def reexec_env(
+    env: Mapping[str, str],
+    resolved: Mapping[str, Path],
+    old_venv_bin: Path,
+    target: Path,
+) -> dict[str, str]:
+    """The environment of the re-exec'ed poller, from a copy of `env`: no `VIRTUAL_ENV`,
+    `old_venv_bin` out of `PATH`, each of `REEXEC_PATH_VARS` set to its absolute value in
+    `resolved` (and removed when `resolved` has none, e.g. no log file), `AGENTIC_REEXEC_FROM`
+    set to `target`, everything else unchanged. A relative value in `resolved` raises
+    ValueError."""
+    out = {k: v for k, v in env.items() if k != "VIRTUAL_ENV" and k not in REEXEC_PATH_VARS}
+    for name in REEXEC_PATH_VARS:
+        if name in resolved:
+            out[name] = _absolute(resolved[name])
+    if "PATH" in out:
+        kept = [p for p in out["PATH"].split(":") if Path(p) != old_venv_bin]
+        out["PATH"] = ":".join(kept)
+    out[REEXEC_MARKER] = _absolute(target)
+    return out
+
+
+def reexec_blocked(target: Path, marker: str | None) -> bool:
+    """Whether this process already came from `target` (`marker` is `AGENTIC_REEXEC_FROM`):
+    re-exec'ing there again would loop, so the caller reports it and keeps running."""
+    return marker is not None and marker != "" and Path(marker) == target
+
+
+def inherited_zombies(inherited: frozenset[int], states: Mapping[int, str]) -> frozenset[int]:
+    """The pids of `inherited` whose state in `states` is `Z`: the dead children to reap."""
+    return frozenset(pid for pid in inherited if states.get(pid) == "Z")

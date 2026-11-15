@@ -1,0 +1,13 @@
+# Fires agentic-stage0-rotate.service every 5 minutes, 2 minutes after boot. No
+# Persistent=: a missed round is not made up, the next one is at most 5 minutes away.
+# Rendered by `scripts/install-poller.sh --rotate`.
+[Unit]
+Description=agentic stage0 rotation timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=agentic-stage0-rotate.service
+
+[Install]
+WantedBy=timers.target

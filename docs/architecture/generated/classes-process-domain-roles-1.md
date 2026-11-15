@@ -38,19 +38,21 @@ classDiagram
     class roles__Role["Role"]
     class schemas__Answers["Answers"]
     class schemas__CapabilityFile["CapabilityFile"]
+    class schemas__CarveOutOutput["CarveOutOutput"]
     class schemas__Classification["Classification"]
     class schemas__Consolidation["Consolidation"]
     class schemas__Consultation["Consultation"]
-    class schemas__ConsultationWithAssumptions["ConsultationWithAssumptions"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
-    schemas__ConsultationWithAssumptions --|> schemas__Consultation
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
+  - `schemas.ConsultationWithAssumptions` hereda de `schemas.Consultation`
 - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - `schemas.Answers` hereda de `schemas.RoleOutput`
+  - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`
   - `schemas.Classification` hereda de `schemas.RoleOutput`
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
   - `schemas.Consultation` hereda de `schemas.RoleOutput`

@@ -29,6 +29,7 @@ graph TD
     m_adapters__github__ci_logs --> m_adapters__github__run
     m_adapters__github__commit_ci --> g_pkg__domain
     m_adapters__github__commit_ci --> m_adapters__github__tracker
+    m_adapters__github__inbox --> g_pkg__application
     m_adapters__github__inbox --> g_pkg__domain
     m_adapters__github__inbox --> m_adapters__github__run
     m_adapters__github__inbox --> m_adapters__github__tracker

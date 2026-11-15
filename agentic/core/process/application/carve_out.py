@@ -44,7 +44,7 @@ from ..domain.roles import TECH_LEAD
 from ..domain.schemas import FitDecision
 from ..domain.task import WAITING_ON_HUMAN, CarveRecord, TaskState, apply
 from . import split_sweep
-from .ports import Ports
+from .ports import ListMayBeCut, Ports
 from .run_role import finish
 
 # The label of the queue itself: `copied_labels` adds it and the repository always has it.
@@ -122,11 +122,13 @@ def apply_carve(
         return _save(current, ports, outcome="refused", cause="no_issue")
     if "issue_url" not in current["carve_out"]:
         try:
-            bodies = ports.inbox.open_issues()
+            refs = ports.inbox.open_issue_refs()
+        except ListMayBeCut:
+            return _stopped(current, "reading the open issues", "cut", ports)
         except (ValueError, OSError) as exc:
             return _stopped(current, "reading the open issues", type(exc).__name__, ports)
         wanted = (task_id, part)
-        url = next((found for found, body in bodies if carve_out.marked_by(body) == wanted), None)
+        url = next((ref.url for ref in refs if carve_out.marked_by(ref.body) == wanted), None)
         if url is None:
             url, current = _open(current, saved, part, ports)
             if url is None:
@@ -186,6 +188,8 @@ def _repoint(
     complete; no comment on the part is posted then."""
     try:
         refs = ports.inbox.open_issue_refs()
+    except ListMayBeCut:
+        return state, _stopped(state, "reading the open issues", "cut", ports, _LEFT_REPOINT)
     except (ValueError, OSError) as exc:
         paused = _stopped(
             state, "reading the open issues", type(exc).__name__, ports, _LEFT_REPOINT

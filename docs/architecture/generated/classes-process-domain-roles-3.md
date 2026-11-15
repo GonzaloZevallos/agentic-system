@@ -27,6 +27,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__GlossaryTerm["GlossaryTerm"]
     class schemas__InterviewTurn["InterviewTurn"]
     class schemas__LandingDiagnosis["LandingDiagnosis"]
     class schemas__LessonDelta["LessonDelta"]
@@ -41,7 +42,6 @@ classDiagram
     class schemas__Reflection["Reflection"]
     class schemas__Review["Review"]
     class schemas__RoleOutput["RoleOutput"]
-    class schemas__Ruling["Ruling"]
     schemas__InterviewTurn --|> schemas__RoleOutput
     schemas__LandingDiagnosis --|> schemas__RoleOutput
     schemas__PRD --|> schemas__RoleOutput
@@ -51,13 +51,13 @@ classDiagram
     schemas__PlatformAnswersWithAssumptions --|> schemas__PlatformAnswers
     schemas__Reflection --|> schemas__RoleOutput
     schemas__Review --|> schemas__RoleOutput
-    schemas__Ruling --|> schemas__RoleOutput
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - `schemas.Answers` hereda de `schemas.RoleOutput`
+  - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`
   - `schemas.Classification` hereda de `schemas.RoleOutput`
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
   - `schemas.Consultation` hereda de `schemas.RoleOutput`
@@ -70,6 +70,7 @@ classDiagram
   - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
   - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - `schemas.Ruling` hereda de `schemas.RoleOutput`
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`
   - `schemas.StackProposal` hereda de `schemas.RoleOutput`
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`

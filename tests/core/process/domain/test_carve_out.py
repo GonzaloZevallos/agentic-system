@@ -45,6 +45,8 @@ def _b(brief: str = "Build b, which fixes the parser.", invariants: list[str] | 
 def _plan(integration: str = "wire a and b together", b: Any = None) -> dict[str, object]:
     return {
         "integration": integration,
+        "required_paths": ["src/a.py", "src/b.py"],
+        "ci_required": ["tests", "lint"],
         "subtasks": [
             {"id": "a", "title": "A", "brief": "Build a.", "depends_on": []},
             _b() if b is None else b,
@@ -76,6 +78,66 @@ def test_integration_naming_an_extracted_id_is_refused_as_a_whole_word() -> None
 def test_original_plan_integration_naming_extracted_ids_is_not_refused() -> None:
     # The original integration wires every subtask; only the redeclared one is judged.
     assert carve_out.validate(_carve(integration="wire a"), _plan()) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "extra"),
+    [("required_paths", ["src/a.py", "src/new.py"]), ("ci_required", ["tests", "types"])],
+)
+def test_a_list_entry_the_original_plan_does_not_hold_is_refused(field: str, extra: Any) -> None:
+    reasons = carve_out.validate(_carve(**{field: extra}), _plan("wire a"))
+    assert len(reasons) == 1
+    assert field in reasons[0] and extra[1] in reasons[0] and extra[0] not in reasons[0]
+
+
+def test_both_lists_are_refused_separately_and_each_names_its_entries_in_order() -> None:
+    reasons = carve_out.validate(
+        _carve(required_paths=["z.py", "src/a.py", "y.py"], ci_required=["x"]), _plan("wire a")
+    )
+    assert len(reasons) == 2
+    assert "['z.py', 'y.py']" in reasons[0] and "['x']" in reasons[1]
+
+
+@pytest.mark.parametrize(
+    "lists",
+    [
+        {"required_paths": ["src/a.py", "src/b.py"], "ci_required": ["tests", "lint"]},
+        {"required_paths": ["src/b.py"], "ci_required": ["lint"]},
+        {"required_paths": [], "ci_required": []},
+    ],
+    ids=["equal", "strict subset", "empty"],
+)
+def test_lists_equal_to_a_subset_of_or_empty_against_the_originals_pass(lists: Any) -> None:
+    assert carve_out.validate(_carve(**lists), _plan("wire a")) == []
+
+
+@pytest.mark.parametrize("original", [None, "src/a.py"], ids=["absent", "not a list"])
+def test_an_absent_or_non_list_original_counts_as_empty(original: Any) -> None:
+    plan = _plan("wire a")
+    for key in ("required_paths", "ci_required"):
+        plan.pop(key)
+        if original is not None:
+            plan[key] = original
+    reasons = carve_out.validate(_carve(), plan)
+    assert len(reasons) == 2
+    assert carve_out.validate(_carve(required_paths=[], ci_required=[]), plan) == []
+
+
+def test_rules_text_names_every_kind_token_closing_word_and_what_the_system_writes() -> None:
+    text = carve_out.rules_text()
+    for kind in carve_out.KINDS:
+        assert kind in text
+    for token in ("<!--", "-->", "Blocked by:", "Closes", "Fixes", "Resolves"):
+        assert token in text
+    assert "one line" in text
+    for written in ("marker", "context line", "Kind"):
+        assert written in text
+
+
+def test_what_rules_text_says_is_refused_is_refused_by_text_refused() -> None:
+    for token in ("<!--", "-->", "Blocked by:", "Closes", "Fixes", "Resolves"):
+        assert carve_out.text_refused("t", f"x {token} y") is not None
+    assert carve_out.text_refused("one\nline", "") is not None
 
 
 def test_invalid_kind_and_multiline_green_are_refused() -> None:

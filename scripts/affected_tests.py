@@ -76,6 +76,11 @@ TABLE: tuple[Row, ...] = (
         "`pull_request` or `merge`",
     ),
     Row(
+        "docs/adr/*",
+        ("tests/test_poll_reexec.py",),
+        "it lists docs/adr and asserts the ADR of the poller's re-exec exists once, by slug",
+    ),
+    Row(
         "agentic/core/process/adapters/filesystem/heartbeats.py",
         (
             "tests/core/process/adapters/filesystem/test_perf_lock.py",
@@ -204,9 +209,11 @@ TABLE: tuple[Row, ...] = (
         "tests/fixtures/ci_logs/*",
         (
             "tests/core/process/domain/test_ci_log_excerpt.py",
+            "tests/core/process/domain/test_full_checks_excerpt_rules.py",
             "tests/core/process/domain/test_test_failure_excerpt.py",
         ),
-        "red CI log captures: the excerpt golden digests and the failing-test excerpt read them",
+        "red CI log captures: the excerpt golden digests, the failing-test excerpt and the "
+        "recorded failing-test hashes read them",
     ),
     Row(
         "tests/core/process/domain/fixtures/GH-484.yaml",
