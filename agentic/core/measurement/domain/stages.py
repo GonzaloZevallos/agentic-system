@@ -1,6 +1,6 @@
 """The stage claims of a task's cycle (GH-750, step 1): a task document turned into ranked,
-clipped intervals, each saying which stage of the cycle it claims. A later step sweeps the
-claims into seconds per stage; nothing calls this module yet.
+clipped intervals, each saying which stage of the cycle it claims. `stage_split` (step 2,
+ADR-0099) sweeps the claims into seconds per stage; nothing calls this module yet.
 
 Pure domain, no I/O, one pass over runs, failures, pauses and CI records. Every instant read
 from the document enters through `cycle.moment`, so an unreadable one is unknown, never
@@ -9,6 +9,7 @@ guessed. The only role-to-stage map in the code is `ROLE_STAGES`.
 
 from __future__ import annotations
 
+import heapq
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -339,3 +340,80 @@ def claims(
     for span in _queue_claims(runs, created):
         add(span, RANK_QUEUE, "queue")
     return found
+
+
+@dataclass(frozen=True)
+class StageSplit:
+    """The seconds of a task's cycle by stage, between the issue's creation and the merge. Every
+    `CycleStage` key and every `OtherCause` key is present; `seconds["other"]` is the sum of
+    `other_by_cause`."""
+
+    seconds: dict[CycleStage, float]
+    other_by_cause: dict[OtherCause, float]
+
+
+def stage_split(
+    document: Mapping[str, Any],
+    *,
+    issue_created_at: datetime | None,
+    pr_created_at: datetime | None,
+    pr_merged_at: datetime | None,
+) -> StageSplit | StageUnknown:
+    """The seconds per stage of the cycle `[issue_created_at, pr_merged_at]`, or the
+    `StageUnknown` `claims` returns. The only place stage seconds are computed (ADR-0099).
+
+    One sweep over the claim edges, sorted once: at each instant every edge is applied before
+    the next segment is attributed, and a heap of open `(key, index)` pairs gives the segment to
+    the claim with the smallest `key` (the index settles equal keys; a closed claim is dropped
+    from the top lazily). A segment no claim covers is `other`/`gap`. O(n log n) time and O(n)
+    memory. Never raises and never reads `closed_at` or `cycle._bounds`."""
+    found = claims(
+        document,
+        issue_created_at=issue_created_at,
+        pr_created_at=pr_created_at,
+        pr_merged_at=pr_merged_at,
+    )
+    if isinstance(found, StageUnknown):
+        return found
+    # `claims` returned a list, so the three arguments are not `None` and the bounds are ordered.
+    assert issue_created_at is not None and pr_merged_at is not None
+    created, merged = _utc(issue_created_at), _utc(pr_merged_at)
+
+    seconds: dict[CycleStage, float] = dict.fromkeys(STAGE_PRECEDENCE, 0.0)
+    by_cause: dict[OtherCause, float] = dict.fromkeys(OTHER_ORDER, 0.0)
+    # (instant, 0 close | 1 open, claim index): a close sorts before an open at the same instant.
+    edges = sorted(
+        edge
+        for index, claim in enumerate(found)
+        for edge in ((claim.start, 1, index), (claim.end, 0, index))
+    )
+    open_keys: list[tuple[tuple[int, int, int], int]] = []
+    closed: set[int] = set()
+    keys = [key(claim) for claim in found]
+
+    def attribute(until: datetime, since: datetime) -> None:
+        length = (until - since).total_seconds()
+        if length <= 0:
+            return
+        while open_keys and open_keys[0][1] in closed:
+            heapq.heappop(open_keys)
+        if not open_keys:
+            by_cause["gap"] += length
+            return
+        claim = found[open_keys[0][1]]
+        if claim.stage == "other":
+            by_cause[claim.cause or "gap"] += length
+        else:
+            seconds[claim.stage] += length
+
+    since = created
+    for instant, opens, index in edges:
+        attribute(instant, since)
+        since = max(since, instant)
+        if opens:
+            heapq.heappush(open_keys, (keys[index], index))
+        else:
+            closed.add(index)
+    attribute(merged, since)
+    seconds["other"] = sum(by_cause.values())
+    return StageSplit(seconds, by_cause)
