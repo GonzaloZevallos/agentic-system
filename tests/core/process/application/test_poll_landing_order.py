@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from agentic.core.process.adapters.filesystem.documents import FilesystemTaskDocuments
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
 from agentic.core.process.domain import adr_numbers, rules
@@ -620,7 +621,7 @@ class TestFastLane:
             "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7",
         ]
 
-    def test_a_head_holding_no_turn_leaves_todays_lines_byte_for_byte(self, tmp_path):
+    def test_a_head_holding_no_turn_reads_nothing_and_says_it_is_not_integrating(self, tmp_path):
         ports = _lane_ports()
         lines: list[str] = []
 
@@ -633,11 +634,13 @@ class TestFastLane:
             [],
             now=NOW,
             cfg=Configuration(product_dir=tmp_path),
-            integrating=frozenset({"GH-7"}),
         )
 
         assert found == [7]
-        assert lines == [WAITING.format(5), WAITING.format(6)]
+        assert lines == [
+            "agentic: poll: auto-merge #5 -> waiting (clean, head not integrating) behind #7",
+            "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7",
+        ]
         assert ports.workspace.ancestor_checks == []
 
     def test_one_lane_member_per_master_movement(self, tmp_path):
@@ -678,17 +681,16 @@ class TestFastLane:
             "agentic: poll: auto-merge #6 -> waiting (clean, head sync budget) behind #7",
         ]
 
-    def test_a_head_first_seen_in_this_round_opens_the_lane_in_the_next(self, tmp_path):
+    def test_a_head_first_seen_in_this_round_opens_the_lane_in_the_same_round(self, tmp_path):
         ports = _lane_ports()
         ports.documents.record_closure("GH-7", {"head_seen_at": None, "head_turn_at": None})
 
         first_found, first_lines = _lane_round(ports, tmp_path)
         second_found, second_lines = _lane_round(ports, tmp_path, now=NOW + timedelta(minutes=1))
 
-        assert first_found == []
-        assert first_lines == [WAITING.format(5), WAITING.format(6)]
-        assert second_found == [5]
-        assert second_lines[0] == FAST
+        # GH-827: the round observes its head, so a busy head first seen now already holds the turn.
+        assert first_found == second_found == [5]
+        assert first_lines[0] == second_lines[0] == FAST
 
     def test_a_member_under_a_merge_refusal_backoff_prints_todays_line(self, tmp_path):
         ports = _lane_ports()
@@ -856,3 +858,159 @@ class TestFastLaneRecord:
 
         assert "lane_merges" not in ports.documents.load("GH-7")
         assert "lane_recorded" not in ports.documents.load("GH-5")
+
+
+def _unseen_head(ports) -> None:
+    """The head as a child run's `save` leaves it: no `head_seen_at`, no `head_turn_at`."""
+    ports.documents.record_closure("GH-7", {"head_seen_at": None, "head_turn_at": None})
+
+
+class TestLaneAssessedBesideAHeadTheRoundObserves:
+    """The fast lane reads the head as `advance` returned it (GH-827): a head whose
+    `head_seen_at` a child run erased is still seen as head in this round."""
+
+    def test_a_busy_head_with_no_head_seen_at_still_assesses_every_clean_member(self, tmp_path):
+        ports = _lane_ports()
+        _unseen_head(ports)
+
+        round_ = _evaluated(ports, tmp_path)
+
+        assert round_.head == 7
+        assert round_.lane == 5
+        assert round_.lane_reasons == {}  # the lane member and the one it did not reach
+
+    def test_every_member_is_in_the_lane_or_has_a_reason_when_the_head_cannot_open_it(
+        self, tmp_path
+    ):
+        ports = _lane_ports()
+        _unseen_head(ports)
+        ports.workspace.ancestors_by_ref[_head_of(5)] = set()
+        ports.workspace.touched_by[(MASTER, _head_of(6))] = ("head.py",)
+
+        round_ = _evaluated(ports, tmp_path)
+
+        assert round_.lane is None
+        assert round_.lane_reasons == {5: "lacks_master", 6: "paths_overlap"}
+
+    def test_the_round_after_a_child_run_saved_a_stale_state_assesses_the_members(self, tmp_path):
+        memory = _lane_ports()
+        _unseen_head(memory)
+        documents = FilesystemTaskDocuments(tmp_path)
+        for task_id in memory.documents.ids():
+            state = memory.documents.load(task_id)
+            documents.save({"id": task_id, "title": task_id, "description": "d"})
+            documents.record_closure(task_id, {k: v for k, v in state.items() if k != "id"})
+        ports = dataclasses.replace(memory, documents=documents)
+        stale = documents.load("GH-7")  # the child loaded it before the poller wrote head_seen_at
+
+        first = _evaluated(ports, tmp_path)
+        _lane_round(ports, tmp_path)  # round N: the poller records the turn of the head
+        assert documents.load("GH-7")["head_seen_at"] is not None
+        documents.save(stale)  # the child saves: the whole frontmatter, head_seen_at gone
+        assert not documents.load("GH-7").get("head_seen_at")
+        second = _evaluated(ports, tmp_path, now=NOW + timedelta(minutes=1))
+
+        assert first.lane == second.lane == 5
+        assert second.lane_reasons == {}
+
+    def test_a_hand_started_child_is_an_integrating_child_like_the_pollers_own(self, tmp_path):
+        ports = _lane_ports()
+        _unseen_head(ports)
+        launcher = FakeLauncher()
+        hand_started = RunRegistration(1, "h", "product", "GH-7", kind="role")
+
+        lines = poll.run_once(
+            Configuration(product_dir=tmp_path),
+            ports,
+            MemoryRunRegistry(entries=[hand_started]),
+            launcher,
+            NOW,
+            sleep=_no_sleep,
+            argv0="agentic",
+            lock=_Locks(),
+            current_boot="boot-now",
+        )
+
+        assert FAST in lines
+
+    @pytest.mark.parametrize("child", [None, "merge"])
+    def test_a_head_that_does_not_integrate_reads_nothing_and_every_member_says_so(
+        self, tmp_path, monkeypatch, child
+    ):
+        ports = _lane_ports()
+        _unseen_head(ports)
+        reads: list[str] = []
+        workspace, tracker = ports.workspace, ports.tracker
+        for owner, name in ((workspace, "is_ancestor"), (workspace, "touched_paths")):
+            original = getattr(owner, name)
+
+            def spy(*args, _name=name, _original=original, **kwargs):
+                reads.append(_name)
+                return _original(*args, **kwargs)
+
+            monkeypatch.setattr(owner, name, spy)
+        pull_request = tracker.pull_request
+
+        def spy_pull_request(reference):
+            reads.append("pull_request")
+            return pull_request(reference)
+
+        monkeypatch.setattr(tracker, "pull_request", spy_pull_request)
+        lane_only = poll._fast_lane
+
+        def counted(*args, **kwargs):
+            reads.clear()
+            result = lane_only(*args, **kwargs)
+            lane_reads.extend(reads)
+            return result
+
+        lane_reads: list[str] = []
+        monkeypatch.setattr(poll, "_fast_lane", counted)
+
+        round_ = poll.evaluate_landing_order(
+            ports,
+            frozenset(),
+            MASTER,
+            _Locks(),
+            frozenset({"GH-7"}) if child else frozenset(),
+            Configuration(product_dir=tmp_path),
+            NOW,
+            integrating=frozenset(),
+        )
+
+        assert lane_reads == []
+        assert round_.lane is None
+        assert round_.lane_reasons == {5: "head_not_integrating", 6: "head_not_integrating"}
+
+    def test_a_clean_member_that_is_no_lane_candidate_keeps_the_line_without_a_reason(
+        self, tmp_path
+    ):
+        ports = _missing_ci(_lane_ports())
+        _unseen_head(ports)
+
+        found, lines = _lane_round(ports, tmp_path, integrating=())
+
+        assert found == []
+        assert lines == [WAITING.format(5), WAITING.format(6)]
+
+    def test_a_candidate_behind_a_head_with_no_child_says_the_head_is_not_integrating(
+        self, tmp_path
+    ):
+        ports = _lane_ports()
+        lines: list[str] = []
+
+        poll.gather_merges(
+            ports,
+            frozenset(),
+            MASTER,
+            _Locks(),
+            lines,
+            [],
+            now=NOW,
+            cfg=Configuration(product_dir=tmp_path),
+        )
+
+        assert lines == [
+            "agentic: poll: auto-merge #5 -> waiting (clean, head not integrating) behind #7",
+            "agentic: poll: auto-merge #6 -> waiting (clean, head not integrating) behind #7",
+        ]
