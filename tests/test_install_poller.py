@@ -451,3 +451,18 @@ def test_rotate_installs_three_files_and_enables_the_poller_and_the_timer(tmp_pa
 
     assert second.returncode == 0, second.stderr
     assert {path.name: path.read_bytes() for path in target.iterdir()} == before
+
+
+def test_rotate_refuses_a_root_that_would_break_the_rendering(tmp_path):
+    home = tmp_path / "ho$me"
+    executable(home / ".agentic-stage0s/abc/.venv/bin/agentic")
+    link = home / ".agentic-stage0s" / "current"
+    link.symlink_to("abc")
+    work = tmp_path / "work"
+    work.mkdir()
+
+    result = rotate_render(home, work, link, stub_path(tmp_path))
+
+    assert result.returncode == 1
+    assert "refusing a path" in result.stderr
+    assert result.stdout == ""
