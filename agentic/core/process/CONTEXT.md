@@ -181,7 +181,7 @@ _Avoid_: hallazgo (lo de un validador sobre un pensador), sugerencia
 _Campo_: sin término de arte
 
 **Desviación del dibujo**:
-Algo visible que un rol entregaría distinto del dibujo aprobado (Dibujo aprobado). A diferencia de una observación, la tarea espera: el escalado la nombra con un número estable y el dueño responde por ese número, nunca por la clave interna (`ruta:elemento`). Ningún rol escribe el número ni el registro; los asigna el sistema. En el código: `Departure`, `departure_key`, `departure_question`, `DepartureRecord`, `departure_records` y `add_drawing_departures`.
+Algo visible que un rol entregaría distinto del dibujo aprobado (Dibujo aprobado). A diferencia de una observación, la tarea espera: el escalado la nombra con un número estable y el dueño responde por ese número, nunca por la clave interna (`ruta:elemento`). Ningún rol escribe el número ni el registro; los asigna el sistema. En el código: `Departure`, `departure_key`, `departure_question`, `DepartureRecord`, `departure_records` y `add_drawing_departures`. La respuesta del dueño: `DepartureAnswer` (veredicto, por comentario o por bandera, y cuándo), `verdicts` y `answers` (la gramática de las líneas `Drawing <n>: accept|reject` de sus comentarios) y `DrawingEscalation` con `add_drawing_escalation` (las rondas y los números ya preguntados).
 _Avoid_: Observación al diseño (la observación sigue con el diseño tal cual y le llega al humano en el pull request; la desviación espera la decisión del dueño antes de entregar)
 _Campo_: sin término de arte
 

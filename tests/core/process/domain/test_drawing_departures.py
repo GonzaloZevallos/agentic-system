@@ -17,6 +17,8 @@ from agentic.core.process.domain.task import (
     departure_records,
 )
 
+_ANSWER = {"verdict": "accept", "by": "comment", "at": "T1"}
+
 
 def _departure(element: str, drawing: str = "design/home.png") -> Departure:
     return Departure(
@@ -84,11 +86,11 @@ def test_replaying_the_same_rows_changes_nothing():
 
 
 def test_the_first_answer_stays_and_a_conflict_never_raises():
-    held = [_record(1, answer="accept")]
-    assert add_drawing_departures(held, [_record(1, answer="reject")])[0]["answer"] == "accept"
-    assert add_drawing_departures([_record(1)], [_record(1, answer="reject")])[0]["answer"] == (
-        "reject"
-    )
+    accept = {"verdict": "accept", "by": "comment", "at": "T1"}
+    reject = {"verdict": "reject", "by": "flag", "at": "T2"}
+    held = [_record(1, answer=accept)]
+    assert add_drawing_departures(held, [_record(1, answer=reject)])[0]["answer"] == accept
+    assert add_drawing_departures([_record(1)], [_record(1, answer=reject)])[0]["answer"] == reject
 
 
 def test_number_raised_at_raised_by_and_text_are_never_overwritten():
@@ -113,10 +115,10 @@ def test_fix_passes_takes_the_max():
 
 def test_apply_folds_rows_over_an_absent_key_through_the_reducer():
     state = cast(TaskState, {"id": "T-1"})
-    patch = cast(TaskState, {"drawing_departures": [_record(1), _record(1, answer="x")]})
+    patch = cast(TaskState, {"drawing_departures": [_record(1), _record(1, answer=_ANSWER)]})
     merged = apply(state, patch)
     assert len(merged["drawing_departures"]) == 1
-    assert merged["drawing_departures"][0]["answer"] == "x"
+    assert merged["drawing_departures"][0]["answer"] == _ANSWER
 
 
 def test_delta_round_trips_an_absent_key_and_a_changed_answer():
@@ -125,7 +127,7 @@ def test_delta_round_trips_an_absent_key_and_a_changed_answer():
     after = cast(TaskState, {"id": "T-1", "drawing_departures": rows})
     assert apply(bare, delta(bare, after)) == after
 
-    answered = [_record(1, answer="accept", fix_passes=1), rows[1]]
+    answered = [_record(1, answer=_ANSWER, fix_passes=1), rows[1]]
     final = cast(TaskState, {"id": "T-1", "drawing_departures": answered})
     patch = delta(after, final)
     assert patch["drawing_departures"] == [answered[0]]

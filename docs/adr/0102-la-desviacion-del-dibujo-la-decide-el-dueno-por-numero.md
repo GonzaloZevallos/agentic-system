@@ -64,3 +64,34 @@ fija). GH-766 se cierra solo cuando no queda ningún `pending`.
 - El escaneo prueba que cada motivo sigue la gramática, no que sea cierto: las partes 3 y 5
   revisan los `covered by` cuando agregan el marcador.
 - El glosario del contexto `process` define **Desviación del dibujo**.
+
+## Adenda: la respuesta del dueño (GH-766 parte 2a)
+
+Esta parte agrega la gramática y las formas del estado; sigue inerte: ningún nodo, CLI ni prompt
+de rol cambia y nada escribe `drawing_escalation`. `applicable` (a qué fila llega una
+respuesta), `escalation_patch` y `prompt_cause` llegan en #814; la opción `--drawing` de
+`agentic resume`, en las partes siguientes.
+
+**La gramática.** Cuenta una línea entera `Drawing <n>: accept` o `Drawing <n>: reject`, sin
+distinguir mayúsculas. `<n>` son de 1 a 6 dígitos ASCII (nunca `\d`, que acepta otros
+alfabetos); `007` es 7 y el 0 se descarta. Una línea con sangría cuenta; una línea citada (su
+primer carácter no blanco es `>`) o dentro de un bloque cercado (``` o ~~~) no cuenta. El mismo
+veredicto repetido cuenta una vez; dos veredictos distintos para un número en un comentario lo
+dejan en `contradicted`, sin veredicto. Entre comentarios gana la última línea, un número
+contradicho después pierde lo que tenía y un veredicto limpio posterior borra la contradicción.
+`verdicts` y `answers` nunca levantan ante un texto raro; la bandera `<n>=accept|reject` sí
+levanta `ValueError` (formato, `n` < 1 o dos veredictos para un número), porque es un error del
+que escribe el comando.
+
+**El tope duro.** `DEPARTURE_ESCALATIONS_MAX = 3`: a partir de la ronda 4 la causa es
+`drawing_cap`, que además ofrece cerrar la tarea. El tope cuenta rondas, no progreso: una tarea
+que avanza pero sigue levantando desviaciones nuevas también se detiene. A cambio hay una cota
+sobre las desviaciones que siguen apareciendo, y el dueño decide entonces si cierra o replantea.
+
+**El registro.** `drawing_escalation` (`DrawingEscalation`: `round`, `numbers`, `cause`) falta
+hasta la primera escalada y se pliega con `add_drawing_escalation`: la ronda máxima, la unión
+ordenada de números y `drawing_cap` si cualquiera de los dos lados lo tiene; es conmutativo y
+asociativo, así que el orden de las ramas no lo cambia. Solo lo escribe el turno serializado
+del sistema, nunca un rol. `DepartureRecord.answer` pasa de un texto libre a `DepartureAnswer`
+(`verdict`, `by` `comment` o `flag`, `at`); una fila de la parte 1 con `answer` nulo se sigue
+leyendo.

@@ -1,13 +1,23 @@
+import ast
+from pathlib import Path
+
 import pytest
 
+from agentic.core.process.domain import drawing as drawing_module
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.drawing import (
+    DEPARTURE_ESCALATIONS_MAX,
     DRAWING_RULE,
     Departure,
+    Verdicts,
+    answers,
     departure_key,
     departure_question,
+    flag_verdict,
+    flag_verdicts,
     normalize_drawing,
     rule_for,
+    verdicts,
 )
 
 
@@ -78,3 +88,98 @@ def test_the_question_quotes_the_path_and_never_the_key():
     ):
         assert part in text
     assert departure_key(d.drawing, d.element) not in text
+    assert text.endswith('Answer with a line "Drawing 7: accept" or "Drawing 7: reject".')
+
+
+def test_the_cap_is_three_rounds():
+    assert DEPARTURE_ESCALATIONS_MAX == 3
+
+
+@pytest.mark.parametrize(
+    ("text", "given"),
+    [
+        ("Drawing 3: accept", {3: "accept"}),
+        ("Drawing 3: reject", {3: "reject"}),
+        ("DRAWING 3: ACCEPT\n", {3: "accept"}),
+        ("drawing 12: Reject  ", {12: "reject"}),
+        ("thanks\nDrawing 1: accept\nDrawing 2: reject\nbye", {1: "accept", 2: "reject"}),
+        ("    Drawing 4: accept", {4: "accept"}),
+        ("Drawing 007: accept", {7: "accept"}),
+        ("Drawing 3: accept\nDrawing 3: accept", {3: "accept"}),
+        ("Drawing 0: accept", {}),
+        ("> Drawing 3: accept", {}),
+        ("  >Drawing 3: accept", {}),
+        ("```\nDrawing 3: accept\n```", {}),
+        ("~~~\nDrawing 3: accept\n~~~", {}),
+        ("```text\nDrawing 3: accept\n```\nDrawing 4: reject", {4: "reject"}),
+        ("```\nDrawing 3: accept\n~~~\nDrawing 4: reject\n```", {}),
+        ("Drawing \u0661: accept", {}),
+        ("Drawing " + "9" * 30 + ": accept", {}),
+        ("Drawing 1234567: accept", {}),
+        ("Drawing 3: accept please", {}),
+        ("so Drawing 3: accept", {}),
+        ("Drawing 3 accept", {}),
+    ],
+)
+def test_verdicts_reads_whole_lines_only(text, given):
+    got = verdicts(text)
+    assert dict(got.given) == given
+    assert got.contradicted == frozenset()
+
+
+def test_two_verdicts_for_one_number_in_one_comment_contradict():
+    got = verdicts("Drawing 3: accept\nDrawing 3: reject\nDrawing 4: accept")
+    assert dict(got.given) == {4: "accept"}
+    assert got.contradicted == frozenset({3})
+
+
+def test_answers_takes_the_last_line_across_comments():
+    got = answers(["Drawing 1: accept\nDrawing 2: accept", "Drawing 1: reject"])
+    assert dict(got.given) == {1: "reject", 2: "accept"}
+    assert got.contradicted == frozenset()
+
+
+def test_a_later_contradiction_drops_the_earlier_verdict_and_a_clean_one_clears_it():
+    contradiction = "Drawing 1: accept\nDrawing 1: reject"
+    dropped = answers(["Drawing 1: accept", contradiction])
+    assert dropped == Verdicts(given={}, contradicted=frozenset({1}))
+    cleared = answers(["Drawing 1: accept", contradiction, "Drawing 1: reject"])
+    assert cleared == Verdicts(given={1: "reject"}, contradicted=frozenset())
+
+
+def test_answers_does_not_raise_on_nonsense():
+    assert answers([]) == Verdicts(given={}, contradicted=frozenset())
+    assert answers(["Drawing " + "7" * 30 + ": accept", ""]).given == {}
+
+
+@pytest.mark.parametrize(
+    ("raw", "pair"), [("1=accept", (1, "accept")), ("12=reject", (12, "reject"))]
+)
+def test_flag_verdict_parses(raw, pair):
+    assert flag_verdict(raw) == pair
+
+
+@pytest.mark.parametrize("raw", ["1=maybe", "x=accept", "1", "0=accept", "=accept", "1=accept=1"])
+def test_flag_verdict_refuses_anything_else(raw):
+    with pytest.raises(ValueError):
+        flag_verdict(raw)
+
+
+def test_flag_verdicts_folds_and_refuses_a_conflict():
+    assert flag_verdicts(["1=accept", "2=reject", "1=accept"]) == {1: "accept", 2: "reject"}
+    with pytest.raises(ValueError):
+        flag_verdicts(["1=accept", "1=reject"])
+
+
+def test_drawing_is_a_leaf_that_imports_neither_task_nor_rules():
+    tree = ast.parse(Path(drawing_module.__file__).read_text())
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            base = "." * node.level + (node.module or "")
+            imported.add(base)
+            imported |= {f"{base}.{a.name}" for a in node.names}
+    leaves = {name.rsplit(".", 1)[-1] for name in imported}
+    assert not leaves & {"task", "rules"}
