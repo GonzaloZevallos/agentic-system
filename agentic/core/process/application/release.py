@@ -8,7 +8,9 @@ because the processes run out of the worktrees that `git worktree remove` is abo
 delete. `release_processes` is the narrower verb for a run found dead: only that run's own
 scope, never the task's. No reaper method raises (`ProcessReaper`), so a reap never stops
 a delivery, a discard, an archive or a reflection; a `GitError` from `cleanup` is the
-caller's, exactly as it was before."""
+caller's, exactly as it was before. The one exception is `release_after_merge` (GH-820): a
+merge that happened is never failed by its housekeeping, so it retries and then records a
+`worktree_release_lapse` instead of propagating."""
 
 from __future__ import annotations
 
