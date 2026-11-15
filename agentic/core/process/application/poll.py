@@ -1145,7 +1145,7 @@ def evaluate_landing_order(
     resumed = landing_order.resumed(members, now)
     result, turned = landing_order.advance(resumed, now)
     lane, lane_reasons = _fast_lane(
-        ports, cfg, current_master, entries, resumed, result.head, integrating, now
+        ports, cfg, current_master, entries, turned, result.head, integrating, now
     )
     after = iter(turned)
     return LandingRound(
@@ -1201,12 +1201,14 @@ def _fast_lane(
     now: datetime,
 ) -> tuple[int | None, dict[int, landing_order.LaneReason]]:
     """The fast lane of a round (GH-681): the member that may merge beside the head and why each
-    other clean member may not. Nothing is read unless the head, as `resumed` left it, holds its
-    turn and a waiting member is a candidate; the facts are `landing_lane`'s and the predicate and
-    its reasons `landing_order`'s. Read-only: it writes nothing and adds no member state."""
+    other clean member may not. `members` are as `advance` returned them, so the head of the round
+    has been observed (a child run's save may have erased what the document held of it). Nothing is
+    read unless the head, as this round observes it, integrates and a waiting member is a
+    candidate; the facts are `landing_lane`'s and the predicate and its reasons `landing_order`'s.
+    Read-only: it writes nothing and adds no member state."""
     head = next((m for m in members if m.issue == head_issue), None)
     head_entry = next((e for e in entries if e.number == head_issue), None)
-    if cfg is None or head is None or head_entry is None or not landing_order.holds_turn(head, now):
+    if cfg is None or head is None or head_entry is None:
         return None, {}
     candidates = _lane_candidates(entries, head.issue, current_master, now)
     if not candidates:
