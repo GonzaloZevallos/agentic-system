@@ -350,7 +350,11 @@ def _judge(
             first = next(
                 i for i, (st, why, _) in enumerate(rows) if (st, why) == ("CLOSED", "NOT_PLANNED")
             )
-            return _escalate(ports, state, numbers, first + 1)
+            open_parts = frozenset(
+                n for n, (st, _, _) in enumerate(rows, start=1) if st != "CLOSED"
+            )
+            recorded = repointed or bool(state.get("split_repointed_at"))
+            return _escalate(ports, state, numbers, first + 1, open_parts, recorded)
         case _:
             return []
 
@@ -410,7 +414,14 @@ def _closing_comment(ports: Ports, numbers: Sequence[int]) -> str:
     return "All parts of this split merged, so this issue is closed.\n\n" + "\n".join(rows)
 
 
-def _escalate(ports: Ports, state: TaskState, numbers: list[int], part: int) -> list[str]:
+def _escalate(
+    ports: Ports,
+    state: TaskState,
+    numbers: list[int],
+    part: int,
+    open_parts: frozenset[int],
+    repointed: bool,
+) -> list[str]:
     """One comment per parent when a part was abandoned (closed as not planned): none when
     `split_abandoned_at` is recorded; none either when the comments already carry the part's
     marker (a cut between the comment and the record), and then only the record is written.
@@ -421,25 +432,53 @@ def _escalate(ports: Ports, state: TaskState, numbers: list[int], part: int) -> 
         return []
     marker = f"<!-- agentic-split-abandoned: {task_id} part {part} -->"
     if not any(marker in text for text in ports.tracker.issue_comments(task_id)):
-        ports.tracker.comment_on_issue(str(parent), _escalation_text(state, numbers, part, marker))
+        text = _escalation_text(state, numbers, part, marker, open_parts, repointed)
+        ports.tracker.comment_on_issue(str(parent), text)
     ports.documents.record_closure(task_id, {"split_abandoned_at": _now()})
     return [f"agentic: split: {task_id}: part {part} abandoned, escalated"]
 
 
-def _escalation_text(state: TaskState, numbers: list[int], part: int, marker: str) -> str:
+def _escalation_text(
+    state: TaskState,
+    numbers: list[int],
+    part: int,
+    marker: str,
+    open_parts: frozenset[int],
+    repointed: bool,
+) -> str:
+    """The comment for an abandoned part, from what the sweep read: the parts whose `depends_on`
+    names it (open ones may launch without it, closed ones listed apart) and, once the re-point
+    is recorded, the open last parts the original task's dependents wait on. A snapshot of this
+    sweep; it assumes no order among the parts and no single last part."""
     parts = state["parts"]
-    if part in rules.last_part_numbers(parts):
-        effect = "Its re-pointed dependents are now free."
+    direct = [n for n, record in enumerate(parts, start=1) if part in record["depends_on"]]
+    launching = [f"#{numbers[n - 1]}" for n in direct if n in open_parts]
+    closed = [f"#{numbers[n - 1]}" for n in direct if n not in open_parts]
+    if launching:
+        dependents = f"{', '.join(launching)} depended on it and may launch without it."
     else:
-        waiting = ", ".join(f"#{numbers[n - 1]}" for n in rules.last_part_numbers(parts))
-        effect = (
-            f"The dependents still wait on part(s) {waiting}; the next parts of the chain may "
-            "launch over this one."
-        )
+        dependents = "No open part of this split depended on it."
+    if closed:
+        dependents += f" Parts already closed: {', '.join(closed)}."
+    if not repointed:
+        sinks = "Any issue that waited on the original task still waits on this issue."
+    else:
+        waiting = [
+            f"#{numbers[n - 1]}"
+            for n in rules.last_part_numbers(parts)
+            if n != part and n in open_parts
+        ]
+        if waiting:
+            sinks = (
+                f"Issues that waited on the original task still wait on {', '.join(waiting)} "
+                "and on any open carve-out follow-up of those parts."
+            )
+        else:
+            sinks = "No other last part of this split is still open."
     return (
         f"Part {part} (#{numbers[part - 1]}) of this split was abandoned: its issue was closed "
-        f"as not planned. {effect}\n\nWhat should happen with this parent? The system leaves it "
-        f"open.\n\n{marker}"
+        f"as not planned. As of this sweep:\n- {dependents}\n- {sinks}\n\n"
+        f"What should happen with this parent? The system leaves it open.\n\n{marker}"
     )
 
 
