@@ -1160,3 +1160,5 @@ tasks:
   GH-802@decision:
     cost_usd: 0.0496
     decisions: 1
+  GH-755@review:
+    cost_usd: 0.045
