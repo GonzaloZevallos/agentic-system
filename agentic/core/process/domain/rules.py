@@ -2676,9 +2676,11 @@ def tracker_only_plan(state: TaskState) -> bool:
     """The third plan shape (GH-336): no subtasks, no parts and tracker work for the human,
     typed (`tracker_items`, GH-620) or the legacy `tracker_checklist`. The one place the shape
     is decided; tracker work next to subtasks rides the delivery, and next to parts the split
-    posts it (GH-350), so neither is this shape."""
+    posts it (GH-350), so neither is this shape. Never while a re-plan is due (`plan_due`,
+    GH-798): the items then belong to a plan the owner's decision is about to replace."""
     return bool(
-        not state.get("subtasks")
+        not state.get("plan_due")
+        and not state.get("subtasks")
         and not state.get("parts")
         and (state.get("tracker_items") or state.get("tracker_checklist"))
     )
@@ -3577,10 +3579,12 @@ def resumed(
         # judged by the same budget. Written explicitly: a `last` reducer ignores a
         # missing key.
         patch["fit_question"] = False
+        patch["plan_due"] = True  # the only writer of True (GH-798, ADR-0054 addendum)
     if state.get("escalation_class") == "estimate" and state.get("parts"):
         # A split that stopped on the estimate and the human decided on it (ADR-0054): the
         # plan is made again, with the same budget.
         patch["parts"] = []
+        patch["plan_due"] = True
     if (
         state.get("escalation_class") == "estimate"
         and (decided or estimate is not None)
@@ -3828,10 +3832,18 @@ def _publication_owed(state: TaskState) -> bool:
     return same_commit(state.get("publish_owed"), approved_head(state))
 
 
+def all_approved_or_none(state: TaskState) -> bool:
+    """No subtask is left to build: the state has none, or every one is approved. A
+    `tracker_only` end is only that when this holds (GH-798): a plan with a code subtask
+    still undelivered is never ended by the tracker."""
+    return not state.get("subtasks") or all_approved(state)
+
+
 def resume_target(state: TaskState) -> str | None:
     """Where a resumed task goes next, from the same facts the routing reads. A pull
     request ends the road unless the landing reopened the stage under it, or a stopped run
-    still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`."""
+    still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`. A
+    re-plan owed (`plan_due`, GH-798) goes to `plan`, whatever the status says."""
     if state.get("escalated"):
         return None
     if state.get("pull_request"):
@@ -3839,9 +3851,11 @@ def resume_target(state: TaskState) -> str | None:
             return "deliver"
         if not landing_pass_live(state):
             return None
+    if state.get("plan_due"):
+        return "plan"
     if state.get("status") == "split":
         return None  # an end like a pull request: the parts are other tasks now
-    if state.get("status") == "tracker_only":
+    if state.get("status") == "tracker_only" and all_approved_or_none(state):
         return None  # an end: the checklist is with the human
     if state.get("parts") and not state.get("subtasks"):
         return "split"  # paused while opening the parts: finish them, do not plan again

@@ -2165,3 +2165,13 @@ def test_a_state_without_a_carve_out_renders_no_carve_out_key():
     assert "carve_out" not in bare
     assert document.render(_bare(carve_out={})) == bare
     assert "carve_out" not in document.parse(bare)
+
+
+def test_plan_due_is_rendered_only_when_true_and_an_old_document_reads_it_false():
+    base = {"id": "GH-9", "title": "t", "description": "d", "type": "feature", "sections": {}}
+    old = document.render(base)
+    assert "plan_due" not in old and "plan_due" not in document.render({**base, "plan_due": False})
+    assert document.render(document.parse(old) | {"sections": {}}) == old
+    owed = document.render({**base, "plan_due": True})
+    assert document.parse(owed)["plan_due"] is True and "plan_due" in resume.STATE_FIELDS
+    assert not document.parse(old).get("plan_due")
