@@ -1961,3 +1961,22 @@ candidates:
   - finding
   - return
   added_at: '2026-11-15T18:53:33.616+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, check each plan invariant with a command, such as a grep for call sites. If you think one cannot hold, record the evidence under Decisions and assumptions, not only in a note to the Tech Lead.
+  confidence: medium
+  seen_in:
+  - GH-786
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T19:07:21.375+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your change adds a read or call that runs per candidate or per round, work out its cost and state it in the plan or the delivery notes. Do not leave the plan's claim that the cost is unchanged standing.
+  confidence: low
+  seen_in:
+  - GH-786
+  sources:
+  - finding
+  added_at: '2026-11-15T19:07:21.375+00:00'
