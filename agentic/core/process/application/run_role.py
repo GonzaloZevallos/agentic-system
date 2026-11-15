@@ -99,6 +99,7 @@ from ..domain.task import (
     TaskState,
     apply,
 )
+from .checkouts import task_base
 from .closed import closed_documents
 from .limits import RunLimits
 from .ports import AttemptFailed, CheckRuns, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
@@ -376,13 +377,6 @@ def load_prompt(
     were."""
     raw, rendered = render_role_prompt(role, cfg, ports, vocabulary, **placeholders)
     return with_playbook(raw, rendered, role, ports, tiers)
-
-
-def _base(state: TaskState, ports: Ports) -> str:
-    """What `checkouts.task_base` answers: the commit the task started from, the product's
-    HEAD without one. Not imported from there, so that the support page of the package docs
-    does not split in two for one edge; the two are one line each."""
-    return ports.workspace.base_of(rules.task_branch(state["id"])) or "HEAD"
 
 
 def render_role_prompt(
@@ -1115,7 +1109,7 @@ async def run_role(
             cfg,
             ports,
             vocabulary,
-            drawing_rule_for=lambda: drawing.rule_for(ports.stack.design(_base(state, ports))),
+            drawing_rule_for=lambda: drawing.rule_for(ports.stack.design(task_base(state, ports))),
             **placeholders,
         )
         # The constant block the table names for the role (ADR-0096): only with a spec and only
