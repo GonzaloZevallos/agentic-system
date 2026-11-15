@@ -27,26 +27,28 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__EstimateRevision["EstimateRevision"]
-    class task__EvaluatedPatch["EvaluatedPatch"]
-    class task__EvaluationRef["EvaluationRef"]
-    class task__Failure["Failure"]
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
     class task__FlakeRecord["FlakeRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
+    class task__FullChecksJob["FullChecksJob"]
+    class task__FullChecksRead["FullChecksRead"]
     class task__FullChecksRecord["FullChecksRecord"]
     class task__GateRecord["GateRecord"]
     class task__HeadYield["HeadYield"]
     class task__InterviewStats["InterviewStats"]
     class task__LandedSlice["LandedSlice"]
-    task__EvaluatedPatch --|> task__FinishedPatch
+    class task__LandedSliceRef["LandedSliceRef"]
+    class task__LandingEntry["LandingEntry"]
+    class task__LaneAdmitted["LaneAdmitted"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
-  - `task.TaskState` se asocia con `task.EvaluationRef`
+- [domain: state (parte 4)](classes-process-domain-state-4.md)
+  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
+  - `task.FullChecksJob` hereda de `task.CiLogRecord`
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`
