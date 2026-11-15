@@ -68,6 +68,7 @@ from agentic.core.process.application.ports import (
     SentMemory,
     SpecReader,
     SpecUnreadable,
+    SpecValidator,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -106,6 +107,7 @@ from agentic.core.process.domain.run_check import Verification
 from agentic.core.process.domain.scratch import OwnerKind, SpaceReading
 from agentic.core.process.domain.size_budget import NumstatRow
 from agentic.core.process.domain.spec_brief import SPEC_BLOCKS, block_name_ok
+from agentic.core.process.domain.spec_delivery import SpecCause, SpecContract
 from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
@@ -2500,6 +2502,21 @@ class FakeSpecReader:
             raise SpecUnreadable("missing") from None
 
 
+class FakeSpecValidator:
+    """GH-594: no test decides on a real spec through the port. `validate` answers `result` for
+    every text and records each call as the tuple of its arguments, in `calls`."""
+
+    def __init__(self, result: SpecContract | SpecCause = "spec_invalid") -> None:
+        self.result = result
+        self.calls: list[tuple[str, str, str, str | None, str | None]] = []
+
+    def validate(
+        self, text: str, path: str, commit: str, slice_id: str | None, owner_login: str | None
+    ) -> SpecContract | SpecCause:
+        self.calls.append((text, path, commit, slice_id, owner_login))
+        return self.result
+
+
 class FakeFreeSpace:
     """GH-391, invariant 7: no test reads the real volume. `read` answers `reading` for
     every path, ample by default (a terabyte and ten million inodes), or the reading of
@@ -2739,6 +2756,7 @@ def memory_ports(
     load_reader: LoadReader | None = None,
     experiment: ExperimentFile | None = None,
     spec_reader: SpecReader | None = None,
+    spec_validator: SpecValidator | None = None,
     now: Callable[[], str] | None = None,
 ) -> Ports:
     return Ports(
@@ -2768,6 +2786,7 @@ def memory_ports(
         load_reader=load_reader,
         experiment=experiment,
         spec_reader=spec_reader,
+        spec_validator=spec_validator,
     )
 
 

@@ -2165,3 +2165,19 @@ def test_a_state_without_a_carve_out_renders_no_carve_out_key():
     assert "carve_out" not in bare
     assert document.render(_bare(carve_out={})) == bare
     assert "carve_out" not in document.parse(bare)
+
+
+SPEC_REFUSAL = {"cause": "spec_unreadable", "detail": ["missing", "docs/specs/a.md"]}
+
+
+def test_a_document_without_spec_refusal_renders_byte_identically_to_the_golden():
+    assert document.render(golden_state(spec_refusal=None)) == GOLDEN_WITHOUT_ASSIGNMENT
+    assert "spec_refusal" not in document.render(golden_state())
+
+
+def test_spec_refusal_survives_render_parse_render_byte_for_byte():
+    rendered = document.render(golden_state(spec_refusal=SPEC_REFUSAL))
+    assert "\nspec_refusal:" in rendered
+    parsed = document.parse(rendered)
+    assert parsed["spec_refusal"] == SPEC_REFUSAL
+    assert document.render({**golden_state(), **parsed}) == rendered
