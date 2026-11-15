@@ -50,7 +50,7 @@ def _only_lands(lines):
     return [line for line in lines if " land #" in line]
 
 
-def test_a_waiting_land_holds_the_other_products_launch_until_it_starts(tmp_path):
+def test_a_waiting_land_does_not_hold_the_other_products_launch(tmp_path):
     a_ports, b_ports, registry, a_cfg, b_cfg = _two_products(tmp_path)
     a_launcher, b_launcher = FakeLauncher(), FakeLauncher()
 
@@ -59,9 +59,9 @@ def test_a_waiting_land_holds_the_other_products_launch_until_it_starts(tmp_path
     assert [w.product for w in registry.land_waits(ESCALATED_AT)[0]] == ["a"]
 
     registry.entries.pop()  # one of B's children finished: one slot is free
-    held = _lines(b_cfg, b_ports, registry, b_launcher)
-    assert b_launcher.spawned == []
-    assert not any("launch" in line for line in held)
+    free = _lines(b_cfg, b_ports, registry, b_launcher)
+    assert [argv[1] for argv in b_launcher.spawned] == ["run"]
+    assert "agentic: poll: launch #9 -> pid 4242" in free
 
     started = _lines(a_cfg, a_ports, registry, a_launcher)
     assert a_launcher.spawned == [_land_argv(5, tmp_path / "a")]

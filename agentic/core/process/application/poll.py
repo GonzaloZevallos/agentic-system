@@ -3057,7 +3057,10 @@ def run_once(
                 spent_notices,
             )
         )
-        deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
+        # A deferred launch has its own journal line (GH-836, wired in the poller's own part).
+        deferral_lines = [
+            deferred_line(d) for d in plan.deferred if d.kind not in ("orphan", "launch")
+        ]
         deferral_lines += starvation
         orphan_lines += [
             rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"
