@@ -1941,3 +1941,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-15T10:01:24.578+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change adds or alters a step in a key flow (poller round, resume), update its architecture doc and every count or wording that restates it (docstrings, CLI help, reference docs) in the same change.
+  confidence: medium
+  seen_in:
+  - GH-798
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T11:03:42.680+00:00'
