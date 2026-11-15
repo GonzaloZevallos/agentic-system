@@ -1875,3 +1875,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-14T20:43:39.189+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, grep your diff for literals that duplicate a constant the plan names as the single source (kinds, tokens, words) and derive them from it, with a test tying them together.
+  confidence: medium
+  seen_in:
+  - GH-753
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T00:35:25.636+00:00'
