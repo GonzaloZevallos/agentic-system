@@ -6326,3 +6326,93 @@ def test_backfill_replaces_only_no_merge_and_only_for_a_merged_pull_request(tmp_
             lead_time=kept,
         )
         assert doc["lead_time"] == kept and timeline.calls == []
+
+
+# `_backfill_one` and the stage report (GH-752): the stage_h.* scores and the row of one document.
+
+
+def stage_pull_request(created="2026-09-20T12:00:00+00:00", merged="2026-09-20T13:00:00+00:00"):
+    return PullRequest(
+        state="MERGED" if merged else "OPEN",
+        created_at=created,
+        merged_at=merged,
+        commits=(),
+    )
+
+
+def stage_reads(tracker):
+    return cli._GhReads(close_ports(Path("."), tracker))
+
+
+def stage_names(scores):
+    return {score.name for score in scores if score.name.startswith("stage_h.")}
+
+
+def test_backfill_one_scores_the_ten_stage_hours_of_a_merged_pull_request():
+    from agentic.core.measurement.domain import stages
+
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": stage_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    found = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    assert stage_names(found.scores) == set(cli.task_scores.FAMILIES["stage_h"])
+    assert found.stage_row.task_id == "GH-9"
+    assert isinstance(found.stage_row.outcome, stages.StageSplit)
+    assert found.stage_row.active_h == 1.0
+
+
+def test_backfill_one_passes_the_pull_request_creation_time():
+    """Without `pr_created_at` the split is `no_pr_created`; an unreadable one is the same."""
+    tracker = FakePullRequestTracker(
+        {"https://github.com/o/r/pull/7": stage_pull_request(created="not a time")}
+    )
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    found = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    assert stage_names(found.scores) == set()
+    assert found.stage_row.outcome.cause == "no_pr_created"
+
+
+def test_backfill_one_writes_no_stage_hours_without_a_merge():
+    tracker = FakePullRequestTracker(
+        {"https://github.com/o/r/pull/7": stage_pull_request(merged=None)}
+    )
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    found = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    assert stage_names(found.scores) == set()
+    assert found.stage_row.outcome.cause == "no_merge"
+
+
+def test_backfill_one_marks_a_failed_tracker_read_unread_not_unknown():
+    tracker = FakePullRequestTracker(raises=ValueError("gh failed"))
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    found = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    assert stage_names(found.scores) == set()
+    assert found.stage_row.outcome == cli.stage_report.Unread("gh_failed")
+
+
+def test_backfill_one_marks_a_skipped_document_unread():
+    tracker = FakePullRequestTracker()
+    found = cli._backfill_one(
+        "p", "GH-1", finished_task("GH-1", status="paused"), stage_reads(tracker)
+    )
+    assert found.outcome == "skipped:not_finished"
+    assert found.stage_row.outcome == cli.stage_report.Unread("not_finished")
+
+
+def test_the_backfill_prints_the_stage_report_in_the_dry_run_and_the_live_run(
+    monkeypatch, tmp_path, capsys
+):
+    outputs = []
+    for extra in (["--dry-run"], []):
+        root = close_root(tmp_path / ("dry" if extra else "live"))
+        tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": stage_pull_request()})
+        tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+        ports = close_ports(root, tracker)
+        ports.documents.save(finished_task())
+        close_it(ports)
+        assert _backfill(monkeypatch, root, ports, FakeScorer(), *extra) == 0
+        outputs.append(capsys.readouterr().out.splitlines())
+    for lines in outputs:
+        assert lines[-1].startswith("scored 1")
+        assert any(line.startswith("GH-9 | ") for line in lines)
+        assert any(line.startswith("queue>active_h (unclipped)") for line in lines)
+    assert outputs[0][1:-1] == outputs[1][1:-1]

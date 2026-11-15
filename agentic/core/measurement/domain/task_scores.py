@@ -31,7 +31,8 @@ from agentic.core.process.domain.task import (
     TaskState,
 )
 
-from . import metrics
+from . import metrics, stage_report
+from .stages import CycleStage, StageSplit, StageUnknown, stage_split
 
 ScoreDataType = Literal["NUMERIC", "CATEGORICAL", "BOOLEAN"]
 
@@ -95,6 +96,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     "delivered_cost_usd.type": family_names("delivered_cost_usd.type", members(TaskType)),
     "cost_usd.origin": family_names("cost_usd.origin", ORIGINS),
     "cost_usd.model": family_names("cost_usd.model", members(ModelFamily)),
+    "stage_h": family_names("stage_h", members(CycleStage)),
 }
 """The per-task families (ADR-0051): one name per member of a closed domain set, never a
 literal typed beside the widget that reads it. `README` rows write a family as
@@ -248,6 +250,69 @@ def _active_hours(document: Mapping[str, Any]) -> float | None:
     return total / _SECONDS_PER_HOUR
 
 
+def stage_outcome(
+    document: Mapping[str, Any],
+    *,
+    issue_created_at: str | None,
+    pr_created_at: str | None,
+    pr_merged_at: str | None,
+) -> StageSplit | StageUnknown:
+    """The stage split of the document between the issue's creation and the merge, from the
+    three tracker strings read only with `_parse` (an unreadable one is unknown, never guessed).
+    The seconds are `stages.stage_split`'s; nothing here recomputes them."""
+    return stage_split(
+        document,
+        issue_created_at=_parse(issue_created_at),
+        pr_created_at=_parse(pr_created_at),
+        pr_merged_at=_parse(pr_merged_at),
+    )
+
+
+def stage_row(
+    task_id: str,
+    document: Mapping[str, Any],
+    *,
+    issue_created_at: str | None,
+    pr_created_at: str | None,
+    pr_merged_at: str | None,
+) -> stage_report.StageRow:
+    """The report row of a document. Never raises on a legacy document: runs that are not a
+    list of mappings leave `active_h` as `None`."""
+    try:
+        active_h = _active_hours(document)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        active_h = None
+    return stage_report.StageRow(
+        task_id,
+        stage_outcome(
+            document,
+            issue_created_at=issue_created_at,
+            pr_created_at=pr_created_at,
+            pr_merged_at=pr_merged_at,
+        ),
+        active_h,
+    )
+
+
+def _stage_hours(
+    document: Mapping[str, Any],
+    issue_created_at: str | None,
+    pr_created_at: str | None,
+    pr_merged_at: str | None,
+) -> dict[str, float]:
+    """`stage_h.<stage>` for every name of the family, or none when the split is unknown."""
+    outcome = stage_outcome(
+        document,
+        issue_created_at=issue_created_at,
+        pr_created_at=pr_created_at,
+        pr_merged_at=pr_merged_at,
+    )
+    if isinstance(outcome, StageUnknown):
+        return {}
+    hours: dict[str, float] = {str(stage): h for stage, h in stage_report.hours(outcome).items()}
+    return {name: hours[name.removeprefix("stage_h.")] for name in FAMILIES["stage_h"]}
+
+
 def _cycle_hours(issue_created_at: str | None, pr_merged_at: str | None) -> float | None:
     created, merged = _parse(issue_created_at), _parse(pr_merged_at)
     if created is None or merged is None:
@@ -365,11 +430,13 @@ def task_scores(
     *,
     pr_merged_at: str | None = None,
     issue_created_at: str | None = None,
+    pr_created_at: str | None = None,
     identity: Identity | None = None,
 ) -> list[Score]:
-    """The scores the document and the two tracker reads support, in `SCORE_NAMES` order.
+    """The scores the document and the tracker reads support, in `SCORE_NAMES` order.
     A score whose input is missing is left out, never written as `0` or `false`. With an
-    `identity` each score carries its id."""
+    `identity` each score carries its id. The `stage_h` family is all ten hours from one
+    `StageSplit` or none: an unknown split, or no merge, writes nothing."""
     cost = float(document.get("cost_usd") or 0.0)
     delivered = _delivered(document)
     task_type, origin = document.get("type") or None, _origin(document)
@@ -400,6 +467,7 @@ def task_scores(
     if delivered == 1.0:
         numeric[f"delivered_cost_usd.type.{task_type}"] = cost
     numeric[f"cost_usd.origin.{origin}"] = cost
+    numeric.update(_stage_hours(document, issue_created_at, pr_created_at, pr_merged_at))
     values.update({name: (value, "NUMERIC") for name, value in numeric.items()})
     return [
         Score(

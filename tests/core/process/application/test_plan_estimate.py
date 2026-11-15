@@ -2,6 +2,8 @@
 Lead as a placeholder value only, the check that refuses a bad estimate is injected on
 both arms, and a plan that fits is delivered with its `estimate`."""
 
+from dataclasses import replace
+
 import pytest
 
 from agentic.core.process.application.plan import plan
@@ -12,6 +14,10 @@ from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_preflight import ORIGINAL_PARTS_WORDING
 from tests.core.process.domain.test_tracker_item_kinds_prompt import PARAGRAPH_WITH_OPEN_ISSUE
 from tests.fakes import (
+    IssueState,
+    MemoryInbox,
+    MemoryTracker,
+    RawResult,
     ScriptedRunner,
     memory_ports,
     planned,
@@ -53,11 +59,12 @@ def interviewed(tmp_path):
     return Configuration(product_dir=tmp_path)
 
 
-def interview_runner(*plans):
+def interview_runner(*plans, **more):
     return ScriptedRunner(
         **{ASK: [questions(1, session="e1"), questions(done=True, session="e1")]},
         **{ANSWER: [tech_answers(1, session="t1")]},
         tech_lead=list(plans),
+        **more,
     )
 
 
@@ -327,10 +334,17 @@ PART_DEPTH_ONE = {
 PART_OLD_MARKER = {**PART, "description": "Second half.\n\n<!-- agentic-split: GH-316 part 2 -->"}
 
 
+def declined():
+    """The carve-out the system refuses (it extracts an id the plan does not hold): the part's
+    plan stays over the line and the pause is the one it always was, after one declined try."""
+    return carve_result(steps=["nope"])
+
+
 def arm_of(arm, tmp_path, *scripted):
+    carving = {"tech_lead_carve_out": [declined()]}
     if arm == "cold":
-        return ScriptedRunner(tech_lead=list(scripted)), cold(tmp_path)
-    return interview_runner(*scripted), interviewed(tmp_path)
+        return ScriptedRunner(tech_lead=list(scripted), **carving), cold(tmp_path)
+    return interview_runner(*scripted, **carving), interviewed(tmp_path)
 
 
 def over_the_line_by_reference(ports):
@@ -560,7 +574,10 @@ async def test_an_unproven_ratio_is_the_fixed_factor(tmp_path):
 async def test_a_part_at_the_depth_cap_is_judged_with_the_proven_ratio_too(tmp_path):
     # PART is at the depth cap: a plan it cannot fit asks the human, one that fits does not.
     unproven, proven = (
-        memory_ports(ScriptedRunner(tech_lead=[planned(hand_files=6)])) for _ in "ab"
+        memory_ports(
+            ScriptedRunner(tech_lead=[planned(hand_files=6)], tech_lead_carve_out=[declined()])
+        )
+        for _ in "ab"
     )
     proven.documents.saved.extend(sized_closed(PROVEN_PAIRS))
     fits = await plan(PART, cold(tmp_path), unproven)
@@ -624,3 +641,200 @@ async def test_a_plan_node_that_escalates_leaves_plan_due_true(tmp_path):
     assert paused["plan_due"] is True
     resumed = apply(paused, rules.resumed(paused, "narrow it", at=AT))
     assert rules.resume_target(resumed) == "plan"
+
+
+# -- the depth-2 carve-out, wired into the three branches of the plan node (GH-722) -----------
+
+ARMS = ["cold", "interview", "critic"]
+CRITIC_ASSIGNMENT = {"experiment": "e1", "arm": "critic", "switches": {"plan_review": "critic"}}
+FOLLOW_UP = 800
+DEPENDENTS = {"_900": "Blocked by: #346", "_901": "Intro\n\nBlocked by: #5, #346\n"}
+
+
+def carve_result(cost=0.2, **over):
+    carve = {
+        "steps": ["b"],
+        "title": "Carved steps",
+        "body": "Does the rest.",
+        "kind": "change",
+        "moved_criteria": ["it works"],
+        "estimated_cost_usd": 10.0,
+        "estimated_files": 3,
+        "hand_files": 2,
+        "hand_lines": 60,
+        "test_lines": 40,
+        "required_paths": ["src/a.py"],
+        "ci_required": ["tests"],
+        "integration": "wire a",
+        "remainder_green": "the app builds",
+        "guard": "nothing calls it",
+    }
+    return RawResult({**carve, **over, "markdown": "Moved b."}, cost, 2, "cv")
+
+
+def two_steps(**more):
+    """A plan of two subtasks whose declared hand-written size is over the size budget."""
+    step = {"id": "b", "title": "B", "brief": "Build b.", "seams": ["GET /y"]}
+    result = planned(step, hand_files=12, estimated_cost_usd=20.0, **more)
+    data = result.structured_output
+    data["ci_none_reason"] = ""
+    data.update(required_paths=["src/a.py", "src/b.py"], ci_required=["tests", "docs"])
+    return result
+
+
+def depth_cap(arm, tmp_path, *, carve=(), spent=0.0):
+    """`(task, runner, cfg)` of a part at the depth cap on `arm`, planning `two_steps()` and
+    carving with the scripted `carve` results."""
+    carving = {"tech_lead_carve_out": list(carve)} if carve else {}
+    task = {**PART, "cost_usd": spent} if spent else PART
+    if arm == "cold":
+        return task, ScriptedRunner(tech_lead=[two_steps()], **carving), cold(tmp_path)
+    if arm == "interview":
+        return task, interview_runner(two_steps(), **carving), interviewed(tmp_path)
+    sized = RawResult(
+        {"markdown": "Small.", "estimated_cost_usd": 12.0, "estimated_files": 4}, 0.02
+    )
+    critique = RawResult({"markdown": "Fine.", "findings": [], "invariants_proposed": []}, 0.4, 3)
+    runner = ScriptedRunner(
+        plan_sizer=[sized],
+        tech_lead=[two_steps(), two_steps()],
+        tech_lead_critic=[critique],
+        **carving,
+    )
+    return (
+        {**task, "assignment": CRITIC_ASSIGNMENT},
+        runner,
+        Configuration(product_dir=tmp_path, plan_review="critic", plan_interview_min_usd=1000.0),
+    )
+
+
+def carve_ports(runner, *, labels=("bug", "path:x", "needs-human")):
+    inbox = MemoryInbox(
+        open_issues=[(f"https://github.com/o/r/issues/{n[1:]}", b) for n, b in DEPENDENTS.items()],
+        **{
+            n[1:]: {"id": f"GH-{n[1:]}", "title": "t", "description": b}
+            for n, b in DEPENDENTS.items()
+        },
+    )
+    tracker = MemoryTracker()
+    tracker.issue_numbers_from = FOLLOW_UP
+    tracker.inbox = inbox
+    tracker.states[346] = IssueState("OPEN", "", None, None, labels)
+    return memory_ports(runner=runner, tracker=tracker, inbox=inbox)
+
+
+@pytest.mark.parametrize("arm", ARMS)
+async def test_a_valid_carve_out_opens_the_follow_up_and_queues_the_narrowed_subtasks(
+    arm, tmp_path
+):
+    task, runner, cfg = depth_cap(arm, tmp_path, carve=[carve_result(cost=0.2)])
+    ports = carve_ports(runner)
+    patch = await plan(task, cfg, ports)
+
+    [(title, body)] = ports.tracker.opened_issues
+    assert title == "Carved steps" and ports.tracker.opened_label_sets == [("agentic", "bug")]
+    assert "Blocked by: #346" in body.splitlines()
+    assert "<!-- agentic-carve-out: GH-346 of #346 -->" in body
+    assert dict(ports.tracker.updated_bodies) == {
+        900: "Blocked by: #346, #800",
+        901: "Intro\n\nBlocked by: #5, #346, #800\n",
+    }
+    assert list(patch["subtasks"]) == ["api"] and patch["status"] == "planned"
+    assert patch.get("escalation_class") is None and "fit_question" not in patch
+    assert patch["carve_out"]["outcome"] == "applied"
+    assert patch["required_paths"] == ["src/a.py"] and patch["ci_required"] == ["tests"]
+    assert patch["estimate"]["cost_usd"] == 10.0
+    section = patch["sections"]["Tech Lead"]
+    assert "#### b" not in section and "### Carved out -> #800" in section
+    assert "`src/b.py`" in section and "`docs`" in section
+    # The plan role's cost and the carve role's, each once.
+    paid = sum(r["cost_usd"] for r in patch["runs"])
+    assert patch["cost_usd"] == pytest.approx(paid)
+    assert [r["slug"] for r in patch["runs"]].count("tech_lead_carve_out") == 1
+    assert patch["runs"][-1]["slug"] == "tech_lead_carve_out"
+    assert runner.calls[-1]["slug"] == "tech_lead_carve_out" and runner.calls[-1]["resume"] is None
+
+
+class NoTrackerWrites(MemoryTracker):
+    """A tracker that fails the test on any write a carve-out makes."""
+
+    def open_issue(self, *args, **kwargs):
+        raise AssertionError("open_issue")
+
+    def update_issue_body(self, *args, **kwargs):
+        raise AssertionError("update_issue_body")
+
+    def comment_on_issue(self, *args, **kwargs):
+        raise AssertionError("comment_on_issue")
+
+
+class NoIssueRead(MemoryInbox):
+    def open_issue_refs(self):
+        raise AssertionError("open_issue_refs")
+
+
+@pytest.mark.parametrize("arm", ARMS)
+async def test_a_remainder_that_fits_only_unfloored_escalates_with_both_figures_and_no_tracker_call(
+    arm, tmp_path
+):
+    # 160 USD already spent: the remainder's 10 USD is raised above the 150 line by the floor.
+    task, runner, cfg = depth_cap(arm, tmp_path, carve=[carve_result()], spent=160.0)
+    ports = carve_ports(runner)
+    patch = await plan(task, cfg, ports)
+
+    tracker = ports.tracker
+    assert (
+        tracker.opened_issues == []
+        and tracker.commented_issues == []
+        and not tracker.updated_bodies
+    )
+    assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
+    assert patch["carve_out"] == {"outcome": "failed"} and "subtasks" not in patch
+    raised = patch["estimate"]["cost_usd"]
+    assert (
+        f"{raised:.2f}" in patch["escalated"] and f"{raised:.2f}" in patch["sections"]["Tech Lead"]
+    )
+    assert patch["estimate"]["declared_usd"] == 20.0
+    # The remainder's own figure, over the line once floored, is quoted next to the plan's.
+    assert patch["escalated"].count("USD") >= 2 and "10.00" not in patch["escalated"]
+
+
+@pytest.mark.parametrize("arm", ARMS)
+async def test_a_refused_carve_out_narrows_nothing(arm, tmp_path):
+    task, runner, cfg = depth_cap(arm, tmp_path, carve=[declined()])
+    ports = carve_ports(runner)
+    patch = await plan(task, cfg, ports)
+
+    assert patch["carve_out"] == {"outcome": "failed"} and "subtasks" not in patch
+    assert patch["required_paths"] == ["src/a.py", "src/b.py"]
+    assert patch["ci_required"] == ["tests", "docs"] and patch["invariants"] == []
+    assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
+    assert ports.tracker.opened_issues == []
+
+
+@pytest.mark.parametrize("arm", ARMS)
+async def test_a_repeated_run_opens_no_second_issue(arm, tmp_path):
+    task, runner, cfg = depth_cap(arm, tmp_path, carve=[carve_result()])
+    ports = carve_ports(runner)
+    first = await plan(task, cfg, ports)
+    again_task, again_runner, _ = depth_cap(arm, tmp_path)
+    second = await plan(apply(task, first), cfg, replace(ports, runner=again_runner))
+
+    assert len(ports.tracker.opened_issues) == 1
+    assert "tech_lead_carve_out" not in again_runner.slugs
+    assert second["escalation_class"] == "estimate" and "carve_out" not in second
+
+
+@pytest.mark.parametrize("arm", ARMS)
+async def test_an_evaluation_run_never_carves_and_escalates_as_before(arm, tmp_path):
+    task, runner, cfg = depth_cap(arm, tmp_path)
+    ports = carve_ports(runner)
+    tracker, inbox = NoTrackerWrites(), NoIssueRead()
+    patch = await plan(
+        {**task, "evaluation": True}, cfg, replace(ports, tracker=tracker, inbox=inbox)
+    )
+
+    assert "tech_lead_carve_out" not in runner.slugs
+    assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
+    assert "carve_out" not in patch and "subtasks" not in patch
+    assert "part 2 of GH-316" in patch["escalated"]

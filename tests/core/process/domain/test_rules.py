@@ -5395,3 +5395,13 @@ def test_stranded_tracker_only_stays_false_after_a_questions_resume_following_a_
     )
     doc["runs"].append({"role": "Tech Lead", "started_at": "2026-11-06T16:30:00+00:00"})
     assert rules.stranded_tracker_only(doc) is False
+
+
+def test_part_over_line_with_a_remainder_carries_its_figures_and_keeps_the_fit_question():
+    remainder = FitDecision(False, 61.5, 9, None)
+    patch = rules.part_over_line("GH-338", PART_OF, GH_338_FIT, at=_STAMP, remainder=remainder)
+    assert patch["escalated"] == rules.fit_question_text(
+        "GH-338", PART_OF, GH_338_FIT, remainder=remainder
+    )
+    assert "61.50 USD and 9 files" in patch["escalated"] and patch["fit_question"] is True
+    assert patch["escalation_class"] == "estimate"

@@ -37,7 +37,7 @@ from ..domain.scratch import (
     SweepDecision,
 )
 from ..domain.size_budget import NumstatRow
-from ..domain.spec_delivery import SpecReadCause, SpecReadRefusal
+from ..domain.spec_delivery import SpecCause, SpecContract, SpecReadCause, SpecReadRefusal
 from ..domain.stage0_rotation import (
     Green,
     Heartbeat,
@@ -2523,6 +2523,18 @@ class SpecReader(Protocol):
         ...
 
 
+class SpecValidator(Protocol):
+    """Whether a spec's text is a valid, approved contract for a slice (GH-594): the decision
+    is Knowledge's, this port only names it for Process, in Process's own types."""
+
+    def validate(
+        self, text: str, path: str, commit: str, slice_id: str | None, owner_login: str | None
+    ) -> SpecContract | SpecCause:
+        """The contract of the slice `slice_id` of the spec in `text`, or the cause that stops
+        it. Never raises on any text."""
+        ...
+
+
 class SpecUnreadable(Exception):
     """A spec that cannot be read: the reason and the cause, and nothing else. The message is
     the reason alone, so no git output, path or id ever reaches a log through it. Not a
@@ -2589,6 +2601,9 @@ class Ports:
     # Reads a spec from the product repo at a commit (GH-594). `None` reads no spec, which is how
     # every round ran before it existed.
     spec_reader: SpecReader | None = None
+    # Decides whether the text a `SpecReader` read is an approved spec (GH-594). `None` decides
+    # nothing, which is how every round ran before it existed; both are needed to honour a spec.
+    spec_validator: SpecValidator | None = None
     # The clock the nodes stamp `pause_log` and `Failure` instants from (GH-467): injected so a
     # test sets it, and passed to the domain as an argument, never read there.
     now: Callable[[], str] = utc_now
