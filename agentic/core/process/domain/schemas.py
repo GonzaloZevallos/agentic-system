@@ -489,8 +489,19 @@ class Part(BaseModel):
     )
     depends_on: list[int] = Field(
         default_factory=list,
-        description="Numbers of the EARLIER parts that must be merged before this one starts "
-        "(1 is the first part). Empty when it can start at once",
+        description="Numbers of the earlier parts whose code this part needs (it calls, imports, "
+        "extends or migrates something that part creates; 1 is the first part). Empty when it "
+        "can start at once, which is preferred",
+    )
+    depends_on_reasons: list[str] = Field(
+        default_factory=list,
+        description="One reason per `depends_on` entry, in the same order: one line naming what "
+        "the other part creates and this part needs. Empty when `depends_on` is",
+    )
+    overlap_risk: str = Field(
+        default="",
+        description="One line naming the files this part is expected to touch that another "
+        "independent part also touches. Empty otherwise",
     )
     hand_files: int = Field(
         ge=0,
@@ -511,13 +522,16 @@ class Part(BaseModel):
     )
     kind: PartKind = Field(
         description="`migration` for a part that converts or moves existing data, and only "
-        "for that: it is always a part of its own, ordered next to the part it depends on or "
-        "the part that depends on it. `change` for everything else"
+        "for that: it is always a part of its own, and its neighbour (the part it depends on "
+        "or the part that depends on it) is a real edge with a reason. `change` for "
+        "everything else"
     )
     guard: str = Field(
         description="Empty when this part leaves no user-visible behaviour unfinished. "
-        "Otherwise how it stays unreachable until the last part that finishes it: out of the "
-        "navigation, or behind a flag, and where"
+        "Otherwise how it stays unreachable until the part that finishes it lands: out of the "
+        "navigation, or behind a flag, and where. With no edges it must hold if this part "
+        "lands alone, in any order among its siblings; a guard that waits for a sibling is "
+        "an edge with a reason"
     )
 
 
@@ -765,7 +779,7 @@ class TechPlan(RoleOutput):
         default_factory=list,
         description="Only for a task that is not itself a part of a split, and only when the "
         "estimate does not fit (over the size limit the system sets, or the history's "
-        "reference says so): at least two chained parts, each a small task of its own, in the "
+        "reference says so): at least two parts, each a small task of its own, in the "
         "order to build them, and no subtasks. A part of a split never writes `parts`. Empty "
         "when the plan fits",
     )
@@ -1232,25 +1246,29 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+_BLOCKED_BY_PREFIX = "blocked by:"
+
+
 def parts_check(
     parts: list[dict[str, Any]],
     ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
-    *,
-    one_terminal: bool = False,
 ) -> None:
     """The structure of a split: at least two parts, each with a title and a body, each
-    depending only on earlier parts, once. Earlier-only is what keeps the chain acyclic.
+    depending only on earlier parts, once. Earlier-only is what keeps the edges acyclic.
+
+    An edge is a real need of code another part creates, and carries its reason, one per
+    `depends_on` entry in the same order; `overlap_risk` (which may be empty) names files an
+    independent part also touches. Both are read with an empty default, so a part without
+    them has no edge to explain. Their refusals, and the migration's, come in one message.
 
     A part that declares its size (GH-592) is judged on it times `ratio`, the same floor the
     plan is judged with, and must fit the size budget: a part is a task of its own. A part
     of kind `migration` has a neighbour in `depends_on`, before it or after it, so a data
-    conversion never stands alone. With `one_terminal`, set when the plan is written by a part,
-    exactly one part is depended on by none: its pull request closes the parent part's issue,
-    and every other part reaches it."""
+    conversion never stands alone. Which parts are sinks is `rules.last_part_numbers`'s."""
     if len(parts) < 2:
         raise ValueError(
             f"a split needs at least two parts, this one has {len(parts)}: "
-            "a plan that does not fit is cut into chained tasks"
+            "a plan that does not fit is cut into parts, each a task of its own"
         )
     for number, part in enumerate(parts, 1):
         if not part["title"].strip():
@@ -1266,10 +1284,73 @@ def parts_check(
                 raise ValueError(
                     f"part {number} depends on part {dep}: a part depends only on earlier parts"
                 )
+    refusals = _reason_pass(parts)
+    try:
+        _migration_check(parts)
+    except ValueError as refusal:
+        refusals.append(str(refusal))
+    if refusals:
+        raise ValueError("; ".join(refusals))
     _size_pass(parts, ratio)
-    _migration_check(parts)
-    if one_terminal:
-        _terminal_check(parts)
+
+
+def _part_line_refusal(number: int, field: str, text: str, *, may_be_empty: bool) -> str | None:
+    """Why `text`, a part's reason or `overlap_risk`, cannot be written into its issue, or
+    `None`. The one place that holds their limits: one line of at most `TEXT_MAX` characters,
+    no placeholder, and never a `Blocked by:` line, which would block the issue for real."""
+    if "\n" in text or "\r" in text:
+        broken = "has a newline"
+    elif not text.strip():
+        return None if may_be_empty else f"part {number} {field} is empty"
+    elif len(text) > TEXT_MAX:
+        broken = f"has {len(text)} characters, over {TEXT_MAX}"
+    elif "{{" in text or "}}" in text:
+        broken = "has `{{` or `}}`"
+    elif text.strip().lower().startswith(_BLOCKED_BY_PREFIX):
+        broken = "starts with `Blocked by:`"
+    else:
+        return None
+    return f"part {number} {field} {broken}"
+
+
+def _edge_fix(part: dict[str, Any], edges: int, reasons: int) -> str:
+    if reasons > edges:
+        return "remove the extra reason or add the edge it explains"
+    if part.get("kind") == "migration":
+        return "write the missing reason: a migration keeps its edge"
+    return (
+        "write the missing reason, naming what that part creates, "
+        "or remove the edge if this part can start alone"
+    )
+
+
+def _reason_pass(parts: list[dict[str, Any]]) -> list[str]:
+    """Every refusal of the reasons and `overlap_risk` of the parts, in part order, then
+    field order: one retry shows all of them."""
+    refusals: list[str] = []
+    for number, part in enumerate(parts, 1):
+        edges = len(part["depends_on"])
+        reasons = part.get("depends_on_reasons", [])
+        if len(reasons) != edges:
+            refusals.append(
+                f"part {number} has {edges} depends_on and {len(reasons)} depends_on_reasons: "
+                + _edge_fix(part, edges, len(reasons))
+            )
+        for index, reason in enumerate(reasons):
+            refusal = _part_line_refusal(
+                number, f"depends_on_reasons[{index}]", reason, may_be_empty=False
+            )
+            if refusal:
+                refusals.append(f"{refusal}: one plain line naming what the other part creates")
+        refusal = _part_line_refusal(
+            number, "overlap_risk", part.get("overlap_risk", ""), may_be_empty=True
+        )
+        if refusal:
+            refusals.append(
+                f"{refusal}: one plain line naming the files another independent part also "
+                "touches, or empty"
+            )
+    return refusals
 
 
 def _size_pass(parts: list[dict[str, Any]], ratio: size_budget.Ratio) -> None:
@@ -1300,18 +1381,6 @@ def _migration_check(parts: list[dict[str, Any]]) -> None:
                 f"part {number} is a migration with no neighbour: it must depend on the part "
                 "that writes both shapes, or be depended on by the part that reads the new one"
             )
-
-
-def _terminal_check(parts: list[dict[str, Any]]) -> None:
-    listed = {dep for part in parts for dep in part["depends_on"]}
-    sinks = [number for number in range(1, len(parts) + 1) if number not in listed]
-    if len(sinks) != 1:
-        found = ", ".join(str(number) for number in sinks)
-        raise ValueError(
-            "a part that splits needs exactly one terminal part, the one no other part depends "
-            f"on, so that its pull request closes this part's issue; this plan has {len(sinks)} "
-            f"(parts {found}): make the last part depend on the others"
-        )
 
 
 def _tracker_only_check(data: dict[str, Any]) -> None:
@@ -1656,7 +1725,7 @@ def plan_check_for(
             _tracker_only_check(data)
             return
         if parts:
-            parts_check(parts, size_ratio, one_terminal=part_of is not None)
+            parts_check(parts, size_ratio)
         else:
             plan_check(data)
             _revision_check(existing_ids, subtasks)
@@ -1691,7 +1760,8 @@ def plan_check_for(
             raise ValueError(
                 f"{words} does not fit one task "
                 "(or the history's reference for this size does not): write parts, "
-                f"at least two chained tasks, and no subtasks. {_size_words(fit, size_ratio)}"
+                "at least two tasks, each a task of its own, and no subtasks. "
+                f"{_size_words(fit, size_ratio)}"
                 f"{SPLIT_NOT_WAIVED}"
             )
         if plan_shape != DEFAULT_PLAN_SHAPE:

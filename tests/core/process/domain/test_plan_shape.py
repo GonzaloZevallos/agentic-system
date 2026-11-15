@@ -147,7 +147,13 @@ def plan(*ids, integration="", cost=20.0, files=3):
 def split(cost=200.0, files=50):
     parts = [
         {**PART_DEFAULTS, "title": "One", "body": "First slice.", "depends_on": []},
-        {**PART_DEFAULTS, "title": "Two", "body": "Second slice.", "depends_on": [1]},
+        {
+            **PART_DEFAULTS,
+            "title": "Two",
+            "body": "Second slice.",
+            "depends_on": [1],
+            "depends_on_reasons": ["calls what part 1 creates"],
+        },
     ]
     return {**plan("a", cost=cost, files=files), "subtasks": [], "parts": parts}
 

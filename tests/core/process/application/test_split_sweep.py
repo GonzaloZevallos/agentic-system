@@ -355,6 +355,22 @@ def test_an_old_split_with_all_parts_merged_is_re_pointed_recorded_then_closed_w
     assert ports.tracker.closed_issues == ["GH-5"]
 
 
+def test_a_parent_of_three_independent_parts_all_merged_is_closed_by_the_sweep():
+    """GH-837: with several sinks no part carries `Closes`; the sweep closes the parent."""
+    independent = [{"title": t, "body": t, "depends_on": []} for t in "abc"]
+    state = split_state(
+        parts=independent,
+        split_issues={"1": URL.format(8), "2": URL.format(9), "3": URL.format(10)},
+    )
+    ports = close_ports(state, parts=(COMPLETED, COMPLETED, COMPLETED))
+
+    lines = judge(ports)
+
+    assert lines[-1] == "agentic: split: GH-5: parent closed"
+    assert "split_closed_at" in ports.documents.load("GH-5")
+    assert ports.tracker.closed_issues == ["GH-5"]
+
+
 def test_a_cut_after_the_record_keeps_the_parent_open_and_the_next_round_only_closes():
     ports = close_ports(split_state(), **{"7": "Blocked by: #5"})
     ports.tracker.close_issue_failures = [ValueError("gh issue close failed")]

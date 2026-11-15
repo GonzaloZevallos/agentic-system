@@ -2968,6 +2968,13 @@ PART_DEFAULTS: dict[str, object] = {
 }
 
 
+def _reasons_for(part: dict[str, object]) -> dict[str, object]:
+    """One reason per edge a fake part declares (GH-837), unless the test wrote its own."""
+    edges = part.get("depends_on") or []
+    assert isinstance(edges, list)
+    return {"depends_on_reasons": [f"needs what part {dep} creates" for dep in edges]}
+
+
 def planned_parts(
     *parts: dict[str, object],
     cost: float = 0.3,
@@ -2980,12 +2987,14 @@ def planned_parts(
     test_lines: int = 10,
 ) -> RawResult:
     """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
-    given, two chained ones."""
+    given, two, the second needing the first."""
     given = list(parts) or [
         {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
         {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
     ]
-    items: list[dict[str, object]] = [{**PART_DEFAULTS, **item} for item in given]
+    items: list[dict[str, object]] = [
+        {**PART_DEFAULTS, **_reasons_for(item), **item} for item in given
+    ]
     markdown = "### Solution\n\nCut it.\n\n### Parts\n\n" + "\n\n".join(
         f"#### {i['title']}\n\n{i['body']}" for i in items
     )

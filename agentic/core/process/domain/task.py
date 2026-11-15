@@ -1604,7 +1604,9 @@ class PartRecord(TypedDict):
     not a part, 2 for a part of a part. Absent on a record written before parts could split
     again, which reads as 1. `kind` (`change` or `migration`) and `guard` (how unfinished
     behaviour stays unreachable, empty for none) are absent on a record written before them
-    (GH-592)."""
+    (GH-592). `depends_on_reasons` (one line per `depends_on` entry, same order) and
+    `overlap_risk` are absent on a record written before GH-837: it loads and resumes as it is,
+    and readers use an empty default."""
 
     title: str
     body: str
@@ -1612,6 +1614,8 @@ class PartRecord(TypedDict):
     depth: NotRequired[int]
     kind: NotRequired[Literal["change", "migration"]]
     guard: NotRequired[str]
+    depends_on_reasons: NotRequired[list[str]]
+    overlap_risk: NotRequired[str]
 
 
 CarveOutcome = Literal["applied", "refused", "failed"]
