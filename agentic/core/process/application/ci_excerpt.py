@@ -62,10 +62,10 @@ def read_record(
     hashes of the failing tests. Never the text of a log. One `failed_job_logs` call.
 
     `candidates` is `ci.log_candidates(report, declared)`, computed by the caller from its own
-    `CiReport`, with `declared` the base commit's ci names. Until the adapter selects with
-    `declared`. The adapter selects with the `ci:` names of the product checkout's HEAD, and a
-    mismatch with the caller's base-commit names, or a re-push between the report and the read,
-    makes `recorded_tests` give `None`, so there is no `tests` and never a false repeat.
+    `CiReport`, with `declared` the base commit's ci names. The adapter selects with the `ci:`
+    names of the product checkout's HEAD, and a mismatch with the caller's base-commit names,
+    or a re-push between the report and the read, makes `recorded_tests` give `None`, so there
+    is no `tests` and never a false repeat.
 
     Matching always uses the raw names and logs: `ci.record_job` and `ci.record_link` apply only
     to the row stored. Two long names may be cut to the same `job`, so a consumer never keys
