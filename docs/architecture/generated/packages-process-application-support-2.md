@@ -46,6 +46,7 @@ graph TD
     m_application__preflight --> m_application__ports
     m_application__preflight --> m_application__run_role
     m_application__release --> g_domain__machine
+    m_application__release --> g_domain__state
     m_application__release --> m_application__ports
     m_application__run_role --> g_application__checks
     m_application__run_role --> g_application__landing
