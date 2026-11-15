@@ -31,7 +31,6 @@ from ...application.ports import (
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
 from ...domain.presubmit import ApiBreakLine
-from ...domain.tracker_refs import issue_number, pull_request_number
 from ...domain.task import (
     PullRequest,
     PullRequestCommit,
@@ -39,8 +38,8 @@ from ...domain.task import (
     TrackerFailureClass,
     TrackerTarget,
 )
+from ...domain.tracker_refs import issue_number, pull_request_number
 from .run import GhRetry, bounded_run, print_line, run_gh
-
 
 # The order a merge method is picked in: the first the repository allows.
 _MERGE_METHODS = (
