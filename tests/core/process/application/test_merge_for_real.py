@@ -754,6 +754,7 @@ def test_a_merge_that_failed_but_landed_is_released_once(world, monkeypatch):
     events = _released(world, monkeypatch)
 
     def landed(reference: str, head: str) -> str:
+        pull_request_number(reference)
         world.tracker.prs[URL] = dataclasses.replace(
             world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
         )
@@ -796,7 +797,12 @@ def test_a_stopped_or_refused_merge_never_releases(world, monkeypatch, tmp_path)
     # stopped: the pull request is neither OPEN nor MERGED after the failure (ambiguous)
     (tmp_path / "second").mkdir()
     ambiguous = World(tmp_path / "second", GREEN)
-    ambiguous.tracker.merge = lambda reference, head: _closed_then_fail(ambiguous)  # type: ignore[method-assign]
+
+    def closed_under_us(reference: str, head: str) -> str:
+        pull_request_number(reference)
+        return _closed_then_fail(ambiguous)
+
+    ambiguous.tracker.merge = closed_under_us  # type: ignore[method-assign]
     ambiguous.merge()
     assert ambiguous.doc()["auto_merge_head"] == ambiguous.head  # the intent is kept: ambiguous
 

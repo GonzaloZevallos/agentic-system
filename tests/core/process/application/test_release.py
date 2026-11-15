@@ -299,15 +299,6 @@ def test_an_os_error_is_not_retried_and_is_recorded_as_os_error():
     assert lapse == {"at": "2026-11-15T10:00:00+00:00", "cause": "os_error"}
 
 
-def test_a_subprocess_error_is_recorded_as_os_error_and_never_raised():
-    workspace = _Failing(subprocess.TimeoutExpired("git", 5))
-
-    ports = _after_merge(workspace)
-
-    lapse = (ports.documents.load("GH-12") or {})["worktree_release_lapse"]
-    assert lapse["cause"] == "os_error" and workspace.attempts == 1
-
-
 def test_a_bug_is_not_swallowed_and_leaves_no_lapse():
     # The rejected input: a TypeError is not one of the closed causes.
     from agentic.core.process.application.release import release_after_merge

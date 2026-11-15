@@ -12,7 +12,6 @@ caller's, exactly as it was before."""
 
 from __future__ import annotations
 
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -79,7 +78,8 @@ def release_after_merge(
 ) -> None:
     """`release_task` for a task the system just merged (GH-820): the removal is housekeeping
     after a merge that happened, so it never fails the merge. A `GitError` is retried once
-    after `RELEASE_RETRY_PAUSE_S`; an `OSError` or `SubprocessError` is not. A removal that
+    after `RELEASE_RETRY_PAUSE_S`; an `OSError` is not. The application layer may not import
+    `subprocess`, so a `SubprocessError` is not caught here. A removal that
     still fails leaves one `worktree_release_lapse` row in the document (a record, read by no
     decision) and one log line. Nothing else is caught: a `TypeError` is a bug."""
     started = time.monotonic()
@@ -92,7 +92,7 @@ def release_after_merge(
             reaped = release_task(ports, task_id)
     except GitError:
         cause = "git_failed"
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
         cause = "os_error"
     else:
         line = f"agentic: merge: {task_id}: worktrees released in {time.monotonic() - started:.1f}s"
