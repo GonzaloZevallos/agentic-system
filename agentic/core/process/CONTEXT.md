@@ -533,7 +533,7 @@ _Avoid_: descartado (acá sí hay algo que construir, en las partes), dividida (
 _Campo_: sin término de arte
 
 **Seguimiento de carve-out**:
-El issue que abre una partida de profundidad 2 con las subtareas enteras que extrae de su plan cuando este sigue por encima del presupuesto (GH-719, ADR-0093). Lleva el marcador `agentic-carve-out` con el número de issue de la partida y la línea `Blocked by: #<partida>`; no es una partida y no tiene profundidad. Todavía no lo abre nadie (parte 3 de GH-719).
+El issue que abre una partida de profundidad 2 con las subtareas enteras que extrae de su plan cuando este sigue por encima del presupuesto (GH-719, ADR-0093). Lleva el marcador `agentic-carve-out` con el número de issue de la partida y la línea `Blocked by: #<partida>`; no es una partida y no tiene profundidad. Lo abre el nodo del plan cuando una partida de profundidad 2 queda por encima del presupuesto: una sola vez por tarea, y si falla la tarea escala con `estimate` (GH-722).
 _Avoid_: partida (no se parte ni se cuenta), subtarea (es una tarea)
 _Campo_: sin término de arte
 

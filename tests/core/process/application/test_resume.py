@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.application.plan import PART_BUILT_WHOLE
+from agentic.core.process.application.plan import PART_BUILT_WHOLE, plan
 from agentic.core.process.domain import (
     document,
     legacy_names,
@@ -16,7 +16,8 @@ from agentic.core.process.domain import (
     spec_assumptions,
 )
 from agentic.shared.configuration import Configuration
-from tests.fakes import memory_ports
+from tests.core.process.application.test_plan_estimate import carve_ports, carve_result, two_steps
+from tests.fakes import ScriptedRunner, memory_ports
 
 CAP = "Developer stopped by the task cap: 106.27 of 100.00 USD spent"
 USD = {"cost_usd": 25.0}
@@ -1139,3 +1140,68 @@ def test_a_spec_conflict_pause_needs_a_human_comment_and_then_reads_as_decided(c
         "spec conflict (contradiction) settled by the owner's decision"
     )
     assert spec_assumptions.conflict_step(decided, "data_loss") == "escalate"
+
+
+# --- a carve-out an earlier run left unfinished (GH-722): the plan node ends it at entry ---------
+
+NOW = "2026-11-14T10:00:00+00:00"
+
+
+def cut_carve_out(**record):
+    """A part at the depth cap whose document was cut mid carve-out: `record` says how far."""
+    data = {k: v for k, v in two_steps().structured_output.items() if k != "markdown"}
+    data["subtasks"] = [{"depends_on": [], **s} for s in data["subtasks"]]
+    carve = {k: v for k, v in carve_result().structured_output.items() if k != "markdown"}
+    fit = {"fits": False, "cost_usd": 180.0, "files": 5, "reference_usd": None}
+    saved = {"data": {"carve": carve, "plan_output": data}, "fit": fit, "at": NOW}
+    section = "### Solution\n\nHex.\n\n### Subtasks\n\n#### api\n\nBuild it.\n\n#### b\n\nBuild b."
+    return {
+        "id": "GH-346",
+        "title": "Dashboard",
+        "description": f"Second half.\n\n{rules.split_marker('GH-316', 2, 2)}",
+        "type": "feature",
+        "status": "waiting_on_human",
+        "sections": {"Tech Lead": section},
+        "carve_out": {**saved, **record},
+    }
+
+
+async def finish_the_cut(state, tmp_path):
+    runner = ScriptedRunner()
+    ports = carve_ports(runner)
+    ports.tracker.issue_numbers_from = 900
+    patch = await plan(state, Configuration(product_dir=tmp_path), ports)
+    return patch, runner, ports
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("cut", ["issue_url", "repointed_at"])
+async def test_a_document_cut_mid_carve_out_finishes_with_no_role_and_no_second_issue(
+    cut, tmp_path
+):
+    record = {"issue_url": "https://github.com/o/r/issues/800"}
+    if cut == "repointed_at":
+        record["repointed_at"] = NOW
+    patch, runner, ports = await finish_the_cut(cut_carve_out(**record), tmp_path)
+
+    assert runner.calls == [] and ports.tracker.opened_issues == []
+    assert patch["carve_out"]["outcome"] == "applied" and list(patch["subtasks"]) == ["api"]
+    assert patch["required_paths"] == ["src/a.py"] and patch.get("escalation_class") is None
+
+
+@pytest.mark.anyio
+async def test_a_carve_out_whose_remainder_no_longer_fits_stays_applied_and_asks_the_human(
+    tmp_path,
+):
+    record = {"issue_url": "https://github.com/o/r/issues/800", "repointed_at": NOW}
+    state = {**cut_carve_out(**record, commented_at=NOW), "cost_usd": 160.0}
+    patch, runner, ports = await finish_the_cut(state, tmp_path)
+
+    assert runner.calls == [] and ports.tracker.opened_issues == []
+    assert patch["carve_out"]["outcome"] == "applied" and "subtasks" not in patch
+    assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
+    assert patch["escalated"].count("USD") >= 2
+    paused = {**state, **patch}
+    with pytest.raises(resume.WaitingOnHuman):
+        resume.prepare("GH-346", paused, "checkpoint", Configuration(product_dir=tmp_path), ports)
+    assert runner.calls == []
