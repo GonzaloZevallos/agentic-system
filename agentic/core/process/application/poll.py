@@ -1923,7 +1923,7 @@ def gather_launches(
     reports: list[rules.BlockerReport] | None = None,
     by_issue: dict[int, rules.BlockerReport] | None = None,
     documents: Mapping[int, TaskState | None] | None = None,
-    notes: list[str] | None = None,
+    declaration: experiment.Experiment | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -1934,18 +1934,15 @@ def gather_launches(
     `reports` when given (GH-344), for the queue-blocked line, and set in `by_issue` under
     its issue number when given (GH-375), for the board mirror. `documents` (GH-403) is
     `queue_documents`' answer, shared with the orphan pass so each queue document is loaded
-    once per round; without it this function reads it itself. When the product declares an
-    experiment (GH-470, `ports.experiment`), each launch candidate that can launch carries the
-    arm `experiment.assign` picked for it, or the one its launch record already has; an invalid
-    declaration, or an `.env` switch an arm names, adds one line to `notes` and leaves every
-    candidate unassigned -- it never stops the queue. With no declaration this reads and counts
-    nothing more than it did before."""
+    once per round; without it this function reads it itself. When the round has a valid
+    experiment `declaration` (GH-470, `_declared_experiment`), a candidate that can launch keeps
+    the arm its launch record already has while the declaration still names it; it never picks a
+    new one: `_assign_arms` does that, after `rules.poll_plan`, for the launches that come out.
+    Every other candidate arrives with no arm."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     queued = documents if documents is not None else queue_documents(ports)
-    declaration = _declared_experiment(cfg, ports, notes)
-    counts = _arm_counts(declaration, ports, registry, product, queued) if declaration else {}
     for number, loaded in queued.items():
         if loaded is not None:
             registry.clear_launch(product, number)
@@ -1960,7 +1957,7 @@ def gather_launches(
         prior = attempt.prior if attempt is not None else 0
         arm = None
         if declaration is not None and not report:
-            arm = _arm_for(declaration, number, attempt, counts)
+            arm = _kept_arm(declaration, attempt)
         launches.append(
             rules.LaunchCandidate(
                 number, bool(report), since, prior, len(rules.LAUNCH_SCHEDULE), arm
@@ -2026,21 +2023,35 @@ def _arm_counts(
     return counts
 
 
-def _arm_for(
-    declaration: experiment.Experiment,
-    number: int,
-    attempt: LaunchAttempt | None,
-    counts: dict[str, int],
-) -> str:
-    """The arm of a launch candidate: the one its record already has (counted already, and kept
-    while the declaration still names it), else the next `experiment.assign` picks, which
-    counts for the candidates after it in this round."""
+def _kept_arm(declaration: experiment.Experiment, attempt: LaunchAttempt | None) -> str | None:
+    """The arm a launch record already has (counted already), kept while the declaration still
+    names it; `None` otherwise, for `_assign_arms` to give one if the candidate launches."""
     if attempt is not None and attempt.arm in {a.name for a in declaration.arms}:
-        assert attempt.arm is not None
         return attempt.arm
-    chosen = experiment.assign(declaration, number, counts).name
-    counts[chosen] = counts.get(chosen, 0) + 1
-    return chosen
+    return None
+
+
+def _assign_arms(
+    plan: rules.PollPlan,
+    declaration: experiment.Experiment | None,
+    counts: dict[str, int],
+    skip: Collection[int] = (),
+) -> rules.PollPlan:
+    """`plan` with a new experiment arm on each `launch` action that has none, in the order the
+    plan launches them, so an arm is counted only for a launch that happens and the next pick
+    sees it. A launch that kept its record's arm, an issue in `skip` (a fresh rerun of a task that
+    already has its assignment) and every other kind of action are left as they are. Without a
+    valid `declaration` the plan comes back as it was."""
+    if declaration is None:
+        return plan
+    actions: list[rules.PollAction] = []
+    for action in plan.actions:
+        if action.kind == "launch" and action.arm is None and action.issue not in skip:
+            chosen = experiment.assign(declaration, action.issue, counts).name
+            counts[chosen] = counts.get(chosen, 0) + 1
+            action = replace(action, arm=chosen)
+        actions.append(action)
+    return replace(plan, actions=actions)
 
 
 def orphaned_comment(counted: int) -> str:
@@ -2834,6 +2845,10 @@ def run_once(
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
         experiment_notes: list[str] = []
+        declaration = _declared_experiment(cfg, ports, experiment_notes)
+        arm_counts = (
+            _arm_counts(declaration, ports, registry, product, queued) if declaration else {}
+        )
         launches = gather_launches(
             cfg,
             ports,
@@ -2842,7 +2857,7 @@ def run_once(
             blocker_reports,
             blockers_by_issue,
             queued,
-            experiment_notes,
+            declaration,
         )
         merges: list[int] = []
         backed_off_merges: list[int] = []
@@ -2973,6 +2988,7 @@ def run_once(
             exempt_attempts=exempt_records,
             exempt_yield=plan_yielded,
         )
+        plan = _assign_arms(plan, declaration, arm_counts, frozenset(reruns))
         # GH-500: the head of this product's queue is published only while it could start. A
         # round that starts it, or that has no such head, removes the record: the child that
         # runs is the claim, and a record of the old `since` would hold the others for nothing.
