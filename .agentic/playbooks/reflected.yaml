@@ -1162,3 +1162,5 @@ tasks:
     decisions: 1
   GH-755@review:
     cost_usd: 0.045
+  GH-778@review:
+    cost_usd: 0.0662

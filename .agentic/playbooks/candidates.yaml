@@ -1921,3 +1921,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-15T07:55:57.791+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: For every guard or invariant check you add or rely on, make it callable on any input and add a test that feeds it a case it must reject, so a green run shows it can fail.
+  confidence: medium
+  seen_in:
+  - GH-778
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T09:49:37.261+00:00'
