@@ -3839,6 +3839,37 @@ def all_approved_or_none(state: TaskState) -> bool:
     return not state.get("subtasks") or all_approved(state)
 
 
+def stranded_tracker_only(document: Mapping[str, Any]) -> bool:
+    """A task that ended `tracker_only` after an estimate pause was resumed and the Tech Lead
+    never planned again (GH-798, ADR-0054 addendum; the owed re-plan is the glossary's
+    Re-plan debido). True when the `status` is `tracker_only`, the `pause_log` holds an
+    `escalation` of value `estimate` followed later by a `resumed` entry (the first one: the
+    resume that owed the re-plan), and no run of the Tech Lead started after that `resumed`.
+    A run with no readable `started_at` counts as a re-plan (false: it cannot be said to have
+    been skipped), and so does a `resumed` without an instant. Reads only the log and the
+    runs, never a section's text; it writes nothing."""
+    if document.get("status") != "tracker_only":
+        return False
+    resumed_at: object = None
+    seen_estimate = False
+    for entry in document.get("pause_log", []):
+        if entry.get("kind") == "escalation" and entry.get("value") == "estimate":
+            seen_estimate = True
+        elif entry.get("kind") == "resumed" and seen_estimate:
+            resumed_at = entry.get("at")
+            break
+    resumed = _instant(resumed_at)
+    if resumed is None:
+        return False
+    for run in document.get("runs", []):
+        if run.get("role") != TECH_LEAD.name:
+            continue
+        started = _instant(run.get("started_at"))
+        if started is None or started > resumed:
+            return False
+    return True
+
+
 def resume_target(state: TaskState) -> str | None:
     """Where a resumed task goes next, from the same facts the routing reads. A pull
     request ends the road unless the landing reopened the stage under it, or a stopped run

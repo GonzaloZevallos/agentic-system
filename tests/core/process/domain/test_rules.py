@@ -5306,3 +5306,68 @@ def test_a_crash_after_resumed_reaches_plan_from_the_document():
     assert rules.resume_target(loaded) == "plan"
     without = resume.state_from(document.parse(document.render({**saved, "plan_due": False})))
     assert rules.resume_target(without) == "tracker_only"
+
+
+def _stranded() -> dict[str, Any]:
+    """The shape GH-798 flags: a tracker_only end after an estimate escalation and a resume,
+    with no Tech Lead run since the resume."""
+    return {
+        "id": "GH-9",
+        "status": "tracker_only",
+        "tracker_items": _GH762_ITEMS,
+        "pause_log": [
+            {"kind": "escalation", "value": "estimate", "at": "2026-11-06T16:23:35+00:00"},
+            {"kind": "resumed", "at": "2026-11-06T16:29:17+00:00"},
+        ],
+        "runs": [{"role": "Tech Lead", "started_at": "2026-11-06T16:00:00+00:00"}],
+    }
+
+
+def test_stranded_tracker_only_is_true_on_an_estimate_resume_with_no_replan_after_it():
+    assert rules.stranded_tracker_only(_stranded()) is True
+
+
+def test_stranded_tracker_only_is_false_when_the_tech_lead_planned_after_the_resume():
+    doc = _stranded()
+    doc["runs"].append({"role": "Tech Lead", "started_at": "2026-11-06T16:30:00+00:00"})
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_ignores_a_run_of_another_role_after_the_resume():
+    doc = _stranded()
+    doc["runs"].append({"role": "Developer", "started_at": "2026-11-06T16:30:00+00:00"})
+    assert rules.stranded_tracker_only(doc) is True
+
+
+def test_stranded_tracker_only_is_false_without_an_estimate_escalation():
+    doc = _stranded()
+    doc["pause_log"][0] = {"kind": "escalation", "value": "questions", "at": "x"}
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_is_false_when_the_estimate_was_never_resumed():
+    doc = _stranded()
+    doc["pause_log"] = doc["pause_log"][:1]
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_is_false_when_a_resume_came_before_the_estimate():
+    doc = _stranded()
+    doc["pause_log"].reverse()
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_counts_a_run_without_started_at_as_a_replan():
+    doc = _stranded()
+    doc["runs"].append({"role": "Tech Lead"})
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_is_false_for_another_status():
+    assert rules.stranded_tracker_only({**_stranded(), "status": "planned"}) is False
+
+
+def test_stranded_tracker_only_is_false_when_the_resume_has_no_readable_instant():
+    doc = _stranded()
+    doc["pause_log"][1] = {"kind": "resumed"}
+    assert rules.stranded_tracker_only(doc) is False
