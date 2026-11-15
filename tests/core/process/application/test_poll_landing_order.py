@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agentic.core.process.adapters.filesystem.documents import FilesystemTaskDocuments
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
 from agentic.core.process.domain import adr_numbers, rules
@@ -952,6 +953,7 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
         pull_request = tracker.pull_request
 
         def spy_pull_request(reference):
+            pull_request_number(reference)
             reads.append("pull_request")
             return pull_request(reference)
 
