@@ -3,9 +3,12 @@ and nothing of how either is done. The git adapter is `adapters/git/eval_roots.p
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
+
+from ..domain.issue_listing import ListedIssue
 
 
 class EvalRoots(Protocol):
@@ -53,3 +56,34 @@ class EvalChild(Protocol):
 
 # Starts the child with the environment overlay and returns at once (never waits).
 EvalSpawn = Callable[[list[str], dict[str, str]], EvalChild]
+
+
+class GhRead(Protocol):
+    """One `gh` read with no retry: its stdout. Raises the `TrackerCallFailed` family or
+    `TrackerRefused` (both `ValueError`), or `ValueError` / `OSError`."""
+
+    def __call__(self, args: tuple[str, ...]) -> str: ...
+
+
+PageCause = Literal["rate_limited", "timed_out", "unreachable", "transient", "refused"]
+
+
+@dataclass(frozen=True)
+class Page:
+    """One page of the listing; `size` is the raw item count the page had."""
+
+    items: Sequence[ListedIssue]
+    size: int
+
+
+@dataclass(frozen=True)
+class PageUnreadable:
+    cause: PageCause
+
+
+class IssueListing(Protocol):
+    """The repository's issues and pull requests, a page at a time (1-based)."""
+
+    def page(self, n: int) -> Page | PageUnreadable:
+        """Never raises: a page that cannot be read is a `PageUnreadable`."""
+        ...
