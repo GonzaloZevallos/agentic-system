@@ -1885,3 +1885,30 @@ candidates:
   - finding
   - return
   added_at: '2026-11-15T00:35:25.636+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When the brief tells you to call an existing function, import and call it; never copy its body, because the rule then lives in two places that can drift.
+  confidence: medium
+  seen_in:
+  - GH-777
+  sources:
+  - finding
+  added_at: '2026-11-15T04:25:21.135+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: When the brief tells you to call an existing function, import and call it; never copy its body, because the rule then lives in two places that can drift.
+  confidence: medium
+  seen_in:
+  - GH-777
+  sources:
+  - finding
+  added_at: '2026-11-15T04:25:21.135+00:00'
+- slug: tech_lead_platform
+  category: plan-calibration
+  lesson: Before a plan states that no test reads a generated artifact, search the tests for readers of those files and plan for the staleness check each new module will trigger.
+  confidence: medium
+  seen_in:
+  - GH-777
+  sources:
+  - finding
+  added_at: '2026-11-15T04:25:21.135+00:00'

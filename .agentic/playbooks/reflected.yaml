@@ -1139,3 +1139,5 @@ tasks:
   GH-781@review:
     cost_usd: 0.077
     decisions: 1
+  GH-777@review:
+    cost_usd: 0.0941
