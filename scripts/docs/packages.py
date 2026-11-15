@@ -507,7 +507,9 @@ def _flat_pages(
     them) and one page per layer with a module (`<layer>`: its modules, the imports they make,
     each target in another layer or outside the package collapsed to one ghost). A module whose
     layer is not in `layers` raises, and so does a layer with more than `DIAGRAM_BUDGET.classes`
-    modules or a page over the budget, naming the layer and saying to add groups."""
+    modules. A layer whose one page is over the budget is split in `chunks` of consecutive
+    modules (`<layer>-1`, `<layer>-2`; GH-804: the measurement `domain` page was at 30 of 30
+    edges); a chunk still over the budget raises, naming the layer and saying to add groups."""
     prefix = root + "."
     modules: dict[str, set[str]] = {}
     for name, names in imports.items():
