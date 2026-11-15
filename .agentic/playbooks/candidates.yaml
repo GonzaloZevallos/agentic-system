@@ -1990,3 +1990,23 @@ candidates:
   - finding
   - return
   added_at: '2026-11-15T19:21:54.859+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a port, an adapter package or a public module, document it in the architecture docs in the same change, and confirm the docs folder shows in your diff before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-804
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T19:35:06.904+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Never edit a check, generator or budget guard outside the declared seams to make a check pass. Fit your change to the check as it is, or record the conflict under Decisions and assumptions.
+  confidence: medium
+  seen_in:
+  - GH-804
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T19:35:06.904+00:00'

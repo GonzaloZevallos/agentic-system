@@ -1190,3 +1190,5 @@ tasks:
   GH-812@review:
     cost_usd: 0.0724
     decisions: 1
+  GH-804@review:
+    cost_usd: 0.0863
