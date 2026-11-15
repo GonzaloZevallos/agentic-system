@@ -182,3 +182,16 @@ def test_no_other_application_module_calls_the_spec_reader():
     root = Path(spec_guard.__file__).parent
     callers = {p.name for p in root.glob("*.py") if "reader.read(" in p.read_text()}
     assert callers == {"spec_guard.py"}
+
+
+def test_intact_at_never_asks_the_upstream_and_check_at_still_does():
+    changed = TEXT.replace("Text.", "Other.")
+    reader = Reader({RECORDED: TEXT, HEAD: changed, UPSTREAM: changed})
+    ports = _ports(reader, upstream=UPSTREAM)
+
+    assert spec_guard.intact_at(STATE, ports, HEAD) is False
+    assert ports.workspace.upstream_calls == 0
+    assert (UPSTREAM, PATH) not in reader.calls
+
+    assert spec_guard.check_at(STATE, ports, HEAD) == Changed((PATH, "upstream"))
+    assert ports.workspace.upstream_calls == 1

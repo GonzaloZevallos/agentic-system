@@ -12,6 +12,13 @@ from agentic.core.process.domain import adr_numbers, ci, landing, rules
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.core.process.application import gh374_shape as gh374
+from tests.core.process.application.spec_fixtures import (
+    SPEC,
+    SPEC_PATH,
+    NeverRead,
+    SpecAt,
+    spy_intact_at,
+)
 from tests.fakes import MemoryTracker, memory_ports
 
 HEAD = "a" * 40
@@ -825,3 +832,84 @@ def test_release_does_not_release_a_task_paused_on_tracker_items_even_with_a_ci_
     )
     assert (held.released, held.why, held.decision) == (False, "waiting_on_human", None)
     assert ports.tracker.reads == []
+
+
+# ---- the spec carry gate in the tramo (GH-594, part 4b-3b) -------------------------------
+
+TRAMO_BASE, TRAMO_MASTER = "1" * 40, "2" * 40
+TRAMO_A, TRAMO_B = "3" * 40, "4" * 40
+
+
+def _tramo(reader, *, spec=True, own=("own.py",), master=("master.py",)):
+    """Two approved units reviewed at `TRAMO_A` and `TRAMO_B`, master moved on files the units
+    did not touch (unless `master` says so), read through `reader`."""
+    ports = memory_ports(spec_reader=reader)
+    ports.workspace.existing_branches[rules.task_branch("GH-1")] = ("x", TRAMO_BASE)
+    ports.workspace.changed_paths = lambda base, head: own if base == TRAMO_BASE else master
+    raw = {
+        "id": "GH-1",
+        "subtasks": {
+            "a": {"status": "approved", "reviewed_head": TRAMO_A},
+            "b": {"status": "approved", "reviewed_head": TRAMO_B},
+        },
+        **({"spec": SPEC} if spec else {}),
+    }
+    return raw, ports
+
+
+def _reads(raw, ports):
+    return landing_plan.unit_reads(raw, ["a", "b"], None, ports, TRAMO_MASTER)[0]
+
+
+def test_a_unit_whose_spec_changed_at_its_reviewed_head_does_not_carry():
+    raw, ports = _tramo(SpecAt(lambda commit: commit == TRAMO_A))
+
+    assert _reads(raw, ports) == {"a": False, "b": True}
+
+
+def test_a_spec_changed_only_on_master_cuts_every_unit_and_master_is_read_once():
+    reader = SpecAt(lambda commit: commit == TRAMO_MASTER)
+    raw, ports = _tramo(reader)
+
+    assert _reads(raw, ports) == {"a": False, "b": False}
+    assert [call for call in reader.calls if call[0] == TRAMO_MASTER] == [(TRAMO_MASTER, SPEC_PATH)]
+
+
+def test_a_unit_whose_review_does_not_carry_reads_no_spec():
+    reader = SpecAt()
+    raw, ports = _tramo(reader, own=("shared.py",), master=("shared.py",))
+
+    assert _reads(raw, ports) == {"a": False, "b": False}
+    assert reader.calls == []
+
+
+def test_the_tramo_asks_the_gate_with_the_spec_of_the_state(monkeypatch):
+    seen = spy_intact_at(monkeypatch)
+    raw, ports = _tramo(SpecAt())
+
+    assert _reads(raw, ports) == {"a": True, "b": True}
+    assert seen == [True, True, True]  # master once, then each unit's reviewed head
+
+
+def test_a_tramo_without_a_spec_never_reads_one():
+    raw, ports = _tramo(NeverRead(), spec=False)
+
+    assert _reads(raw, ports) == {"a": True, "b": True}
+
+
+def test_a_spec_changed_only_on_master_restarts_instead_of_slicing(tmp_path):
+    from tests.core.process.application.test_poll import _cfg
+
+    raw, ports = _tramo(SpecAt())
+    cfg = _cfg(tmp_path)
+    assert isinstance(
+        landing.slice_or_restart(
+            landing_plan.slice_inputs(raw, cfg, ports, TRAMO_MASTER, "5" * 40)
+        ),
+        landing.Slice,
+    )  # the same world without the change slices: the cut below is the spec's
+
+    raw, ports = _tramo(SpecAt(lambda commit: commit == TRAMO_MASTER))
+    inputs = landing_plan.slice_inputs(raw, cfg, ports, TRAMO_MASTER, "5" * 40)
+
+    assert landing.slice_or_restart(inputs) == "no_clean_slice"

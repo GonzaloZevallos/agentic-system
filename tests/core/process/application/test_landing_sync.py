@@ -37,6 +37,7 @@ from tests.core.process.application.spec_fixtures import (
     SpecAt,
     spy_intact_at,
 )
+from tests.core.process.application.test_landing_dated_rename import _world as _dated_world
 from tests.core.process.application.test_landing_renumber import _world as _renumber_world
 from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _round
 from tests.core.process.application.test_poll_merge import (
@@ -912,3 +913,29 @@ def test_the_renumber_carry_asks_the_gate_with_the_spec_of_the_state(tmp_path, m
     _renumber_land(tmp_path, ports)
 
     assert seen == [True]
+
+
+def test_a_dated_rename_whose_spec_changed_at_the_new_head_is_not_carried(tmp_path):
+    ports, head, _ = _dated_world(tmp_path)
+    ports = replace(ports, spec_reader=SpecAt(lambda commit: True))
+    ports.documents.save({**ports.documents.load("GH-5"), "spec": SPEC})
+    lines: list[str] = []
+
+    landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", ports.workspace.master_sha, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: "2026-11-12T00:00:00+00:00",
+        live=frozenset({"renumber"}),
+        turn="head",
+    )
+
+    document = ports.documents.load("GH-5")
+    assert document["subtasks"]["only"]["reviewed_head"] == head
+    assert not document.get("review_scopes")
+    assert document["adr_renumbered"][-1]["carried"] is False
+    assert any("(review not carried)" in line for line in lines)
