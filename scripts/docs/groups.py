@@ -217,6 +217,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.task": "state",
     "domain.task_path": "state",
     "domain.tracker_items": "roles",
+    "domain.tracker_refs": "state",
     "domain.turn_notice": "roles",
 }
 
@@ -244,6 +245,7 @@ MEASUREMENT_CLUSTERS: Mapping[str, str] = {
     "domain.dashboards": "langfuse",
     "domain.evaluation": "scorecard",
     "domain.findings_report": "reports",
+    "domain.issue_listing": "reports",
     "domain.planning": "reports",
     "domain.playbook_window": "reports",
     "domain.role_usage": "reports",

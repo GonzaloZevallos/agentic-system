@@ -16,6 +16,8 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli, composition
+from agentic.core.measurement.application.ports import Page, PageUnreadable
+from agentic.core.measurement.domain.issue_listing import PAGE_SIZE, ListedIssue
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import GhInbox
 from agentic.core.process.adapters.github.tracker import pull_request_number
@@ -4720,7 +4722,9 @@ def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(mo
 
 # `agentic scores backfill` (GH-273, subtask `backfill`): argv in, exit code, stdout and the
 # scorer's own record out. The scorer is a fake with `LangfuseScores.write`'s shape; the
-# tracker is `FakePullRequestTracker`, which also answers `issue_created_at`.
+# GitHub is `FakeListing`, swapped in for `composition.backfill_listing`; the tracker is
+# `FakePullRequestTracker`, whose data the default listing is derived from and which must
+# never be asked (the backfill reads GitHub only through the listing).
 
 
 class FakeScorer:
@@ -4736,16 +4740,55 @@ class FakeScorer:
         return self._results.pop(0) if self._results else True
 
 
-def _backfill_run(monkeypatch, root: Path, ports, scorer, *extra: str) -> None:
+class FakeListing:
+    """`IssueListing`'s shape over `items`, `PAGE_SIZE` to a page; `unreadable` maps a page
+    number to its cause; `calls` records every page asked, `before` runs ahead of a page."""
+
+    def __init__(self, items=(), unreadable=None, before=None):
+        self.items = {item.number: item for item in items}
+        self.unreadable = unreadable or {}
+        self.before = before
+        self.calls: list[int] = []
+
+    def page(self, n):
+        self.calls.append(n)
+        if self.before:
+            self.before(n, self.items)
+        if n in self.unreadable:
+            return PageUnreadable(self.unreadable[n])
+        ordered = [self.items[k] for k in sorted(self.items)]
+        chunk = ordered[(n - 1) * PAGE_SIZE : n * PAGE_SIZE]
+        return Page(chunk, len(chunk))
+
+
+def listing_of(tracker: FakePullRequestTracker, **kwargs) -> FakeListing:
+    """The listing GitHub would give for what `tracker` holds: its pull requests and its
+    issue times (an issue it fails to read is not listed)."""
+    items = [
+        ListedIssue(pull_request_number(ref), pr.created_at, True, pr.merged_at)
+        for ref, pr in tracker.prs.items()
+        if pr is not None
+    ]
+    items += [
+        ListedIssue(int(task_id.removeprefix("GH-")), created, False, None)
+        for task_id, created in tracker.issue_created.items()
+        if task_id not in tracker.issue_created_errors
+    ]
+    return FakeListing(items, **kwargs)
+
+
+def _backfill_run(monkeypatch, root: Path, ports, scorer, *extra: str, listing=None) -> None:
     monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
     monkeypatch.setattr(cli.composition, "task_scorer", lambda product: scorer)
+    chosen = listing if listing is not None else listing_of(ports.tracker)
+    monkeypatch.setattr(cli.composition, "backfill_listing", lambda product_dir: chosen)
     monkeypatch.setattr(
         "sys.argv", ["agentic", "scores", "backfill", "--product-dir", str(root), *extra]
     )
 
 
-def _backfill(monkeypatch, root: Path, ports, scorer, *extra: str) -> int:
-    _backfill_run(monkeypatch, root, ports, scorer, *extra)
+def _backfill(monkeypatch, root: Path, ports, scorer, *extra: str, listing=None) -> int:
+    _backfill_run(monkeypatch, root, ports, scorer, *extra, listing=listing)
     try:
         cli.main()
     except SystemExit as exit_:
@@ -4827,13 +4870,13 @@ def test_each_skip_reason_is_counted_and_a_skip_alone_exits_zero(monkeypatch, tm
     ports = close_ports(root, FakePullRequestTracker())
     ports.documents.save(finished_task("GH-1", status="paused"))  # not finished
     ports.documents.save(
-        close_task(id="GH-2", title="old", pull_request=None, status="ready_for_review")
-    )  # no runs, no pull request, no issue time
+        close_task(id="EVAL-2", title="old", pull_request=None, status="ready_for_review")
+    )  # no runs, no pull request, and not a GH-N id: no issue time, not a failed read
     scorer = FakeScorer()
     assert _backfill(monkeypatch, root, ports, scorer) == 0
     lines = capsys.readouterr().out.splitlines()
     assert "agentic: GH-1: skipped:not_finished" in lines
-    assert "agentic: GH-2: skipped:no_time" in lines
+    assert "agentic: EVAL-2: skipped:no_time" in lines
     assert lines[-1] == "scored 0, partial 0, skipped:no_time 1, skipped:not_finished 1, failed 0"
     assert scorer.calls == []
 
@@ -4860,6 +4903,7 @@ def test_a_run_with_no_timestamps_takes_the_pull_requests_time_never_the_clock(
 ):
     root = close_root(tmp_path)
     tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-02T00:00:00+00:00"
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(title="old"))
     scorer = FakeScorer()
@@ -4874,8 +4918,10 @@ def test_three_consecutive_failed_writes_stop_the_run_with_the_counts_so_far(
     monkeypatch, tmp_path, capsys
 ):
     root = close_root(tmp_path)
-    ports = close_ports(root, FakePullRequestTracker())
+    tracker = FakePullRequestTracker()
+    ports = close_ports(root, tracker)
     for number in range(1, 6):
+        tracker.issue_created[f"GH-{number}"] = STARTED
         ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
     scorer = FakeScorer([False, False, False])
     assert _backfill(monkeypatch, root, ports, scorer) == 1
@@ -4887,8 +4933,10 @@ def test_three_consecutive_failed_writes_stop_the_run_with_the_counts_so_far(
 
 def test_a_success_between_failures_resets_the_consecutive_count(monkeypatch, tmp_path, capsys):
     root = close_root(tmp_path)
-    ports = close_ports(root, FakePullRequestTracker())
+    tracker = FakePullRequestTracker()
+    ports = close_ports(root, tracker)
     for number in range(1, 6):
+        tracker.issue_created[f"GH-{number}"] = STARTED
         ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
     scorer = FakeScorer([False, False, True, False, False])
     assert _backfill(monkeypatch, root, ports, scorer) == 1
@@ -4899,19 +4947,24 @@ def test_a_success_between_failures_resets_the_consecutive_count(monkeypatch, tm
 def test_dry_run_reads_everything_and_sends_nothing(monkeypatch, tmp_path, capsys):
     root = close_root(tmp_path)
     tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = STARTED
     ports = close_ports(root, tracker)
     ports.documents.save(finished_task())
     close_it(ports)
     scorer = FakeScorer()
-    assert _backfill(monkeypatch, root, ports, scorer, "--dry-run") == 0
+    listing = listing_of(tracker)
+    assert _backfill(monkeypatch, root, ports, scorer, "--dry-run", listing=listing) == 0
     assert scorer.calls == []
-    assert tracker.pull_request_refs == ["https://github.com/o/r/pull/7"]
+    assert listing.calls == [1]
+    assert tracker.pull_request_refs == []
     assert capsys.readouterr().out.splitlines()[-1] == "scored 1, partial 0, failed 0"
 
 
 def test_a_discarded_task_is_scored_without_delivered(monkeypatch, tmp_path):
     root = close_root(tmp_path)
-    ports = close_ports(root, FakePullRequestTracker())
+    tracker = FakePullRequestTracker()
+    tracker.issue_created["GH-9"] = STARTED
+    ports = close_ports(root, tracker)
     ports.documents.save(finished_task(status="discarded", pull_request=None))
     scorer = FakeScorer()
     assert _backfill(monkeypatch, root, ports, scorer) == 0
@@ -4924,7 +4977,9 @@ def test_without_a_scorer_and_without_dry_run_it_refuses_with_exit_two(
     monkeypatch, tmp_path, capsys
 ):
     root = close_root(tmp_path)
-    ports = close_ports(root, FakePullRequestTracker())
+    tracker = FakePullRequestTracker()
+    tracker.issue_created["GH-9"] = STARTED
+    ports = close_ports(root, tracker)
     ports.documents.save(finished_task(pull_request=None))
     assert _backfill(monkeypatch, root, ports, None) == 2
     assert "AGENTIC_LANGFUSE_HOST" in capsys.readouterr().err
@@ -4933,11 +4988,171 @@ def test_without_a_scorer_and_without_dry_run_it_refuses_with_exit_two(
 
 def test_a_backfill_writes_no_task_document(monkeypatch, tmp_path):
     root = close_root(tmp_path)
-    ports = close_ports(root, FakePullRequestTracker())
+    tracker = FakePullRequestTracker()
+    tracker.issue_created["GH-9"] = STARTED
+    ports = close_ports(root, tracker)
     ports.documents.save(finished_task(pull_request=None))
     before = ports.documents.path_for("GH-9").read_bytes()
     assert _backfill(monkeypatch, root, ports, FakeScorer()) == 0
     assert ports.documents.path_for("GH-9").read_bytes() == before
+
+
+def _item(number, created=STARTED, *, pr=False, merged=None):
+    return ListedIssue(number, created, pr, merged)
+
+
+def test_a_mixed_set_prints_each_outcome_in_order_and_a_missing_number_is_gh_failed(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker()
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task("GH-2", status="paused"))  # unfinished
+    ports.documents.save(finished_task("EVAL-3", pull_request=None))  # no issue time, no PR
+    ports.documents.save(finished_task("GH-4", pull_request="https://github.com/o/r/pull/7"))
+    ports.documents.save(finished_task("GH-5", pull_request=None))  # not in the listing
+    ports.documents.path_for("GH-1").write_text("{not a task document")  # unreadable
+    listing = FakeListing([_item(4), _item(7, pr=True, merged=ENDED)])
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[:5] == [
+        "agentic: EVAL-3: scored",
+        "agentic: GH-1: skipped:unreadable",
+        "agentic: GH-2: skipped:not_finished",
+        "agentic: GH-4: scored",
+        "agentic: GH-5: partial:cycle_h",
+    ]
+    assert "GH-5 | unread:gh_failed" in out
+    assert out[-1] == "scored 2, partial 1, skipped:not_finished 1, skipped:unreadable 1, failed 0"
+    assert [call[1] for call in scorer.calls] == ["EVAL-3", "GH-4", "GH-5"]
+    assert listing.calls == [1]
+    assert tracker.pull_request_refs == []
+
+
+def test_400_documents_over_800_items_make_at_most_9_page_calls(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    for number in range(1, 401):
+        ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
+    listing = FakeListing([_item(number) for number in range(1, 801)])
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 0
+    assert listing.calls == list(range(1, 10))
+    assert len(scorer.calls) == 400
+    assert capsys.readouterr().out.splitlines()[-1] == "scored 400, partial 0, failed 0"
+
+
+@pytest.mark.parametrize(
+    ("cause", "code"),
+    [
+        ("transient", 75),
+        ("rate_limited", 75),
+        ("timed_out", 75),
+        ("unreachable", 75),
+        ("refused", 1),
+    ],
+)
+@pytest.mark.parametrize("extra", [[], ["--dry-run"]])
+def test_an_unreadable_page_prints_only_the_stop_line_and_writes_nothing(
+    monkeypatch, tmp_path, capsys, cause, code, extra
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    for number in range(1, 151):
+        ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
+    listing = FakeListing([_item(number) for number in range(1, 151)], {2: cause})
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, *extra, listing=listing) == code
+    assert capsys.readouterr().out == f"agentic: stopped reading GitHub: {cause}; rerun later\n"
+    assert listing.calls == [1, 2]
+    assert scorer.calls == []
+
+
+def test_an_eval_id_with_a_listed_pull_request_is_scored_not_gh_failed(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task("EVAL-12-abc"))
+    listing = FakeListing([_item(7, pr=True, merged=ENDED)])
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 0
+    out = capsys.readouterr().out
+    assert "agentic: EVAL-12-abc: scored" in out
+    assert "gh_failed" not in out.replace("gh_failed 0", "")
+
+
+def test_only_unfinished_documents_make_no_github_call_and_build_no_listing(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task("GH-1", status="paused"))
+    ports.documents.save(finished_task("GH-2", status="running"))
+    _backfill_run(monkeypatch, root, ports, FakeScorer())
+
+    def built(product_dir):
+        raise AssertionError("the listing is built only when a finished document needs it")
+
+    monkeypatch.setattr(cli.composition, "backfill_listing", built)
+    assert _backfill_exit() == 0
+    assert capsys.readouterr().out.splitlines()[-1].startswith("scored 0, partial 0")
+
+
+def _backfill_exit() -> int:
+    try:
+        cli.main()
+    except SystemExit as exit_:
+        return exit_.code
+    return 0
+
+
+def test_a_gh_n_id_whose_listed_item_is_a_pull_request_is_scored(monkeypatch, tmp_path, capsys):
+    """The accepted unknown: the item's own `created_at` stands for the issue's."""
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task("GH-9", pull_request=None))
+    listing = FakeListing([_item(9, pr=True, merged=ENDED)])
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 0
+    out = capsys.readouterr().out
+    assert "agentic: GH-9: scored" in out and "unread:gh_failed" not in out
+
+
+def test_a_pull_request_reference_to_a_plain_issue_is_gh_failed(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task("GH-9"))
+    listing = FakeListing([_item(9), _item(7)])  # 7 is an issue, not a pull request
+    assert _backfill(monkeypatch, root, ports, FakeScorer(), listing=listing) == 1
+    assert "agentic: GH-9: partial:cycle_h" in capsys.readouterr().out
+
+
+def test_an_item_deleted_between_two_pages_is_gh_failed_for_that_document_only(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    for number in (60, 101, 150):
+        ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
+
+    def delete_between(page, items):
+        if page == 2:
+            items.pop(60)  # not the last of page 1: 101 slides into page 1's place, unread
+
+    items = [_item(number) for number in range(1, 151)]
+    listing = FakeListing(items, before=delete_between)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert listing.calls == [1, 2]
+    assert out[:3] == [
+        "agentic: GH-101: partial:cycle_h",
+        "agentic: GH-150: scored",
+        "agentic: GH-60: scored",
+    ]
+    assert [call[1] for call in scorer.calls] == ["GH-101", "GH-150", "GH-60"]
 
 
 # --- GH-274: `agentic dashboards apply` ---------------------------------------------------
@@ -6341,7 +6556,7 @@ def stage_pull_request(created="2026-09-20T12:00:00+00:00", merged="2026-09-20T1
 
 
 def stage_reads(tracker):
-    return cli._GhReads(close_ports(Path("."), tracker))
+    return listing_of(tracker).items
 
 
 def stage_names(scores):
@@ -6381,19 +6596,14 @@ def test_backfill_one_writes_no_stage_hours_without_a_merge():
     assert found.stage_row.outcome.cause == "no_merge"
 
 
-def test_backfill_one_marks_a_failed_tracker_read_unread_not_unknown():
-    tracker = FakePullRequestTracker(raises=ValueError("gh failed"))
-    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
-    found = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+def test_backfill_one_marks_a_number_the_listing_lacks_unread_not_unknown():
+    found = cli._backfill_one("p", "GH-9", finished_task(), {})
     assert stage_names(found.scores) == set()
     assert found.stage_row.outcome == cli.stage_report.Unread("gh_failed")
 
 
 def test_backfill_one_marks_a_skipped_document_unread():
-    tracker = FakePullRequestTracker()
-    found = cli._backfill_one(
-        "p", "GH-1", finished_task("GH-1", status="paused"), stage_reads(tracker)
-    )
+    found = cli._backfill_one("p", "GH-1", finished_task("GH-1", status="paused"), {})
     assert found.outcome == "skipped:not_finished"
     assert found.stage_row.outcome == cli.stage_report.Unread("not_finished")
 
