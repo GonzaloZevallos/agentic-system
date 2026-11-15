@@ -190,6 +190,11 @@ TABLE: tuple[Row, ...] = (
         "the declared GraphQL types of the board's mutations are checked against it",
     ),
     Row(
+        "tests/core/measurement/adapters/github/fixtures/issues_page.json",
+        ("tests/core/measurement/adapters/github/test_issue_listing.py",),
+        "the recorded page of the issues listing GhIssueListing parses",
+    ),
+    Row(
         "tests/core/process/adapters/github/fixtures/commit_ci_synthetic.json",
         ("tests/core/process/adapters/github/test_commit_ci.py",),
         "the synthetic answer to COMMIT_CI_QUERY the by-sha CI reader is run against",
