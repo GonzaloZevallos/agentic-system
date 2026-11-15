@@ -376,3 +376,13 @@ def test_a_state_without_drawing_escalation_goes_through_apply_and_delta():
     assert "drawing_escalation" not in delta(state, state)
     assert "drawing_escalation" not in TaskInput.__annotations__
     assert "drawing_escalation" in TaskState.__optional_keys__
+
+
+def test_add_drawing_escalation_treats_an_empty_side_as_the_identity():
+    # The graph's channel starts from `DrawingEscalation()` and may fold an empty update.
+    empty = cast(DrawingEscalation, {})
+    held = _escalation(2, [3, 1])
+    assert add_drawing_escalation(empty, held) == _escalation(2, [1, 3])
+    assert add_drawing_escalation(held, empty) == held
+    assert add_drawing_escalation(empty, empty) == {}
+    assert add_drawing_escalation(None, empty) == {}

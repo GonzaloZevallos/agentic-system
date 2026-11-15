@@ -656,8 +656,12 @@ def add_drawing_escalation(
     existing: DrawingEscalation | None, new: DrawingEscalation
 ) -> DrawingEscalation:
     """`existing` and `new` as one record: the higher `round`, the sorted union of `numbers`,
-    `drawing_cap` if either has it. Commutative and associative; `existing` may be `None`."""
-    if existing is None:
+    `drawing_cap` if either has it. Commutative and associative; `existing` may be `None`.
+    The graph's channel starts from the empty `DrawingEscalation()` and may fold an empty
+    update: an empty side is the identity, never an error."""
+    if not new:
+        return existing if existing is not None else cast(DrawingEscalation, {})
+    if not existing:
         return DrawingEscalation(
             round=new["round"], numbers=sorted(set(new["numbers"])), cause=new["cause"]
         )
