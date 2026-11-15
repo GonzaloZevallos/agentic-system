@@ -3,7 +3,8 @@ Esta página muestra las clases públicas de los módulos del grupo `scorecard` 
 - Padre: [Clases de domain](classes-measurement-domain.md)
 - Hermanas:
   - [domain: langfuse](classes-measurement-domain-langfuse.md)
-  - [domain: reports](classes-measurement-domain-reports.md)
+  - [domain: reports (parte 1)](classes-measurement-domain-reports-1.md)
+  - [domain: reports (parte 2)](classes-measurement-domain-reports-2.md)
   - [domain: scorecard (parte 1)](classes-measurement-domain-scorecard-1.md)
 
 ```mermaid
