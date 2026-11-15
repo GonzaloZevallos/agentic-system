@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks (parte 1)](packages-process-application-checks-1.md)
-  - [application: checks (parte 2)](packages-process-application-checks-2.md)
+  - [application: checks](packages-process-application-checks.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 1)](packages-process-application-landing-1.md)
@@ -27,6 +26,7 @@ graph TD
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_application__checkouts["application.checkouts"]
+    m_application__ci_excerpt["application.ci_excerpt"]
     m_application__ci_push["application.ci_push"]
     m_application__ci_trust["application.ci_trust"]
     m_application__docs_settlement["application.docs_settlement"]
@@ -36,6 +36,9 @@ graph TD
     m_application__checkouts --> g_domain__roles
     m_application__checkouts --> g_domain__state
     m_application__checkouts --> g_pkg__agentic__shared
+    m_application__ci_excerpt --> g_application__support__2
+    m_application__ci_excerpt --> g_domain__checks
+    m_application__ci_excerpt --> g_domain__state
     m_application__ci_push --> g_application__support__2
     m_application__ci_push --> g_domain__checks
     m_application__ci_trust --> g_application__support__2

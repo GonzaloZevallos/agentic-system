@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `landing` de `application` y los imp
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks (parte 1)](packages-process-application-checks-1.md)
-  - [application: checks (parte 2)](packages-process-application-checks-2.md)
+  - [application: checks](packages-process-application-checks.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
@@ -52,7 +51,6 @@ graph TD
     m_application__landing_adr --> m_application__adr_collision
     m_application__landing_adr --> m_application__landing_fix
     m_application__landing_fix --> g_application__build
-    m_application__landing_fix --> g_application__checks
     m_application__landing_fix --> g_application__landing__2
     m_application__landing_fix --> g_application__lifecycle
     m_application__landing_fix --> g_application__support
