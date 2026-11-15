@@ -2449,14 +2449,28 @@ class FakeCiLogs:
     """GH-449: no test reads a real CI log. `failed_job_logs` answers `logs` and records the
     `(reference, head)` it was asked for."""
 
-    def __init__(self, logs: list[JobLog] | None = None) -> None:
+    def __init__(
+        self,
+        logs: list[JobLog] | None = None,
+        *,
+        successive: Sequence[list[JobLog]] = (),
+        raises: Exception | None = None,
+    ) -> None:
+        """GH-790: `successive` answers one list per call (the last one for good), and `raises`
+        is what every `failed_job_logs` call raises instead."""
         self.logs = list(logs or [])
+        self.successive = [list(answer) for answer in successive]
+        self.raises = raises
         self.asked: list[tuple[str, str]] = []
         self.blocks: list[tuple[str, list[str]]] | CiUnreadable | None = None
         self.flake_asked: list[tuple[str, str, tuple[str, ...]]] = []
 
     def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
         self.asked.append((reference, head))
+        if self.raises is not None:
+            raise self.raises
+        if self.successive:
+            return list(self.successive.pop(0) if len(self.successive) > 1 else self.successive[0])
         return list(self.logs)
 
     def flake_block(
