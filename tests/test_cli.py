@@ -28,6 +28,7 @@ from tests.fakes import (
     MemoryKnowledge,
     MemoryStack,
     MemoryTracker,
+    MemoryWorkspace,
     eval_set_yaml,
     memory_ports,
 )
@@ -6249,6 +6250,37 @@ def _lead_time_close(tmp_path, pull_request, timeline, closure=None, **task):
     cfg = Configuration(product_dir=root)
     result = cli._close_document("GH-9", cfg, ports, label_timeline=timeline)
     return result, ports.documents.load("GH-9"), root
+
+
+class _ExplodingWorkspace(MemoryWorkspace):
+    """A Workspace whose checkout verbs all raise: a closure must never ask them (GH-820)."""
+
+    def task_checkout(self, task_id):
+        raise AssertionError("task_checkout")
+
+    def subtask_checkout(self, task_id, subtask_id):
+        raise AssertionError("subtask_checkout")
+
+    def worktrees(self, task_id):
+        raise AssertionError("worktrees")
+
+
+def test_close_document_over_a_merged_pull_request_never_touches_the_workspace(tmp_path):
+    # GH-820 contract: the worktrees are the merge's to release, not the closure's.
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-08-31T01:00:00+00:00"
+    ports = replace(close_ports(root, tracker), workspace=_ExplodingWorkspace())
+    ports.documents.save(close_task(pull_request=reference))
+    cfg = Configuration(product_dir=root)
+
+    result = cli._close_document("GH-9", cfg, ports)
+
+    assert result.status == "closed"
+    # The rejected input: the same fake does raise when asked.
+    with pytest.raises(AssertionError, match="worktrees"):
+        ports.workspace.worktrees("GH-9")
 
 
 def test_close_records_the_label_and_the_pull_requests_own_merged_at(tmp_path):

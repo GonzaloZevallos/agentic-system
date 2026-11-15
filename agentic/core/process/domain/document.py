@@ -97,7 +97,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # whole with `add_flakes`' result. `tracker_failures` (GH-389) is the best-effort tracker
 # writes that failed, which a merge child (no state owner) replaces whole with
 # `add_tracker_failures`' result. `merge_ci` (GH-463) is the merge gate's fresh-run pairs, which
-# the merge child writes whole with `add_merge_ci`' result.
+# the merge child writes whole with `add_merge_ci`' result. `worktree_release_lapse` (GH-820) is the
+# one `{at, cause}` row a merge that could not remove the task's worktrees leaves; read by nothing.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -117,6 +118,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "head_yields",
         "lane_admitted",
         "lane_merges",
+        "worktree_release_lapse",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"

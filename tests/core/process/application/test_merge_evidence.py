@@ -270,4 +270,12 @@ def test_the_merge_checkout_is_reaped_before_each_removal_of_it(tmp_path):
     _run(ports, tmp_path)
 
     # The stale one from a killed attempt first, the one this run made in the `finally`.
-    assert journal == ["reap:merge-GH-5", "remove:merge-GH-5"] * 2
+    assert journal[:4] == ["reap:merge-GH-5", "remove:merge-GH-5"] * 2
+    # GH-820: then the merged task's own release (`release_task`), which ends in the cleanup.
+    assert journal[4:] == [
+        "reap:merge-GH-5",
+        "reap:slice-GH-5",
+        "remove:merge-GH-5",
+        "remove:slice-GH-5",
+        "cleanup:GH-5",
+    ]

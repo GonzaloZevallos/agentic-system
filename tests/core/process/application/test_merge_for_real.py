@@ -19,8 +19,14 @@ from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import landing_plan
+from agentic.core.process.application import merge as merge_module
 from agentic.core.process.application.merge import merge_task
-from agentic.core.process.application.ports import MergeCallFailed, TrackerUnreachable, Upstream
+from agentic.core.process.application.ports import (
+    GitError,
+    MergeCallFailed,
+    TrackerUnreachable,
+    Upstream,
+)
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.size_budget import ActualSize
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
@@ -710,3 +716,153 @@ def test_a_merge_that_failed_but_landed_records_the_lead_time_from_the_pull_requ
         "labeled_at": "2026-10-05T12:00:00Z",
         "merged_at": "2026-10-06T00:00:00Z",
     }
+
+
+# GH-820: the task's worktrees are released once the system has merged, never otherwise.
+
+
+def _released(world: World, monkeypatch) -> list[str]:
+    """The release calls and the tracker notes, in the order they happened."""
+    events: list[str] = []
+    real_release = merge_module.release_after_merge
+    real_note = world.tracker.note
+
+    def release(ports, task_id, log, clock, sleep):
+        events.append(f"release:{task_id}")
+        real_release(ports, task_id, log, clock, sleep)
+
+    def note(task_id, text):
+        events.append("note")
+        return real_note(task_id, text)
+
+    monkeypatch.setattr(merge_module, "release_after_merge", release)
+    world.tracker.note = note  # type: ignore[method-assign]
+    return events
+
+
+def test_a_merged_task_is_released_once_after_the_tracker_note(world, monkeypatch):
+    events = _released(world, monkeypatch)
+
+    world.merge()
+
+    assert events == ["note", "release:GH-209"]
+    assert "worktree_release_lapse" not in world.doc()
+    assert not (world.product / ".agentic/worktrees/merge-GH-209").exists()
+
+
+def test_a_merge_that_failed_but_landed_is_released_once(world, monkeypatch):
+    events = _released(world, monkeypatch)
+
+    def landed(reference: str, head: str) -> str:
+        world.tracker.prs[URL] = dataclasses.replace(
+            world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
+        )
+        raise MergeCallFailed("gh_unreadable", "timed out after merging")
+
+    world.tracker.merge = landed  # type: ignore[method-assign]
+
+    world.merge()
+
+    assert events == ["release:GH-209"]
+
+
+def test_a_stopped_or_refused_merge_never_releases(world, monkeypatch, tmp_path):
+    events = _released(world, monkeypatch)
+
+    # refused: the pull request is still OPEN after the merge call failed
+    world.tracker.merge_error = "head moved"
+    world.merge()
+    assert world.doc()["auto_merge_head"] == ""
+    # refused: master moved after the checks
+    real = world.ports.workspace
+    calls: list[int] = []
+
+    class Moving:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def upstream(self):
+            calls.append(1)
+            return Upstream("origin/master", "f" * 40, None) if len(calls) == 2 else real.upstream()
+
+    world.tracker.merge_error = None
+    world.ports = dataclasses.replace(world.ports, workspace=Moving())
+    world.merge()
+    # stopped: gh could not reach GitHub
+    world.tracker = _Unreachable("repo view")
+    world.ports = dataclasses.replace(world.ports, tracker=world.tracker, workspace=real)
+    world.deliver()
+    world.merge()
+    # stopped: the pull request is neither OPEN nor MERGED after the failure (ambiguous)
+    (tmp_path / "second").mkdir()
+    ambiguous = World(tmp_path / "second", GREEN)
+    ambiguous.tracker.merge = lambda reference, head: _closed_then_fail(ambiguous)  # type: ignore[method-assign]
+    ambiguous.merge()
+    assert ambiguous.doc()["auto_merge_head"] == ambiguous.head  # the intent is kept: ambiguous
+
+    assert events.count("release:GH-209") == 0
+
+
+def _closed_then_fail(world: World) -> str:
+    world.tracker.prs[URL] = dataclasses.replace(world.tracker.prs[URL], state="CLOSED")
+    raise MergeCallFailed("gh_unreadable", "closed under us")
+
+
+def test_a_release_that_raises_git_error_leaves_the_merge_merged_and_records_the_lapse(world):
+    real = world.ports.workspace
+    attempts: list[int] = []
+
+    class Stuck:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def cleanup(self, task_id):
+            attempts.append(1)
+            raise GitError("index.lock exists")
+
+    world.ports = dataclasses.replace(world.ports, workspace=Stuck())
+    paused: list[float] = []
+    lines: list[str] = []
+
+    result = merge_task(
+        "GH-209",
+        209,
+        world.cfg,
+        world.ports,
+        real.upstream(),
+        frozenset(),
+        lines.append,
+        lambda: "2026-11-15T10:00:00+00:00",
+        paused.append,
+    )
+
+    assert result.kind == "merged" and result.method == "squash"
+    assert len(attempts) == 2 and paused == [2.0]
+    assert world.doc()["worktree_release_lapse"] == {
+        "at": "2026-11-15T10:00:00+00:00",
+        "cause": "git_failed",
+    }
+    assert world.doc()["auto_merge_method"] == "squash"
+    assert "agentic: merge: GH-209: worktree release lapsed (git_failed)" in lines
+
+
+def test_the_merging_process_is_not_reaped_by_the_release(world, monkeypatch):
+    reaped: list[tuple[Path, ...]] = []
+    real = world.ports.reaper
+
+    class Watching:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def reap_within(self, paths):
+            reaped.append(tuple(paths))
+            return real.reap_within(paths)
+
+    world.ports = dataclasses.replace(world.ports, reaper=Watching())
+
+    world.merge()
+
+    # The release asked for the task's own checkouts only, none of them this process's cwd.
+    root = world.product / ".agentic/worktrees"
+    assert any(path.name == "merge-GH-209" for group in reaped for path in group)
+    assert all(path.parent == root for group in reaped for path in group)

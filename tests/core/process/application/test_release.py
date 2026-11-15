@@ -207,3 +207,206 @@ def test_the_summary_names_the_count_and_each_command_and_is_empty_for_nothing()
     assert summary(()) == ""
     assert summary(LEFT + OTHER) == "reaped 2 processes: `sleep 99` (kill), `uv run app` (term)"
     assert summary(LEFT) == "reaped 1 process: `sleep 99` (kill)"
+
+
+# GH-820: `release_after_merge`, the removal that never fails a merge.
+
+
+class _Clock:
+    def __call__(self) -> str:
+        return "2026-11-15T10:00:00+00:00"
+
+
+def _after_merge(workspace=None, reaper=None, *, sleeps=None, lines=None):
+    from agentic.core.process.application.release import release_after_merge
+
+    ports = memory_ports(reaper=reaper or FakeReaper(), workspace=workspace or MemoryWorkspace())
+    ports.documents.save({"id": "GH-12", "title": "t", "description": "d", "status": "done"})
+    seen: list[float] = [] if sleeps is None else sleeps
+    said: list[str] = [] if lines is None else lines
+    release_after_merge(ports, "GH-12", said.append, _Clock(), seen.append)
+    return ports
+
+
+class _Failing(MemoryWorkspace):
+    def __init__(self, error: BaseException, *, times: int = 99) -> None:
+        super().__init__()
+        self.error = error
+        self.times = times
+        self.attempts = 0
+
+    def cleanup(self, task_id: str) -> None:
+        self.attempts += 1
+        if self.attempts <= self.times:
+            raise self.error
+        super().cleanup(task_id)
+
+
+def test_a_release_after_merge_that_works_logs_once_and_records_no_lapse():
+    lines: list[str] = []
+    sleeps: list[float] = []
+    workspace = MemoryWorkspace()
+
+    ports = _after_merge(workspace, FakeReaper(LEFT), sleeps=sleeps, lines=lines)
+
+    assert workspace.cleaned == ["GH-12"] and sleeps == []
+    assert len(lines) == 1
+    assert lines[0].startswith("agentic: merge: GH-12: worktrees released in ")
+    assert lines[0].endswith("s; reaped 1 process: `sleep 99` (kill)")
+    assert "worktree_release_lapse" not in (ports.documents.load("GH-12") or {})
+    quiet: list[str] = []
+    _after_merge(lines=quiet)
+    assert len(quiet) == 1 and quiet[0].endswith("s") and ";" not in quiet[0]
+
+
+def test_a_git_error_is_retried_once_after_the_pause_and_then_recorded_as_git_failed():
+    from agentic.core.process.application.release import RELEASE_RETRY_PAUSE_S
+
+    sleeps: list[float] = []
+    lines: list[str] = []
+    workspace = _Failing(GitError("index.lock exists"))
+
+    ports = _after_merge(workspace, sleeps=sleeps, lines=lines)
+
+    assert workspace.attempts == 2 and sleeps == [RELEASE_RETRY_PAUSE_S]
+    assert (ports.documents.load("GH-12") or {})["worktree_release_lapse"] == {
+        "at": "2026-11-15T10:00:00+00:00",
+        "cause": "git_failed",
+    }
+    assert lines == ["agentic: merge: GH-12: worktree release lapsed (git_failed)"]
+
+
+def test_a_git_error_that_clears_on_the_retry_records_no_lapse():
+    sleeps: list[float] = []
+    lines: list[str] = []
+    workspace = _Failing(GitError("locked"), times=1)
+
+    ports = _after_merge(workspace, sleeps=sleeps, lines=lines)
+
+    assert workspace.attempts == 2 and len(sleeps) == 1
+    assert "worktree_release_lapse" not in (ports.documents.load("GH-12") or {})
+    assert "worktrees released in" in lines[0]
+
+
+def test_an_os_error_is_not_retried_and_is_recorded_as_os_error():
+    sleeps: list[float] = []
+    workspace = _Failing(PermissionError("denied"))
+
+    ports = _after_merge(workspace, sleeps=sleeps)
+
+    assert workspace.attempts == 1 and sleeps == []
+    lapse = (ports.documents.load("GH-12") or {})["worktree_release_lapse"]
+    assert lapse == {"at": "2026-11-15T10:00:00+00:00", "cause": "os_error"}
+
+
+def test_a_subprocess_error_is_recorded_as_os_error_and_never_raised():
+    workspace = _Failing(subprocess.TimeoutExpired("git", 5))
+
+    ports = _after_merge(workspace)
+
+    lapse = (ports.documents.load("GH-12") or {})["worktree_release_lapse"]
+    assert lapse["cause"] == "os_error" and workspace.attempts == 1
+
+
+def test_a_bug_is_not_swallowed_and_leaves_no_lapse():
+    # The rejected input: a TypeError is not one of the closed causes.
+    from agentic.core.process.application.release import release_after_merge
+
+    ports = memory_ports(workspace=_Failing(TypeError("bug")))
+    ports.documents.save({"id": "GH-12", "title": "t", "description": "d", "status": "done"})
+
+    with pytest.raises(TypeError, match="bug"):
+        release_after_merge(ports, "GH-12", lambda line: None, _Clock(), lambda s: None)
+
+    assert "worktree_release_lapse" not in (ports.documents.load("GH-12") or {})
+
+
+def test_a_lapse_that_cannot_be_written_is_only_logged():
+    # No document saved: the memory fake raises FileNotFoundError (an OSError) on the write.
+    from agentic.core.process.application.release import release_after_merge
+
+    lines: list[str] = []
+    ports = memory_ports(workspace=_Failing(GitError("locked")))
+
+    release_after_merge(ports, "GH-12", lines.append, _Clock(), lambda s: None)
+
+    assert len(lines) == 1 and "lapsed (git_failed), not recorded" in lines[0]
+
+
+def test_the_reaps_of_a_release_after_merge_carry_the_tasks_own_ids_and_paths(tmp_path):
+    reaper, workspace, journal = _journalled(tmp_path)
+    ports = memory_ports(reaper=reaper, workspace=workspace)
+    from agentic.core.process.application.release import release_after_merge
+
+    release_after_merge(ports, "GH-12", lambda line: None, _Clock(), lambda s: None)
+
+    assert reaper.calls == [("task", "GH-12", None, None)]
+    assert reaper.within_calls == [
+        (tmp_path / "GH-12",),
+        (tmp_path / "GH-12.api",),
+        (tmp_path / "merge-GH-12",),
+        (tmp_path / "slice-GH-12",),
+    ]
+
+
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_a_real_release_after_merge_removes_every_checkout_and_keeps_every_branch(tmp_path):
+    from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+    from agentic.core.process.adapters.git.workspace import GitWorkspace
+    from agentic.core.process.application.release import release_after_merge
+    from agentic.shared.configuration import Configuration
+
+    origin, product = tmp_path / "origin.git", tmp_path / "product"
+    _git("init", "-q", "--bare", "-b", "master", str(origin), cwd=tmp_path)
+    _git("clone", "-q", str(origin), str(product), cwd=tmp_path)
+    (product / "a.txt").write_text("a\n")
+    _git("add", "-A", cwd=product)
+    _git("commit", "-q", "-m", "v0", cwd=product)
+    _git("push", "-q", "-u", "origin", "HEAD:master", cwd=product)
+    _git("branch", "-q", "--set-upstream-to=origin/master", cwd=product)
+    cfg = Configuration(product_dir=product, run_registry_dir=tmp_path / "registry")
+    workspace = GitWorkspace(product, cfg.git_identity)
+    documents = FilesystemTaskDocuments(product)
+    documents.save({"id": "GH-8", "title": "t", "description": "d", "status": "done"})
+    root = product / ".agentic/worktrees"
+
+    task = workspace.task_checkout("GH-8")
+    sub = workspace.subtask_checkout("GH-8", "a")
+    neighbour = workspace.task_checkout("GH-82")
+    (sub.path / "work.txt").write_text("work\n")
+    _git("add", "-A", cwd=sub.path)
+    _git("commit", "-q", "-m", "unpushed", cwd=sub.path)
+    unpushed = _git("rev-parse", "HEAD", cwd=sub.path)
+    (sub.path / "dirty.txt").write_text("uncommitted\n")
+    scratch = workspace.detached_checkout("merge-GH-8", _git("rev-parse", "HEAD", cwd=product))
+    assert {p.name for p in root.iterdir()} == {"GH-8", "GH-8.a", "merge-GH-8", "GH-82"}
+    branches = _git("branch", "--list", "--format=%(refname:short)", cwd=product).splitlines()
+    ports = memory_ports(
+        reaper=ShellReaper("product", root), workspace=workspace, documents=documents
+    )
+    lines: list[str] = []
+
+    release_after_merge(ports, "GH-8", lines.append, _Clock(), lambda s: None)
+
+    assert {p.name for p in root.iterdir()} == {"GH-82"}
+    assert not task.path.exists() and not sub.path.exists() and not scratch.exists()
+    assert neighbour.path.is_dir()
+    assert (
+        _git("branch", "--list", "--format=%(refname:short)", cwd=product).splitlines() == branches
+    )
+    assert _git("rev-parse", sub.branch, cwd=product) == unpushed
+    assert "worktree_release_lapse" not in (documents.load("GH-8") or {})
+
+    release_after_merge(ports, "GH-8", lines.append, _Clock(), lambda s: None)  # nothing left
+
+    assert "worktree_release_lapse" not in (documents.load("GH-8") or {})
+    assert all("lapsed" not in line for line in lines)

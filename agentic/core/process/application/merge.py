@@ -72,7 +72,7 @@ from .ports import (
 )
 from .preflight import criteria_regressed, product_name
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
-from .release import release_checkout
+from .release import release_after_merge, release_checkout
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
 COMMENTED: tuple[str, ...] = (
@@ -344,6 +344,7 @@ def merge_task(
         pull_request,
         inert_from,
         label_timeline,
+        sleep,
     )
 
 
@@ -1152,6 +1153,7 @@ def _merge(
     pull_request: PullRequest | None = None,
     inert_from: list[str] | None = None,
     label_timeline: LabelTimeline | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> MergeResult:
     """`relied` is the CI links a merge on the CI rested on (None: it rested on the local
     checks); `ci_declared` says the product declares its CI, which is the only case that
@@ -1214,11 +1216,31 @@ def _merge(
         return MergeResult("stopped", "unreachable")
     except MergeCallFailed as exc:
         return _after_failure(
-            task_id, reference, head, facts, exc.failure, str(exc), ports, log, label_timeline
+            task_id,
+            reference,
+            head,
+            facts,
+            exc.failure,
+            str(exc),
+            ports,
+            log,
+            label_timeline,
+            clock,
+            sleep,
         )
     except ValueError as exc:
         return _after_failure(
-            task_id, reference, head, facts, "gh_unreadable", str(exc), ports, log, label_timeline
+            task_id,
+            reference,
+            head,
+            facts,
+            "gh_unreadable",
+            str(exc),
+            ports,
+            log,
+            label_timeline,
+            clock,
+            sleep,
         )
     ports.documents.record_closure(
         task_id,
@@ -1240,7 +1262,21 @@ def _merge(
     if accepted := _accepted_without_a_fix(ports.documents.load(task_id) or {}):
         text += "\n\nAccepted without a fix:\n" + accepted
     _note(task_id, text, ports)
-    return MergeResult("merged", method=method)
+    return _merged(task_id, MergeResult("merged", method=method), ports, log, clock, sleep)
+
+
+def _merged(
+    task_id: str,
+    result: MergeResult,
+    ports: Ports,
+    log: Callable[[str], None],
+    clock: Callable[[], str],
+    sleep: Callable[[float], None],
+) -> MergeResult:
+    """`result`, a merged one, once the task's worktrees are released (GH-820). The release
+    never changes the result: its failure is a lapse in the document, not the merge's."""
+    release_after_merge(ports, task_id, log, clock, sleep)
+    return result
 
 
 def _lead_time_patch(
@@ -1308,6 +1344,8 @@ def _after_failure(
     ports: Ports,
     log: Callable[[str], None],
     label_timeline: LabelTimeline | None = None,
+    clock: Callable[[], str] = _now,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> MergeResult:
     """`Tracker.merge` raised (GH-196). The failed call is counted first, before anything
     else is read: a terminal class spends the whole budget, any other one call of it. The
@@ -1351,7 +1389,7 @@ def _after_failure(
             task_id,
             _lead_time_patch(task_id, reference, ports, label_timeline, merged=current),
         )
-        return MergeResult("merged", failure)
+        return _merged(task_id, MergeResult("merged", failure), ports, log, clock, sleep)
     log(
         f"agentic: merge: {task_id}: merge failed ({failure}: {error}), "
         "pull request not open: intent kept"

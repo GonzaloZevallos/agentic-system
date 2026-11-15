@@ -1059,6 +1059,23 @@ def test_record_closure_round_trips_a_merge_checks_record_on_one_flow_line():
     _assert_roundtrip_and_replace("merge_checks", other, huge)
 
 
+def test_record_closure_round_trips_a_worktree_release_lapse_on_one_flow_line():
+    first = {"at": "2026-11-15T10:00:00+00:00", "cause": "git_failed"}
+    second = {"at": "2026-11-15T10:00:01+00:00", "cause": "os_error", "x": "y" * 40}
+    _assert_roundtrip_and_replace("worktree_release_lapse", first, second)
+    # the rejected input: a key outside RECORD_KEYS is not replaced over a block value
+    block = document.render(_bare()).replace(
+        "\n---\n", "\nworktree_release_lapse:\n  at: x\n---\n", 1
+    )
+    assert "worktree_release_lapse" in document.RECORD_KEYS
+    assert (
+        document.parse(document.record_closure(block, {"worktree_release_lapse": first}))[
+            "worktree_release_lapse"
+        ]
+        == first
+    )
+
+
 def test_record_closure_round_trips_a_full_checks_record_run_on_ci_and_one_run_locally():
     """GH-376: `ran_on`, `ci_fallback` and a job's `link` survive the flow line."""
     ci_run = {
