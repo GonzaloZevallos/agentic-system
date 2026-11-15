@@ -29,9 +29,6 @@ classDiagram
     class presubmit__Reuse["Reuse"]
     class run_check__RunCheck["RunCheck"]
     class schema_guard__RoleSchemaGuard["RoleSchemaGuard"]
-    class spec_guard__Changed["Changed"]
-    class spec_guard__Intact["Intact"]
-    class spec_guard__Unreadable["Unreadable"]
     run_check__RunCheck o-- presubmit__CheckoutPresubmit
 ```
 

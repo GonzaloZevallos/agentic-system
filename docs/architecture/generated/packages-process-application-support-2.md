@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks (parte 1)](packages-process-application-checks-1.md)
-  - [application: checks (parte 2)](packages-process-application-checks-2.md)
+  - [application: checks](packages-process-application-checks.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 1)](packages-process-application-landing-1.md)
@@ -27,18 +26,18 @@ graph TD
     g_domain__roles["roles (grupo de domain)"]
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
-    m_application__limits["application.limits"]
     m_application__ports["application.ports"]
     m_application__preflight["application.preflight"]
     m_application__release["application.release"]
     m_application__run_role["application.run_role"]
+    m_application__spec_guard["application.spec_guard"]
+    m_application__ports --> g_application__support__1
     m_application__ports --> g_domain__checks
     m_application__ports --> g_domain__landing
     m_application__ports --> g_domain__machine
     m_application__ports --> g_domain__playbook
     m_application__ports --> g_domain__roles
     m_application__ports --> g_domain__state
-    m_application__ports --> m_application__limits
     m_application__preflight --> g_application__support__1
     m_application__preflight --> g_domain__checks
     m_application__preflight --> g_domain__roles
@@ -58,6 +57,8 @@ graph TD
     m_application__run_role --> g_domain__roles
     m_application__run_role --> g_domain__state
     m_application__run_role --> g_pkg__agentic__shared
-    m_application__run_role --> m_application__limits
     m_application__run_role --> m_application__ports
+    m_application__spec_guard --> g_application__support__1
+    m_application__spec_guard --> g_domain__state
+    m_application__spec_guard --> m_application__ports
 ```

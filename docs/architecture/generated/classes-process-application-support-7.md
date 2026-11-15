@@ -29,6 +29,9 @@ classDiagram
     class run_role__PromptFailure["PromptFailure"]
     class run_role__RoleFailure["RoleFailure"]
     class run_role__TaskCapReached["TaskCapReached"]
+    class spec_guard__Changed["Changed"]
+    class spec_guard__Intact["Intact"]
+    class spec_guard__Unreadable["Unreadable"]
     run_role__EstimateCapReached --|> run_role__Escalating
     run_role__PromptFailure --|> run_role__Escalating
     run_role__RoleFailure --|> run_role__Escalating

@@ -4,8 +4,7 @@ Esta página muestra los módulos del grupo `support` de `application` y los imp
 - Hermanas:
   - [application: build (parte 1)](packages-process-application-build-1.md)
   - [application: build (parte 2)](packages-process-application-build-2.md)
-  - [application: checks (parte 1)](packages-process-application-checks-1.md)
-  - [application: checks (parte 2)](packages-process-application-checks-2.md)
+  - [application: checks](packages-process-application-checks.md)
   - [application: definition (parte 1)](packages-process-application-definition-1.md)
   - [application: definition (parte 2)](packages-process-application-definition-2.md)
   - [application: landing (parte 1)](packages-process-application-landing-1.md)
@@ -31,6 +30,7 @@ graph TD
     m_application__ci_trust["application.ci_trust"]
     m_application__docs_settlement["application.docs_settlement"]
     m_application__landing_body["application.landing_body"]
+    m_application__limits["application.limits"]
     m_application__checkouts --> g_application__support__2
     m_application__checkouts --> g_domain__checks
     m_application__checkouts --> g_domain__roles
