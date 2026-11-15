@@ -1540,6 +1540,19 @@ SPEC_HUMAN_ITEM_REFUSAL = (
 )
 
 
+def _spec_protected_refusal(path: str) -> str:
+    return (
+        f"spec_protected: `{path}` is the approved spec of this task and no unit changes it; "
+        "remove it from every subtask's `files` and from `required_paths`"
+    )
+
+
+def _names_path(data: dict[str, Any], path: str) -> bool:
+    """Whether a subtask's `files` (when listed) or the plan's `required_paths` name `path`."""
+    files = [f for s in data.get("subtasks") or [] for f in s.get("files") or []]
+    return path in files or path in (data.get("required_paths") or [])
+
+
 def _has_human_item(data: dict[str, Any]) -> bool:
     """Whether the plan's raw `tracker_items` hold a `human` one. Every item is a dict with a
     `kind` once `TechPlan` parsed it; anything else is not a `human` item."""
@@ -1562,6 +1575,7 @@ def plan_check_for(
     path_label: str = "none",
     size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
     has_spec: bool = False,
+    spec_path: str | None = None,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1607,7 +1621,9 @@ def plan_check_for(
 
     With `has_spec` (GH-594: the task carries a spec) a plan with any `human` tracker item is
     refused with `spec_human_item`, unless it sets `spec_conflict`: a spec delivery never asks
-    the owner a question outside the three spec causes. Without a spec nothing changes."""
+    the owner a question outside the three spec causes. With `spec_path` (the same delivery's spec
+    file) a plan whose subtasks' `files` or `required_paths` name it is refused with
+    `spec_protected`: no unit changes the spec. Without a spec nothing changes."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import MAX_SPLIT_DEPTH, TRACKER_WITH_PARTS
@@ -1622,6 +1638,8 @@ def plan_check_for(
         _ci_names_check(data, workflow, stack_ci)
         if has_spec and not data.get("spec_conflict") and _has_human_item(data):
             raise ValueError(SPEC_HUMAN_ITEM_REFUSAL)
+        if spec_path and _names_path(data, spec_path):
+            raise ValueError(_spec_protected_refusal(spec_path))
         if parts and part_of is not None and at_cap:
             raise ValueError(
                 f"this task is part {part_of[1]} of {part_of[0]}, at split depth {part_of[2]}; "

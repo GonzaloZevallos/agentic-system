@@ -89,3 +89,31 @@ fórmula sobre un directorio sintético.
 - **Dónde se lee.** `run_role` pide el bloque dentro del `try` de `PromptFailure`, solo con
   `state["spec"]` presente, con la tabla nombrando al rol y sin `prompt` del llamador; un fallo
   escala sin reintento y antes de toda llamada al modelo.
+
+## Adenda (GH-764): la spec que cambia se escala, no se revisa
+
+La parte 4b-3 protege la spec de una entrega: ningún cambio suyo pasa sin que lo vea una persona.
+Todo queda inerte sin `state["spec"]`; hasta la parte 4b-4 nada escribe esa clave.
+
+- **Un solo lector.** `application/spec_guard.py` es el único que llama a `ports.spec_reader`, a
+  un commit completo, y compara solo con `spec_delivery.spec_intact`.
+- **Una spec cambiada escala `spec_changed`.** Si en un head revisado, o al cortar la rama de la
+  tarea, la spec difiere de la registrada (cuerpo, solo el front matter, o borrada), la revisión
+  escribe una fila de sistema `spec-scope` en la ruta de la spec y escala `spec_changed`. Si el
+  cambio ya está en el upstream del producto, el detalle lleva `upstream`.
+- **Una spec ilegible escala `spec_unreadable`**, con la razón cerrada en el detalle. Una spec
+  borrada en el head es `spec_changed`, no ilegible.
+- **La escalación no devuelve la unidad ni cuenta nada.** No agrega `ChangesRequested`, no mueve
+  el contador del par ni `change_history`, no habilita un reinicio ni escribe `reviewed_head` o
+  `review_scopes`.
+- **Corre antes del revisor y antes del push especulativo.** Un veredicto que se descartaría no
+  se paga, y no se publica un head que no se va a revisar. La fila se escribe, entonces, antes
+  de la corrida del revisor y no después de bajar sus hallazgos.
+- **El corte.** `integrate` compara la spec en la base de la rama con la del commit registrado:
+  si son iguales, re-registra `commit` como la base; si no, escala antes de despachar a un
+  Developer.
+- **Salida.** Hasta que la parte 4b-4 agregue la aceptación del texto nuevo, la única salida es
+  revertir la spec en la rama: la próxima revisión la lee intacta y corre como siempre. Reanudar
+  sin revertir escala otra vez con la misma causa y sin costo de modelo.
+- **La compuerta de los acarreos** (`landing_sync`, el renumerado de `landing_adr` y el tramo de
+  `landing_plan`) es de #801, que usa `spec_carry_ok` e `intact_at`.

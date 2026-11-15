@@ -112,3 +112,12 @@ def data_refusal(spec: SpecContract) -> DataRefusal | None:
     # `surrogatepass` so text the Knowledge validator would call unencodable is still measured.
     size = len(fenced_section(spec).encode("utf-8", errors="surrogatepass"))
     return "oversize" if size > SPEC_MAX_BYTES else None
+
+
+def protected_line(spec: SpecContract) -> str:
+    """The one line that tells a Developer the spec file is not theirs: the review escalates the
+    task, and no unit goes on, when it differs from what the delivery recorded."""
+    return (
+        f"Never write, move or delete `{spec['path']}`: it is the approved spec, and the "
+        "review escalates the task when it changes."
+    )

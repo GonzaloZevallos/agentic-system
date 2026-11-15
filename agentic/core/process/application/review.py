@@ -41,7 +41,7 @@ from agentic.shared.configuration import Configuration, ReviewMode, experiment_s
 from ..domain import ci, docs, landing, presubmit, restart, rules, speculation
 from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, FindingRecord, TaskState, apply
-from . import ci_push, ci_trust, promotion, review_scope, shadow_review
+from . import ci_push, ci_trust, promotion, review_scope, shadow_review, spec_guard
 from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Checkout, GitError, Ports
@@ -145,6 +145,10 @@ async def review(
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
+    if not isinstance(result := spec_guard.check_at(state, ports, head), spec_guard.Intact):
+        # The delivery's spec is not what was approved at this head (GH-594, part 4b-3): no
+        # push, no reviewer and no counter, only the finding and the escalation for the human.
+        return finish(state, _spec_refusal(state, subtask_id, version, head, result, ports), ports)
     experiment = experiment_snapshot(cfg, cfg.model_for(reviewer.slug, reviewer.kind))
     if rules.system_approves(state, subtask_id, cfg.review_mode):
         # The `single` arm (GH-473): the branch is approved on the head it delivered, with
@@ -443,6 +447,38 @@ def _revised(
     if isinstance(revision, str):
         return {}, revision
     return {"required_paths_revisions": [revision]}, ""
+
+
+def _spec_refusal(
+    state: TaskState,
+    subtask_id: str,
+    version: int,
+    head: str,
+    result: spec_guard.Changed | spec_guard.Unreadable,
+    ports: Ports,
+) -> TaskState:
+    """The patch of a review that found the spec not intact at `head`: the system section, the
+    blocking `spec-scope` row at the spec path, and the escalation. Never a verdict."""
+    path = state["spec"]["path"]
+    cause = "changed" if isinstance(result, spec_guard.Changed) else f"unreadable ({result.reason})"
+    row = {
+        "location": path,
+        "claim": "the spec changed or could not be read at this head",
+        "evidence": f"the spec at {head} is {cause}; recorded at {state['spec']['commit']}",
+        "severity": "blocking",
+        "scope": "subtask",
+        "category": "spec-scope",
+    }
+    return apply(
+        {
+            "sections": {
+                rules.review_section(subtask_id): f"The spec `{path}` is {cause} at `{head}`; "
+                "the review did not run."
+            },
+            "findings": rules.finding_records(subtask_id, version, [row]),
+        },
+        spec_guard.refusal_patch(result, path, ports.now()),
+    )
 
 
 def _required_paths_findings(
