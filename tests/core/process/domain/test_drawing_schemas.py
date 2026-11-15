@@ -1,6 +1,7 @@
 """The drawing schema classes nothing consumes yet (GH-766 part 1b): they validate on
 their own and no schema a role receives reaches them, so no prompt or role output moves."""
 
+from collections.abc import Iterable
 from typing import Any
 
 import pytest
@@ -101,7 +102,16 @@ def test_a_departure_with_an_unusable_path_or_element_is_rejected(over: dict[str
 
 @pytest.mark.parametrize("model", BASE_SCHEMAS, ids=lambda m: m.__name__)
 def test_no_base_schema_a_role_receives_has_a_drawing_field(model: type[BaseModel]):
-    assert not FORBIDDEN_FIELDS & set(model.model_json_schema()["properties"])
+    assert not _forbidden_properties(model)
+
+
+def _forbidden_properties(model: type[BaseModel]) -> set[str]:
+    return FORBIDDEN_FIELDS & set(model.model_json_schema()["properties"])
+
+
+@pytest.mark.parametrize("model", [DefinitionTurn], ids=lambda m: m.__name__)
+def test_the_base_schema_check_catches_a_model_with_a_forbidden_property(model: type[BaseModel]):
+    assert _forbidden_properties(model) == {"visible"}
 
 
 def _walk(node: Any, root: dict[str, Any], seen: set[str], titles: set[str], names: set[str]):
@@ -170,8 +180,27 @@ def _subclasses(cls: type) -> set[type]:
     return out
 
 
+def _writers_of_the_record(classes: Iterable[type[BaseModel]]) -> list[str]:
+    return sorted(
+        c.__name__ for c in classes if {"drawing_departures", "number"} & set(c.model_fields)
+    )
+
+
 def test_no_role_output_writes_a_departure_number_or_the_record():
     writers = _subclasses(RoleOutput)
     assert len(writers) > 10
-    for sub in writers:
-        assert not {"drawing_departures", "number"} & set(sub.model_fields), sub.__name__
+    assert _writers_of_the_record(writers) == []
+
+
+def test_the_writers_check_reports_a_class_with_a_number_or_the_record():
+    # Standalone models, not RoleOutput subclasses: those would join the real walk.
+    class WithNumber(BaseModel):
+        number: int
+
+    class WithRecord(BaseModel):
+        drawing_departures: list[str] = []
+
+    class Clean(BaseModel):
+        text: str = ""
+
+    assert _writers_of_the_record([WithNumber, WithRecord, Clean]) == ["WithNumber", "WithRecord"]
