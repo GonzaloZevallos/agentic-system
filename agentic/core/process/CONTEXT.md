@@ -577,6 +577,12 @@ La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
+**Re-plan debido**:
+El hecho que deja la reanudación de una pregunta de ajuste o de una estimación con partes: la tarea se planifica de nuevo con la decisión del dueño, y ningún final `tracker_only` ni ningún otro camino la saltan. Lo escribe solo `rules.resumed` y lo limpia solo el parche exitoso del nodo plan (un plan que escala lo deja); un documento sin la clave lo lee falso, y el documento la omite cuando es falsa.
+En el código se llama `plan_due`, el campo del estado; `rules.resume_target` lo lee primero y `rules.tracker_only_plan` da falso mientras esté.
+_Avoid_: re-plan pendiente
+_Campo_: sin término de arte
+
 **Publicación debida**:
 La cabeza aprobada de una tarea que su rama remota todavía no tiene, o que tiene sin que la tarea esté en `ready_for_review`: la integración la aprobó (con niveles, además el chequeo completo pasó sobre ella) y la corrida murió antes de empujarla, de actualizar el pull request o de fijar el estado. La comprueba la reanudación desde el documento, que sólo la declara si la rama de tarea sigue en esa cabeza o difiere de ella únicamente en el documento; la saldan la entrega y nada más: se retoma en `deliver`, sin correr ningún rol. Una lectura de origen que falla no la declara: la reanudación lo dice y no sugiere empezar de cero.
 En el código se llama `publish_owed`, el campo del estado, y `approved_head`, la regla pura que dice cuál es esa cabeza.

@@ -148,3 +148,35 @@ async def test_an_open_issue_is_opened_needs_triage_and_its_url_is_in_the_ready_
     assert f"- issue opened ({url})" in ready
     assert patch["tracker_actions_done"][items.item_hash(issue)]["url"] == url
     _assert_system_comments(ports)
+
+
+async def test_after_a_replan_deliver_raises_the_human_item_once_across_two_resumes(cfg):
+    """GH-798: a plan with a code subtask and a `human` item is delivered, not ended as
+    tracker-only; the item is raised once and answered once however often the task resumes."""
+    from agentic.core.process.domain import rules, task
+
+    human = {"kind": "human", "question": "Chain the follow-up?", "recommendation": "Yes."}
+    built = {
+        **TASK,
+        "tracker_items": [human],
+        "plan_due": False,
+        "subtasks": {"api": {"id": "api", "status": "approved"}},
+    }
+    assert rules.after_plan(built) == "integrate"
+
+    ports = memory_ports()
+    first = task.apply(built, await deliver(built, cfg, ports))
+    assert first["status"] == "waiting_on_human" and first["tracker_human"]
+    key = items.item_hash(human)
+    assert set(first["tracker_actions_done"]) == {key}
+
+    answered = task.apply(first, rules.resumed(first, "yes", at="2026-11-06T16:34:00+00:00"))
+    assert answered["tracker_actions_done"][key]["answered"] == "2026-11-06T16:34:00+00:00"
+    again = task.apply(answered, await deliver(answered, cfg, ports))
+    assert "tracker_human" not in again or not again["tracker_human"]
+    assert set(again["tracker_actions_done"]) == {key}
+
+    second = task.apply(again, rules.resumed(again, "still yes", at="2026-11-06T17:00:00+00:00"))
+    last = task.apply(second, await deliver(second, cfg, ports))
+    assert set(last["tracker_actions_done"]) == {key}
+    assert last["tracker_actions_done"][key]["answered"] == "2026-11-06T16:34:00+00:00"

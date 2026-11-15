@@ -2010,6 +2010,10 @@ class TaskState(TaskInput, total=False):
     # The pause of a part whose plan is over the line (`rules.part_over_line`): the question
     # is "build it whole or stop". Set with the pause, written False when it is answered.
     fit_question: Annotated[bool, last]
+    # The task is planned again with the owner's decision (GH-798): `rules.resumed` writes it
+    # True when a fit question or an estimate with parts was decided, the plan node's
+    # successful patch writes it False. Absent reads False.
+    plan_due: Annotated[bool, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The size the plan declared and the size the delivery measured (GH-592), as the records

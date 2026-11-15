@@ -560,6 +560,9 @@ def render(
         **({"assumptions": e} if (e := state.get("assumptions")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),
+        # A re-plan owed after the owner's decision (GH-798): written only when true, so a
+        # document without it is byte-identical to one written before; absent reads false.
+        **({"plan_due": True} if state.get("plan_due") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

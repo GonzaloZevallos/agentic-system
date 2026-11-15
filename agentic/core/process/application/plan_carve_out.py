@@ -81,7 +81,13 @@ async def carved(
 async def _carve(
     state: TaskState, delivered: TaskState, output: Output, steps: PlanSteps, ports: Ports
 ) -> TaskState:
-    base = cast(TaskState, {k: v for k, v in delivered.items() if k != "subtasks"})
+    # A plan that is not built leaves nothing alive (GH-798): no subtasks, no tracker items (they
+    # would read as a tracker-only plan once the pause is answered) and no cleared `plan_due`;
+    # `steps.land` re-delivers all three when the remainder lands.
+    base = cast(
+        TaskState,
+        {k: v for k, v in delivered.items() if k not in ("subtasks", "tracker_items", "plan_due")},
+    )
     fit = steps.fit or FitDecision(
         False, output.data["estimated_cost_usd"], output.data["estimated_files"], None
     )

@@ -5,6 +5,7 @@ from typing import Any, cast, get_args
 
 import pytest
 
+from agentic.core.process.application import resume
 from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import (
     ci,
@@ -5184,6 +5185,216 @@ def test_spec_delivery_and_escalation_read_the_same_signal():
     assert "spec_cause" not in rules.escalation("questions", "doubt")
     with pytest.raises(ValueError):
         rules.escalation("questions", "doubt", spec=with_spec["spec"])
+
+
+# GH-798: a decided resume owes a re-plan (`plan_due`), never a `tracker_only` ending.
+
+_GH762_ITEMS = [
+    {"kind": "open_issue", "title": "Follow-up: chain of spec-seam", "body": "b"},
+    {"kind": "human", "question": "Chain the follow-up behind #790?", "recommendation": "Yes."},
+]
+
+
+def _gh762_paused() -> dict[str, Any]:
+    """GH-762 at 16:23Z, trimmed: a part over the line, its plan out of `subtasks` and its
+    tracker items still in the document, waiting on the owner (fit_question, class estimate)."""
+    return {
+        "id": "GH-762",
+        "title": "t",
+        "description": "d",
+        "type": "platform_enhancement",
+        "status": "waiting_on_human",
+        "escalated": "part over the line",
+        "escalation_class": "estimate",
+        "fit_question": True,
+        "subtasks": {},
+        "tracker_items": _GH762_ITEMS,
+    }
+
+
+def test_the_real_gh762_pause_resumes_to_plan_and_not_to_tracker_only():
+    paused = _gh762_paused()
+    resumed = task.apply(paused, rules.resumed(paused, "yes", None, at="2026-11-06T16:29:17+00:00"))
+    assert resumed["plan_due"] is True
+    assert rules.tracker_only_plan(resumed) is False
+    assert rules.resume_target(resumed) == "plan"
+
+
+def test_a_narrowing_decision_on_a_depth_two_part_over_the_line_resumes_to_plan():
+    paused = task.apply(
+        {"id": "GH-789", "tracker_items": _GH762_ITEMS, "type": "platform_enhancement"},
+        rules.part_over_line("GH-789", ("GH-700", 2, 2), None, at="2026-11-06T01:00:00+00:00"),
+    )
+    resumed = task.apply(
+        paused, rules.resumed(paused, "moved steps to #791", at="2026-11-06T01:41:00+00:00")
+    )
+    assert rules.resume_target(resumed) == "plan"
+
+
+def test_an_estimate_stop_with_parts_resumed_with_a_decision_owes_a_replan():
+    paused = {
+        "id": "GH-9",
+        "status": "waiting_on_human",
+        "escalated": "x",
+        "escalation_class": "estimate",
+        "parts": [{"title": "p"}],
+        "tracker_items": _GH762_ITEMS,
+    }
+    resumed = task.apply(paused, rules.resumed(paused, "go on", at="2026-11-06T01:00:00+00:00"))
+    assert resumed["plan_due"] is True and resumed["parts"] == []
+    assert rules.resume_target(resumed) == "plan"
+
+
+def test_plan_due_is_written_by_no_other_resume():
+    paused = {
+        "id": "GH-9",
+        "status": "waiting_on_human",
+        "escalated": "q",
+        "questions_for_human": ["?"],
+    }
+    assert "plan_due" not in rules.resumed(paused, "a", at="2026-11-06T01:00:00+00:00")
+
+
+_UNDELIVERED = [
+    {"api": {"status": "pending"}},
+    {"api": {"status": "delivered"}},
+    {"api": {"status": "returned"}, "ui": {"status": "approved"}},
+]
+
+
+@pytest.mark.parametrize("subtasks", _UNDELIVERED)
+@pytest.mark.parametrize("status", ["planned", "developing", "tracker_only", "waiting_on_human"])
+@pytest.mark.parametrize("items", [[], _GH762_ITEMS])
+def test_resume_target_never_ends_a_state_with_an_undelivered_subtask(subtasks, status, items):
+    state = {"status": status, "subtasks": subtasks, "tracker_items": items}
+    assert rules.resume_target(state) not in (None, "tracker_only")
+
+
+@pytest.mark.parametrize("status", ["planned", "definition_ready", "tracker_only", "split", "open"])
+@pytest.mark.parametrize("items", [[], _GH762_ITEMS])
+@pytest.mark.parametrize("parts", [[], [{"title": "p"}]])
+@pytest.mark.parametrize("subtasks", [{}, *_UNDELIVERED])
+def test_resume_target_of_a_state_with_plan_due_is_always_plan(status, items, parts, subtasks):
+    state = {
+        "status": status,
+        "tracker_items": items,
+        "parts": parts,
+        "subtasks": subtasks,
+        "plan_due": True,
+    }
+    assert rules.resume_target(state) == "plan"
+    assert rules.tracker_only_plan(state) is False
+    # The two already-defined ends still win over a re-plan.
+    assert rules.resume_target({**state, "escalated": "x"}) is None
+
+
+def test_a_crash_after_resumed_reaches_plan_from_the_document():
+    """The document the resume saved before the crash, rendered and read back as the
+    from-document path reads it, reaches `plan`; only a document without `plan_due` ends."""
+    saved = {
+        "id": "GH-9",
+        "title": "t",
+        "description": "d",
+        "type": "feature",
+        "sections": {},
+        "status": "planned",
+        "plan_due": True,
+        "tracker_items": _GH762_ITEMS,
+    }
+    loaded = resume.state_from(document.parse(document.render(saved)))
+    assert loaded["plan_due"] is True and not loaded.get("subtasks")
+    assert rules.resume_target(loaded) == "plan"
+    without = resume.state_from(document.parse(document.render({**saved, "plan_due": False})))
+    assert rules.resume_target(without) == "tracker_only"
+
+
+def _stranded() -> dict[str, Any]:
+    """The shape GH-798 flags: a tracker_only end after an estimate escalation and a resume,
+    with no Tech Lead run since the resume."""
+    return {
+        "id": "GH-9",
+        "status": "tracker_only",
+        "tracker_items": _GH762_ITEMS,
+        "pause_log": [
+            {"kind": "escalation", "value": "estimate", "at": "2026-11-06T16:23:35+00:00"},
+            {"kind": "resumed", "at": "2026-11-06T16:29:17+00:00"},
+        ],
+        "runs": [{"role": "Tech Lead", "started_at": "2026-11-06T16:00:00+00:00"}],
+    }
+
+
+def test_stranded_tracker_only_is_true_on_an_estimate_resume_with_no_replan_after_it():
+    assert rules.stranded_tracker_only(_stranded()) is True
+
+
+def test_stranded_tracker_only_is_false_when_the_tech_lead_planned_after_the_resume():
+    doc = _stranded()
+    doc["runs"].append({"role": "Tech Lead", "started_at": "2026-11-06T16:30:00+00:00"})
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_ignores_a_run_of_another_role_after_the_resume():
+    doc = _stranded()
+    doc["runs"].append({"role": "Developer", "started_at": "2026-11-06T16:30:00+00:00"})
+    assert rules.stranded_tracker_only(doc) is True
+
+
+def test_stranded_tracker_only_is_false_without_an_estimate_escalation():
+    doc = _stranded()
+    doc["pause_log"][0] = {"kind": "escalation", "value": "questions", "at": "x"}
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_is_false_when_the_estimate_was_never_resumed():
+    doc = _stranded()
+    doc["pause_log"] = doc["pause_log"][:1]
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_is_false_when_a_resume_came_before_the_estimate():
+    doc = _stranded()
+    doc["pause_log"].reverse()
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_counts_a_run_without_started_at_as_a_replan():
+    doc = _stranded()
+    doc["runs"].append({"role": "Tech Lead"})
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_is_false_for_another_status():
+    assert rules.stranded_tracker_only({**_stranded(), "status": "planned"}) is False
+
+
+def test_stranded_tracker_only_is_false_when_the_resume_has_no_readable_instant():
+    doc = _stranded()
+    doc["pause_log"][1] = {"kind": "resumed"}
+    assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_reads_the_last_estimate_resume_pair():
+    doc = _stranded()
+    doc["pause_log"] = [
+        {"kind": "escalation", "value": "estimate", "at": "2026-11-06T10:00:00+00:00"},
+        {"kind": "resumed", "at": "2026-11-06T10:05:00+00:00"},
+        {"kind": "escalation", "value": "estimate", "at": "2026-11-06T16:23:35+00:00"},
+        {"kind": "resumed", "at": "2026-11-06T16:29:17+00:00"},
+    ]
+    doc["runs"] = [{"role": "Tech Lead", "started_at": "2026-11-06T10:10:00+00:00"}]
+    assert rules.stranded_tracker_only(doc) is True
+
+
+def test_stranded_tracker_only_stays_false_after_a_questions_resume_following_a_replan():
+    doc = _stranded()
+    doc["pause_log"].extend(
+        [
+            {"kind": "escalation", "value": "questions", "at": "2026-11-06T16:40:00+00:00"},
+            {"kind": "resumed", "at": "2026-11-06T16:45:00+00:00"},
+        ]
+    )
+    doc["runs"].append({"role": "Tech Lead", "started_at": "2026-11-06T16:30:00+00:00"})
+    assert rules.stranded_tracker_only(doc) is False
 
 
 def test_part_over_line_with_a_remainder_carries_its_figures_and_keeps_the_fit_question():

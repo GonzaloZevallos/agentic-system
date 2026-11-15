@@ -2641,8 +2641,53 @@ def _starvation_lines(
     return found
 
 
+STRANDED_FLAGS_PER_ROUND = 1
+"""How many stranded `tracker_only` issues a round flags (GH-798): one, so a backlog of them
+reaches the owner a round at a time."""
+
+STRANDED_MARKER = "<!-- agentic-stranded-tracker-only -->"
+"""The mark the flag comment ends with: its presence on the issue is the memory that it was said."""
+
+
+def _stranded_comment(number: int) -> str:
+    return (
+        f"agentic: task #{number} ended `tracker_only` after an estimate resume, without a "
+        "re-plan: its plan may still have code subtasks that were never built (Re-plan debido, "
+        "ADR-0054 addendum). To plan it again run:\n\n"
+        f"`agentic run --fresh --issue {number}`\n\n{STRANDED_MARKER}"
+    )
+
+
+def flag_stranded(ports: Ports, queued: Mapping[int, TaskState | None]) -> list[str]:
+    """GH-798: for each open issue of the bandeja (`queued`) whose document
+    `rules.stranded_tracker_only` calls stranded and whose comments do not carry
+    `STRANDED_MARKER` yet, add `needs-human` and post one comment ending with the marker; at
+    most `STRANDED_FLAGS_PER_ROUND` per round. The rule decides, this does the writes. A
+    tracker that refuses a write costs that flag only: the next round tries again (the marker
+    is the last thing posted), and nothing is raised. One output line per flag, no metric."""
+    lines: list[str] = []
+    flagged = 0
+    for number, raw in queued.items():
+        if flagged >= STRANDED_FLAGS_PER_ROUND:
+            break
+        if raw is None or not rules.stranded_tracker_only(raw):
+            continue
+        task_id = ports.inbox.task_id(number)
+        try:
+            if any(STRANDED_MARKER in c.body for c in ports.tracker.timestamped_comments(task_id)):
+                continue
+            flagged += 1
+            ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
+            ports.tracker.comment(task_id, _stranded_comment(number))
+        except (ValueError, OSError) as exc:
+            lines.append(f"agentic: poll: #{number} stranded tracker_only -> flag failed: {exc}")
+            continue
+        lines.append(f"agentic: poll: #{number} stranded tracker_only -> needs-human")
+    return lines
+
+
 # The sweeps a dry round skips (GH-622), named as its `dry-run: skipped <name>` lines say them.
-DRY_RUN_SKIPPED = ("close_issues", "split", "scratch", "ci_refs", "board")
+DRY_RUN_SKIPPED = ("close_issues", "split", "scratch", "ci_refs", "stranded", "board")
 
 
 def run_once(
@@ -2689,7 +2734,7 @@ def run_once(
     right after the closes are gathered and outside `registry.exclusive()`: its `issue
     closed` lines open the round's output, and a failed close or unreadable queue says
     nothing (the next round retries). `dry_run` (GH-622) is a round over read-only ports
-    (`dry_run.read_only_ports`): the five sweeps, `execute` and `reflect_lines` do not run, each
+    (`dry_run.read_only_ports`): the six sweeps, `execute` and `reflect_lines` do not run, each
     sweep says `dry-run: skipped <name>` at the head of the output, and each action in the plan
     says `would <kind> issue <N>` where `execute`'s lines would stand."""
     closes = gather_closes(ports)
@@ -2716,6 +2761,8 @@ def run_once(
         # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
         # read, so a round that frees room starts its children in the same round.
         swept = [*scratch_sweep.sweep(ports, now), *swept]
+        # GH-798: a task that ended tracker_only without the re-plan it was owed is said once.
+        swept = [*flag_stranded(ports, queued), *swept]
         # GH-376: the CI refs of ended tasks with no live run, the only place they are deleted.
         swept = [*ci_ref_sweep.sweep(ports, {r.task_id for r in registry.live()}), *swept]
     held, hold_lines = scratch_sweep.read_holds(cfg, ports)

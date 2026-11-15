@@ -77,6 +77,7 @@ def test_reducers_are_read_from_the_annotations():
         "carve_out",
         "fit_waived",
         "fit_question",
+        "plan_due",
         "proposed_invariants",
         "experiment",
         "pause_log",

@@ -89,6 +89,9 @@ sequenceDiagram
    estado dice que se frenó (`agentic/core/process/domain/rules.py:resume_target`): una tarea
    ligera sin plan sigue a `plan` y no a `define`, y una promoción pendiente la manda primero a
    `define` o `diagnose` (`agentic/core/process/domain/rules.py:promotion_route`).
+   Una reanudación con decisión de una pregunta de ajuste, o de una estimación con partes, deja
+   `plan_due` y vuelve siempre a `plan`, nunca a `tracker_only`
+   (`agentic/core/process/domain/rules.py:resume_target`); solo el plan que se entrega lo limpia.
 6. **Si el estado guardado se perdió.** `agentic resume --issue N --from-document` siembra el
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`
