@@ -64,8 +64,9 @@ async def test_a_real_decision_records_the_answer_and_does_not_escalate_again(co
 
 
 async def test_a_plan_with_one_human_item_escalates_with_needs_human_through_deliver(config):
-    """GH-663: the Tech Lead's plan writes the `human` item, and the delivery raises it as a
-    `questions` escalation: no 'Tracker work for you' comment, the task not the landing head."""
+    """GH-663, GH-784: the Tech Lead's plan writes the `human` item and the plan node raises it as
+    a `questions` escalation before anything is built: no pull request, no Ready comment and no
+    'Tracker work for you' comment, the task not the landing head."""
     item = {"kind": "human", "question": "Close #12 as superseded?", "recommendation": "Close."}
     fakes = Fakes()
     script = script_for(**technical(tech_lead=[planned(tracker_items=[item])]))
@@ -76,8 +77,9 @@ async def test_a_plan_with_one_human_item_escalates_with_needs_human_through_del
     state = snapshot.values
     comments = [text for _, text in fakes.tracker.comments]
 
-    assert paused["pull_request"].endswith("/pull/7")
-    assert any(c.startswith("Ready for review") for c in comments)
+    assert "pull_request" not in paused and "pull_request" not in state
+    assert fakes.tracker.pull_requests == []
+    assert not any(c.startswith("Ready for review") for c in comments)
     assert state["status"] == "waiting_on_human"
     assert state["escalation_class"] == "questions"
     assert state["tracker_human"] == [tracker_items.item_hash(item)]
