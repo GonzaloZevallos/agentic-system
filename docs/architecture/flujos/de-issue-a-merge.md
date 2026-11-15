@@ -53,7 +53,13 @@ sequenceDiagram
 3. **Corrida.** `agentic/cli.py:_run` toma el lock de la tarea, la registra, abre el
    checkpointer (`agentic/composition.py:checkpointer`) e invoca el grafo
    `agentic/composition.py:graph`.
-4. **Camino.** `classify` (PjM) elige el tipo: feature, bug o platform enhancement
+4. **Camino.** Antes de PjM, `classify` corre la entrada de la spec
+   (`agentic/core/process/application/classify.py:spec_intake`), sólo si están los puertos
+   `SpecReader` y `SpecValidator` (`spec_delivery.honoured`): lee la línea `Spec:` del cuerpo del
+   issue y la spec en el commit del upstream; si algo falla, la tarea escala como
+   `classification` con una causa cerrada (`spec_refusal`) y PjM no corre. Si PjM tipa la tarea
+   como algo que no es feature, escala `spec_type` después de su corrida. `classify` (PjM) elige
+   el tipo: feature, bug o platform enhancement
    (README.md, sección 2). Una feature pasa por `define` (Product Analyst) y `validate`
    (PM) antes de `plan` (Tech Lead); un bug reemplaza la definición por `diagnose`; un
    platform enhancement la salta. Una feature o un bug en el camino ligero (`path: light`,

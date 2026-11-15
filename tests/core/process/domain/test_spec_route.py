@@ -66,6 +66,7 @@ def test_every_cause_escalates_as_classification_with_its_refusal(cause: SpecRou
         "touches_copy",
         "oversize",  # a SpecReadRefusal
         "unreachable",
+        "owner_login",  # the configuration key an unapproved route names
         "docs/specs/a-b_c.md",  # a spec path
         "slice-one",  # a slice id
         "risk-2",  # a risk id

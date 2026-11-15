@@ -2494,8 +2494,10 @@ class FakeSpecReader:
 
     def __init__(self, texts: Mapping[tuple[str, str], str]) -> None:
         self.texts = dict(texts)
+        self.calls: list[tuple[str, str]] = []
 
     def read(self, commit: str, path: str) -> str:
+        self.calls.append((commit, path))
         try:
             return self.texts[(commit, path)]
         except KeyError:

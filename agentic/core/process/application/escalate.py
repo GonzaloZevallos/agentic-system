@@ -100,8 +100,11 @@ def _prompt_block(
     if cls == "returns" and pair is not None and state.get("restarts", {}).get(pair, 0) > 0:
         question, recommended, options = escalation_prompts.restarted_returns_prompt()
     else:
+        refusal = state.get("spec_refusal")
+        # A refused spec escalates as `classification`: its own cause picks the question.
+        cause = refusal["cause"] if cls == "classification" and refusal else None
         question, recommended, options = escalation_prompts.prompt_for(
-            cls, state.get("escalation_cause")
+            cls, cause or state.get("escalation_cause")
         )
     fill = {
         "issue": "<issue>" if number is None else str(number),

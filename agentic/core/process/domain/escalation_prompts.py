@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Final, Literal, get_args
 
+from .spec_delivery import SpecRouteCause
 from .task import EscalationClass, MechanicalCause
 
 RESUME: Final = "agentic resume --issue {issue}"
@@ -23,7 +24,7 @@ Prompt = tuple[str, str, tuple[str, ...]]
 AskedCause = Literal["api_break_missing"]
 """The cause of a `questions` escalation the owner answers on the issue (GH-610): not a
 `MechanicalCause`, because the poller never retakes it by itself -- it waits for the answer."""
-PromptCause = MechanicalCause | AskedCause
+PromptCause = MechanicalCause | AskedCause | SpecRouteCause
 
 _RETRY: Final[Prompt] = (
     "Should the task try again now?",
@@ -86,6 +87,22 @@ ESCALATION_PROMPTS[("questions", "api_break_missing")] = (
 )
 for _cause in get_args(MechanicalCause):
     ESCALATION_PROMPTS[("ci" if _cause.startswith("ci_") else "system_delivery", _cause)] = _RETRY
+for _spec_cause in get_args(SpecRouteCause):
+    ESCALATION_PROMPTS[("classification", _spec_cause)] = (
+        (
+            "A Spec: line is kept only for a feature, and PjM typed this task otherwise. "
+            "Remove the line, or decide that it is a feature?",
+            DECIDE,
+            (DECIDE, RESUME, CLOSE_UNPLANNED),
+        )
+        if _spec_cause == "spec_type"
+        else (
+            f"The task's Spec: route was refused ({_spec_cause}, see the reason above). Fix the "
+            "issue's Spec: line, the spec file or owner_login, then resume?",
+            RESUME,
+            (RESUME, CLOSE_UNPLANNED),
+        )
+    )
 
 
 def prompt_for(cls: EscalationClass, cause: PromptCause | None = None) -> Prompt:
