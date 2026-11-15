@@ -2010,3 +2010,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-15T19:35:06.904+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the brief states an invariant over a set, assert it for every member in the test, never pin an outcome that violates it; if it cannot hold, record it as unsatisfiable with command, output and the shipped version.
+  confidence: medium
+  seen_in:
+  - GH-827
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T22:01:36.975+00:00'
