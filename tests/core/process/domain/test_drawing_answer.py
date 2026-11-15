@@ -1,0 +1,255 @@
+"""The drawing-answer domain (GH-766 part 2a-2): which row an answer reaches, when the escalation
+is due, what it says, and which cause a pause carries."""
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+import pytest
+
+from agentic.core.process.domain import drawing, drawing_answer, escalation_prompts, rules, task
+
+AT = "2026-11-15T10:00:00Z"
+
+
+def _departure(element: str, drawing_path: str = "design/home.png") -> drawing.Departure:
+    return drawing.Departure(
+        drawing=drawing_path,
+        element=element,
+        shows="a blue button",
+        would_ship="a green button",
+        recommendation="keep the drawing",
+        reason="the owner approved it",
+        raised_by="developer",
+    )
+
+
+def _state(**over: Any) -> task.TaskState:
+    return cast(task.TaskState, over)
+
+
+def _answered(row: task.DepartureRecord) -> task.DepartureRecord:
+    return cast(
+        task.DepartureRecord,
+        {**row, "answer": {"verdict": "accept", "by": "comment", "at": "T1"}},
+    )
+
+
+def _rows(*elements: str, answered: tuple[int, ...] = ()) -> list[task.DepartureRecord]:
+    rows = task.departure_records(None, [_departure(e) for e in elements], AT)
+    return [_answered(r) if r["number"] in answered else r for r in rows]
+
+
+def _applied(state: task.TaskState, patch: dict[str, object]) -> task.TaskState:
+    return cast(task.TaskState, task.apply(state, cast(Any, patch)))
+
+
+def test_unanswered_lists_open_numbers_sorted_and_tolerates_no_key():
+    assert drawing_answer.unanswered(_state()) == []
+    rows = _rows("a", "b", "c", answered=(2,))
+    assert drawing_answer.unanswered(_state(drawing_departures=rows[::-1])) == [1, 3]
+
+
+def test_applicable_ignores_a_number_without_row_and_an_answered_row():
+    state = _state(drawing_departures=_rows("a", "b", answered=(2,)))
+    take, ignored = drawing_answer.applicable(state, {1: "accept", 2: "reject", 99: "accept"})
+    assert take == {1: "accept"}
+    assert ignored == frozenset({2, 99})
+
+
+def test_patch_without_spec_has_no_spec_cause_and_no_mechanical_cause():
+    patch = drawing_answer.escalation_patch(_state(), [_departure("hero")], AT, issue=7)
+    assert "spec_cause" not in patch
+    assert patch["escalation_cause"] is None
+    assert patch["escalation_class"] == "questions"
+    assert patch["drawing_escalation"] == {"round": 1, "numbers": [1], "cause": "drawing_departure"}
+    assert [r["number"] for r in cast(list[task.DepartureRecord], patch["drawing_departures"])] == [
+        1
+    ]
+
+
+def test_patch_with_spec_carries_exactly_the_drawing_spec_cause():
+    state = _state(spec=cast(Any, {"issue": 7}))
+    patch = drawing_answer.escalation_patch(state, [_departure("hero")], AT, issue=7)
+    assert patch["spec_cause"] == "drawing"
+    assert patch["escalation_cause"] is None
+
+
+def _with_round(previous: int, *elements: str) -> task.TaskState:
+    return _state(
+        drawing_departures=_rows(*elements),
+        drawing_escalation=task.DrawingEscalation(
+            round=previous, numbers=[1], cause="drawing_departure"
+        ),
+    )
+
+
+def test_no_record_is_round_one_due():
+    due = drawing_answer.escalation_due(_state(), [_departure("a")])
+    assert isinstance(due, drawing_answer.Due)
+    assert (due.round, due.cause) == (1, "drawing_departure")
+
+
+@pytest.mark.parametrize("previous", [0, 1, 2])
+def test_rounds_up_to_three_are_due(previous):
+    due = drawing_answer.escalation_due(_with_round(previous, "a"), [])
+    assert isinstance(due, drawing_answer.Due)
+    assert due.round == previous + 1
+
+
+def test_round_four_is_exhausted_and_records_the_new_rows_unanswered():
+    state = _with_round(3, "a")
+    new = [_departure("b")]
+    due = drawing_answer.escalation_due(state, new)
+    assert isinstance(due, drawing_answer.Exhausted)
+    assert (due.round, due.cause) == (4, "drawing_cap")
+    patch = drawing_answer.escalation_patch(state, new, AT, issue=7)
+    rows = cast(list[task.DepartureRecord], patch["drawing_departures"])
+    assert [(r["number"], r["answer"]) for r in rows] == [(2, None)]
+    assert patch["drawing_escalation"] == {"round": 4, "numbers": [1, 2], "cause": "drawing_cap"}
+    reason = cast(str, patch["escalated"])
+    assert reason.startswith("The task escalated drawing departures in 3 rounds")
+    assert "0 departures are answered and 2 still open" in reason
+    assert "close the issue" in reason
+
+
+def test_round_five_is_still_the_cap():
+    due = drawing_answer.escalation_due(_with_round(4, "a"), [])
+    assert isinstance(due, drawing_answer.Exhausted)
+    assert (due.round, due.cause) == (5, "drawing_cap")
+
+
+def test_nothing_unanswered_raises():
+    state = _state(drawing_departures=_rows("a", answered=(1,)))
+    with pytest.raises(ValueError, match="nothing to escalate"):
+        drawing_answer.escalation_patch(state, [_departure("a")], AT, issue=7)
+    with pytest.raises(ValueError):
+        drawing_answer.escalation_patch(_state(), [], AT, issue=7)
+
+
+def test_a_contradicted_open_row_gets_its_line_and_a_row_without_one_does_not():
+    state = _state(drawing_departures=_rows("a", "b", answered=(2,)))
+    patch = drawing_answer.escalation_patch(
+        state, [], AT, issue=7, contradicted=frozenset({1, 2, 99})
+    )
+    reason = cast(str, patch["escalated"])
+    assert "Drawing 1 got both accept and reject in one comment; answer it once." in reason
+    assert "Drawing 2 got both" not in reason
+    assert "Drawing 99 got both" not in reason
+
+
+def test_commands_carry_the_issue_number_or_n():
+    state = _state(drawing_departures=_rows("a", "b"))
+    reason = cast(str, drawing_answer.escalation_patch(state, [], AT, issue=42)["escalated"])
+    for n in (1, 2):
+        for template in (escalation_prompts.DRAWING_ACCEPT, escalation_prompts.DRAWING_REJECT):
+            assert template.format(issue=42).replace("<n>", str(n)) in reason
+    unknown = cast(str, drawing_answer.escalation_patch(state, [], AT, issue=None)["escalated"])
+    assert "agentic resume --issue N --drawing 1=accept" in unknown
+    assert "agentic resume --issue N --drawing 2=reject" in unknown
+
+
+def test_the_internal_key_is_in_no_reason_and_no_section_line():
+    state = _with_round(3, "Hero Banner")
+    patch = drawing_answer.escalation_patch(state, [_departure("Footer")], AT, issue=7)
+    rows = (
+        cast(list[task.DepartureRecord], patch["drawing_departures"]) + state["drawing_departures"]
+    )
+    keys = [drawing.departure_key(r["drawing"], r["element"]) for r in rows]
+    reason = cast(str, patch["escalated"])
+    lines = drawing_answer.section_lines(rows) + drawing_answer.section_lines(
+        [_answered(r) for r in rows]
+    )
+    for key in keys:
+        assert key not in reason
+        assert all(key not in line for line in lines)
+
+
+def test_an_answered_round_one_row_stays_in_numbers_and_does_not_trigger_alone():
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    state = _applied(_state(), patch)
+    assert drawing_answer.prompt_cause(state) == "drawing_departure"
+    answered = _state(
+        **{**state, "drawing_departures": [_answered(r) for r in state["drawing_departures"]]}
+    )
+    assert answered["drawing_escalation"]["numbers"] == [1]
+    assert drawing_answer.prompt_cause(answered) is None
+
+
+def test_prompt_cause_is_none_for_a_tracker_human_pause_with_an_old_unanswered_row():
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    state = _applied(_state(), patch)
+    other = rules.escalation("questions", "typed items", tracker_human=["h1"])
+    paused = _state(**{**state, **other})
+    assert drawing_answer.unanswered(paused) == [1]
+    assert drawing_answer.prompt_cause(paused) is None
+
+
+def test_prompt_cause_is_none_for_api_break_missing_with_an_unregistered_unanswered_row():
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    state = _applied(_state(), patch)
+    first = _answered(state["drawing_departures"][0])
+    second = task.departure_records([first], [_departure("b")], AT)[0]
+    paused = _state(
+        **{
+            **state,
+            "drawing_departures": [first, second],
+            **rules.escalation("questions", "api break"),
+        }
+    )
+    assert drawing_answer.unanswered(paused) == [2]
+    assert paused["drawing_escalation"]["numbers"] == [1]
+    assert drawing_answer.prompt_cause(paused) is None
+
+
+def test_prompt_cause_is_none_when_the_pause_is_not_a_questions_one():
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    state = _applied(_state(), patch)
+    assert drawing_answer.prompt_cause(_state(**{**state, "escalation_class": "ci"})) is None
+
+
+def test_the_drawing_escalation_is_a_humans_pause():
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    logged = rules.logged(cast(dict[str, Any], patch), at=AT)
+    assert rules.pause_kind(logged["pause_log"]) == "human"
+    state = _applied(_state(), logged)
+    assert rules.auto_resumable(state) is None
+
+
+def test_section_lines_one_line_per_answered_row_and_bounded():
+    rows = [_answered(r) for r in _rows(*[f"e{i}" for i in range(50)])]
+    lines = drawing_answer.section_lines(rows)
+    assert len(lines) == 50
+    assert lines[0] == "#1 · design/home.png · e0 · accept (comment, T1)"
+
+
+def test_section_lines_open_row_has_four_collapsed_and_cut_fields():
+    row = _rows("a")[0]
+    long_row = cast(
+        task.DepartureRecord, {**row, "shows": "x" * 1000, "reason": "one\ntwo\n\nthree"}
+    )
+    lines = drawing_answer.section_lines([long_row])
+    assert len(lines) == 4
+    assert lines[0] == "#1 · shows: " + "x" * 239 + "…"
+    assert lines[3] == "#1 · reason: one two three"
+    assert all(len(line) <= task.ASSUMPTION_MAX_CHARS + 30 for line in lines)
+
+
+def test_section_lines_of_no_rows_is_empty():
+    assert drawing_answer.section_lines([]) == []
+
+
+def test_a_state_without_a_drawing_escalation_goes_through_without_raising():
+    state = _state()
+    assert drawing_answer.applicable(state, {1: "accept"}) == ({}, frozenset({1}))
+    assert drawing_answer.escalation_due(state, []).round == 1
+    assert drawing_answer.prompt_cause(state) is None
+    assert drawing_answer.section_lines(state.get("drawing_departures", [])) == []
+    assert task.apply(state, {}) == state
+    assert task.delta(state, state) == {}
+
+
+def test_a_part_one_row_with_a_null_answer_loads():
+    row = _rows("a")[0]
+    assert row["answer"] is None
+    assert task.add_drawing_departures(None, [row]) == [row]
