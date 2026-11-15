@@ -28,6 +28,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__LaneAdmitted["LaneAdmitted"]
     class task__LaneMerge["LaneMerge"]
     class task__LapsePauseEntry["LapsePauseEntry"]
     class task__MergeCiRecord["MergeCiRecord"]
@@ -42,7 +43,6 @@ classDiagram
     class task__PlanRoute["PlanRoute"]
     class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
-    class task__PullRequestCommit["PullRequestCommit"]
 ```
 
 ## Relaciones con otras páginas

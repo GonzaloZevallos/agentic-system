@@ -2165,3 +2165,40 @@ def test_a_state_without_a_carve_out_renders_no_carve_out_key():
     assert "carve_out" not in bare
     assert document.render(_bare(carve_out={})) == bare
     assert "carve_out" not in document.parse(bare)
+
+
+def _departure_row(number: int, element: str, answer: str | None = None) -> dict[str, object]:
+    return {
+        "number": number,
+        "key": f"design/home.png:{element}",
+        "drawing": "design/home.png",
+        "element": element,
+        "shows": "a blue button: with a colon",
+        "would_ship": "a green button",
+        "recommendation": "keep the drawing",
+        "reason": "approved",
+        "raised_by": "developer",
+        "raised_at": "2026-11-15T10:00:00Z",
+        "answer": answer,
+        "fix_passes": 1,
+    }
+
+
+def _departure_base() -> dict[str, object]:
+    return {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
+
+
+def test_a_state_without_departures_writes_the_frontmatter_it_always_did():
+    plain = document.render(_departure_base())
+    assert "drawing_departures" not in plain
+    assert document.render({**_departure_base(), "drawing_departures": []}) == plain
+
+
+def test_a_document_without_departures_loads_without_the_key():
+    assert "drawing_departures" not in document.parse(document.render(_departure_base()))
+
+
+def test_a_non_empty_departure_record_round_trips_intact():
+    rows = [_departure_row(1, "hero", "accept"), _departure_row(2, "footer")]
+    parsed = document.parse(document.render({**_departure_base(), "drawing_departures": rows}))
+    assert parsed["drawing_departures"] == rows

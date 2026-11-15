@@ -18,6 +18,7 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import (
     Annotated,
@@ -26,11 +27,13 @@ from typing import (
     Literal,
     NotRequired,
     TypedDict,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
 )
 
+from . import drawing
 from .ci_push import PushKind
 from .landing_order import YieldReason
 from .lead_time import LeadTime
@@ -550,6 +553,82 @@ def add_shadow_reviews(existing: list[ShadowRecord], new: list[ShadowRecord]) ->
     joined: dict[str, ShadowRecord] = {}
     for row in (*existing, *new):
         joined.setdefault(row["subtask"], row)
+    return list(joined.values())
+
+
+class DepartureRecord(TypedDict):
+    """One departure from an approved drawing as the state keeps it (GH-766): `number` its
+    stable number (the owner answers by it), `key` `drawing.departure_key` of the row, the
+    text fields as raised, `raised_at` when, `answer` the owner's verdict (`None` until
+    given) and `fix_passes` how many fix passes it has had. Never read by a role."""
+
+    number: int
+    key: str
+    drawing: str
+    element: str
+    shows: str
+    would_ship: str
+    recommendation: str
+    reason: str
+    raised_by: str
+    raised_at: str
+    answer: str | None
+    fix_passes: int
+
+
+def departure_records(
+    existing: list[DepartureRecord] | None, departures: Sequence[drawing.Departure], at: str
+) -> list[DepartureRecord]:
+    """The rows for `departures` against `existing`: the only place a number is assigned. A
+    key already held returns its row unchanged; a new one takes `max(number)+1` in input
+    order, `raised_at` `at`, no answer, no fix pass. A key repeated in `departures` is one row."""
+    rows: dict[str, DepartureRecord] = {r["key"]: r for r in existing or []}
+    held = set(rows)
+    out: dict[str, DepartureRecord] = {}
+    for d in departures:
+        key = drawing.departure_key(d.drawing, d.element)
+        if key in out:
+            continue
+        if key in held:
+            out[key] = rows[key]
+            continue
+        rows[key] = out[key] = DepartureRecord(
+            number=max((r["number"] for r in rows.values()), default=0) + 1,
+            key=key,
+            drawing=d.drawing,
+            element=d.element,
+            shows=d.shows,
+            would_ship=d.would_ship,
+            recommendation=d.recommendation,
+            reason=d.reason,
+            raised_by=d.raised_by,
+            raised_at=at,
+            answer=None,
+            fix_passes=0,
+        )
+    return list(out.values())
+
+
+def add_drawing_departures(
+    existing: list[DepartureRecord] | None, new: list[DepartureRecord]
+) -> list[DepartureRecord]:
+    """The departure rows of `existing` and `new` as one list, one row per `key` in order of
+    first appearance. A known key keeps `number`, `raised_at`, `raised_by` and its text: the
+    first non-`None` `answer` stays (a later different one is ignored, never raised) and
+    `fix_passes` takes the max. Rows arrive complete (`departure_records` numbered them)."""
+    joined: dict[str, DepartureRecord] = {}
+    for row in (*(existing or []), *new):
+        held = joined.get(row["key"])
+        if held is None:
+            joined[row["key"]] = row
+            continue
+        joined[row["key"]] = DepartureRecord(
+            **{
+                **held,
+                "answer": held["answer"] if held["answer"] is not None else row["answer"],
+                "fix_passes": max(held["fix_passes"], row["fix_passes"]),
+            }
+        )
     return list(joined.values())
 
 
@@ -2208,6 +2287,11 @@ class TaskState(TaskInput, total=False):
     # folds back through the reducer). Read with `.get("full_checks_reads", [])`: a document
     # written before it has none. Hashes only, never log text.
     full_checks_reads: Annotated[list[FullChecksRead], add_full_checks_reads]
+    # The departures from an approved drawing (GH-766, `DepartureRecord`),
+    # `add_drawing_departures`. Absent until the first one is raised: the initial state never
+    # creates it, and a document written before it has none. Rows arrive numbered by
+    # `departure_records`, the only place a number is assigned.
+    drawing_departures: Annotated[list[DepartureRecord], add_drawing_departures]
 
 
 def _reducers() -> dict[str, object]:
@@ -2227,7 +2311,11 @@ def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) ->
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)
-        if reducer is None or key not in merged:
+        if reducer is add_drawing_departures:
+            merged[key] = add_drawing_departures(
+                merged.get(key), cast(list[DepartureRecord], value)
+            )
+        elif reducer is None or key not in merged:
             merged[key] = value
         else:
             merged[key] = reducer(merged[key], value)  # type: ignore[operator]
@@ -2307,6 +2395,15 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
             held_shadows = {r["subtask"] for r in old}
             if fresh_shadows := [r for r in value if r["subtask"] not in held_shadows]:
                 patch[key] = fresh_shadows
+        elif reducer is add_drawing_departures:
+            held_rows = {r["key"]: r for r in old}
+            if changed_rows := [
+                r
+                for r in value
+                if (h := held_rows.get(r["key"])) is None
+                or (h["answer"], h["fix_passes"]) != (r["answer"], r["fix_passes"])
+            ]:
+                patch[key] = changed_rows
         elif reducer is add_review_scopes:
             seen = {(r["unit"], r["head"], r["base"]) for r in old}
             if added_scopes := [r for r in value if (r["unit"], r["head"], r["base"]) not in seen]:
