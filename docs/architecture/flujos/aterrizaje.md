@@ -52,6 +52,9 @@ sequenceDiagram
    Uno de ellos es `open_escalation` (GH-784): una escalación al dueño sigue abierta o no se pudo
    mostrar cerrada (`agentic/core/process/application/merge.py:escalation_hold`). Es del humano:
    el aterrizaje no hace nada y el poller imprime `left to the human: open_escalation`.
+   La excepción: mientras el propio aterrizaje tiene una pregunta abierta (el documento está
+   `escalated`, o su última escalación no tiene `released_at`) la retención no actúa, porque el
+   aterrizaje la libera por el rechazo que la causó.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo
