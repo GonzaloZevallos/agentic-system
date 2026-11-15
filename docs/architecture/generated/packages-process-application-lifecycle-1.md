@@ -30,6 +30,7 @@ graph TD
     m_application__dry_run["application.dry_run"]
     m_application__plan_carve_out["application.plan_carve_out"]
     m_application__poll["application.poll"]
+    m_application__promotion["application.promotion"]
     m_application__registration["application.registration"]
     m_application__relabel["application.relabel"]
     m_application__archive --> g_application__support
@@ -54,6 +55,7 @@ graph TD
     m_application__poll --> g_pkg__domain
     m_application__poll --> m_application__board_sync
     m_application__poll --> m_application__registration
+    m_application__promotion --> g_pkg__domain
     m_application__registration --> g_application__support
     m_application__registration --> g_pkg__domain
     m_application__relabel --> g_application__definition

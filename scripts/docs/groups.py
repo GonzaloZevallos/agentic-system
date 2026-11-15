@@ -115,7 +115,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.pre_pr_fix": "build",
     "application.preflight": "support",
     "application.presubmit": "checks",
-    "application.promotion": "build",
+    "application.promotion": "lifecycle",
     "application.qa_performance": "definition",
     "application.reflect": "reflection",
     "application.reflect_run": "reflection",

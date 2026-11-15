@@ -39,7 +39,6 @@ graph TD
     m_application__deliver --> g_pkg__domain
     m_application__delivered --> g_application__support
     m_application__delivered --> g_pkg__domain
-    m_application__develop --> g_application__build__2
     m_application__develop --> g_application__checks
     m_application__develop --> g_application__lifecycle
     m_application__develop --> g_application__support
@@ -52,11 +51,12 @@ graph TD
     m_application__evaluated --> g_pkg__agentic__shared
     m_application__evaluated --> g_pkg__domain
     m_application__integrate --> g_application__build__2
+    m_application__integrate --> g_application__lifecycle
     m_application__integrate --> g_application__support
     m_application__integrate --> g_pkg__agentic__shared
     m_application__integrate --> g_pkg__domain
-    m_application__plan --> g_application__build__2
     m_application__plan --> g_application__definition
+    m_application__plan --> g_application__lifecycle
     m_application__plan --> g_application__reflection
     m_application__plan --> g_application__support
     m_application__plan --> g_pkg__agentic__shared
