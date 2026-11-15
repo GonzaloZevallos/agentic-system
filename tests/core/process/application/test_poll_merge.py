@@ -281,7 +281,7 @@ def test_attempts_count_only_for_the_current_head():
 
 
 def _facts_of(raw):
-    return poll._merge_facts("GH-5", raw, _pr(), frozenset(), 5, MASTER)
+    return poll._merge_facts("GH-5", raw, _pr(), frozenset(), 5, MASTER, open_escalation=False)
 
 
 def _important(scope: str, subtask: str = "only") -> dict[str, str]:
@@ -937,7 +937,9 @@ def _reloaded(**more):
 
 
 def _decision(raw):
-    facts = poll._merge_facts("GH-5", raw, _docs_pr(), frozenset(), 5, MASTER)
+    facts = poll._merge_facts(
+        "GH-5", raw, _docs_pr(), frozenset(), 5, MASTER, open_escalation=False
+    )
     return rules.auto_merge_decision(facts)
 
 
@@ -994,3 +996,115 @@ def test_an_escalated_task_with_a_rereadable_no_verdict_pair_is_assessed_ci_run(
 def test_the_same_pair_once_reread_is_assessed_ci_no_verdict():
     ports = _ci_no_verdict_world(reread_at="2026-11-03T10:30:00+00:00", reread_state="timed_out")
     assert _assessed(ports) == rules.MergeDecision("refuse", "ci_no_verdict")
+
+
+def _thread(ports, number: int, *rows: tuple[str, str]) -> None:
+    """The issue's comments, oldest first, as `(body, created_at)` pairs."""
+    ports.tracker.timestamped[f"GH-{number}"] = [IssueComment(body, at) for body, at in rows]
+
+
+def test_an_open_escalation_comment_after_the_last_ready_is_left_to_the_human(tmp_path):
+    ports = _ports(5)
+    _thread(
+        ports,
+        5,
+        ("Ready for review: the pull request", "2026-11-01T10:00:00Z"),
+        ("Escalated: needs the owner", "2026-11-01T11:00:00Z"),
+    )
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: open_escalation"]
+    assert launcher.spawned == []
+
+
+def test_an_unbuilt_owner_decision_is_left_to_the_human_on_a_clean_thread(tmp_path):
+    ports = _ports(5, owner_decision_unbuilt="2026-11-01T12:00:00+00:00")
+    _thread(ports, 5, ("Ready for review: the pull request", "2026-11-01T10:00:00Z"))
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: open_escalation"]
+    assert launcher.spawned == []
+
+
+def test_a_readable_thread_ending_in_ready_is_still_a_candidate(tmp_path):
+    ports = _ports(5)
+    _thread(
+        ports,
+        5,
+        ("Escalated: needs the owner", "2026-11-01T09:00:00Z"),
+        ("Ready for review: the pull request", "2026-11-01T10:00:00Z"),
+    )
+    assert _merges(ports) == ([5], [])
+
+
+def _verb(ports, tmp_path):
+    return merge.merge_task(
+        "GH-5",
+        5,
+        _cfg(tmp_path),
+        ports,
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        lambda _line: None,
+    )
+
+
+class _UnreadableThread(MemoryTracker):
+    def timestamped_comments(self, task_id):
+        raise ValueError("gh issue view failed: scripted")
+
+
+def test_the_verb_merges_on_a_readable_thread_whose_last_mark_is_ready(tmp_path):
+    ports = _ports(5)
+    _thread(
+        ports,
+        5,
+        ("Escalated: needs the owner", "2026-11-01T09:00:00Z"),
+        ("Ready for review: the pull request", "2026-11-01T10:00:00Z"),
+    )
+    assert _verb(ports, tmp_path) == merge.MergeResult("merged", method="squash")
+    assert len(ports.tracker.merge_calls) == 1
+
+
+def test_the_verb_refuses_open_escalation_when_the_comments_cannot_be_read(tmp_path):
+    ports = _ports(5)
+    ports.tracker.__class__ = _UnreadableThread
+    assert _verb(ports, tmp_path) == merge.MergeResult("refused", "open_escalation")
+    assert ports.tracker.merge_calls == []
+
+
+def test_the_verb_refuses_an_open_escalation_and_comments_it_once_per_head(tmp_path):
+    ports = _ports(5)
+    _thread(ports, 5, ("Escalated: needs the owner", "2026-11-01T11:00:00Z"))
+    assert _verb(ports, tmp_path) == merge.MergeResult("refused", "open_escalation")
+    assert ports.tracker.merge_calls == []
+    assert [text.splitlines()[0] for _, text in ports.tracker.comments] == [
+        f"Auto-merge refused: {HEAD} open_escalation"
+    ]
+
+
+def _state(**more):
+    return {"id": "GH-5", "status": "ready_for_review", **more}
+
+
+def _at(body: str, at: str) -> IssueComment:
+    return IssueComment(body, at)
+
+
+def test_escalation_hold_reads_the_marks_off_the_document_and_the_thread():
+    escalated = _at("Escalated: x", "2026-11-01T11:00:00Z")
+    assert merge.escalation_hold(_state(), [escalated]) is True
+    assert merge.escalation_hold(_state(), [_at("a human note", "2026-11-01T11:00:00Z")]) is False
+    resumed = {"pause_log": [{"kind": "resumed", "at": "2026-11-01T12:00:00+00:00"}]}
+    assert merge.escalation_hold(_state(**resumed), [escalated]) is False
+    released = {"landing": [{"head": HEAD, "released_at": "2026-11-01T12:00:00+00:00"}]}
+    assert merge.escalation_hold(_state(**released), [escalated]) is False
+    assert merge.escalation_hold(_state(landing=[{"head": HEAD}]), [escalated]) is True
+
+
+def test_escalation_hold_is_true_on_a_tracker_pause_or_an_unbuilt_decision_and_none_when_unread():
+    assert merge.escalation_hold(_state(tracker_human=["abc"]), []) is True
+    assert merge.escalation_hold(_state(owner_decision_unbuilt="2026-11-01T12:00:00Z"), []) is True
+    assert merge.escalation_hold(_state(), None) is None
+    bad = _state(pause_log=[{"kind": "resumed"}])
+    assert merge.escalation_hold(bad, [_at("Escalated: x", "2026-11-01T11:00:00Z")]) is None

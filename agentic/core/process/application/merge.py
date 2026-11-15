@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,6 +27,7 @@ from ..domain import (
     master_gain,
     merge_ci,
     merge_conflict,
+    merge_hold,
     presubmit,
     rules,
 )
@@ -47,7 +48,9 @@ from ..domain.task import (
 )
 from . import adr_collision, ci_flakes, ci_push, ci_trust, landing_flakes, landing_plan
 from .checkouts import task_base
+from .deliver import READY
 from .delivered import files_patch, size_patch
+from .escalate import ESCALATED
 from .poll import (
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
@@ -61,6 +64,7 @@ from .poll import (
 from .ports import (
     CommandResult,
     GitError,
+    IssueComment,
     LabelTimeline,
     MergeCallFailed,
     MergeConflict,
@@ -92,6 +96,7 @@ COMMENTED: tuple[str, ...] = (
     "ci_no_verdict",
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
+    "open_escalation",
 )
 
 LEFT_TO_HUMAN = "Left for the human to merge."
@@ -121,6 +126,38 @@ class MergeResult:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def read_comments(ports: Ports, task_id: str) -> list[IssueComment] | None:
+    """The issue's comments with their instants, read once per merge decision (GH-784); `None`
+    when the read fails, which `escalation_hold` turns into an unknown fact, never a clear one."""
+    try:
+        return ports.tracker.timestamped_comments(task_id)
+    except (ValueError, OSError):
+        return None
+
+
+def escalation_hold(state: TaskState, comments: Sequence[IssueComment] | None) -> bool | None:
+    """`MergeFacts.open_escalation` (GH-784): `True` while the document pauses on typed tracker
+    items or carries `owner_decision_unbuilt`, else `merge_hold.open_escalation` over the
+    `Escalated:` and `Ready for review:` comments, the last `resumed` entry of the pause log and
+    every landing `released_at`. `None` (unreadable comments or a mark without an instant) is
+    never clear: the decision refuses on anything that is not `False`. The one caller is the
+    facts assembly of the merge decision, the poller's and the verb's alike."""
+    if rules.tracker_item_pause(state) or state.get("owner_decision_unbuilt"):
+        return True
+    kinds: list[tuple[merge_hold.CommentKind, str]] = []
+    for comment in comments if comments is not None else ():
+        if comment.body.startswith(ESCALATED):
+            kinds.append(("escalated", comment.created_at))
+        elif comment.body.startswith(READY):
+            kinds.append(("ready", comment.created_at))
+    resumed = [entry for entry in state.get("pause_log", []) if entry["kind"] == "resumed"]
+    resumed_at = str(resumed[-1].get("at") or "") if resumed else None
+    released = [
+        entry["released_at"] for entry in state.get("landing", []) if "released_at" in entry
+    ]
+    return merge_hold.open_escalation(None if comments is None else kinds, resumed_at, released)
 
 
 def merge_task(
@@ -180,6 +217,10 @@ def merge_task(
             return MergeResult("stopped", f"adr_unreadable: {exc}")
     declared = ports.stack.ci(base)
     names = ci_gate(raw, declared).names
+    # GH-784: the one read of the issue's comments of this decision; the facts read the escalation
+    # off it and the refusal's `AUTO_MERGE_REFUSED` and `LANDING` lookups reuse its bodies.
+    comments = read_comments(ports, task_id)
+    bodies = [comment.body for comment in comments or ()]
     # GH-463: the decided fresh run, once there is one: it replaces the pull request's own report.
     fresh_runs: list[ci.CiReport] = []
     report: ci.CiReport | ci.CiUnreadable | None = None
@@ -195,7 +236,16 @@ def merge_task(
     gains: dict[str, tuple[str, ...] | None] = {}
 
     def decide(document: TaskState) -> rules.MergeFacts:
-        base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
+        base_facts = _facts(
+            task_id,
+            document,
+            pull_request,
+            eval_set,
+            number,
+            master,
+            touched,
+            escalation_hold(document, comments),
+        )
         # GitHub's reading of a conflict on this head and master (GH-326), git-free; the
         # probe is the last look's, immediately before the merge call.
         # GH-492: git's own conflict on this exact pair, once recorded, counts as well.
@@ -308,6 +358,7 @@ def merge_task(
             facts=facts,
             report=report,
             cause=cause,
+            bodies=bodies,
         )
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
@@ -344,6 +395,7 @@ def merge_task(
         pull_request,
         inert_from,
         label_timeline,
+        bodies,
     )
 
 
@@ -1001,10 +1053,13 @@ def _facts(
     number: int,
     master: str,
     touched: tuple[str, ...] | None,
+    open_escalation: bool | None,
 ) -> rules.MergeFacts:
     pr_head = pull_request.head_oid if pull_request is not None else None
     return replace(
-        _merge_facts(task_id, raw, pull_request, eval_set, number, master),
+        _merge_facts(
+            task_id, raw, pull_request, eval_set, number, master, open_escalation=open_escalation
+        ),
         touched_paths=touched,
         ci_untrusted=rules.ci_untrusted(touched),
         # GH-462: whether the recorded dispatched run of the base's workflow stands for this head.
@@ -1022,7 +1077,9 @@ def settlement_facts(
     """The facts `merge_task` starts from before it reads any diff, a worktree or the CI --
     the builder `agentic restore` asks `plan_settlement.settleable` over, so a settlement
     and a merge never read a document two ways. No eval set is read (`in_eval_set` is `None`)."""
-    return _merge_facts(task_id, raw, pull_request, None, number, master)
+    # Settling reads no `open_escalation` (`plan_settlement.settleable` ignores it): the fact is
+    # the unknown one, which no decision over these facts would take for clear.
+    return _merge_facts(task_id, raw, pull_request, None, number, master, open_escalation=None)
 
 
 def run_checks(
@@ -1152,6 +1209,7 @@ def _merge(
     pull_request: PullRequest | None = None,
     inert_from: list[str] | None = None,
     label_timeline: LabelTimeline | None = None,
+    bodies: Sequence[str] = (),
 ) -> MergeResult:
     """`relied` is the CI links a merge on the CI rested on (None: it rested on the local
     checks); `ci_declared` says the product declares its CI, which is the only case that
@@ -1214,11 +1272,29 @@ def _merge(
         return MergeResult("stopped", "unreachable")
     except MergeCallFailed as exc:
         return _after_failure(
-            task_id, reference, head, facts, exc.failure, str(exc), ports, log, label_timeline
+            task_id,
+            reference,
+            head,
+            facts,
+            exc.failure,
+            str(exc),
+            ports,
+            log,
+            label_timeline,
+            bodies,
         )
     except ValueError as exc:
         return _after_failure(
-            task_id, reference, head, facts, "gh_unreadable", str(exc), ports, log, label_timeline
+            task_id,
+            reference,
+            head,
+            facts,
+            "gh_unreadable",
+            str(exc),
+            ports,
+            log,
+            label_timeline,
+            bodies,
         )
     ports.documents.record_closure(
         task_id,
@@ -1308,6 +1384,7 @@ def _after_failure(
     ports: Ports,
     log: Callable[[str], None],
     label_timeline: LabelTimeline | None = None,
+    bodies: Sequence[str] = (),
 ) -> MergeResult:
     """`Tracker.merge` raised (GH-196). The failed call is counted first, before anything
     else is read: a terminal class spends the whole budget, any other one call of it. The
@@ -1339,7 +1416,9 @@ def _after_failure(
         )
         if decision.kind == "refuse" and decision.reason == "merge_failed":
             log(f"agentic: merge: {task_id}: merge failed ({failure}: {error}), budget spent")
-            return _refuse(task_id, head, "merge_failed", ports, failure=failure, facts=facts)
+            return _refuse(
+                task_id, head, "merge_failed", ports, failure=failure, facts=facts, bodies=bodies
+            )
         log(
             f"agentic: merge: {task_id}: merge failed ({failure}: {error}), "
             f"{count} of {rules.MERGE_CALLS_MAX}"
@@ -1474,6 +1553,7 @@ def _refuse(
     facts: rules.MergeFacts | None = None,
     report: ci.CiReport | ci.CiUnreadable | None = None,
     cause: CiCause | None = None,
+    bodies: Sequence[str] = (),
 ) -> MergeResult:
     """Comments a refusal the human can act on, once per (head, reason): the last
     `Auto-merge refused:` comment naming the same head and reason is enough. A
@@ -1524,11 +1604,7 @@ def _refuse(
             )
             first = f"{AUTO_MERGE_REFUSED}{head} gh pr merge failed: {failure or 'unknown'}"
             text = "\n\n".join(part for part in (first, advice, closing) if part)
-        refused = [
-            body
-            for body in ports.tracker.issue_comments(task_id)
-            if body.startswith(AUTO_MERGE_REFUSED)
-        ]
+        refused = [body for body in bodies if body.startswith(AUTO_MERGE_REFUSED)]
         if (
             not refused
             or refused[-1].splitlines()[0] != first
@@ -1548,8 +1624,6 @@ def _refuse(
                 facts.current_master if facts is not None else None,
                 names=step.names,
             )
-            if not taken and not any(
-                body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)
-            ):
+            if not taken and not any(body.splitlines()[:1] == [line] for body in bodies):
                 _note(task_id, line, ports)
     return MergeResult("refused", reason)
