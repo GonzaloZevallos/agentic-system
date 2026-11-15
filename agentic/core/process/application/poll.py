@@ -2687,7 +2687,7 @@ def flag_stranded(ports: Ports, queued: Mapping[int, TaskState | None]) -> list[
 
 
 # The sweeps a dry round skips (GH-622), named as its `dry-run: skipped <name>` lines say them.
-DRY_RUN_SKIPPED = ("close_issues", "split", "scratch", "ci_refs", "board")
+DRY_RUN_SKIPPED = ("close_issues", "split", "scratch", "ci_refs", "stranded", "board")
 
 
 def run_once(
@@ -2734,7 +2734,7 @@ def run_once(
     right after the closes are gathered and outside `registry.exclusive()`: its `issue
     closed` lines open the round's output, and a failed close or unreadable queue says
     nothing (the next round retries). `dry_run` (GH-622) is a round over read-only ports
-    (`dry_run.read_only_ports`): the five sweeps, `execute` and `reflect_lines` do not run, each
+    (`dry_run.read_only_ports`): the six sweeps, `execute` and `reflect_lines` do not run, each
     sweep says `dry-run: skipped <name>` at the head of the output, and each action in the plan
     says `would <kind> issue <N>` where `execute`'s lines would stand."""
     closes = gather_closes(ports)

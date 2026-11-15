@@ -646,7 +646,7 @@ def build_parser() -> CommandTree:
         "--dry-run",
         action="store_true",
         help="with --once: one round from reads only, printing what it would do and writing "
-        "nothing; the upstream fetch is the one exception. The five sweeps are skipped, so a "
+        "nothing; the upstream fetch is the one exception. The six sweeps are skipped, so a "
         "blocker the live close sweep would close does not release its dependent (GH-348), "
         "and the first-seen exempt stamp is not recorded; exits 1 if a call was unclassified",
     )

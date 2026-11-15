@@ -3843,11 +3843,11 @@ def stranded_tracker_only(document: Mapping[str, Any]) -> bool:
     """A task that ended `tracker_only` after an estimate pause was resumed and the Tech Lead
     never planned again (GH-798, ADR-0054 addendum; the owed re-plan is the glossary's
     Re-plan debido). True when the `status` is `tracker_only`, the `pause_log` holds an
-    `escalation` of value `estimate` followed later by a `resumed` entry (the first one: the
-    resume that owed the re-plan), and no run of the Tech Lead started after that `resumed`.
-    A run with no readable `started_at` counts as a re-plan (false: it cannot be said to have
-    been skipped), and so does a `resumed` without an instant. Reads only the log and the
-    runs, never a section's text; it writes nothing."""
+    `escalation` of value `estimate` followed later by a `resumed` entry (the last such
+    pair: the resume that owed the re-plan), and no run of the Tech Lead started after that
+    `resumed`. A run with no readable `started_at` counts as a re-plan (false: it cannot be
+    said to have been skipped), and so does a `resumed` without an instant. Reads only the log
+    and the runs, never a section's text; it writes nothing."""
     if document.get("status") != "tracker_only":
         return False
     resumed_at: object = None
@@ -3857,7 +3857,7 @@ def stranded_tracker_only(document: Mapping[str, Any]) -> bool:
             seen_estimate = True
         elif entry.get("kind") == "resumed" and seen_estimate:
             resumed_at = entry.get("at")
-            break
+            seen_estimate = False  # a later estimate opens a new pair: the last one counts
     resumed = _instant(resumed_at)
     if resumed is None:
         return False

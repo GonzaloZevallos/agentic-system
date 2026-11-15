@@ -25,7 +25,8 @@ from tests.fakes import MemoryInbox, MemoryTracker, MemoryWorkspace, memory_port
 
 BANNER = "dry-run: plan from reads only; effects of this round's own writes are not simulated"
 SKIPPED = [
-    f"dry-run: skipped {name}" for name in ("close_issues", "split", "scratch", "ci_refs", "board")
+    f"dry-run: skipped {name}"
+    for name in ("close_issues", "split", "scratch", "ci_refs", "stranded", "board")
 ]
 MERGED = {
     "delivery_outcome": "auto_merged",

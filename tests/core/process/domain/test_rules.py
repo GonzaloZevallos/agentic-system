@@ -5371,3 +5371,27 @@ def test_stranded_tracker_only_is_false_when_the_resume_has_no_readable_instant(
     doc = _stranded()
     doc["pause_log"][1] = {"kind": "resumed"}
     assert rules.stranded_tracker_only(doc) is False
+
+
+def test_stranded_tracker_only_reads_the_last_estimate_resume_pair():
+    doc = _stranded()
+    doc["pause_log"] = [
+        {"kind": "escalation", "value": "estimate", "at": "2026-11-06T10:00:00+00:00"},
+        {"kind": "resumed", "at": "2026-11-06T10:05:00+00:00"},
+        {"kind": "escalation", "value": "estimate", "at": "2026-11-06T16:23:35+00:00"},
+        {"kind": "resumed", "at": "2026-11-06T16:29:17+00:00"},
+    ]
+    doc["runs"] = [{"role": "Tech Lead", "started_at": "2026-11-06T10:10:00+00:00"}]
+    assert rules.stranded_tracker_only(doc) is True
+
+
+def test_stranded_tracker_only_stays_false_after_a_questions_resume_following_a_replan():
+    doc = _stranded()
+    doc["pause_log"].extend(
+        [
+            {"kind": "escalation", "value": "questions", "at": "2026-11-06T16:40:00+00:00"},
+            {"kind": "resumed", "at": "2026-11-06T16:45:00+00:00"},
+        ]
+    )
+    doc["runs"].append({"role": "Tech Lead", "started_at": "2026-11-06T16:30:00+00:00"})
+    assert rules.stranded_tracker_only(doc) is False

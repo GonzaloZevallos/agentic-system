@@ -63,7 +63,11 @@ def test_at_most_one_issue_is_flagged_per_round_and_the_next_round_flags_the_oth
     ports = _ports(7, 8)
     _go(ports)
     assert [t for t, _ in _flagged(ports)] == ["GH-7"]
-    ports.tracker.timestamped["GH-7"] = [IssueComment(f"x\n{MARKER}", "2026-11-07T00:00:00Z")]
+    # The fake's `comment()` does not feed `timestamped_comments`: hand the poller its own
+    # comment back, as the issue would.
+    ports.tracker.timestamped["GH-7"] = [
+        IssueComment(text, "2026-11-07T00:00:00Z") for task, text in _flagged(ports)
+    ]
     _go(ports)
     assert [t for t, _ in _flagged(ports)] == ["GH-7", "GH-8"]
     assert poll.STRANDED_FLAGS_PER_ROUND == 1
