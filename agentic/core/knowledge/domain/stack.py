@@ -180,6 +180,7 @@ which is why it is declared and not guessed.
 from __future__ import annotations
 
 import importlib
+import posixpath
 import re
 import shlex
 from collections.abc import Callable, Mapping, Sequence
@@ -190,7 +191,7 @@ from typing import Any, Literal, Protocol, TypeGuard
 
 from agentic.core.process.domain import master_gain
 from agentic.core.process.domain import performance as perf
-from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.design import Capture, Design
 from agentic.core.process.domain.docs import Docs
 from agentic.core.process.domain.presubmit import (
     FAILED_IDS_TOKEN,
@@ -268,7 +269,8 @@ BASE_TOKEN = "{base}"
 EMPTY_DECLARATION = "is declared empty; leave the key out to declare none"
 # Every sub-key `design` may declare (ADR-0040): the same "unknown is a typo" rule,
 # one level down.
-DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare")
+DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare", "captures")
+CAPTURE_KEYS = ("image", "screen", "paths")
 # The name is a label value in Prometheus and a variable in the dashboard: a slug keeps
 # one product from arriving under two spellings and keeps the panels' regexes honest.
 # Every sub-key one `performance` scenario declares, and the two of each limit (GH-318).
@@ -1129,7 +1131,87 @@ def design(data: object, source: object) -> Design | None:
         entry=entry.strip(),
         sample_app=_design_command(found, source, "sample_app"),
         compare=_design_command(found, source, "compare"),
+        captures=_captures(found, source),
     )
+
+
+def _captures(found: dict[str, Any], source: object) -> tuple[Capture, ...]:
+    """The optional `captures` under `design` (glossary: Dibujo aprobado): a non-empty
+    list of `{image, screen, paths?}`, `paths` being `fnmatch` globs relative to the repo
+    root. Read at the task's base commit, like the rest of the block.
+
+    The check is textual only: it never touches the filesystem, never resolves a symlink
+    and does not check that the image exists at the base commit (that is the departure
+    check's job, not the loader's). `image` comes back through `posixpath.normpath`;
+    `paths` come back as given. Every refusal is a `ValueError` naming the source."""
+    if "captures" not in found:
+        return ()
+    entries = found["captures"]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"{source}: expected `captures` under `design`, a non-empty list")
+    captures: list[Capture] = []
+    for index, entry in enumerate(entries):
+        capture = _capture(entry, source, f"`captures[{index}]`")
+        if any(seen.image == capture.image for seen in captures):
+            raise ValueError(f"{source}: `captures[{index}]` repeats the image {capture.image!r}")
+        if any(seen.screen == capture.screen for seen in captures):
+            raise ValueError(f"{source}: `captures[{index}]` repeats the screen {capture.screen!r}")
+        captures.append(capture)
+    return tuple(captures)
+
+
+def _capture(entry: object, source: object, where: str) -> Capture:
+    if not isinstance(entry, dict):
+        raise ValueError(f"{source}: expected a mapping for {where} under `captures`")
+    if unknown := [key for key in entry if key not in CAPTURE_KEYS]:
+        raise ValueError(
+            f"{source}: unknown key(s) {', '.join(sorted(map(str, unknown)))} in {where} "
+            f"under `captures`; expected {CAPTURE_KEYS}"
+        )
+    image = entry.get("image")
+    if not isinstance(image, str) or not image.strip():
+        raise ValueError(f"{source}: expected a non-empty `image` in {where} under `captures`")
+    screen = entry.get("screen")
+    if not isinstance(screen, str) or not screen.strip():
+        raise ValueError(f"{source}: expected a non-empty `screen` in {where} under `captures`")
+    paths: tuple[str, ...] = ()
+    if "paths" in entry:
+        declared = entry["paths"]
+        if not isinstance(declared, list) or not declared:
+            raise ValueError(
+                f"{source}: expected `paths` in {where} under `captures`, a non-empty list"
+            )
+        for glob in declared:
+            if not isinstance(glob, str) or not glob.strip():
+                raise ValueError(
+                    f"{source}: expected only non-empty strings in `paths` of {where} "
+                    "under `captures`"
+                )
+            _repo_relative(glob.strip(), source, f"a `paths` entry of {where} under `captures`")
+        paths = tuple(declared)
+    return Capture(
+        image=_capture_image(image.strip(), source, where), screen=screen.strip(), paths=paths
+    )
+
+
+def _capture_image(image: str, source: object, where: str) -> str:
+    what = f"the `image` of {where} under `captures`"
+    if image.endswith("/") or "\\" in image:
+        raise ValueError(
+            f"{source}: expected {what} to be a file path with `/` separators, got {image!r}"
+        )
+    normal = _repo_relative(image, source, what)
+    if normal == ".":
+        raise ValueError(f"{source}: expected {what} to name a file, got {image!r}")
+    return normal
+
+
+def _repo_relative(path: str, source: object, what: str) -> str:
+    """`path` normalised, refused when it is absolute or climbs out with `..`: text only."""
+    normal = posixpath.normpath(path)
+    if posixpath.isabs(normal) or normal == ".." or normal.startswith("../"):
+        raise ValueError(f"{source}: expected {what} relative to the repo root, got {path!r}")
+    return normal
 
 
 def performance(data: object, source: object) -> dict[str, perf.Scenario]:
@@ -1431,7 +1513,8 @@ KEY_REFERENCE: tuple[KeyReference, ...] = (
         design,
         DESIGN_KEYS,
         Disabled(),
-        "mapping of `prototype`, `entry`, `sample_app` and `compare`: the static prototype",
+        "mapping of `prototype`, `entry`, `sample_app`, `compare` and `captures`: the static "
+        "prototype and its approved captures",
     ),
     KeyReference(
         "ci",

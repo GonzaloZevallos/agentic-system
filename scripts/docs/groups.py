@@ -163,6 +163,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.design": "roles",
     "domain.docs": "roles",
     "domain.document": "state",
+    "domain.drawing": "roles",
     "domain.escalation_prompts": "state",
     "domain.exempt_queue": "machine",
     "domain.experiment": "state",

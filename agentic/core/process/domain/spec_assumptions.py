@@ -27,6 +27,7 @@ from .task import (
     WAITING_ON_HUMAN,
     AssumptionRow,
     PauseEntry,
+    SpecConflictCause,
     SpecEscalationCause,
     assumption_text,
 )
@@ -96,7 +97,7 @@ def conflict_decided(pause_log: Sequence[PauseEntry], cause: SpecEscalationCause
 ESCALATE = "escalate"
 
 
-def conflict_step(state: Mapping[str, Any], cause: SpecEscalationCause) -> str:
+def conflict_step(state: Mapping[str, Any], cause: SpecConflictCause) -> str:
     """What a site that found a spec conflict of `cause` does: `ESCALATE` when the owner has not
     decided it, otherwise the assumption text that records the decision."""
     if not conflict_decided(state.get("pause_log", []), cause):
@@ -104,7 +105,7 @@ def conflict_step(state: Mapping[str, Any], cause: SpecEscalationCause) -> str:
     return f"spec conflict ({cause}) settled by the owner's decision"
 
 
-_CONFLICT_QUESTIONS: dict[SpecEscalationCause, str] = {
+_CONFLICT_QUESTIONS: dict[SpecConflictCause, str] = {
     "contradiction": "the spec contradicts itself; decide which clause holds.",
     "conflict": "the spec conflicts with current behaviour or an ADR; decide which wins.",
     "data_loss": "building the spec as written would lose stored data; decide whether that "
@@ -116,7 +117,7 @@ _CONFLICT_POINTERS: dict[Literal["plan", "interview"], str] = {
 }
 
 
-def conflict_question(cause: SpecEscalationCause, where: Literal["plan", "interview"]) -> str:
+def conflict_question(cause: SpecConflictCause, where: Literal["plan", "interview"]) -> str:
     """The one fixed `questions_for_human` line of a spec conflict: never model text. It names
     the cause and points to where the owner reads the detail."""
     return f"Spec {cause}: {_CONFLICT_QUESTIONS[cause]} ({_CONFLICT_POINTERS[where]})"
@@ -124,7 +125,7 @@ def conflict_question(cause: SpecEscalationCause, where: Literal["plan", "interv
 
 def conflict_escalation(
     state: Mapping[str, Any],
-    cause: SpecEscalationCause,
+    cause: SpecConflictCause,
     reason: str,
     where: Literal["plan", "interview"],
     at: str,

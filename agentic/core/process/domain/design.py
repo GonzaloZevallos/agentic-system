@@ -15,17 +15,31 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class Capture:
+    """One approved capture of a screen (glossary: Dibujo aprobado): `image` is its path
+    inside the repo, normalised, `screen` the name of the screen it draws, and `paths`
+    the `fnmatch` globs, relative to the repo root, of the code that implements it --
+    `()` when the product did not say."""
+
+    image: str
+    screen: str
+    paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Design:
     """The product's design block, once `core.knowledge.domain.stack.design` has
     validated it. `prototype` is the directory of static screens, `entry` the screen
     inside it a walk starts from. `sample_app` and `compare` are optional commands:
     `None` is the product declaring neither, not a half-written file -- that failure
-    already happened at load, in `core.knowledge`."""
+    already happened at load, in `core.knowledge`. `captures` are the approved
+    captures, `()` when the block declares none."""
 
     prototype: str
     entry: str
     sample_app: str | None
     compare: str | None
+    captures: tuple[Capture, ...] = ()
 
 
 # The one line the system writes in a lead's section when it cannot back a claim with

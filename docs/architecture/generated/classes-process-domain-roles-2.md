@@ -27,6 +27,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__ConsultationWithAssumptions["ConsultationWithAssumptions"]
     class schemas__CopyDraft["CopyDraft"]
     class schemas__CopyFinding["CopyFinding"]
     class schemas__CopyReview["CopyReview"]
@@ -41,12 +42,13 @@ classDiagram
     class schemas__Finding["Finding"]
     class schemas__FitBucket["FitBucket"]
     class schemas__FitDecision["FitDecision"]
-    class schemas__GlossaryTerm["GlossaryTerm"]
     schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: roles (parte 1)](classes-process-domain-roles-1.md)
+  - `schemas.ConsultationWithAssumptions` hereda de `schemas.Consultation`
 - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`

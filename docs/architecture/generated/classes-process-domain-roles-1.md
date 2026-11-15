@@ -27,6 +27,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class design__Capture["Capture"]
     class design__Design["Design"]
     class design__NotReady["NotReady"]
     class docs__DiagramBudget["DiagramBudget"]
@@ -41,14 +42,14 @@ classDiagram
     class schemas__Classification["Classification"]
     class schemas__Consolidation["Consolidation"]
     class schemas__Consultation["Consultation"]
-    class schemas__ConsultationWithAssumptions["ConsultationWithAssumptions"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
-    schemas__ConsultationWithAssumptions --|> schemas__Consultation
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
+  - `schemas.ConsultationWithAssumptions` hereda de `schemas.Consultation`
 - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - `schemas.Answers` hereda de `schemas.RoleOutput`
   - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`

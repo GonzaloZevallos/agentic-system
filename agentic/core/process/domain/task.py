@@ -348,7 +348,11 @@ def add_flakes(existing: list[FlakeRecord], new: list[FlakeRecord]) -> list[Flak
     return [joined[key] for key in sorted(joined)]
 
 
-SpecEscalationCause = Literal["contradiction", "conflict", "data_loss"]
+SpecConflictCause = Literal["contradiction", "conflict", "data_loss"]
+# The wide cause of an escalation: a spec conflict, or a departure from the approved drawing.
+# Only the narrow `SpecConflictCause` types a role's `spec_conflict` field and the conflict
+# question table; `drawing` is raised by the system, never by a role.
+SpecEscalationCause = SpecConflictCause | Literal["drawing"]
 ASSUMPTION_MAX_CHARS = 240
 
 
