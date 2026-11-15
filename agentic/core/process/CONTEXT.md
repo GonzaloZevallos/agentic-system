@@ -180,6 +180,11 @@ Fricción que UX encuentra en el diseño del humano sin que impida cumplir el jo
 _Avoid_: hallazgo (lo de un validador sobre un pensador), sugerencia
 _Campo_: sin término de arte
 
+**Desviación del dibujo**:
+Algo visible que un rol entregaría distinto del dibujo aprobado (Dibujo aprobado). A diferencia de una observación, la tarea espera: el escalado la nombra con un número estable y el dueño responde por ese número, nunca por la clave interna (`ruta:elemento`). Ningún rol escribe el número ni el registro; los asigna el sistema. En el código: `Departure`, `departure_key`, `departure_question`, `DepartureRecord`, `departure_records` y `add_drawing_departures`.
+_Avoid_: Observación al diseño (la observación sigue con el diseño tal cual y le llega al humano en el pull request; la desviación espera la decisión del dueño antes de entregar)
+_Campo_: sin término de arte
+
 **Comparación**:
 Una pantalla del prototipo y la misma pantalla de la app de muestra, lado a lado y del mismo ancho. La saca un comando del producto. El Developer mira las suyas antes de entregar y UI Lead las juzga en la validación final de PM.
 _Avoid_: par de capturas (Par ya es el rol que devuelve y el que recibe), screenshot diff (no se compara pixel a pixel)

@@ -469,6 +469,10 @@ def render(
             if (waited := state.get("shadow_wait_s")) is not None
             else {}
         ),
+        # The departures from an approved drawing (GH-766), numbered rows written only when
+        # there is one, so every document without one is byte-identical to one written before;
+        # parsed back under the same name.
+        **({"drawing_departures": d} if (d := state.get("drawing_departures")) else {}),
         # The landing order's stamp and the head's anchor (GH-588), written only when set.
         **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
         **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
