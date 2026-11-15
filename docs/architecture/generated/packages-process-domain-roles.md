@@ -19,6 +19,7 @@ graph TD
     m_domain__denials["domain.denials"]
     m_domain__design["domain.design"]
     m_domain__docs["domain.docs"]
+    m_domain__drawing["domain.drawing"]
     m_domain__roles["domain.roles"]
     m_domain__schema_guard["domain.schema_guard"]
     m_domain__schemas["domain.schemas"]
@@ -29,6 +30,7 @@ graph TD
     m_domain__copy --> g_domain__state
     m_domain__copy --> m_domain__schemas
     m_domain__denials --> m_domain__roles
+    m_domain__drawing --> m_domain__design
     m_domain__roles --> g_domain__checks
     m_domain__roles --> g_domain__state
     m_domain__roles --> g_pkg__agentic__shared
@@ -38,6 +40,7 @@ graph TD
     m_domain__schemas --> g_domain__landing
     m_domain__schemas --> g_domain__state
     m_domain__schemas --> g_pkg__agentic__shared
+    m_domain__schemas --> m_domain__drawing
     m_domain__schemas --> m_domain__tracker_items
     m_domain__tracker_items --> g_domain__state
     m_domain__turn_notice --> g_domain__state

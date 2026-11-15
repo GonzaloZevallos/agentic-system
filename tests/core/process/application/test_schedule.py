@@ -19,7 +19,9 @@ from agentic.core.process.domain.task import (
     REDUCERS,
     add,
     add_assumptions,
+    add_drawing_departures,
     add_flakes,
+    add_full_checks_reads,
     add_merge_ci,
     add_restorations,
     add_review_scopes,
@@ -455,6 +457,26 @@ def value_for(key: str, branch: str, n: int):
                 "changed_lines": n % 3,
             }
         ]
+    if reducer is add_drawing_departures:
+        # One row per key, a function of the key alone (number included, as `departure_records`
+        # would have assigned it): the known key keeps its first row, so a row that differed by
+        # branch would depend on which branch landed first.
+        return [
+            {
+                "number": n % 3 + 1,
+                "key": f"d.png:e{n % 3}",
+                "drawing": "d.png",
+                "element": f"e{n % 3}",
+                "shows": "s",
+                "would_ship": "w",
+                "recommendation": "r",
+                "reason": "why",
+                "raised_by": "developer",
+                "raised_at": "t",
+                "answer": None,
+                "fix_passes": 0,
+            }
+        ]
     if reducer is add_merge_ci:
         # One row per (head, master) pair, a function of the pair alone: the known pair is
         # replaced whole, so a row that differed by branch would depend on the order.
@@ -469,6 +491,10 @@ def value_for(key: str, branch: str, n: int):
                 "superseded": [],
             }
         ]
+    if reducer is add_full_checks_reads:
+        # One row per version, a function of the version alone: the last row seen wins, so a
+        # row that differed by branch would depend on which branch landed first.
+        return [{"version": n % 3 + 1, "head": "h", "jobs": [], "tests": ["aaaaaaaa"]}]
     if reducer is last:
         return f"{branch}:{key}:{n}"
     return f"{branch}:{key}:{n}"
@@ -484,7 +510,9 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             merge,
             first,
             add_assumptions,
+            add_drawing_departures,
             add_flakes,
+            add_full_checks_reads,
             add_merge_ci,
             add_restorations,
             add_review_scopes,

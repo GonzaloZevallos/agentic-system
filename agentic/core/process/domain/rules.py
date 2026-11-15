@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -94,6 +94,7 @@ from .task import (
     FindingRecord,
     FindingStatus,
     FinishedPatch,
+    FullChecksRead,
     FullChecksRecord,
     LapsePauseEntry,
     MechanicalCause,
@@ -2675,9 +2676,11 @@ def tracker_only_plan(state: TaskState) -> bool:
     """The third plan shape (GH-336): no subtasks, no parts and tracker work for the human,
     typed (`tracker_items`, GH-620) or the legacy `tracker_checklist`. The one place the shape
     is decided; tracker work next to subtasks rides the delivery, and next to parts the split
-    posts it (GH-350), so neither is this shape."""
+    posts it (GH-350), so neither is this shape. Never while a re-plan is due (`plan_due`,
+    GH-798): the items then belong to a plan the owner's decision is about to replace."""
     return bool(
-        not state.get("subtasks")
+        not state.get("plan_due")
+        and not state.get("subtasks")
         and not state.get("parts")
         and (state.get("tracker_items") or state.get("tracker_checklist"))
     )
@@ -2962,6 +2965,137 @@ def full_checks_return(
         stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))}, at=at)
         patch = {**patch, **stopped, "status": WAITING_ON_HUMAN}
     return patch
+
+
+FULL_CHECKS_TESTS_MAX = 16
+
+
+def test_hashes(ids: Iterable[str]) -> list[str]:
+    """The first 16 of the sorted `ids`, each as the first 8 hex characters of its sha256: what
+    `FullChecksRead.tests` holds in place of a test id."""
+    return [
+        hashlib.sha256(item.encode("utf-8")).hexdigest()[:8]
+        for item in sorted(ids)[:FULL_CHECKS_TESTS_MAX]
+    ]
+
+
+def _log_says_nothing(log: ci.JobLog) -> bool:
+    """Whether a declared job's log that gave no set shows nothing it could have said: empty,
+    or read (cut short or not) with no header and no dropped id."""
+    if log.cause == "empty":
+        return True
+    scan = ci.scan_headers(log.text)
+    return log.cause == "read" and not scan.headers and scan.dropped == 0
+
+
+def recorded_tests(
+    logs: Sequence[ci.JobLog], candidates: Sequence[ci.CiCheck], declared: Sequence[str]
+) -> list[str] | None:
+    """The hashes of the failing tests of a red full tier, or `None` when the logs cannot say.
+    The only producer of `FullChecksRead.tests`. `candidates` is the whole `ci.log_candidates`
+    result, before any slice; a log belongs to the check of the same name (the first log of a
+    job when `logs` holds two).
+
+    A candidate that is not a declared name counts only through a log `ci.failing_set` could
+    read whole: any other answer makes the whole result `None`. A declared candidate (the
+    aggregate, which says less than the shards it waits on) is ignored when it has no log, an
+    empty log, or a read log with no header and no dropped id; when its log yields a set it
+    counts; any other log of it (unreadable, timed out, another head, or a cut or read log that
+    shows a header or a dropped id) makes the result `None`. No counted candidate, or more than
+    16 ids in the union, is `None`.
+
+    The accepted residual risk: a declared job that runs its own suite, truncated before any
+    header, next to red shards, is ignored and the shards' set stands for the failure."""
+    by_job: dict[str, ci.JobLog] = {}
+    for read in logs:
+        by_job.setdefault(read.job, read)
+    union: set[str] = set()
+    counted = False
+    for check in candidates:
+        log = by_job.get(check.name)
+        is_declared = check.name in declared
+        if log is None:
+            if is_declared:
+                continue
+            return None
+        ids = ci.failing_set(log)
+        if ids is not None:
+            union |= ids
+            counted = True
+        elif not is_declared:
+            return None
+        elif not _log_says_nothing(log):
+            return None
+    if not counted or len(union) > FULL_CHECKS_TESTS_MAX:
+        return None
+    return test_hashes(union)
+
+
+def _read_tests(row: FullChecksRead) -> frozenset[str] | None:
+    tests = row.get("tests")
+    if not isinstance(tests, list) or not tests or not all(isinstance(t, str) for t in tests):
+        return None
+    return frozenset(tests)
+
+
+def repeated_ci_failure(
+    reads: Sequence[FullChecksRead],
+) -> Literal["repeat", "no_repeat", "unknown"]:
+    """Whether the newest read of `full_checks` failed on the same tests as the latest earlier
+    read of another version: `repeat` when the overlap of their recorded ids is at least half
+    of the smaller set, else `no_repeat`. `unknown` with fewer than two versions, or when
+    either has no recorded tests (absent, empty, or not a list of str). Never raises on a
+    malformed row. Note a single id shared with a set of 16 reads `repeat`."""
+    valid = sorted(
+        (r for r in reads if type(r) is dict and type(r.get("version")) is int),
+        key=lambda r: r["version"],
+    )
+    if not valid:
+        return "unknown"
+    newest = valid[-1]
+    earlier = [r for r in valid if r["version"] != newest["version"]]
+    if not earlier:
+        return "unknown"
+    a, b = _read_tests(newest), _read_tests(earlier[-1])
+    if a is None or b is None:
+        return "unknown"
+    return "repeat" if len(a & b) * 2 >= min(len(a), len(b)) else "no_repeat"
+
+
+def repetition_sentence(prev_version: int) -> str:
+    """The one sentence that says a failure repeats: only a version number."""
+    return (
+        f"Same failing tests as full_checks v{prev_version} (overlap of recorded failing-test ids)."
+    )
+
+
+def full_checks_excerpt_due(
+    state: TaskState, unit: str, head: str
+) -> Literal["read", "dispatch", "none"]:
+    """Whether the CI logs of a red `full_checks` run are to be read for `unit` on `head`, and
+    through which record: `read` for a run `ci` judged, `dispatch` for one `ci_dispatch` did.
+    `none` without a failed record, when `unit` is not the reviewed unit or is not `returned`,
+    or when the record is of another commit. Independent of `returned_by`.
+
+    For part 1c: with 2+ subtasks and no integration, `full_checks_return` reopens the first
+    subtask while `reviewed_unit_name` is `None`, and this says `none` on purpose."""
+    record = state.get("full_checks")
+    if record is None or record.get("passed") is not False:
+        return "none"
+    name = reviewed_unit_name(state)
+    if name is None or unit != name:
+        return "none"
+    if state.get("subtasks", {}).get(unit, {}).get("status") != "returned":
+        return "none"
+    if not same_commit(record.get("head"), head):
+        return "none"
+    match record.get("ran_on"):
+        case "ci":
+            return "read"
+        case "ci_dispatch":
+            return "dispatch"
+        case _:
+            return "none"
 
 
 # The verifiers that read the integrated head (GH-469), in the one order their deltas and
@@ -3382,17 +3516,22 @@ def fit_question_text(
 
 
 def part_over_line(
-    task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None, *, at: str
+    task_id: str,
+    part_of: tuple[str, int, int],
+    fit: FitDecision | None,
+    *,
+    at: str,
+    remainder: FitDecision | None = None,
 ) -> dict[str, Any]:
     """The patch that pauses a part at the depth cap whose plan is over the line: one
     `estimate` escalation asking "narrow it or stop", marked by `fit_question` so its resume
     plans again instead of building. It carries no `proposed_estimate`; the plan stays in
-    the Tech Lead's section."""
+    the Tech Lead's section. After a carve-out, `remainder` is the fit of what was left."""
     return logged(
         {
             "current_role": PJM.name,
             "status": WAITING_ON_HUMAN,
-            **escalation("estimate", fit_question_text(task_id, part_of, fit)),
+            **escalation("estimate", fit_question_text(task_id, part_of, fit, remainder=remainder)),
             "fit_question": True,
         },
         at=at,
@@ -3427,6 +3566,9 @@ def resumed(
     }
     if state.get("spec"):
         patch["spec_cause"] = None
+    if state.get("spec_refusal"):
+        # An intake refusal comes before any `spec` exists, so it has its own condition.
+        patch["spec_refusal"] = None
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
     decided = bool(decision and decision.strip())
@@ -3445,10 +3587,12 @@ def resumed(
         # judged by the same budget. Written explicitly: a `last` reducer ignores a
         # missing key.
         patch["fit_question"] = False
+        patch["plan_due"] = True  # the only writer of True (GH-798, ADR-0054 addendum)
     if state.get("escalation_class") == "estimate" and state.get("parts"):
         # A split that stopped on the estimate and the human decided on it (ADR-0054): the
         # plan is made again, with the same budget.
         patch["parts"] = []
+        patch["plan_due"] = True
     if (
         state.get("escalation_class") == "estimate"
         and (decided or estimate is not None)
@@ -3696,10 +3840,49 @@ def _publication_owed(state: TaskState) -> bool:
     return same_commit(state.get("publish_owed"), approved_head(state))
 
 
+def all_approved_or_none(state: TaskState) -> bool:
+    """No subtask is left to build: the state has none, or every one is approved. A
+    `tracker_only` end is only that when this holds (GH-798): a plan with a code subtask
+    still undelivered is never ended by the tracker."""
+    return not state.get("subtasks") or all_approved(state)
+
+
+def stranded_tracker_only(document: Mapping[str, Any]) -> bool:
+    """A task that ended `tracker_only` after an estimate pause was resumed and the Tech Lead
+    never planned again (GH-798, ADR-0054 addendum; the owed re-plan is the glossary's
+    Re-plan debido). True when the `status` is `tracker_only`, the `pause_log` holds an
+    `escalation` of value `estimate` followed later by a `resumed` entry (the last such
+    pair: the resume that owed the re-plan), and no run of the Tech Lead started after that
+    `resumed`. A run with no readable `started_at` counts as a re-plan (false: it cannot be
+    said to have been skipped), and so does a `resumed` without an instant. Reads only the log
+    and the runs, never a section's text; it writes nothing."""
+    if document.get("status") != "tracker_only":
+        return False
+    resumed_at: object = None
+    seen_estimate = False
+    for entry in document.get("pause_log", []):
+        if entry.get("kind") == "escalation" and entry.get("value") == "estimate":
+            seen_estimate = True
+        elif entry.get("kind") == "resumed" and seen_estimate:
+            resumed_at = entry.get("at")
+            seen_estimate = False  # a later estimate opens a new pair: the last one counts
+    resumed = _instant(resumed_at)
+    if resumed is None:
+        return False
+    for run in document.get("runs", []):
+        if run.get("role") != TECH_LEAD.name:
+            continue
+        started = _instant(run.get("started_at"))
+        if started is None or started > resumed:
+            return False
+    return True
+
+
 def resume_target(state: TaskState) -> str | None:
     """Where a resumed task goes next, from the same facts the routing reads. A pull
     request ends the road unless the landing reopened the stage under it, or a stopped run
-    still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`."""
+    still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`. A
+    re-plan owed (`plan_due`, GH-798) goes to `plan`, whatever the status says."""
     if state.get("escalated"):
         return None
     if state.get("pull_request"):
@@ -3707,9 +3890,11 @@ def resume_target(state: TaskState) -> str | None:
             return "deliver"
         if not landing_pass_live(state):
             return None
+    if state.get("plan_due"):
+        return "plan"
     if state.get("status") == "split":
         return None  # an end like a pull request: the parts are other tasks now
-    if state.get("status") == "tracker_only":
+    if state.get("status") == "tracker_only" and all_approved_or_none(state):
         return None  # an end: the checklist is with the human
     if state.get("parts") and not state.get("subtasks"):
         return "split"  # paused while opening the parts: finish them, do not plan again

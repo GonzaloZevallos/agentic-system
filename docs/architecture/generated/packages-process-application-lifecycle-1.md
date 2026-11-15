@@ -11,7 +11,8 @@ Esta página muestra los módulos del grupo `lifecycle` de `application` y los i
   - [application: landing (parte 2)](packages-process-application-landing-2.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support](packages-process-application-support.md)
+  - [application: support (parte 1)](packages-process-application-support-1.md)
+  - [application: support (parte 2)](packages-process-application-support-2.md)
 
 ```mermaid
 graph TD
@@ -28,10 +29,11 @@ graph TD
     m_application__board_sync["application.board_sync"]
     m_application__carve_out["application.carve_out"]
     m_application__dry_run["application.dry_run"]
+    m_application__plan_carve_out["application.plan_carve_out"]
     m_application__poll["application.poll"]
+    m_application__promotion["application.promotion"]
     m_application__registration["application.registration"]
     m_application__relabel["application.relabel"]
-    m_application__restore["application.restore"]
     m_application__archive --> g_application__support
     m_application__archive --> g_pkg__domain
     m_application__board_sync --> g_application__support
@@ -40,6 +42,10 @@ graph TD
     m_application__carve_out --> g_application__support
     m_application__carve_out --> g_pkg__domain
     m_application__dry_run --> g_application__support
+    m_application__plan_carve_out --> g_application__support
+    m_application__plan_carve_out --> g_pkg__agentic__shared
+    m_application__plan_carve_out --> g_pkg__domain
+    m_application__plan_carve_out --> m_application__carve_out
     m_application__poll --> g_application__build
     m_application__poll --> g_application__checks
     m_application__poll --> g_application__landing
@@ -50,14 +56,10 @@ graph TD
     m_application__poll --> g_pkg__domain
     m_application__poll --> m_application__board_sync
     m_application__poll --> m_application__registration
+    m_application__promotion --> g_pkg__domain
     m_application__registration --> g_application__support
     m_application__registration --> g_pkg__domain
     m_application__relabel --> g_application__definition
     m_application__relabel --> g_application__support
     m_application__relabel --> g_pkg__domain
-    m_application__restore --> g_application__landing
-    m_application__restore --> g_application__lifecycle__2
-    m_application__restore --> g_application__support
-    m_application__restore --> g_pkg__domain
-    m_application__restore --> m_application__archive
 ```

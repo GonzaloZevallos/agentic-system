@@ -28,7 +28,7 @@ APPLICATION_DIR = Path(preflight.__file__).resolve().parent
 PLAN = "plan.py"
 
 # What `load_prompt` and `render` fill themselves, so no call has to.
-ALWAYS_SUPPLIED = frozenset({"date", "max_changes", "max_turns", "flags"})
+ALWAYS_SUPPLIED = frozenset({"date", "max_changes", "max_turns", "flags", "drawing_rule"})
 # The sides of an `Interview` a role expression may name.
 SIDES = ("author", "interviewer", "interviewee", "consultant")
 # `run_role`'s own named parameters: a keyword with one of these names is not a placeholder.

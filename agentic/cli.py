@@ -29,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, Literal, NamedTuple, NoReturn, cast
 
 import anyio
 import yaml
@@ -57,6 +57,7 @@ from .core.measurement.domain import (
     findings_report,
     playbook_window,
     shadow_report,
+    stage_report,
     task_scores,
 )
 from .core.measurement.domain import metrics as delivery_metrics
@@ -646,7 +647,7 @@ def build_parser() -> CommandTree:
         "--dry-run",
         action="store_true",
         help="with --once: one round from reads only, printing what it would do and writing "
-        "nothing; the upstream fetch is the one exception. The five sweeps are skipped, so a "
+        "nothing; the upstream fetch is the one exception. The six sweeps are skipped, so a "
         "blocker the live close sweep would close does not release its dependent (GH-348), "
         "and the first-seen exempt stamp is not recorded; exits 1 if a call was unclassified",
     )
@@ -3307,20 +3308,27 @@ class _GhReads:
         return self.issues[task_id]
 
 
+class _Backfilled(NamedTuple):
+    """What `_backfill_one` decided for one document. `stage_row` is last and never `None`."""
+
+    outcome: str
+    identity: task_scores.Identity | None
+    scores: list[task_scores.Score]
+    moment: task_scores.TaskTime | None
+    dimensions: task_scores.Dimensions | None
+    stage_row: stage_report.StageRow
+
+
 def _backfill_one(
     product: str, task_id: str, document: Mapping[str, Any], reads: _GhReads
-) -> tuple[
-    str,
-    task_scores.Identity | None,
-    list[task_scores.Score],
-    task_scores.TaskTime | None,
-    task_scores.Dimensions | None,
-]:
+) -> _Backfilled:
     """The outcome of one document and, when it has scores, what to write: `("scored" |
-    "partial:<names>" | "skipped:<reason>", identity, scores, task time, dimensions)`. The
-    same `task_time`, `identity`, `dimensions` and `task_scores` the live path calls."""
+    "partial:<names>" | "skipped:<reason>", identity, scores, task time, dimensions, stage
+    row)`. The same `task_time`, `identity`, `dimensions` and `task_scores` the live path
+    calls. A document whose tracker read failed is `Unread("gh_failed")`, never unknown."""
     if not (task_scores.scoreable(document) or document.get("closed_at")):
-        return "skipped:not_finished", None, [], None, None
+        unread = stage_report.StageRow(task_id, stage_report.Unread("not_finished"), None)
+        return _Backfilled("skipped:not_finished", None, [], None, None, unread)
     reference = document.get("pull_request")
     pull_request = reads.pull_request(str(reference)) if reference else None
     issue = reads.issue_created_at(task_id)
@@ -3329,12 +3337,14 @@ def _backfill_one(
     created = issue if isinstance(issue, str) else None
     moment = task_scores.task_time(document, pr.created_at if pr else None, created)
     if moment is None:
-        return "skipped:no_time", None, [], None, None
+        unread = stage_report.StageRow(task_id, stage_report.Unread("no_time"), None)
+        return _Backfilled("skipped:no_time", None, [], None, None, unread)
     ids = task_scores.identity(product, task_id, moment.start)
     scores = task_scores.task_scores(
         document,
         pr_merged_at=pr.merged_at if pr else None,
         issue_created_at=created,
+        pr_created_at=pr.created_at if pr else None,
         identity=ids,
     )
     omitted: list[str] = []
@@ -3344,7 +3354,18 @@ def _backfill_one(
         if task_scores.task_time(document, None, None) is None:
             omitted.append("time")
     outcome = f"partial:{','.join(omitted)}" if omitted else "scored"
-    return outcome, ids, scores, moment, task_scores.dimensions(document)
+    row = (
+        stage_report.StageRow(task_id, stage_report.Unread("gh_failed"), None)
+        if failed
+        else task_scores.stage_row(
+            task_id,
+            document,
+            issue_created_at=created,
+            pr_created_at=pr.created_at if pr else None,
+            pr_merged_at=pr.merged_at if pr else None,
+        )
+    )
+    return _Backfilled(outcome, ids, scores, moment, task_scores.dimensions(document), row)
 
 
 async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> None:
@@ -3367,6 +3388,7 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
         )
     reads = _GhReads(ports)
     counts: dict[str, int] = {}
+    rows: list[stage_report.StageRow] = []
     consecutive_failures = 0
     for task_id in ports.documents.ids():
         try:
@@ -3375,8 +3397,12 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
             document = None
         if document is None:
             outcome, ids, scores, moment, dims = "skipped:unreadable", None, [], None, None
+            row = stage_report.StageRow(task_id, stage_report.Unread("unreadable"), None)
         else:
-            outcome, ids, scores, moment, dims = _backfill_one(product, task_id, document, reads)
+            outcome, ids, scores, moment, dims, row = _backfill_one(
+                product, task_id, document, reads
+            )
+        rows.append(row)
         if (
             ids is not None
             and not dry_run
@@ -3396,6 +3422,8 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
         if consecutive_failures >= BACKFILL_TRANSPORT_FAILURES:
             print(f"agentic: stopped after {consecutive_failures} consecutive failed writes")
             break
+    for line in stage_report.stage_lines(rows):
+        print(line)
     scored, partial, failed = (counts.pop(k, 0) for k in ("scored", "partial", "failed"))
     skipped = ", ".join(f"{name} {n}" for name, n in sorted(counts.items()))
     print(f"scored {scored}, partial {partial}, {skipped + ', ' if skipped else ''}failed {failed}")
@@ -3597,6 +3625,7 @@ def _write_scores(
             document,
             pr_merged_at=pr_merged_at,
             issue_created_at=issue_created_at,
+            pr_created_at=pr_created_at,
             identity=task_scores.identity(product, task_id, span.start),
         )
         scorer.write(product, task_id, document, scores, span, task_scores.dimensions(document))

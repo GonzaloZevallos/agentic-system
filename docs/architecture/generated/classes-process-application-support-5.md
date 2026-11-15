@@ -31,8 +31,8 @@ classDiagram
     class ports__SentMemory["SentMemory"]
     class ports__SpecReader["SpecReader"]
     class ports__SpecUnreadable["SpecUnreadable"]
+    class ports__SpecValidator["SpecValidator"]
     class ports__Stage0Candidate["Stage0Candidate"]
-    class ports__Stage0Escalation["Stage0Escalation"]
 ```
 
 ## Relaciones con otras páginas

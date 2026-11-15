@@ -17,6 +17,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
   - [domain: state (parte 4)](classes-process-domain-state-4.md)
@@ -27,7 +28,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class rules__LandWait["LandWait"]
     class rules__LaunchCandidate["LaunchCandidate"]
     class rules__LockFacts["LockFacts"]
     class rules__MergeDecision["MergeDecision"]
@@ -41,4 +41,6 @@ classDiagram
     class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
+    class size_budget__ActualSize["ActualSize"]
+    class size_budget__Divergence["Divergence"]
 ```

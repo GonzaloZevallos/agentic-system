@@ -228,3 +228,42 @@ def test_the_lazy_import_guard_rejects_a_module_level_import(tmp_path):
     lazy = tmp_path / "composition.py"
     lazy.write_text("def f():\n    from .core.measurement.adapters.langfuse.dashboards import X\n")
     assert not _eager_dashboard_adapter(lazy)
+
+
+# Invariant 2 (GH-722): the application of a carve-out is reached through `plan_carve_out` alone.
+CARVE_APPLICATION = "agentic.core.process.application.carve_out"
+CARVE_HOME = Path("core") / "process" / "application" / "plan_carve_out.py"
+
+
+def _imports_carve_application(path: Path, root: Path) -> bool:
+    return CARVE_APPLICATION in imports.imports_of(path, root)
+
+
+def _outside_the_carve_home(package: Path) -> list[str]:
+    return sorted(
+        str(p.relative_to(package))
+        for p in package.rglob("*.py")
+        if p != package / CARVE_HOME and _imports_carve_application(p, package.parent)
+    )
+
+
+def test_only_plan_carve_out_imports_the_carve_out_application():
+    assert _outside_the_carve_home(PACKAGE) == []
+    assert _imports_carve_application(PACKAGE / CARVE_HOME, PACKAGE.parent)
+
+
+def test_the_carve_out_guard_rejects_any_other_module_that_imports_it(tmp_path):
+    package = tmp_path / "agentic"
+    home = package / CARVE_HOME
+    home.parent.mkdir(parents=True)
+    home.write_text("from . import carve_out\n")
+    for name, source in (
+        ("plan.py", "from .carve_out import apply_carve\n"),
+        ("late.py", "from agentic.core.process.application import carve_out\n"),
+        ("fine.py", "from agentic.core.process.domain import carve_out\n"),
+    ):
+        (home.parent / name).write_text(source)
+    assert _outside_the_carve_home(package) == [
+        "core/process/application/late.py",
+        "core/process/application/plan.py",
+    ]

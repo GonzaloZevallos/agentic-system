@@ -11,7 +11,8 @@ Esta página muestra los módulos del grupo `build` de `application` y los impor
   - [application: lifecycle (parte 1)](packages-process-application-lifecycle-1.md)
   - [application: lifecycle (parte 2)](packages-process-application-lifecycle-2.md)
   - [application: reflection](packages-process-application-reflection.md)
-  - [application: support](packages-process-application-support.md)
+  - [application: support (parte 1)](packages-process-application-support-1.md)
+  - [application: support (parte 2)](packages-process-application-support-2.md)
 
 ```mermaid
 graph TD
@@ -39,7 +40,6 @@ graph TD
     m_application__deliver --> g_pkg__domain
     m_application__delivered --> g_application__support
     m_application__delivered --> g_pkg__domain
-    m_application__develop --> g_application__build__2
     m_application__develop --> g_application__checks
     m_application__develop --> g_application__lifecycle
     m_application__develop --> g_application__support
@@ -52,11 +52,12 @@ graph TD
     m_application__evaluated --> g_pkg__agentic__shared
     m_application__evaluated --> g_pkg__domain
     m_application__integrate --> g_application__build__2
+    m_application__integrate --> g_application__lifecycle
     m_application__integrate --> g_application__support
     m_application__integrate --> g_pkg__agentic__shared
     m_application__integrate --> g_pkg__domain
-    m_application__plan --> g_application__build__2
     m_application__plan --> g_application__definition
+    m_application__plan --> g_application__lifecycle
     m_application__plan --> g_application__reflection
     m_application__plan --> g_application__support
     m_application__plan --> g_pkg__agentic__shared

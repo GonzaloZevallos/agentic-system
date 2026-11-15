@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `roles` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 4 de 4, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `roles` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 4 de 5, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -16,6 +16,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: roles (parte 1)](classes-process-domain-roles-1.md)
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
@@ -27,27 +28,51 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__Part["Part"]
+    class schemas__PerfBudget["PerfBudget"]
+    class schemas__PerfScenario["PerfScenario"]
+    class schemas__PlanCritique["PlanCritique"]
+    class schemas__PlanSize["PlanSize"]
+    class schemas__PlatformAnswers["PlatformAnswers"]
+    class schemas__PlatformAnswersWithAssumptions["PlatformAnswersWithAssumptions"]
+    class schemas__Reflection["Reflection"]
+    class schemas__Review["Review"]
+    class schemas__RoleOutput["RoleOutput"]
+    class schemas__Ruling["Ruling"]
     class schemas__SolutionTurn["SolutionTurn"]
     class schemas__StackProposal["StackProposal"]
-    class schemas__Subtask["Subtask"]
-    class schemas__TechAnswers["TechAnswers"]
-    class schemas__TechAnswersWithAssumptions["TechAnswersWithAssumptions"]
-    class schemas__TechPlan["TechPlan"]
-    class schemas__TechPlanWithAssumptions["TechPlanWithAssumptions"]
-    class schemas__Verdict["Verdict"]
-    class stack_signals__Signals["Signals"]
-    class tracker_items__CommentItem["CommentItem"]
-    class tracker_items__HumanItem["HumanItem"]
-    class tracker_items__OpenIssueItem["OpenIssueItem"]
-    schemas__TechAnswersWithAssumptions --|> schemas__TechAnswers
-    schemas__TechPlanWithAssumptions --|> schemas__TechPlan
+    schemas__PlanCritique --|> schemas__RoleOutput
+    schemas__PlanSize --|> schemas__RoleOutput
+    schemas__PlatformAnswers --|> schemas__RoleOutput
+    schemas__PlatformAnswersWithAssumptions --|> schemas__PlatformAnswers
+    schemas__Reflection --|> schemas__RoleOutput
+    schemas__Review --|> schemas__RoleOutput
+    schemas__Ruling --|> schemas__RoleOutput
+    schemas__StackProposal --|> schemas__RoleOutput
 ```
 
 ## Relaciones con otras páginas
 
+- [domain: roles (parte 1)](classes-process-domain-roles-1.md)
+  - `schemas.Answers` hereda de `schemas.RoleOutput`
+  - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`
+- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
+  - `schemas.Classification` hereda de `schemas.RoleOutput`
+  - `schemas.Consolidation` hereda de `schemas.RoleOutput`
+  - `schemas.Consultation` hereda de `schemas.RoleOutput`
+  - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
+  - `schemas.CopyReview` hereda de `schemas.RoleOutput`
+  - `schemas.Delivery` hereda de `schemas.RoleOutput`
+  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
+  - `schemas.DesignReview` hereda de `schemas.RoleOutput`
 - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
+  - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
+  - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
+  - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
+  - `schemas.PRD` hereda de `schemas.RoleOutput`
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`
-  - `schemas.StackProposal` hereda de `schemas.RoleOutput`
+- [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
   - `schemas.TechPlan` hereda de `schemas.RoleOutput`
   - `schemas.Verdict` hereda de `schemas.RoleOutput`

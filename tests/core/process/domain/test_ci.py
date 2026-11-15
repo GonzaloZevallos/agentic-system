@@ -523,3 +523,43 @@ def test_current_runs_keeps_report_order_and_the_full_name_not_the_declared_one(
     b_new = job("pytest (b...", "SUCCESS", NEW)
     assert ci.current_runs(report(a_old, b_new, a_new)) == (b_new, a_new)
     assert ci.current_runs(report()) == ()
+
+
+# --- the link and job name a task record may keep (GH-789) ---------------------------------------
+
+STORED = "https://github.com/o/r/actions/runs/123/job/456"
+
+
+@pytest.mark.parametrize("url", [STORED, STORED + "?pr=12"])
+def test_record_link_keeps_an_actions_job_link_and_the_adapter_reads_it(url: str) -> None:
+    assert ci.record_link(url) == url
+    assert ci.JOB_LINK.search(url) is not None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/x?u=/actions/runs/1/job/2",
+        "http://github.com/o/r/actions/runs/1/job/2",
+        "https://github.com.evil.example/o/r/actions/runs/1/job/2",
+        STORED + "?pr=1&x=y",
+        STORED + "\n",
+        STORED + "`",
+        "https://github.com/o/r/actions/runs/١٢٣/job/2",
+        "https://github.example.com/o/r/actions/runs/1/job/2",
+        "",
+    ],
+)
+def test_record_link_gives_empty_for_anything_else(url: str) -> None:
+    assert ci.record_link(url) == ""
+
+
+def test_record_job_removes_control_characters_and_forbidden_sequences_then_cuts() -> None:
+    assert ci.record_job("shard 1\nnext\r\tx") == "shard 1nextx"
+    assert ci.record_job("a{{b}}c<!--d-->e`f") == "abcdef"
+    assert ci.record_job("x" * 300) == "x" * ci.RECORD_JOB_MAX_CHARS
+
+
+def test_record_job_cannot_rebuild_a_forbidden_sequence_by_removing_one() -> None:
+    cleaned = ci.record_job("<!<!---->--")
+    assert "<!--" not in cleaned and "-->" not in cleaned

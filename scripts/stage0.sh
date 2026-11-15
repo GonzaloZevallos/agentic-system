@@ -9,6 +9,12 @@
 # Updating stage0 is an explicit act: you name the commit. That is the point. A `git
 # pull` that moved the running code mid-task is the failure this exists to prevent.
 #
+# Fixing stage0 by hand still works for a directory you name. The automatic rotation under
+# ~/.agentic-stage0s is done by `agentic stage0 rotate` from the user timer, and
+# AGENTIC_STAGE0_PIN in current/.env holds it on a sha: it moves stage0 there, even to an
+# older sha, and once there `target` keeps it (an invalid pin is unreadable, a rejected one
+# rejected, an empty one is no pin).
+#
 # A clone and not a `git worktree`: a worktree shares its repository with the checkout
 # you are editing, so preflight would refuse it just the same, and it would share the
 # toolchain that already bit gym-saas (#37).

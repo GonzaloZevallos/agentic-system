@@ -452,6 +452,9 @@ def render(
         # reviewed before it is byte-identical to one written before; parsed back under the
         # same name. Nothing reads it to decide.
         **({"review_scopes": r} if (r := state.get("review_scopes")) else {}),
+        # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
+        # causes only, written only when there is a row, parsed back under the same name.
+        **({"full_checks_reads": r} if (r := state.get("full_checks_reads")) else {}),
         # The shadow reviews of the integration review under `review_mode` `single` (GH-473) and
         # how long the node waited for them: written only when set, so every document under
         # another mode is byte-identical to one written before them. Parsed back under the
@@ -466,6 +469,10 @@ def render(
             if (waited := state.get("shadow_wait_s")) is not None
             else {}
         ),
+        # The departures from an approved drawing (GH-766), numbered rows written only when
+        # there is one, so every document without one is byte-identical to one written before;
+        # parsed back under the same name.
+        **({"drawing_departures": d} if (d := state.get("drawing_departures")) else {}),
         # The landing order's stamp and the head's anchor (GH-588), written only when set.
         **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
         **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
@@ -551,9 +558,14 @@ def render(
         # (GH-594): each written only when set, so a document without a spec is byte-identical.
         # `from_frontmatter` reads them back through `assumption_text`.
         **({"spec_cause": e} if (e := state.get("spec_cause")) else {}),
+        # Why a spec was refused (GH-594), written only when set.
+        **({"spec_refusal": e} if (e := state.get("spec_refusal")) else {}),
         **({"assumptions": e} if (e := state.get("assumptions")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),
+        # A re-plan owed after the owner's decision (GH-798): written only when true, so a
+        # document without it is byte-identical to one written before; absent reads false.
+        **({"plan_due": True} if state.get("plan_due") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

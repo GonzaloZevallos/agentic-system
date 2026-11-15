@@ -31,6 +31,7 @@ from . import carve_out, ci_workflow, plan_view, size_budget, tracker_items
 from .ci_workflow import WorkflowNames
 from .cost_history import History, Raise, bucket_median, raised_estimate, reference_usd
 from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
+from .drawing import departure_key, normalize_drawing
 from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
 from .pull_request import api_break_reason, is_reject_reason
 from .task import (
@@ -40,7 +41,7 @@ from .task import (
     FindingCategory,
     FindingScope,
     Severity,
-    SpecEscalationCause,
+    SpecConflictCause,
 )
 from .task_path import TEXT_MAX, Size, validate_request
 from .tracker_items import TrackerItem
@@ -195,6 +196,50 @@ class SolutionTurn(InterviewTurn):
     )
 
 
+class DefinitionTurn(InterviewTurn):
+    """The definition interviewer's round once it names the drawings a question depends
+    on (GH-766 part 3). No role uses it yet: `roles.py` keeps `InterviewTurn`."""
+
+    visible: list[int] = Field(default_factory=list)
+
+
+class DrawingDeparture(BaseModel):
+    """A departure from the approved drawing as a schema (the fields of
+    `drawing.Departure`). It has no number: only the system assigns one."""
+
+    drawing: str
+    element: str
+    shows: str
+    would_ship: str
+    recommendation: str
+    reason: str
+    raised_by: str
+
+    @model_validator(mode="after")
+    def _key_is_valid(self) -> DrawingDeparture:
+        departure_key(self.drawing, self.element)  # raises on the path and element rules
+        return self
+
+
+class DrawingCheck(BaseModel):
+    """One check of a question or a screen against the approved drawing. `unverified`
+    needs no path; `matches` and `departs` name the drawing and the element."""
+
+    subject: Literal["question", "screen"]
+    ref: str
+    verdict: Literal["matches", "departs", "unverified"]
+    drawing: str | None = None
+    element: str | None = None
+
+    @model_validator(mode="after")
+    def _names_the_drawing(self) -> DrawingCheck:
+        if self.drawing is not None:
+            normalize_drawing(self.drawing)
+        if self.verdict != "unverified" and (self.drawing is None or self.element is None):
+            raise ValueError(f"a {self.verdict} check names the drawing and the element")
+        return self
+
+
 class Answers(RoleOutput):
     """One round of the interviewee: a decision per question, what it leaves for the
     human and what it takes back from the human (issue #12)."""
@@ -230,7 +275,7 @@ class TechAnswersWithAssumptions(TechAnswers):
         description="Behaviour decisions taken where the request was silent: one line each, "
         "at most 240 characters",
     )
-    spec_conflict: SpecEscalationCause | None = None
+    spec_conflict: SpecConflictCause | None = None
 
 
 class PlanSize(RoleOutput):
@@ -368,7 +413,7 @@ class PlatformAnswersWithAssumptions(PlatformAnswers):
         description="Behaviour decisions taken where the request was silent: one line each, "
         "at most 240 characters",
     )
-    spec_conflict: SpecEscalationCause | None = None
+    spec_conflict: SpecConflictCause | None = None
 
 
 class Consultation(RoleOutput):
@@ -871,7 +916,7 @@ class TechPlanWithAssumptions(TechPlan):
         description="Behaviour decisions taken where the request was silent: one line each, "
         "at most 240 characters",
     )
-    spec_conflict: SpecEscalationCause | None = Field(
+    spec_conflict: SpecConflictCause | None = Field(
         default=None,
         description="Set only when the spec cannot be built as written; explain which clause, "
         "and why, in your section",
