@@ -137,6 +137,36 @@ def read_comments(ports: Ports, task_id: str) -> list[IssueComment] | None:
         return None
 
 
+def _held_by_state(state: TaskState) -> bool:
+    """The part of the hold the document alone answers: typed tracker items waiting for a person,
+    or the owner's decision stamped as not built (`resume`'s settled branch)."""
+    return rules.tracker_item_pause(state) or bool(state.get("owner_decision_unbuilt"))
+
+
+def thread_needed(state: TaskState) -> bool:
+    """Whether `escalation_hold` will look at the thread: only a `ready_for_review` document that
+    neither the hold above nor the landing's own open question has already answered. A caller that
+    would pay a read for the comments asks first; the answer never changes the hold."""
+    return (
+        state.get("status") == "ready_for_review"
+        and not _held_by_state(state)
+        and not _landing_asked(state)
+    )
+
+
+def _landing_asked(state: TaskState) -> bool:
+    """Whether the landing owns an open question: the document is `escalated`, or the latest
+    live escalating entry carries no `released_at` (`landing_rules.waits_on_human`'s own test)."""
+    if state.get("escalated"):
+        return True
+    asked = [
+        entry
+        for entry in landing_plan.live_entries(state)
+        if entry.get("step") in landing_rules.ESCALATING_STEPS
+    ]
+    return bool(asked) and not asked[-1].get("released_at")
+
+
 def escalation_hold(state: TaskState, comments: Sequence[IssueComment] | None) -> bool | None:
     """`MergeFacts.open_escalation` (GH-784): `True` while the document pauses on typed tracker
     items or carries `owner_decision_unbuilt`, else `merge_hold.open_escalation` over the
@@ -144,8 +174,12 @@ def escalation_hold(state: TaskState, comments: Sequence[IssueComment] | None) -
     every landing `released_at`. `None` (unreadable comments or a mark without an instant) is
     never clear: the decision refuses on anything that is not `False`. The one caller is the
     facts assembly of the merge decision, the poller's and the verb's alike."""
-    if rules.tracker_item_pause(state) or state.get("owner_decision_unbuilt"):
+    if _held_by_state(state):
         return True
+    if _landing_asked(state):
+        # The landing's own escalation (`Escalated:` too) is released by its own machinery, which
+        # needs the refusal that caused it: the hold would shadow it and nothing could answer.
+        return False
     kinds: list[tuple[merge_hold.CommentKind, str]] = []
     for comment in comments if comments is not None else ():
         if comment.body.startswith(ESCALATED):

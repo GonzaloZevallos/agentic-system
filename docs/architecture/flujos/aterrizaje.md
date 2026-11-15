@@ -49,6 +49,9 @@ sequenceDiagram
    `agentic/core/process/domain/rules.py:auto_merge_decision` si mergear. Cuando dice que no,
    el motivo es uno de los rechazos de la tabla del ADR-0048: CI sin terminar o roto,
    hallazgos abiertos, cabeza no revisada, master movido, intentos agotados.
+   Uno de ellos es `open_escalation` (GH-784): una escalación al dueño sigue abierta o no se pudo
+   mostrar cerrada (`agentic/core/process/application/merge.py:escalation_hold`). Es del humano:
+   el aterrizaje no hace nada y el poller imprime `left to the human: open_escalation`.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo

@@ -1509,6 +1509,7 @@ def landing_pass_live(state: TaskState) -> bool:
 
 _ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger", "escalate_api_break")
 """The steps that ask a person once and leave the task to them until it is released."""
+ESCALATING_STEPS = _ESCALATING_STEPS
 
 
 def waits_on_human(

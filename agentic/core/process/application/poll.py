@@ -689,9 +689,11 @@ def assess_merge(
         return Abandoned(pull_request)
     # GH-784: the one comment read of this decision; `merge.escalation_hold` is the only reader
     # of what it says about an open owner escalation (`merge` imports this module, so late).
-    from .merge import escalation_hold, read_comments
+    from .merge import escalation_hold, read_comments, thread_needed
 
-    hold = escalation_hold(raw, read_comments(ports, task_id))
+    # The thread is read only when the hold looks at it (`thread_needed`): a task refused
+    # `not_ready`, or one the document alone holds, costs no read.
+    hold = escalation_hold(raw, read_comments(ports, task_id) if thread_needed(raw) else [])
     facts = _merge_facts(
         task_id, raw, pull_request, eval_set, number, current_master, open_escalation=hold
     )
