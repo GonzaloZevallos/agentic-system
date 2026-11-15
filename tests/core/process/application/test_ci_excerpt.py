@@ -237,6 +237,21 @@ def test_todays_adapter_case_an_aggregate_and_five_shards_gives_no_tests_but_job
     assert len(row["jobs"]) == 4
 
 
+def test_logs_that_follow_the_empty_selection_give_no_tests_and_nothing_raises():
+    # The adapter chose with another checkout's names: the candidates (declared `check`) and
+    # the logs read (the `()` selection, aggregate first) disagree, so no `tests` and no raise.
+    report = _report("check", *(f"shard {n}" for n in range(1, 6)))
+    by = _shards(report)
+    logs = [_log(by["check"], _text("a::x"))] + [
+        _log(by[f"shard {n}"], _text(f"t::{n}")) for n in range(1, 4)
+    ]
+
+    row = _record(report, logs)
+
+    assert "tests" not in row
+    assert [job["job"] for job in row["jobs"]] == ["check", "shard 1", "shard 2", "shard 3"]
+
+
 def test_a_candidate_that_is_not_declared_and_was_read_on_another_head_gives_no_tests():
     report = _report("shard 1", "shard 2")
     by = _shards(report)

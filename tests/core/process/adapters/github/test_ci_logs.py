@@ -3,10 +3,11 @@ The report and the stream are fakes (no network); `bounded_stream` itself runs a
 shell command so its byte cap and its timeout are the real ones."""
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
+import yaml
 
 from agentic.core.process.adapters.github import ci_logs
 from agentic.core.process.adapters.github.ci_logs import (
@@ -15,7 +16,15 @@ from agentic.core.process.adapters.github.ci_logs import (
     _Stream,
 )
 from agentic.core.process.adapters.github.run import StreamRead, bounded_stream
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, JobLog
+from agentic.core.process.domain.ci import (
+    CiCheck,
+    CiReport,
+    CiUnreadable,
+    JobLog,
+    log_candidates,
+    red_checks,
+)
+from agentic.core.process.domain.landing import CI_LOG_JOBS
 
 FIXTURES = Path(__file__).resolve().parents[4] / "fixtures" / "ci_logs"
 HEAD = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
@@ -377,3 +386,106 @@ def test_bounded_stream_tail_keeps_the_last_cap_across_many_chunks() -> None:
     assert len(read.data) == 70000
     assert read.data == b"b" * 69990 + b"c" * 10
     assert read.truncated == 300010 - 70000
+
+
+# --- the declared aggregate is read last (GH-742) ----------------------------------------------
+
+
+def _shard(name: str, n: int) -> CiCheck:
+    return check(name, job=n, run=5)
+
+
+def _logs(
+    checks: Sequence[CiCheck], declared: Callable[[], Sequence[str]] | None = None
+) -> tuple[list[JobLog], Fake]:
+    fake = Fake(checks)
+    kwargs = {} if declared is None else {"declared": declared}
+    adapter = GhCiLogs(Path("."), fake.ci_report, stream=fake.stream, **kwargs)
+    return adapter.failed_job_logs(PR, HEAD), fake
+
+
+def _slice(checks: Sequence[CiCheck]) -> list[tuple[str, str]]:
+    report = CiReport(HEAD, "master", None, None, tuple(checks))
+    return [(c.name, c.link) for c in red_checks(report)[:CI_LOG_JOBS]]
+
+
+def _pairs(logs: list[JobLog]) -> list[tuple[str, str]]:
+    return [(log.job, log.link) for log in logs]
+
+
+def _six() -> list[CiCheck]:
+    return [_shard(f"shard {n}", n) for n in range(1, 7)]
+
+
+def test_with_no_declared_the_first_four_red_checks_are_read() -> None:
+    checks = _six()
+    logs, _ = _logs(checks)
+    assert _pairs(logs) == _slice(checks)
+    assert len(logs) == CI_LOG_JOBS
+
+
+@pytest.mark.parametrize("error", [OSError("no git"), yaml.YAMLError("bad yaml")])
+def test_a_declared_that_fails_selects_as_if_nothing_were_declared(error: Exception) -> None:
+    checks = [_shard("check", 0), *_six()[:5]]
+
+    def broken() -> Sequence[str]:
+        raise error
+
+    logs, _ = _logs(checks, broken)
+    assert _pairs(logs) == _slice(checks)
+    assert "check" in [log.job for log in logs]
+
+
+def test_the_declared_aggregate_gives_way_to_the_shards() -> None:
+    checks = [_shard("check", 0), *(_shard(f"shard {n}", n) for n in range(1, 6))]
+    logs, fake = _logs(checks, lambda: ("check",))
+    assert [log.job for log in logs] == [f"shard {n}" for n in range(1, 5)]
+    assert len(fake.calls) == 4
+
+
+def test_a_declared_aggregate_among_few_shards_keeps_the_red_checks_order() -> None:
+    checks = [_shard("check", 0), *(_shard(f"shard {n}", n) for n in range(1, 4))]
+    declared, _ = _logs(checks, lambda: ("check",))
+    nothing, _ = _logs(checks, lambda: ())
+    assert _pairs(declared) == _pairs(nothing) == _slice(checks)
+    assert declared[0].job == "check"
+
+
+def test_declared_is_not_called_with_few_red_checks_nor_on_another_head() -> None:
+    calls: list[int] = []
+
+    def declared() -> Sequence[str]:
+        calls.append(1)
+        return ("check",)
+
+    _logs([_shard("check", 0), *_six()[:2]], declared)
+    fake = Fake(_six(), head=OTHER)
+    GhCiLogs(Path("."), fake.ci_report, stream=fake.stream, declared=declared).failed_job_logs(
+        PR, HEAD
+    )
+    assert calls == []
+
+
+def test_two_equal_runs_are_neither_collapsed_nor_duplicated() -> None:
+    twin = "https://github.com/o/r/actions/runs/5/job/9"
+    first = CiCheck("shard", "COMPLETED", "FAILURE", twin)
+    second = CiCheck("shard", "COMPLETED", "FAILURE", twin)
+    assert first == second and first is not second
+    checks = [_shard("check", 0), first, second, _shard("a", 1), _shard("b", 2)]
+    report = CiReport(HEAD, "master", None, None, tuple(checks))
+    red = red_checks(report)
+    assert [c for c in red if c is first or c is second] == [first, second]
+    assert all(any(c is r for r in red) for c in log_candidates(report, ("shard",)))
+
+    logs, _ = _logs(checks, lambda: ("shard",))
+
+    # The three undeclared fill three slots and the first twin the fourth; selecting by
+    # equality would take both twins and give 5.
+    assert len(logs) == CI_LOG_JOBS
+    assert [log.job for log in logs] == ["check", "shard", "a", "b"]
+
+
+def test_declared_names_never_empty_the_selection() -> None:
+    checks = _six()
+    logs, _ = _logs(checks, lambda: tuple(c.name for c in checks))
+    assert len(logs) == CI_LOG_JOBS
