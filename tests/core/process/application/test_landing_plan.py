@@ -883,6 +883,19 @@ def test_a_unit_whose_review_does_not_carry_reads_no_spec():
     assert reader.calls == []
 
 
+def test_a_unit_that_does_not_hold_reads_no_spec_even_after_another_one_did():
+    reader = SpecAt()
+    raw, ports = _tramo(reader)
+    # `a` holds (master touched other files); `b` does not (master touched what it did)
+    ports.workspace.changed_paths = lambda base, head: (
+        ("own.py",) if base == TRAMO_BASE else ("own.py",) if base == TRAMO_B else ("master.py",)
+    )
+
+    assert _reads(raw, ports) == {"a": True, "b": False}
+    assert (TRAMO_B, SPEC_PATH) not in reader.calls
+    assert (TRAMO_A, SPEC_PATH) in reader.calls
+
+
 def test_the_tramo_asks_the_gate_with_the_spec_of_the_state(monkeypatch):
     seen = spy_intact_at(monkeypatch)
     raw, ports = _tramo(SpecAt())

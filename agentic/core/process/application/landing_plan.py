@@ -454,11 +454,12 @@ def unit_reads(
     for name, head in reviewed_heads(raw, units).items():
         own = ports.workspace.changed_paths(base, head)
         holds = landing.review_carries(False, ports.workspace.changed_paths(head, master), own)
-        if holds and master_intact is None:
-            master_intact = spec_guard.intact_at(raw, ports, master)
-        carries[name] = spec_delivery.spec_carry_ok(
-            holds, bool(master_intact) and spec_guard.intact_at(raw, ports, head)
-        )
+        intact = False
+        if holds:
+            if master_intact is None:
+                master_intact = spec_guard.intact_at(raw, ports, master)
+            intact = master_intact and spec_guard.intact_at(raw, ports, head)
+        carries[name] = spec_delivery.spec_carry_ok(holds, intact)
         paths[name] = frozenset(own)
     return carries, paths
 
