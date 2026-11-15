@@ -553,22 +553,28 @@ def _finish(
     current = state_from(raw)
     if outcome == "applied" and head_after is not None:
         reviewed = current["subtasks"][unit].get("reviewed_head")
-        subtasks, scopes = _carries(
+        result = _carries(
             current,
             unit,
             reviewed,
             head_after,
             holds=carried,
             cause="renumber",
+            ports=context.ports,
             at=(context.clock or _now)(),
         )
         context.ports.documents.save(
-            {**current, "subtasks": subtasks, "review_scopes": scopes, "landing": resolved}
+            {
+                **current,
+                "subtasks": result.subtasks,
+                "review_scopes": result.scopes,
+                "landing": resolved,
+            }
         )
         record_landing(context, resolved)
         context.log(
             f"agentic: land: {context.task_id}: apply_adr_decision applied, pushed {head_after}"
-            + ("" if carried else " (review not carried)")
+            + ("" if result.carried else " (review not carried)")
         )
         return
     context.ports.documents.save({**current, "landing": resolved})

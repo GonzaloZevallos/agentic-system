@@ -15,7 +15,7 @@ from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, landing, plan_settlement, pull_request, rules
+from ..domain import ci, landing, plan_settlement, pull_request, rules, spec_delivery
 from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous
 from ..domain.landing import LandingStep, LandingStepKind
@@ -34,6 +34,7 @@ from ..domain.task import (
     TaskState,
     apply,
 )
+from . import spec_guard
 from .checkouts import task_base
 from .escalate import ESCALATED, NEEDS_HUMAN
 from .ports import GitError, IssueComment, Launcher, Ports, Upstream
@@ -443,14 +444,20 @@ def unit_reads(
     """Per unit: whether `landing.review_carries` holds for it against what `master` changed
     since its `reviewed_head` branched, and the paths the unit changed since the task's base.
     `changed_paths` is a three-dot diff, so `(reviewed_head, master)` is what master did since
-    the merge-base. Raises `GitError`."""
+    the merge-base. Under a spec delivery a unit also carries only when the spec is intact at
+    `master` (read once, and only for a unit whose review holds) and at its `reviewed_head`
+    (`spec_guard.intact_at`, which never raises). Raises `GitError`."""
     base = task_base(raw, ports)
     carries: dict[str, bool] = {}
     paths: dict[str, frozenset[str]] = {}
+    master_intact: bool | None = None
     for name, head in reviewed_heads(raw, units).items():
         own = ports.workspace.changed_paths(base, head)
-        carries[name] = landing.review_carries(
-            False, ports.workspace.changed_paths(head, master), own
+        holds = landing.review_carries(False, ports.workspace.changed_paths(head, master), own)
+        if holds and master_intact is None:
+            master_intact = spec_guard.intact_at(raw, ports, master)
+        carries[name] = spec_delivery.spec_carry_ok(
+            holds, bool(master_intact) and spec_guard.intact_at(raw, ports, head)
         )
         paths[name] = frozenset(own)
     return carries, paths
