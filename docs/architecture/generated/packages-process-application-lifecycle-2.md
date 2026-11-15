@@ -1,4 +1,4 @@
-Esta página muestra los módulos del grupo `lifecycle` de `application` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `application`, `<nombre> (grupo de domain)` un grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. El grupo se dividió por cantidad: esta es la parte 2 de 2, con módulos consecutivos en orden alfabético, y las otras partes aparecen como nodos `<grupo> parte <n> (grupo)`.
+Esta página muestra los módulos del grupo `lifecycle` de `application` y los imports que hacen; un nodo `<nombre> (grupo)` es otro grupo de `application`, `<nombre> (grupo de domain)` un grupo de `domain` (cada grupo tiene su página) y `<nombre> (paquete)` otro paquete: con su página si es un paquete de `process`, sin ella si es de fuera. Los imports hacia `domain` se resumen en un solo nodo `domain (paquete)` porque dibujar un nodo por grupo no cabe en el presupuesto de diagramas. El grupo se dividió por cantidad: esta es la parte 2 de 2, con módulos consecutivos en orden alfabético, y las otras partes aparecen como nodos `<grupo> parte <n> (grupo)`.
 
 - Padre: [application](packages-process-application.md)
 - Hermanas:
@@ -21,11 +21,9 @@ graph TD
     g_application__landing["landing (grupo)"]
     g_application__lifecycle__1["lifecycle parte 1 (grupo)"]
     g_application__support["support (grupo)"]
-    g_domain__landing["landing (grupo de domain)"]
-    g_domain__machine["machine (grupo de domain)"]
-    g_domain__roles["roles (grupo de domain)"]
-    g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
+    g_pkg__domain["domain (paquete)"]
+    m_application__restore["application.restore"]
     m_application__resume["application.resume"]
     m_application__risk_net["application.risk_net"]
     m_application__schedule["application.schedule"]
@@ -33,31 +31,30 @@ graph TD
     m_application__split_sweep["application.split_sweep"]
     m_application__stage0_rotate["application.stage0_rotate"]
     m_application__stop["application.stop"]
+    m_application__restore --> g_application__landing
+    m_application__restore --> g_application__lifecycle__1
+    m_application__restore --> g_application__support
+    m_application__restore --> g_pkg__domain
+    m_application__restore --> m_application__resume
     m_application__resume --> g_application__build
     m_application__resume --> g_application__definition
     m_application__resume --> g_application__landing
     m_application__resume --> g_application__lifecycle__1
     m_application__resume --> g_application__support
-    m_application__resume --> g_domain__landing
-    m_application__resume --> g_domain__machine
-    m_application__resume --> g_domain__roles
-    m_application__resume --> g_domain__state
     m_application__resume --> g_pkg__agentic__shared
+    m_application__resume --> g_pkg__domain
     m_application__risk_net --> g_application__support
-    m_application__risk_net --> g_domain__state
     m_application__risk_net --> g_pkg__agentic__shared
+    m_application__risk_net --> g_pkg__domain
     m_application__schedule --> g_application__support
-    m_application__schedule --> g_domain__state
     m_application__schedule --> g_pkg__agentic__shared
+    m_application__schedule --> g_pkg__domain
     m_application__scratch_sweep --> g_application__support
-    m_application__scratch_sweep --> g_domain__machine
-    m_application__scratch_sweep --> g_domain__state
     m_application__scratch_sweep --> g_pkg__agentic__shared
+    m_application__scratch_sweep --> g_pkg__domain
     m_application__split_sweep --> g_application__support
-    m_application__split_sweep --> g_domain__landing
-    m_application__split_sweep --> g_domain__state
+    m_application__split_sweep --> g_pkg__domain
     m_application__stage0_rotate --> g_application__support
-    m_application__stage0_rotate --> g_domain__machine
-    m_application__stage0_rotate --> g_domain__state
+    m_application__stage0_rotate --> g_pkg__domain
     m_application__stop --> g_application__support
 ```

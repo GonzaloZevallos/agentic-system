@@ -17,10 +17,12 @@ import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
 from ..domain import (
+    carve_out,
     ci_workflow,
     cost_history,
     docs,
@@ -44,9 +46,10 @@ from ..domain.roles import (
     Interview,
 )
 from ..domain.task import INTEGRATION, PlanRoute, Subtask, TaskState, apply
-from . import promotion
+from . import plan_carve_out, promotion
 from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .interview import interview
+from .plan_carve_out import carved
 from .ports import GitError, Ports
 from .reflect_run import closed_documents
 from .run_role import Check, Output, finish, run_role
@@ -77,6 +80,10 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     carried: TaskState = {}
     pre_estimate: float | None = None
     files: int | None = None
+    if carve_out.carve_out_pending(state):
+        # An earlier run left a carve-out unfinished (GH-722): it ends before any role runs.
+        steps = _steps(cfg, state, history, _part_of(state), ports, None)
+        return _finished(state, await carved(state, {}, {}, None, steps, ports), ports)
     if _revising(state):
         return await _replan(state, spec, cfg, ports, task.path, history)
     if plan_route.sizes(state.get("assignment"), cfg.plan_review):
@@ -206,7 +213,16 @@ async def _interview_and_plan(
     )
     delivered = _covered(state, apply(delivered, gate) if gate else delivered, floored)
     judged = _after_delivery(state, delivered, part_of, output, history, at=ports.now())
-    return _finished(state, judged, ports)
+    steps = _steps(
+        cfg,
+        state,
+        history,
+        part_of,
+        ports,
+        _lazy_check(cfg, interviewed, history, part_of, ports),
+        output,
+    )
+    return _finished(state, await carved(state, delivered, judged, output, steps, ports), ports)
 
 
 def _joined(carried: TaskState, patch: TaskState) -> TaskState:
@@ -438,6 +454,72 @@ def _after_delivery(
     return apply(unbuilt, rules.part_over_line(state["id"], part_of, fit, at=at))
 
 
+def _judged_remainder(
+    history: cost_history.History, data: Mapping[str, object], state: TaskState
+) -> plan_carve_out.Judged:
+    """The one place a carve-out's remainder is judged (GH-722): its estimate raised by
+    `_floored` once, over `state`, then `schemas.plan_fits` with the plan's own history and
+    ratio. The raise travels in `Judged.floor` to `land`, which never recomputes it."""
+    raised, floor = _floored(Output(text="", data=dict(data)), state, history)
+    assert raised is not None
+    fit = schemas.plan_fits(raised.data, history, size_ratio=_size_ratio(history))
+    return plan_carve_out.Judged(raised, fit, floor)
+
+
+def _lazy_check(
+    cfg: Configuration,
+    state: TaskState,
+    history: cost_history.History,
+    part_of: tuple[str, int, int] | None,
+    ports: Ports,
+) -> Check:
+    """`_estimate_check`, built only when a remainder is checked: a plan with no carve-out
+    reads nothing more than it did."""
+
+    def check(data: dict) -> None:
+        _estimate_check(cfg, state, history, part_of, ports)(data)
+
+    return check
+
+
+def _steps(
+    cfg: Configuration,
+    state: TaskState,
+    history: cost_history.History,
+    part_of: tuple[str, int, int] | None,
+    ports: Ports,
+    check: Check | None,
+    output: Output | None = None,
+) -> plan_carve_out.PlanSteps:
+    """What the plan lends the carve-out (GH-722). `land` routes the remainder through the plan's
+    own delivery: what `_delivered` produces replaces the delivered patch's own, key by key, and
+    `_covered` and `_after_delivery` judge it as they judge any plan. `output` is the plan the
+    carve-out starts from, whose fit is the decision the pause quotes."""
+    section = solution_interview(state).author.name
+
+    def land(
+        current: TaskState, base: TaskState, judged: plan_carve_out.Judged, written: TaskState
+    ) -> TaskState:
+        floor = judged.floor if isinstance(judged.floor, _Floored) else None
+        fresh = _delivered(cfg, judged.output, written, section, floor, _revised_from(current))
+        patch = {**base, **fresh, "sections": {**base.get("sections", {}), **fresh["sections"]}}
+        if "ci_required" in base and "ci_required" not in fresh:
+            patch["ci_required"] = []
+        covered = _covered(current, cast(TaskState, patch), floor)
+        return _after_delivery(current, covered, part_of, judged.output, history, at=ports.now())
+
+    return plan_carve_out.PlanSteps(
+        judge_remainder=lambda data, at: _judged_remainder(history, data, at),
+        land=land,
+        check=check,
+        part_of=part_of or (state["id"], 0, rules.MAX_SPLIT_DEPTH),
+        cfg=cfg,
+        fit=None
+        if output is None
+        else schemas.plan_fits(output.data, history, size_ratio=_size_ratio(history)),
+    )
+
+
 async def _plan_cold(
     state: TaskState,
     spec: Interview,
@@ -471,7 +553,10 @@ async def _plan_cold(
     )
     delivered = _covered(state, apply(delivered, gate) if gate else delivered, floored)
     judged = _after_delivery(state, delivered, part_of, output, history, at=ports.now())
-    return _finished(state, judged, ports)
+    steps = _steps(
+        cfg, state, history, part_of, ports, _lazy_check(cfg, base, history, part_of, ports), output
+    )
+    return _finished(state, await carved(state, delivered, judged, output, steps, ports), ports)
 
 
 async def _cold_draft(
@@ -600,15 +685,11 @@ async def _plan_with_critic(
     if gate:
         delivered = apply(delivered, gate)
     route_state: TaskState = {"plan_route": {**recorded, "critic": critic_state}}
-    judged = _after_delivery(
-        state,
-        _covered(state, apply(apply(carried, delivered), route_state), floored),
-        part_of,
-        final,
-        history,
-        at=ports.now(),
-    )
-    return _finished(state, judged, ports)
+    covered = _covered(state, apply(apply(carried, delivered), route_state), floored)
+    judged = _after_delivery(state, covered, part_of, final, history, at=ports.now())
+    checking = _lazy_check(cfg, apply(state, carried), history, part_of, ports)
+    steps = _steps(cfg, state, history, part_of, ports, checking, final)
+    return _finished(state, await carved(state, covered, judged, final, steps, ports), ports)
 
 
 def _critique_input(findings: list[dict]) -> str:

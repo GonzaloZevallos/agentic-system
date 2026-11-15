@@ -9,6 +9,7 @@ import pytest
 from agentic.core.process.application.plan import plan
 from agentic.core.process.application.ports import RawResult
 from agentic.shared.configuration import Configuration
+from tests.core.process.application.test_plan_estimate import carve_ports, carve_result, depth_cap
 from tests.fakes import ScriptedRunner, memory_ports, planned, questions
 
 pytestmark = pytest.mark.anyio
@@ -281,3 +282,27 @@ async def test_a_draft_that_cannot_be_made_ends_the_node_with_its_escalation(cri
     assert [r["slug"] for r in patch["runs"]] == ["plan_sizer"]
     assert patch["plan_route"]["route"] == "critic"
     assert patch["plan_route"]["critic"] == "skipped"
+
+
+async def test_a_carve_out_leaves_the_plan_route_as_the_critic_arm_recorded_it(tmp_path):
+    # GH-722: the carve-out neither regates nor re-enters the critic; the route is the one the
+    # node wrote before it, with the critic having run once.
+    task, runner, cfg = depth_cap("critic", tmp_path, carve=[carve_result()])
+    patch = await plan(task, cfg, carve_ports(runner))
+
+    assert patch["carve_out"]["outcome"] == "applied" and list(patch["subtasks"]) == ["api"]
+    assert patch["plan_route"] == {
+        "pre_estimate_usd": 12.0,
+        "files": 4,
+        "threshold_usd": 1000.0,
+        "route": "critic",
+        "misrouted": False,
+        "critic": "ran",
+    }
+    assert runner.slugs == [
+        "plan_sizer",
+        "tech_lead",
+        "tech_lead_critic",
+        "tech_lead",
+        "tech_lead_carve_out",
+    ]

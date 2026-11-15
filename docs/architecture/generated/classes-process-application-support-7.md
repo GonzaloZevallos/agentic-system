@@ -36,6 +36,8 @@ classDiagram
 
 ## Relaciones con otras páginas
 
+- [application: lifecycle (parte 1)](classes-process-application-lifecycle-1.md)
+  - `plan_carve_out.Judged` se asocia con `run_role.Output`
 - [application: support (parte 1)](classes-process-application-support-1.md)
   - `run_role.Output` se asocia con `ports.CheckRuns`
 - [application: support (parte 5)](classes-process-application-support-5.md)
