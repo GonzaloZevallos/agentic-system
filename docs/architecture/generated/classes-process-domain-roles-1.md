@@ -32,6 +32,7 @@ classDiagram
     class design__NotReady["NotReady"]
     class docs__DiagramBudget["DiagramBudget"]
     class docs__Docs["Docs"]
+    class drawing__Departure["Departure"]
     class roles__Interview["Interview"]
     class roles__Pair["Pair"]
     class roles__Prompt["Prompt"]
@@ -41,18 +42,14 @@ classDiagram
     class schemas__CarveOutOutput["CarveOutOutput"]
     class schemas__Classification["Classification"]
     class schemas__Consolidation["Consolidation"]
-    class schemas__Consultation["Consultation"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: roles (parte 2)](classes-process-domain-roles-2.md)
-  - `schemas.ConsultationWithAssumptions` hereda de `schemas.Consultation`
-- [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+- [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - `schemas.Answers` hereda de `schemas.RoleOutput`
   - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`
   - `schemas.Classification` hereda de `schemas.RoleOutput`
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
-  - `schemas.Consultation` hereda de `schemas.RoleOutput`
