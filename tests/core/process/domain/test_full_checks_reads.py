@@ -175,3 +175,50 @@ def test_a_job_reuses_the_one_cause_list():
     hints = get_type_hints(FullChecksJob)
     assert hints["cause"] is JobLogCause
     assert set(hints) == {"job", "bytes", "cause", "link"}
+
+
+# --- GH-790: previous_read, the one chooser of the earlier read ---------------------------------
+
+
+def _version_of(row: Any) -> Any:
+    return row.get("version") if isinstance(row, dict) else None
+
+
+PREVIOUS_TABLE: list[tuple[str, list[Any], int | None]] = [
+    ("empty", [], None),
+    ("one version", [read(1, "aaaaaaaa")], None),
+    ("same version twice", [read(2, "aaaaaaaa"), read(2, "bbbbbbbb")], None),
+    ("two versions", [read(1, "aaaaaaaa"), read(2, "aaaaaaaa")], 1),
+    ("unsorted input", [read(3), read(1), read(2)], 2),
+    ("newest twice", [read(1), read(3), read(3, "aaaaaaaa")], 1),
+    ("not a dict", ["x", None, 3, read(1), read(2)], 1),
+    ("version not an int", [{"version": "1"}, {"version": True}, {"version": 2.0}, read(3)], None),
+    ("malformed beside valid", [{"head": HEAD}, read(1), read(2, "aaaaaaaa")], 1),
+    ("v2 lacks tests, v1 overlaps v3", [read(1, "aaaaaaaa"), read(2), read(3, "aaaaaaaa")], 2),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "rows", "expected"), PREVIOUS_TABLE, ids=[p[0] for p in PREVIOUS_TABLE]
+)
+def test_previous_read_is_the_highest_version_below_the_newest(
+    label: str, rows: list[Any], expected: int | None
+):
+    found = rules.previous_read(rows)
+    assert _version_of(found) == expected
+    if rules.repeated_ci_failure(rows) == "repeat":
+        assert found is not None
+
+
+def test_three_reads_where_the_middle_lacks_tests_are_unknown_with_no_repeat():
+    rows = [read(1, "aaaaaaaa"), read(2), read(3, "aaaaaaaa")]
+    assert rules.repeated_ci_failure(rows) == "unknown"
+    previous = rules.previous_read(rows)
+    assert previous is not None and previous["version"] == 2
+
+
+def test_overlapping_reads_repeat_and_previous_read_names_the_earlier_one():
+    rows = [read(1, "aaaaaaaa", "bbbbbbbb"), read(2, "bbbbbbbb")]
+    assert rules.repeated_ci_failure(rows) == "repeat"
+    previous = rules.previous_read(rows)
+    assert previous is not None and previous["version"] == 1

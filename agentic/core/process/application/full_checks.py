@@ -72,11 +72,12 @@ from ..domain.task import (
     CiTiming,
     FallbackCause,
     FullCheckEntry,
+    FullChecksRead,
     FullChecksRecord,
     TaskState,
     apply,
 )
-from . import ci_flakes, ci_push, ci_trust
+from . import ci_excerpt, ci_flakes, ci_push, ci_trust
 from .checkouts import Checkout, task_base
 from .ci_push import Pushed, PushFailed
 from .ports import GitError, Ports
@@ -780,7 +781,16 @@ async def _ci_full_checks(
         case "green":
             patch = _ci_green(state, head, gate_names, read, waited)
         case "red" | "timed_out":
-            patch = _ci_red(state, cfg, head, gate_names, verdict, read, waited, at=ports.now())
+            # GH-790: evidence only, after the verdict, `waited` and the timing are fixed: the
+            # read adds a saved entry and a sentence, and decides nothing.
+            entry, repeat = await anyio.to_thread.run_sync(
+                _read_and_repeat, state, ports, ref, head, read, names
+            )
+            patch = _ci_red(
+                state, cfg, head, gate_names, verdict, read, waited, at=ports.now(), repeat=repeat
+            )
+            if entry is not None and entry["version"] == patch["full_checks"]["version"]:
+                patch["full_checks_reads"] = [entry]
         case "cancelled":
             # A second cancellation: never a return, the escalation of a CI that did not run.
             return _NoVerdict(
@@ -1336,6 +1346,42 @@ def _dispatched_record(patch: dict[str, Any], run: DispatchedRun) -> dict[str, A
     return patch
 
 
+def _next_version(state: TaskState) -> int:
+    """The version of the next `full_checks` record: the previous one plus 1, or 1."""
+    previous = state.get("full_checks")
+    return previous["version"] + 1 if previous else 1
+
+
+def _read_and_repeat(
+    state: TaskState,
+    ports: Ports,
+    reference: str,
+    head: str,
+    read: CiReport,
+    names: tuple[str, ...],
+) -> tuple[FullChecksRead | None, str]:
+    """The one read of a red CI run's failed-job logs (GH-790): the entry for `full_checks_reads`
+    and the sentence that says the failure repeats, or `(None, "")`. Blocking (`gh` reads): the
+    caller runs it in a thread. Nothing here may change the verdict or the return, so any
+    exception is `(None, "")`. The sentence holds a version number from `rules.previous_read`,
+    never log text."""
+    try:
+        logs = ports.ci_logs
+        candidates = ci.log_candidates(read, names)
+        if logs is None or not candidates:
+            return None, ""
+        entry = ci_excerpt.read_record(
+            ports, reference, head, _next_version(state), candidates, names
+        )
+        reads = [*state.get("full_checks_reads", []), entry]
+        previous = rules.previous_read(reads)
+        if rules.repeated_ci_failure(reads) != "repeat" or previous is None:
+            return entry, ""
+        return entry, rules.repetition_sentence(previous["version"])
+    except Exception:
+        return None, ""
+
+
 def _ci_record(
     state: TaskState,
     head: str,
@@ -1343,9 +1389,8 @@ def _ci_record(
     waited: float,
     results: list[FullCheckEntry],
 ) -> FullChecksRecord:
-    previous = state.get("full_checks")
     return {
-        "version": previous["version"] + 1 if previous else 1,
+        "version": _next_version(state),
         "head": head,
         "passed": passed,
         "duration_s": round(waited, 1),
@@ -1390,9 +1435,11 @@ def _ci_red(
     waited: float,
     *,
     at: str,
+    repeat: str = "",
 ) -> dict[str, Any]:
     """A red job, or a bound that ran out. A job still pending beside a red one is not a
-    failure of its own and gets no row; at the bound it does, and the section names it."""
+    failure of its own and gets no row; at the bound it does, and the section names it. A
+    non-empty `repeat` (GH-790) is the last paragraph of the section and the limit's text."""
     timed_out = verdict.state == "timed_out"
     red = {name: runs[0] for name, runs in reversed(verdict.red)}
     results: list[FullCheckEntry] = []
@@ -1413,8 +1460,15 @@ def _ci_red(
             f"{', '.join(verdict.pending)}."
         )
     lines.append(_REPRODUCE)
+    if repeat:
+        lines.append(repeat)
     patch = rules.full_checks_return(
-        state, record, cfg.max_changes_requested_per_pair, at=at, mode=cfg.review_mode
+        state,
+        record,
+        cfg.max_changes_requested_per_pair,
+        at=at,
+        mode=cfg.review_mode,
+        repeat=repeat,
     )
     patch["sections"] = _section(state, record["version"], "\n\n".join(lines))
     return patch
