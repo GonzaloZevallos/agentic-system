@@ -171,15 +171,32 @@ def test_flag_verdicts_folds_and_refuses_a_conflict():
         flag_verdicts(["1=accept", "1=reject"])
 
 
-def test_drawing_is_a_leaf_that_imports_neither_task_nor_rules():
-    tree = ast.parse(Path(drawing_module.__file__).read_text())
+def _forbidden_imports(source: str) -> set[str]:
+    """The names `task` or `rules` that `source` imports anywhere, deferred imports included."""
     imported: set[str] = set()
-    for node in ast.walk(tree):
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
             imported |= {a.name for a in node.names}
         elif isinstance(node, ast.ImportFrom):
             base = "." * node.level + (node.module or "")
             imported.add(base)
             imported |= {f"{base}.{a.name}" for a in node.names}
-    leaves = {name.rsplit(".", 1)[-1] for name in imported}
-    assert not leaves & {"task", "rules"}
+    return {name.rsplit(".", 1)[-1] for name in imported} & {"task", "rules"}
+
+
+def test_drawing_is_a_leaf_that_imports_neither_task_nor_rules():
+    assert not _forbidden_imports(Path(drawing_module.__file__).read_text())
+
+
+@pytest.mark.parametrize(
+    ("source", "found"),
+    [
+        ("def f():\n    from .task import TaskState\n", {"task"}),
+        ("from . import rules\n", {"rules"}),
+        ("import agentic.core.process.domain.task\n", {"task"}),
+        ("from agentic.core.process.domain.rules import escalation\n", {"rules"}),
+        ("from .design import Design\n", set()),
+    ],
+)
+def test_the_leaf_check_rejects_a_forbidden_import_wherever_it_sits(source, found):
+    assert _forbidden_imports(source) == found
