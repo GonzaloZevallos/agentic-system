@@ -26,6 +26,7 @@ graph TD
     g_domain__state["state (grupo de domain)"]
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_application__checkouts["application.checkouts"]
+    m_application__ci_excerpt["application.ci_excerpt"]
     m_application__ci_push["application.ci_push"]
     m_application__ci_trust["application.ci_trust"]
     m_application__docs_settlement["application.docs_settlement"]
@@ -35,6 +36,9 @@ graph TD
     m_application__checkouts --> g_domain__roles
     m_application__checkouts --> g_domain__state
     m_application__checkouts --> g_pkg__agentic__shared
+    m_application__ci_excerpt --> g_application__support__2
+    m_application__ci_excerpt --> g_domain__checks
+    m_application__ci_excerpt --> g_domain__state
     m_application__ci_push --> g_application__support__2
     m_application__ci_push --> g_domain__checks
     m_application__ci_trust --> g_application__support__2
