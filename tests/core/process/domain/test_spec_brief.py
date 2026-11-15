@@ -360,3 +360,11 @@ def test_every_block_path_is_in_the_affected_fallback_glob(name):
     (glob,) = [g for g in stack["affected_fallback"] if g.startswith("agentic/*/prompts/")]
     relative = (SPEC_PROMPTS / f"{name}.md").relative_to(ROOT).as_posix()
     assert fnmatchcase(relative, glob)
+
+
+def test_protected_line_names_the_spec_path_and_the_escalation():
+    line = spec_brief.protected_line(contract(path="docs/specs/ledger.md"))
+    assert "\n" not in line
+    assert "docs/specs/ledger.md" in line
+    assert "Never write, move or delete" in line
+    assert "escalates" in line

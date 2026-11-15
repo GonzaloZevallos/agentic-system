@@ -2,16 +2,20 @@
 
 `rule_for` is the only producer of the rule wording: no other module builds or copies it.
 `normalize_drawing` is the only owner of the drawing-path rule and `departure_question` of the
-escalation text of a departure: callers use them, never repeat them.
+escalation text of a departure: callers use them, never repeat them. `verdicts` and `answers`
+are the only owners of the comment grammar of the owner's answer, `flag_verdict` and
+`flag_verdicts` of the `--drawing` flag's. The module is a leaf: it imports neither `task` nor
+`rules`, not even inside a function.
 """
 
 from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Literal
 
 from .design import Design
 
@@ -81,8 +85,97 @@ def departure_question(d: Departure, number: int) -> str:
         f"Departure #{number}: the approved drawing {d.drawing} shows {d.shows}, "
         f"but what would ship is {d.would_ship}. "
         f"Recommendation: {d.recommendation}, because {d.reason}. "
-        f"Answer by the number #{number}."
+        f'Answer with a line "Drawing {number}: accept" or "Drawing {number}: reject".'
     )
+
+
+Verdict = Literal["accept", "reject"]
+
+DEPARTURE_ESCALATIONS_MAX = 3
+"""The hard cap of rounds in which a task may escalate drawing departures (counts rounds, not
+progress): the next one is `drawing_cap`. Read by the escalation (GH-814)."""
+
+_VERDICT_LINE = re.compile(r"^\s*Drawing ([0-9]{1,6}): (accept|reject)\s*$", re.IGNORECASE)
+_FENCE = re.compile(r"^\s*(```|~~~)")
+
+
+@dataclass(frozen=True)
+class Verdicts:
+    """What the owner said in some comments: `given` the verdict of each number answered
+    once, `contradicted` the numbers that got two different verdicts and so have none."""
+
+    given: Mapping[int, Verdict]
+    contradicted: frozenset[int]
+
+
+def _lines_of(text: str) -> list[tuple[int, Verdict]]:
+    """The verdict lines of one comment in order: whole lines only, never a quoted line
+    (first non-blank character `>`) nor one inside a fenced block. Number 0 is discarded."""
+    found: list[tuple[int, Verdict]] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        marker = _FENCE.match(line)
+        if marker:
+            fence = None if fence == marker.group(1) else (fence or marker.group(1))
+            continue
+        if fence is not None or line.lstrip().startswith(">"):
+            continue
+        hit = _VERDICT_LINE.match(line)
+        if hit and int(hit.group(1)) > 0:
+            found.append(
+                (int(hit.group(1)), "accept" if hit.group(2).lower() == "accept" else "reject")
+            )
+    return found
+
+
+def verdicts(text: str) -> Verdicts:
+    """The verdicts one comment gives: a number with two different verdicts in it is
+    `contradicted` and not `given`; the same verdict twice counts once."""
+    seen: dict[int, set[Verdict]] = {}
+    for number, verdict in _lines_of(text):
+        seen.setdefault(number, set()).add(verdict)
+    return Verdicts(
+        given={n: next(iter(v)) for n, v in seen.items() if len(v) == 1},
+        contradicted=frozenset(n for n, v in seen.items() if len(v) > 1),
+    )
+
+
+def answers(comments: Sequence[str]) -> Verdicts:
+    """The verdicts of `comments` read in order: the last line wins across comments; a number
+    contradicted in a later comment loses its earlier verdict, a later clean one clears the
+    contradiction."""
+    given: dict[int, Verdict] = {}
+    contradicted: set[int] = set()
+    for text in comments:
+        one = verdicts(text)
+        for number, verdict in one.given.items():
+            given[number] = verdict
+            contradicted.discard(number)
+        for number in one.contradicted:
+            given.pop(number, None)
+            contradicted.add(number)
+    return Verdicts(given=given, contradicted=frozenset(contradicted))
+
+
+_FLAG = re.compile(r"^([0-9]+)=(accept|reject)$")
+
+
+def flag_verdict(raw: str) -> tuple[int, Verdict]:
+    """`<n>=accept|reject` of `--drawing` as a pair; `ValueError` for anything else or `n` < 1."""
+    hit = _FLAG.match(raw.strip())
+    if hit is None or int(hit.group(1)) < 1:
+        raise ValueError(f"--drawing {raw!r}: expected <n>=accept or <n>=reject with n >= 1")
+    return int(hit.group(1)), "accept" if hit.group(2) == "accept" else "reject"
+
+
+def flag_verdicts(raws: Sequence[str]) -> Mapping[int, Verdict]:
+    """The pairs of every `--drawing` flag; `ValueError` for one number with two verdicts."""
+    out: dict[int, Verdict] = {}
+    for raw in raws:
+        number, verdict = flag_verdict(raw)
+        if out.setdefault(number, verdict) != verdict:
+            raise ValueError(f"--drawing gives drawing {number} two different verdicts")
+    return out
 
 
 _NO_DRAWING_RULE: dict[str, str] = {}

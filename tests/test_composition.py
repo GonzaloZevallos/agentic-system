@@ -490,3 +490,52 @@ def test_an_unreadable_stack_makes_the_ci_logs_select_as_if_nothing_were_declare
     jobs = _jobs_read(product, monkeypatch, report)
     assert jobs == [c.name for c in red_checks(report)[:CI_LOG_JOBS]]
     assert jobs[0] == "check"
+
+
+class _FakeRun:
+    """A `run` that raises `error` and counts its calls, the `gh api rate_limit` ones too."""
+
+    def __init__(self, error):
+        self.error = error
+        self.calls: list[list[str]] = []
+
+    def __call__(self, command, **_kwargs):
+        self.calls.append(command)
+        raise self.error
+
+
+def _failing_with_stderr(stderr, code=1):
+    return subprocess.CalledProcessError(code, ["gh"], stderr=stderr)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_failing_with_stderr("gh: HTTP 502"), "TrackerTransient"),
+        (subprocess.TimeoutExpired(["gh"], 60), "TrackerTimedOut"),
+        (_failing_with_stderr("gh: API rate limit exceeded for user"), "TrackerRateLimited"),
+        (_failing_with_stderr("gh: Forbidden (HTTP 403)"), "TrackerRefused"),
+        (_failing_with_stderr("error connecting to api.github.com"), "TrackerUnreachable"),
+    ],
+)
+def test_the_backfill_read_makes_one_call_and_names_why_it_failed(
+    tmp_path, capsys, error, expected
+):
+    from agentic.core.process.application import ports
+
+    run = _FakeRun(error)
+    with pytest.raises(getattr(ports, expected)):
+        composition.backfill_gh_read(tmp_path, run=run)(("api", "repos/{owner}/{repo}/issues"))
+    assert run.calls == [["gh", "api", "repos/{owner}/{repo}/issues"]]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_backfill_read_says_what_is_missing_in_its_own_words(tmp_path):
+    with pytest.raises(ValueError, match="scores backfill needs the gh CLI"):
+        composition.backfill_gh_read(tmp_path, run=_FakeRun(FileNotFoundError("gh")))(("api", "x"))
+
+
+def test_the_backfill_listing_is_the_github_adapter(tmp_path):
+    from agentic.core.measurement.adapters.github.issue_listing import GhIssueListing
+
+    assert isinstance(composition.backfill_listing(tmp_path), GhIssueListing)

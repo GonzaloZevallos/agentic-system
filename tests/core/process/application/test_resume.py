@@ -1147,6 +1147,30 @@ def test_a_spec_conflict_pause_needs_a_human_comment_and_then_reads_as_decided(c
     assert spec_assumptions.conflict_step(decided, "data_loss") == "escalate"
 
 
+def test_the_settled_branch_marks_the_owner_decision_as_not_built(cfg):
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: the plan leaves 1 decision(s)", "Yes, ship it"]
+    r = resume.prepare("GH-12", _held_pr(), "checkpoint", cfg, ports)
+    settled = resume.settle(r, ports)
+    resumed_at = settled["pause_log"][-1]["at"]
+    assert settled["owner_decision_unbuilt"] == resumed_at
+    assert ports.documents.saved[-1]["owner_decision_unbuilt"] == resumed_at
+
+
+def test_a_later_ordinary_resume_does_not_clear_the_unbuilt_marker(cfg):
+    ports = memory_ports()
+    marked = {
+        **paused(cost_usd=1.0, subtasks={}, runs=[]),
+        "owner_decision_unbuilt": "2026-11-01T12:00:00+00:00",
+    }
+    ports.tracker.earlier = ["Escalated: stuck", "Go on."]
+    r = resume.prepare("GH-12", marked, "checkpoint", cfg, ports)
+    assert resume.settle(r, ports)["owner_decision_unbuilt"] == "2026-11-01T12:00:00+00:00"
+    assert (
+        r.target is not None and r.resumed["owner_decision_unbuilt"] == "2026-11-01T12:00:00+00:00"
+    )
+
+
 # --- a carve-out an earlier run left unfinished (GH-722): the plan node ends it at entry ---------
 
 NOW = "2026-11-14T10:00:00+00:00"

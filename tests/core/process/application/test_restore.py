@@ -205,6 +205,7 @@ class World:
         facts = replace(
             base,
             in_eval_set=False,
+            open_escalation=False,
             touched_paths=("agentic/x.py",),
             conflicts=True,
             github_conflicting=True,

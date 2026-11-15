@@ -286,6 +286,8 @@ def _merge_facts(
     eval_set: frozenset[int] | None,
     number: int,
     current_master: str | None,
+    *,
+    comments: Sequence[IssueComment] | None,
 ) -> rules.MergeFacts:
     """What the poller can know about a delivered task before any worktree exists, every
     fact off the product checkout's own document, the tracker and the upstream sha --
@@ -304,9 +306,15 @@ def _merge_facts(
     step = checks.get("failed_step")
     partition = rules.important_partition(raw)
     perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(raw)
+    # GH-784: the one call of `merge.escalation_hold`, in the assembly the poller and the verb both
+    # build their facts on (`merge` imports this module, so the import is late). `comments` is
+    # the issue's thread, `None` when it was not read or could not be.
+    from .merge import escalation_hold
+
     return rules.MergeFacts(
         task_id=task_id,
         status=raw.get("status"),
+        open_escalation=escalation_hold(raw, comments),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
         reviewed_head=unit.get("reviewed_head") if unit is not None else None,
         close_docs=raw.get("close_docs"),
@@ -684,7 +692,19 @@ def assess_merge(
         and not rules.closed_for_body_fix(raw, pull_request.head_oid)
     ):
         return Abandoned(pull_request)
-    facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
+    # GH-784: the thread is read only when the hold looks at it (`thread_needed`): a task refused
+    # `not_ready`, or one the document alone answers, costs no read.
+    from .merge import read_comments, thread_needed
+
+    facts = _merge_facts(
+        task_id,
+        raw,
+        pull_request,
+        eval_set,
+        number,
+        current_master,
+        comments=read_comments(ports, task_id) if thread_needed(raw) else [],
+    )
     # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this
     # exact pair, so a recorded conflict refuses `merge_conflict` here, unlandable pair or not.
     recorded = merge_conflict.applies(raw.get("merge_conflict"), facts.pr_head, current_master)

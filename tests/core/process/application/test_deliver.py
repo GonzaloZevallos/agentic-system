@@ -1429,6 +1429,7 @@ async def test_the_document_deliver_leaves_with_an_item_is_refused_as_not_ready_
     document = {**state, **patch}
 
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-12",
         status=document["status"],
         reviewed_unit_approved=True,

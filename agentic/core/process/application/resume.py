@@ -547,8 +547,15 @@ def prepare(
             )
         if held and paused.get("pull_request"):
             # GH-620: the pull request exists and the owner's decision is all that was owed.
-            # `rules.resumed` records the items as answered; there is nothing to run.
-            settled = apply(paused, rules.resumed(paused, decision, estimate, at=ports.now()))
+            # `rules.resumed` records the items as answered; there is nothing to run. GH-784: the
+            # answer was not built, so the same patch marks the task for the merge decision, which
+            # refuses while the marker stands; nothing clears it (the human merges, closes or
+            # restarts the task).
+            at = ports.now()
+            settled = apply(
+                paused,
+                {**rules.resumed(paused, decision, estimate, at=at), "owner_decision_unbuilt": at},
+            )
             return Resumption(
                 task_id,
                 source,

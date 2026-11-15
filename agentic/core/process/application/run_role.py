@@ -79,6 +79,8 @@ from ..domain import (
 from ..domain.document import HUMAN
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import (
+    DEVELOPER,
+    DEVELOPER_INTEGRATOR,
     ORIGINAL,
     TECH_LEAD,
     Prompt,
@@ -267,6 +269,10 @@ class Output:
     check_runs: CheckRuns = field(default_factory=CheckRuns)
 
 
+# The roles that write files under a spec delivery: only they are told the spec is not theirs.
+_SPEC_WRITERS = frozenset({DEVELOPER.slug, DEVELOPER_INTEGRATOR.slug})
+
+
 def context_for(
     state: TaskState,
     role: Role,
@@ -291,7 +297,8 @@ def context_for(
     projection cannot use (`plan_view.for_reader`'s own degrade rule).
 
     With `state["spec"]` the fenced Spec slice (`spec_brief.fenced_section`) comes after those
-    sections and before the human's decisions; without one the output is what it was."""
+    sections and before the human's decisions, and a Developer role gets the never-write line for
+    the spec path right after it (GH-594); without a spec the output is what it was."""
     sections = state.get("sections", {})
     parts = [text for text in (standards, design, product_knowledge) if text]
     spec = state.get("spec")
@@ -300,6 +307,8 @@ def context_for(
             # The approved slice (GH-594) goes after the declared sections and before the
             # human's decisions: the one way it reaches a role (ADR-0096).
             parts.append(spec_brief.fenced_section(spec))
+            if role.slug in _SPEC_WRITERS:
+                parts.append(spec_brief.protected_line(spec))
         if name == ORIGINAL:
             request = document.demote(state["description"])
             parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{request}")

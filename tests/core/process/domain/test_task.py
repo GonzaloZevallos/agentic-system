@@ -1,10 +1,16 @@
+from typing import cast
+
 import pytest
 
 from agentic.core.process.domain.task import (
     REDUCERS,
+    DrawingEscalation,
     PullRequest,
     PullRequestCommit,
+    TaskInput,
+    TaskState,
     add,
+    add_drawing_escalation,
     apply,
     delta,
     last,
@@ -58,6 +64,7 @@ def test_reducers_are_read_from_the_annotations():
         "escalation_class",
         "escalation_cause",
         "tracker_human",
+        "owner_decision_unbuilt",
         "tracker_items",
         "tracker_actions_done",
         "restarts",
@@ -88,6 +95,7 @@ def test_reducers_are_read_from_the_annotations():
         "review_scopes",
         "shadow_reviews",
         "drawing_departures",
+        "drawing_escalation",
         "spec_cause",
         "spec_refusal",
         "spec",
@@ -309,3 +317,74 @@ def test_a_growing_carve_out_record_round_trips_through_delta_and_apply():
         assert apply(before, delta(before, after)) == after
     first = {"id": "T-1"}
     assert apply(first, delta(first, states[0])) == states[0]
+
+
+def _escalation(round_: int, numbers: list[int], cause: str = "drawing_departure"):
+    return cast(DrawingEscalation, {"round": round_, "numbers": numbers, "cause": cause})
+
+
+_ESCALATIONS = [
+    _escalation(3, [2, 5]),
+    _escalation(4, [5, 1], "drawing_cap"),
+    _escalation(1, [9]),
+    _escalation(4, [], "drawing_departure"),
+]
+
+
+def test_add_drawing_escalation_takes_max_round_sorted_union_and_the_cap():
+    merged = add_drawing_escalation(_escalation(3, [5, 2]), _escalation(4, [1, 5], "drawing_cap"))
+    assert merged == _escalation(4, [1, 2, 5], "drawing_cap")
+    assert add_drawing_escalation(None, _escalation(1, [3, 1])) == _escalation(1, [1, 3])
+    assert add_drawing_escalation(_escalation(2, [1], "drawing_cap"), _escalation(1, [1])) == (
+        _escalation(2, [1], "drawing_cap")
+    )
+
+
+@pytest.mark.parametrize("a", _ESCALATIONS)
+@pytest.mark.parametrize("b", _ESCALATIONS)
+def test_add_drawing_escalation_is_equal_in_both_merge_orders_from_the_same_base(a, b):
+    base = _escalation(2, [4])
+    assert add_drawing_escalation(add_drawing_escalation(base, a), b) == (
+        add_drawing_escalation(add_drawing_escalation(base, b), a)
+    )
+
+
+@pytest.mark.parametrize("a", _ESCALATIONS)
+@pytest.mark.parametrize("b", _ESCALATIONS)
+@pytest.mark.parametrize("c", _ESCALATIONS)
+def test_add_drawing_escalation_is_associative(a, b, c):
+    assert add_drawing_escalation(add_drawing_escalation(a, b), c) == add_drawing_escalation(
+        a, add_drawing_escalation(b, c)
+    )
+
+
+def test_drawing_escalation_round_trips_through_apply_and_delta():
+    bare = cast(TaskState, {"id": "T-1"})
+    first = cast(TaskState, {"id": "T-1", "drawing_escalation": _escalation(1, [1, 2])})
+    assert apply(bare, delta(bare, first)) == first
+    assert apply(bare, first) == first
+    later = cast(
+        TaskState, {"id": "T-1", "drawing_escalation": _escalation(2, [1, 2, 3], "drawing_cap")}
+    )
+    patch = delta(first, later)
+    assert patch["drawing_escalation"] == later["drawing_escalation"]
+    assert apply(first, patch) == later
+    assert "drawing_escalation" not in delta(later, later)
+
+
+def test_a_state_without_drawing_escalation_goes_through_apply_and_delta():
+    state = cast(TaskState, {"id": "T-1", "cost_usd": 0.5})
+    assert apply(state, cast(TaskState, {"cost_usd": 0.25}))["cost_usd"] == 0.75
+    assert "drawing_escalation" not in delta(state, state)
+    assert "drawing_escalation" not in TaskInput.__annotations__
+    assert "drawing_escalation" in TaskState.__optional_keys__
+
+
+def test_add_drawing_escalation_treats_an_empty_side_as_the_identity():
+    # The graph's channel starts from `DrawingEscalation()` and may fold an empty update.
+    empty = cast(DrawingEscalation, {})
+    held = _escalation(2, [3, 1])
+    assert add_drawing_escalation(empty, held) == _escalation(2, [1, 3])
+    assert add_drawing_escalation(held, empty) == held
+    assert add_drawing_escalation(empty, empty) == {}
+    assert add_drawing_escalation(None, empty) == {}

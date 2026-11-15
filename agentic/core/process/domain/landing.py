@@ -117,6 +117,7 @@ HUMAN_OWNED_REFUSALS: frozenset[rules.MergeRefusal] = frozenset(
         "criteria_over_cap",
         "criteria_unreadable",
         "ci_untrusted_no_dispatch",
+        "open_escalation",
     }
 )
 """The refusals that leave the task to a person (GH-588): `landing_step` answers `none` to each,
@@ -1112,6 +1113,9 @@ def slice_facts(
     return rules.MergeFacts(
         task_id=task_id,
         status=state.get("status"),
+        # GH-784: a slice lands only from the task's own landing, which the merge decision of the
+        # task already held when an owner escalation was open; the slice adds no read of it.
+        open_escalation=False,
         reviewed_unit_approved=approved,
         reviewed_head=slice_head if reviewed else None,
         open_blocking=sum(1 for row in owned if row["severity"] == "blocking"),
@@ -1503,7 +1507,7 @@ def landing_pass_live(state: TaskState) -> bool:
     return rules.landing_pass_live(state)
 
 
-_ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger", "escalate_api_break")
+ESCALATING_STEPS = ("escalate", "escalate_adr", "escalate_ledger", "escalate_api_break")
 """The steps that ask a person once and leave the task to them until it is released."""
 
 
@@ -1531,7 +1535,7 @@ def waits_on_human(
     asked = [
         entry
         for entry in live_entries(state)
-        if entry.get("step") in _ESCALATING_STEPS and entry.get("head") == head
+        if entry.get("step") in ESCALATING_STEPS and entry.get("head") == head
     ]
     return head is not None and bool(asked) and not asked[-1].get("released_at")
 

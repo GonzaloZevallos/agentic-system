@@ -18,6 +18,7 @@ CAP_MESSAGE = "`DESIGN_STANDARDS.md`: 305 lines (cap 300), 295 at the base"
 
 def _facts(**over: Any) -> MergeFacts:
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

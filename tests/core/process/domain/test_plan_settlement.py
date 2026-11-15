@@ -231,6 +231,7 @@ def gh374_ledger():
 
 def merge_facts(s):
     return rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-374",
         status="ready_for_review",
         reviewed_unit_approved=True,

@@ -5,6 +5,7 @@ Esta página muestra las clases públicas de todos los módulos de `agentic.core
 ```mermaid
 classDiagram
     class git__eval_roots__GitEvalRoots["GitEvalRoots"]
+    class github__issue_listing__GhIssueListing["GhIssueListing"]
     class langfuse__dashboards__PostgresDashboards["PostgresDashboards"]
     class langfuse__scores__LangfuseScores["LangfuseScores"]
     class langfuse__scores__Rejected["Rejected"]

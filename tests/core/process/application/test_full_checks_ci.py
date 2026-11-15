@@ -19,6 +19,7 @@ from agentic.core.process.domain.ci import (
     CiReport,
     CiUnreadable,
     DispatchedRun,
+    JobLog,
     ghost_ids_text,
 )
 from agentic.core.process.domain.ci_push import PUSH_ATTEMPTS, PUSH_UNKNOWN_ATTEMPTS
@@ -27,6 +28,7 @@ from agentic.core.process.domain.roles import DEVELOPER_INTEGRATOR
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN, CiCause, apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    FakeCiLogs,
     MemoryCheckResults,
     MemoryCommands,
     MemoryStack,
@@ -1297,3 +1299,165 @@ async def test_a_live_run_with_no_declared_job_at_the_bound_escalates_ci_without
     assert clock.now >= CFG.check_timeout_s
     assert ports.workspace.ci_ref_calls == [("publish", REF)]
     assert ports.tracker.dispatch_calls == [] and ports.commands.ran == []
+
+
+# --- the CI logs of a red run name a repeated failure (GH-790) -------------------------------
+
+RED_WEB = report(job("unit"), job("web", "FAILURE"))
+LEAK = "tests/secret_module.py::test_leaky_name"
+OTHER_LEAK = "tests/other_module.py::test_another_leak"
+SAME = "Same failing tests"
+
+
+def log_of(name: str, *failed: str, cause="read") -> JobLog:
+    lines = ["=== test session starts ===", "=== short test summary info ==="]
+    lines += [f"FAILED {item} - boom LOGLINE" for item in failed]
+    text = "\n".join([*lines, f"=== {len(failed)} failed ==="])
+    return JobLog(name, f"{LINK}/{name}", text, len(text.encode()), cause, 0)
+
+
+def pair_state(used: int) -> dict:
+    pair = rules.full_checks_pair(INTEGRATION, CFG.review_mode)
+    return state_of(changes_requested={pair.key: used})
+
+
+async def twice(first, second, *, used=0):
+    """Two red runs on the same head, the logs of each as scripted; the second sees the first."""
+    logs = FakeCiLogs(successive=[[log_of("web", *first)], [log_of("web", *second)]])
+    ports = ports_of(RED_WEB, ci_logs=logs)
+    start = pair_state(used)
+    one = await run(start, ports)
+    two = await run(apply(start, one), ports)
+    return one, two
+
+
+def sentence(version: int) -> str:
+    return rules.repetition_sentence(version)
+
+
+async def test_a_repeated_failure_ends_the_section_with_the_sentence_naming_the_earlier_version():
+    one, two = await twice([LEAK], [LEAK, OTHER_LEAK])
+    assert sentence(1) not in one["sections"]["Full checks"]
+    text = two["sections"]["Full checks"]
+    assert text.endswith(sentence(1)) and text.count(sentence(1)) == 1
+    assert two["full_checks"]["version"] == 2
+    assert [r["version"] for r in two["full_checks_reads"]] == [2]
+
+
+async def test_at_the_pair_limit_the_escalation_reason_carries_the_sentence():
+    _, two = await twice([LEAK], [LEAK], used=1)
+    assert two["escalation_class"] == "returns"
+    assert sentence(1) in two["escalated"]
+
+
+async def test_at_count_the_reason_and_the_history_are_what_they_are_without_a_log_port():
+    _, two = await twice([LEAK], [LEAK])
+    plain_ports = ports_of(RED_WEB)
+    start = pair_state(0)
+    plain_one = await run(start, plain_ports)
+    plain_two = await run(apply(start, plain_one), plain_ports)
+    assert sentence(1) in two["sections"]["Full checks"]
+    for key in ("subtasks", "change_history", "findings", "changes_requested"):
+        assert two[key] == plain_two[key]
+    assert sentence(1) not in repr({k: v for k, v in two.items() if k != "sections"})
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [([LEAK], [OTHER_LEAK]), ([LEAK], [])],
+    ids=["disjoint", "unknown"],
+)
+async def test_disjoint_or_unknown_sets_show_no_sentence(first, second):
+    _, two = await twice(first, second, used=1)
+    assert SAME not in two["sections"]["Full checks"] and SAME not in two["escalated"]
+    assert [r["version"] for r in two["full_checks_reads"]] == [2]
+
+
+async def test_three_reads_where_the_middle_one_has_no_tests_name_no_sentence():
+    logs = FakeCiLogs(successive=[[log_of("web", LEAK)], [log_of("web")], [log_of("web", LEAK)]])
+    ports = ports_of(RED_WEB, ci_logs=logs)
+    state = state_of()
+    for _ in range(3):
+        patch = await run(state, ports)
+        state = apply(state, patch)
+    assert patch["full_checks"]["version"] == 3
+    assert SAME not in patch["sections"]["Full checks"]
+
+
+async def test_a_ci_dispatch_red_run_reads_no_log_and_saves_no_read():
+    logs = FakeCiLogs([log_of("web", LEAK)])
+    ports = dispatching((run_of(job("unit"), job("web", "FAILURE")),), ci_logs=logs)
+    patch = await run(state_of(), ports)
+    assert patch["full_checks"]["ran_on"] == "ci_dispatch"
+    assert patch["full_checks"]["passed"] is False
+    assert logs.asked == [] and "full_checks_reads" not in patch
+
+
+async def test_a_timed_out_run_with_everything_pending_reads_no_log_and_saves_no_read():
+    logs = FakeCiLogs([log_of("web", LEAK)])
+    waiting = report(job("unit", None, "IN_PROGRESS"), job("web", None, "IN_PROGRESS"))
+    patch = await run(state_of(), ports_of(waiting, ci_logs=logs))
+    assert patch["full_checks"]["failed_step"] == "timeout"
+    assert logs.asked == [] and "full_checks_reads" not in patch
+
+
+async def test_without_a_log_port_nothing_is_read_or_saved():
+    patch = await run(state_of(), ports_of(RED_WEB))
+    assert "full_checks_reads" not in patch and patch["full_checks"]["passed"] is False
+
+
+def assert_unchanged(patch, baseline):
+    keys = set(patch) - {"full_checks_reads"}
+    assert keys == set(baseline)
+    for key in keys:
+        assert patch[key] == baseline[key], key
+
+
+async def test_a_read_that_raises_changes_no_verdict_return_or_timing():
+    baseline = await run(state_of(), ports_of(RED_WEB))
+    logs = FakeCiLogs(raises=OSError("gh"))
+    patch = await run(state_of(), ports_of(RED_WEB, ci_logs=logs))
+    assert_unchanged(patch, baseline)
+    [entry] = patch["full_checks_reads"]
+    assert [j["cause"] for j in entry["jobs"]] == ["unreadable"] and "tests" not in entry
+
+
+async def test_a_read_whose_later_path_raises_saves_nothing_and_changes_nothing(monkeypatch):
+    baseline = await run(pair_state(2), ports_of(RED_WEB))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("after the call")
+
+    monkeypatch.setattr(rules, "recorded_tests", boom)
+    logs = FakeCiLogs([log_of("web", LEAK)])
+    patch = await run(pair_state(2), ports_of(RED_WEB, ci_logs=logs))
+    assert logs.asked == [(REF, HEAD)]
+    assert "full_checks_reads" not in patch
+    assert_unchanged(patch, baseline)
+    assert patch["escalation_class"] == baseline["escalation_class"] == "returns"
+
+
+async def test_the_saved_entry_has_the_records_version_and_no_log_text_anywhere():
+    one, two = await twice([LEAK], [LEAK])
+    for patch in (one, two):
+        [entry] = patch["full_checks_reads"]
+        assert entry["version"] == patch["full_checks"]["version"] and entry["head"] == HEAD
+        dump = repr(patch) + repr(apply(state_of(), patch))
+        assert "secret_module" not in dump and "LOGLINE" not in dump and "test_leaky" not in dump
+    assert one["full_checks_reads"][0]["tests"] == rules.test_hashes([LEAK])
+
+
+async def test_a_second_report_for_another_head_saves_a_read_without_tests_and_no_sentence():
+    stale = JobLog("web", f"{LINK}/web", "", 0, "other_head", 0)
+    logs = FakeCiLogs(successive=[[log_of("web", LEAK)], [stale]])
+    ports = ports_of(RED_WEB, ci_logs=logs)
+    baseline = await run(pair_state(0), ports_of(RED_WEB))
+    start = pair_state(0)
+    one = await run(start, ports)
+    two = await run(apply(start, one), ports)
+    [entry] = two["full_checks_reads"]
+    assert entry["version"] == 2 and "tests" not in entry
+    assert [j["cause"] for j in entry["jobs"]] == ["other_head"]
+    assert SAME not in two["sections"]["Full checks"]
+    assert two["full_checks"]["passed"] is False and two["full_checks"]["version"] == 2
+    assert one["full_checks"] == baseline["full_checks"]

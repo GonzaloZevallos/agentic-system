@@ -316,6 +316,7 @@ def _estimate_check(
         path_label=task_path.path_label_of(state),
         size_ratio=_size_ratio(history),
         has_spec=bool(state.get("spec")),
+        spec_path=state["spec"]["path"] if state.get("spec") else None,
     )
 
 

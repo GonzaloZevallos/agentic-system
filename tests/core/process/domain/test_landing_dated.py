@@ -22,6 +22,7 @@ def _spent(**over) -> LandingSpent:
 
 def _facts(naming="dated", collision=None) -> rules.MergeFacts:
     return rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

@@ -67,7 +67,7 @@ dataclass `Ports` (`agentic/core/process/application/ports.py:Ports`):
 | `Tracker` | pull requests, comentarios, etiquetas, reescritura del cuerpo de un issue (`update_issue_body`, GH-619: re-apunta las líneas `Blocked by:` de los dependientes de una partida), lectura del CI y despacho del workflow de la rama base (`dispatch_ci`, `dispatched_ci`, GH-462) | `agentic/core/process/adapters/github/tracker.py:GhTracker` |
 | `CiLogs` (opcional, `None` sin adaptador) | los logs de los jobs rojos de la cabeza de un pull request y, para la cabeza que se juzga (`flake_block`, GH-464), las líneas `agentic-flakes:` de los últimos 4 MiB del log de los jobs que nombra el `ci:` del stack | `agentic/core/process/adapters/github/ci_logs.py:GhCiLogs` |
 | `ExperimentFile` (opcional, `None` sin adaptador) | la declaración de experimento del producto, el archivo experiment.yaml de .agentic | `agentic/core/process/adapters/filesystem/experiment_file.py:FilesystemExperimentFile` |
-| `SpecReader` (opcional, `None` sin adaptador; sólo lo llama `agentic/core/process/application/classify.py:spec_intake`, y únicamente cuando están los dos puertos, `spec_delivery.honoured`; GH-594) | leer una spec del repo del producto en un commit completo, nunca del worktree; sólo `docs/specs/<nombre>.md`, un blob de a lo sumo 64 KiB en UTF-8, y si no, `SpecUnreadable` con el motivo y nada más | `agentic/core/knowledge/adapters/git/spec_reader.py:GitSpecReader` |
+| `SpecReader` (opcional, `None` sin adaptador; sólo lo llama `agentic/core/process/application/spec_guard.py`, también para el intake de `classify.spec_intake`, que sólo lee cuando están los dos puertos (`spec_delivery.honoured`); inerte sin `state["spec"]`, GH-594) | leer una spec del repo del producto en un commit completo, nunca del worktree; sólo `docs/specs/<nombre>.md`, un blob de a lo sumo 64 KiB en UTF-8, y si no, `SpecUnreadable` con el motivo y nada más | `agentic/core/knowledge/adapters/git/spec_reader.py:GitSpecReader` |
 | `SpecValidator` (opcional, `None` sin adaptador; sólo lo llama `agentic/core/process/application/classify.py:spec_intake`, y únicamente cuando están los dos puertos, `spec_delivery.honoured`; GH-594) | decidir si el texto de una spec leída es un contrato aprobado para una rebanada: devuelve el `SpecContract` o la causa que lo detiene, sin I/O y sin lanzar | `agentic/core/knowledge/adapters/spec_validator.py:DomainSpecValidator` |
 | `Inbox` | la cola de issues | `agentic/core/process/adapters/github/inbox.py:GhInbox` |
 | `Board` | el espejo del Project | `agentic/core/process/adapters/github/board.py:GhBoard` |
@@ -180,6 +180,19 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
 - `adapters/git/`: `agentic/core/measurement/adapters/git/eval_roots.py:GitEvalRoots` cumple
   `EvalRoots` con `git worktree add --detach` en la base de la entrada y su limpieza
   (`worktree remove`, `prune`, `branch -D agentic/<id>`).
+- Lectura del listado de GitHub (GH-802, `scores backfill`): el puerto `IssueListing`
+  (`agentic/core/measurement/application/ports.py`, con `GhRead`, `Page` y `PageUnreadable`)
+  entrega el listado REST de issues y pull requests de a una página; `read_listing`
+  (`agentic/core/measurement/application/listing_reads.py`) lee las páginas 1, 2, … una sola
+  vez cada una y devuelve `Listing` completo o `Stopped(causa)` en la primera página ilegible.
+  `times_for` (`agentic/core/measurement/domain/issue_listing.py`) busca en él los tiempos de
+  una tarea con `agentic/core/process/domain/tracker_refs.py`.
+- `adapters/github/`: `agentic/core/measurement/adapters/github/issue_listing.py:GhIssueListing`
+  cumple `IssueListing` sobre un `GhRead` que recibe por parámetro (no importa nada de
+  `core.process.adapters`; solo las excepciones de `core.process.application.ports`, que mapea
+  por tipo a la causa de la página). La composición lo arma con `composition.backfill_listing`,
+  sobre `composition.backfill_gh_read`: una sola llamada por página, sin reintento ni línea
+  impresa.
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
   proceso y la composición se lo pasa a `build_graph`.

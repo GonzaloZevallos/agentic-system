@@ -4,6 +4,7 @@ one turn at a time. `integrate` is its async wrapper and behaves exactly as befo
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import subprocess
 from dataclasses import replace
@@ -13,6 +14,7 @@ import pytest
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application.integrate import integrate, integrate_turn
+from agentic.core.process.application.ports import SpecUnreadable
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
@@ -192,3 +194,78 @@ def test_a_turn_with_nothing_asked_changes_no_path(cfg):
     state = {**TASK, **LIGHT, "subtasks": {"api": approved("api")}}
     patch = integrate_turn(state, cfg, memory_ports(ScriptedRunner()))
     assert "path" not in patch and "promotion" not in patch
+
+
+# --- the cut of the task branch under a spec delivery (GH-594, part 4b-3) ---------------
+
+SPEC_PATH = "docs/specs/a.md"
+SPEC_BODY = "## Goal\n\nText.\n"
+SPEC_TEXT = "---\nstatus: approved\n---\n" + SPEC_BODY
+RECORDED = "a" * 40
+BASE = "b" * 40
+
+
+class _SpecReader:
+    def __init__(self, texts):
+        self.texts = texts
+
+    def read(self, commit, path):
+        if commit not in self.texts:
+            raise SpecUnreadable("missing")
+        return self.texts[commit]
+
+
+def _spec_state():
+    spec = {
+        "path": SPEC_PATH,
+        "slice": "a",
+        "commit": RECORDED,
+        "sha256": hashlib.sha256(SPEC_BODY.encode()).hexdigest(),
+        "criteria": ["c"],
+        "screens": [],
+        "risks": [],
+        "touches_ui": False,
+        "touches_copy": False,
+    }
+    return {**TASK, "spec": spec, "subtasks": {"api": {**approved("api"), "status": "pending"}}}
+
+
+def _spec_ports(texts):
+    ports = memory_ports(ScriptedRunner(), spec_reader=_SpecReader(texts))
+    ports.workspace.existing_branches[rules.task_branch("GH-12")] = ("x", BASE)
+    return ports
+
+
+def test_a_cut_after_the_spec_moved_refuses_before_any_developer(cfg):
+    moved = SPEC_TEXT.replace("Text.", "Other.")
+    ports = _spec_ports({RECORDED: SPEC_TEXT, BASE: moved})
+
+    patch = integrate_turn(_spec_state(), cfg, ports)
+
+    assert patch["spec_refusal"] == {"cause": "spec_changed", "detail": [SPEC_PATH]}
+    assert patch["status"] == "waiting_on_human"
+    assert "spec" not in patch
+    assert ports.workspace.merges == []
+    assert ports.workspace.checkouts_made == [rules.task_branch("GH-12")]  # only the cut itself
+
+
+def test_a_cut_over_the_same_spec_re_records_the_commit(cfg):
+    ports = _spec_ports({RECORDED: SPEC_TEXT, BASE: SPEC_TEXT})
+
+    patch = integrate_turn(_spec_state(), cfg, ports)
+
+    assert patch["spec"]["commit"] == BASE
+    assert "spec_refusal" not in patch
+
+
+def test_without_a_spec_the_cut_reads_nothing(cfg):
+    class Raising:
+        def read(self, commit, path):
+            raise AssertionError("a read was made")
+
+    state = {k: v for k, v in _spec_state().items() if k != "spec"}
+    ports = memory_ports(ScriptedRunner(), spec_reader=Raising())
+
+    patch = integrate_turn(state, cfg, ports)
+
+    assert "spec" not in patch and "spec_refusal" not in patch

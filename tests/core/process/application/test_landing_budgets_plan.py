@@ -152,6 +152,7 @@ def test_only_a_delivered_diagnosis_counts():
 def test_the_document_before_verdicts_gets_the_step_it_got():
     """No `verdict`, no `upstream` on a diagnose or a sync: the step table reads as before."""
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

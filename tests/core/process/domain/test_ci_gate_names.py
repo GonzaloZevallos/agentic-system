@@ -19,6 +19,7 @@ def _facts(**over) -> MergeFacts:
     """The #432 shape: the plan requires `web` and `e2e`, the stack declares no CI, the
     local checks are recorded green on this head and master, the CI is green and fresh."""
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

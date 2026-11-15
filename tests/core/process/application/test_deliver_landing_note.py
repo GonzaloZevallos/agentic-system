@@ -107,6 +107,7 @@ async def test_without_a_record_asking_the_body_is_what_it_was(cfg):
 
 async def test_a_refusing_auto_merge_leaves_the_block_in_the_body(cfg):
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-12",
         status="ready_for_review",
         reviewed_unit_approved=False,
