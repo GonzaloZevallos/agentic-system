@@ -51,6 +51,7 @@ from .core.measurement.application import eval_commands
 from .core.measurement.application.eval_commands import (
     _eval_score,
 )
+from .core.measurement.application.listing_reads import Stopped, read_listing
 from .core.measurement.application.ports import EvalRoots, EvalSpawn
 from .core.measurement.domain import (
     evaluation,
@@ -61,6 +62,7 @@ from .core.measurement.domain import (
     task_scores,
 )
 from .core.measurement.domain import metrics as delivery_metrics
+from .core.measurement.domain.issue_listing import ListedIssue, Missing, times_for
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
     FilesystemRunRegistry,
@@ -153,6 +155,7 @@ from .core.process.domain.task import (
     TrackerFailure,
     TrackerFailureRecord,
 )
+from .core.process.domain.tracker_refs import issue_number
 from .shared import stage0 as stage0_paths
 from .shared.configuration import (
     ENV_PREFIX,
@@ -3282,32 +3285,6 @@ async def _eval_run(
 BACKFILL_TRANSPORT_FAILURES = 3
 
 
-@dataclass
-class _GhReads:
-    """The pull request and the issue creation of a backfill run, each read from `gh` at
-    most once (cached by reference and by task id); a failed read is cached as failed."""
-
-    ports: Ports
-    pull_requests: dict[str, PullRequest | None | Exception] = field(default_factory=dict)
-    issues: dict[str, str | None | Exception] = field(default_factory=dict)
-
-    def pull_request(self, reference: str) -> PullRequest | None | Exception:
-        if reference not in self.pull_requests:
-            try:
-                self.pull_requests[reference] = self.ports.tracker.pull_request(reference)
-            except (ValueError, OSError) as exc:
-                self.pull_requests[reference] = exc
-        return self.pull_requests[reference]
-
-    def issue_created_at(self, task_id: str) -> str | None | Exception:
-        if task_id not in self.issues:
-            try:
-                self.issues[task_id] = self.ports.tracker.issue_created_at(task_id)
-            except (ValueError, OSError) as exc:
-                self.issues[task_id] = exc
-        return self.issues[task_id]
-
-
 class _Backfilled(NamedTuple):
     """What `_backfill_one` decided for one document. `stage_row` is last and never `None`."""
 
@@ -3320,31 +3297,32 @@ class _Backfilled(NamedTuple):
 
 
 def _backfill_one(
-    product: str, task_id: str, document: Mapping[str, Any], reads: _GhReads
+    product: str, task_id: str, document: Mapping[str, Any], items: Mapping[int, ListedIssue]
 ) -> _Backfilled:
     """The outcome of one document and, when it has scores, what to write: `("scored" |
     "partial:<names>" | "skipped:<reason>", identity, scores, task time, dimensions, stage
     row)`. The same `task_time`, `identity`, `dimensions` and `task_scores` the live path
-    calls. A document whose tracker read failed is `Unread("gh_failed")`, never unknown."""
+    calls. A document the listing has no usable item for is `Unread("gh_failed")`, never
+    unknown."""
     if not (task_scores.scoreable(document) or document.get("closed_at")):
         unread = stage_report.StageRow(task_id, stage_report.Unread("not_finished"), None)
         return _Backfilled("skipped:not_finished", None, [], None, None, unread)
     reference = document.get("pull_request")
-    pull_request = reads.pull_request(str(reference)) if reference else None
-    issue = reads.issue_created_at(task_id)
-    failed = isinstance(pull_request, Exception) or isinstance(issue, Exception)
-    pr = pull_request if isinstance(pull_request, PullRequest) else None
-    created = issue if isinstance(issue, str) else None
-    moment = task_scores.task_time(document, pr.created_at if pr else None, created)
+    times = times_for(items, task_id, str(reference) if reference else None)
+    failed = isinstance(times, Missing)
+    created = None if isinstance(times, Missing) else times.issue_created_at
+    pr_created = None if isinstance(times, Missing) else times.pr_created_at
+    pr_merged = None if isinstance(times, Missing) else times.pr_merged_at
+    moment = task_scores.task_time(document, pr_created, created)
     if moment is None:
         unread = stage_report.StageRow(task_id, stage_report.Unread("no_time"), None)
         return _Backfilled("skipped:no_time", None, [], None, None, unread)
     ids = task_scores.identity(product, task_id, moment.start)
     scores = task_scores.task_scores(
         document,
-        pr_merged_at=pr.merged_at if pr else None,
+        pr_merged_at=pr_merged,
         issue_created_at=created,
-        pr_created_at=pr.created_at if pr else None,
+        pr_created_at=pr_created,
         identity=ids,
     )
     omitted: list[str] = []
@@ -3361,11 +3339,21 @@ def _backfill_one(
             task_id,
             document,
             issue_created_at=created,
-            pr_created_at=pr.created_at if pr else None,
-            pr_merged_at=pr.merged_at if pr else None,
+            pr_created_at=pr_created,
+            pr_merged_at=pr_merged,
         )
     )
     return _Backfilled(outcome, ids, scores, moment, task_scores.dimensions(document), row)
+
+
+def _needs_github(loaded: Sequence[tuple[str, Mapping[str, Any] | None]]) -> bool:
+    """Whether a finished document has a `GH-N` id or a pull request to look up."""
+    return any(
+        document is not None
+        and (task_scores.scoreable(document) or document.get("closed_at"))
+        and (issue_number(task_id) is not None or document.get("pull_request"))
+        for task_id, document in loaded
+    )
 
 
 async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> None:
@@ -3375,7 +3363,10 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     the same ones and fills gaps without duplicating (ADR-0037, addendum). One line per
     document, then a count by outcome; exit 1 when any document was partial or failed.
     After `BACKFILL_TRANSPORT_FAILURES` consecutive failed writes it stops and says so.
-    `--dry-run` reads everything (`gh` included) and writes nothing to Langfuse."""
+    `--dry-run` reads everything (`gh` included) and writes nothing to Langfuse. GitHub is
+    read once, as one paginated listing and only when a finished document needs it; a page
+    that cannot be read stops the run before any line or score: `agentic: stopped reading
+    GitHub: CAUSE; rerun later`, exit 75 (1 when the cause is `refused`)."""
     try:
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
@@ -3386,21 +3377,29 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
             "no Langfuse configured: set AGENTIC_LANGFUSE_HOST, AGENTIC_LANGFUSE_PUBLIC_KEY "
             "and AGENTIC_LANGFUSE_SECRET_KEY, or pass --dry-run"
         )
-    reads = _GhReads(ports)
+    loaded: list[tuple[str, Mapping[str, Any] | None]] = []
+    for task_id in ports.documents.ids():
+        try:
+            loaded.append((task_id, ports.documents.load(task_id)))
+        except (ValueError, OSError):
+            loaded.append((task_id, None))
+    items: dict[int, ListedIssue] = {}
+    if _needs_github(loaded):
+        listing = read_listing(composition.backfill_listing(cfg.product_dir))
+        if isinstance(listing, Stopped):
+            print(f"agentic: stopped reading GitHub: {listing.cause}; rerun later")
+            sys.exit(1 if listing.cause == "refused" else 75)
+        items = listing.items
     counts: dict[str, int] = {}
     rows: list[stage_report.StageRow] = []
     consecutive_failures = 0
-    for task_id in ports.documents.ids():
-        try:
-            document = ports.documents.load(task_id)
-        except (ValueError, OSError):
-            document = None
+    for task_id, document in loaded:
         if document is None:
             outcome, ids, scores, moment, dims = "skipped:unreadable", None, [], None, None
             row = stage_report.StageRow(task_id, stage_report.Unread("unreadable"), None)
         else:
             outcome, ids, scores, moment, dims, row = _backfill_one(
-                product, task_id, document, reads
+                product, task_id, document, items
             )
         rows.append(row)
         if (
