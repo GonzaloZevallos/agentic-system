@@ -40,7 +40,7 @@ from ..domain import rules
 from ..domain.docs import Docs
 from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
-from . import docs_settlement, pre_pr_fix, promotion
+from . import docs_settlement, pre_pr_fix, promotion, spec_guard
 from .checkouts import SetupFailed, subtask_checkout, task_base, task_checkout
 from .ports import Checkout, Ports
 from .run_role import finish
@@ -79,8 +79,14 @@ def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     # branch it could not be told to the human: a branch never routes to the escalation.
     try:
         task = task_checkout(state, cfg, ports)
+        # The branch is cut from the product's head: a spec that moved since it was recorded
+        # refuses here, before any Developer, and one that did not has its commit re-recorded.
+        cut = spec_guard.cut(state, ports)
+        if cut.get("escalated"):
+            return finish(state, apply(promoted, cut), ports)
+        state = apply(state, cut)
         patch: TaskState = apply(
-            promoted, {"branch": task.branch, "sections": rules.findings_section(state)}
+            promoted, {"branch": task.branch, "sections": rules.findings_section(state), **cut}
         )
         conflicts = _merge_approved(state, task.path, ports)
         # Read only when a merge left something for the integrator: the conflict text is the
