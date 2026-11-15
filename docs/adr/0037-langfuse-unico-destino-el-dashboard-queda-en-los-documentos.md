@@ -1186,3 +1186,26 @@ caso (`FINAL` deja las dos filas; las vistas además agrupan por `id`); se corri
   de Langfuse con otra clave; nunca el proyecto de un producto.
 - **Riesgo residual:** un script fuera del repositorio con una clave cruda sigue pudiendo
   escribir cualquier entorno.
+
+## Adenda (2026-11-15, GH-802): `scores backfill` frena antes de la reserva de cuota y muestra su costo
+
+- **Una lectura por repositorio.** El backfill lee un solo listado REST del repositorio a
+  través de `gh`, con los marcadores literales `{owner}/{repo}`, y no hay lecturas de GraphQL
+  por documento. Nada de este camino se reintenta (`attempts=1`): una página que falla es una
+  parada, no un segundo intento.
+- **Reserva de 1000 puntos core.** Antes de cada página se lee la cuota (`gh api rate_limit`,
+  que no cuesta puntos) y la corrida se detiene si `remaining <= 1000`, sin escribir nada. Solo
+  protege la cuota core.
+- **1000 es una apuesta,** porque los pollers también gastan core. La señal de que falló es una
+  línea `rate_limited` de un poller durante un backfill, o un `core remaining` impreso por
+  debajo de 1000.
+- **`core remaining` es la última lectura,** una página vieja: la página que se lee después
+  gasta un punto más.
+- **Salidas.** Una parada sale con 75, y con 1 cuando la causa es `refused`. `quota_unreadable`
+  sale con 75 incluso cuando la causa es una forma inválida de `rate_limit`; si se repite en
+  cada corrida, lo que falla es la forma del endpoint y se arregla en el código.
+- **Costo impreso.** `agentic: github reads for PRODUCT: N calls (P core points), core
+  remaining R` va justo después de la línea de parada, o justo antes del resumen en los demás
+  caminos; `R` es `unknown` si no hubo ninguna lectura de cuota.
+- **Un número ausente de un listado completo** es `gh_failed` solo para esa corrida, sin
+  ningún score con un tiempo inventado; una nueva corrida lo completa.

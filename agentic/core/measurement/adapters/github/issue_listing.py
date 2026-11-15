@@ -12,7 +12,15 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
 )
 
-from ...application.ports import GhRead, Page, PageCause, PageUnreadable
+from ...application.ports import (
+    GhRead,
+    Page,
+    PageCause,
+    PageUnreadable,
+    QuotaReading,
+    QuotaUnreadable,
+    Spend,
+)
 from ...domain.issue_listing import PAGE_SIZE, ListedIssue
 
 # `gh` resolves the placeholders against the checkout's repository, as `gh issue view` does.
@@ -28,8 +36,27 @@ _CAUSES: tuple[tuple[type[Exception], PageCause], ...] = (
 class GhIssueListing:
     def __init__(self, gh: GhRead):
         self._gh = gh
+        self._calls = 0
+        self._points = 0
+
+    def spent(self) -> Spend:
+        return Spend(self._calls, self._points)
+
+    def rate_limit(self) -> QuotaReading | QuotaUnreadable:
+        """The core quota left; reading it costs no point but is a call."""
+        self._calls += 1
+        try:
+            payload = json.loads(self._gh(("api", "rate_limit")))
+            remaining = payload["resources"]["core"]["remaining"]
+        except (ValueError, OSError, TypeError, KeyError):
+            return QuotaUnreadable()
+        if type(remaining) is not int:
+            return QuotaUnreadable()
+        return QuotaReading(remaining)
 
     def page(self, n: int) -> Page | PageUnreadable:
+        self._calls += 1
+        self._points += 1
         try:
             raw = self._gh(("api", f"{_PATH}&page={n}"))
         except (ValueError, OSError) as exc:

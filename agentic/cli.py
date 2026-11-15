@@ -52,7 +52,7 @@ from .core.measurement.application.eval_commands import (
     _eval_score,
 )
 from .core.measurement.application.listing_reads import Stopped, read_listing
-from .core.measurement.application.ports import EvalRoots, EvalSpawn
+from .core.measurement.application.ports import NO_READS, EvalRoots, EvalSpawn, Spend
 from .core.measurement.domain import (
     evaluation,
     findings_report,
@@ -62,7 +62,7 @@ from .core.measurement.domain import (
     task_scores,
 )
 from .core.measurement.domain import metrics as delivery_metrics
-from .core.measurement.domain.issue_listing import ListedIssue, Missing, times_for
+from .core.measurement.domain.issue_listing import ListedIssue, Missing, cost_line, times_for
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
     FilesystemRunRegistry,
@@ -3364,9 +3364,13 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     document, then a count by outcome; exit 1 when any document was partial or failed.
     After `BACKFILL_TRANSPORT_FAILURES` consecutive failed writes it stops and says so.
     `--dry-run` reads everything (`gh` included) and writes nothing to Langfuse. GitHub is
-    read once, as one paginated listing and only when a finished document needs it; a page
-    that cannot be read stops the run before any line or score: `agentic: stopped reading
-    GitHub: CAUSE; rerun later`, exit 75 (1 when the cause is `refused`)."""
+    read once, as one paginated listing and only when a finished document needs it, the core
+    quota read before each page; a quota at or under the reserve, an unreadable quota or an
+    unreadable page (CAUSE: `reserve`, `quota_unreadable`, `rate_limited`, `timed_out`,
+    `unreachable`, `transient`, `refused`) stops the run before any line or score:
+    `agentic: stopped reading GitHub: CAUSE; rerun later`, exit 75 (1 when the cause is
+    `refused`). The cost line `agentic: github reads for PRODUCT: N calls (P core points),
+    core remaining R` follows the stop line and otherwise precedes the summary line."""
     try:
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
@@ -3384,10 +3388,13 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
         except (ValueError, OSError):
             loaded.append((task_id, None))
     items: dict[int, ListedIssue] = {}
+    reads: tuple[Spend, int | None] = (NO_READS, None)
     if _needs_github(loaded):
         listing = read_listing(composition.backfill_listing(cfg.product_dir))
+        reads = (listing.spend, listing.remaining)
         if isinstance(listing, Stopped):
             print(f"agentic: stopped reading GitHub: {listing.cause}; rerun later")
+            print(cost_line(product, reads[0].calls, reads[0].points, reads[1]))
             sys.exit(1 if listing.cause == "refused" else 75)
         items = listing.items
     counts: dict[str, int] = {}
@@ -3423,6 +3430,7 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
             break
     for line in stage_report.stage_lines(rows):
         print(line)
+    print(cost_line(product, reads[0].calls, reads[0].points, reads[1]))
     scored, partial, failed = (counts.pop(k, 0) for k in ("scored", "partial", "failed"))
     skipped = ", ".join(f"{name} {n}" for name, n in sorted(counts.items()))
     print(f"scored {scored}, partial {partial}, {skipped + ', ' if skipped else ''}failed {failed}")

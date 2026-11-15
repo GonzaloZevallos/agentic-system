@@ -16,7 +16,13 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli, composition
-from agentic.core.measurement.application.ports import Page, PageUnreadable
+from agentic.core.measurement.application.ports import (
+    Page,
+    PageUnreadable,
+    QuotaReading,
+    QuotaUnreadable,
+    Spend,
+)
 from agentic.core.measurement.domain.issue_listing import PAGE_SIZE, ListedIssue
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import GhInbox
@@ -4742,13 +4748,23 @@ class FakeScorer:
 
 class FakeListing:
     """`IssueListing`'s shape over `items`, `PAGE_SIZE` to a page; `unreadable` maps a page
-    number to its cause; `calls` records every page asked, `before` runs ahead of a page."""
+    number to its cause; `calls` records every page asked, `before` runs ahead of a page;
+    `quotas` are the readings in order (a plentiful quota once they run out)."""
 
-    def __init__(self, items=(), unreadable=None, before=None):
+    def __init__(self, items=(), unreadable=None, before=None, quotas=()):
         self.items = {item.number: item for item in items}
         self.unreadable = unreadable or {}
         self.before = before
+        self.quotas = list(quotas)
         self.calls: list[int] = []
+        self.quota_reads = 0
+
+    def rate_limit(self):
+        self.quota_reads += 1
+        return self.quotas.pop(0) if self.quotas else QuotaReading(4800)
+
+    def spent(self):
+        return Spend(self.quota_reads + len(self.calls), len(self.calls))
 
     def page(self, n):
         self.calls.append(n)
@@ -5040,7 +5056,8 @@ def test_400_documents_over_800_items_make_at_most_9_page_calls(monkeypatch, tmp
     assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 0
     assert listing.calls == list(range(1, 10))
     assert len(scorer.calls) == 400
-    assert capsys.readouterr().out.splitlines()[-1] == "scored 400, partial 0, failed 0"
+    out = capsys.readouterr().out.splitlines()
+    assert out[-2:] == [_cost(18, 9, 4800), "scored 400, partial 0, failed 0"]
 
 
 @pytest.mark.parametrize(
@@ -5064,9 +5081,115 @@ def test_an_unreadable_page_prints_only_the_stop_line_and_writes_nothing(
     listing = FakeListing([_item(number) for number in range(1, 151)], {2: cause})
     scorer = FakeScorer()
     assert _backfill(monkeypatch, root, ports, scorer, *extra, listing=listing) == code
-    assert capsys.readouterr().out == f"agentic: stopped reading GitHub: {cause}; rerun later\n"
+    assert capsys.readouterr().out == (
+        f"agentic: stopped reading GitHub: {cause}; rerun later\n"
+        "agentic: github reads for p: 4 calls (2 core points), core remaining 4800\n"
+    )
     assert listing.calls == [1, 2]
     assert scorer.calls == []
+
+
+def _cost(calls, points, remaining):
+    return (
+        f"agentic: github reads for p: {calls} calls ({points} core points), "
+        f"core remaining {remaining}"
+    )
+
+
+def _many_documents(root, ports, count):
+    for number in range(1, count + 1):
+        ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
+
+
+@pytest.mark.parametrize("extra", [[], ["--dry-run"]])
+def test_the_quota_reaching_the_reserve_before_page_3_exits_75_with_two_lines(
+    monkeypatch, tmp_path, capsys, extra
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 250)
+    quotas = [QuotaReading(2000), QuotaReading(1500), QuotaReading(1000)]
+    listing = FakeListing([_item(number) for number in range(1, 251)], quotas=quotas)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, *extra, listing=listing) == 75
+    assert capsys.readouterr().out == (
+        "agentic: stopped reading GitHub: reserve; rerun later\n" + _cost(5, 2, 1000) + "\n"
+    )
+    assert listing.calls == [1, 2]
+    assert scorer.calls == []
+
+
+def test_a_refused_page_exits_1_with_the_same_two_lines(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 150)
+    listing = FakeListing([_item(n) for n in range(1, 151)], {1: "refused"})
+    assert _backfill(monkeypatch, root, ports, FakeScorer(), listing=listing) == 1
+    assert capsys.readouterr().out == (
+        "agentic: stopped reading GitHub: refused; rerun later\n" + _cost(2, 1, 4800) + "\n"
+    )
+
+
+def test_an_unreadable_first_quota_exits_75_and_the_remaining_is_unknown(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 3)
+    listing = FakeListing([_item(n) for n in range(1, 4)], quotas=[QuotaUnreadable()])
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 75
+    assert capsys.readouterr().out == (
+        "agentic: stopped reading GitHub: quota_unreadable; rerun later\n"
+        + _cost(1, 0, "unknown")
+        + "\n"
+    )
+    assert listing.calls == [] and scorer.calls == []
+
+
+def test_a_partial_run_still_exits_1_with_its_output_and_the_cost_line_before_the_summary(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task("GH-5", pull_request=None))  # not in the listing
+    listing = FakeListing([_item(4)])
+    assert _backfill(monkeypatch, root, ports, FakeScorer(), listing=listing) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "agentic: GH-5: partial:cycle_h"
+    assert out[-2:] == [_cost(2, 1, 4800), "scored 0, partial 1, failed 0"]
+
+
+def test_the_cost_line_follows_the_stage_lines_after_three_failed_writes(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 5)
+    listing = FakeListing([_item(n) for n in range(1, 6)])
+    scorer = FakeScorer([False, False, False])
+    assert _backfill(monkeypatch, root, ports, scorer, listing=listing) == 1
+    out = capsys.readouterr().out.splitlines()
+    stopped = out.index("agentic: stopped after 3 consecutive failed writes")
+    assert out[stopped + 1 : -2] and out[-2:] == [
+        _cost(2, 1, 4800),
+        "scored 0, partial 0, failed 3",
+    ]
+    assert _cost(2, 1, 4800) not in out[: stopped + 1]
+
+
+def test_a_complete_run_prints_the_cost_line_right_before_the_summary(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    _many_documents(root, ports, 1)
+    listing = FakeListing([_item(1)], quotas=[QuotaReading(3333)])
+    assert _backfill(monkeypatch, root, ports, FakeScorer(), listing=listing) == 0
+    assert capsys.readouterr().out.splitlines()[-2:] == [
+        _cost(2, 1, 3333),
+        "scored 1, partial 0, failed 0",
+    ]
 
 
 def test_an_eval_id_with_a_listed_pull_request_is_scored_not_gh_failed(
@@ -5097,7 +5220,9 @@ def test_only_unfinished_documents_make_no_github_call_and_build_no_listing(
 
     monkeypatch.setattr(cli.composition, "backfill_listing", built)
     assert _backfill_exit() == 0
-    assert capsys.readouterr().out.splitlines()[-1].startswith("scored 0, partial 0")
+    out = capsys.readouterr().out.splitlines()
+    assert out[-2] == _cost(0, 0, "unknown")
+    assert out[-1].startswith("scored 0, partial 0")
 
 
 def _backfill_exit() -> int:
