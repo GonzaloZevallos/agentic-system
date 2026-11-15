@@ -1951,3 +1951,13 @@ candidates:
   - finding
   - return
   added_at: '2026-11-15T11:03:42.680+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Before you deliver, check whether the change alters a flow or component that docs/architecture describes, and update those docs in the same change, including stale statements such as 'nobody calls it yet'.
+  confidence: medium
+  seen_in:
+  - GH-764
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-15T18:53:33.616+00:00'
