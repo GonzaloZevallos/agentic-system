@@ -1179,4 +1179,6 @@ tasks:
       - GH-798
   GH-789@review:
     cost_usd: 0.0
-    attempts: 2
+    failed: 'Reflector failed 1 times: You''ve hit your weekly limit · resets Nov 16, 12pm (America/Argentina/Buenos_Aires) (terminal reason: api_error, HTTP 429, exit code 1)'
+    decisions: 1
+    attempts: 3
