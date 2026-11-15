@@ -556,11 +556,21 @@ def add_shadow_reviews(existing: list[ShadowRecord], new: list[ShadowRecord]) ->
     return list(joined.values())
 
 
+class DepartureAnswer(TypedDict):
+    """The owner's verdict on one departure: `verdict`, `by` how it arrived (a `comment` line
+    or the `--drawing` `flag`) and `at` when the system recorded it."""
+
+    verdict: drawing.Verdict
+    by: Literal["comment", "flag"]
+    at: str
+
+
 class DepartureRecord(TypedDict):
     """One departure from an approved drawing as the state keeps it (GH-766): `number` its
     stable number (the owner answers by it), `key` `drawing.departure_key` of the row, the
     text fields as raised, `raised_at` when, `answer` the owner's verdict (`None` until
-    given) and `fix_passes` how many fix passes it has had. Never read by a role."""
+    given) and `fix_passes` how many fix passes it has had. Now read by every role through a
+    section (GH-814), never by the role's own output."""
 
     number: int
     key: str
@@ -572,7 +582,7 @@ class DepartureRecord(TypedDict):
     reason: str
     raised_by: str
     raised_at: str
-    answer: str | None
+    answer: DepartureAnswer | None
     fix_passes: int
 
 
@@ -630,6 +640,38 @@ def add_drawing_departures(
             }
         )
     return list(joined.values())
+
+
+class DrawingEscalation(TypedDict):
+    """The record of the drawing-departure escalations of a task: `round` how many there have
+    been, `numbers` every number asked so far (sorted) and `cause` `drawing_cap` once the cap
+    was reached, `drawing_departure` before."""
+
+    round: int
+    numbers: list[int]
+    cause: Literal["drawing_departure", "drawing_cap"]
+
+
+def add_drawing_escalation(
+    existing: DrawingEscalation | None, new: DrawingEscalation
+) -> DrawingEscalation:
+    """`existing` and `new` as one record: the higher `round`, the sorted union of `numbers`,
+    `drawing_cap` if either has it. Commutative and associative; `existing` may be `None`.
+    The graph's channel starts from the empty `DrawingEscalation()` and may fold an empty
+    update: an empty side is the identity, never an error."""
+    if not new:
+        return existing if existing is not None else cast(DrawingEscalation, {})
+    if not existing:
+        return DrawingEscalation(
+            round=new["round"], numbers=sorted(set(new["numbers"])), cause=new["cause"]
+        )
+    return DrawingEscalation(
+        round=max(existing["round"], new["round"]),
+        numbers=sorted({*existing["numbers"], *new["numbers"]}),
+        cause="drawing_cap"
+        if "drawing_cap" in (existing["cause"], new["cause"])
+        else "drawing_departure",
+    )
 
 
 ReviewScope = Literal["carried", "resolution", "full"]
@@ -2306,6 +2348,10 @@ class TaskState(TaskInput, total=False):
     # creates it, and a document written before it has none. Rows arrive numbered by
     # `departure_records`, the only place a number is assigned.
     drawing_departures: Annotated[list[DepartureRecord], add_drawing_departures]
+    # The drawing-departure escalations so far (GH-766, `DrawingEscalation`),
+    # `add_drawing_escalation`. Absent until the first one: the initial state never creates it.
+    # Written only by the system's serialized turn, never by a role.
+    drawing_escalation: Annotated[DrawingEscalation, add_drawing_escalation]
 
 
 def _reducers() -> dict[str, object]:
@@ -2329,6 +2375,8 @@ def apply(state: TaskState, patch: TaskState | ReleasePatch | EvaluatedPatch) ->
             merged[key] = add_drawing_departures(
                 merged.get(key), cast(list[DepartureRecord], value)
             )
+        elif reducer is add_drawing_escalation:
+            merged[key] = add_drawing_escalation(merged.get(key), cast(DrawingEscalation, value))
         elif reducer is None or key not in merged:
             merged[key] = value
         else:
@@ -2418,6 +2466,9 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
                 or (h["answer"], h["fix_passes"]) != (r["answer"], r["fix_passes"])
             ]:
                 patch[key] = changed_rows
+        elif reducer is add_drawing_escalation:
+            if add_drawing_escalation(old, value) != old:
+                patch[key] = value
         elif reducer is add_review_scopes:
             seen = {(r["unit"], r["head"], r["base"]) for r in old}
             if added_scopes := [r for r in value if (r["unit"], r["head"], r["base"]) not in seen]:

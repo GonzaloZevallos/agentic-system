@@ -34,13 +34,13 @@ classDiagram
     class docs__DiagramBudget["DiagramBudget"]
     class docs__Docs["Docs"]
     class drawing__Departure["Departure"]
+    class drawing__Verdicts["Verdicts"]
     class roles__Interview["Interview"]
     class roles__Pair["Pair"]
     class roles__Prompt["Prompt"]
     class roles__Role["Role"]
     class schemas__Answers["Answers"]
     class schemas__CapabilityFile["CapabilityFile"]
-    class schemas__CarveOutOutput["CarveOutOutput"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
@@ -49,4 +49,3 @@ classDiagram
 
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
   - `schemas.Answers` hereda de `schemas.RoleOutput`
-  - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`

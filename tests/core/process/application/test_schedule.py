@@ -20,6 +20,7 @@ from agentic.core.process.domain.task import (
     add,
     add_assumptions,
     add_drawing_departures,
+    add_drawing_escalation,
     add_flakes,
     add_full_checks_reads,
     add_merge_ci,
@@ -477,6 +478,14 @@ def value_for(key: str, branch: str, n: int):
                 "fix_passes": 0,
             }
         ]
+    if reducer is add_drawing_escalation:
+        # The max round, the sorted union and the cap flag: commutative, so the order of the
+        # branches that land never changes the record.
+        return {
+            "round": n % 4,
+            "numbers": [n % 3 + 1],
+            "cause": "drawing_cap" if n % 4 == 3 else "drawing_departure",
+        }
     if reducer is add_merge_ci:
         # One row per (head, master) pair, a function of the pair alone: the known pair is
         # replaced whole, so a row that differed by branch would depend on the order.
@@ -511,6 +520,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             first,
             add_assumptions,
             add_drawing_departures,
+            add_drawing_escalation,
             add_flakes,
             add_full_checks_reads,
             add_merge_ci,
