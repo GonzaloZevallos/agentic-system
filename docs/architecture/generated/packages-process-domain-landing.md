@@ -22,6 +22,7 @@ graph TD
     m_domain__gate_priority["domain.gate_priority"]
     m_domain__landing["domain.landing"]
     m_domain__landing_order["domain.landing_order"]
+    m_domain__merge_hold["domain.merge_hold"]
     m_domain__plan_revision["domain.plan_revision"]
     m_domain__plan_route["domain.plan_route"]
     m_domain__plan_settlement["domain.plan_settlement"]
