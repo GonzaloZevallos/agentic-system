@@ -57,6 +57,7 @@ def test_reducers_are_read_from_the_annotations():
         "escalation_class",
         "escalation_cause",
         "tracker_human",
+        "owner_decision_unbuilt",
         "tracker_items",
         "tracker_actions_done",
         "restarts",

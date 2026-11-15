@@ -3243,6 +3243,7 @@ PROBE_HEAD = "a" * 40
 
 def _probe_facts(**over) -> rules.MergeFacts:
     base = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,
@@ -3531,6 +3532,7 @@ PIN_MASTER = "b" * 40
 
 def _pin_facts(**over) -> rules.MergeFacts:
     base = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

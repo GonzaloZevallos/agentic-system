@@ -544,6 +544,9 @@ def render(
         **({"tracker_items": e} if (e := state.get("tracker_items")) else {}),
         **({"tracker_actions_done": e} if (e := state.get("tracker_actions_done")) else {}),
         **({"tracker_human": e} if (e := state.get("tracker_human")) else {}),
+        # GH-784: when resume closed a pause without building the owner's answer, written only
+        # when set so a document without it is byte-identical; read back under the same name.
+        **({"owner_decision_unbuilt": e} if (e := state.get("owner_decision_unbuilt")) else {}),
         # The delivery assumptions and the cause of a spec delivery's `questions` pause
         # (GH-594): each written only when set, so a document without a spec is byte-identical.
         # `from_frontmatter` reads them back through `assumption_text`.

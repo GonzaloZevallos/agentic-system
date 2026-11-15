@@ -18,6 +18,7 @@ AMBIGUOUS = adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0049")
 
 def _facts(collision) -> MergeFacts:
     return MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

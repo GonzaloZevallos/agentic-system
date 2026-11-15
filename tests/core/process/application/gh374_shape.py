@@ -83,6 +83,7 @@ def report(*checks: ci.CiCheck, head: str = HEAD) -> ci.CiReport:
 def facts(**over) -> rules.MergeFacts:
     """The facts of the failing `land`: head red on `web`, nothing red on the base."""
     found = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-374",
         status="ready_for_review",
         reviewed_unit_approved=True,

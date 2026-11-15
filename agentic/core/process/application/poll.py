@@ -307,6 +307,8 @@ def _merge_facts(
     return rules.MergeFacts(
         task_id=task_id,
         status=raw.get("status"),
+        # GH-784: placeholder until the application-wiring subtask assembles the real fact.
+        open_escalation=False,
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
         reviewed_head=unit.get("reviewed_head") if unit is not None else None,
         close_docs=raw.get("close_docs"),
