@@ -2,6 +2,7 @@ Esta página es el índice de los diagramas de clases de `agentic.core.measureme
 
 - Páginas:
   - [domain: langfuse](classes-measurement-domain-langfuse.md)
-  - [domain: reports](classes-measurement-domain-reports.md)
+  - [domain: reports (parte 1)](classes-measurement-domain-reports-1.md)
+  - [domain: reports (parte 2)](classes-measurement-domain-reports-2.md)
   - [domain: scorecard (parte 1)](classes-measurement-domain-scorecard-1.md)
   - [domain: scorecard (parte 2)](classes-measurement-domain-scorecard-2.md)

@@ -17,6 +17,7 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
   - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - [domain: state (parte 1)](classes-process-domain-state-1.md)
   - [domain: state (parte 2)](classes-process-domain-state-2.md)
   - [domain: state (parte 3)](classes-process-domain-state-3.md)
@@ -27,6 +28,9 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
+    class task__LandedSliceRef["LandedSliceRef"]
+    class task__LandingEntry["LandingEntry"]
+    class task__LaneAdmitted["LaneAdmitted"]
     class task__LaneMerge["LaneMerge"]
     class task__LapsePauseEntry["LapsePauseEntry"]
     class task__MergeCiRecord["MergeCiRecord"]
@@ -39,12 +43,9 @@ classDiagram
     class task__PathRevision["PathRevision"]
     class task__PendingCloseDocs["PendingCloseDocs"]
     class task__PlanRoute["PlanRoute"]
-    class task__PlanSettledRow["PlanSettledRow"]
-    class task__PullRequest["PullRequest"]
-    class task__PullRequestCommit["PullRequestCommit"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 7)](classes-process-domain-state-7.md)
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.PlanRoute`
