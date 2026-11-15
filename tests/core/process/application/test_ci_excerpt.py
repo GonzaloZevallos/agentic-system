@@ -3,15 +3,19 @@ written before `ci_excerpt` was extracted from `landing_fix._ci_excerpt` (GH-789
 by its sha256, the closed `{job, bytes, cause}` records and the log line stay what they were."""
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
-from agentic.core.process.application import landing_fix
+from agentic.core.process.application import ci_excerpt, landing_fix
 from agentic.core.process.application.landing_plan import LandingContext
+from agentic.core.process.application.ports import Ports
+from agentic.core.process.domain import ci
 from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain.ci import CiCheck, CiReport, JobLog, JobLogCause
 from tests.core.process.domain.test_ci_log_excerpt import FIXTURES, fixture
 from tests.fakes import FakeCiLogs
 
@@ -123,3 +127,204 @@ def test_a_raising_render_is_its_golden(monkeypatch):
 
     assert _wrapper(context) == ("", UNREADABLE)
     assert context.lines == ["agentic: land: GH-1: diagnose: CI logs not read (KeyError)"]
+
+
+def _direct(context: _Context):
+    seen: list[str] = []
+    got = ci_excerpt.ci_excerpt(
+        cast(Ports, context.ports), "ref", HEAD, landing_rules.ci_log_excerpt, seen.append
+    )
+    return got, seen
+
+
+@pytest.mark.parametrize("name", sorted(GOLDENS))
+def test_the_shared_excerpt_equals_the_landing_wrapper_for_every_fixture(name):
+    context = _context(FakeCiLogs([fixture(name)]))
+
+    (text, records), seen = _direct(context)
+
+    assert (text, [dict(r) for r in records]) == _wrapper(_context(FakeCiLogs([fixture(name)])))
+    assert seen == []
+
+
+def test_the_shared_excerpt_hands_on_error_exactly_the_class_name(monkeypatch):
+    assert _direct(_context(_RaisingRead())) == (("", UNREADABLE), ["OSError"])
+
+    def render(logs):
+        raise KeyError("boom")
+
+    monkeypatch.setattr(landing_rules, "ci_log_excerpt", render)
+    got, seen = _direct(_context(FakeCiLogs([fixture("check_test_failure.log")])))
+    assert (got, seen) == (("", UNREADABLE), ["KeyError"])
+
+
+def test_the_shared_excerpt_without_a_port_is_empty():
+    assert _direct(_context(None)) == (("", []), [])
+
+
+# --- read_record ------------------------------------------------------------------------------
+
+DECLARED = ("check",)
+LINK = "https://github.com/o/r/actions/runs/7/job/{}"
+
+
+def _sha8(item: str) -> str:
+    return hashlib.sha256(item.encode()).hexdigest()[:8]
+
+
+def _check(name: str, n: int) -> CiCheck:
+    return CiCheck(name, "COMPLETED", "FAILURE", LINK.format(n))
+
+
+def _report(*names: str) -> CiReport:
+    checks = tuple(_check(name, n) for n, name in enumerate(names, 1))
+    return CiReport(HEAD, None, None, None, checks)
+
+
+def _text(*failed: str) -> str:
+    lines = ["=== test session starts ===", "=== short test summary info ==="]
+    lines += [f"FAILED {item} - boom" for item in failed]
+    return "\n".join([*lines, f"=== {len(failed)} failed ==="])
+
+
+def _log(check: CiCheck, text: str, cause: JobLogCause = "read") -> JobLog:
+    return JobLog(check.name, check.link, text, len(text.encode()), cause, 0)
+
+
+def _record(report: CiReport, logs: list[JobLog]):
+    candidates = ci.log_candidates(report, DECLARED)
+    ports = cast(Ports, SimpleNamespace(ci_logs=FakeCiLogs(logs)))
+    return ci_excerpt.read_record(ports, "ref", HEAD, 3, candidates, DECLARED)
+
+
+def _shards(report: CiReport) -> dict[str, CiCheck]:
+    return {check.name: check for check in report.checks}
+
+
+def test_five_red_shards_with_four_read_give_jobs_and_no_tests():
+    report = _report(*(f"shard {n}" for n in range(1, 6)))
+    logs = [_log(c, _text(f"t.py::t{c.name[-1]}")) for c in report.checks[:4]]
+
+    row = _record(report, logs)
+
+    assert "tests" not in row
+    assert [job["job"] for job in row["jobs"]] == [f"shard {n}" for n in range(1, 5)]
+    assert (row["version"], row["head"]) == (3, HEAD)
+
+
+def test_an_empty_aggregate_and_two_readable_shards_give_hashes():
+    report = _report("check", "shard 1", "shard 2")
+    by = _shards(report)
+    logs = [
+        _log(by["check"], "", "empty"),
+        _log(by["shard 1"], _text("a::x")),
+        _log(by["shard 2"], _text("b::y")),
+    ]
+
+    row = _record(report, logs)
+
+    assert row["tests"] == [_sha8("a::x"), _sha8("b::y")]
+    assert row["jobs"][0] == {"job": "check", "link": LINK.format(1), "bytes": 0, "cause": "empty"}
+
+
+def test_todays_adapter_case_an_aggregate_and_five_shards_gives_no_tests_but_jobs():
+    report = _report("check", *(f"shard {n}" for n in range(1, 6)))
+    logs = [_log(c, _text(f"t.py::{c.name}")) for c in ci.red_checks(report)[:4]]
+
+    row = _record(report, logs)
+
+    assert "tests" not in row
+    assert len(row["jobs"]) == 4
+
+
+def test_a_candidate_that_is_not_declared_and_was_read_on_another_head_gives_no_tests():
+    report = _report("shard 1", "shard 2")
+    by = _shards(report)
+    logs = [_log(by["shard 1"], _text("a::x")), _log(by["shard 2"], "", "other_head")]
+
+    row = _record(report, logs)
+
+    assert "tests" not in row
+    assert [job["cause"] for job in row["jobs"]] == ["read", "other_head"]
+
+
+def test_a_raising_read_is_one_unreadable_job_and_no_tests():
+    ports = cast(Ports, SimpleNamespace(ci_logs=_RaisingRead()))
+
+    row = ci_excerpt.read_record(ports, "ref", HEAD, 2, [], DECLARED)
+
+    assert row == {
+        "version": 2,
+        "head": HEAD,
+        "jobs": [{"job": "ci", "link": "", "bytes": 0, "cause": "unreadable"}],
+    }
+
+
+def test_no_port_is_no_jobs_and_no_tests():
+    ports = cast(Ports, SimpleNamespace(ci_logs=None))
+
+    row = ci_excerpt.read_record(ports, "ref", HEAD, 2, [], DECLARED)
+
+    assert row == {"version": 2, "head": HEAD, "jobs": []}
+
+
+def test_the_result_never_holds_log_text_and_the_job_name_is_cleaned():
+    report = _report("shard 1")
+    secret = "SECRET-LOG-LINE-do-not-store"
+    check = report.checks[0]
+    log = JobLog(
+        "shard 1\n{{<!-- tail",
+        check.link,
+        _text("a::x") + "\n" + secret,
+        99,
+        "read",
+        0,
+    )
+    ports = cast(Ports, SimpleNamespace(ci_logs=FakeCiLogs([log])))
+
+    row = ci_excerpt.read_record(ports, "ref", HEAD, 1, ci.log_candidates(report, DECLARED), ())
+
+    dumped = json.dumps(row)
+    assert secret not in dumped and "{{" not in dumped and "\\n" not in dumped
+    assert row["jobs"][0]["job"] == "shard 1 tail"
+    assert row["jobs"][0]["bytes"] == 99
+
+
+def test_names_cut_to_the_same_job_keep_their_own_rows_and_the_same_tests():
+    long = "x" * 130
+    short = _report("shard 1", "shard 2")
+    wide = CiReport(
+        HEAD,
+        None,
+        None,
+        None,
+        (
+            CiCheck(long + "1", "COMPLETED", "FAILURE", LINK.format(1)),
+            CiCheck(long + "2", "COMPLETED", "FAILURE", LINK.format(2)),
+        ),
+    )
+    texts = [_text("a::x"), _text("b::y")]
+    want = _record(short, [_log(c, t) for c, t in zip(short.checks, texts, strict=True)])
+    logs = [_log(c, t) for c, t in zip(wide.checks, texts, strict=True)]
+    logs[1] = JobLog(logs[1].job, logs[1].link, logs[1].text, 5, "read", 0)
+
+    row = _record(wide, logs)
+
+    assert row["tests"] == want["tests"]
+    assert row["jobs"][0]["job"] == row["jobs"][1]["job"] == "x" * ci.RECORD_JOB_MAX_CHARS
+    assert [job["link"] for job in row["jobs"]] == [LINK.format(1), LINK.format(2)]
+    assert row["jobs"][1]["bytes"] == 5
+
+
+@pytest.mark.parametrize(
+    "link", ["https://evil.example/a/actions/runs/1/job/2", "https://github.com/o/r/runs/1", ""]
+)
+def test_a_link_that_is_not_an_actions_job_link_is_stored_empty(link):
+    report = _report("shard 1")
+    log = JobLog("shard 1", link, _text("a::x"), 10, "read", 0)
+    ports = cast(Ports, SimpleNamespace(ci_logs=FakeCiLogs([log])))
+
+    row = ci_excerpt.read_record(ports, "ref", HEAD, 1, ci.log_candidates(report, DECLARED), ())
+
+    assert row["jobs"][0]["link"] == ""
+    assert row["tests"] == [_sha8("a::x")]

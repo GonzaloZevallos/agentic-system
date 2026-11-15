@@ -70,6 +70,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.board_sync": "lifecycle",
     "application.carve_out": "lifecycle",
     "application.checkouts": "support",
+    "application.ci_excerpt": "checks",
     "application.ci_flakes": "checks",
     "application.ci_push": "support",
     "application.ci_ref_sweep": "checks",
