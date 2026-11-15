@@ -5184,3 +5184,13 @@ def test_spec_delivery_and_escalation_read_the_same_signal():
     assert "spec_cause" not in rules.escalation("questions", "doubt")
     with pytest.raises(ValueError):
         rules.escalation("questions", "doubt", spec=with_spec["spec"])
+
+
+def test_part_over_line_with_a_remainder_carries_its_figures_and_keeps_the_fit_question():
+    remainder = FitDecision(False, 61.5, 9, None)
+    patch = rules.part_over_line("GH-338", PART_OF, GH_338_FIT, at=_STAMP, remainder=remainder)
+    assert patch["escalated"] == rules.fit_question_text(
+        "GH-338", PART_OF, GH_338_FIT, remainder=remainder
+    )
+    assert "61.50 USD and 9 files" in patch["escalated"] and patch["fit_question"] is True
+    assert patch["escalation_class"] == "estimate"

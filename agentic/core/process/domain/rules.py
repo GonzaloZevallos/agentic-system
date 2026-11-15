@@ -3382,17 +3382,24 @@ def fit_question_text(
 
 
 def part_over_line(
-    task_id: str, part_of: tuple[str, int, int], fit: FitDecision | None, *, at: str
+    task_id: str,
+    part_of: tuple[str, int, int],
+    fit: FitDecision | None,
+    *,
+    at: str,
+    remainder: FitDecision | None = None,
 ) -> dict[str, Any]:
     """The patch that pauses a part at the depth cap whose plan is over the line: one
     `estimate` escalation asking "narrow it or stop", marked by `fit_question` so its resume
     plans again instead of building. It carries no `proposed_estimate`; the plan stays in
-    the Tech Lead's section."""
+    the Tech Lead's section. After a carve-out, `remainder` is the fit of what was left."""
     return logged(
         {
             "current_role": PJM.name,
             "status": WAITING_ON_HUMAN,
-            **escalation("estimate", fit_question_text(task_id, part_of, fit)),
+            **escalation(
+                "estimate", fit_question_text(task_id, part_of, fit, remainder=remainder)
+            ),
             "fit_question": True,
         },
         at=at,
