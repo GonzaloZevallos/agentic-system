@@ -6,6 +6,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from agentic.core.process.domain.tracker_refs import issue_number, pull_request_number
+
 PAGE_SIZE = 100
 
 
@@ -36,3 +38,27 @@ class Missing:
 def merge(items: Mapping[int, ListedIssue], page: Iterable[ListedIssue]) -> dict[int, ListedIssue]:
     """`items` plus `page`, keyed by number; a later read wins."""
     return {**items, **{item.number: item for item in page}}
+
+
+def times_for(
+    items: Mapping[int, ListedIssue], task_id: str, pr_reference: str | None
+) -> TaskTimes | Missing:
+    """A task's times: an id that is not `GH-N` has no issue time (not a failure); a number
+    the listing lacks, an unparsable reference or one naming a plain issue is `Missing`."""
+    number = issue_number(task_id)
+    issue_time = None
+    if number is not None:
+        issue = items.get(number)
+        if issue is None:
+            return Missing(number)
+        issue_time = issue.created_at
+    if pr_reference is None:
+        return TaskTimes(issue_time, None, None)
+    try:
+        pr_number = pull_request_number(pr_reference)
+    except ValueError:
+        return Missing(number)
+    pull = items.get(pr_number)
+    if pull is None or not pull.is_pr:
+        return Missing(pr_number)
+    return TaskTimes(issue_time, pull.created_at, pull.pr_merged_at)

@@ -180,6 +180,19 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
 - `adapters/git/`: `agentic/core/measurement/adapters/git/eval_roots.py:GitEvalRoots` cumple
   `EvalRoots` con `git worktree add --detach` en la base de la entrada y su limpieza
   (`worktree remove`, `prune`, `branch -D agentic/<id>`).
+- Lectura del listado de GitHub (GH-802, `scores backfill`): el puerto `IssueListing`
+  (`agentic/core/measurement/application/ports.py`, con `GhRead`, `Page` y `PageUnreadable`)
+  entrega el listado REST de issues y pull requests de a una página; `read_listing`
+  (`agentic/core/measurement/application/listing_reads.py`) lee las páginas 1, 2, … una sola
+  vez cada una y devuelve `Listing` completo o `Stopped(causa)` en la primera página ilegible.
+  `times_for` (`agentic/core/measurement/domain/issue_listing.py`) busca en él los tiempos de
+  una tarea con `agentic/core/process/domain/tracker_refs.py`.
+- `adapters/github/`: `agentic/core/measurement/adapters/github/issue_listing.py:GhIssueListing`
+  cumple `IssueListing` sobre un `GhRead` que recibe por parámetro (no importa nada de
+  `core.process.adapters`; solo las excepciones de `core.process.application.ports`, que mapea
+  por tipo a la causa de la página). La composición lo arma con `composition.backfill_listing`,
+  sobre `composition.backfill_gh_read`: una sola llamada por página, sin reintento ni línea
+  impresa.
 - `adapters/otel/`: spans y métricas; el módulo
   `agentic/core/measurement/adapters/otel/telemetry.py` cumple el puerto `Telemetry` de
   proceso y la composición se lo pasa a `build_graph`.

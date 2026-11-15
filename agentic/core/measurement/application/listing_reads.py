@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
-from agentic.core.process.domain.tracker_refs import issue_number, pull_request_number
-
-from ..domain.issue_listing import PAGE_SIZE, ListedIssue, Missing, TaskTimes, merge
+from ..domain.issue_listing import PAGE_SIZE, ListedIssue, merge
 from .ports import IssueListing, PageCause, PageUnreadable
 
 
@@ -37,27 +34,3 @@ def read_listing(listing: IssueListing) -> Listing | Stopped:
         if page.size < PAGE_SIZE:
             return Listing(items)
         number += 1
-
-
-def times_for(
-    items: Mapping[int, ListedIssue], task_id: str, pr_reference: str | None
-) -> TaskTimes | Missing:
-    """A task's times: an id that is not `GH-N` has no issue time (not a failure); a number
-    the listing lacks, an unparsable reference or one naming a plain issue is `Missing`."""
-    number = issue_number(task_id)
-    issue_time = None
-    if number is not None:
-        issue = items.get(number)
-        if issue is None:
-            return Missing(number)
-        issue_time = issue.created_at
-    if pr_reference is None:
-        return TaskTimes(issue_time, None, None)
-    try:
-        pr_number = pull_request_number(pr_reference)
-    except ValueError:
-        return Missing(number)
-    pull = items.get(pr_number)
-    if pull is None or not pull.is_pr:
-        return Missing(pr_number)
-    return TaskTimes(issue_time, pull.created_at, pull.pr_merged_at)

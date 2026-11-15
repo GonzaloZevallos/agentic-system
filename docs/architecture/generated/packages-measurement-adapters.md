@@ -3,7 +3,8 @@ Esta página muestra los módulos de la capa `adapters` de `agentic.core.measure
 - Padre: [Paquetes de measurement](packages-measurement.md)
 - Hermanas:
   - [measurement: application](packages-measurement-application.md)
-  - [measurement: domain](packages-measurement-domain.md)
+  - [measurement: domain (1)](packages-measurement-domain-1.md)
+  - [measurement: domain (2)](packages-measurement-domain-2.md)
 
 ```mermaid
 graph TD

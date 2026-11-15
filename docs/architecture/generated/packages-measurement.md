@@ -1,7 +1,8 @@
 Esta página muestra las capas de `agentic.core.measurement` (`domain`, `application`, `adapters`), con una flecha por cada capa que importa a otra. Cada capa tiene su página, con sus módulos y los imports que hacen.
 
 - Páginas:
-  - [measurement: domain](packages-measurement-domain.md)
+  - [measurement: domain (1)](packages-measurement-domain-1.md)
+  - [measurement: domain (2)](packages-measurement-domain-2.md)
   - [measurement: application](packages-measurement-application.md)
   - [measurement: adapters](packages-measurement-adapters.md)
 
