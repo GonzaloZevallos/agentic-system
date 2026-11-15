@@ -1154,3 +1154,6 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-754
+  GH-762@review:
+    cost_usd: 0.0942
+    decisions: 2

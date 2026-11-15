@@ -1912,3 +1912,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-15T04:25:21.135+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you add a port, adapter or other public component, search the hand-written docs for a table or list naming its siblings and add the new entry in the same change.
+  confidence: medium
+  seen_in:
+  - GH-762
+  sources:
+  - finding
+  added_at: '2026-11-15T07:55:57.791+00:00'
