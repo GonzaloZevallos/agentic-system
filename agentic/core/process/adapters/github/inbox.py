@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from ...application.ports import ListMayBeCut
 from ...domain.landing import IssueRef
 from ...domain.task import TaskInput
 from .run import bounded_run, print_line, run_gh
@@ -90,7 +91,8 @@ class GhInbox:
         """Every open issue as `(url, title, body)` for the flake path (GH-464): no `--label`,
         no `--search`, so a flake issue is found by `landing.flake_issue_for` wherever it sits.
         A list exactly as long as the limit may have been cut, and a cut list would let a
-        second flake issue open: that is a `ValueError`, like a `gh` failure."""
+        second flake issue open: that is a `ListMayBeCut` (a `ValueError`, like a `gh`
+        failure)."""
         raw = run_gh(
             self._run,
             (
@@ -110,7 +112,7 @@ class GhInbox:
         )
         issues = json.loads(raw)
         if len(issues) >= _OPEN_ISSUE_REFS_LIMIT:
-            raise ValueError(
+            raise ListMayBeCut(
                 f"gh issue list returned {len(issues)} issues, the limit it was asked for: "
                 "the list may be cut, so no flake issue is matched against it"
             )

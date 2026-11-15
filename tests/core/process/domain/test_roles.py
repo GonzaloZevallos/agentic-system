@@ -73,6 +73,17 @@ def test_the_plan_sizer_is_a_light_role_with_no_tools(tmp_path):
     assert PLAN_SIZER.runs_on == "actor"
 
 
+def test_the_carve_out_is_one_tech_lead_spec_with_no_tools_and_a_small_budget():
+    from agentic.core.process.domain.roles import TECH_LEAD, TECH_LEAD_CARVE_OUT
+
+    assert [r for r in ROLES if r is TECH_LEAD_CARVE_OUT] == [TECH_LEAD_CARVE_OUT]
+    assert TECH_LEAD_CARVE_OUT.name == TECH_LEAD.name
+    assert TECH_LEAD_CARVE_OUT.tools == () and TECH_LEAD_CARVE_OUT.allowed == ()
+    assert TECH_LEAD_CARVE_OUT.effort == "low" and TECH_LEAD_CARVE_OUT.max_turns <= 4
+    assert TECH_LEAD_CARVE_OUT.slug == "tech_lead_carve_out"
+    assert {r.slug for r in ROLES if r.name == TECH_LEAD.name} >= {"tech_lead_carve_out"}
+
+
 def test_an_explicit_override_still_wins_for_an_ephemeral_slug(tmp_path):
     for role in EPHEMERAL_ROLES:
         cfg = Configuration(
@@ -509,6 +520,7 @@ EXPECTED_CRITERIA = {
     "tech_lead_review": ("engineering",),
     "tech_lead_review_light": ("engineering",),
     "plan_sizer": (),
+    "tech_lead_carve_out": (),
     "tech_lead_critic": ("engineering", "product"),
     "tech_lead_critic_platform": ("engineering", "product"),
     "landing_diagnoser": ("engineering",),

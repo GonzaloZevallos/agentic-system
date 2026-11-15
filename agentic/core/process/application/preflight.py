@@ -8,7 +8,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
-from ..domain import docs, rules, size_budget, spec_brief, task_path, tracker_items
+from ..domain import carve_out, docs, rules, size_budget, spec_brief, task_path, tracker_items
 from ..domain.roles import ROLES
 from ..domain.run_check import resolve_wall
 from ..domain.task import TaskState
@@ -53,6 +53,10 @@ PLACEHOLDERS = {
     # `pjm.md` lists the risk areas PjM chooses from; `classify` passes the product's own, the
     # gate only has to render the built-in menu.
     "risk_areas": task_path.risk_menu(()),
+    # The carve-out prompt (GH-722): the plan, the fit figures and the module's own rules.
+    "carve_plan": "a plan output",
+    "carve_fit": rules.fit_figures_text(None),
+    "carve_rules": carve_out.rules_text(),
 }
 
 

@@ -26,13 +26,13 @@ classDiagram
     class ports__LabelTimeline["LabelTimeline"]
     class ports__LaunchAttempt["LaunchAttempt"]
     class ports__Launcher["Launcher"]
+    class ports__ListMayBeCut["ListMayBeCut"]
     class ports__ListedPullRequest["ListedPullRequest"]
     class ports__LoadReader["LoadReader"]
     class ports__LockHeld["LockHeld"]
     class ports__LockRecord["LockRecord"]
     class ports__MasterWindow["MasterWindow"]
     class ports__MergeCallFailed["MergeCallFailed"]
-    class ports__MergeConflict["MergeConflict"]
     ports__LockHeld o-- ports__LockRecord
 ```
 

@@ -5070,6 +5070,84 @@ def test_tracker_item_pause_is_true_only_with_pending_hashes():
     assert not rules.tracker_item_pause({})
 
 
+# The text of `fit_question_text` before the remainder paragraph existed (GH-722): captured from
+# the code as it was, one golden per branch of the figures.
+
+_FIT_HEAD = (
+    "GH-9 is part 2 of GH-316, at split depth 2; a split goes at most 2 levels deep, so it "
+    "cannot split again. "
+)
+_FIT_TAIL = (
+    "Choose one:\n"
+    "- Narrow the task: comment on the issue what to cut and resume; the task is planned "
+    "again with your comment and judged by the same budget.\n"
+    "- Stop and release the parts that depend on it: close the issue as not planned.\n"
+    "- Stop and hold them: leave it open and do not resume.\n"
+    "Closing the issue as completed without a merge leaves the parts behind it blocked. "
+    "No resume builds the plan as it stands."
+)
+_FIT_FIGURES_NONE = "The plan's figures are not known, so which limit it crossed is not either. "
+_FIT_FIGURES_LEGACY = (
+    "Its plan declares 400.00 USD and 90 files, and the history has no reference for this many "
+    "subtasks. One task holds at most 150 USD and 40 files: the declared cost is over the 150 "
+    "USD limit; the declared files are over the 40 file limit. "
+)
+_FIT_FIGURES_SIZED = (
+    "Its plan declares 20.00 USD, 11 hand-written files, 120 hand-written lines and 700 test "
+    "lines (judged 17 files and 180 lines after the floor), and the history has no reference "
+    "for this many subtasks. One task holds at most 150 USD, 15 hand-written files, 400 "
+    "hand-written lines and 600 test lines: the declared hand-written files are over the 15 "
+    "file cap; the declared test lines are over the 600 line cap. "
+)
+_FIT_FIGURES_REFERENCE = (
+    "Its plan declares 20.00 USD and 4 files, and the history's reference for this many "
+    "subtasks is 200.00 USD. One task holds at most 150 USD and 40 files: the history's "
+    "reference is over the 150 USD limit. "
+)
+
+
+def _sized_fit() -> FitDecision:
+    declared = size_budget.PlanSize(11, 120, 700)
+    judged = size_budget.judged(declared)
+    return FitDecision(False, 20.0, 40, None, declared, judged, size_budget.crossed(judged))
+
+
+@pytest.mark.parametrize(
+    ("fit", "figures"),
+    [
+        (None, _FIT_FIGURES_NONE),
+        (FitDecision(False, 400.0, 90, None), _FIT_FIGURES_LEGACY),
+        (_sized_fit(), _FIT_FIGURES_SIZED),
+        (GH_338_FIT, _FIT_FIGURES_REFERENCE),
+    ],
+    ids=["unknown", "legacy", "sized", "reference"],
+)
+def test_the_fit_question_without_a_remainder_is_byte_identical_to_the_one_before(fit, figures):
+    assert rules.fit_question_text("GH-9", PART_OF, fit) == _FIT_HEAD + figures + _FIT_TAIL
+
+
+def test_the_figures_helper_is_the_figures_sentence_of_the_question():
+    assert rules.fit_figures_text(None) == _FIT_FIGURES_NONE
+    assert rules.fit_figures_text(_sized_fit()) == _FIT_FIGURES_SIZED
+    assert rules.fit_figures_text(GH_338_FIT) == _FIT_FIGURES_REFERENCE
+
+
+def test_the_fit_question_after_a_carve_out_quotes_the_remainders_figures_and_its_limit():
+    remainder = FitDecision(False, 180.0, 12, None)
+    plain = rules.fit_question_text("GH-9", PART_OF, GH_338_FIT)
+    text = rules.fit_question_text("GH-9", PART_OF, GH_338_FIT, remainder=remainder)
+    assert text.startswith(_FIT_HEAD + _FIT_FIGURES_REFERENCE.rstrip() + "\n\n")
+    assert text.endswith("\n\nChoose one:" + plain.split("Choose one:")[1])
+    (paragraph,) = [p for p in text.split("\n\n") if "carve-out" in p]
+    assert "carve-out" in paragraph and "remainder" in paragraph
+    assert rules.fit_figures_text(remainder).rstrip() in paragraph
+    assert "180.00 USD and 12 files" in paragraph
+    assert "the declared cost is over the 150 USD limit" in paragraph
+    # The plan's own figures are still quoted once, in their own sentence.
+    assert text.count("200.00 USD") == 1
+    assert "Narrow the task" in text and "do not resume" in text
+
+
 # --- GH-594 part 4a: rules.spec_delivery and its agreement with rules.escalation -----------
 
 _SPEC_CONTRACT = {

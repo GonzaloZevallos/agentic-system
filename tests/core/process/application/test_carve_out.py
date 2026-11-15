@@ -17,8 +17,9 @@ from agentic.core.process.application.carve_out import (
     finish_carve,
     refusals,
 )
-from agentic.core.process.application.ports import IssueState, TrackerRateLimited
+from agentic.core.process.application.ports import IssueState, ListMayBeCut, TrackerRateLimited
 from agentic.core.process.domain import carve_out, rules
+from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.roles import TECH_LEAD
 from agentic.core.process.domain.schemas import FitDecision
 from agentic.core.process.domain.task import WAITING_ON_HUMAN, apply
@@ -54,6 +55,8 @@ def _carve(**over: Any) -> Any:
 
 PLAN: Any = {
     "integration": "wire a and b",
+    "required_paths": ["src/a.py"],
+    "ci_required": ["tests"],
     "subtasks": [
         {"id": "a", "title": "A", "brief": "Build a.", "depends_on": []},
         {"id": "b", "title": "B", "brief": "Build b.", "invariants": ["b is pure"]},
@@ -93,7 +96,7 @@ class LeakyTracker(MemoryTracker):
 
 
 class LeakyInbox(MemoryInbox):
-    def open_issues(self) -> list[tuple[str, str]]:
+    def open_issue_refs(self) -> list[IssueRef]:
         raise OSError(LEAK)
 
 
@@ -368,6 +371,7 @@ def test_a_run_cut_after_the_follow_up_was_opened_opens_no_second_and_finishes_t
     patch = _run(second, only_url)
 
     assert inner.opened_issues == [] and "inbox.open_issues" not in calls
+    assert calls.count("inbox.open_issue_refs") == 1  # only the re-point reads the list
     assert len(inner.updated_bodies) == 2 and len(_carve_comments(inner)) == 1
     assert patch["carve_out"]["issue_url"] == PART_URL and "commented_at" in patch["carve_out"]
 
@@ -394,7 +398,11 @@ def test_an_incomplete_step_pauses_key_by_key_and_the_resume_finishes(failure: s
             "re-pointing the dependents failed (stopped by TrackerRateLimited)",
             REPOINT_LEFT,
         ),
-        "refs": ("reading the open issues failed (OSError)", REPOINT_LEFT),
+        # The dedupe read comes first now, so the follow-up is not yet opened either.
+        "refs": (
+            "reading the open issues failed (OSError)",
+            "the follow-up, its re-point and the comment on the part are left",
+        ),
         "comments": ("reading the comments of the part failed (ValueError)", COMMENT_LEFT),
         "posting": ("commenting on the part failed (ValueError)", COMMENT_LEFT),
     }[failure]
@@ -415,12 +423,72 @@ def test_an_incomplete_step_pauses_key_by_key_and_the_resume_finishes(failure: s
 
     healthy, _, again = _setup(inbox=_inbox(**DEPENDENTS))
     resumed = _run(healthy, apply({**STATE, "carve_out": record}, patch))
-    assert again.opened_issues == [] and len(_carve_comments(again)) == 1
+    # The refs failure now stops before the follow-up exists, so its resume opens it.
+    assert len(again.opened_issues) == (1 if failure == "refs" else 0)
+    assert len(_carve_comments(again)) == 1
     assert {"repointed_at", "commented_at"} <= set(resumed["carve_out"])
     assert (
         finish_carve({**STATE, "carve_out": resumed["carve_out"]})[0]["carve_out"]["outcome"]
         == "applied"
     )
+
+
+def test_a_list_that_may_be_cut_pauses_with_cut_and_opens_nothing() -> None:
+    inbox = _inbox(**DEPENDENTS)
+    inbox.refs_error = ListMayBeCut(LEAK)
+    ports, calls, inner = _setup(inbox=inbox)
+
+    patch = _run(ports)
+
+    assert patch["status"] == WAITING_ON_HUMAN and patch["escalation_class"] == "failure"
+    assert patch["escalated"] == (
+        "carve-out: reading the open issues failed (cut); the follow-up, its re-point and the "
+        "comment on the part are left, resume to finish"
+    )
+    assert set(patch) == KEYS
+    assert "tracker.open_issue" not in calls and "tracker.ensure_label" not in calls
+    assert inner.opened_issues == [] and not inner.updated_bodies
+    assert "issue_url" not in _record(ports)
+    assert LEAK not in json.dumps(patch, default=str)
+
+
+def test_a_list_that_is_not_cut_opens_the_follow_up_as_before() -> None:
+    inbox = _inbox(_5="Unrelated body.")
+    ports, calls, inner = _setup(inbox=inbox)
+
+    _run(ports)
+
+    assert inbox.refs_calls == 2 and calls.count("tracker.open_issue") == 1
+    assert len(inner.opened_issues) == 1 and "issue_url" in _record(ports)
+
+
+def test_a_list_carrying_the_marked_follow_up_reuses_its_url() -> None:
+    mine = f"Body.\n{carve_out.marker('GH-732', 732)}"
+    inbox = MemoryInbox()
+    inbox.refs = [IssueRef("https://github.com/o/r/issues/5", "Carved steps", mine)]
+    ports, calls, inner = _setup(inbox=inbox)
+
+    _run(ports)
+
+    assert "tracker.open_issue" not in calls and inner.opened_issues == []
+    assert _record(ports)["issue_url"] == "https://github.com/o/r/issues/5"
+
+
+def test_a_re_point_whose_list_may_be_cut_pauses_with_cut_and_comments_nothing() -> None:
+    inbox = _inbox(**DEPENDENTS)
+    inbox.refs_error = ListMayBeCut(LEAK)
+    ports, _, inner = _setup(inbox=inbox)
+    state = {**STATE, "carve_out": {"data": _data(), "at": NOW, "issue_url": PART_URL}}
+
+    patch = _run(ports, state)
+
+    assert patch["escalated"] == (
+        f"carve-out: reading the open issues failed (cut); {REPOINT_LEFT}, resume to finish"
+    )
+    assert set(patch) == KEYS
+    assert "repointed_at" not in _record(ports)
+    assert not inner.updated_bodies and _carve_comments(inner) == []
+    assert LEAK not in json.dumps(patch, default=str)
 
 
 class RateLimitedTracker(MemoryTracker):

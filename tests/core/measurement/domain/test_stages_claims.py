@@ -124,6 +124,9 @@ def test_the_planning_slugs_are_the_plan_stage_less_the_seats_that_are_not_a_tas
         "tech_lead_ephemeral_stack",
         "tech_lead_interviewee_stack",
         "tech_lead_stack",
+        # The carve-out re-reads a delivered plan and nothing calls it yet: planning cost keeps
+        # its figures until the part that wires it decides whether the role joins them.
+        "tech_lead_carve_out",
     }
     assert set(planning.PLANNING_SLUGS) == plan - not_planning
 

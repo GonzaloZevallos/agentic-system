@@ -100,6 +100,7 @@ ROLE_STAGES: dict[str, CycleStage] = {
             "tech_lead_ephemeral_stack",
             "tech_lead_interviewee_stack",
             "tech_lead_stack",
+            "tech_lead_carve_out",
         ),
         "plan",
     ),
