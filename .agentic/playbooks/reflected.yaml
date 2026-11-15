@@ -1177,3 +1177,6 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-798
+  GH-789@review:
+    cost_usd: 0.0
+    attempts: 1
