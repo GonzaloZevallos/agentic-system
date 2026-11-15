@@ -34,6 +34,7 @@ from tests.fakes import FakeLauncher
 
 def _blank() -> rules.MergeFacts:
     return rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-5",
         status="ready_for_review",
         reviewed_unit_approved=True,

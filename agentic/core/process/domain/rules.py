@@ -5695,6 +5695,7 @@ def head_reviewed(
 
 MergeRefusal = Literal[
     "not_ready",
+    "open_escalation",
     "pr_not_open",
     "adr_number_taken",
     "not_approved",
@@ -5723,6 +5724,9 @@ MergeRefusal = Literal[
 """Why `auto_merge_decision` refuses, one reason per condition:
 
 - `not_ready`: the task is not `ready_for_review`.
+- `open_escalation` (GH-784): an owner escalation is still open, or could not be shown closed
+  (`MergeFacts.open_escalation` is not `False`). Right after `not_ready`, so a paused status is
+  still `not_ready`. Left to the human: nothing in the landing resolves it.
 - `pr_not_open`: the pull request is merged, closed or unreadable. Second, so that a pull
   request that is not open is never reported as a review or findings problem.
 - `adr_number_taken` (GH-229): an ADR the branch's own commits added has a number master
@@ -5851,7 +5855,10 @@ class MergeFacts:
     and `ci_verdict` are about: `pr_head` the pull request's own CI (as always) or `tested`
     the fresh run on the latest pair's `tested` commit, which `merge_ci.run_stands` then
     compares with the head, `ci_run_inert` being its reading of what master gained since the
-    pair's master (None: not read)."""
+    pair's master (None: not read). `open_escalation` (GH-784) is `merge_hold.open_escalation`'s
+    reading, assembled by the merge application: `False` is the only value that is clear, `True` an
+    open owner escalation and `None` one that could not be shown closed; it has no default, so a
+    caller that builds a `MergeFacts` says which it means."""
 
     task_id: str
     status: str | None
@@ -5868,6 +5875,7 @@ class MergeFacts:
     checks_master: str | None
     checks_passed: bool | None
     current_master: str | None
+    open_escalation: bool | None
     merge_failures: int = 0
     merge_failure: MergeFailure | None = None
     ci_required: tuple[str, ...] = ()
@@ -6150,7 +6158,8 @@ def ci_trusted(untrusted: bool | None, dispatched: bool | None) -> bool:
 def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
-    first that fails: `not_ready`, `pr_not_open`, `adr_number_taken`, `not_approved`,
+    first that fails: `not_ready`, `open_escalation` (the fact is not `False`: `None` is never
+    clear, GH-784), `pr_not_open`, `adr_number_taken`, `not_approved`,
     `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `criteria_unreadable`
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
@@ -6179,6 +6188,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     of the last failure (`merge_failure`) is never read."""
     if facts.status != "ready_for_review":
         return MergeDecision("refuse", "not_ready")
+    if facts.open_escalation is not False:
+        return MergeDecision("refuse", "open_escalation")
     if facts.pr_state != "OPEN":
         return MergeDecision("refuse", "pr_not_open")
     if facts.adr_collision is not None:

@@ -136,6 +136,7 @@ def merge_facts(state: TaskState, pr_head: str) -> MergeFacts:
     """What the poller and the landing build for a PR whose reviewed head is its own head."""
     convened, verdict, head = rules.perf_merge_facts(state)
     return MergeFacts(
+        open_escalation=False,
         task_id="GH-1",
         status="ready_for_review",
         reviewed_unit_approved=True,

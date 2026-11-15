@@ -92,6 +92,7 @@ def test_the_orchestration_file_and_other_paths_cover_nothing(paths):
 
 def facts(**over) -> MergeFacts:
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

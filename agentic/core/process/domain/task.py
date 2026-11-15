@@ -1098,6 +1098,10 @@ class EscalationPatch(TypedDict):
     escalation_cause: NotRequired[MechanicalCause | None]
     # The hashes of the typed tracker items a `questions` pause raised (GH-620), `[]` otherwise.
     tracker_human: NotRequired[list[str]]
+    # When a `questions` pause was closed without building the owner's answer (GH-784); the merge
+    # decision holds the task while it is set. Stamped only by the settled branch of resume, and
+    # nothing clears it: the human merges or closes in GitHub, or restarts the task.
+    owner_decision_unbuilt: NotRequired[str]
     # Why a spec delivery's `questions` pause was raised (GH-594), written only with a spec.
     spec_cause: NotRequired[SpecEscalationCause | None]
 
@@ -1977,6 +1981,9 @@ class TaskState(TaskInput, total=False):
     # The hashes of the items the current `questions` pause raised (GH-620); `rules.escalation`
     # writes it and `rules.resumed` clears it. Not a `MechanicalCause`: the pause is a human's.
     tracker_human: Annotated[list[str], last]
+    # GH-784: the instant the settled branch of resume closed a `questions` pause without building
+    # the answer; read by the merge decision, never cleared.
+    owner_decision_unbuilt: Annotated[str, last]
     # Why a spec delivery's `questions` pause was raised (GH-594): written only by
     # `rules.escalation`, with a spec in the state; never a `MechanicalCause`.
     spec_cause: Annotated[SpecEscalationCause | None, last]

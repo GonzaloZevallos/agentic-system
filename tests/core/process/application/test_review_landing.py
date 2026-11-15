@@ -88,6 +88,7 @@ async def test_a_blocking_landing_request_of_the_plan_scope_approves_without_a_r
         row["severity"] in ("blocking", "important") for row in rules.open_findings(state)
     )
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-441",
         status="ready_for_review",
         reviewed_unit_approved=True,

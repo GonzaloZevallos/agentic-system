@@ -58,6 +58,7 @@ def _facts(**over) -> MergeFacts:
     """A `ci:` pull request whose own CI ran on an older master: stale, trusted, nothing
     recorded. It needs a fresh run."""
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

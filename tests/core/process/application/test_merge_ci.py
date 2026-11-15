@@ -638,6 +638,7 @@ def test_a_head_the_landing_moved_is_trusted_only_once_its_own_dispatched_record
         5,
         MASTER,
         (".github/x.yml",),
+        [],
     )
     assert facts.ci_dispatched is False
 
@@ -650,6 +651,7 @@ def test_a_head_the_landing_moved_is_trusted_only_once_its_own_dispatched_record
         5,
         MASTER,
         (".github/x.yml",),
+        [],
     )
     assert facts.ci_dispatched is True
     assert merge._merges_on_ci(

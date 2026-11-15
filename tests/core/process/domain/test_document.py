@@ -1906,6 +1906,15 @@ def test_the_typed_tracker_keys_round_trip_through_the_document():
     assert document.render(parsed) == text
 
 
+def test_the_owner_decision_marker_round_trips_and_is_absent_when_unset():
+    # GH-784: `MemoryDocuments` never renders, so only this seam shows the key is serialised.
+    marker = "2026-11-14T10:00:00+00:00"
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    text = document.render({**state, "owner_decision_unbuilt": marker})
+    assert document.parse(text)["owner_decision_unbuilt"] == marker
+    assert "owner_decision_unbuilt" not in document.render(state)
+
+
 def test_a_document_with_an_unknown_tracker_item_kind_fails_to_load_with_the_reason():
     bad = {**TRACKER_KEYS, "tracker_items": [{"kind": "comment", "question": "q"}]}
     text = document.render({"id": "T-1", "title": "t", "description": "d", **bad})

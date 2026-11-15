@@ -50,6 +50,9 @@ LIVE = frozenset({"escalate_adr", "apply_adr_decision", "re_review"})
 ASKED = "2026-10-14T00:00:00+00:00"
 ESCALATED_COMMENT = "2026-10-14T00:00:10+00:00"
 DECIDED = "2026-10-14T01:00:00+00:00"
+# The local clock of the rounds that answer the decision: after the comments GitHub dated, so the
+# release it stamps (`released_at`) closes the `Escalated:` comment for the merge hold (GH-784).
+ANSWERED = "2026-10-14T02:00:00+00:00"
 DECISION = "renumber to the next free number and point app/main.py to it"
 
 
@@ -113,7 +116,7 @@ def _boom(ports, cwd):
     raise RuntimeError("the harness broke")
 
 
-def _round(tmp_path, ports, live=LIVE, paths=(MINE, NOTES, CODE)):
+def _round(tmp_path, ports, live=LIVE, paths=(MINE, NOTES, CODE), at=ASKED):
     lines: list[str] = []
     ports.workspace.diff_paths = paths  # the pull request's own paths
     result = landing.land(
@@ -124,7 +127,7 @@ def _round(tmp_path, ports, live=LIVE, paths=(MINE, NOTES, CODE)):
         Upstream("origin/master", ports.workspace.master_sha, None),
         frozenset(),
         lines.append,
-        clock=lambda: ASKED,
+        clock=lambda: at,
         live=live,
         turn="head",
     )
@@ -167,7 +170,7 @@ def test_a_decision_on_an_escalated_adr_collision_is_applied_pushed_and_reviewed
     [asked] = _entries(ports)
     assert asked["moves"] == [[MINE, "docs/adr/0050-mine.md"]]
 
-    result, lines = _round(tmp_path, ports)
+    result, lines = _round(tmp_path, ports, at=ANSWERED)
 
     assert (result.kind, result.step) == ("dispatched", "apply_adr_decision"), (result, lines)
     assert result.reason != "not_live"
@@ -186,7 +189,7 @@ def test_a_decision_on_an_escalated_adr_collision_is_applied_pushed_and_reviewed
 
     # The next round: the new head goes through the table, and the review it owes is next.
     _pushed(ports)
-    again, _ = _round(tmp_path, ports)
+    again, _ = _round(tmp_path, ports, at=ANSWERED)
     assert again.step == "re_review"
 
 
@@ -203,7 +206,7 @@ def test_the_apply_gate_asks_the_priority_of_a_landing_step(tmp_path):
 
 def test_the_review_after_an_applied_decision_is_taken_when_the_passes_are_spent(tmp_path):
     ports, _ = _asked(tmp_path)
-    _round(tmp_path, ports)
+    _round(tmp_path, ports, at=ANSWERED)
     _pushed(ports)
     document = ports.documents.load("GH-5")
     spent = [
@@ -212,7 +215,7 @@ def test_the_review_after_an_applied_decision_is_taken_when_the_passes_are_spent
     ]
     ports.documents.record_closure("GH-5", {"landing": [*spent, *document["landing"]]})
 
-    result, _ = _round(tmp_path, ports)
+    result, _ = _round(tmp_path, ports, at=ANSWERED)
 
     assert result.step == "re_review"
 

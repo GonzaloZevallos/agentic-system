@@ -264,6 +264,7 @@ def _merge_facts(**over) -> rules.MergeFacts:
     """A pull request whose head is the synced one, with the checks recorded green on the
     head it had before the sync."""
     base = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-5",
         status="ready_for_review",
         reviewed_unit_approved=True,

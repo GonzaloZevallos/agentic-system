@@ -41,6 +41,7 @@ def test_the_loop_of_two_conflicting_syncs_for_one_sha_reaches_the_diagnose():
     spent = landing_plan.spent(raw, HEAD, None, "b" * 40)
     assert (spent.passes, spent.syncs, spent.conflicting_syncs_for_upstream) == (0, 2, 2)
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,
@@ -220,6 +221,7 @@ def test_only_a_failure_class_escalation_is_releasable():
 
 def test_pending_counts_a_released_diagnose_as_go_and_still_skips_an_unreleased_one():
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-5",
         status="ready_for_review",
         reviewed_unit_approved=True,
@@ -322,6 +324,7 @@ def _adr_facts(
     collision=adr_numbers.Ambiguous("unclassified_token", "docs/a.md:3: 0054", (("a", "b"),)),
 ):
     return rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

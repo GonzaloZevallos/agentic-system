@@ -35,6 +35,7 @@ MASTER = "b" * 40
 
 def _facts(**over) -> MergeFacts:
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,
@@ -73,6 +74,7 @@ EXPECTED = {
     "ci_blocked_by_conflict": "sync_master",
     "ci_unknown_names": "escalate",
     "ci_untrusted_no_dispatch": "none",
+    "open_escalation": "none",
     "ci_stale_exhausted": "sync_master",
     "ci_no_verdict": "escalate",
     "not_approved": "re_review",

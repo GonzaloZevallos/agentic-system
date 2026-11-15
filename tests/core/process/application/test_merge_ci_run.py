@@ -433,6 +433,7 @@ def test_with_ci_run_reads_the_fresh_report_as_the_verdict_of_the_tested_commit(
         "superseded": [],
     }
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-5",
         status="ready_for_review",
         reviewed_unit_approved=True,

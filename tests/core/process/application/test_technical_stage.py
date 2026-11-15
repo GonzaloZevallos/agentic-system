@@ -770,6 +770,7 @@ def _open_findings_refusal(saved):
     unit = rules.reviewed_unit(saved)
     assert unit is not None
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-12",
         status="ready_for_review",
         reviewed_unit_approved=unit["status"] == "approved",
