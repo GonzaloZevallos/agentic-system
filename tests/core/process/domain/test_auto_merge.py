@@ -598,7 +598,7 @@ def test_land_headroom_is_one_slot():
 def test_a_model_land_starts_on_the_headroom_when_the_cap_is_full_and_nothing_launches():
     plan = _plan(available_slots=0, land_slots=1, lands=MODEL_LAND, launches=LAUNCH)
     assert plan.actions == [rules.PollAction("land", 4)]
-    assert plan.deferred == []
+    assert plan.deferred == [rules.Deferred("launch", 8, "no_slot")]
 
 
 def test_a_model_land_takes_the_plain_slot_and_blocks_the_launch_when_one_is_free():
