@@ -1194,3 +1194,5 @@ tasks:
     cost_usd: 0.0863
   GH-790@review:
     cost_usd: 0.0448
+  GH-791@review:
+    cost_usd: 0.0726
