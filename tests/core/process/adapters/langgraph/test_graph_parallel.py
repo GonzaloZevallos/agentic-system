@@ -160,10 +160,31 @@ async def test_an_escalation_stops_new_starts_drains_the_siblings_and_tells_once
 async def test_the_bound_on_parallel_subtasks_is_never_exceeded(config):
     config["configurable"]["max_parallel_subtasks"] = 2
     runner, fakes = blocking(subtask("b"), subtask("c"), subtask("d"))
-    final = await asyncio.wait_for(start(runner, fakes, config), 30)
+    developers = ("developer__api", "developer__b", "developer__c", "developer__d")
+    runner.hold(*developers)
+    two_started = asyncio.Event()
+
+    def on_call(key: str) -> None:
+        if len([k for k in runner.began if k.startswith("developer__")]) == 2:
+            two_started.set()
+
+    runner.on_call = on_call
+    run = start(runner, fakes, config)
+
+    # Overlap is established by events, not by how long a role takes: two Developers are
+    # held, whichever two the loop picked first, so both are running at once.
+    await asyncio.wait_for(two_started.wait(), 30)
+    for _ in range(50):  # a fixed number of loop turns in which a third could start
+        await asyncio.sleep(0)
+    started = [k for k in runner.began if k.startswith("developer__")]
+    assert len(started) == 2  # fast-fail aid, not the proof: the proof is `peak` below
+    assert runner.running == 2
+    assert runner.peak == 2
+    runner.release(*developers)
+    final = await asyncio.wait_for(run, 30)
 
     assert final["status"] == "ready_for_review"
-    assert runner.peak == 2  # parallel, and never more than the bound
+    assert runner.peak == 2  # a running maximum: a third start while two were held reads 3
 
 
 async def test_a_delivered_review_takes_its_role_slot_without_waiting_under_the_default_bound(
