@@ -73,6 +73,7 @@ def facts(state: dict, **over) -> rules.MergeFacts:
     """The facts of a reopened pull request that conflicts with master and has no CI."""
     open_blocking = sum(1 for row in rules.open_findings(state) if row["severity"] == "blocking")
     base = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-374",
         status="ready_for_review",
         reviewed_unit_approved=True,

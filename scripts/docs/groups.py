@@ -134,6 +134,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.schema_guard": "checks",
     "application.scratch_sweep": "lifecycle",
     "application.shadow_review": "build",
+    "application.spec_guard": "support",
     "application.split": "build",
     "application.split_sweep": "lifecycle",
     "application.stack_review": "reflection",
@@ -178,6 +179,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.master_gain": "checks",
     "domain.merge_ci": "checks",
     "domain.merge_conflict": "checks",
+    "domain.merge_hold": "landing",
     "domain.performance": "checks",
     "domain.plan_revision": "landing",
     "domain.plan_route": "landing",
@@ -215,6 +217,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.task": "state",
     "domain.task_path": "state",
     "domain.tracker_items": "roles",
+    "domain.tracker_refs": "state",
     "domain.turn_notice": "roles",
 }
 
@@ -242,6 +245,7 @@ MEASUREMENT_CLUSTERS: Mapping[str, str] = {
     "domain.dashboards": "langfuse",
     "domain.evaluation": "scorecard",
     "domain.findings_report": "reports",
+    "domain.issue_listing": "reports",
     "domain.planning": "reports",
     "domain.playbook_window": "reports",
     "domain.role_usage": "reports",

@@ -1359,6 +1359,27 @@ def test_a_package_layer_over_the_budget_is_refused_naming_the_layer_and_the_fix
         )
 
 
+def test_a_package_layer_whose_page_is_over_the_edge_budget_is_split_in_runs_of_modules(
+    packages: ModuleType,
+) -> None:
+    budget = packages.DIAGRAM_BUDGET
+    outside = [f"agentic.p{n:02d}.x" for n in range(budget.edges // 2 + 1)]
+    names = ["domain.a", "domain.b"]
+    pages = packages.build_pages(
+        _flat_world(names, outside),
+        _flat_imports({"domain.a": tuple(outside), "domain.b": tuple(outside)}),
+        {},
+        KNOWLEDGE,
+        ("domain",),
+    )
+    assert sorted(pages) == ["domain-1", "domain-2", "index"]
+    assert pages["index"].children == ("domain-1", "domain-2")
+    assert pages["domain-1"].siblings == ("domain-2",) and pages["domain-1"].parent == "index"
+    assert "partida" in pages["domain-1"].sentence
+    for key in ("domain-1", "domain-2"):
+        assert len(pages[key].edges) <= budget.edges
+
+
 # --- The class pages and the removed `.mmd` (GH-430 part 3): `render.class_pages` ---
 
 DOMAIN = "agentic.core.process.domain"

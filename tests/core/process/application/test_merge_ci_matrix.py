@@ -126,6 +126,7 @@ def _fresh_facts() -> rules.MergeFacts:
         "superseded": [],
     }
     return rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-5",
         status="ready_for_review",
         reviewed_unit_approved=True,

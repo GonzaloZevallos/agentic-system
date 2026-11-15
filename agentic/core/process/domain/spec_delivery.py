@@ -252,3 +252,29 @@ def render_approved_front_matter(approved_by: str, approved_at: str, sha256: str
         f"---\nstatus: approved\napproved_by: {approved_by}\n"
         f"approved_at: {approved_at}\napproved_sha256: {sha256}\n---\n"
     )
+
+
+def protected(state: Mapping[str, Any], path: str) -> bool:
+    """True only under a spec delivery (`state["spec"]` non-empty) and only for the delivery's
+    own spec path: the one file no unit of the task may change unseen. `rules.forbidden_paths`
+    and `UNSTAGEABLE` do not know it, on purpose: outside a delivery it is an ordinary path."""
+    spec = state.get("spec")
+    return spec is not None and path == spec.get("path")
+
+
+def spec_intact(recorded_sha256: str, recorded_text: str | None, head_text: str | None) -> bool:
+    """True only when the spec at a head is what the delivery recorded: both texts were read,
+    they are equal as written (a front-matter-only edit counts) and the body hash still holds.
+    The one place spec texts are compared (a deleted or unreadable spec is `None`)."""
+    return (
+        head_text is not None
+        and recorded_text is not None
+        and head_text == recorded_text
+        and spec_unchanged(recorded_sha256, head_text)
+    )
+
+
+def spec_carry_ok(holds: bool, intact: bool) -> bool:
+    """Whether a unit may be carried over a moved head: its review still holds and the spec is
+    intact at the new head."""
+    return holds and intact

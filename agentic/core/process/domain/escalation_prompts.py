@@ -21,9 +21,12 @@ DECIDE: Final = RESUME + " (after commenting `Decision: <your decision>` on the 
 
 Prompt = tuple[str, str, tuple[str, ...]]
 
-AskedCause = Literal["api_break_missing"]
+AskedCause = Literal["api_break_missing", "drawing_departure", "drawing_cap"]
 """The cause of a `questions` escalation the owner answers on the issue (GH-610): not a
-`MechanicalCause`, because the poller never retakes it by itself -- it waits for the answer."""
+`MechanicalCause`, because the poller never retakes it by itself -- it waits for the answer.
+`drawing_departure` and `drawing_cap` (GH-766) are answered by number; nothing selects their
+rows yet: the choice arrives with `prompt_cause` (GH-814) and the `--drawing` option of
+`agentic resume` with the later parts."""
 PromptCause = MechanicalCause | AskedCause | SpecRouteCause
 
 _RETRY: Final[Prompt] = (
@@ -84,6 +87,23 @@ ESCALATION_PROMPTS[("questions", "api_break_missing")] = (
     API_BREAK_QUESTION,
     "comment on the issue with the one line the question names",
     ("comment on the issue with the one line the question names", CLOSE_UNPLANNED),
+)
+DRAWING_ACCEPT: Final = "agentic resume --issue {issue} --drawing <n>=accept"
+DRAWING_REJECT: Final = "agentic resume --issue {issue} --drawing <n>=reject"
+_DRAWING_ANSWER: Final = (
+    "comment on the issue with one line per number: `Drawing <n>: accept` or `Drawing <n>: reject`"
+)
+ESCALATION_PROMPTS[("questions", "drawing_departure")] = (
+    "Decide each departure from the approved drawing above, by its number: comment "
+    "`Drawing <n>: accept` or `Drawing <n>: reject`.",
+    _DRAWING_ANSWER,
+    (_DRAWING_ANSWER, DRAWING_ACCEPT, DRAWING_REJECT),
+)
+ESCALATION_PROMPTS[("questions", "drawing_cap")] = (
+    "The task reached the cap of rounds on drawing departures. Decide each one above, by its "
+    "number (comment `Drawing <n>: accept` or `Drawing <n>: reject`), or close the issue.",
+    _DRAWING_ANSWER,
+    (_DRAWING_ANSWER, DRAWING_ACCEPT, DRAWING_REJECT, CLOSE_UNPLANNED),
 )
 for _cause in get_args(MechanicalCause):
     ESCALATION_PROMPTS[("ci" if _cause.startswith("ci_") else "system_delivery", _cause)] = _RETRY

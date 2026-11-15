@@ -1403,7 +1403,8 @@ def test_comments_are_read_only_for_a_document_already_shaped_like_the_stranded_
     shaped = _stranded_ports()
     shaped.tracker.timestamped_comments = lambda task_id: reads.append(task_id) or []
     _land_at(shaped, tmp_path, LAST_AT)
-    assert reads == ["GH-5"]
+    # The stranded check's read, and the merge decision's own one (GH-784) on a ready document.
+    assert reads == ["GH-5", "GH-5"]
 
 
 def test_one_poll_round_over_a_stranded_document_offers_land_and_no_resume(tmp_path):

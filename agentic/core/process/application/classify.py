@@ -11,6 +11,7 @@ from ..domain.roles import PJM
 from ..domain.spec_delivery import SpecLineMalformed, SpecRefusal, SpecRouteCause
 from ..domain.spec_route import refusal_escalation
 from ..domain.task import WAITING_ON_HUMAN, TaskState
+from . import spec_guard
 from .ports import Ports, SpecUnreadable
 from .preflight import product_name, risk_areas
 from .run_role import finish, run_role
@@ -60,7 +61,7 @@ def spec_intake(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     if upstream.note is not None or upstream.sha is None:
         return _refused("spec_unreadable", ("unreachable",), ports)
     try:
-        text = reader.read(upstream.sha, line.path)
+        text = spec_guard.read_at(ports, upstream.sha, line.path)
     except SpecUnreadable as exc:
         return _refused("spec_unreadable", (exc.reason,), ports)
     verdict = validator.validate(text, line.path, upstream.sha, line.slice, cfg.owner_login)

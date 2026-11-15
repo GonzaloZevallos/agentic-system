@@ -31,6 +31,7 @@ def gh320_conflicting_facts() -> tuple[rules.MergeFacts, TaskState]:
     `LANDING_CONFLICT_SYNCS_MAX`, and restart depth 0."""
     conflicts = rules.merge_conflicts_from(gh320_pull_request(), HEAD, MASTER, None, recorded=False)
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-320",
         status="ready_for_review",
         reviewed_unit_approved=True,
@@ -127,6 +128,7 @@ def gh686_body_only(
         red=(("docs", failing[:1]), ("ci-ok", failing[1:])),
     )
     facts = rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-686",
         status="ready_for_review",
         reviewed_unit_approved=True,

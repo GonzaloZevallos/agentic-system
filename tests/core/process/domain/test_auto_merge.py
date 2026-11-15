@@ -21,6 +21,7 @@ def _facts(**over) -> MergeFacts:
     """A pull request that merges: every fact in the accepting position, checks already
     green on this head and this master."""
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,
@@ -55,6 +56,7 @@ REFUSALS = [
     ),
     ("checks_failed", {"checks_passed": False}),
     ("merge_failed", {"merge_failures": rules.MERGE_CALLS_MAX}),
+    ("open_escalation", {"open_escalation": True}),
 ]
 
 
@@ -95,6 +97,27 @@ def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_
         "criteria_unreadable",
     }
     assert given | ci_reasons | others == set(get_args(rules.MergeRefusal))
+
+
+def test_an_open_escalation_that_could_not_be_read_is_never_read_as_clear():
+    assert rules.auto_merge_decision(_facts(open_escalation=None)) == MergeDecision(
+        "refuse", "open_escalation"
+    )
+    assert rules.auto_merge_decision(_facts(open_escalation=False)) == MergeDecision("merge", None)
+
+
+@pytest.mark.parametrize("open_escalation", [True, None])
+@pytest.mark.parametrize("status", ["escalated", "developing"])
+def test_not_ready_wins_over_an_open_escalation_on_a_paused_status(status, open_escalation):
+    assert rules.auto_merge_decision(
+        _facts(status=status, open_escalation=open_escalation)
+    ) == MergeDecision("refuse", "not_ready")
+
+
+def test_an_open_escalation_is_refused_before_a_closed_pull_request_is():
+    assert rules.auto_merge_decision(
+        _facts(open_escalation=True, pr_state="CLOSED")
+    ) == MergeDecision("refuse", "open_escalation")
 
 
 EARLIER_FAILURES = [

@@ -127,6 +127,7 @@ def test_a_resume_that_pushes_no_master_is_counted_and_the_third_tick_is_the_dia
 
 def _facts(master):
     return rules.MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

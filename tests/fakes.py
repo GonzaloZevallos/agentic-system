@@ -1699,6 +1699,9 @@ class MemoryWorkspace:
         return self.fast_forward_answer
 
 
+POSTED_AT = "2026-01-01T00:00:00+00:00"
+
+
 class MemoryTracker:
     def __init__(self, url: str = "https://github.com/o/r/pull/7") -> None:
         self.url = url
@@ -2066,7 +2069,16 @@ class MemoryTracker:
         return [*self.earlier, *(text for _, text in self.comments)]
 
     def timestamped_comments(self, task_id: str) -> list[IssueComment]:
-        return self.timestamped.get(task_id, [])
+        """The scripted comments, then the merge's own refusal and landing notes posted through
+        the double, with the instant of the scripted past: the merge reads its once-per-head
+        lookups off this one list (GH-784), and a double that lost what the system itself
+        commented would make them see an empty issue. Nothing else posted is added."""
+        posted = [
+            IssueComment(body, POSTED_AT)
+            for body in self.issue_comments(task_id)
+            if body.startswith(("Auto-merge refused: ", "Landing: "))
+        ]
+        return [*self.timestamped.get(task_id, []), *posted]
 
     def issue_created_at(self, task_id: str) -> str | None:
         if task_id in self.issue_created_errors:
@@ -2449,14 +2461,28 @@ class FakeCiLogs:
     """GH-449: no test reads a real CI log. `failed_job_logs` answers `logs` and records the
     `(reference, head)` it was asked for."""
 
-    def __init__(self, logs: list[JobLog] | None = None) -> None:
+    def __init__(
+        self,
+        logs: list[JobLog] | None = None,
+        *,
+        successive: Sequence[list[JobLog]] = (),
+        raises: Exception | None = None,
+    ) -> None:
+        """GH-790: `successive` answers one list per call (the last one for good), and `raises`
+        is what every `failed_job_logs` call raises instead."""
         self.logs = list(logs or [])
+        self.successive = [list(answer) for answer in successive]
+        self.raises = raises
         self.asked: list[tuple[str, str]] = []
         self.blocks: list[tuple[str, list[str]]] | CiUnreadable | None = None
         self.flake_asked: list[tuple[str, str, tuple[str, ...]]] = []
 
     def failed_job_logs(self, reference: str, head: str) -> list[JobLog]:
         self.asked.append((reference, head))
+        if self.raises is not None:
+            raise self.raises
+        if self.successive:
+            return list(self.successive.pop(0) if len(self.successive) > 1 else self.successive[0])
         return list(self.logs)
 
     def flake_block(

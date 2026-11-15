@@ -113,6 +113,23 @@ def test_the_rule_knows_where_things_are():
         # Supporting modules may reach the core's domain and application, not its adapters.
         ("core/measurement/domain/x.py", "from agentic.core.process.domain import task", False),
         ("core/measurement/adapters/x.py", "from agentic.core.process import adapters", True),
+        # The GitHub listing adapter takes its `gh` call as a parameter (GH-802): the process
+        # adapters stay out, the process application's exception classes are allowed.
+        (
+            "core/measurement/adapters/github/x.py",
+            "from agentic.core.process.adapters.github import run",
+            True,
+        ),
+        (
+            "core/measurement/adapters/github/x.py",
+            "from ....process.adapters.github import run",
+            True,
+        ),
+        (
+            "core/measurement/adapters/github/x.py",
+            "from agentic.core.process.application.ports import TrackerTransient",
+            False,
+        ),
         ("core/process/domain/x.py", "from agentic.core.knowledge.domain import flags", True),
         ("core/process/adapters/x.py", "from agentic.core import knowledge", True),
         ("shared/x.py", "from agentic.core.process.domain import task", True),

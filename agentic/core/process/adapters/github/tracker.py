@@ -8,7 +8,6 @@ is a no-op. `gh` resolves the repo from the checkout, as the inbox does.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -39,10 +38,8 @@ from ...domain.task import (
     TrackerFailureClass,
     TrackerTarget,
 )
+from ...domain.tracker_refs import issue_number, pull_request_number
 from .run import GhRetry, bounded_run, print_line, run_gh
-
-_ISSUE = re.compile(r"^GH-(\d+)$")
-_PULL_REQUEST_URL = re.compile(r"/pull/(\d+)$")
 
 # The order a merge method is picked in: the first the repository allows.
 _MERGE_METHODS = (
@@ -460,11 +457,6 @@ def _failure_class(error: ValueError) -> TrackerFailureClass | None:
     return None
 
 
-def issue_number(task_id: str) -> int | None:
-    match = _ISSUE.match(task_id)
-    return int(match.group(1)) if match else None
-
-
 def _label_names(raw: object) -> tuple[str, ...] | None:
     """The label names of `gh issue view --json labels`; `None` when the field is absent or
     any entry is not a named label, so an unreadable set is never taken for an empty one."""
@@ -486,14 +478,6 @@ def _blocked_by(raw: dict | None) -> tuple[int, ...] | None:
     if raw is None:
         return None
     return tuple(node["number"] for node in raw.get("nodes", []) if "number" in node)
-
-
-def pull_request_number(url: str) -> int:
-    """The number `gh` needs, off the URL `deliver` stored in the document."""
-    match = _PULL_REQUEST_URL.search(url)
-    if not match:
-        raise ValueError(f"not a pull request URL: {url}")
-    return int(match.group(1))
 
 
 class GhTracker:

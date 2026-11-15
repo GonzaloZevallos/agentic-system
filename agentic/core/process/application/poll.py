@@ -286,6 +286,8 @@ def _merge_facts(
     eval_set: frozenset[int] | None,
     number: int,
     current_master: str | None,
+    *,
+    comments: Sequence[IssueComment] | None,
 ) -> rules.MergeFacts:
     """What the poller can know about a delivered task before any worktree exists, every
     fact off the product checkout's own document, the tracker and the upstream sha --
@@ -304,9 +306,15 @@ def _merge_facts(
     step = checks.get("failed_step")
     partition = rules.important_partition(raw)
     perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(raw)
+    # GH-784: the one call of `merge.escalation_hold`, in the assembly the poller and the verb both
+    # build their facts on (`merge` imports this module, so the import is late). `comments` is
+    # the issue's thread, `None` when it was not read or could not be.
+    from .merge import escalation_hold
+
     return rules.MergeFacts(
         task_id=task_id,
         status=raw.get("status"),
+        open_escalation=escalation_hold(raw, comments),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
         reviewed_head=unit.get("reviewed_head") if unit is not None else None,
         close_docs=raw.get("close_docs"),
@@ -684,7 +692,19 @@ def assess_merge(
         and not rules.closed_for_body_fix(raw, pull_request.head_oid)
     ):
         return Abandoned(pull_request)
-    facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
+    # GH-784: the thread is read only when the hold looks at it (`thread_needed`): a task refused
+    # `not_ready`, or one the document alone answers, costs no read.
+    from .merge import read_comments, thread_needed
+
+    facts = _merge_facts(
+        task_id,
+        raw,
+        pull_request,
+        eval_set,
+        number,
+        current_master,
+        comments=read_comments(ports, task_id) if thread_needed(raw) else [],
+    )
     # GH-492: the base reading of the conflict is GitHub's and the one git recorded for this
     # exact pair, so a recorded conflict refuses `merge_conflict` here, unlandable pair or not.
     recorded = merge_conflict.applies(raw.get("merge_conflict"), facts.pr_head, current_master)
@@ -1125,7 +1145,7 @@ def evaluate_landing_order(
     resumed = landing_order.resumed(members, now)
     result, turned = landing_order.advance(resumed, now)
     lane, lane_reasons = _fast_lane(
-        ports, cfg, current_master, entries, resumed, result.head, integrating, now
+        ports, cfg, current_master, entries, turned, result.head, integrating, now
     )
     after = iter(turned)
     return LandingRound(
@@ -1181,12 +1201,14 @@ def _fast_lane(
     now: datetime,
 ) -> tuple[int | None, dict[int, landing_order.LaneReason]]:
     """The fast lane of a round (GH-681): the member that may merge beside the head and why each
-    other clean member may not. Nothing is read unless the head, as `resumed` left it, holds its
-    turn and a waiting member is a candidate; the facts are `landing_lane`'s and the predicate and
-    its reasons `landing_order`'s. Read-only: it writes nothing and adds no member state."""
+    other clean member may not. `members` are as `advance` returned them, so the head of the round
+    has been observed (a child run's save may have erased what the document held of it). Nothing is
+    read unless the head, as this round observes it, integrates and a waiting member is a
+    candidate; the facts are `landing_lane`'s and the predicate and its reasons `landing_order`'s.
+    Read-only: it writes nothing and adds no member state."""
     head = next((m for m in members if m.issue == head_issue), None)
     head_entry = next((e for e in entries if e.number == head_issue), None)
-    if cfg is None or head is None or head_entry is None or not landing_order.holds_turn(head, now):
+    if cfg is None or head is None or head_entry is None:
         return None, {}
     candidates = _lane_candidates(entries, head.issue, current_master, now)
     if not candidates:

@@ -44,6 +44,7 @@ def _facts(**over) -> MergeFacts:
     """A pull request whose CI is declared, green on this head and fresh, but whose definition
     the change touched."""
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

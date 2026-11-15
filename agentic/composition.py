@@ -28,8 +28,10 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from .core.knowledge.adapters.filesystem import FilesystemFlags, FilesystemKnowledge
 from .core.knowledge.adapters.git import GitStack
+from .core.measurement.adapters.github.issue_listing import GhIssueListing
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
+from .core.measurement.application.ports import GhRead, IssueListing
 from .core.measurement.domain import evaluation
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
@@ -68,6 +70,9 @@ from .core.process.adapters.github.run import (
     GH_EXEMPT_WAIT_MAX_S,
     GH_RATE_WAIT_MAX_S,
     GhRetry,
+    Run,
+    bounded_run,
+    run_gh,
 )
 from .core.process.adapters.github.tracker import pull_request_number
 from .core.process.adapters.langgraph.graph import build_graph
@@ -447,7 +452,9 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=tracker,
         # GH-449: the failed jobs' logs for the Landing Diagnoser, behind its own narrow port.
-        ci_logs=GhCiLogs(cfg.product_dir, ci_reader(tracker)),
+        ci_logs=GhCiLogs(
+            cfg.product_dir, ci_reader(tracker), declared=lambda: tuple(stack.ci("HEAD"))
+        ),
         # GH-470: the product's experiment declaration, read once per poller round.
         experiment=FilesystemExperimentFile(cfg.product_dir),
         stack=stack,
@@ -484,6 +491,30 @@ def _ports(cfg: Configuration, stop_flag: StopFlag, gh_retry: GhWait | None = No
         scratch=scratch,
         free_space=free_space,
     )
+
+
+def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
+    """The `gh` call of the scores backfill (GH-802): one attempt per page, no wait, a timeout
+    included, and no line printed. Only the root builds it, so no read is ever repeated."""
+
+    def read(args: tuple[str, ...]) -> str:
+        return run_gh(
+            run,
+            args,
+            cwd=product_dir,
+            not_installed="gh is not installed; the scores backfill needs the gh CLI",
+            failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
+            log=lambda _line: None,
+            retry=GhRetry(max_wait_s=0, attempts=1),
+            retry_timeouts=True,
+        )
+
+    return read
+
+
+def backfill_listing(product_dir: Path) -> IssueListing:
+    """The repository's issues listing for the backfill, over `backfill_gh_read`."""
+    return GhIssueListing(backfill_gh_read(product_dir))
 
 
 def _file_name(product: str) -> str:

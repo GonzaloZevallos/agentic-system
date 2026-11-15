@@ -19,6 +19,7 @@ def _facts(**over) -> MergeFacts:
     """GH-543: `e2e` is required, the report carries `e2e (1)`..`e2e (4)` only (green, so the
     verdict is pending on the missing name), and every workflow run is completed."""
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

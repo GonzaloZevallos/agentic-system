@@ -25,6 +25,7 @@ def _verdict(state, failing=(), missing=()) -> CiVerdict:
 def _facts(**over) -> MergeFacts:
     """A pull request whose CI is declared, green on this head and fresh: it merges."""
     base = MergeFacts(
+        open_escalation=False,
         task_id="GH-9",
         status="ready_for_review",
         reviewed_unit_approved=True,

@@ -13,9 +13,12 @@ from agentic.core.process.domain.spec_delivery import (
     derive_flags,
     normalize_text,
     parse_spec_line,
+    protected,
     render_approved_front_matter,
     render_draft_front_matter,
+    spec_carry_ok,
     spec_commit_ok,
+    spec_intact,
     spec_path_ok,
     spec_state_patch,
     spec_unchanged,
@@ -294,3 +297,62 @@ def test_spec_unchanged() -> None:
     assert not spec_unchanged(_sha(BODY), BODY)
     assert not spec_unchanged(_sha(BODY), "---\nstatus: draft\n---\n\ud800")
     assert not spec_unchanged("", text)
+
+
+# --- protecting the spec under a delivery (GH-594 part 4b-3) -------------------------------------
+
+PROTECTED_STATE: Any = {"spec": {"path": "docs/specs/a.md"}}
+
+
+@pytest.mark.parametrize(
+    ("state", "path", "expected"),
+    [
+        (PROTECTED_STATE, "docs/specs/a.md", True),
+        (PROTECTED_STATE, "docs/specs/b.md", False),
+        (PROTECTED_STATE, "src/a.py", False),
+        ({}, "docs/specs/a.md", False),
+        ({"spec": None}, "docs/specs/a.md", False),
+        ({"spec": {}}, "docs/specs/a.md", False),
+    ],
+    ids=["the spec", "another spec", "code", "no spec", "none spec", "empty spec"],
+)
+def test_protected_is_true_only_for_the_spec_path_under_a_delivery(
+    state: Any, path: str, expected: bool
+) -> None:
+    assert protected(state, path) is expected
+
+
+APPROVED = "---\nstatus: approved\napproved_sha256: x\n---\n" + BODY
+
+
+def test_spec_intact_when_the_head_text_is_the_recorded_text() -> None:
+    assert spec_intact(_sha(BODY), APPROVED, APPROVED) is True
+
+
+def test_spec_intact_refuses_a_changed_body() -> None:
+    head = APPROVED.replace("Text.", "Other.")
+    assert spec_intact(_sha(BODY), APPROVED, head) is False
+
+
+def test_spec_intact_refuses_a_front_matter_only_edit() -> None:
+    head = APPROVED.replace("status: approved", "status: draft")
+    assert body_sha256(head) == _sha(BODY)  # the body hash alone would not see it
+    assert spec_intact(_sha(BODY), APPROVED, head) is False
+
+
+def test_spec_intact_refuses_a_deleted_spec_and_an_unread_record() -> None:
+    assert spec_intact(_sha(BODY), APPROVED, None) is False
+    assert spec_intact(_sha(BODY), None, APPROVED) is False
+    assert spec_intact(_sha(BODY), None, None) is False
+
+
+def test_spec_intact_refuses_a_record_whose_hash_is_not_the_text() -> None:
+    assert spec_intact(_sha("other"), APPROVED, APPROVED) is False
+
+
+@pytest.mark.parametrize(
+    ("holds", "intact", "expected"),
+    [(True, True, True), (True, False, False), (False, True, False), (False, False, False)],
+)
+def test_spec_carry_ok_needs_both(holds: bool, intact: bool, expected: bool) -> None:
+    assert spec_carry_ok(holds, intact) is expected

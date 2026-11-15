@@ -111,6 +111,17 @@ def test_every_none_refusal_is_owned():
     assert _none_refusals_not_owned(HUMAN_OWNED_REFUSALS) == []
 
 
+def test_an_open_escalation_leaves_the_task_to_a_person_and_the_head_step_is_none():
+    assert "open_escalation" in HUMAN_OWNED_REFUSALS
+    assert _waits(refusal="open_escalation")
+    assert (
+        landing.landing_step("open_escalation", _facts(), _spent(), (), turn="head").kind == "none"
+    )
+    assert _none_refusals_not_owned(HUMAN_OWNED_REFUSALS - {"open_escalation"}) == [
+        "open_escalation"
+    ]
+
+
 def test_the_check_rejects_a_none_refusal_the_set_forgot():
     assert _none_refusals_not_owned(HUMAN_OWNED_REFUSALS - {"eval_set"}) == ["eval_set"]
 
