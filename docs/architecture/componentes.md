@@ -181,10 +181,14 @@ Las métricas del sistema sobre las corridas y las trazas que las llevan.
   `EvalRoots` con `git worktree add --detach` en la base de la entrada y su limpieza
   (`worktree remove`, `prune`, `branch -D agentic/<id>`).
 - Lectura del listado de GitHub (GH-802, `scores backfill`): el puerto `IssueListing`
-  (`agentic/core/measurement/application/ports.py`, con `GhRead`, `Page` y `PageUnreadable`)
-  entrega el listado REST de issues y pull requests de a una página; `read_listing`
-  (`agentic/core/measurement/application/listing_reads.py`) lee las páginas 1, 2, … una sola
-  vez cada una y devuelve `Listing` completo o `Stopped(causa)` en la primera página ilegible.
+  (`agentic/core/measurement/application/ports.py`, con `GhRead`, `Page`, `PageUnreadable`,
+  `QuotaReading`, `QuotaUnreadable` y `Spend`) entrega el listado REST de issues y pull
+  requests de a una página, la cuota core con `rate_limit()` y lo gastado con `spent()`;
+  `read_listing` (`agentic/core/measurement/application/listing_reads.py`) lee la cuota antes
+  de cada página y las páginas 1, 2, … una sola vez cada una, y devuelve `Listing` completo o
+  `Stopped(causa)`: `reserve` si `remaining <= 1000` (`QUOTA_RESERVE`), `quota_unreadable`, o
+  la causa de la primera página ilegible. Ambos llevan `spend` y `remaining` (la última
+  lectura de cuota, o `None`); `cost_line` (dominio) da la línea de costo que imprime `cli.py`.
   `times_for` (`agentic/core/measurement/domain/issue_listing.py`) busca en él los tiempos de
   una tarea con `agentic/core/process/domain/tracker_refs.py`.
 - `adapters/github/`: `agentic/core/measurement/adapters/github/issue_listing.py:GhIssueListing`
