@@ -216,9 +216,10 @@ TABLE: tuple[Row, ...] = (
             "tests/core/process/domain/test_ci_log_excerpt.py",
             "tests/core/process/domain/test_full_checks_excerpt_rules.py",
             "tests/core/process/domain/test_test_failure_excerpt.py",
+            "tests/core/process/application/test_develop_ci_excerpt.py",
         ),
-        "red CI log captures: the excerpt golden digests, the failing-test excerpt and the "
-        "recorded failing-test hashes read them",
+        "red CI log captures: the excerpt golden digests, the failing-test excerpt, the "
+        "recorded failing-test hashes and the reopened Developer's prompt read them",
     ),
     Row(
         "tests/core/process/domain/fixtures/GH-484.yaml",
