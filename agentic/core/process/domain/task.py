@@ -1861,6 +1861,15 @@ class MergeConflictRecord(TypedDict):
     at: str
 
 
+class WorktreeReleaseLapse(TypedDict):
+    """The one row a merge leaves when it could not remove the task's worktrees (GH-820): `at`
+    the ISO instant, `cause` the closed class of the failure. A record only: no decision reads
+    it, and it carries no free text."""
+
+    at: str
+    cause: Literal["git_failed", "os_error"]
+
+
 class MergeRefusalRecord(TypedDict):
     """A refusal the `merge` verb wrote nothing else for (GH-500): `reason` is the closed
     refusal, `head` and `master` the full ids it decided with, `at` the ISO instant. One row for
@@ -2135,6 +2144,9 @@ class TaskState(TaskInput, total=False):
     # write (`last`). Read with `.get("merge_refusal")`: a document written before it has none,
     # which reads as no refusal.
     merge_refusal: Annotated[MergeRefusalRecord, last]
+    # The removal of the task's worktrees a merge could not make (GH-820), one row replaced whole
+    # on each write (`last`). A record for the human; nothing reads it to decide.
+    worktree_release_lapse: Annotated[WorktreeReleaseLapse, last]
     # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
     # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
     full_checks_healed: str
