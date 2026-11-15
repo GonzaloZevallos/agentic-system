@@ -35,6 +35,7 @@ from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import (
     DEVELOPER,
+    DEVELOPER_INTEGRATOR,
     LANDING_DIAGNOSER,
     PJM,
     PM,
@@ -58,7 +59,7 @@ from agentic.core.process.domain.roles import (
 from agentic.core.process.domain.rules import RETRY_TURNS
 from agentic.core.process.domain.schemas import TechAnswers, TechAnswersWithAssumptions
 from agentic.core.process.domain.scratch import SpaceReading
-from agentic.core.process.domain.spec_brief import fenced_section
+from agentic.core.process.domain.spec_brief import fenced_section, protected_line
 from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
@@ -2178,22 +2179,48 @@ def _state(**more: Any) -> dict[str, Any]:
 
 
 def test_context_for_puts_the_fenced_section_after_the_declared_ones_and_before_human():
-    role = dataclasses.replace(DEVELOPER, reads=("PM",))
+    role = dataclasses.replace(TECH_LEAD_REVIEWER, reads=("PM",))
     text = context_for(cast(Any, _state(spec=GOOD_SPEC)), role)
     section = fenced_section(cast(Any, GOOD_SPEC))
     assert text == "\n\n".join(["## PM\n\nthe definition", section, f"## {HUMAN}\n\nDecision 1"])
 
 
 def test_context_for_without_a_spec_is_what_it_was():
-    role = dataclasses.replace(DEVELOPER, reads=("PM",))
+    role = dataclasses.replace(TECH_LEAD_REVIEWER, reads=("PM",))
     expected = f"## PM\n\nthe definition\n\n## {HUMAN}\n\nDecision 1"
     assert context_for(cast(Any, _state()), role) == expected
     assert context_for(cast(Any, _state(spec={})), role) == expected
     assert context_for(cast(Any, _state(spec=None)), role) == expected
 
 
-def test_context_for_puts_the_section_last_when_there_are_no_human_decisions():
+@pytest.mark.parametrize("role", [DEVELOPER, DEVELOPER_INTEGRATOR], ids=lambda r: r.slug)
+def test_context_for_tells_a_developer_the_spec_is_protected_under_a_spec(role):
+    role = dataclasses.replace(role, reads=("PM",))
+    text = context_for(cast(Any, _state(spec=GOOD_SPEC)), role)
+    section = fenced_section(cast(Any, GOOD_SPEC))
+    line = protected_line(cast(Any, GOOD_SPEC))
+    assert text == "\n\n".join(
+        ["## PM\n\nthe definition", section, line, f"## {HUMAN}\n\nDecision 1"]
+    )
+
+
+@pytest.mark.parametrize("role", [TECH_LEAD_REVIEWER, PM, TECH_LEAD], ids=lambda r: r.slug)
+def test_context_for_gives_no_other_role_the_protected_line(role):
+    assert "Never write, move or delete" not in context_for(
+        cast(Any, _state(spec=GOOD_SPEC)), dataclasses.replace(role, reads=("PM",))
+    )
+
+
+@pytest.mark.parametrize("spec", [None, {}], ids=["no spec", "empty spec"])
+def test_context_for_gives_a_developer_without_a_spec_no_protected_line(spec):
     role = dataclasses.replace(DEVELOPER, reads=("PM",))
+    state = _state() if spec is None else _state(spec=spec)
+    assert context_for(cast(Any, state), role) == (
+        f"## PM\n\nthe definition\n\n## {HUMAN}\n\nDecision 1"
+    )
+
+def test_context_for_puts_the_section_last_when_there_are_no_human_decisions():
+    role = dataclasses.replace(TECH_LEAD_REVIEWER, reads=("PM",))
     state = _state(spec=GOOD_SPEC)
     del state["sections"][HUMAN]
     assert context_for(cast(Any, state), role).endswith(fenced_section(cast(Any, GOOD_SPEC)))

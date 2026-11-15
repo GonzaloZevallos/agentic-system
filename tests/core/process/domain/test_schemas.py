@@ -1655,3 +1655,41 @@ def test_every_kind_the_carve_out_module_allows_validates(kind):
 def test_an_invalid_carve_out_output_is_refused(broken):
     with pytest.raises(ValueError):
         schemas.validate(CarveOutOutput, broken, {})
+
+
+# --- the spec is protected: no unit and no required path names it (GH-594 part 4b-3) -------------
+
+SPEC_PATH = "docs/specs/a.md"
+
+
+def _naming(*, files=None, required=None):
+    data = _estimated(20.0, 3)
+    if files is not None:
+        data["subtasks"] = [{**data["subtasks"][0], "files": files}]
+    if required is not None:
+        data["required_paths"] = required
+    return data
+
+
+def test_plan_check_for_refuses_a_subtask_that_names_the_spec():
+    check = schemas.plan_check_for(_history(1, []), 0.0, spec_path=SPEC_PATH)
+    with pytest.raises(ValueError, match="spec_protected"):
+        check(_naming(files=["src/a.py", SPEC_PATH]))
+
+
+def test_plan_check_for_refuses_a_required_path_that_is_the_spec():
+    check = schemas.plan_check_for(_history(1, []), 0.0, spec_path=SPEC_PATH)
+    with pytest.raises(ValueError, match="spec_protected"):
+        check(_naming(required=[SPEC_PATH]))
+
+
+def test_plan_check_for_under_a_spec_accepts_a_plan_that_names_other_files():
+    check = schemas.plan_check_for(_history(1, []), 0.0, spec_path=SPEC_PATH)
+    check(_naming(files=["src/a.py"], required=["docs/specs/b.md"]))
+    check(_estimated(20.0, 3))
+
+
+@pytest.mark.parametrize("spec_path", [None, ""], ids=["none", "empty"])
+def test_plan_check_for_without_a_spec_accepts_a_plan_that_names_the_path(spec_path):
+    check = schemas.plan_check_for(_history(1, []), 0.0, spec_path=spec_path)
+    check(_naming(files=[SPEC_PATH], required=[SPEC_PATH]))
