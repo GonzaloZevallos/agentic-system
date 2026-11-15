@@ -12,10 +12,15 @@ graph TD
     g_pkg__domain["domain (paquete)"]
     m_application__dashboards["application.dashboards"]
     m_application__eval_commands["application.eval_commands"]
+    m_application__listing_reads["application.listing_reads"]
     m_application__ports["application.ports"]
     m_application__dashboards --> g_pkg__domain
     m_application__eval_commands --> g_pkg__agentic__core__process
     m_application__eval_commands --> g_pkg__agentic__shared
     m_application__eval_commands --> g_pkg__domain
     m_application__eval_commands --> m_application__ports
+    m_application__listing_reads --> g_pkg__agentic__core__process
+    m_application__listing_reads --> g_pkg__domain
+    m_application__listing_reads --> m_application__ports
+    m_application__ports --> g_pkg__domain
 ```

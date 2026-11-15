@@ -13,6 +13,7 @@ graph TD
     m_domain__dashboards["domain.dashboards"]
     m_domain__evaluation["domain.evaluation"]
     m_domain__findings_report["domain.findings_report"]
+    m_domain__issue_listing["domain.issue_listing"]
     m_domain__metrics["domain.metrics"]
     m_domain__parallel_factor["domain.parallel_factor"]
     m_domain__planning["domain.planning"]
