@@ -84,7 +84,14 @@ sequenceDiagram
    la base y arma el prompt del Developer solo con la sección `Restart <subtarea>`, sin
    sesión previa (`agentic/core/process/application/develop.py:develop`). El intento
    reiniciado tiene su propio contador y, si también llega al tope, escala.
-6. **Integración y entrega.** `integrate` une las ramas de las subtareas; `owner_rules` y el pase
+   Bajo una entrega con spec (`state["spec"]`), `review` llama a
+   `agentic/core/process/application/spec_guard.py:check_at` justo después de `full_head`: una spec
+   que ya no es la aprobada, o que no se puede leer, escribe la fila `spec-scope` y escala
+   `spec_changed` o `spec_unreadable` antes de `rules.system_approves`, del push especulativo y de
+   todo revisor, sin mover ningún contador.
+6. **Integración y entrega.** Antes de despachar a un Developer, `integrate` llama a
+   `agentic/core/process/application/spec_guard.py:cut` bajo una spec: re-registra `commit` como la
+   base de la rama o la rechaza. Luego `integrate` une las ramas de las subtareas; `owner_rules` y el pase
    de `fix_important` corren en serie y mueven la cabeza; después `verify` corre juntos, sobre
    esa cabeza, los verificadores que el plan convoca (`final_validation`, `copy_review`,
    `qa_performance`, `full_checks`; `agentic/core/process/application/verifiers.py:verify`) y
