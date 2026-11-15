@@ -3397,9 +3397,7 @@ def part_over_line(
         {
             "current_role": PJM.name,
             "status": WAITING_ON_HUMAN,
-            **escalation(
-                "estimate", fit_question_text(task_id, part_of, fit, remainder=remainder)
-            ),
+            **escalation("estimate", fit_question_text(task_id, part_of, fit, remainder=remainder)),
             "fit_question": True,
         },
         at=at,

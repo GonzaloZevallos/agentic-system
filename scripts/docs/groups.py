@@ -109,6 +109,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.owner_rules": "reflection",
     "application.perf": "checks",
     "application.plan": "build",
+    "application.plan_carve_out": "lifecycle",
     "application.poll": "lifecycle",
     "application.ports": "support",
     "application.pre_pr_fix": "build",

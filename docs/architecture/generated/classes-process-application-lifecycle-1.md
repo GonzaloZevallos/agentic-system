@@ -24,10 +24,16 @@ classDiagram
     class dry_run__DryRunLog["DryRunLog"]
     class dry_run__DryRunRefused["DryRunRefused"]
     class dry_run__ReadOnly["ReadOnly"]
+    class plan_carve_out__Judged["Judged"]
+    class plan_carve_out__PlanSteps["PlanSteps"]
     class poll__Abandoned["Abandoned"]
     class poll__CrashRetake["CrashRetake"]
     class poll__LandingRound["LandingRound"]
     class poll__MergeAssessment["MergeAssessment"]
     class poll__OrderEntry["OrderEntry"]
-    class poll__OrderLock["OrderLock"]
 ```
+
+## Relaciones con otras páginas
+
+- [application: support (parte 7)](classes-process-application-support-7.md)
+  - `plan_carve_out.Judged` se asocia con `run_role.Output`
