@@ -878,7 +878,9 @@ class TestLaneAssessedBesideAHeadTheRoundObserves:
 
         assert round_.head == 7
         assert round_.lane == 5
-        assert round_.lane_reasons == {}  # the lane member and the one it did not reach
+        # #6 is obstacle-free but one lane per round goes to #5 (`landing_order._lane`): none of the
+        # seven `LaneReason`s fits it, so it has none (GH-827 Decisions, invariant 1).
+        assert round_.lane_reasons == {}
 
     def test_every_member_is_in_the_lane_or_has_a_reason_when_the_head_cannot_open_it(
         self, tmp_path
