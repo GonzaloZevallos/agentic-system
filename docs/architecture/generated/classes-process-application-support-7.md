@@ -32,6 +32,7 @@ classDiagram
     class spec_guard__Changed["Changed"]
     class spec_guard__Intact["Intact"]
     class spec_guard__Unreadable["Unreadable"]
+    class stack_facts__StackMemo["StackMemo"]
     run_role__EstimateCapReached --|> run_role__Escalating
     run_role__PromptFailure --|> run_role__Escalating
     run_role__RoleFailure --|> run_role__Escalating
