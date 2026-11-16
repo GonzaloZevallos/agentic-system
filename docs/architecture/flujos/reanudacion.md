@@ -96,15 +96,19 @@ sequenceDiagram
    estado desde el documento de la tarea, cruzado con git
    (`agentic/core/process/application/resume.py:from_document`), como si `escalate`
    acabara de correr.
-7. **Una pausa sobre ítems de tracker (GH-620).** Los ítems `human` que el plan deja al dueño
-   los levanta el sistema tras la entrega como un escalado `questions` con `needs-human`
-   (`agentic/core/process/domain/tracker_items.py:escalate_human`), y `tracker_human` guarda
-   sus hashes. Mientras `agentic/core/process/domain/rules.py:tracker_item_pause` valga:
+7. **Una pausa sobre ítems de tracker (GH-620, GH-784).** Los ítems `human` que el plan deja al
+   dueño los levanta el sistema al terminar el plan, antes de construir nada, como un escalado
+   `questions` con `needs-human` (`agentic/core/process/domain/tracker_items.py:escalate_human`,
+   llamado desde `agentic/core/process/application/plan.py:_asked`, alcanzado solo desde
+   `_finished`), y `tracker_human` guarda sus hashes. `agentic/core/process/application/deliver.py:deliver`
+   es solo una valla: si quedara un ítem sin preguntar, termina por `_ended` antes de empujar,
+   abrir el pull request o comentar. Una respuesta dada en el plan reanuda por
+   `agentic/core/process/domain/rules.py:resumed` hacia `integrate`. Mientras `agentic/core/process/domain/rules.py:tracker_item_pause` valga:
    - Una decisión en blanco no reanuda. El nodo `pause`
      (`agentic/core/process/adapters/langgraph/graph.py:_pause_node`) vuelve a llamar a
      `interrupt()` con el mismo contenido, y `agentic/core/process/application/resume.py:prepare`
      espera con el mensaje de preguntas abiertas.
-   - Una tarea con pull request y una decisión no escrita en blanco se resuelve sin ningún nodo
+   - Una tarea que ya tiene pull request (pausas anteriores a GH-784) y una decisión no escrita en blanco se resuelve sin ningún nodo
      del grafo: `prepare` devuelve una `Resumption` con `settled`, y
      `agentic/cli.py:_resume` llama a `agentic/core/process/application/resume.py:settle`, que
      guarda el patch de `agentic/core/process/domain/rules.py:resumed` (la única función que

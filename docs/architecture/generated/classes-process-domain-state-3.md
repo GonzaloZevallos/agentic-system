@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 8, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 3 de 9, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -25,9 +25,14 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - [domain: state (parte 7)](classes-process-domain-state-7.md)
   - [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - [domain: state (parte 9)](classes-process-domain-state-9.md)
 
 ```mermaid
 classDiagram
+    class rules__SpendPace["SpendPace"]
+    class rules__SpendRun["SpendRun"]
+    class size_budget__ActualSize["ActualSize"]
+    class size_budget__Divergence["Divergence"]
     class size_budget__NumstatRow["NumstatRow"]
     class size_budget__PlanSize["PlanSize"]
     class spec_delivery__Screen["Screen"]
@@ -38,18 +43,11 @@ classDiagram
     class spec_delivery__SpecRefusalRecord["SpecRefusalRecord"]
     class spec_delivery__SpecStatePatch["SpecStatePatch"]
     class spec_route__SpecRefusalPatch["SpecRefusalPatch"]
-    class task__ArmAssignment["ArmAssignment"]
-    class task__AssumptionRow["AssumptionRow"]
-    class task__Carried["Carried"]
-    class task__CarveRecord["CarveRecord"]
-    class task__ChangesRequested["ChangesRequested"]
     spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
     spec_route__SpecRefusalPatch --> spec_delivery__SpecRefusalRecord
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`

@@ -66,6 +66,15 @@ class GhRead(Protocol):
 
 
 PageCause = Literal["rate_limited", "timed_out", "unreachable", "transient", "refused"]
+StopCause = Literal[
+    "rate_limited",
+    "timed_out",
+    "unreachable",
+    "transient",
+    "refused",
+    "reserve",
+    "quota_unreadable",
+]
 
 
 @dataclass(frozen=True)
@@ -81,9 +90,41 @@ class PageUnreadable:
     cause: PageCause
 
 
+@dataclass(frozen=True)
+class QuotaReading:
+    """The core quota the account has left, in points."""
+
+    remaining: int
+
+
+@dataclass(frozen=True)
+class QuotaUnreadable:
+    """The quota could not be read, whatever the reason."""
+
+
+@dataclass(frozen=True)
+class Spend:
+    """What the reads cost: every `GhRead` call (failed ones too) and the core points
+    (page calls only: reading the quota costs none)."""
+
+    calls: int
+    points: int
+
+
+NO_READS = Spend(0, 0)
+
+
 class IssueListing(Protocol):
     """The repository's issues and pull requests, a page at a time (1-based)."""
 
     def page(self, n: int) -> Page | PageUnreadable:
         """Never raises: a page that cannot be read is a `PageUnreadable`."""
+        ...
+
+    def rate_limit(self) -> QuotaReading | QuotaUnreadable:
+        """Never raises: a quota that cannot be read is a `QuotaUnreadable`."""
+        ...
+
+    def spent(self) -> Spend:
+        """The calls and core points spent so far."""
         ...

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from ..domain import ci, rules
-from ..domain.task import CiLogRecord, FullChecksJob, FullChecksRead
+from ..domain import ci, landing, rules
+from ..domain.task import CiLogRecord, FullChecksJob, FullChecksRead, TaskState
 from .ports import Ports
 
 CI_LOG_NOTICE = (
@@ -94,3 +94,69 @@ def _job(log: ci.JobLog) -> FullChecksJob:
         "bytes": log.bytes,
         "cause": log.cause,
     }
+
+
+DISPATCH_LINE = "CI logs of a dispatched run are not read (ci_dispatch)."
+"""What a Developer reopened by a dispatched run reads instead of a log (GH-743): the run is of
+the base's workflow over an untrusted head, so its logs are never read."""
+
+NOT_READ = "log no leído: "
+
+
+def developer_excerpt(state: TaskState, ports: Ports, unit: str, head: str) -> str:
+    """What the Developer of `unit` reads of the CI logs of a red `full_checks`, for `run_role`'s
+    `extra_input` alone (GH-743). Blocking: the caller runs it in a thread. Never raises: a log
+    that cannot be read never changes the step it informs (invariant 3).
+
+    By `rules.full_checks_excerpt_due(state, unit, head)`: `read` is one `ci_excerpt` of the
+    record's own head, which already starts with `CI_LOG_NOTICE` and is then followed by
+    `rules.repetition_for` as its own paragraph when it holds, or `log no leído: <cause>` on its
+    own, with the cause of the closed record of that read (never an exception's class or
+    message); `dispatch` is the fixed
+    line and no read; `none` is empty. Composed from `ci_excerpt` alone, so no text of a log
+    reaches the Developer without the notice in front."""
+    try:
+        match rules.full_checks_excerpt_due(state, unit, head):
+            case "dispatch":
+                return DISPATCH_LINE
+            case "read":
+                return _read_for_developer(state, ports, unit)
+            case _:
+                return ""
+    except Exception:
+        return ""
+
+
+def _read_for_developer(state: TaskState, ports: Ports, unit: str) -> str:
+    record = state.get("full_checks")
+    if record is None:
+        return ""
+    text, records = ci_excerpt(
+        ports,
+        f"agentic-ci/{state['id']}",
+        record["head"],
+        landing.test_failure_excerpt,
+        on_error=_ignore,
+    )
+    if not text:
+        cause = next((r["cause"] for r in records if r["cause"] != "read"), None)
+        if cause is None:
+            return ""
+        # The closed-cause line stands alone: the sentence follows only text led by the notice.
+        return f"{NOT_READ}{cause}"
+    sentence = _repetition(state, unit)
+    return f"{text}\n\n{sentence}" if sentence else text
+
+
+def _repetition(state: TaskState, unit: str) -> str:
+    """The repetition sentence, or nothing when the rule cannot say: a malformed row never costs
+    the Developer the excerpt already read."""
+    try:
+        return rules.repetition_for(state, unit)
+    except Exception:
+        return ""
+
+
+def _ignore(_: str) -> None:
+    """The class name of a failed read is for the landing's log line; a Developer reads the
+    closed cause of the record instead."""

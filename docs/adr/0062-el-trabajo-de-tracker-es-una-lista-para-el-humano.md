@@ -311,3 +311,33 @@ Tercer tipo de ítem que el sistema realiza, además de `comment` y `human`.
   4. Un `open_issue` titulado como un issue de flake (`Flaky check: <check>`) puede ser adoptado por
      el camino de flakes (`landing.flake_issue_for`), que también busca por título exacto.
 
+
+## Addendum (GH-784): las preguntas del dueño se plantean al terminar el plan
+
+En apostrophe GH-724 `deliver` planteaba los ítems `human` del plan después de abrir el pull
+request y de postear el comentario de listo: se le preguntaba al dueño cuando la obra ya existía.
+Desde GH-784 se le pregunta antes de construir.
+
+- **Cuándo se plantean.** Los ítems `human` se plantean al final de un plan vigente, en la salida
+  única del paso de sistema del plan (`_finished` en `plan.py`), como un escalado de clase
+  `questions` con `tracker_human`. No se plantean cuando:
+  - el plan escaló;
+  - el plan tiene partes (el split publica la lista, sin ítems derivados);
+  - se aplicó una promoción (una solicitud rechazada o sin efecto sí plantea);
+  - el plan es solo de tracker (lo plantea el nodo `tracker_only`);
+  - la tarea tiene `spec`.
+- **`deliver` es una valla.** Si un ítem nunca se planteó, `deliver` termina por `_ended` antes de
+  guardar el documento, empujar, abrir o editar el pull request y postear el comentario de listo, y
+  conserva el checkout para la reanudación que empuja. Un ítem pendiente sin respuesta no llega a
+  `deliver`: `resume` levanta `WaitingOnHuman`.
+- **La respuesta** sigue la reanudación normal: `rules.resumed` la registra en `answered` y la deja
+  en `Human`, y la tarea sigue a `integrate` antes del primer commit. Nada vuelve a planificar, así
+  que una respuesta puede contradecir subtareas ya planificadas; es un riesgo aceptado.
+- **Retención del merge.** El auto-merge rechaza `open_escalation`, como decide
+  `domain/merge_hold.py`: una pausa de tracker, `owner_decision_unbuilt` o un `Escalated:` vivo
+  frente al último `Ready`, `resumed_at` y los `released_at`. Un empate retiene; un estado ilegible
+  rechaza. Es una negativa de las que quedan en manos de una persona (`HUMAN_OWNED_REFUSALS`), así
+  que su tarea nunca es Cabeza del orden.
+- **`owner_decision_unbuilt`** lo escribe solo la rama de «ya respondido» de `resume`, para un
+  documento que se pausó con el pull request ya abierto (el flujo anterior a GH-784). Nada en el
+  código lo borra ni lo reinicia, y no hay `--force` que lo salte.

@@ -154,3 +154,33 @@ escritura al tracker; escribir `outcome` solo al cerrar; parametrizar el comenta
 evaluación.
 
 Enmendado por ADR-0101: el paso de carve-out de profundidad 2.
+
+## Adenda (2026-11-15): las partes prefieren ser independientes (GH-837)
+
+El rediseño de la cola que aprobó el dueño el 2026-11-15 es más nuevo que este ADR, así que esta
+adenda prevalece sobre el cuerpo donde este habla de partes encadenadas o de exactamente una
+parte terminal. El cuerpo no se edita.
+
+- **Aristas solo por necesidad real de código:** una parte lleva `depends_on` solo cuando llama,
+  importa, extiende o migra algo que crea otra parte. El orden por prolijidad, un documento
+  compartido o «se lee mejor en secuencia» no es una dependencia. Lo que puede empezar de una vez,
+  empieza de una vez.
+- **Una razón por arista:** cada entrada de `depends_on` lleva en `depends_on_reasons` una razón
+  de una línea, en el mismo orden, que dice qué crea la otra parte. Una arista sin razón, o una
+  razón sin arista, se rechaza por parte y por campo. La razón no empieza con `Blocked by:`, no
+  tiene saltos de línea ni `{{` o `}}`, y mide a lo sumo 240 caracteres.
+- **Archivos compartidos como `overlap_risk`:** si dos partes independientes van a tocar los
+  mismos archivos, la parte lo escribe en `overlap_risk` (una línea, puede quedar vacía), nunca como
+  arista: la cola de aterrizaje resuelve los conflictos entre pull requests independientes.
+- **Una sola terminal solo con un único sumidero:** la regla de la hija terminal única ya no se
+  exige. Si el plan tiene un único sumidero (la parte de la que nadie depende, según
+  `rules.last_part_numbers`), ese pull request lleva `Closes` y cierra la parte padre. Con varios
+  sumideros ninguna parte lleva `Closes`, y `split_sweep` cierra la parte padre una ronda del
+  poller después de que se fusiona la última hija.
+- **Migración sin cambios:** una parte `kind: migration` sigue teniendo siempre su vecina como
+  arista real, y esa arista lleva su razón; nunca se aconseja quitarla.
+- **`guard`:** para una parte sin aristas, el `guard` debe cumplirse si la parte aterriza sola, en
+  cualquier orden entre sus hermanas; un `guard` que espera a una hermana es una arista con su
+  razón.
+- **Registros viejos:** `depends_on_reasons` y `overlap_risk` son opcionales en `PartRecord`. Un
+  registro anterior a esta adenda se carga y se reanuda igual, y no se valida de nuevo al partir.

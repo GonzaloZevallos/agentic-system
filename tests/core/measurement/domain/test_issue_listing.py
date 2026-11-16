@@ -2,10 +2,13 @@ import pytest
 
 from agentic.core.measurement.domain.issue_listing import (
     PAGE_SIZE,
+    QUOTA_RESERVE,
     ListedIssue,
     Missing,
     TaskTimes,
+    cost_line,
     merge,
+    reserve_reached,
     times_for,
 )
 
@@ -24,6 +27,31 @@ def keyed(*items):
 
 def test_the_page_size_is_what_github_is_asked_for():
     assert PAGE_SIZE == 100
+
+
+def test_the_reserve_is_a_thousand_core_points():
+    assert QUOTA_RESERVE == 1000
+
+
+@pytest.mark.parametrize(
+    ("remaining", "stop"),
+    [(QUOTA_RESERVE - 1, True), (QUOTA_RESERVE, True), (QUOTA_RESERVE + 1, False)],
+)
+def test_reserve_reached_when_remaining_is_at_or_under_the_reserve(remaining, stop):
+    assert reserve_reached(remaining, QUOTA_RESERVE) is stop
+
+
+def test_cost_line_names_the_product_the_counts_and_the_last_reading():
+    assert (
+        cost_line("apostrophe", 18, 9, 4321)
+        == "agentic: github reads for apostrophe: 18 calls (9 core points), core remaining 4321"
+    )
+
+
+def test_cost_line_without_a_reading_says_unknown():
+    assert cost_line("p", 0, 0, None) == (
+        "agentic: github reads for p: 0 calls (0 core points), core remaining unknown"
+    )
 
 
 def test_merge_keys_by_number_and_a_later_read_wins():

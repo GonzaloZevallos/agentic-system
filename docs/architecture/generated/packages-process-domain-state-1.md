@@ -19,6 +19,7 @@ graph TD
     g_pkg__agentic__shared["agentic.shared (paquete)"]
     m_domain__carve_out["domain.carve_out"]
     m_domain__document["domain.document"]
+    m_domain__drawing_answer["domain.drawing_answer"]
     m_domain__escalation_prompts["domain.escalation_prompts"]
     m_domain__experiment["domain.experiment"]
     m_domain__finding_location["domain.finding_location"]
@@ -31,6 +32,10 @@ graph TD
     m_domain__document --> g_domain__roles
     m_domain__document --> g_domain__state__2
     m_domain__document --> m_domain__legacy_names
+    m_domain__drawing_answer --> g_domain__roles
+    m_domain__drawing_answer --> g_domain__state__2
+    m_domain__drawing_answer --> m_domain__escalation_prompts
+    m_domain__drawing_answer --> m_domain__rules
     m_domain__escalation_prompts --> g_domain__state__2
     m_domain__experiment --> g_domain__state__2
     m_domain__experiment --> g_pkg__agentic__shared

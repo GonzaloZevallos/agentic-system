@@ -619,3 +619,32 @@ Mientras haya causa, `exhausted()` y `after_diagnosis` no devuelven `diagnose`, 
   adaptador de evaluación).
 
 Sin `api_break_line` en el stack, el cuerpo del pull request y los pasos por `ci_failed` no cambian.
+
+## Adenda (GH-740): el Developer reabierto por un `full_checks` rojo de CI lee el extracto de los logs
+
+**Contexto.** Un `full_checks` juzgado por el CI devolvía al Developer solo los nombres de los checks rojos; el
+motivo estaba en los logs de los jobs fallidos, que solo leía el diagnóstico del aterrizaje.
+
+**Decisión.** El Developer que reabre un `full_checks` rojo con `ran_on == "ci"` sobre la cabeza del registro
+recibe por `run_role(extra_input=...)` el extracto de los jobs fallidos (`ci_excerpt` y
+`landing.test_failure_excerpt`), detrás del aviso de dato no confiable. Es una sola lectura por invocación del
+nodo, en un hilo, antes de `run_role`.
+
+- Un hash corto del id de un test fallido no es texto de log: `full_checks_reads` lo guarda por lectura, hasta
+  16 ids (`FULL_CHECKS_TESTS_MAX`), y nunca una línea de log ni un nombre de test.
+- La repetición se juzga por solapamiento y no por igualdad: un fallo intermitente repite un subconjunto y los
+  shards se reparten distinto entre corridas. Un conjunto ilegible, truncado o no reconocido es `unknown`, nunca
+  `repeat` ni `no_repeat`. La frase lleva solo números de versión, y llega al Developer una vez: en la sección
+  `full_checks` o, si esa sección no le llega, en `extra_input`.
+- `ci_dispatch` no se lee: la corrida es del workflow de la base sobre una cabeza no confiable; el Developer
+  recibe una línea fija.
+- El orden de jobs del aterrizaje pone ahora los agregados declarados al final, mientras el texto de su
+  extracto no cambia (`ci_log_excerpt` es idéntico byte a byte para cada fixture).
+- Seguridad (estándar 8): el texto de un log llega solo al `extra_input` del Developer devuelto. Se amplía lo
+  que lee, no lo que puede hacer: mismo checkout, misma jaula y mismo tope. Barreras: el aviso delante,
+  la neutralización de `<CiLog` dentro de cada bloque y los topes `CI_LOG_*`, definidos una sola vez en
+  `domain/landing.py`.
+
+Una lectura que falla, vacía o que lanza solo agrega una causa cerrada al prompt (`log no leído: <causa>`); no
+cambia el veredicto, la devolución ni el escalado. Los patrones de Playwright se comprobaron con un log
+sintético hasta que se adjunte un extracto real de un shard.

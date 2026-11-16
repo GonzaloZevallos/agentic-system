@@ -811,8 +811,9 @@ def spec_delivery(state: TaskState) -> bool:
 
 def tracker_item_pause(state: TaskState) -> bool:
     """Whether the task is paused on typed tracker items (GH-620): `tracker_human` holds the
-    hashes of the items a person has not answered. The one place that reads it, for its three
-    callers: `resume.py`, the graph's `pause` node and `landing_plan.release`."""
+    hashes of the items a person has not answered. The one place that reads it, for its four
+    callers: `resume.py`, the graph's `pause` node, `landing_plan.release` and
+    `drawing_answer.prompt_cause`."""
     return bool(state.get("tracker_human"))
 
 
@@ -3083,6 +3084,33 @@ def repetition_sentence(prev_version: int) -> str:
     return (
         f"Same failing tests as full_checks v{prev_version} (overlap of recorded failing-test ids)."
     )
+
+
+def repetition_for(state: TaskState, unit: str) -> str:
+    """The repetition sentence the returned Developer's `extra_input` carries, or `""`: the one
+    place that decides it (invariant 8, once per attempt). It holds only when the highest-version
+    valid read of `full_checks_reads` is that of the current `full_checks` record (same version
+    and commit; a failed read that was never stored leaves an older one, which says nothing about
+    this record), the failure `repeat`s, and the unit's `full_checks` section does not reach the
+    Developer: `_ci_red` already ends that section with this sentence, so it rides here only
+    when `return_sections` does not carry it (a clean restart). Never raises on malformed rows."""
+    record = state.get("full_checks")
+    reads = state.get("full_checks_reads", [])
+    valid = _valid_by_version(reads)
+    earlier = previous_read(reads)
+    if record is None or not valid or earlier is None:
+        return ""
+    newest = valid[-1]
+    if newest["version"] != record.get("version"):
+        return ""
+    read_head, record_head = newest.get("head"), record.get("head")
+    if not isinstance(read_head, str) or not same_commit(read_head, record_head):
+        return ""
+    if repeated_ci_failure(reads) != "repeat":
+        return ""
+    if _section_of(unit, "full_checks") in return_sections(state, unit):
+        return ""
+    return repetition_sentence(earlier["version"])
 
 
 def full_checks_excerpt_due(
@@ -6672,8 +6700,9 @@ SLICING_RULES = (
     "until its last part (out of the navigation, or behind a flag), and each part's `guard` "
     "says how. A migration that converts or moves existing data is a part of its own, "
     "`kind: migration`, idempotent or after a part that writes both shapes (dual-write); "
-    "readers switch after it and the removal of the old shape comes later. Parts you write "
-    "end in exactly one terminal part, the one no other part depends on."
+    "readers switch after it and the removal of the old shape comes later. A part depends on "
+    "another only for code that part creates, and with a single part no other depends on, that "
+    "part's pull request closes the parent's issue."
 )
 
 
@@ -6735,18 +6764,29 @@ TRACKER_WITH_PARTS = (
     "   goes in that part's body."
 )
 _PARTS_STEP = (
-    "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
-    "   small task of its own that lands and shows in the product before the next one starts.\n"
-    "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
-    "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
+    "8. `### Parts`, only when the estimate does not fit: at least two parts, each a small\n"
+    "   task of its own that lands and shows in the product by itself. Parts preferably run at\n"
+    "   the same time. Each part has a `title`, a `body` (its whole description: the person who\n"
+    "   builds it has not seen this plan) and `depends_on`, the numbers of earlier parts (1 is\n"
+    "   the first) whose code it needs: it calls, imports, extends or migrates something that\n"
+    "   part creates. Ordering for neatness, a shared document or 'reads better in sequence' is\n"
+    "   not a dependency. Every edge carries its reason in `depends_on_reasons`, one line per\n"
+    "   entry in the same order, naming what the other part creates. Files that independent\n"
+    "   parts both touch go in `overlap_risk`, one line naming them, never as an edge: the\n"
+    "   landing queue handles conflicts between independent pull requests. Leave it empty\n"
+    "   otherwise. A migration always has its edge, with a reason. A part's `guard`, with no\n"
+    "   edges, must hold if the part lands alone, in any order among its siblings; a guard that\n"
+    "   waits for a sibling is an edge with a reason.\n"
     "   Write no subtasks then, and `### Subtasks` is not needed. A part that is still over the\n"
     "   size budget splits again. If the section `## Human` says to narrow this task, plan the\n"
     "   narrower task. Work that lands after the merge (a post-merge workflow, a bot\n"
     "   commit) is still a subtask of this task, never a part."
 )
 _PARTS_FIELD = (
-    "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
-    "  estimate does not fit; then `subtasks` is empty. Empty when the plan fits."
+    "- `parts`: one entry per part with `title`, `body`, `depends_on` (only for code the part\n"
+    "  needs from an earlier one), `depends_on_reasons` (one line per edge) and `overlap_risk`\n"
+    "  (files an independent part also touches, or empty), ONLY when the estimate does not\n"
+    "  fit; then `subtasks` is empty. Empty when the plan fits."
 )
 
 

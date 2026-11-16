@@ -168,6 +168,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.docs": "roles",
     "domain.document": "state",
     "domain.drawing": "roles",
+    "domain.drawing_answer": "state",
     "domain.escalation_prompts": "state",
     "domain.exempt_queue": "machine",
     "domain.experiment": "state",
@@ -232,17 +233,22 @@ CLASS_GROUPING: Mapping[str, str] = {
     "knowledge/adapters": "layer",
     "knowledge/domain": "layer",
     "measurement/adapters": "layer",
-    "measurement/application": "layer",
+    "measurement/application": "clusters",
     "measurement/domain": "clusters",
     "process/adapters": "kind",
     "process/application": "clusters",
     "process/domain": "clusters",
 }
 
-# The cluster of each module of `agentic/core/measurement/domain`, keyed like `CLUSTERS`
-# (`domain.<module>`): the layer has 26 public classes, more than a diagram holds. One entry per
-# line, sorted; a module with a class and no entry fails the generator by name.
+# The cluster of each module of `agentic/core/measurement/domain` and `.../application`, keyed
+# like `CLUSTERS` (`<layer>.<module>`): the domain has 26 public classes and the application 18,
+# more than a diagram holds. One entry per line, sorted; a module with a class and no entry fails
+# the generator by name.
 MEASUREMENT_CLUSTERS: Mapping[str, str] = {
+    "application.dashboards": "commands",
+    "application.eval_commands": "commands",
+    "application.listing_reads": "ports",
+    "application.ports": "ports",
     "domain.cycle": "scorecard",
     "domain.dashboards": "langfuse",
     "domain.evaluation": "scorecard",
