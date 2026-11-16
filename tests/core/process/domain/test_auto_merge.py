@@ -85,7 +85,11 @@ def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_
     # The performance gate's (GH-318) is given by `test_auto_merge_perf.py`.
     # The criteria gate's (GH-334) is given by `test_auto_merge_criteria.py`.
     # The fresh GitHub run's (GH-463) are given by `test_auto_merge_ci_run.py`.
+    # The stacked start's (GH-855) are given by `test_auto_merge_stacking.py`.
     others = {
+        "stack_parent_unmerged",
+        "stack_restack_due",
+        "stack_base_orphaned",
         "ci_no_verdict",
         "ci_stale_exhausted",
         "ci_untrusted_no_dispatch",

@@ -315,6 +315,8 @@ def _merge_facts(
 
     return rules.MergeFacts(
         task_id=task_id,
+        # GH-855: stacking is read by the poller from part 1b; until then no decision changes.
+        stack=None,
         status=raw.get("status"),
         open_escalation=escalation_hold(raw, comments),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",

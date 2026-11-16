@@ -1112,6 +1112,8 @@ def slice_facts(
     perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(state)
     return rules.MergeFacts(
         task_id=task_id,
+        # GH-855: a slice of a stacked task is built from its record by the landing mapping.
+        stack=None,
         status=state.get("status"),
         # GH-784: a slice lands only from the task's own landing, which the merge decision of the
         # task already held when an owner escalation was open; the slice adds no read of it.

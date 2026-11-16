@@ -29,6 +29,7 @@ from . import (
     restart,
     retakes,
     size_budget,
+    stacking,
     task_path,
     tracker_items,
 )
@@ -5806,6 +5807,9 @@ MergeRefusal = Literal[
     "ci_no_verdict",
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
+    "stack_parent_unmerged",
+    "stack_restack_due",
+    "stack_base_orphaned",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -5876,6 +5880,14 @@ MergeRefusal = Literal[
 - `ci_untrusted_no_dispatch` (GH-463): the head touches the CI's own definition and the stack
   declares no `ci_dispatch`: no workflow of the base can judge it and the local suite no
   longer runs for a `ci:` product, so it is left to the human at once.
+- `stack_parent_unmerged` (GH-855): a stacked child whose parent has not reached upstream, or
+  whose ancestry could not be read (`MergeFacts.stack`, `stacking.refusal`). Right after
+  `eval_set`, before any conflict, merge or check outcome, so nothing is run for a child that
+  cannot merge yet.
+- `stack_restack_due` (GH-855): the parent landed and the child does not hold its head; one
+  merge of master, never a rebase, is due. A conflicting head is `merge_conflict` instead.
+- `stack_base_orphaned` (GH-855): the record is unreadable, or the parent closed without its
+  recorded head reaching upstream (rebuilt, not planned, squashed). Left to the human.
 """
 
 
@@ -6002,6 +6014,9 @@ class MergeFacts:
     ci_dispatch_declared: bool = False
     ci_covered: bool | None = None
     ci_run_inert: bool | None = None
+    # GH-855: the stacked start's facts; `None` for a task that is not stacked, which decides as
+    # it always did and triggers no stacking read.
+    stack: stacking.StackFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -6248,7 +6263,9 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     clear, GH-784), `pr_not_open`, `adr_number_taken`, `not_approved`,
     `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `criteria_unreadable`
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
-    `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
+    `open_findings`, `eval_set_unreadable`, `eval_set`, `stacking.refusal` (only when `stack` is
+    not `None`: `stack_parent_unmerged`, `stack_restack_due` or `stack_base_orphaned`, GH-855; a
+    task that is not stacked is decided as it always was), `merge_conflict` (only when
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
     product declares its CI or the plan requires checks (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and
@@ -6307,6 +6324,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "eval_set_unreadable")
     if facts.in_eval_set:
         return MergeDecision("refuse", "eval_set")
+    if facts.stack is not None and (stacked := stacking.refusal(facts.stack, facts.conflicts)):
+        return MergeDecision("refuse", stacked)
     if facts.conflicts is True:
         return MergeDecision("refuse", "merge_conflict")
     if facts.merge_failures >= MERGE_CALLS_MAX:
@@ -6462,6 +6481,17 @@ def criteria_probe_wanted(facts: MergeFacts) -> bool:
     `criteria_over_cap` already rules the pull request out."""
     return auto_merge_decision(replace(facts, criteria_regressed=("x",))) == MergeDecision(
         "refuse", "criteria_over_cap"
+    )
+
+
+def stack_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether reading the stacking facts is worth it for `facts` (GH-855): the only answer to
+    that question, derived from the order of `auto_merge_decision`. It is worth it exactly when
+    a parent that is not known to have landed would be the decision, that is, when no refusal
+    ahead of the stacking check already rules the pull request out. The placeholder holds a
+    record and no other fact, so it never says a thing the reads would."""
+    return auto_merge_decision(replace(facts, stack=stacking.unread_facts())) == MergeDecision(
+        "refuse", "stack_parent_unmerged"
     )
 
 
