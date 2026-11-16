@@ -42,6 +42,12 @@ classDiagram
     class roles__Pair["Pair"]
     class roles__Prompt["Prompt"]
     class roles__Role["Role"]
+    class schemas__Answers["Answers"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
+
+## Relaciones con otras páginas
+
+- [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - `schemas.Answers` hereda de `schemas.RoleOutput`

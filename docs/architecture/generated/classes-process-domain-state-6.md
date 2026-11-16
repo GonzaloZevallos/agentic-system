@@ -29,7 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__FlakeRecord["FlakeRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksJob["FullChecksJob"]
     class task__FullChecksRead["FullChecksRead"]
@@ -43,6 +42,8 @@ classDiagram
     class task__LaneAdmitted["LaneAdmitted"]
     class task__LaneMerge["LaneMerge"]
     class task__LapsePauseEntry["LapsePauseEntry"]
+    class task__MergeCiRecord["MergeCiRecord"]
+    class task__MergeConflictRecord["MergeConflictRecord"]
 ```
 
 ## Relaciones con otras páginas

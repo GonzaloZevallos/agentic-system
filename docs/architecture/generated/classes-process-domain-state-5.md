@@ -29,10 +29,10 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__DepartureRecord["DepartureRecord"]
-    class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]
+    class task__DrawingChecksRecord["DrawingChecksRecord"]
     class task__DrawingEscalation["DrawingEscalation"]
+    class task__DrawingRow["DrawingRow"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
@@ -43,6 +43,7 @@ classDiagram
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
+    class task__FlakeRecord["FlakeRecord"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 

@@ -29,7 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__ArmAssignment["ArmAssignment"]
     class task__AssumptionRow["AssumptionRow"]
     class task__Carried["Carried"]
     class task__CarveRecord["CarveRecord"]
@@ -43,11 +42,11 @@ classDiagram
     class task__CiTiming["CiTiming"]
     class task__CloseDocs["CloseDocs"]
     class task__DepartureAnswer["DepartureAnswer"]
+    class task__DepartureRecord["DepartureRecord"]
+    class task__DependencyState["DependencyState"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.FullChecksJob` hereda de `task.CiLogRecord`
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`

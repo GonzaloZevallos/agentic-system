@@ -43,6 +43,7 @@ classDiagram
     class spec_delivery__SpecRefusalRecord["SpecRefusalRecord"]
     class spec_delivery__SpecStatePatch["SpecStatePatch"]
     class spec_route__SpecRefusalPatch["SpecRefusalPatch"]
+    class task__ArmAssignment["ArmAssignment"]
     spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
     spec_route__SpecRefusalPatch --> spec_delivery__SpecRefusalRecord
 ```
@@ -51,3 +52,5 @@ classDiagram
 
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - `task.TaskState` se asocia con `task.ArmAssignment`

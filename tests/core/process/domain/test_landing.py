@@ -89,6 +89,7 @@ EXPECTED = {
     "master_moved": "wait",
     "adr_number_taken": "escalate_adr",
     "perf_unverified": "none",
+    "drawing_unsettled": "none",
     "criteria_over_cap": "none",
     "criteria_unreadable": "none",
     "stack_parent_unmerged": "wait",

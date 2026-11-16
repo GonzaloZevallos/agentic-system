@@ -592,6 +592,21 @@ class DesignReview(RoleOutput):
     )
 
 
+class FinalDesignReview(DesignReview):
+    """A final-validation design review that also reports the drawing checks it made and
+    the departures it found (GH-766 part 5). No role uses it yet: `roles.py` keeps
+    `DesignReview`. Both lists are required and may be empty."""
+
+    drawing_checks: list[DrawingCheck] = Field(
+        description="One check per question or screen compared against its approved "
+        "drawing; empty only when none was due"
+    )
+    departures: list[DrawingDeparture] = Field(
+        description="Every visible departure from an approved drawing, one per `departs` "
+        "check; empty only when there is none"
+    )
+
+
 class CopyDraft(RoleOutput):
     """Tech Writer's texts (README.md, 4): the content is the `markdown` itself, every
     person-facing text of the change in the product's language and criteria. The next

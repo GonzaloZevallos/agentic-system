@@ -514,6 +514,10 @@ def render(
         # there is one, so every document without one is byte-identical to one written before;
         # parsed back under the same name.
         **({"drawing_departures": d} if (d := state.get("drawing_departures")) else {}),
+        # The drawing checks of the verified head (GH-766 part 5), written whenever the key is
+        # there and never when it is absent, so a document without it is byte-identical to one
+        # written before. `parse` keeps it as written; only `rules.drawing_merge_facts` judges it.
+        **({"drawing_checks": c} if (c := state.get("drawing_checks")) is not None else {}),
         # The landing order's stamp and the head's anchor (GH-588), written only when set.
         **({"landing_queued_at": q} if (q := state.get("landing_queued_at")) else {}),
         **({"head_since_at": q} if (q := state.get("head_since_at")) else {}),
