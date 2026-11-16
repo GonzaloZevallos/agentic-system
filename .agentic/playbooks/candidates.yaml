@@ -2077,3 +2077,23 @@ candidates:
   - finding
   - return
   added_at: '2026-11-16T09:36:38.785+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When a guard test holds an allow-list or registry, name every entry of it in the document that justifies it, and check that by comparing the list against the document before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-848
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-16T13:50:31.679+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When you change behavior, grep the architecture docs for the old description (counts, names, order) and update them in the same change, citing the symbols that now carry it.
+  confidence: medium
+  seen_in:
+  - GH-848
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-16T13:50:31.679+00:00'
