@@ -29,6 +29,8 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__DesignDraft["DesignDraft"]
+    class schemas__DesignItem["DesignItem"]
     class schemas__DesignReview["DesignReview"]
     class schemas__Diagnosis["Diagnosis"]
     class schemas__DrawingCheck["DrawingCheck"]
@@ -40,8 +42,6 @@ classDiagram
     class schemas__FitDecision["FitDecision"]
     class schemas__GlossaryTerm["GlossaryTerm"]
     class schemas__InterviewTurn["InterviewTurn"]
-    class schemas__LandingDiagnosis["LandingDiagnosis"]
-    class schemas__LessonDelta["LessonDelta"]
     schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
 
@@ -50,9 +50,10 @@ classDiagram
 - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
   - `schemas.DefinitionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
   - `schemas.DesignReview` hereda de `schemas.RoleOutput`
   - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
   - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
   - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
-  - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
+- [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`

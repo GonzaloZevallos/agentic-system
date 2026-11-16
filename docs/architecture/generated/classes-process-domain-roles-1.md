@@ -34,19 +34,14 @@ classDiagram
     class design__NotReady["NotReady"]
     class docs__DiagramBudget["DiagramBudget"]
     class docs__Docs["Docs"]
+    class drawing__CheckLike["CheckLike"]
     class drawing__Departure["Departure"]
+    class drawing__DepartureLike["DepartureLike"]
     class drawing__Verdicts["Verdicts"]
     class roles__Interview["Interview"]
     class roles__Pair["Pair"]
     class roles__Prompt["Prompt"]
     class roles__Role["Role"]
-    class schemas__Answers["Answers"]
-    class schemas__CapabilityFile["CapabilityFile"]
     roles__Interview --> roles__Role
     roles__Pair --> roles__Role
 ```
-
-## Relaciones con otras páginas
-
-- [domain: roles (parte 4)](classes-process-domain-roles-4.md)
-  - `schemas.Answers` hereda de `schemas.RoleOutput`
