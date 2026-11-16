@@ -452,3 +452,22 @@ def test_add_drawing_escalation_treats_an_empty_side_as_the_identity():
     assert add_drawing_escalation(held, empty) == held
     assert add_drawing_escalation(empty, empty) == {}
     assert add_drawing_escalation(None, empty) == {}
+
+
+_GRID = [
+    _staged(round_, numbers, stage, cause)
+    for round_ in (1, 2)
+    for numbers in ([], [1], [2, 3])
+    for stage in (None, "plan", "delivery")
+    for cause in ("drawing_departure", "drawing_cap")
+]
+
+
+def test_staged_escalation_reducer_laws_hold_over_the_whole_grid():
+    for a in _GRID:
+        for b in _GRID:
+            assert add_drawing_escalation(a, b) == add_drawing_escalation(b, a)
+            for c in _GRID[::5]:
+                assert add_drawing_escalation(
+                    add_drawing_escalation(a, b), c
+                ) == add_drawing_escalation(a, add_drawing_escalation(b, c))
