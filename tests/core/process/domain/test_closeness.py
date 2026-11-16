@@ -196,7 +196,7 @@ def test_row_account_paused_defers_the_land_and_starts_min_n_a_resumes():
         closeness={6: REVIEW},
     )
     assert plan.actions == [rules.PollAction("resume", 6), rules.PollAction("resume", 3)]
-    assert plan.deferred == [rules.Deferred("land", 4, "pause_waiting")]
+    assert _lands(plan) == [rules.Deferred("land", 4, "pause_waiting")]
 
 
 def test_row_account_paused_with_fewer_resumes_than_slots_starts_them_all():
@@ -220,7 +220,7 @@ def test_row_no_headroom_and_no_slot_defers_the_land_and_starts_nothing():
         launches=LAUNCH,
     )
     assert plan.actions == []
-    assert plan.deferred == [rules.Deferred("land", 4, "no_slot")]
+    assert _lands(plan) == [rules.Deferred("land", 4, "no_slot")]
 
 
 def test_row_more_slots_than_resumes_the_land_and_every_resume_take_regular_slots():
@@ -236,7 +236,7 @@ def test_row_more_slots_than_resumes_the_land_and_every_resume_take_regular_slot
         rules.PollAction("resume", 3),
         rules.PollAction("resume", 5),
     ]
-    assert plan.deferred == []
+    assert _lands(plan) == []
 
 
 def test_row_more_slots_than_resumes_the_launch_sees_what_the_land_and_resumes_left():
@@ -261,7 +261,7 @@ def test_row_headroom_above_the_slots_starts_the_land_on_it_and_every_slot_on_a_
         closeness={3: DEFINITION, 5: DEVELOPMENT},
     )
     assert plan.actions == [rules.PollAction("land", 4), rules.PollAction("resume", 5)]
-    assert plan.deferred == []
+    assert _lands(plan) == []
 
 
 def test_row_headroom_equal_to_the_slots_the_land_takes_one_regular_slot_from_the_resumes():
@@ -274,7 +274,7 @@ def test_row_headroom_equal_to_the_slots_the_land_takes_one_regular_slot_from_th
         closeness={3: DEFINITION, 5: DEVELOPMENT},
     )
     assert plan.actions == [rules.PollAction("land", 4), rules.PollAction("resume", 5)]
-    assert plan.deferred == []
+    assert _lands(plan) == []
 
 
 def test_one_slot_with_a_headroom_starts_both_a_resume_and_the_land():
@@ -314,3 +314,8 @@ def test_the_plan_critic_section_and_the_sizer_run_count_as_the_plan_phase():
     state = {"runs": [{"role": "Plan sizer", "cost_usd": 0.1}]}
     assert rules.closeness(state) == PLAN
     assert rules.spent_by_phase(state)["plan"] == 0.1
+
+
+def _lands(plan: rules.PollPlan) -> list[rules.Deferred]:
+    """The deferrals of the land rows: the launch journal (GH-836) is another test's subject."""
+    return [d for d in plan.deferred if d.kind != "launch"]

@@ -42,9 +42,12 @@ sequenceDiagram
    `agentic/core/process/application/poll.py:gather_launches`, que reúne los issues
    abiertos con esa etiqueta y sin documento de tarea todavía.
 2. **Decisión y lanzamiento.** `agentic/core/process/domain/rules.py:poll_plan` decide
-   cuántas corridas caben bajo `max_concurrent_runs` y
-   `agentic/core/process/application/poll.py:execute` lanza un hijo
-   `agentic run --issue N --detach` por medio de `agentic/cli.py:SpawnLauncher`. El poller
+   cuántas corridas caben bajo `max_concurrent_runs`: lanza tantos listos como cupos
+   libres queden, primero el que más issues abiertos desbloquea
+   (`agentic/core/process/domain/launch_order.py`, con una lectura de issues abiertos por
+   ronda para contar dependientes), y cada listo que no sale queda con una razón en el
+   diario. `agentic/core/process/application/poll.py:execute` lanza un hijo por cada
+   lanzamiento del plan, `agentic run --issue N --detach`, por medio de `agentic/cli.py:SpawnLauncher`. El poller
    no corre ningún rol. El único hijo exento (merge o `land_checks`) que la máquina permite
    no va al número de issue más bajo: `poll_plan` elige al candidato que más tiempo lleva
    sin intento (`agentic/core/process/domain/exempt_queue.py:rank`, la Cola exenta), y un

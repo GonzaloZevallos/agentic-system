@@ -1,6 +1,7 @@
 """GH-470, subtask `poller-arm`: the poller assigns each new launch an experiment arm from
-the product's declaration (`gather_launches`), writes it into the launch record and into
-`_argv`, and does exactly what it did before when there is no usable declaration."""
+the product's declaration (`_assign_arms`, after `rules.poll_plan`), writes it into the launch
+record and into `_argv`, and does exactly what it did before when there is no usable
+declaration."""
 
 from __future__ import annotations
 
@@ -40,8 +41,9 @@ def _cfg(tmp_path, **over):
     return Configuration(product_dir=tmp_path, **over)
 
 
-def _arms(launches):
-    return {c.issue: c.arm for c in launches}
+def _recorded(registry):
+    """The arm each launch record of the product holds, by issue."""
+    return {n: attempt.arm for (_, n), attempt in registry.attempts.items()}
 
 
 def _round(cfg, ports, registry, launcher):
@@ -58,11 +60,33 @@ def _round(cfg, ports, registry, launcher):
     )
 
 
-def test_three_launches_in_one_round_split_two_to_one_on_a_fifty_fifty_alternate(tmp_path):
+def _rounds(cfg, ports, registry, launcher, count):
+    for _ in range(count):
+        _round(cfg, ports, registry, launcher)
+
+
+def test_three_launches_split_two_to_one_on_a_fifty_fifty_alternate(tmp_path):
     ports = _ports(tmp_path, [1, 2, 3], _declaration())
-    launches = poll.gather_launches(_cfg(tmp_path), ports, MemoryRunRegistry())
-    arms = [c.arm for c in launches]
-    assert arms == ["control", "light", "control"]
+    registry = MemoryRunRegistry()
+    _rounds(_cfg(tmp_path), ports, registry, FakeLauncher(), 3)
+    assert _recorded(registry) == {1: "control", 2: "light", 3: "control"}
+
+
+def test_a_candidate_the_plan_does_not_launch_gets_no_arm_and_is_not_counted(tmp_path):
+    ports = _ports(tmp_path, [5, 6], _declaration())
+    given = {"experiment": "light-vs-default", "switches": {}}
+    ports.documents.save({"id": "GH-9", "assignment": {**given, "arm": "control"}})
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    # one slot: #5 launches and #6 waits, whatever order the plan puts them in
+    _round(_cfg(tmp_path, max_concurrent_runs=1), ports, registry, launcher)
+    assert len(launcher.spawned) == 1
+    launched = int(launcher.spawned[0][3])
+    waiting = ({5, 6} - {launched}).pop()
+    # the one that left got the arm that is behind (control has the document's one)
+    assert registry.attempts[("product", launched)].arm == "light"
+    assert ("product", waiting) not in registry.attempts
+    assert launcher.spawned[0][4:6] == [ARM_FLAG, "light"]
 
 
 def test_a_record_with_an_arm_counts_and_its_relaunch_keeps_the_arm(tmp_path):
@@ -71,13 +95,11 @@ def test_a_record_with_an_arm_counts_and_its_relaunch_keeps_the_arm(tmp_path):
     registry.attempts[("product", 5)] = LaunchAttempt(
         datetime(2026, 11, 3, 0, 0, tzinfo=UTC), 1, "light"
     )
-    launches = poll.gather_launches(_cfg(tmp_path), ports, registry)
-    # 5 keeps `light` and counts for it, so 6 goes to the arm that is behind
-    assert _arms(launches) == {5: "light", 6: "control"}
     launcher = FakeLauncher()
-    _round(_cfg(tmp_path), ports, registry, launcher)
+    _rounds(_cfg(tmp_path), ports, registry, launcher, 2)
+    # 5 keeps `light` and counts for it, so 6 goes to the arm that is behind
     assert launcher.spawned[0][3:6] == ["5", ARM_FLAG, "light"]
-    assert registry.attempts[("product", 5)].arm == "light"
+    assert _recorded(registry) == {5: "light", 6: "control"}
 
 
 def test_a_record_whose_arm_the_declaration_dropped_is_assigned_again(tmp_path):
@@ -86,7 +108,8 @@ def test_a_record_whose_arm_the_declaration_dropped_is_assigned_again(tmp_path):
     registry.attempts[("product", 5)] = LaunchAttempt(
         datetime(2026, 11, 3, 0, 0, tzinfo=UTC), 1, "gone"
     )
-    assert _arms(poll.gather_launches(_cfg(tmp_path), ports, registry)) == {5: "control"}
+    _round(_cfg(tmp_path), ports, registry, FakeLauncher())
+    assert _recorded(registry) == {5: "control"}
 
 
 def test_a_document_under_the_experiment_counts_once_even_when_a_record_exists(tmp_path):
@@ -99,19 +122,17 @@ def test_a_document_under_the_experiment_counts_once_even_when_a_record_exists(t
     registry = MemoryRunRegistry()
     registry.attempts[("product", 7)] = LaunchAttempt(NOW, 1, "control")  # 7 has a document
     # control 1, light 2 (another experiment's document and 7's record do not count again)
-    assert _arms(poll.gather_launches(_cfg(tmp_path), ports, registry)) == {8: "control"}
+    _round(_cfg(tmp_path), ports, registry, FakeLauncher())
+    assert registry.attempts[("product", 8)].arm == "control"
 
 
 def test_seeded_assignment_is_deterministic(tmp_path):
     declaration = {**_declaration("seeded"), "seed": 7}
-    first = poll.gather_launches(
-        _cfg(tmp_path), _ports(tmp_path, [1, 2, 3, 4], declaration), MemoryRunRegistry()
-    )
-    again = poll.gather_launches(
-        _cfg(tmp_path), _ports(tmp_path, [4, 3, 2, 1], declaration), MemoryRunRegistry()
-    )
-    assert _arms(first) == _arms(again)
-    assert set(_arms(first).values()) <= {"control", "light"}
+    first, again = MemoryRunRegistry(), MemoryRunRegistry()
+    _rounds(_cfg(tmp_path), _ports(tmp_path, [1, 2, 3, 4], declaration), first, FakeLauncher(), 4)
+    _rounds(_cfg(tmp_path), _ports(tmp_path, [4, 3, 2, 1], declaration), again, FakeLauncher(), 4)
+    assert _recorded(first) == _recorded(again)
+    assert set(_recorded(first).values()) <= {"control", "light"}
 
 
 def test_without_a_declaration_argv_record_and_candidates_are_those_of_today(tmp_path):

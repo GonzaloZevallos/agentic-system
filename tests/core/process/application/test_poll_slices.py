@@ -15,7 +15,15 @@ from agentic.core.process.application import poll, tracker_only
 from agentic.core.process.application.ports import RunRegistration, Upstream
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest
-from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _Locks, _round
+from tests.core.process.application.test_poll import (
+    ESCALATED_AT,
+    _cfg,
+    _launched,
+    _Locks,
+    _round,
+    _waiting,
+)
+from tests.core.process.application.test_poll import _ready as _queued
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _pr, _ready
 from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryTracker, memory_ports
 
@@ -135,6 +143,19 @@ def test_a_fresh_run_waits_for_a_slot(tmp_path):
         ESCALATED_AT,
     )
     assert launcher.spawned == []
+
+
+def test_a_fresh_run_with_a_dependent_goes_before_a_new_launch_without_any(tmp_path):
+    # GH-836: the rerun of #5 competes like any candidate; #30 waits on it, #3 has nobody.
+    ports = _ports({A})
+    _queued(ports, 3)
+    _waiting(ports, {30: "Blocked by: #5"})
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg(tmp_path, max_concurrent_runs=1), ports, MemoryRunRegistry(), launcher, ESCALATED_AT
+    )
+    assert _launched(launcher) == ["5"]
+    assert "agentic: poll: launch #3 waiting (no_slot)" in lines
 
 
 def _git(repo: Path, *args: str) -> str:

@@ -834,7 +834,8 @@ def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_is_below_the_thresho
     _tick(ports, tmp_path, driver)
 
     assert ports.tracker.merge_calls == [(URL.format(5), HEAD)]
-    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 0
+    # The two reads are the poll's own, one per round, for the launch order (GH-836).
+    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 2
 
 
 def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_files_the_flake_at_the_threshold(
@@ -913,7 +914,8 @@ def test_acceptance_failed_local_checks_rerun_green_below_the_threshold_files_no
     _tick(ports, tmp_path, driver)
 
     assert ports.tracker.merge_calls == [(URL.format(5), HEAD)]
-    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 0
+    # The two reads are the poll's own, one per round, for the launch order (GH-836).
+    assert ports.tracker.opened_issues == [] and ports.inbox.refs_calls == 2
 
 
 def test_acceptance_failed_local_checks_rerun_green_files_the_flake_at_the_threshold(tmp_path):

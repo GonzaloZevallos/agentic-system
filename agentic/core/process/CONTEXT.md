@@ -267,7 +267,7 @@ _Avoid_: exento, slot extra, cupo libre
 _Campo_: sin término de arte
 
 **Espera de aterrizaje**:
-El hecho que un producto publica en el registro de corridas mientras un aterrizaje con modelo (`land_model`) suyo espera cupo (`Deferred` `no_slot` o `land_queued`): lo reescribe cada vuelta del poller y lo borra la primera vuelta sin esa espera. Vence solo, sin que su escritor lo limpie, a los 15 minutos (`rules.LAND_WAIT_TTL`) o con otro arranque de la máquina, así que un poller muerto no retiene a nadie. Mientras otro producto tiene una vigente, este no arranca nada que cuente contra el tope por debajo de un aterrizaje (lanzamientos, reanudaciones, retomas); los aterrizajes, los cierres, los hijos exentos y las corridas lanzadas a mano no se retienen. Un producto nunca se retiene a sí mismo. Entre aterrizajes de productos distintos gana la espera más vieja (a igual `since`, la raíz de menor clave): el otro queda `land_queued`, publica su propia espera y conserva su lugar.
+El hecho que un producto publica en el registro de corridas mientras un aterrizaje con modelo (`land_model`) suyo espera cupo (`Deferred` `no_slot` o `land_queued`): lo reescribe cada vuelta del poller y lo borra la primera vuelta sin esa espera. Vence solo, sin que su escritor lo limpie, a los 15 minutos (`rules.LAND_WAIT_TTL`) o con otro arranque de la máquina, así que un poller muerto no retiene a nadie. Mientras otro producto tiene una vigente, este no arranca reanudaciones ni retomas; desde GH-836 ya no retiene lanzamientos (ni siquiera los de otro producto) y ninguna razón de espera de un lanzamiento la abre. Los aterrizajes, los lanzamientos, los cierres, los hijos exentos y las corridas lanzadas a mano no se retienen. Un producto nunca se retiene a sí mismo. Entre aterrizajes de productos distintos gana la espera más vieja (a igual `since`, la raíz de menor clave): el otro queda `land_queued`, publica su propia espera y conserva su lugar.
 En el código es `rules.holds_launches` (qué `Deferred` la abre) y `rules.LandWait` (lo publicado).
 _Avoid_: reserva, bloqueo, cola de aterrizaje
 _Campo_: sin término de arte
@@ -290,8 +290,14 @@ _Avoid_: ítem, fila, entrada
 _Campo_: ítem de GitHub Projects
 
 **Cercanía**:
-Qué tan cerca de aterrizar está una tarea: el orden en que el poller arranca lo que cuenta contra el tope en una vuelta (reanudaciones, retomas y aterrizajes con modelo; el lanzamiento va último). Se ordena launch < definition < plan < development < review < delivered < land: una tarea con pull request está en `delivered`, una sin ella está en la fase más avanzada que alcanzó una de sus corridas (la más lejana, no la última), y una sin corridas está en `definition`. En el código es `rules.closeness`, un índice en `rules.CLOSENESS`; a igual cercanía decide el número de issue.
+Qué tan cerca de aterrizar está una tarea: el orden en que el poller arranca lo que cuenta contra el tope en una vuelta (reanudaciones, retomas y aterrizajes con modelo; el lanzamiento va último, y su orden propio es el Orden de lanzamiento). Se ordena launch < definition < plan < development < review < delivered < land: una tarea con pull request está en `delivered`, una sin ella está en la fase más avanzada que alcanzó una de sus corridas (la más lejana, no la última), y una sin corridas está en `definition`. En el código es `rules.closeness`, un índice en `rules.CLOSENESS`; a igual cercanía decide el número de issue.
 _Avoid_: prioridad, urgencia, proximidad
+_Campo_: sin término de arte
+
+**Orden de lanzamiento**:
+El orden en que el poller lanza los issues listos de una ronda, que sale tantos como cupos libres queden: primero el que más issues abiertos sin documento esperan, de forma transitiva, por él (a igualdad, el número de issue menor). Las aristas de los candidatos de la cola salen del predicado de bloqueo (`blockers_of`) y las del resto de los abiertos, de sus líneas `Blocked by:`; con la lectura de abiertos incompleta cuenta solo las primeras. Una dependencia solo nativa de un issue fuera de la cola pesa 0. Los relanzamientos compiten como cualquier otro candidato, y el brazo del experimento se asigna después, en este orden. Cada listo que no sale queda con una sola razón cerrada (`space_held`, `schedule`, `resume_waiting`, `pacing`, `no_slot`).
+En el código es `domain/launch_order.py`.
+_Avoid_: prioridad, Cercanía, Orden de aterrizaje
 _Campo_: sin término de arte
 
 **Revisión de stack**:

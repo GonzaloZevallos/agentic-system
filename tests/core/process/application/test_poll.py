@@ -382,7 +382,7 @@ def test_nothing_launches_when_the_machine_wide_cap_is_full(tmp_path):
     )
     launcher = FakeLauncher()
     lines = _round(_cfg(tmp_path, max_concurrent_runs=1), ports, registry, launcher, ESCALATED_AT)
-    assert lines == ["agentic: poll: nothing to do this round"]
+    assert lines == ["agentic: poll: launch #5 waiting (no_slot)"]
     assert launcher.spawned == []
 
 
@@ -576,7 +576,7 @@ def test_a_child_that_registers_while_waited_for_occupies_the_next_rounds_slot(t
         lock=_Locks(),
         current_boot=None,
     )
-    assert second == ["agentic: poll: nothing to do this round"]
+    assert second == ["agentic: poll: launch #5 waiting (schedule)"]
     assert len(launcher.spawned) == 1  # the second round launched nothing more
 
 
@@ -1395,7 +1395,7 @@ def test_pacing_on_with_spend_over_pace_and_a_live_run_holds_the_launch_back(tmp
     launcher = FakeLauncher()
     cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
     lines = _round(cfg, ports, registry, launcher, PACE_NOW)
-    assert lines == ["agentic: poll: nothing to do this round"]
+    assert lines == ["agentic: poll: launch #5 waiting (pacing)"]
     assert launcher.spawned == []
     assert len(registry.publish_calls) == 1 and len(registry.spend_calls) == 1
 
@@ -1446,7 +1446,7 @@ def test_spend_that_another_product_published_counts_toward_the_pace(tmp_path):
     launcher = FakeLauncher()
     cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
     assert _round(cfg, ports, registry, launcher, PACE_NOW) == [
-        "agentic: poll: nothing to do this round"
+        "agentic: poll: launch #5 waiting (pacing)"
     ]
     assert launcher.spawned == []
 
@@ -1523,7 +1523,10 @@ def test_the_pace_never_holds_back_a_close_while_it_holds_the_launch(tmp_path):
     registry = MemoryRunRegistry(entries=_one_live())
     cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
     lines = _round(cfg, ports, registry, FakeLauncher(), PACE_NOW)
-    assert lines == ["agentic: poll: close #3 -> pid 4242"]
+    assert lines == [
+        "agentic: poll: close #3 -> pid 4242",
+        "agentic: poll: launch #5 waiting (pacing)",
+    ]
 
 
 # -- what counts against the cap (RunKind) --------------------------------------------------
@@ -1571,7 +1574,7 @@ def test_a_live_model_land_and_a_role_fill_the_cap_but_a_merge_beside_them_chang
             launcher,
             ESCALATED_AT,
         )
-        assert lines == ["agentic: poll: nothing to do this round"]
+        assert lines == ["agentic: poll: launch #5 waiting (no_slot)"]
         assert launcher.spawned == []
 
 
@@ -1582,7 +1585,7 @@ def test_a_record_that_names_no_kind_still_takes_a_slot(tmp_path):
     )
     launcher = FakeLauncher()
     lines = _round(_cfg(tmp_path, max_concurrent_runs=1), ports, registry, launcher, ESCALATED_AT)
-    assert lines == ["agentic: poll: nothing to do this round"]
+    assert lines == ["agentic: poll: launch #5 waiting (no_slot)"]
 
 
 def test_the_pace_sees_only_the_counted_runs_so_a_live_merge_is_an_empty_machine(tmp_path):
@@ -1594,7 +1597,7 @@ def test_the_pace_sees_only_the_counted_runs_so_a_live_merge_is_an_empty_machine
     assert lines == ["agentic: poll: launch #5 -> pid 4242"]
     held = _paced_ports([_spent_run(10, 500.0)])
     lines = _round(cfg, held, MemoryRunRegistry(entries=[_live("role")]), FakeLauncher(), PACE_NOW)
-    assert lines == ["agentic: poll: nothing to do this round"]
+    assert lines == ["agentic: poll: launch #5 waiting (pacing)"]
 
 
 # -- a stalled gh call (GH-266) ------------------------------------------------------------
@@ -2570,7 +2573,8 @@ def test_a_round_without_a_split_document_makes_no_list_read_and_reads_the_queue
 
     _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
 
-    assert ports.inbox.refs_calls == 0 and len(reads) == 1
+    # The one list read is the launch order's (GH-836); the split sweep makes none.
+    assert ports.inbox.refs_calls == 1 and len(reads) == 1
 
 
 def test_a_round_re_points_a_split_parent_once_and_the_next_round_reads_nothing(tmp_path):
@@ -2594,8 +2598,10 @@ def test_a_round_re_points_a_split_parent_once_and_the_next_round_reads_nothing(
     assert ports.tracker.updated_bodies == [(7, "Blocked by: #8")]
     assert ports.documents.load("GH-5")["split_repointed_at"]
 
+    reads_after_first = ports.inbox.refs_calls
     _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
-    assert ports.inbox.refs_calls == 1
+    # The next round's only list read is the launch order's (GH-836); the split sweep reads none.
+    assert ports.inbox.refs_calls == reads_after_first + 1
 
 
 def test_a_recorded_launch_attempt_with_no_document_is_not_relaunched_this_round(tmp_path):
@@ -2609,7 +2615,7 @@ def test_a_recorded_launch_attempt_with_no_document_is_not_relaunched_this_round
 
     lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
 
-    assert launcher.spawned == [] and lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == [] and lines == ["agentic: poll: launch #5 waiting (schedule)"]
 
 
 # --- GH-619 part 3: a split parent closed by the split sweep resolves a blocker ---
@@ -2650,3 +2656,115 @@ def test_the_split_record_does_not_resolve_a_document_that_is_not_split(tmp_path
         {"id": "GH-9", "status": "done", "split_closed_at": "2026-11-13T10:00:00Z"}
     )
     assert _verdict(tmp_path, ports, 9) == "no_merge_recorded"
+
+
+# --- GH-836: several launches per round, products not holding each other, dependents first ---
+
+
+def _ready(ports, *numbers: int, native: dict[int, tuple[int, ...]] | None = None) -> None:
+    """Queue `numbers` as unblocked candidates (or, with `native`, blocked on those issues)."""
+    ports.tracker._queue = sorted({*ports.tracker._queue, *numbers})
+    for number in numbers:
+        ports.tracker.states[number] = IssueState("OPEN", "", (native or {}).get(number, ()), None)
+        _seed_body(ports, number)
+
+
+def _waiting(ports, refs: dict[int, str]) -> None:
+    ports.inbox.refs = [
+        IssueRef(f"https://github.com/o/r/issues/{n}", "t", b) for n, b in refs.items()
+    ]
+
+
+def _launched(launcher) -> list[str]:
+    return [argv[argv.index("--issue") + 1] for argv in launcher.spawned if argv[1] == "run"]
+
+
+def _machine_with_live(count: int = 1) -> MemoryRunRegistry:
+    return MemoryRunRegistry(
+        entries=[
+            RunRegistration(pid=i + 1, host="h", product="other", task_id=f"GH-{900 + i}")
+            for i in range(count)
+        ]
+    )
+
+
+def test_a_round_launches_every_free_slot_in_dependents_order_and_says_why_the_rest_wait(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5, 6, 7)
+    # 7 has two open dependents, 6 one, 5 none: 7, 6, then 5 (no slot left).
+    _waiting(ports, {20: "Blocked by: #7", 21: "Blocked by: #7", 22: "Blocked by: #6"})
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg(tmp_path, max_concurrent_runs=3), ports, _machine_with_live(), launcher, ESCALATED_AT
+    )
+    assert _launched(launcher) == ["7", "6"]
+    assert "agentic: poll: launch #5 waiting (no_slot)" in lines
+    assert not any("#7 waiting" in line or "#6 waiting" in line for line in lines)
+
+
+def test_an_unlabelled_open_issue_blocked_by_a_candidate_counts_as_its_dependent(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5, 6)
+    _waiting(ports, {30: "Blocked by: #6"})
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert _launched(launcher) == ["6"]
+
+
+def test_an_open_issue_with_a_document_is_not_a_dependent(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5, 6, 30)
+    ports.documents.save({"id": "GH-30", "status": "delivered", "pull_request": "x"})
+    _waiting(ports, {30: "Blocked by: #6"})
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert _launched(launcher) == ["5"]
+
+
+def test_a_candidate_blocked_only_by_a_native_dependency_counts_for_its_blocker(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5, 6)
+    _ready(ports, 8, native={8: (6,)})  # #8 waits on #6 through the native dependency
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert _launched(launcher) == ["6"]
+
+
+def test_a_cut_open_list_ranks_by_the_queue_alone_and_says_so(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5, 6)
+    _ready(ports, 8, native={8: (6,)})
+    ports.inbox.refs = [IssueRef("https://github.com/o/r/issues/40", "t", "Blocked by: #5")]
+    ports.inbox.refs_error = poll.ListMayBeCut("cut")
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert _launched(launcher) == ["6"]
+    assert "agentic: poll: dependents from queue only (ListMayBeCut)" in lines
+
+
+def test_another_products_land_wait_neither_holds_a_launch_nor_lets_a_due_resume_start(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5)
+    _paused_account_limit(ports, 19, [])
+    registry = MemoryRunRegistry()
+    other = tmp_path / "other-root"
+    registry.land_wait_records[other.resolve()] = (
+        "apostrophe",
+        ESCALATED_AT + timedelta(minutes=16),
+        ESCALATED_AT,
+        (7,),
+    )
+    launcher = FakeLauncher()
+    due = ESCALATED_AT + timedelta(minutes=16)
+    _round(_cfg(tmp_path, max_concurrent_runs=2), ports, registry, launcher, due)
+    assert _launched(launcher) == ["5"]
+    assert not any(argv[1] == "resume" for argv in launcher.spawned)
+
+
+def test_gather_launches_hands_back_the_blockers_it_read(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5)
+    _ready(ports, 8, native={8: (6,)})
+    seen: dict[int, tuple[int, ...]] = {}
+    poll.gather_launches(_cfg(tmp_path), ports, MemoryRunRegistry(), blockers_of=seen)
+    assert seen == {5: (), 8: (6,)}

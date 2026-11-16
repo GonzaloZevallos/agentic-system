@@ -23,6 +23,7 @@ from . import (
     ci,
     escalation_prompts,
     exempt_queue,
+    launch_order,
     merge_ci,
     presubmit,
     restart,
@@ -5254,8 +5255,9 @@ class LandCandidate:
 
 @dataclass(frozen=True)
 class Deferred:
-    """A merge, land or orphan retake `poll_plan` held back this round, and why: `no_slot` (a
-    `land_model` child or an `orphan` retake needs a slot and none is left, headroom included),
+    """A merge, land, orphan retake or launch `poll_plan` held back this round, and why: `no_slot`
+    (a `land_model` child, an `orphan` retake or a `launch` needs a slot and none is left,
+    headroom included),
     `exempt_busy` (the one exempt
     child the machine allows is already live, or this round already starts one),
     `pause_waiting` (a `land_model` land while this product has an `account_limit` pause
@@ -5263,27 +5265,47 @@ class Deferred:
     `land_queued` (a `land_model` land with a slot to start in, yielding to another product's
     land whose wait began earlier: first come, first landed, GH-362) or `backoff` (a merge whose
     refusal wrote nothing and still holds on the same head and master, GH-500: it is not tried
-    again until one moves or `exempt_queue.EXEMPT_REFUSAL_BACKOFF` runs out)."""
+    again until one moves or `exempt_queue.EXEMPT_REFUSAL_BACKOFF` runs out).
 
-    kind: Literal["merge", "land", "orphan"]
+    A `launch` (GH-836) is an unblocked candidate the plan did not start, with exactly one of
+    `space_held` (the round is held by the free-space floor), `schedule` (its own attempt
+    calendar has not come), `resume_waiting` (a resume of the product still waits out its
+    calendar), `pacing` (the spend pace does not admit it) or `no_slot`, in that precedence."""
+
+    kind: Literal["merge", "land", "orphan", "launch"]
     issue: int
-    reason: Literal["no_slot", "land_queued", "exempt_busy", "pause_waiting", "backoff"]
+    reason: Literal[
+        "no_slot",
+        "land_queued",
+        "exempt_busy",
+        "pause_waiting",
+        "backoff",
+        "pacing",
+        "resume_waiting",
+        "space_held",
+        "schedule",
+    ]
 
 
 def holds_launches(deferred: Deferred) -> bool:
     """Whether this deferral opens an Espera de aterrizaje (ADR-0045 addendum, GH-362): the
-    product's poller publishes it, and the other products hold every counted start below a
-    land while it lasts. Only a `land` that waits does, for a slot (`no_slot`) or for an earlier
-    wait of another product (`land_queued`): `exempt_busy` is the serialisation of the children
-    that take no slot, and `pause_waiting` waits on the
+    product's poller publishes it, and the other products hold every resume and retake below a
+    land while it lasts (a launch is no longer held, GH-836). Only a `land` that waits does, for
+    a slot (`no_slot`) or for an earlier wait of another product (`land_queued`): `exempt_busy`
+    is the serialisation of the children that take no slot, and `pause_waiting` waits on the
     account's calendar, which another product's start does not lengthen. `backoff` is a merge
-    that waits on its own refusal, never on a slot."""
+    that waits on its own refusal, never on a slot. A deferred `launch` never opens one: a
+    launch waiting is not a land waiting."""
+    if deferred.kind == "launch":
+        return False
     match deferred.reason:
         case "no_slot" | "land_queued":
             return deferred.kind == "land"
         case "exempt_busy" | "pause_waiting":
             return False
         case "backoff":
+            return False
+        case "pacing" | "resume_waiting" | "space_held" | "schedule":
             return False
         case _:
             assert_never(deferred.reason)
@@ -5402,14 +5424,16 @@ def poll_plan(
     exempt_attempts: Mapping[tuple[int, exempt_queue.ExemptKind], exempt_queue.ExemptAttempt] = {},
     backed_off_merges: Sequence[int] = (),
     exempt_yield: bool = False,
+    dependents: Mapping[int, int] = {},
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
     counts against the cap, nearest to merge first (`closeness`, below): every `retakes`
     and `crash_retakes` issue (a run a reboot interrupted, `interrupted_run`, or one that
-    raised) and the due resumes, together, while `available_slots` lasts; at most one launch,
-    the lowest-numbered issue with every blocker resolved and its own wait (if any) elapsed
-    -- and only when no eligible pause anywhere in the
+    raised) and the due resumes, together, while `available_slots` lasts; then one launch per
+    slot left (GH-836), taken from the issues with every blocker resolved and its own wait (if
+    any) elapsed, in the Orden de lanzamiento (`dependents`, below) -- and only when no
+    eligible pause anywhere in the
     product is still waiting out its own calendar (its own next slot has not arrived
     yet, but one is still scheduled), whether or not a slot is free for it. A pause
     whose calendar is spent (`resume_exhausted`) does not count as "still waiting": it
@@ -5430,9 +5454,13 @@ def poll_plan(
     land competes at the rank of `CLOSENESS` "land", so it goes first in `actions`.
 
     `others_landing` (GH-362, Espera de aterrizaje) is true while another product has a fresh
-    published wait for a land: every start ranked below a land is held, that is every launch,
-    resume and retake, whatever its phase. Lands, closes and the children that take no slot
-    are untouched, and nothing held leaves a deferral.
+    published wait for a land: every resume and retake is held, whatever its phase, and nothing
+    held leaves a deferral. Launches are not held by it (GH-836): one product's land wait never
+    stops the other's launches. Lands, closes and the children that take no slot are untouched.
+
+    `dependents` (GH-836, `launch_order.dependents`) maps an issue to how many open issues wait
+    on it, transitively; a missing key is zero. The ready launches go in
+    `launch_order.launch_key` order: most dependents first, then the lowest issue.
 
     `earlier_land_wait` (GH-362, `land_queued_behind`) is true while another product's wait
     for a land began earlier than this product's own: the `land_model` land that would start
@@ -5478,16 +5506,22 @@ def poll_plan(
     `land_checks` land that did not start is `exempt_busy`, except a backed-off merge, which is
     `backoff`.
 
-    `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
-    if `paced_launch_fits` says so, counting this round's retakes and resumes as live
-    runs (a launch after one on an empty machine is the second run) against a ceiling of
-    `pace.live_runs` plus the `available_slots` received. Closes, retakes and resumes
-    are never gated, and a waiting pause still blocks every launch.
+    `pace` (GH-177, `None` is today's behaviour) gates only the launches: each one goes out
+    only if `paced_launch_fits` says so, counting this round's retakes and resumes, and the
+    launches already decided in the same round, as live runs (a launch after one on an empty
+    machine is the second run) against a ceiling of `pace.live_runs` plus the `available_slots`
+    received. The first that does not fit ends the launches of the round. Closes, retakes and
+    resumes are never gated, and a waiting pause still blocks every launch.
+
+    Every unblocked launch candidate that does not start is `Deferred("launch", issue, reason)`
+    with one reason, by precedence: `space_held`, `schedule`, `resume_waiting`, then `pacing` or
+    `no_slot`. A blocked candidate is neither launched nor deferred here.
 
     `orphan_retakes` (GH-403, `orphaned_run`) are the issues whose run left no lock: they are
     retakes in every respect (the same cap, the same closeness order, the same holds), with
     `reason="orphaned"`. One that finds no slot is `Deferred("orphan", issue, "no_slot")`, the
-    only source of its line; a round held by `others_landing` or `held` defers nothing.
+    only source of its line; a round held by `others_landing` or `held` defers no orphan (a
+    `held` round does defer its unblocked launches, as `space_held`).
 
     `spent_retakes` (GH-466) are the issues whose retake budget is spent and not yet announced:
     each is a `retakes_spent` action, which spawns nothing and so takes no slot, comes right
@@ -5496,11 +5530,16 @@ def poll_plan(
     `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
     not empty the plan is the closes and the notices alone: no launch, resume, retake, land or
     merge starts, because a start would write scratch to a disk that is almost full. It defers
-    nothing, so it opens no Espera de aterrizaje."""
+    only the unblocked launch candidates, each `space_held` (GH-836), so it opens no Espera de
+    aterrizaje."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
     actions += [PollAction("retakes_spent", issue) for issue in sorted(spent_retakes)]
+    unblocked = sorted(
+        (c for c in launches if not c.blocked),
+        key=lambda c: launch_order.launch_key(c.issue, dependents),
+    )
     if held:
-        return PollPlan(actions, [])
+        return PollPlan(actions, [Deferred("launch", c.issue, "space_held") for c in unblocked])
     received_slots = available_slots
 
     due_resumes = [r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None]
@@ -5567,32 +5606,35 @@ def poll_plan(
     some_resume_still_waiting = any(
         not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
     )
-    if slots_left > 0 and not some_resume_still_waiting and not others_landing:
-        ready = sorted(
-            (
-                c
-                for c in launches
-                if not c.blocked
-                and (
-                    c.since is None
-                    or next_attempt_at(c.since, c.prior, c.limit, now, schedule=LAUNCH_SCHEDULE)
-                    is not None
-                )
-            ),
-            key=lambda c: c.issue,
-        )
-        if ready and (
-            pace is None
-            or paced_launch_fits(
+    due = [
+        c
+        for c in unblocked
+        if c.since is None
+        or next_attempt_at(c.since, c.prior, c.limit, now, schedule=LAUNCH_SCHEDULE) is not None
+    ]
+    deferred.extend(Deferred("launch", c.issue, "schedule") for c in unblocked if c not in due)
+    if some_resume_still_waiting:
+        deferred.extend(Deferred("launch", c.issue, "resume_waiting") for c in due)
+    else:
+        launched = 0
+        for position, c in enumerate(due):
+            if slots_left == 0:
+                reason: Literal["no_slot", "pacing"] = "no_slot"
+            elif pace is not None and not paced_launch_fits(
                 spent_usd=pace.spent_usd,
                 covered_s=pace.covered_s,
-                live_runs=pace.live_runs + started,
+                live_runs=pace.live_runs + started + launched,
                 ceiling=pace.live_runs + received_slots,
                 pace_usd_per_h=pace.pace_usd_per_h,
-            )
-        ):
-            actions.append(PollAction("launch", ready[0].issue, arm=ready[0].arm))
-            slots_left -= 1
+            ):
+                reason = "pacing"
+            else:
+                actions.append(PollAction("launch", c.issue, arm=c.arm))
+                slots_left -= 1
+                launched += 1
+                continue
+            deferred.extend(Deferred("launch", rest.issue, reason) for rest in due[position:])
+            break
 
     deferred.extend(Deferred("merge", issue, "backoff") for issue in sorted(set(backed_off_merges)))
     exempt_merges = sorted(set(merges) - set(backed_off_merges))

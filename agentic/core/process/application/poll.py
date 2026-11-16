@@ -35,6 +35,7 @@ from ..domain import (
     exempt_queue,
     experiment,
     landing_order,
+    launch_order,
     merge_ci,
     merge_conflict,
     presubmit,
@@ -45,7 +46,7 @@ from ..domain import retakes as retake_rules
 from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
-from ..domain.landing import LandingStep, LandingStepKind
+from ..domain.landing import IssueRef, LandingStep, LandingStepKind
 from ..domain.landing_order import Turn
 from ..domain.retakes import RETAKEN, RETAKEN_AFTER_CRASH, RETAKEN_ORPHANED
 from ..domain.task import (
@@ -77,6 +78,7 @@ from .ports import (
     IssueComment,
     LaunchAttempt,
     Launcher,
+    ListMayBeCut,
     LockRecord,
     Ports,
     RunLock,
@@ -1866,7 +1868,11 @@ def _part_verdict(
 
 
 def _blocked(
-    cfg: Configuration, ports: Ports, number: int, upstream: Callable[[], Upstream]
+    cfg: Configuration,
+    ports: Ports,
+    number: int,
+    upstream: Callable[[], Upstream],
+    blockers_of: dict[int, tuple[int, ...]] | None = None,
 ) -> rules.BlockerReport:
     """What `number`'s blockers come to; the launch predicate is `bool(report)`. Any
     doubt -- an unknown git object, a `gh` failure, a blocker whose own `stateReason` this
@@ -1877,11 +1883,14 @@ def _blocked(
     loop, which has no handler of its own (the blocking finding this closes): one
     candidate's git trouble must cost that candidate's own launch, never the round, and
     never the process. When the blockers themselves cannot be read the candidate is its
-    own `unknown` entry, so the report still blocks."""
+    own `unknown` entry, so the report still blocks. The numbers it read (GH-836) are set in
+    `blockers_of` under `number` when given, before any verdict: an unreadable list sets none."""
     try:
         blockers = _blocker_numbers(ports, number)
     except (ValueError, OSError, KeyError, GitError):
         return rules.BlockerReport(unknown=(number,))
+    if blockers_of is not None:
+        blockers_of[number] = blockers
     open_: list[int] = []
     closed: list[tuple[int, rules.BlockerReason]] = []
     unknown: list[int] = []
@@ -1925,7 +1934,8 @@ def gather_launches(
     reports: list[rules.BlockerReport] | None = None,
     by_issue: dict[int, rules.BlockerReport] | None = None,
     documents: Mapping[int, TaskState | None] | None = None,
-    notes: list[str] | None = None,
+    declaration: experiment.Experiment | None = None,
+    blockers_of: dict[int, tuple[int, ...]] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -1936,23 +1946,22 @@ def gather_launches(
     `reports` when given (GH-344), for the queue-blocked line, and set in `by_issue` under
     its issue number when given (GH-375), for the board mirror. `documents` (GH-403) is
     `queue_documents`' answer, shared with the orphan pass so each queue document is loaded
-    once per round; without it this function reads it itself. When the product declares an
-    experiment (GH-470, `ports.experiment`), each launch candidate that can launch carries the
-    arm `experiment.assign` picked for it, or the one its launch record already has; an invalid
-    declaration, or an `.env` switch an arm names, adds one line to `notes` and leaves every
-    candidate unassigned -- it never stops the queue. With no declaration this reads and counts
-    nothing more than it did before."""
+    once per round; without it this function reads it itself. When the round has a valid
+    experiment `declaration` (GH-470, `_declared_experiment`), a candidate that can launch keeps
+    the arm its launch record already has while the declaration still names it; it never picks a
+    new one: `_assign_arms` does that, after `rules.poll_plan`, for the launches that come out.
+    Every other candidate arrives with no arm. Each candidate's blocker numbers, the ones
+    `_blocked` already read (native or the body's), are set in `blockers_of` when given
+    (GH-836), the queue's edges of the launch order: no call is added."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     queued = documents if documents is not None else queue_documents(ports)
-    declaration = _declared_experiment(cfg, ports, notes)
-    counts = _arm_counts(declaration, ports, registry, product, queued) if declaration else {}
     for number, loaded in queued.items():
         if loaded is not None:
             registry.clear_launch(product, number)
             continue
-        report = _blocked(cfg, ports, number, upstream)
+        report = _blocked(cfg, ports, number, upstream, blockers_of)
         if reports is not None:
             reports.append(report)
         if by_issue is not None:
@@ -1962,13 +1971,52 @@ def gather_launches(
         prior = attempt.prior if attempt is not None else 0
         arm = None
         if declaration is not None and not report:
-            arm = _arm_for(declaration, number, attempt, counts)
+            arm = _kept_arm(declaration, attempt)
         launches.append(
             rules.LaunchCandidate(
                 number, bool(report), since, prior, len(rules.LAUNCH_SCHEDULE), arm
             )
         )
     return launches
+
+
+def _issue_number(url: str) -> int | None:
+    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def read_open_refs(ports: Ports) -> tuple[list[IssueRef], str | None]:
+    """The round's one read of every open issue, for the launch order (GH-836), and the line
+    that says when it failed: the closed name of the error (`ListMayBeCut`, `ValueError`,
+    `TrackerCallFailed`), never the text `gh` printed. A failed read gives no refs."""
+    try:
+        return list(ports.inbox.open_issue_refs()), None
+    except ListMayBeCut:
+        failure = "ListMayBeCut"
+    except TrackerCallFailed:
+        failure = "TrackerCallFailed"
+    except ValueError:
+        failure = "ValueError"
+    return [], f"agentic: poll: dependents from queue only ({failure})"
+
+
+def launch_edges(
+    refs: Sequence[IssueRef],
+    queued: Mapping[int, TaskState | None],
+    blockers_of: Mapping[int, tuple[int, ...]],
+) -> dict[int, tuple[int, ...]]:
+    """The blocker edges `launch_order.dependents` counts (GH-836): the open issues with no
+    document, each with its own `Blocked by:` lines, except the candidates of the queue, whose
+    `blockers_of` (native dependency first, the body as a fallback) replaces the body. A queue
+    candidate the refs did not list is still an edge source."""
+    edges: dict[int, tuple[int, ...]] = {}
+    for ref in refs:
+        number = _issue_number(ref.url)
+        if number is None or queued.get(number) is not None:
+            continue
+        edges[number] = rules.blockers_from_body(ref.body)
+    edges.update(blockers_of)
+    return edges
 
 
 EXPERIMENT_FILE = ".agentic/experiment.yaml"
@@ -2028,21 +2076,35 @@ def _arm_counts(
     return counts
 
 
-def _arm_for(
-    declaration: experiment.Experiment,
-    number: int,
-    attempt: LaunchAttempt | None,
-    counts: dict[str, int],
-) -> str:
-    """The arm of a launch candidate: the one its record already has (counted already, and kept
-    while the declaration still names it), else the next `experiment.assign` picks, which
-    counts for the candidates after it in this round."""
+def _kept_arm(declaration: experiment.Experiment, attempt: LaunchAttempt | None) -> str | None:
+    """The arm a launch record already has (counted already), kept while the declaration still
+    names it; `None` otherwise, for `_assign_arms` to give one if the candidate launches."""
     if attempt is not None and attempt.arm in {a.name for a in declaration.arms}:
-        assert attempt.arm is not None
         return attempt.arm
-    chosen = experiment.assign(declaration, number, counts).name
-    counts[chosen] = counts.get(chosen, 0) + 1
-    return chosen
+    return None
+
+
+def _assign_arms(
+    plan: rules.PollPlan,
+    declaration: experiment.Experiment | None,
+    counts: dict[str, int],
+    skip: Collection[int] = (),
+) -> rules.PollPlan:
+    """`plan` with a new experiment arm on each `launch` action that has none, in the order the
+    plan launches them, so an arm is counted only for a launch that happens and the next pick
+    sees it. A launch that kept its record's arm, an issue in `skip` (a fresh rerun of a task that
+    already has its assignment) and every other kind of action are left as they are. Without a
+    valid `declaration` the plan comes back as it was."""
+    if declaration is None:
+        return plan
+    actions: list[rules.PollAction] = []
+    for action in plan.actions:
+        if action.kind == "launch" and action.arm is None and action.issue not in skip:
+            chosen = experiment.assign(declaration, action.issue, counts).name
+            counts[chosen] = counts.get(chosen, 0) + 1
+            action = replace(action, arm=chosen)
+        actions.append(action)
+    return replace(plan, actions=actions)
 
 
 def orphaned_comment(counted: int) -> str:
@@ -2808,6 +2870,9 @@ def run_once(
     ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
+    # GH-836: the one read of every open issue, for the Orden de lanzamiento; a held round
+    # starts nothing, so it has no order to rank and makes no call.
+    open_refs, refs_note = ([], None) if held else read_open_refs(ports)
     with registry.exclusive():
         running = registry.live()
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
@@ -2835,7 +2900,12 @@ def run_once(
         upstream = functools.cache(ports.workspace.upstream)
         blocker_reports: list[rules.BlockerReport] = []
         blockers_by_issue: dict[int, rules.BlockerReport] = {}
+        queue_blockers: dict[int, tuple[int, ...]] = {}
         experiment_notes: list[str] = []
+        declaration = _declared_experiment(cfg, ports, experiment_notes)
+        arm_counts = (
+            _arm_counts(declaration, ports, registry, product, queued) if declaration else {}
+        )
         launches = gather_launches(
             cfg,
             ports,
@@ -2844,8 +2914,10 @@ def run_once(
             blocker_reports,
             blockers_by_issue,
             queued,
-            experiment_notes,
+            declaration,
+            queue_blockers,
         )
+        dependents = launch_order.dependents(launch_edges(open_refs, queued, queue_blockers))
         merges: list[int] = []
         backed_off_merges: list[int] = []
         backoff_ends: dict[int, datetime] = {}
@@ -2944,6 +3016,7 @@ def run_once(
         notes = [
             *dry_skipped,
             *experiment_notes,
+            *([refs_note] if refs_note else []),
             *spend_notes,
             *wait_notes,
             *exempt_wait_notes,
@@ -2974,7 +3047,9 @@ def run_once(
             spent_retakes=sorted(spent_notices),
             exempt_attempts=exempt_records,
             exempt_yield=plan_yielded,
+            dependents=dependents,
         )
+        plan = _assign_arms(plan, declaration, arm_counts, frozenset(reruns))
         # GH-500: the head of this product's queue is published only while it could start. A
         # round that starts it, or that has no such head, removes the record: the child that
         # runs is the claim, and a record of the old `since` would hold the others for nothing.
@@ -3043,7 +3118,15 @@ def run_once(
                 spent_notices,
             )
         )
-        deferral_lines = [deferred_line(d) for d in plan.deferred if d.kind != "orphan"]
+        # A deferred launch says why it waits in a line of its own (GH-836), after the others.
+        deferral_lines = [
+            deferred_line(d) for d in plan.deferred if d.kind not in ("orphan", "launch")
+        ]
+        deferral_lines += [
+            f"agentic: poll: launch #{d.issue} waiting ({d.reason})"
+            for d in plan.deferred
+            if d.kind == "launch"
+        ]
         deferral_lines += starvation
         orphan_lines += [
             rules.orphaned_line(d.issue, "no_slot") for d in plan.deferred if d.kind == "orphan"

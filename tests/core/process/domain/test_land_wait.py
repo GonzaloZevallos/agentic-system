@@ -29,6 +29,10 @@ HOLDS = {
     "exempt_busy": False,
     "pause_waiting": False,
     "backoff": False,
+    "pacing": False,
+    "resume_waiting": False,
+    "space_held": False,
+    "schedule": False,
 }
 
 
@@ -42,16 +46,21 @@ def test_a_deferred_land_holds_launches_only_for_the_reasons_that_open_a_wait(re
     assert rules.holds_launches(rules.Deferred("land", 4, reason)) is holds
 
 
+@pytest.mark.parametrize("reason", sorted(HOLDS))
+def test_a_deferred_launch_never_opens_a_wait(reason):
+    assert rules.holds_launches(rules.Deferred("launch", 4, reason)) is False
+
+
 def test_a_deferred_merge_never_opens_a_wait():
     assert rules.holds_launches(rules.Deferred("merge", 4, "exempt_busy")) is False
     assert rules.holds_launches(rules.Deferred("merge", 4, "backoff")) is False
 
 
-def test_a_launch_is_held_while_others_land():
+def test_a_launch_is_not_held_while_others_land():
     free = _plan(available_slots=2, launches=LAUNCH)
-    held = _plan(available_slots=2, launches=LAUNCH, others_landing=True)
+    landing = _plan(available_slots=2, launches=LAUNCH, others_landing=True)
     assert free.actions == [rules.PollAction("launch", 8)]
-    assert held.actions == []
+    assert landing.actions == free.actions
 
 
 def test_a_due_resume_is_held_while_others_land():
@@ -80,6 +89,7 @@ def test_the_own_land_close_and_exempt_merge_are_not_held():
     assert plan.actions == [
         rules.PollAction("close", 1),
         rules.PollAction("land", 4),
+        rules.PollAction("launch", 8),
         rules.PollAction("merge", 6),
     ]
 
