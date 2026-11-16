@@ -2048,3 +2048,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-16T05:16:53.447+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before you deliver, check every output path against each plan invariant, including error and empty-read paths, and add a test at the declared seam that drives each failing path to its exact output.
+  confidence: medium
+  seen_in:
+  - GH-743
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-16T05:55:00.018+00:00'
