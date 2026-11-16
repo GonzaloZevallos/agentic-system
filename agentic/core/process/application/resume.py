@@ -845,7 +845,7 @@ def _drawing_lines(r: Resumption) -> list[str]:
     flagged = [
         f"{row['number']}={row['answer']['verdict']} (flag)"
         for row in r.drawing_answers
-        if row["answer"] is not None and row["answer"]["by"] == "flag"
+        if row["answer"] is not None and row["answer"]["by"] in ("flag",)
     ]
     return [f"drawing:   {', '.join(flagged)}"] if flagged else []
 
