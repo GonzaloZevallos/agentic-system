@@ -3395,7 +3395,10 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     `unreachable`, `transient`, `refused`) stops the run before any line or score:
     `agentic: stopped reading GitHub: CAUSE; rerun later`, exit 75 (1 when the cause is
     `refused`). The cost line `agentic: github reads for PRODUCT: N calls (P core points),
-    core remaining R` follows the stop line and otherwise precedes the summary line."""
+    core remaining R` follows the stop line and otherwise precedes the summary line. With a read
+    cache (GH-803) the pages read are kept per repository: the stop line ends `K pages cached,
+    the next run resumes` (`refused`: `rerun later; K pages cached`) and the cost line `, C pages
+    from cache`."""
     try:
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
