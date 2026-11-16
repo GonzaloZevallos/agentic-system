@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, get_args, get_origin
 
@@ -97,6 +97,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     "cost_usd.origin": family_names("cost_usd.origin", ORIGINS),
     "cost_usd.model": family_names("cost_usd.model", members(ModelFamily)),
     "stage_h": family_names("stage_h", members(CycleStage)),
+    "slowest_stage": family_names("slowest_stage", members(CycleStage)),
 }
 """The per-task families (ADR-0051): one name per member of a closed domain set, never a
 literal typed beside the widget that reads it. `README` rows write a family as
@@ -109,10 +110,15 @@ FIXED_SCORE_NAMES: tuple[str, ...] = (
     "checks_red",
 )
 
+STAGE_SCORE_NAMES: tuple[str, ...] = ("cycle_active_h", "stage_split_known")
+"""The two fixed scores the dashboard reads beside the `stage_h` family (GH-819), after the
+older fixed names so none of them moves."""
+
 SCORE_NAMES: tuple[str, ...] = (
     *BASE_SCORE_NAMES,
     *(name for names in FAMILIES.values() for name in names),
     *FIXED_SCORE_NAMES,
+    *STAGE_SCORE_NAMES,
 )
 """The closed list of score names; no other name can be produced."""
 
@@ -133,6 +139,8 @@ class Score:
     value: float | str
     data_type: ScoreDataType
     id: str = ""
+    timestamp: datetime = field(kw_only=True)
+    """When the score is dated; `score_time` alone chooses it."""
 
     def __post_init__(self) -> None:
         if self.name not in SCORE_NAMES:
@@ -191,6 +199,26 @@ def _parse(value: object) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+MERGE_DATED_PREFIXES: tuple[str, ...] = ("stage_h.", "slowest_stage.")
+MERGE_DATED_NAMES: tuple[str, ...] = ("cycle_h", *STAGE_SCORE_NAMES)
+
+
+def merge_dated(name: str) -> bool:
+    """Whether the score only exists with a merge, so it is dated at the merge instant."""
+    return name in MERGE_DATED_NAMES or name.startswith(MERGE_DATED_PREFIXES)
+
+
+def score_time(name: str, task_time: TaskTime, pr_merged_at: str | None) -> datetime | None:
+    """The instant a score is dated at, the only place one is chosen (GH-819). A score that
+    needs a merge (`cycle_h`, `stage_h.*`, `cycle_active_h`, `stage_split_known`,
+    `slowest_stage.*`) is dated at the pull request's merge, so the weekly trend and the
+    date range put the task in the week it landed; `None` when there is no readable merge.
+    Every other score keeps the task's own end."""
+    if merge_dated(name):
+        return _parse(pr_merged_at)
+    return task_time.end
 
 
 def _runs(document: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -294,23 +322,30 @@ def stage_row(
     )
 
 
-def _stage_hours(
-    document: Mapping[str, Any],
-    issue_created_at: str | None,
-    pr_created_at: str | None,
-    pr_merged_at: str | None,
-) -> dict[str, float]:
+def _stage_hours(split: StageSplit | StageUnknown) -> dict[str, float]:
     """`stage_h.<stage>` for every name of the family, or none when the split is unknown."""
-    outcome = stage_outcome(
-        document,
-        issue_created_at=issue_created_at,
-        pr_created_at=pr_created_at,
-        pr_merged_at=pr_merged_at,
-    )
-    if isinstance(outcome, StageUnknown):
+    if isinstance(split, StageUnknown):
         return {}
-    hours: dict[str, float] = {str(stage): h for stage, h in stage_report.hours(outcome).items()}
+    hours: dict[str, float] = {str(stage): h for stage, h in stage_report.hours(split).items()}
     return {name: hours[name.removeprefix("stage_h.")] for name in FAMILIES["stage_h"]}
+
+
+def _slowest_stage(stage_hours: Mapping[str, float], cycle_h: float | None) -> dict[str, float]:
+    """`slowest_stage.<stage>: cycle_h` under the stage with the most hours; a tie goes to
+    the first stage in `CycleStage` order (the family's own order). Nothing without hours."""
+    if not stage_hours or cycle_h is None:
+        return {}
+    names = FAMILIES["stage_h"]
+    slowest = max(names, key=lambda name: (stage_hours[name], -names.index(name)))
+    return {f"slowest_stage.{slowest.removeprefix('stage_h.')}": cycle_h}
+
+
+def _active_cycle(stage_hours: Mapping[str, float], cycle_h: float | None) -> float | None:
+    """The cycle without the two waits a person or the account cause, from the same hours
+    as `stage_h`; `None` without a split or a cycle."""
+    if not stage_hours or cycle_h is None:
+        return None
+    return cycle_h - stage_hours["stage_h.human_wait"] - stage_hours["stage_h.account_limit"]
 
 
 def _cycle_hours(issue_created_at: str | None, pr_merged_at: str | None) -> float | None:
@@ -428,6 +463,7 @@ def _checks_red(document: Mapping[str, Any]) -> float | None:
 def task_scores(
     document: Mapping[str, Any],
     *,
+    task_time: TaskTime,
     pr_merged_at: str | None = None,
     issue_created_at: str | None = None,
     pr_created_at: str | None = None,
@@ -435,14 +471,25 @@ def task_scores(
 ) -> list[Score]:
     """The scores the document and the tracker reads support, in `SCORE_NAMES` order.
     A score whose input is missing is left out, never written as `0` or `false`. With an
-    `identity` each score carries its id. The `stage_h` family is all ten hours from one
-    `StageSplit` or none: an unknown split, or no merge, writes nothing."""
+    `identity` each score carries its id, and each carries the `score_time` it is dated at;
+    a score that needs a merge is left out when there is none. The `stage_h` family is all
+    ten hours from one `StageSplit` or none: an unknown split, or no merge, writes nothing,
+    and `cycle_active_h` and `slowest_stage.*` come from that same split. `stage_split_known`
+    says which of the two a merged task got."""
     cost = float(document.get("cost_usd") or 0.0)
     delivered = _delivered(document)
+    cycle_h = _cycle_hours(issue_created_at, pr_merged_at)
+    split = stage_outcome(
+        document,
+        issue_created_at=issue_created_at,
+        pr_created_at=pr_created_at,
+        pr_merged_at=pr_merged_at,
+    )
+    stage_hours = _stage_hours(split)
     task_type, origin = document.get("type") or None, _origin(document)
     values: dict[str, tuple[float | str | None, ScoreDataType]] = {
         "cost_usd": (cost, "NUMERIC"),
-        "cycle_h": (_cycle_hours(issue_created_at, pr_merged_at), "NUMERIC"),
+        "cycle_h": (cycle_h, "NUMERIC"),
         "active_h": (_active_hours(document), "NUMERIC"),
         "returns": (metrics.changes_requested_total(document), "NUMERIC"),
         "failed_cost_usd": (
@@ -456,6 +503,11 @@ def task_scores(
         "findings_important": (_findings_important(document), "NUMERIC"),
         "followups": (_followups(document), "NUMERIC"),
         "checks_red": (_checks_red(document), "NUMERIC"),
+        "cycle_active_h": (_active_cycle(stage_hours, cycle_h), "NUMERIC"),
+        "stage_split_known": (
+            None if _parse(pr_merged_at) is None else float(bool(stage_hours)),
+            "BOOLEAN",
+        ),
     }
     numeric: dict[str, float] = {
         **_returns_by_category(document),
@@ -467,18 +519,25 @@ def task_scores(
     if delivered == 1.0:
         numeric[f"delivered_cost_usd.type.{task_type}"] = cost
     numeric[f"cost_usd.origin.{origin}"] = cost
-    numeric.update(_stage_hours(document, issue_created_at, pr_created_at, pr_merged_at))
+    numeric.update(stage_hours)
+    numeric.update(_slowest_stage(stage_hours, cycle_h))
     values.update({name: (value, "NUMERIC") for name, value in numeric.items()})
-    return [
-        Score(
-            name=name,
-            value=value,
-            data_type=values[name][1],
-            id=identity.score_id(name) if identity else "",
+    scores: list[Score] = []
+    for name in SCORE_NAMES:
+        if name not in values or (value := values[name][0]) is None:
+            continue
+        if (stamp := score_time(name, task_time, pr_merged_at)) is None:
+            continue
+        scores.append(
+            Score(
+                name=name,
+                value=value,
+                data_type=values[name][1],
+                id=identity.score_id(name) if identity else "",
+                timestamp=stamp,
+            )
         )
-        for name in SCORE_NAMES
-        if name in values and (value := values[name][0]) is not None
-    ]
+    return scores
 
 
 def _delivered(document: Mapping[str, Any]) -> float | None:
