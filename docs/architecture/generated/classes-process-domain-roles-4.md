@@ -29,6 +29,8 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__LandingDiagnosis["LandingDiagnosis"]
+    class schemas__LessonDelta["LessonDelta"]
     class schemas__PRD["PRD"]
     class schemas__Part["Part"]
     class schemas__PerfBudget["PerfBudget"]
@@ -40,8 +42,7 @@ classDiagram
     class schemas__Reflection["Reflection"]
     class schemas__Review["Review"]
     class schemas__RoleOutput["RoleOutput"]
-    class schemas__Ruling["Ruling"]
-    class schemas__SolutionTurn["SolutionTurn"]
+    schemas__LandingDiagnosis --|> schemas__RoleOutput
     schemas__PRD --|> schemas__RoleOutput
     schemas__PlanCritique --|> schemas__RoleOutput
     schemas__PlanSize --|> schemas__RoleOutput
@@ -49,14 +50,12 @@ classDiagram
     schemas__PlatformAnswersWithAssumptions --|> schemas__PlatformAnswers
     schemas__Reflection --|> schemas__RoleOutput
     schemas__Review --|> schemas__RoleOutput
-    schemas__Ruling --|> schemas__RoleOutput
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: roles (parte 1)](classes-process-domain-roles-1.md)
-  - `schemas.Answers` hereda de `schemas.RoleOutput`
 - [domain: roles (parte 2)](classes-process-domain-roles-2.md)
+  - `schemas.Answers` hereda de `schemas.RoleOutput`
   - `schemas.CarveOutOutput` hereda de `schemas.RoleOutput`
   - `schemas.Classification` hereda de `schemas.RoleOutput`
   - `schemas.Consolidation` hereda de `schemas.RoleOutput`
@@ -64,15 +63,14 @@ classDiagram
   - `schemas.CopyDraft` hereda de `schemas.RoleOutput`
   - `schemas.CopyReview` hereda de `schemas.RoleOutput`
   - `schemas.Delivery` hereda de `schemas.RoleOutput`
-  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
 - [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - `schemas.DesignDraft` hereda de `schemas.RoleOutput`
   - `schemas.DesignReview` hereda de `schemas.RoleOutput`
   - `schemas.Diagnosis` hereda de `schemas.RoleOutput`
   - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
   - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
-  - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
-  - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
+  - `schemas.Ruling` hereda de `schemas.RoleOutput`
   - `schemas.StackProposal` hereda de `schemas.RoleOutput`
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
   - `schemas.TechPlan` hereda de `schemas.RoleOutput`
