@@ -30,9 +30,12 @@ from .release import release_checkout, release_task
 
 @dataclass
 class SweepCarry:
-    """What the poller keeps between rounds: the latest memory, nothing else."""
+    """What the poller keeps between rounds: the latest memory and whether the held-round line
+    was said. `held_said` is not a `SweepMemory` pair: `due` drops the pairs of tasks it is not
+    listed, and nothing resets this flag."""
 
     memory: SweepMemory = field(default_factory=SweepMemory)
+    held_said: bool = False
 
 
 def _listed(ports: Ports) -> dict[str, list[str]]:
@@ -45,15 +48,22 @@ def _listed(ports: Ports) -> dict[str, list[str]]:
 
 
 def sweep(
-    ports: Ports, lock: RunLock, memory: SweepMemory, monotonic: Callable[[], float]
+    ports: Ports,
+    lock: RunLock,
+    memory: SweepMemory,
+    monotonic: Callable[[], float],
+    *,
+    busy: frozenset[str] = frozenset(),
 ) -> tuple[list[str], SweepMemory]:
     """One round: at most `SWEEP_READS_MAX` tasks, none started after `SWEEP_WALL_S`. Returns
     the lines to say (each cause once per process) and the next memory. A `TrackerCallFailed`
     stops the reads of the round; any exception outside the ones a task's own try names
-    propagates."""
+    propagates. A task in `busy` (a live process of this product, or one the round just
+    ordered) is skipped before any read and with no memo, so the next round looks at it again."""
     started = monotonic()
     names = _listed(ports)
     ids, memory = due(names, memory)
+    ids = [task for task in ids if task not in busy]
     lines: list[str] = []
     removed = 0
     for task in ids:

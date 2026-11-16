@@ -4297,6 +4297,54 @@ async def test_poll_a_timed_out_round_prints_its_line_sleeps_and_runs_the_next(
 
 
 @pytest.mark.anyio
+async def test_poll_hands_every_round_the_same_sweep_carry_and_a_dry_round_none(
+    monkeypatch, tmp_path
+):
+    """GH-824: the carry is a local of the loop, not a module global; `_dry_round` has none."""
+    from agentic.core.process.application.worktree_sweep import SweepCarry
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    carries: list[object] = []
+
+    def run_once(*args, **kwargs):
+        carries.append(kwargs.get("sweep_carry", "absent"))
+        return ["agentic: poll: nothing to do"]
+
+    monkeypatch.setattr(cli.pollmod, "run_once", run_once)
+
+    class Stop(Exception):
+        pass
+
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise Stop()
+
+    with pytest.raises(Stop):
+        await cli._poll(
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            60.0,
+            run_lock=FakeLock(),
+            registry=MemoryRunRegistry(),
+            launcher=FakeLauncher(),
+            argv0="agentic",
+            sleep=sleep,
+        )
+    first, second = carries
+    assert isinstance(first, SweepCarry) and first is second
+
+    carries.clear()
+    cli._dry_round(
+        Configuration(product_dir=tmp_path), memory_ports(), MemoryRunRegistry(), FakeLock()
+    )
+    assert carries == ["absent"]
+
+
+@pytest.mark.anyio
 async def test_poll_a_plain_value_error_still_escapes_the_loop(monkeypatch, tmp_path):
     from agentic.shared.configuration import Configuration
     from tests.fakes import FakeLauncher, MemoryRunRegistry

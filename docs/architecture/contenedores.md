@@ -76,16 +76,27 @@ no escribe nada. `--once` solo se acepta junto con `--dry-run`, y `--dry-run` se
 (`DryRunLog.writes`, la línea `would <puerto>.<método>`) y devuelve un valor neutro, y un
 nombre sin clasificar se anota en `DryRunLog.refused` y levanta `DryRunRefused`. La única
 excepción declarada es `Workspace.upstream()` (el fetch), que es una lectura.
-`run_once(dry_run=True)` no ejecuta los seis barridos (`close_issues.sweep`,
+`run_once(dry_run=True)` no ejecuta los siete barridos (`close_issues.sweep`,
 `split_sweep.sweep`, `scratch_sweep.sweep`, `ci_ref_sweep.sweep`, `poll.flag_stranded` en
 `agentic/core/process/application/poll.py`, que avisa una tarea `tracker_only` varada tras una
-reanudación de estimación (GH-798), y `board_sync.mirror`: una línea
-`dry-run: skipped <barrido>` cada uno), ni `execute`, ni `reflect_lines`; en lugar de lanzar
+reanudación de estimación (GH-798), `board_sync.mirror` y
+`worktree_sweep.sweep`: una línea `dry-run: skipped <barrido>` cada uno), ni `execute`, ni `reflect_lines`; en lugar de lanzar
 imprime `would <tipo> issue <N>` por cada acción del plan. Por eso un bloqueador que el barrido
 de cierre cerraría en esa ronda sigue abierto y su dependiente no se lanza (GH-348). La salida
 es el aviso inicial, las líneas de la ronda, las notas `would ...` y una línea
 `dry-run: unclassified <Puerto>.<nombre>` por cada rechazo. Termina con 0; con 1 si hubo algún
 rechazo o si el tracker falló (`TrackerCallFailed`, `round ended early`).
+
+Al final de cada ronda, `poll.run_once` corre el barrido de worktrees (GH-824): borra los
+checkouts bajo `.agentic/worktrees` de las tareas cuyo issue está CLOSED, nunca las ramas. Corre
+después de `execute` y antes de `board_sync.mirror`, fuera de `registry.exclusive()`, y solo si la
+ronda no está retenida, no es dry run y hay un `worktree_sweep.SweepCarry`: el lazo de
+`cli._poll` crea uno como local y lo pasa en cada ronda, y `_dry_round` no pasa ninguno. El carry
+guarda la memoria del barrido y `held_said`; reiniciar el poller los pierde. La función
+`poll._sweep_busy` arma el conjunto de tareas que el barrido deja para la ronda siguiente: las
+corridas vivas de este producto (`registry.live()` fresco) y la tarea de toda acción de la ronda,
+cierres incluidos. Una ronda retenida con carry dice una sola vez por proceso
+`agentic: poll: worktrees: not swept while held`.
 
 ## El clon stage0
 
