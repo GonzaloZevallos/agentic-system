@@ -281,3 +281,18 @@ def test_real_git_a_directory_git_lost_is_removed_with_its_task_and_the_branches
     ]
     assert workspace.task_checkout("GH-9").path.is_dir()
     assert lines and lines[-1].startswith("agentic: sweep: removed 2 worktrees")
+
+
+def test_a_busy_task_is_skipped_before_any_read_and_leaves_no_memo() -> None:
+    ports, workspace, tracker = world("GH-7", "GH-8", closed=(7, 8))
+    lock = Lock()
+
+    lines, memory = sweep(ports, lock, SweepMemory(), Clock(), busy=frozenset({"GH-7"}))
+
+    assert tracker.reads == [8]
+    assert "GH-7" not in memory.memos and memory.memos["GH-8"][1] == "removed"
+    assert ("acquire", "GH-7") not in lock.events
+    assert not {"GH-7"} & set(workspace.removed_checkouts)
+
+    _, again = sweep(ports, lock, memory, Clock())  # the next round, no longer busy
+    assert 7 in tracker.reads

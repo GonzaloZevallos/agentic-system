@@ -69,6 +69,7 @@ from . import (
     scratch_sweep,
     split_sweep,
     tracker_only,
+    worktree_sweep,
 )
 from . import escalate as escalate_module
 from .checkouts import task_base
@@ -2563,6 +2564,18 @@ def _live_issues(
     return frozenset(running | {a.issue for a in actions if a.kind in _LIVE_ACTIONS})
 
 
+def _sweep_busy(
+    ports: Ports, registry: RunRegistry, actions: Sequence[rules.PollAction]
+) -> frozenset[str]:
+    """The tasks the worktree sweep leaves alone this round (GH-824), as `GH-N`: this product's
+    registered runs, read fresh after `execute`, and the issue of every action of the round,
+    a close included. A land is registered before it takes the task's lock and a child just
+    spawned may not hold it yet, so the lock alone is not enough."""
+    product = ports.stack.product()
+    running = {r.task_id for r in registry.live() if r.product == product}
+    return frozenset(running | {ports.inbox.task_id(a.issue) for a in actions})
+
+
 def _exempt_candidates(
     product: str,
     key: str,
@@ -2709,7 +2722,18 @@ def flag_stranded(ports: Ports, queued: Mapping[int, TaskState | None]) -> list[
 
 
 # The sweeps a dry round skips (GH-622), named as its `dry-run: skipped <name>` lines say them.
-DRY_RUN_SKIPPED = ("close_issues", "split", "scratch", "ci_refs", "stranded", "board")
+DRY_RUN_SKIPPED = (
+    "close_issues",
+    "split",
+    "scratch",
+    "ci_refs",
+    "stranded",
+    "board",
+    "worktrees",
+)
+
+# Said once per process by a held round that has a sweep carry (GH-824).
+WORKTREES_HELD_LINE = "agentic: poll: worktrees: not swept while held"
 
 
 def run_once(
@@ -2728,6 +2752,7 @@ def run_once(
     live_steps: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
     system_version: Callable[[], str | None] = lambda: None,
     dry_run: bool = False,
+    sweep_carry: worktree_sweep.SweepCarry | None = None,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -2756,9 +2781,13 @@ def run_once(
     right after the closes are gathered and outside `registry.exclusive()`: its `issue
     closed` lines open the round's output, and a failed close or unreadable queue says
     nothing (the next round retries). `dry_run` (GH-622) is a round over read-only ports
-    (`dry_run.read_only_ports`): the six sweeps, `execute` and `reflect_lines` do not run, each
+    (`dry_run.read_only_ports`): the seven sweeps, `execute` and `reflect_lines` do not run, each
     sweep says `dry-run: skipped <name>` at the head of the output, and each action in the plan
-    says `would <kind> issue <N>` where `execute`'s lines would stand."""
+    says `would <kind> issue <N>` where `execute`'s lines would stand. The GH-824 worktree sweep
+    (`worktree_sweep.sweep`) runs at the tail, after `execute` and before the board mirror,
+    outside the exclusive section, when the round is not held, not dry and `sweep_carry` is
+    given: it keeps its memory in the carry, its lines join the notes and it never ends the
+    round. A held round with a carry says once per process that it did not sweep."""
     closes = gather_closes(ports)
     swept: list[str] = []
     dry_skipped = [f"dry-run: skipped {name}" for name in DRY_RUN_SKIPPED] if dry_run else []
@@ -3060,6 +3089,21 @@ def run_once(
                 seen,
                 blockers_by_issue,
             )
+    # GH-824: after `execute`, so one slow removal never delays this round's launches or merges;
+    # outside the exclusive section, since it takes no slot and starts no child.
+    if sweep_carry is not None and not dry_run:
+        if not held:
+            sweep_lines, sweep_carry.memory = worktree_sweep.sweep(
+                ports,
+                lock,
+                sweep_carry.memory,
+                time.monotonic,
+                busy=_sweep_busy(ports, registry, plan.actions),
+            )
+            notes += sweep_lines
+        elif not sweep_carry.held_said:
+            sweep_carry.held_said = True
+            notes.append(WORKTREES_HELD_LINE)
     # GH-375: the board mirror, outside the exclusive section (it takes no slot and a Project
     # call may be slow). Its notes go with the others, so `nothing to do` is unaffected.
     if not dry_run:

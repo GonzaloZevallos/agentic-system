@@ -26,8 +26,22 @@ from tests.fakes import MemoryInbox, MemoryTracker, MemoryWorkspace, memory_port
 BANNER = "dry-run: plan from reads only; effects of this round's own writes are not simulated"
 SKIPPED = [
     f"dry-run: skipped {name}"
-    for name in ("close_issues", "split", "scratch", "ci_refs", "stranded", "board")
+    for name in ("close_issues", "split", "scratch", "ci_refs", "stranded", "board", "worktrees")
 ]
+
+
+def test_the_dry_round_names_seven_skipped_sweeps_in_order():
+    assert poll.DRY_RUN_SKIPPED == (
+        "close_issues",
+        "split",
+        "scratch",
+        "ci_refs",
+        "stranded",
+        "board",
+        "worktrees",
+    )
+
+
 MERGED = {
     "delivery_outcome": "auto_merged",
     "merge_commit": "7a22ebfd" + "0" * 32,

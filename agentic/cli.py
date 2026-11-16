@@ -121,6 +121,7 @@ from .core.process.application.restore import restore_task
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.application.stage0_rotate import rotate
+from .core.process.application.worktree_sweep import SweepCarry
 from .core.process.domain import document as task_document
 from .core.process.domain import (
     experiment,
@@ -1759,6 +1760,7 @@ async def _poll(
     with _locked(lock, pollmod.LOCK_KEY, hold=hold):
         beat = _beats(heartbeats, ports, interval_s, hold)
         said: FastForwardMemory = None
+        sweep_carry = SweepCarry()  # GH-824: the sweep's memory lives as long as this loop
         try:
             while True:
                 if stage0 is not None:
@@ -1783,6 +1785,7 @@ async def _poll(
                         current_boot=liveness.current_boot_id(),
                         eval_set=_round_eval_set(ports, upstream),
                         system_version=telemetry.fresh_system_version,
+                        sweep_carry=sweep_carry,
                     ):
                         print(line, flush=True)
                 except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
