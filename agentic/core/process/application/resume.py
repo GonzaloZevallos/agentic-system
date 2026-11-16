@@ -146,6 +146,8 @@ class Resumption:
     # GH-766: the departure rows this resume answers, each with its `answer`. They reach the graph
     # state only through `answer()`, which the `pause` node folds by the field's reducer.
     drawing_answers: tuple[DepartureRecord, ...] = ()
+    # The `<n>=<verdict>` of the answers above that arrived by `--drawing`, for the summary.
+    drawing_flagged: tuple[str, ...] = ()
 
     def answer(self) -> dict[str, object]:
         """What the graph resumes with: the decision, the `--estimate` when given, and the
@@ -670,6 +672,9 @@ def prepare(
         estimate=estimate,
         increment=increment,
         drawing_answers=tuple(answered),
+        drawing_flagged=tuple(
+            f"{row['number']}={flags[row['number']]}" for row in answered if row["number"] in flags
+        ),
     )
 
 
@@ -842,12 +847,8 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
 
 
 def _drawing_lines(r: Resumption) -> list[str]:
-    """The `drawing:` line of the answers given by `--drawing`, grouped by how each arrived."""
-    arrived: dict[str, list[str]] = {}
-    for row in r.drawing_answers:
-        if (answer := row["answer"]) is not None:
-            arrived.setdefault(answer["by"], []).append(f"{row['number']}={answer['verdict']}")
-    flagged = [f"{item} (flag)" for item in arrived.get("flag", [])]
+    """The `drawing:` line of the answers given by `--drawing`."""
+    flagged = [f"{item} (flag)" for item in r.drawing_flagged]
     return [f"drawing:   {', '.join(flagged)}"] if flagged else []
 
 
