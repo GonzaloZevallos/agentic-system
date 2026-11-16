@@ -85,12 +85,8 @@ def _history(due: Exhausted, rows: Sequence[task.DepartureRecord]) -> str:
 
 
 def _reason(
-    due: Due | Exhausted,
-    rows: Sequence[task.DepartureRecord],
-    issue: int | None,
-    contradicted: frozenset[int],
+    due: Due | Exhausted, rows: Sequence[task.DepartureRecord], contradicted: frozenset[int]
 ) -> str:
-    shown = "N" if issue is None else str(issue)
     lines = [_history(due, rows)] if isinstance(due, Exhausted) else []
     for row in sorted(rows, key=lambda r: r["number"]):
         if row["answer"] is not None:
@@ -99,9 +95,18 @@ def _reason(
         lines.append(drawing.departure_question(_departure(row), n))
         if n in contradicted:
             lines.append(f"Drawing {n} got both accept and reject in one comment; answer it once.")
-        for command in (escalation_prompts.DRAWING_ACCEPT, escalation_prompts.DRAWING_REJECT):
-            lines.append(command.format(issue=shown).replace("<n>", str(n)))
     return "\n".join(lines)
+
+
+def prompt_lines(rows: Sequence[task.DepartureRecord], issue: int) -> list[str]:
+    """The `agentic resume --drawing` commands of the open rows in number order, accept then
+    reject each, with `issue` and the number filled. The only place those commands are built."""
+    return [
+        command.format(issue=str(issue)).replace("<n>", str(row["number"]))
+        for row in sorted(rows, key=lambda r: r["number"])
+        if row["answer"] is None
+        for command in (escalation_prompts.DRAWING_ACCEPT, escalation_prompts.DRAWING_REJECT)
+    ]
 
 
 def escalation_patch(
@@ -109,13 +114,12 @@ def escalation_patch(
     departures: Sequence[drawing.Departure],
     at: str,
     *,
-    issue: int | None,
     contradicted: frozenset[int] = frozenset(),
 ) -> dict[str, object]:
     """The patch that escalates `departures` (and every row still open) to the owner: the new
     rows recorded (also when the cap is reached, never dropped), the round, and a `questions`
-    escalation worded here. `issue` is the number the resume commands show, `None` shows `N`.
-    Raises `ValueError` when no number remains unanswered.
+    escalation worded here (the commands are `prompt_lines`, shown by the one that renders the
+    comment). Raises `ValueError` when no number remains unanswered.
 
     Called only from the system's serialized turn, never from a branch node: it reads the
     round the whole task has reached."""
@@ -127,7 +131,7 @@ def escalation_patch(
         raise ValueError("no departure is left unanswered: there is nothing to escalate")
     escalation = rules.escalation(
         "questions",
-        _reason(due, rows, issue, contradicted),
+        _reason(due, rows, contradicted),
         spec=state.get("spec"),
         spec_cause="drawing" if rules.spec_delivery(state) else None,
     )
