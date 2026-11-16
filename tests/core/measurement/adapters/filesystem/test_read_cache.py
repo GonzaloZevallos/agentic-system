@@ -65,7 +65,8 @@ def test_only_raw_items_page_times_and_open_are_stored(tmp_path):
         '{"v": 1, "pages": []}',
         '{"v": 1, "pages": {"x": {}}}',
         '{"v": 1, "pages": {"1": {"read_at": "yesterday", "open": false, "items": []}}}',
-        '{"v": 1, "pages": {"1": {"read_at": "2026-11-16T12:00:00+00:00", "open": 1, "items": []}}}',
+        '{"v": 1, "pages": {"1": {"read_at": "2026-11-16T12:00:00+00:00", "open": 1,'
+        ' "items": []}}}',
         '{"v": 1, "pages": {"1": {"read_at": "2026-11-16T12:00:00", "open": false, "items": []}}}',
         '{"v": 1, "pages": {"1": {"read_at": "2026-11-16T12:00:00+00:00", "open": false,'
         ' "items": [{"number": "1"}]}}}',
