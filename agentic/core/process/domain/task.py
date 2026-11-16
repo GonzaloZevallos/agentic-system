@@ -645,33 +645,72 @@ def add_drawing_departures(
 class DrawingEscalation(TypedDict):
     """The record of the drawing-departure escalations of a task: `round` how many there have
     been, `numbers` every number asked so far (sorted) and `cause` `drawing_cap` once the cap
-    was reached, `drawing_departure` before."""
+    was reached, `drawing_departure` before. `stage` says which gate asked, `plan` or `delivery`;
+    absent it reads `delivery`, and a record only carries it when it is `plan`."""
 
     round: int
     numbers: list[int]
     cause: Literal["drawing_departure", "drawing_cap"]
+    stage: NotRequired[Literal["plan", "delivery"]]
+
+
+# Which `stage` wins when two records share a round: the higher rank. `delivery` is the
+# conservative one, and what an absent `stage` reads as.
+_STAGE_RANK = {"plan": 0, "delivery": 1}
+
+
+def _escalation_stage(record: DrawingEscalation) -> Literal["plan", "delivery"]:
+    return record.get("stage", "delivery")
 
 
 def add_drawing_escalation(
     existing: DrawingEscalation | None, new: DrawingEscalation
 ) -> DrawingEscalation:
     """`existing` and `new` as one record: the higher `round`, the sorted union of `numbers`,
-    `drawing_cap` if either has it. Commutative and associative; `existing` may be `None`.
-    The graph's channel starts from the empty `DrawingEscalation()` and may fold an empty
-    update: an empty side is the identity, never an error."""
+    `drawing_cap` if either has it, and the `stage` of the higher round (the higher
+    `_STAGE_RANK` on a tie), kept only when it is `plan`. Commutative and associative;
+    `existing` may be `None`. The graph's channel starts from the empty `DrawingEscalation()`
+    and may fold an empty update: an empty side is the identity, never an error."""
     if not new:
-        return existing if existing is not None else cast(DrawingEscalation, {})
-    if not existing:
-        return DrawingEscalation(
-            round=new["round"], numbers=sorted(set(new["numbers"])), cause=new["cause"]
+        if not existing:
+            return cast(DrawingEscalation, {})
+        return _drawing_escalation(
+            existing["round"],
+            set(existing["numbers"]),
+            existing["cause"],
+            _escalation_stage(existing),
         )
-    return DrawingEscalation(
-        round=max(existing["round"], new["round"]),
-        numbers=sorted({*existing["numbers"], *new["numbers"]}),
-        cause="drawing_cap"
+    if not existing:
+        return _drawing_escalation(
+            new["round"], set(new["numbers"]), new["cause"], _escalation_stage(new)
+        )
+    if existing["round"] != new["round"]:
+        winner = existing if existing["round"] > new["round"] else new
+        stage = _escalation_stage(winner)
+    else:
+        stage = max(
+            _escalation_stage(existing), _escalation_stage(new), key=_STAGE_RANK.__getitem__
+        )
+    return _drawing_escalation(
+        max(existing["round"], new["round"]),
+        {*existing["numbers"], *new["numbers"]},
+        "drawing_cap"
         if "drawing_cap" in (existing["cause"], new["cause"])
         else "drawing_departure",
+        stage,
     )
+
+
+def _drawing_escalation(
+    round: int,
+    numbers: set[int],
+    cause: Literal["drawing_departure", "drawing_cap"],
+    stage: Literal["plan", "delivery"],
+) -> DrawingEscalation:
+    record = DrawingEscalation(round=round, numbers=sorted(numbers), cause=cause)
+    if stage == "plan":
+        record["stage"] = "plan"
+    return record
 
 
 ReviewScope = Literal["carried", "resolution", "full"]
