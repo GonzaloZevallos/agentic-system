@@ -5492,13 +5492,12 @@ def poll_plan(
     `orphan_retakes` (GH-403, `orphaned_run`) are the issues whose run left no lock: they are
     retakes in every respect (the same cap, the same closeness order, the same holds), with
     `reason="orphaned"`. One that finds no slot is `Deferred("orphan", issue, "no_slot")`, the
-    only source of its line; a round held by `others_landing` or `held` defers nothing.
+    only source of its line; a round held by `others_landing` or `held` defers no orphan (a
+    `held` round does defer its unblocked launches, as `space_held`).
 
     `spent_retakes` (GH-466) are the issues whose retake budget is spent and not yet announced:
     each is a `retakes_spent` action, which spawns nothing and so takes no slot, comes right
     after the closes and is kept even in a `held` round (it writes the tracker alone).
-
-    is kept even in a `held` round (it writes the tracker alone).
 
     `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
     not empty the plan is the closes and the notices alone: no launch, resume, retake, land or
