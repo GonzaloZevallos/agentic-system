@@ -254,9 +254,9 @@ def test_a_listing_ending_on_a_full_page_ends_with_an_empty_one_and_costs_nothin
     listing, cache, clock = CountingIssueListing(range(1, count + 1)), MemoryCache(), Clock()
     run(listing, cache, clock)
     assert listing.reads[-1] == count // PAGE_SIZE + 1
-    before = len(listing.reads)
+    before = (len(listing.reads), listing.quota_reads)
     assert isinstance(run(listing, cache, clock), Listing)
-    assert len(listing.reads) == before
+    assert (len(listing.reads), listing.quota_reads) == before
 
 
 def test_a_missing_high_number_with_a_fresh_cache_makes_no_call_on_the_second_run():
@@ -304,3 +304,36 @@ def test_a_stop_reports_the_saved_pages_still_fresh_and_a_run_the_pages_served()
     assert run(listing, cache, clock) == Stopped("reserve", Spend(1, 0), 10, 2)
     done = run(CountingIssueListing(range(1, 251)), cache, clock)
     assert isinstance(done, Listing) and done.from_cache == 2
+
+
+class TickingClock(Clock):
+    """A clock that moves on `step` seconds at every reading, as a real one does."""
+
+    def __init__(self, step):
+        super().__init__()
+        self.step = step
+
+    def __call__(self):
+        moment = self.now
+        self.advance(self.step)
+        return moment
+
+
+def test_a_stop_counts_cached_pages_fresh_at_the_start_not_at_the_moment_of_the_stop():
+    expiring = PageRecord(
+        START - timedelta(seconds=3 * 3600 - 2),
+        False,
+        tuple(item(i) for i in range(1, PAGE_SIZE + 1)),
+    )
+    cache = MemoryCache({1: expiring})  # fresh at the start, expired 2 s later
+    listing = CountingIssueListing(range(1, 251), quotas=[QuotaReading(10)])
+    stopped = run(listing, cache, TickingClock(5))
+    assert isinstance(stopped, Stopped) and stopped.cause == "reserve" and stopped.cached == 1
+
+
+def test_a_stop_counts_the_pages_read_in_this_run_though_they_are_newer_than_the_start():
+    listing = CountingIssueListing(
+        range(1, 351), quotas=[QuotaReading(5000), QuotaReading(5000), QuotaReading(10)]
+    )
+    stopped = run(listing, MemoryCache(), TickingClock(5))
+    assert isinstance(stopped, Stopped) and stopped.cached == 2
