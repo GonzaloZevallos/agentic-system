@@ -1212,3 +1212,5 @@ tasks:
     cost_usd: 0.0632
   GH-840@review:
     cost_usd: 0.0
+  GH-844@review:
+    cost_usd: 0.0
