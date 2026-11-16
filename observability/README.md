@@ -254,6 +254,10 @@ Cómo leer la tabla:
   `stage_split_known`, `slowest_stage.*`): esos llevan la fecha del merge del PR, para que
   la tendencia semanal y el rango pongan la tarea en la semana en que se mergeó
   (`task_scores.score_time`; GH-819). Sin merge no se escriben.
+  **Pendiente verificar:** las filas de `cycle_h` y `stage_h.*` ya escritas llevan
+  `task_time.end`; si Langfuse deja dos filas al reescribir el mismo id con otra fecha,
+  el backfill necesita retirarlas antes (no se verificó: falta la prueba en el entorno
+  `agentic-gate-probe`, GH-819).
 - **Versión del sistema.** El desglose `traceRelease` es el `release` de la traza portadora
   del score; en Panorama es el marcador del cambio de versión (no hay línea vertical).
 - **`unknown` es una serie visible.** Una tarea cuya versión no se registró aparece como
