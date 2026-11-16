@@ -163,3 +163,11 @@ def test_the_views_are_the_table():
     assert stacking.base_landed(_facts("open", False, None), False) is False
     assert stacking.restack_due(_facts("closed", True, False), False) is True
     assert stacking.restack_due(_facts("closed", True, False), True) is False
+
+
+def test_the_placeholder_of_the_probe_is_an_unmerged_parent_whatever_the_conflict():
+    """What `rules.stack_probe_wanted` substitutes holds a record and no fact: it refuses."""
+    placeholder = stacking.unread_facts()
+    assert placeholder.record is not None
+    for conflicts in (None, False, True):
+        assert refusal(placeholder, conflicts) == "stack_parent_unmerged"
