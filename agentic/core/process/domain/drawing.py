@@ -5,17 +5,17 @@
 escalation text of a departure: callers use them, never repeat them. `verdicts` and `answers`
 are the only owners of the comment grammar of the owner's answer, `flag_verdict` and
 `flag_verdicts` of the `--drawing` flag's, `screens_due` of which screens a change owes a
-check for and `row_is_open` of whether a check row still blocks. The module is a leaf: it imports neither `task` nor
-`rules`, not even inside a function.
+check for and `row_is_open` of whether a check row still blocks. The module is a leaf: it
+imports neither `task` nor `rules`, not even inside a function.
 """
 
 from __future__ import annotations
 
 import posixpath
 import re
-from fnmatch import fnmatchcase
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from types import MappingProxyType
 from typing import Literal
 

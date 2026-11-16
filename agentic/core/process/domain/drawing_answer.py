@@ -3,8 +3,9 @@
 `unanswered` and `applicable` are the only rule of which row an answer reaches;
 `escalation_due` and `escalation_patch` the only place the escalation of departures is decided
 and worded; `prompt_cause` the only reading of which drawing cause a pause carries; and
-`section_lines` the only rendering of the rows a role reads. Imports only the domain's `task`,
-`rules`, `drawing` and `escalation_prompts`."""
+`section_lines` the only rendering of the rows a role reads; `classify` the only rule that
+crosses a `departs` check with `departures` and with `drawing_departures`. Imports only the
+domain's `task`, `rules`, `drawing`, `escalation_prompts` and `schemas`."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from . import drawing, escalation_prompts, rules, task
+from .schemas import DrawingCheck, DrawingDeparture
 
 Cause = Literal["drawing_departure", "drawing_cap"]
 
@@ -187,3 +189,105 @@ def section_lines(rows: Sequence[task.DepartureRecord]) -> list[str]:
         )
         lines.extend(f"#{n} · {name}: {_flat(text)}" for name, text in fields)
     return lines
+
+
+Outcome = Literal["raise", "settled_accept", "fix_due", "return_due"]
+
+
+class ClassifyMismatch(ValueError):
+    """The checks and the departures of a final review do not belong together. `cause` is
+    `departs_unraised` (a `departs` check no departure raises and no row answered) or
+    `departure_without_check` (a departure no `departs` check names)."""
+
+    def __init__(
+        self, cause: Literal["departs_unraised", "departure_without_check"], identity: str
+    ) -> None:
+        self.cause = cause
+        self.identity = identity
+        if cause == "departs_unraised":
+            message = (
+                f"drawing {identity!r} has a `departs` check but no departure: add a "
+                f"departure for it to `departures`, or change the check's verdict"
+            )
+        else:
+            message = (
+                f"drawing {identity!r} has a departure but no `departs` check: add a "
+                f"`departs` drawing check for it, or drop the departure"
+            )
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class Classified:
+    """What `classify` decided: `raised` the departures with no row yet, `outcomes` one per
+    `departs` check keyed by `drawing.departure_key`, and `open` the checks that still block
+    (the `unverified` ones and the `departs` ones not `settled_accept`), in input order."""
+
+    raised: list[drawing.Departure]
+    outcomes: dict[str, Outcome]
+    open: list[DrawingCheck]
+
+
+def _check_identity(check: DrawingCheck) -> str:
+    if check.drawing is None or check.element is None:
+        raise ValueError(f"the departs check {check.ref!r} names no drawing or element")
+    return drawing.departure_key(check.drawing, check.element)
+
+
+def _outcome(row: task.DepartureRecord) -> Outcome:
+    answer = row["answer"]
+    if answer is None:
+        return "raise"
+    if answer["verdict"] == "accept":
+        return "settled_accept"
+    return "fix_due" if row["fix_passes"] == 0 else "return_due"
+
+
+def classify(
+    state: task.TaskState,
+    checks: Sequence[DrawingCheck],
+    departures: Sequence[DrawingDeparture],
+) -> Classified:
+    """The only rule that crosses a `departs` check with `departures` and `drawing_departures`.
+
+    The outcome of a `departs` check depends on the row of its key: no row is `raise` (and
+    its departure joins `raised`); an unanswered row is `raise` too, never duplicated; an
+    accepted one is `settled_accept`; a rejected one is `fix_due` while it has had no fix
+    pass and `return_due` after. Raises `ClassifyMismatch` for a `departs` check with no
+    departure and no answered row, and for a departure with no `departs` check."""
+    rows = {r["key"]: r for r in state.get("drawing_departures", [])}
+    entries: dict[str, DrawingDeparture] = {}
+    for declared in departures:
+        entries.setdefault(drawing.departure_key(declared.drawing, declared.element), declared)
+    named = {_check_identity(c) for c in checks if c.verdict == "departs"}
+    for identity in entries:
+        if identity not in named:
+            raise ClassifyMismatch("departure_without_check", identity)
+    raised: dict[str, drawing.Departure] = {}
+    outcomes: dict[str, Outcome] = {}
+    for check in checks:
+        if check.verdict != "departs":
+            continue
+        identity = _check_identity(check)
+        row = rows.get(identity)
+        if row is not None and row["answer"] is not None:
+            outcomes[identity] = _outcome(row)
+            continue
+        entry = entries.get(identity)
+        if entry is None:
+            raise ClassifyMismatch("departs_unraised", identity)
+        outcomes[identity] = "raise"
+        if row is None:
+            raised.setdefault(identity, drawing.Departure(**entry.model_dump()))
+    return Classified(
+        raised=list(raised.values()),
+        outcomes=outcomes,
+        open=[
+            c
+            for c in checks
+            if drawing.row_is_open(
+                c.verdict,
+                c.verdict == "departs" and outcomes[_check_identity(c)] == "settled_accept",
+            )
+        ],
+    )

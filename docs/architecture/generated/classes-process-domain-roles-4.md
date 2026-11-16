@@ -29,6 +29,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__LessonDelta["LessonDelta"]
     class schemas__PRD["PRD"]
     class schemas__Part["Part"]
     class schemas__PerfBudget["PerfBudget"]
@@ -41,7 +42,6 @@ classDiagram
     class schemas__Review["Review"]
     class schemas__RoleOutput["RoleOutput"]
     class schemas__Ruling["Ruling"]
-    class schemas__SolutionTurn["SolutionTurn"]
     schemas__PRD --|> schemas__RoleOutput
     schemas__PlanCritique --|> schemas__RoleOutput
     schemas__PlanSize --|> schemas__RoleOutput
@@ -71,7 +71,6 @@ classDiagram
   - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
   - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
   - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
-  - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - `schemas.StackProposal` hereda de `schemas.RoleOutput`
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
