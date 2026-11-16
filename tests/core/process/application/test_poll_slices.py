@@ -13,6 +13,7 @@ import pytest
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application import poll, tracker_only
 from agentic.core.process.application.ports import RunRegistration, Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import (
@@ -55,7 +56,14 @@ def _ports(ancestors: set[str], **more):
 def _gather(ports, tmp_path, reruns=None):
     lines: list[str] = []
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), lines, cfg=_cfg(tmp_path), reruns=reruns
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        cfg=_cfg(tmp_path),
+        reruns=reruns,
+        memo=StackMemo(),
     )
     return found, lines
 
@@ -211,7 +219,9 @@ def test_with_a_real_repo_the_renamed_unit_branches_still_resolve_and_the_task_c
         state="CLOSED", created_at="2026-10-05T00:00:00Z", merged_at=None, commits=(), head_oid=HEAD
     )
     lines: list[str] = []
-    poll.gather_merges(ports, frozenset(), master, _Locks(), lines, cfg=_cfg(repo), reruns=[])
+    poll.gather_merges(
+        ports, frozenset(), master, _Locks(), lines, cfg=_cfg(repo), reruns=[], memo=StackMemo()
+    )
     assert lines == ["agentic: poll: #5 -> closed: every unit landed through slices (#350)"]
     assert ports.documents.closures["GH-5"]["closed_by_slices"] == [SLICE_PR]
 

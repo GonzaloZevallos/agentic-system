@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agentic.core.process.application import landing_plan, merge, poll
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci_push import scrub
 from tests.core.process.application.test_conflict_probe import _land
@@ -59,7 +60,9 @@ def _document(ports) -> dict:
 
 
 def _assess(ports, master: str = MASTER):
-    assessed = poll.assess_merge(ports, "GH-5", _document(ports), 5, frozenset(), master)
+    assessed = poll.assess_merge(
+        ports, "GH-5", _document(ports), 5, frozenset(), master, cfg=None, memo=StackMemo()
+    )
     assert not isinstance(assessed, poll.Abandoned)
     return assessed
 
@@ -93,7 +96,7 @@ def test_gh475_after_the_record_the_poller_stops_launching_merge(tmp_path):
 
     lines = []
     lands: list = []
-    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands)
+    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands, memo=StackMemo())
     assert found == []  # the poller no longer launches `merge`
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: merge_conflict (recorded)"]
     assert [(c.issue, c.kind) for c in lands] == [(5, "land_model")]
@@ -236,5 +239,5 @@ def test_gh500_the_last_look_conflict_writes_the_row_and_the_next_round_hands_ov
     assert (assessed.decision.kind, assessed.decision.reason) == ("refuse", "merge_conflict")
     assert assessed.conflict_source == "recorded"
     lands: list = []
-    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands)
+    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, memo=StackMemo())
     assert found == [] and [(c.issue, c.kind) for c in lands] == [(5, "land_model")]

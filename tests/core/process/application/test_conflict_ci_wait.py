@@ -15,6 +15,7 @@ import dataclasses
 
 from agentic.core.process.application import landing_plan, merge, poll
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain import rules
 from tests.core.process.application.test_conflict_probe import _land
@@ -49,7 +50,16 @@ def _conflicting_world(**document):
 
 
 def _assess(ports):
-    return poll.assess_merge(ports, "GH-5", ports.documents.load("GH-5"), 5, frozenset(), MASTER)
+    return poll.assess_merge(
+        ports,
+        "GH-5",
+        ports.documents.load("GH-5"),
+        5,
+        frozenset(),
+        MASTER,
+        cfg=None,
+        memo=StackMemo(),
+    )
 
 
 def test_a_conflicting_head_with_no_ci_is_handed_to_the_sync_in_the_same_round(tmp_path):
@@ -57,7 +67,7 @@ def test_a_conflicting_head_with_no_ci_is_handed_to_the_sync_in_the_same_round(t
     lands: list = []
     lines: list[str] = []
 
-    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands)
+    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands, memo=StackMemo())
 
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: ci_blocked_by_conflict"]
@@ -99,7 +109,7 @@ def test_a_mergeable_head_with_a_missing_check_still_waits(tmp_path):
     lines: list[str] = []
     lands: list = []
 
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands)
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands, memo=StackMemo())
 
     assert lines == ["agentic: poll: auto-merge #5 -> waiting: ci missing web (60s of 3600)"]
     assert lands == []
