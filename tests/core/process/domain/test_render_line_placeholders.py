@@ -8,6 +8,7 @@ from agentic.core.process.domain.roles import LINE_PLACEHOLDERS, prompt_hash, re
 from tests.core.process.application.test_prompt_placeholder_scan import real_prompts
 
 SOURCE = Path("/memory/x.md")
+_LINE = re.compile(r"(?m)^\{\{drawing_rule\}\}\n")
 
 
 def old_fill(raw: str, **values: object) -> str:
@@ -79,10 +80,15 @@ def test_an_ordinary_placeholder_fills_exactly_as_the_old_fill_did(name, value, 
 
 def test_every_real_prompt_renders_as_the_old_fill_did():
     for slug, raw in real_prompts().items():
-        names = set(roles._PLACEHOLDER.findall(raw))
+        carries = "{{drawing_rule}}" in raw
+        # A prompt that carries the placeholder renders, without a design, as it did before it
+        # carried it: the raw text with that line deleted.
+        bare = _LINE.sub("", raw) if carries else raw
+        names = set(roles._PLACEHOLDER.findall(bare))
         values = {name: f"<{name}>" for name in names - {"date"}}
-        assert new_fill(raw, **values) == old_fill(raw, **values), slug
+        assert new_fill(raw, drawing_rule="<r>", **values) == old_fill(
+            raw, drawing_rule="<r>", **values
+        ), slug
         empty = {name: "" for name in names - {"date"}}
-        assert new_fill(raw, **empty) == old_fill(raw, **empty), slug
-        # With the supplier's empty value a real prompt is untouched too.
-        assert re.search(r"\{\{drawing_rule\}\}", raw) is None, slug
+        assert new_fill(raw, drawing_rule="", **empty) == old_fill(bare, **empty), slug
+        assert raw.count("{{drawing_rule}}") <= 1, slug

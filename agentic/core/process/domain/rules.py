@@ -35,7 +35,7 @@ from . import (
 from .copy import copy_location_parts
 from .denials import denial_for
 from .docs import Docs, conflict_line
-from .document import HUMAN, demote, relative_path
+from .document import DRAWING_DEPARTURES, HUMAN, demote, drawing_section, relative_path
 from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
     DEVELOPER,
@@ -1646,6 +1646,8 @@ def interview_retake_delta(state: TaskState, spec: Interview, branch: str, head:
     ]
     if human := state.get("sections", {}).get(HUMAN):
         parts.append(f"## {HUMAN}\n\n{human}")
+    if departures := drawing_section(state.get("drawing_departures")):
+        parts.append(f"## {DRAWING_DEPARTURES}\n\n{departures}")
     return "\n\n".join(parts)
 
 

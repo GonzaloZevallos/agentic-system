@@ -5553,3 +5553,37 @@ def test_every_unblocked_candidate_is_launched_or_deferred_once_and_never_both(e
     assert blocked.isdisjoint(set(launched) | set(deferred))
     closed = {"space_held", "schedule", "resume_waiting", "pacing", "no_slot"}
     assert {reason for _, reason in _launch_deferred(plan)} <= closed
+
+
+def test_interview_retake_delta_adds_the_drawing_departures_only_when_there_are_rows():
+    from agentic.core.process.domain import drawing, task
+
+    row = task.departure_records(
+        None,
+        [
+            drawing.Departure(
+                drawing="design/home.png",
+                element="date",
+                shows="DD/MM",
+                would_ship="MM/DD",
+                recommendation="keep DD/MM",
+                reason="the drawing says so",
+                raised_by="pm_interviewee",
+            )
+        ],
+        "T0",
+    )
+    without = rules.interview_retake_delta({}, INTERVIEW_DEFINITION, "agentic/GH-1", "abc123")
+    assert "Drawing departures" not in without
+    state = {"sections": {"Human": "### Decision 1\n\nUSD."}, "drawing_departures": row}
+    delta = rules.interview_retake_delta(state, INTERVIEW_DEFINITION, "agentic/GH-1", "abc123")
+    assert delta.startswith(without.split("\n\n")[0])
+    assert "## Drawing departures\n\n" in delta
+    assert "#1 · shows: DD/MM" in delta and row[0]["key"] not in delta
+    no_rows = rules.interview_retake_delta(
+        {"sections": {"Human": "### Decision 1\n\nUSD."}, "drawing_departures": []},
+        INTERVIEW_DEFINITION,
+        "agentic/GH-1",
+        "abc123",
+    )
+    assert no_rows.endswith("USD.")

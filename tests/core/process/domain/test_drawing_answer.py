@@ -260,3 +260,32 @@ def test_a_part_one_row_with_a_null_answer_loads():
     row = _rows("a")[0]
     assert row["answer"] is None
     assert task.add_drawing_departures(None, [row]) == [row]
+
+
+def _verdict_row(row: task.DepartureRecord, verdict: str, **over: Any) -> task.DepartureRecord:
+    return cast(
+        task.DepartureRecord,
+        {**row, "answer": {"verdict": verdict, "by": "comment", "at": "T1"}, **over},
+    )
+
+
+def _two_rows() -> list[task.DepartureRecord]:
+    a, b = _rows("a", "b")
+    return [_verdict_row(a, "reject"), _verdict_row(b, "accept")]
+
+
+def test_rejected_keys_maps_each_rejected_key_to_its_number_and_skips_the_rest():
+    open_row, accepted = _rows("open", "ok")
+    rejected = _verdict_row(_rows("no")[0], "reject", number=7)
+    state = _state(drawing_departures=[open_row, _verdict_row(accepted, "accept"), rejected])
+    assert drawing_answer.rejected_keys(state) == {rejected["key"]: 7}
+    assert drawing_answer.rejected_keys(_state()) == {}
+
+
+def test_must_match_is_the_rejected_rows_of_the_seat_with_no_fix_pass():
+    rows = _two_rows()
+    state = _state(drawing_departures=rows)
+    assert drawing_answer.must_match(state, "developer") == {rows[0]["key"]: 1}
+    assert drawing_answer.must_match(state, "pm_interviewee") == {}
+    done = _state(drawing_departures=[{**rows[0], "fix_passes": 1}, rows[1]])
+    assert drawing_answer.must_match(done, "developer") == {}

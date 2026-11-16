@@ -49,6 +49,7 @@ to true and put in `markdown` a short closing summary of what was decided.
 - The interview has at most {{max_rounds}} rounds. This is round {{round}}. On the last
   round, close with what you have.
 - Do not write the PRD here; that is the next step.
+{{drawing_rule}}
 </Hard Limits>
 
 <Output>
