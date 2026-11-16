@@ -447,20 +447,40 @@ def test_a_not_planned_last_part_gets_one_comment_across_two_sweeps_and_the_pare
 
     ((reference, text),) = ports.tracker.commented_issues
     assert reference == "5" and text.endswith("<!-- agentic-split-abandoned: GH-5 part 2 -->")
-    assert "re-pointed dependents are now free" in text
+    assert "No open part of this split depended on it." in text
+    assert "No other last part of this split is still open." in text
     assert ports.tracker.closed_issues == [] and ports.tracker.labels == []
     assert ports.documents.load("GH-5")["split_abandoned_at"]
 
 
-def test_a_not_planned_middle_part_says_the_dependents_still_wait_and_a_second_adds_nothing():
+def test_a_not_planned_middle_part_names_its_open_dependent_and_a_second_adds_nothing():
     ports = abandoned_ports(parts=(NOT_PLANNED, OPEN))
 
     assert judge(ports) == ["agentic: split: GH-5: part 1 abandoned, escalated"]
     ((_, text),) = ports.tracker.commented_issues
-    assert "still wait on part(s) #9" in text and "may launch over this one" in text
+    assert "#9 depended on it and may launch without it" in text
+    assert "still wait on #9 and on any open carve-out follow-up" in text
 
     ports.tracker.states[9] = NOT_PLANNED
     assert judge(ports) == [] and len(ports.tracker.commented_issues) == 1
+
+
+def test_the_comment_through_the_sweep_reflects_the_states_read_with_no_extra_reads():
+    ports = abandoned_ports(parts=(NOT_PLANNED, COMPLETED))
+    ports.documents.save({**split_state(), "split_repointed_at": "2026-11-15T10:00:00+00:00"})
+    reads: list[int] = []
+    listings: list[str] = []
+    tracker, inbox = ports.tracker, ports.inbox
+    read_state, read_comments = tracker.issue_state, tracker.issue_comments
+    tracker.issue_state = lambda number: reads.append(number) or read_state(number)
+    tracker.issue_comments = lambda task_id: listings.append(task_id) or read_comments(task_id)
+
+    assert judge(ports) == ["agentic: split: GH-5: part 1 abandoned, escalated"]
+
+    ((_, text),) = tracker.commented_issues
+    assert reads == [8, 9] and listings == ["GH-5"] and inbox.refs_calls == 0
+    assert "already closed: #9" in text and "may launch" not in text
+    assert "No other last part of this split is still open." in text
 
 
 def test_a_marker_already_in_the_comments_posts_nothing_and_the_record_is_written():
@@ -479,6 +499,63 @@ def test_an_abandoned_part_that_is_reopened_and_merged_lets_the_parent_close():
 
     assert judge(ports) == ["agentic: split: GH-5: parent closed"]
     assert ports.tracker.closed_issues == ["GH-5"]
+
+
+NUMBERS = [11, 12, 13, 14, 15]
+
+
+def escalation(depends, part, open_parts, repointed=True):
+    parts = [{"title": "t", "body": "b", "depends_on": deps} for deps in depends]
+    text = split_sweep._escalation_text(
+        {"parts": parts}, NUMBERS, part, "<!-- m -->", frozenset(open_parts), repointed
+    )
+    assert "chain" not in text and "free" not in text
+    assert text.endswith("<!-- m -->") and f"Part {part} (#{NUMBERS[part - 1]})" in text
+    return text
+
+
+def test_the_comment_names_each_open_direct_dependent_and_lists_the_closed_ones_apart():
+    text = escalation([[], [1], [1], [], [1]], part=1, open_parts={2, 4, 5})
+
+    assert "#12" in text and "#15" in text and "may launch without it" in text
+    assert "#13" not in text.split("already closed")[0] and "already closed: #13" in text
+    assert "#14" in text.split("As of this sweep:")[1]  # an open sink of the other branch
+
+
+def test_a_part_nobody_depended_on_has_no_open_dependent_to_name():
+    text = escalation([[], [], [1]], part=2, open_parts={1, 3})
+
+    assert "No open part of this split depended on it." in text
+    assert "may launch" not in text and "already closed" not in text
+
+
+def test_a_part_whose_dependents_are_all_closed_says_none_is_open():
+    text = escalation([[], [1]], part=1, open_parts=set())
+
+    assert "No open part of this split depended on it." in text and "already closed: #12" in text
+
+
+def test_the_sinks_are_named_only_when_the_repoint_is_recorded():
+    recorded = escalation([[], [1], []], part=1, open_parts={2, 3}, repointed=True)
+    pending = escalation([[], [1], []], part=1, open_parts={2, 3}, repointed=False)
+
+    assert "still wait on #12, #13 and on any open carve-out follow-up" in recorded
+    assert "#13" not in pending
+    assert "waited on the original task still waits on this issue" in pending
+
+
+def test_with_two_last_parts_the_abandoned_one_is_left_out_of_the_sinks():
+    text = escalation([[], []], part=2, open_parts={1})
+
+    assert "still wait on #11 and on any open carve-out" in text and "#12" in text
+    assert "#12," not in text.split("still wait on")[1]
+
+
+def test_with_two_last_parts_and_the_other_closed_no_sink_is_open():
+    text = escalation([[], []], part=2, open_parts=set())
+
+    assert "No other last part of this split is still open." in text
+    assert "still wait on" not in text
 
 
 def test_the_closing_note_says_no_pr_recorded_for_a_part_with_no_document():
