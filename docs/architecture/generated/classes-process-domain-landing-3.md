@@ -29,8 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
-    class landing__NonCodeState["NonCodeState"]
-    class landing__ScopeFacts["ScopeFacts"]
     class landing__ScopeStep["ScopeStep"]
     class landing__ScopeVerdict["ScopeVerdict"]
     class landing__Slice["Slice"]
@@ -39,6 +37,7 @@ classDiagram
     class landing_order__Member["Member"]
     class landing_order__Order["Order"]
     class landing_order__Yield["Yield"]
+    class plan_view__PartEdge["PartEdge"]
     class pull_request__BoundedBody["BoundedBody"]
     landing_order__Yield --> landing_order__Member
 ```

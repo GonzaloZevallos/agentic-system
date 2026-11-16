@@ -1246,9 +1246,6 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-_BLOCKED_BY_PREFIX = "blocked by:"
-
-
 def parts_check(
     parts: list[dict[str, Any]],
     ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
@@ -1294,25 +1291,6 @@ def parts_check(
     _size_pass(parts, ratio)
 
 
-def _part_line_refusal(number: int, field: str, text: str, *, may_be_empty: bool) -> str | None:
-    """Why `text`, a part's reason or `overlap_risk`, cannot be written into its issue, or
-    `None`. The one place that holds their limits: one line of at most `TEXT_MAX` characters,
-    no placeholder, and never a `Blocked by:` line, which would block the issue for real."""
-    if "\n" in text or "\r" in text:
-        broken = "has a newline"
-    elif not text.strip():
-        return None if may_be_empty else f"part {number} {field} is empty"
-    elif len(text) > TEXT_MAX:
-        broken = f"has {len(text)} characters, over {TEXT_MAX}"
-    elif "{{" in text or "}}" in text:
-        broken = "has `{{` or `}}`"
-    elif text.strip().lower().startswith(_BLOCKED_BY_PREFIX):
-        broken = "starts with `Blocked by:`"
-    else:
-        return None
-    return f"part {number} {field} {broken}"
-
-
 def _edge_fix(part: dict[str, Any], edges: int, reasons: int) -> str:
     if reasons > edges:
         return "remove the extra reason or add the edge it explains"
@@ -1337,12 +1315,12 @@ def _reason_pass(parts: list[dict[str, Any]]) -> list[str]:
                 + _edge_fix(part, edges, len(reasons))
             )
         for index, reason in enumerate(reasons):
-            refusal = _part_line_refusal(
+            refusal = plan_view.part_line_refusal(
                 number, f"depends_on_reasons[{index}]", reason, may_be_empty=False
             )
             if refusal:
                 refusals.append(f"{refusal}: one plain line naming what the other part creates")
-        refusal = _part_line_refusal(
+        refusal = plan_view.part_line_refusal(
             number, "overlap_risk", part.get("overlap_risk", ""), may_be_empty=True
         )
         if refusal:

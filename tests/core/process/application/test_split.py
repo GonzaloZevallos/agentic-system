@@ -1,5 +1,5 @@
 """The `split` node (ADR-0054) with a fake tracker and a fake inbox: a plan that does not
-fit becomes chained, labelled issues and the task ends `split`; a cut `gh` resumes without
+fit becomes labelled issues, one per part, and the task ends `split`; a cut `gh` resumes without
 duplicating; a part splits again up to depth 2 and no further."""
 
 from datetime import datetime
@@ -38,7 +38,7 @@ def ports_with_numbered_issues():
     return ports
 
 
-async def test_a_plan_that_does_not_fit_opens_chained_labelled_issues_and_ends_split(tmp_path):
+async def test_a_plan_that_does_not_fit_opens_labelled_issues_and_ends_split(tmp_path):
     ports = ports_with_numbered_issues()
     patch = await split(STATE, Configuration(product_dir=tmp_path), ports)
 
@@ -58,6 +58,10 @@ async def test_a_plan_that_does_not_fit_opens_chained_labelled_issues_and_ends_s
     assert saved["status"] == "split" and sorted(saved["split_issues"]) == ["1", "2", "3", "4"]
     ((task_id, text),) = ports.tracker.comments
     assert task_id == "GH-53" and "NOT relaunched" in text
+    assert "split into 4 issues, each with its own pull request:" in text
+    assert "chained" not in text
+    # No part of this record has reasons: each edge is listed without one.
+    assert "Dependencies:\n- part 2 needs part 1\n- part 3 needs part 1\n" in text
     assert all(f"/issues/{n}" in text for n in (101, 102, 103, 104))
 
 
@@ -466,3 +470,126 @@ async def test_a_task_that_is_not_a_part_writes_no_closes_marker(tmp_path):
     ports = ports_with_numbered_issues()
     await split({**STATE, "parts": GUARDED}, Configuration(product_dir=tmp_path), ports)
     assert all("agentic-closes" not in body for _, body in ports.tracker.opened_issues)
+
+
+def independent(n=3, **over):
+    return [
+        {
+            "title": f"Part {i}",
+            "body": f"Do {i}.",
+            "depends_on": [],
+            "depends_on_reasons": [],
+            **over,
+        }
+        for i in range(1, n + 1)
+    ]
+
+
+def comment_of(ports):
+    ((_, text),) = ports.tracker.comments
+    return text
+
+
+async def test_three_independent_parts_open_with_no_blocked_by_and_say_they_start_at_once(tmp_path):
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": independent()}, Configuration(product_dir=tmp_path), ports)
+
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert all("Blocked by:" not in body for body in bodies)
+    assert [rules.blockers_from_body(b) for b in bodies] == [(), (), ()]
+    text = comment_of(ports)
+    assert "The parts are independent: all start at once." in text
+    assert "Dependencies:" not in text and "needs part" not in text
+
+
+async def test_independent_parts_of_a_part_carry_no_closes_marker(tmp_path):
+    ports = ports_with_numbered_issues()
+    state = {
+        **STATE,
+        "id": "GH-60",
+        "parts": independent(),
+        "description": f"Build it.\n\n{rules.split_marker('GH-53', 3, 1)}",
+    }
+    await split(state, Configuration(product_dir=tmp_path), ports)
+
+    assert rules.last_part_numbers(state["parts"]) == [1, 2, 3]
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert all("agentic-closes" not in body for body in bodies)
+
+
+async def test_one_real_edge_writes_one_blocked_by_line_and_a_dependencies_line(tmp_path):
+    parts = independent()
+    parts[1] = {**parts[1], "depends_on": [1], "depends_on_reasons": ["it imports the catalogue"]}
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": parts}, Configuration(product_dir=tmp_path), ports)
+
+    bodies = [body for _, body in ports.tracker.opened_issues]
+    assert [b.count("Blocked by:") for b in bodies] == [0, 1, 0]
+    assert rules.blockers_from_body(bodies[1]) == (101,)
+    text = comment_of(ports)
+    assert "Dependencies:\n- part 2 needs part 1: it imports the catalogue\n" in text
+    assert "The parts are independent" not in text
+    # The reason is for the comment only, never for an issue body.
+    assert all("it imports the catalogue" not in body for body in bodies)
+
+
+async def test_a_reason_that_looks_like_a_blocked_by_line_never_reaches_a_body(tmp_path):
+    parts = independent()
+    parts[1] = {
+        **parts[1],
+        "depends_on": [1],
+        "depends_on_reasons": ["needs the catalogue, Blocked by: #9 mid-text"],
+    }
+    plain = {**parts[1], "depends_on_reasons": ["needs the catalogue"]}
+    cfg = Configuration(product_dir=tmp_path)
+    with_text, without = ports_with_numbered_issues(), ports_with_numbered_issues()
+    await split({**STATE, "parts": parts}, cfg, with_text)
+    await split({**STATE, "parts": [parts[0], plain, parts[2]]}, cfg, without)
+
+    assert with_text.tracker.opened_issues == without.tracker.opened_issues
+    for _, body in with_text.tracker.opened_issues:
+        assert 9 not in rules.blockers_from_body(body)
+        assert rules.split_part_of(body) is not None
+    assert "needs part 1: needs the catalogue, Blocked by: #9 mid-text" in comment_of(with_text)
+
+
+async def test_a_reason_that_is_a_whole_blocked_by_line_is_not_shown_anywhere(tmp_path):
+    parts = independent()
+    parts[1] = {**parts[1], "depends_on": [1], "depends_on_reasons": ["Blocked by: #9"]}
+    parts[2] = {**parts[2], "overlap_risk": "blocked by: #9"}
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": parts}, Configuration(product_dir=tmp_path), ports)
+
+    assert "- part 2 needs part 1\n" in comment_of(ports)
+    assert "#9" not in comment_of(ports)
+    assert all("#9" not in body for _, body in ports.tracker.opened_issues)
+
+
+async def test_an_overlap_risk_shows_in_the_comment_and_not_in_a_body(tmp_path):
+    parts = independent()
+    parts[1] = {**parts[1], "overlap_risk": "also edits cli.py"}
+    ports = ports_with_numbered_issues()
+    await split({**STATE, "parts": parts}, Configuration(product_dir=tmp_path), ports)
+
+    assert "- part 2 may overlap: also edits cli.py" in comment_of(ports)
+    assert all("also edits cli.py" not in body for _, body in ports.tracker.opened_issues)
+
+
+async def test_a_retry_lists_the_same_edges_the_opened_bodies_carry(tmp_path):
+    parts = independent()
+    parts[2] = {**parts[2], "depends_on": [1], "depends_on_reasons": ["it needs part 1's module"]}
+    state = {
+        **STATE,
+        "parts": parts,
+        "split_issues": {
+            "1": "https://github.com/o/r/issues/101",
+            "2": "https://github.com/o/r/issues/102",
+        },
+    }
+    ports = memory_ports()
+    ports.tracker.issue_numbers_from = 103
+    await split(state, Configuration(product_dir=tmp_path), ports)
+
+    ((_, body),) = ports.tracker.opened_issues
+    assert rules.blockers_from_body(body) == (101,)
+    assert "- part 3 needs part 1: it needs part 1's module" in comment_of(ports)
