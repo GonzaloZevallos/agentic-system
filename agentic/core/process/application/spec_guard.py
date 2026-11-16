@@ -76,8 +76,9 @@ def _upstream_detail(
     return (path, "upstream") if text == head_text else (path,)
 
 
-def check_at(state: TaskState, ports: Ports, head: str) -> Verdict:
-    """What `head` makes of the delivery's spec. `Intact` without a spec, with no read."""
+def _verdict(state: TaskState, ports: Ports, head: str, *, detail: bool) -> Verdict:
+    """What `head` makes of the delivery's spec. With `detail` a `Changed` asks the upstream for
+    its detail (one fetch); without it the detail is the path alone and nothing is fetched."""
     spec = state.get("spec")
     if not spec:
         return Intact()
@@ -95,12 +96,19 @@ def check_at(state: TaskState, ports: Ports, head: str) -> Verdict:
         return Unreadable(why)
     if spec_delivery.spec_intact(spec["sha256"], recorded, head_text):
         return Intact()
-    return Changed(_upstream_detail(reader, ports, path, head_text))
+    return Changed(_upstream_detail(reader, ports, path, head_text) if detail else (path,))
+
+
+def check_at(state: TaskState, ports: Ports, head: str) -> Verdict:
+    """What `head` makes of the delivery's spec, with the refusal's detail. `Intact` without a
+    spec, with no read."""
+    return _verdict(state, ports, head, detail=True)
 
 
 def intact_at(state: TaskState, ports: Ports, head: str) -> bool:
-    """Whether the spec is intact at `head`: the question a carry asks (`spec_carry_ok`)."""
-    return isinstance(check_at(state, ports, head), Intact)
+    """Whether the spec is intact at `head`: the question a carry asks (`spec_carry_ok`). It never
+    fetches the upstream: a carry decision has no use for the refusal's detail."""
+    return isinstance(_verdict(state, ports, head, detail=False), Intact)
 
 
 def refusal_patch(result: Changed | Unreadable, path: str, at: str) -> TaskState:

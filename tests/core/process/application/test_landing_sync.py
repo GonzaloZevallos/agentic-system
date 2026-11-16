@@ -31,6 +31,14 @@ from agentic.core.process.domain.check_results import check_key
 from agentic.core.process.domain.ci import CiVerdict
 from agentic.core.process.domain.docs import Docs, conflict_line
 from agentic.core.process.domain.task import TaskState
+from tests.core.process.application.spec_fixtures import (
+    SPEC,
+    NeverRead,
+    SpecAt,
+    spy_intact_at,
+)
+from tests.core.process.application.test_landing_dated_rename import _world as _dated_world
+from tests.core.process.application.test_landing_renumber import _world as _renumber_world
 from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _round
 from tests.core.process.application.test_poll_merge import (
     HEAD,
@@ -63,6 +71,7 @@ class _World(FakeLauncher):
         self.landed: list[landing.LandResult] = []
         self.locks = _HeldLocks()
         self.await_resume = None
+        self.lines: list[str] = []
 
     def resume(self, number: int) -> int:
         self.resumed.append(number)
@@ -80,7 +89,7 @@ class _World(FakeLauncher):
                     self.locks,
                     upstream,
                     frozenset(),
-                    lambda line: None,
+                    self.lines.append,
                     clock=lambda: "2026-10-14T00:00:00+00:00",
                     live=LIVE,
                     resume=self.resume,
@@ -763,3 +772,171 @@ def test_the_conflict_reason_is_what_it_was_without_docs_and_regenerates_with_th
     assert declared == plain + conflict_line(docs)
     assert "do not merge them by hand" in declared
     assert "run `make docs` and commit its output" in declared
+
+
+# ---- the spec carry gate (GH-594, part 4b-3b) --------------------------------------------
+
+
+def _behind_with_spec(tmp_path, reader):
+    """`_behind` for a delivery under a spec, read through `reader`."""
+    ports, _ = _behind(tmp_path, spec=SPEC)
+    ports = replace(ports, spec_reader=reader)
+    return ports, _World(ports, tmp_path)
+
+
+def test_a_sync_whose_spec_changed_at_the_new_head_carries_nothing(tmp_path):
+    ports, world = _behind_with_spec(tmp_path, SpecAt(lambda commit: commit == NEW))
+    _diffs(ports, merged=("upstream.py",), own=("feature.py",))
+
+    world.tick()
+
+    unit = _unit(ports)
+    assert unit["reviewed_head"] == HEAD
+    assert "reviewed_head_carried_from" not in unit
+    assert not _document(ports).get("review_scopes")
+    assert ports.workspace.pushed  # master was merged and the branch pushed all the same
+    [entry] = _document(ports)["landing"]
+    assert entry["resolved_at"]
+    assert any(
+        f"master synced, pushed {NEW} (spec changed, review not carried)" in line
+        for line in world.lines
+    )
+    assert not any("verdict carried" in line for line in world.lines)
+
+
+def test_a_sync_whose_upstream_changed_only_the_spec_carries_nothing(tmp_path):
+    ports, world = _behind_with_spec(tmp_path, SpecAt(lambda commit: commit == NEW))
+    _diffs(ports, merged=("docs/specs/a.md",), own=("feature.py",))
+
+    world.tick()
+
+    assert _unit(ports)["reviewed_head"] == HEAD
+    assert not _document(ports).get("review_scopes")
+
+
+def test_a_sync_whose_spec_is_intact_at_the_new_head_still_carries(tmp_path):
+    reader = SpecAt()
+    ports, world = _behind_with_spec(tmp_path, reader)
+    _diffs(ports, merged=("upstream.py",), own=("feature.py",))
+
+    world.tick()
+
+    assert _unit(ports)["reviewed_head"] == NEW
+    assert [scope["scope"] for scope in _document(ports)["review_scopes"]] == ["carried"]
+    assert any((NEW, "docs/specs/a.md") == call for call in reader.calls)
+
+
+def test_a_sync_without_a_spec_never_reads_one(tmp_path):
+    ports, _ = _behind(tmp_path)
+    ports = replace(ports, spec_reader=NeverRead())
+    world = _World(ports, tmp_path)
+    _diffs(ports, merged=("upstream.py",), own=("feature.py",))
+
+    world.tick()
+
+    assert _unit(ports)["reviewed_head"] == NEW
+
+
+def test_the_sync_carry_asks_the_gate_with_the_spec_of_the_state(tmp_path, monkeypatch):
+    seen = spy_intact_at(monkeypatch)
+    ports, world = _behind_with_spec(tmp_path, SpecAt())
+    _diffs(ports, merged=("upstream.py",), own=("feature.py",))
+
+    world.tick()
+
+    assert seen == [True]
+
+
+def _renumber_with_spec(tmp_path, reader, *, extra=()):
+    ports, head = _renumber_world(tmp_path, extra=extra)
+    ports = replace(ports, spec_reader=reader)
+    ports.documents.save({**ports.documents.load("GH-5"), "spec": SPEC})
+    return ports, head
+
+
+def _renumber_land(tmp_path, ports) -> list[str]:
+    lines: list[str] = []
+    landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", ports.workspace.master_sha, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: "2026-10-14T00:00:00+00:00",
+        live=frozenset({"renumber"}),
+        turn="head",
+    )
+    return lines
+
+
+def test_a_renumber_whose_spec_changed_at_the_new_head_is_not_carried(tmp_path):
+    ports, head = _renumber_with_spec(tmp_path, SpecAt(lambda commit: True))
+    lines = _renumber_land(tmp_path, ports)
+
+    document = ports.documents.load("GH-5")
+    new = ports.workspace.branch_commits[-1].sha
+    assert new != head
+    assert document["subtasks"]["only"]["reviewed_head"] == head
+    assert "reviewed_head_carried_from" not in document["subtasks"]["only"]
+    assert not document.get("review_scopes")
+    assert document["adr_renumbered"][-1]["carried"] is False
+    assert any(f"pushed {new} (review not carried)" in line for line in lines)
+
+
+def test_a_renumber_whose_spec_is_intact_is_still_carried(tmp_path):
+    ports, head = _renumber_with_spec(tmp_path, SpecAt())
+
+    lines = _renumber_land(tmp_path, ports)
+
+    document = ports.documents.load("GH-5")
+    new = ports.workspace.branch_commits[-1].sha
+    assert document["subtasks"]["only"]["reviewed_head"] == new
+    assert document["adr_renumbered"][-1]["carried"] is True
+    assert [scope["scope"] for scope in document["review_scopes"]] == ["carried"]
+    assert not any("review not carried" in line for line in lines)
+
+
+def test_a_renumber_without_a_spec_never_reads_one(tmp_path):
+    ports, _ = _renumber_world(tmp_path)
+    ports = replace(ports, spec_reader=NeverRead())
+
+    _renumber_land(tmp_path, ports)
+
+    assert ports.documents.load("GH-5")["adr_renumbered"][-1]["carried"] is True
+
+
+def test_the_renumber_carry_asks_the_gate_with_the_spec_of_the_state(tmp_path, monkeypatch):
+    seen = spy_intact_at(monkeypatch)
+    ports, _ = _renumber_with_spec(tmp_path, SpecAt())
+
+    _renumber_land(tmp_path, ports)
+
+    assert seen == [True]
+
+
+def test_a_dated_rename_whose_spec_changed_at_the_new_head_is_not_carried(tmp_path):
+    ports, head, _ = _dated_world(tmp_path)
+    ports = replace(ports, spec_reader=SpecAt(lambda commit: True))
+    ports.documents.save({**ports.documents.load("GH-5"), "spec": SPEC})
+    lines: list[str] = []
+
+    landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", ports.workspace.master_sha, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: "2026-11-12T00:00:00+00:00",
+        live=frozenset({"renumber"}),
+        turn="head",
+    )
+
+    document = ports.documents.load("GH-5")
+    assert document["subtasks"]["only"]["reviewed_head"] == head
+    assert not document.get("review_scopes")
+    assert document["adr_renumbered"][-1]["carried"] is False
+    assert any("(review not carried)" in line for line in lines)

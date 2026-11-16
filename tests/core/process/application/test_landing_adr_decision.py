@@ -26,6 +26,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import adr_numbers, rules
 from agentic.core.process.domain import landing as landing_rules
+from tests.core.process.application.spec_fixtures import SPEC, NeverRead, SpecAt, spy_intact_at
 from tests.core.process.application.test_landing_renumber import (
     BRANCH,
     MINE,
@@ -1529,3 +1530,55 @@ def test_d_be76583a_a_checks_red_result_goes_back_to_the_question_and_is_not_ret
 
     assert again.step != "apply_adr_decision" and len(ports.runner.calls) == developer_runs
     assert [e["step"] for e in _entries(ports)].count("apply_adr_decision") == 1
+
+
+# ---- the spec carry gate (GH-594, part 4b-3b) --------------------------------------------
+
+
+def _gh_652_with_spec(tmp_path, reader):
+    """The mechanical apply of GH-652, which carries the review, for a delivery under a spec."""
+    ports, head, paths = _gh_652_world(tmp_path)
+    ports = dataclasses.replace(ports, spec_reader=reader)
+    ports.documents.save({**ports.documents.load("GH-5"), "spec": SPEC})
+    return ports, head, paths
+
+
+def test_an_applied_decision_whose_spec_changed_at_the_new_head_is_not_carried(tmp_path):
+    ports, head, paths = _gh_652_with_spec(tmp_path, SpecAt(lambda commit: True))
+
+    _, lines = _round(tmp_path, ports, paths=paths)
+
+    entry = _apply_entry(ports)
+    assert entry["outcome"] == "applied", (entry, lines)
+    document = ports.documents.load("GH-5")
+    assert document["subtasks"]["only"]["reviewed_head"] == head
+    assert "reviewed_head_carried_from" not in document["subtasks"]["only"]
+    assert not document.get("review_scopes")
+    assert any(
+        f"apply_adr_decision applied, pushed {entry['head_after']} (review not carried)" in line
+        for line in lines
+    )
+
+
+def test_an_applied_decision_whose_spec_is_intact_is_still_carried(tmp_path, monkeypatch):
+    seen = spy_intact_at(monkeypatch)
+    ports, _, paths = _gh_652_with_spec(tmp_path, SpecAt())
+
+    _, lines = _round(tmp_path, ports, paths=paths)
+
+    entry = _apply_entry(ports)
+    document = ports.documents.load("GH-5")
+    assert document["subtasks"]["only"]["reviewed_head"] == entry["head_after"]
+    assert [scope["scope"] for scope in document["review_scopes"]] == ["carried"]
+    assert not any("review not carried" in line for line in lines)
+    assert seen == [True]  # the gate got the state with its spec
+
+
+def test_an_applied_decision_without_a_spec_never_reads_one(tmp_path):
+    ports, _, paths = _gh_652_world(tmp_path)
+    ports = dataclasses.replace(ports, spec_reader=NeverRead())
+
+    _round(tmp_path, ports, paths=paths)
+
+    entry = _apply_entry(ports)
+    assert ports.documents.load("GH-5")["subtasks"]["only"]["reviewed_head"] == entry["head_after"]
