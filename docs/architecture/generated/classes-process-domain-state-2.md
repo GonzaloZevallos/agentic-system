@@ -29,7 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class rules__FastForwardBlock["FastForwardBlock"]
     class rules__ImportantPartition["ImportantPartition"]
     class rules__InterviewProgress["InterviewProgress"]
     class rules__LandCandidate["LandCandidate"]
@@ -43,4 +42,6 @@ classDiagram
     class rules__PushPlan["PushPlan"]
     class rules__ReportedFailure["ReportedFailure"]
     class rules__RestoreObserved["RestoreObserved"]
+    class rules__RestoreSteps["RestoreSteps"]
+    class rules__ResumeCandidate["ResumeCandidate"]
 ```

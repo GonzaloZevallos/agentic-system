@@ -29,7 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
-    class cost_history__Floor["Floor"]
     class cost_history__History["History"]
     class cost_history__Pair["Pair"]
     class cost_history__Raise["Raise"]
@@ -41,9 +40,11 @@ classDiagram
     class landing__LineChange["LineChange"]
     class landing__NonCodeState["NonCodeState"]
     class landing__ScopeFacts["ScopeFacts"]
+    class landing__ScopeStep["ScopeStep"]
+    class landing__ScopeVerdict["ScopeVerdict"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 8)](classes-process-domain-state-8.md)
+- [domain: state (parte 7)](classes-process-domain-state-7.md)
   - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`

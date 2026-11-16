@@ -42,6 +42,7 @@ classDiagram
     class schemas__GlossaryTerm["GlossaryTerm"]
     class schemas__InterviewTurn["InterviewTurn"]
     class schemas__LandingDiagnosis["LandingDiagnosis"]
+    class schemas__LessonDelta["LessonDelta"]
     schemas__FinalDesignReview --|> schemas__DesignReview
     schemas__FinalValidationWithAssumptions --|> schemas__FinalValidation
 ```
@@ -56,5 +57,4 @@ classDiagram
   - `schemas.FinalValidation` hereda de `schemas.RoleOutput`
   - `schemas.InterviewTurn` hereda de `schemas.RoleOutput`
   - `schemas.LandingDiagnosis` hereda de `schemas.RoleOutput`
-- [domain: roles (parte 5)](classes-process-domain-roles-5.md)
   - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`

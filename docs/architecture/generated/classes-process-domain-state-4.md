@@ -29,9 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class spec_delivery__SpecStatePatch["SpecStatePatch"]
-    class spec_route__SpecRefusalPatch["SpecRefusalPatch"]
-    class task__ArmAssignment["ArmAssignment"]
     class task__AssumptionRow["AssumptionRow"]
     class task__Carried["Carried"]
     class task__CarveRecord["CarveRecord"]
@@ -43,16 +40,13 @@ classDiagram
     class task__CiLogRecord["CiLogRecord"]
     class task__CiSpeculation["CiSpeculation"]
     class task__CiTiming["CiTiming"]
+    class task__CloseDocs["CloseDocs"]
+    class task__DepartureAnswer["DepartureAnswer"]
+    class task__DepartureRecord["DepartureRecord"]
+    class task__DependencyState["DependencyState"]
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 3)](classes-process-domain-state-3.md)
-  - `spec_delivery.SpecStatePatch` se asocia con `spec_delivery.SpecContract`
-  - `spec_route.SpecRefusalPatch` se asocia con `spec_delivery.SpecRefusalRecord`
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
 - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - `task.FullChecksJob` hereda de `task.CiLogRecord`
-- [domain: state (parte 9)](classes-process-domain-state-9.md)
-  - `task.TaskState` se asocia con `task.ArmAssignment`

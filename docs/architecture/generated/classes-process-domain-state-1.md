@@ -43,4 +43,5 @@ classDiagram
     class rules__CiGate["CiGate"]
     class rules__Commit["Commit"]
     class rules__Deferred["Deferred"]
+    class rules__FastForwardBlock["FastForwardBlock"]
 ```

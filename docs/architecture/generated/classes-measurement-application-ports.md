@@ -12,10 +12,12 @@ classDiagram
     class ports__EvalRoots["EvalRoots"]
     class ports__GhRead["GhRead"]
     class ports__IssueListing["IssueListing"]
+    class ports__NoCache["NoCache"]
     class ports__Page["Page"]
     class ports__PageUnreadable["PageUnreadable"]
     class ports__QuotaReading["QuotaReading"]
     class ports__QuotaUnreadable["QuotaUnreadable"]
+    class ports__ReadCache["ReadCache"]
     class ports__Spend["Spend"]
     listing_reads__Listing --> ports__Spend
     listing_reads__Stopped --> ports__Spend

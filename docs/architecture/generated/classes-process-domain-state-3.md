@@ -29,8 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class rules__RestoreSteps["RestoreSteps"]
-    class rules__ResumeCandidate["ResumeCandidate"]
     class rules__SpendPace["SpendPace"]
     class rules__SpendRun["SpendRun"]
     class size_budget__ActualSize["ActualSize"]
@@ -43,10 +41,16 @@ classDiagram
     class spec_delivery__SpecLineMalformed["SpecLineMalformed"]
     class spec_delivery__SpecRefusal["SpecRefusal"]
     class spec_delivery__SpecRefusalRecord["SpecRefusalRecord"]
+    class spec_delivery__SpecStatePatch["SpecStatePatch"]
+    class spec_route__SpecRefusalPatch["SpecRefusalPatch"]
+    class task__ArmAssignment["ArmAssignment"]
+    spec_delivery__SpecStatePatch --> spec_delivery__SpecContract
+    spec_route__SpecRefusalPatch --> spec_delivery__SpecRefusalRecord
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `spec_delivery.SpecStatePatch` se asocia con `spec_delivery.SpecContract`
-  - `spec_route.SpecRefusalPatch` se asocia con `spec_delivery.SpecRefusalRecord`
+- [domain: state (parte 5)](classes-process-domain-state-5.md)
+  - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - `task.TaskState` se asocia con `task.ArmAssignment`

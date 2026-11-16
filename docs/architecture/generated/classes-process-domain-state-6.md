@@ -29,11 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__Failure["Failure"]
-    class task__FailurePauseEntry["FailurePauseEntry"]
-    class task__FindingRecord["FindingRecord"]
-    class task__FinishedPatch["FinishedPatch"]
-    class task__FlakeRecord["FlakeRecord"]
     class task__FullCheckEntry["FullCheckEntry"]
     class task__FullChecksJob["FullChecksJob"]
     class task__FullChecksRead["FullChecksRead"]
@@ -43,14 +38,18 @@ classDiagram
     class task__InterviewStats["InterviewStats"]
     class task__LandedSlice["LandedSlice"]
     class task__LandedSliceRef["LandedSliceRef"]
+    class task__LandingEntry["LandingEntry"]
+    class task__LaneAdmitted["LaneAdmitted"]
+    class task__LaneMerge["LaneMerge"]
+    class task__LapsePauseEntry["LapsePauseEntry"]
+    class task__MergeCiRecord["MergeCiRecord"]
+    class task__MergeConflictRecord["MergeConflictRecord"]
 ```
 
 ## Relaciones con otras páginas
 
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `task.FullChecksJob` hereda de `task.CiLogRecord`
-- [domain: state (parte 5)](classes-process-domain-state-5.md)
-  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
-- [domain: state (parte 9)](classes-process-domain-state-9.md)
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.FullChecksRecord`
   - `task.TaskState` se asocia con `task.InterviewStats`

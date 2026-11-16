@@ -29,6 +29,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__CapabilityFile["CapabilityFile"]
     class schemas__CarveOutOutput["CarveOutOutput"]
     class schemas__Classification["Classification"]
     class schemas__Consolidation["Consolidation"]
