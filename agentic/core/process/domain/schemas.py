@@ -414,16 +414,6 @@ class PlatformAnswers(RoleOutput):
         description="Numbers, from `## With the human` as received this round, of the "
         "questions this round's answers settle after all; empty if none",
     )
-    drawing_checks: list[DrawingCheck] = Field(
-        default_factory=list,
-        description="One check, with ref `Q<n>`, for every question marked visible; "
-        "empty when no question is visible",
-    )
-    departures: list[DrawingDeparture] = Field(
-        default_factory=list,
-        description="One departure, with the same drawing and element, for every check "
-        "that says `departs`; empty if none",
-    )
 
 
 class PlatformAnswersWithAssumptions(PlatformAnswers):
