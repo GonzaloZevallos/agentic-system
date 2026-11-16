@@ -196,6 +196,7 @@ Tech Lead. Las ramas nunca se borran; solo los checkouts bajo `.agentic/worktree
 | Creador | Checkout | Lock |
 |---|---|---|
 | nodos del grafo (`plan`, `define`, `design`, `copy`, `develop`, `review`, `deliver`, `verifiers`, `diagnose`, `validate_prd`, `owner_rules`, `integrate`, `shadow_review`) | `GH-N`, `GH-N.<sub>`, `GH-N.shadow-<sid>` | run y resume, bajo `_locked` en `cli._run` y `cli._resume` |
+| `checkouts` (`task_checkout`, `subtask_checkout` y sus `_in_thread`, que usan los nodos y `landing`) | `GH-N`, `GH-N.<sub>` | el de quien lo llama: `_locked` en `cli._run` y `cli._resume`, o `landing.land`; no lo toma por sí mismo |
 | `merge` | `merge-GH-N` | `_locked` en `cli._merge` |
 | `landing`, `landing_sync`, `landing_adr`, `landing_slice` | `GH-N`, `slice-GH-N` | `lock.acquire(task_id, "land")` en `landing.land`, dentro de `cli._land` |
 | `restore`, `close` | ninguno | `_locked` en `cli._restore` y `cli._close`; tocan ramas y documento |
