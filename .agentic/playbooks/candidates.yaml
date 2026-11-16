@@ -2020,3 +2020,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-15T22:01:36.975+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief says an expensive or forbidden read must be skipped under a condition, guard the call itself so it is not evaluated eagerly as an argument; a correct result does not prove the read was avoided.
+  confidence: medium
+  seen_in:
+  - GH-801
+  sources:
+  - finding
+  added_at: '2026-11-16T03:32:34.909+00:00'
