@@ -109,9 +109,10 @@ def developer_excerpt(state: TaskState, ports: Ports, unit: str, head: str) -> s
     that cannot be read never changes the step it informs (invariant 3).
 
     By `rules.full_checks_excerpt_due(state, unit, head)`: `read` is one `ci_excerpt` of the
-    record's own head, which already starts with `CI_LOG_NOTICE`, or `log no leído: <cause>`
-    with the cause of the closed record of that read (never an exception's class or message),
-    then `rules.repetition_for` as its own paragraph when it holds; `dispatch` is the fixed
+    record's own head, which already starts with `CI_LOG_NOTICE` and is then followed by
+    `rules.repetition_for` as its own paragraph when it holds, or `log no leído: <cause>` on its
+    own, with the cause of the closed record of that read (never an exception's class or
+    message); `dispatch` is the fixed
     line and no read; `none` is empty. Composed from `ci_excerpt` alone, so no text of a log
     reaches the Developer without the notice in front."""
     try:
@@ -141,7 +142,8 @@ def _read_for_developer(state: TaskState, ports: Ports, unit: str) -> str:
         cause = next((r["cause"] for r in records if r["cause"] != "read"), None)
         if cause is None:
             return ""
-        text = f"{NOT_READ}{cause}"
+        # The closed-cause line stands alone: the sentence follows only text led by the notice.
+        return f"{NOT_READ}{cause}"
     sentence = _repetition(state, unit)
     return f"{text}\n\n{sentence}" if sentence else text
 

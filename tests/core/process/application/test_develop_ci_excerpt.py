@@ -354,6 +354,23 @@ def test_developer_excerpt_never_gives_log_text_without_the_notice(wired):
         assert FIRST_TEST not in text or text.startswith(NOTICE)
 
 
+def test_the_cause_line_stands_alone_when_the_read_fails_and_a_repetition_holds(wired):
+    # returned_by review: the section does not carry the sentence, so repetition_for holds; the
+    # read raises, so the closed-cause line must not be followed by it (invariant 9).
+    state = state_of(returned_by="review")
+    assert rules.repetition_for(state, "api") == SENTENCE
+    for logs in (FakeCiLogs(raises=ValueError("boom")), FakeCiLogs([])):
+        case = wired(logs=logs)
+        text = ci_excerpt.developer_excerpt(state, case.ports, "api", HEAD)
+        assert SENTENCE not in text and "ValueError" not in text and "boom" not in text
+        assert text in ("", "log no leído: unreadable")
+    raising = wired(logs=FakeCiLogs(raises=ValueError("boom")))
+    assert (
+        ci_excerpt.developer_excerpt(state, raising.ports, "api", HEAD)
+        == "log no leído: unreadable"
+    )
+
+
 def test_a_repetition_rule_that_raises_keeps_the_excerpt_it_was_to_follow(wired, monkeypatch):
     def broken(state: Any, unit: str) -> str:
         raise RuntimeError("malformed reads")
