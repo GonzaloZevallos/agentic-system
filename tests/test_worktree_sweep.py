@@ -62,10 +62,11 @@ class Workspace(MemoryWorkspace):
         self.stale_checkouts = list(names)
         self.unreadable: set[Path] = set()
         self.full_for: set[str] = set()
+        self.full_errno = errno.EDQUOT
 
     def remove_checkout(self, name: str) -> None:
         if name in self.full_for:
-            raise OSError(errno.EDQUOT, "Disk quota exceeded")
+            raise OSError(self.full_errno, "disk full")
         super().remove_checkout(name)
 
     def is_committed(self, path: Path) -> bool:
@@ -347,9 +348,11 @@ def test_no_space_is_said_once_across_rounds() -> None:
     assert carry.memory.memos["GH-1"][1] == "no_space"
 
 
-def test_no_space_from_a_removal_rewinds_the_cursor_to_that_task() -> None:
+@pytest.mark.parametrize("code", [errno.ENOSPC, errno.EDQUOT])
+def test_no_space_from_a_removal_rewinds_the_cursor_to_that_task(code: int) -> None:
     ports, workspace, tracker = world("GH-1", "GH-2", "GH-3", closed=(1, 2, 3))
     workspace.full_for = {"GH-2"}
+    workspace.full_errno = code
 
     lines, memory = sweep(ports, Lock(), SweepMemory(), Clock())
 
