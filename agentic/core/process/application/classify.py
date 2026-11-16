@@ -30,6 +30,10 @@ _REASONS: Final[dict[SpecRouteCause, str]] = {
 _OWNER_LOGIN_REASON: Final = (
     "The spec cannot be checked as approved: the configuration key `owner_login` is empty."
 )
+_BODY_UNREAD_REASON: Final = (
+    "The issue body could not be read from the tracker on resume, or it is empty; restore the "
+    "body if you emptied it, then run `agentic resume` again."
+)
 
 
 def _refused(
@@ -50,7 +54,20 @@ def spec_intake(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     reader, validator = ports.spec_reader, ports.spec_validator
     if not spec_delivery.honoured(reader, validator) or reader is None or validator is None:
         return None
-    line = spec_delivery.parse_spec_line(state.get("description", ""))
+    text = state.get("description", "")
+    if spec_delivery.body_source(state) == "inbox":
+        # GH-809: the owner fixes the issue's `Spec:` line, and `description` is the body the task
+        # entered with. What is read here is only parsed: never written to the state or document.
+        try:
+            number = ports.inbox.issue_of(state["id"])
+            body = None if number is None else ports.inbox.task(number)["description"]
+        except (ValueError, OSError):
+            return _refused("spec_unreadable", ("unreachable",), ports, _BODY_UNREAD_REASON)
+        if body is not None:
+            if not body.strip():
+                return _refused("spec_unreadable", ("unreachable",), ports, _BODY_UNREAD_REASON)
+            text = body
+    line = spec_delivery.parse_spec_line(text)
     if line is None:
         return None
     if isinstance(line, SpecLineMalformed):
