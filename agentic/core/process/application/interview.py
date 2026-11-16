@@ -180,7 +180,7 @@ async def interview(
     )
 
     design = ports.stack.design(task_base(state, ports))  # read once: `None` changes nothing
-    drawn = interview_drawing.Collector(design)
+    drawn = interview_drawing.collector_for(spec.interviewee, design)
 
     def failed(patch: TaskState) -> tuple[None, TaskState]:
         # The exit by failure composes no escalation: the failure stays as it is, and what was
@@ -327,16 +327,18 @@ async def interview(
             )
         if has_spec and (cause := answers.data.get("spec_conflict")):
             step = spec_assumptions.conflict_step(state, cause)
-            if step == spec_assumptions.ESCALATE and drawn.due(apply(state, patch)):
-                # The drawing wins: no more rounds, and the conflict comes back on the retake.
+            if drawn.raised_now:
+                # The drawing wins whatever the step: no more rounds, and the conflict comes
+                # back on the retake at the step it would have had.
                 recorded = _record(state, spec, transcript, patch)
                 return None, _escalate_drawing(state, recorded, drawn, ports)
             if step == spec_assumptions.ESCALATE:
                 # Escalates in this round: its questions for PM are dropped, no consultation runs.
                 reason = spec_assumptions.conflict_reason(cause, round_)
+                recorded = _record(state, spec, transcript, patch)
                 return None, _escalate_questions(
                     state,
-                    _record(state, spec, transcript, patch),
+                    apply(recorded, drawn.rows(apply(state, recorded), ports.now())),
                     reason,
                     ports,
                     spec_cause=cause,

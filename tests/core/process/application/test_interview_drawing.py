@@ -8,7 +8,7 @@ import pytest
 from agentic.core.process.application import interview_drawing
 from agentic.core.process.application.interview import interview
 from agentic.core.process.application.ports import AttemptFailed, RawResult
-from agentic.core.process.domain import drawing, drawing_answer, task
+from agentic.core.process.domain import drawing, drawing_answer, spec_assumptions, task
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.roles import (
     INTERVIEW_DEFINITION,
@@ -16,6 +16,8 @@ from agentic.core.process.domain.roles import (
     INTERVIEW_SOLUTION_PLATFORM,
     INTERVIEW_SOLUTION_STACK,
 )
+from agentic.core.process.domain.schemas import Answers
+from agentic.core.process.domain.task import SpecConflictCause
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_interview import SPEC_TASK, TASK, _closed_four_rounds
 from tests.fakes import MemoryStack, ScriptedRunner, memory_ports, questions
@@ -270,3 +272,86 @@ async def test_without_a_design_a_departing_answer_changes_nothing(cfg):
     )
     transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, _ports(runner, None))
     assert transcript is not None and "drawing_departures" not in patch
+
+
+def _conflicting(checks=(), departures=(), n=1):
+    base = _answer(checks, departures, n=n)
+    data = {**base.structured_output, "assumptions": [], "spec_conflict": "conflict"}
+    return RawResult(data, 0.1, 1, "a")
+
+
+class _SpecAnswers(Answers):
+    """`Answers` as a spec delivery would ask for it. Today's `SPEC_SCHEMAS` has no such
+    class for the PM interviewee, so the tests below put it there: they pin the rule of
+    `interview()` for the day a seat of `DRAWING_SEATS` can raise a conflict."""
+
+    assumptions: list[str] = []
+    spec_conflict: SpecConflictCause | None = None
+
+
+@pytest.fixture
+def spec_answers(monkeypatch):
+    monkeypatch.setitem(spec_assumptions.SPEC_SCHEMAS, Answers, _SpecAnswers)
+
+
+async def test_a_conflict_and_a_departure_in_one_round_escalate_the_drawing_first(
+    cfg, spec_answers
+):
+    runner = ScriptedRunner(
+        **{
+            ASK: [_ask(), _ask(2, visible=()), _ask(done=True, visible=())],
+            ANSWER: [_conflicting([_check(verdict="departs")], [_departure()])],
+        }
+    )
+    transcript, patch = await interview(SPEC_TASK, INTERVIEW_DEFINITION, cfg, _ports(runner))
+
+    assert transcript is None and runner.slugs == [ASK, ANSWER]  # no more rounds
+    assert patch["spec_cause"] == "drawing" and PATH in patch["escalated"]
+    assert [e["kind"] for e in patch["pause_log"]] == ["escalation"]
+    (row,) = patch["drawing_departures"]
+
+    # The owner accepts it; on the retake the conflict escalates at the step it would have had.
+    accepted = {**row, "answer": {"verdict": "accept", "by": "comment", "at": "T1"}}
+    state = {**SPEC_TASK, **{k: v for k, v in patch.items() if k in ("runs", "sections")}}
+    state = {**state, "branch": "agentic/T-1", "drawing_departures": [accepted]}
+    retake = ScriptedRunner(
+        **{
+            ASK: [_ask(2, visible=())],
+            ANSWER: [_conflicting(n=2)],
+        }
+    )
+    transcript, second = await interview(state, INTERVIEW_DEFINITION, cfg, _ports(retake))
+    assert transcript is None and second["spec_cause"] == "conflict"
+    assert second["escalated"].startswith("Spec conflict raised in interview round")
+
+
+async def test_a_departure_of_this_round_wins_over_a_conflict_the_owner_decided(cfg, spec_answers):
+    decided = {
+        "pause_log": [{"kind": "escalation", "value": "questions", "spec_cause": "conflict"}]
+    }
+    runner = ScriptedRunner(
+        **{
+            ASK: [_ask(), _ask(done=True, visible=())],
+            ANSWER: [_conflicting([_check(verdict="departs")], [_departure()])],
+        }
+    )
+    transcript, patch = await interview(
+        {**SPEC_TASK, **decided}, INTERVIEW_DEFINITION, cfg, _ports(runner)
+    )
+    assert transcript is None and patch["spec_cause"] == "drawing"
+
+
+async def test_an_open_drawing_row_does_not_escalate_a_solution_interview(cfg):
+    from tests.core.process.application.test_interview import TL_ANSWER_P, TL_ASK_P
+    from tests.fakes import answers as plain_answers
+
+    row = task.departure_records(
+        None, [drawing.Departure(PATH, "date format", "a", "b", "c", "d", ANSWER)], "T0"
+    )
+    runner = ScriptedRunner(
+        **{TL_ASK_P: [questions(1), questions(done=True)], TL_ANSWER_P: [plain_answers(1)]}
+    )
+    transcript, patch = await interview(
+        {**TASK, "drawing_departures": row}, INTERVIEW_SOLUTION_PLATFORM, cfg, _ports(runner)
+    )
+    assert transcript is not None and "escalated" not in patch

@@ -71,6 +71,7 @@ class Collector:
 
     design: Design | None
     new: dict[str, drawing.Departure] = field(default_factory=dict)
+    raised_now: bool = False  # the last accepted answer raised a departure of its own
 
     def collect(self, role: Role, data: Mapping[str, Any], state: TaskState) -> TaskState:
         """Take the departures of an accepted answer of `role` and return the patch that gives
@@ -79,10 +80,12 @@ class Collector:
         if self.design is None or drawing.DRAWING_SEATS.get(role.slug) != "interviewee":
             return {}
         held = {r["key"] for r in state.get("drawing_departures", [])}
+        self.raised_now = False
         for raw in data.get("departures", []):
             key = drawing.departure_key(raw["drawing"], raw["element"])
-            if key not in held and key not in self.new:
-                self.new[key] = drawing.Departure(**{**raw, "raised_by": role.slug})
+            if key not in held:
+                self.raised_now = True
+                self.new.setdefault(key, drawing.Departure(**{**raw, "raised_by": role.slug}))
         owed = drawing_answer.must_match(state, role.slug)
         matched = {
             key
@@ -120,3 +123,10 @@ class Collector:
                 state.get("drawing_departures"), pending, at
             )
         }
+
+
+def collector_for(interviewee: Role, design: Design | None) -> Collector:
+    """The collector of an interview: inert unless its interviewee is a seat of
+    `drawing.DRAWING_SEATS`, so the solution, platform and stack interviews never escalate
+    drawing rows even with a design."""
+    return Collector(design if interviewee.slug in drawing.DRAWING_SEATS else None)
