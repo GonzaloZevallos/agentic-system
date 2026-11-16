@@ -352,6 +352,14 @@ def build_parser() -> CommandTree:
         "--task-budget governs only the flat task cap",
     )
     resume.add_argument(
+        "--drawing",
+        action="append",
+        default=[],
+        metavar="N=VERDICT",
+        help="answer departure N from an approved drawing: N=accept or N=reject; repeat it for "
+        "each number (an error on a task not paused on drawing departures)",
+    )
+    resume.add_argument(
         "--from-document",
         action="store_true",
         help="seed the state from the task document instead of the checkpoint",
@@ -886,6 +894,7 @@ def main() -> None:
                 ports,
                 *options,
                 estimate=args.estimate,
+                drawing=tuple(args.drawing),
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
@@ -2263,6 +2272,7 @@ async def _resume(
     stop: StopCause | None = None,
     estimate: float | None = None,
     by_poller: bool = False,
+    drawing: tuple[str, ...] = (),
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -2282,6 +2292,7 @@ async def _resume(
                     ports,
                     estimate=estimate,
                     increment=seeded.increment,
+                    drawing_flags=drawing,
                 )
             elif not snapshot.next:
                 status = snapshot.values.get("status", "open")
@@ -2309,6 +2320,7 @@ async def _resume(
                     ports,
                     estimate=estimate,
                     increment=seeded.increment,
+                    drawing_flags=drawing,
                 )
             elif not snapshot.interrupts and (
                 rules.resume_source(snapshot.next, crashed=True) == "document"
@@ -2326,12 +2338,22 @@ async def _resume(
                     (PIPELINE,),
                     estimate,
                     increment=seeded.increment,
+                    drawing_flags=drawing,
                 )
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
                 pending = () if snapshot.interrupts else tuple(snapshot.next)
                 paused = cast(TaskState, snapshot.values)
-                r = resuming.prepare(task_id, paused, "checkpoint", cfg, ports, pending, estimate)
+                r = resuming.prepare(
+                    task_id,
+                    paused,
+                    "checkpoint",
+                    cfg,
+                    ports,
+                    pending,
+                    estimate,
+                    drawing_flags=drawing,
+                )
         except resuming.WaitingOnHuman as exc:
             raise CannotStart(str(exc), code=1) from exc
         except ValueError as exc:

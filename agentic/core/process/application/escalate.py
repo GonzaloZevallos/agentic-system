@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, escalation_prompts, rules, tracker_items
+from ..domain import document, drawing_answer, escalation_prompts, rules, tracker_items
 from ..domain.task import EscalationClass, TaskState
 from .ports import Ports
 
@@ -84,6 +84,23 @@ def _code(command: str) -> str:
     return command if "`" in command else f"`{command}`"
 
 
+def _drawing_block(state: TaskState, cause: drawing_answer.Cause, number: int | None) -> list[str]:
+    """The block of a pause on drawing departures (GH-766): the table's question, recommendation
+    and options, then the commands `drawing_answer.prompt_lines` builds for each open number. The
+    departures themselves are the escalation's reason; nothing is composed here."""
+    question, recommended, options = escalation_prompts.prompt_for("questions", cause)
+    fill = {"issue": "<issue>" if number is None else str(number)}
+    block = ["", f"Question: {question}", f"Recommended: {_code(recommended.format(**fill))}"]
+    block.append("Options:")
+    block.extend(f"- {_code(option.format(**fill))}" for option in options)
+    if number is not None:
+        block.extend(
+            f"- {_code(line)}"
+            for line in drawing_answer.prompt_lines(state.get("drawing_departures", []), number)
+        )
+    return block
+
+
 def _prompt_block(
     state: TaskState,
     cls: EscalationClass,
@@ -96,6 +113,8 @@ def _prompt_block(
     a pair whose subtask restarted asks what to change in the brief. For `questions`, the role's
     questions are the question, one per line, and answering them in free text is recommended.
     Presentation only: nothing here decides what happens next."""
+    if (drawing_cause := drawing_answer.prompt_cause(state)) is not None:
+        return _drawing_block(state, drawing_cause, number)
     pair = rules.returns_pair(state)
     if cls == "returns" and pair is not None and state.get("restarts", {}).get(pair, 0) > 0:
         question, recommended, options = escalation_prompts.restarted_returns_prompt()
