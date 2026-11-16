@@ -15,7 +15,7 @@ from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, landing, plan_settlement, pull_request, rules, spec_delivery
+from ..domain import ci, landing, plan_settlement, pull_request, rules, spec_delivery, stacking
 from ..domain.adr_dated import Undated
 from ..domain.adr_numbers import Ambiguous
 from ..domain.landing import LandingStep, LandingStepKind
@@ -479,6 +479,8 @@ def slice_inputs(
     refused = landing.refused_slices(live_entries(raw))
     blocking = frozenset(landing.blocking_owners(raw))
     names = [unit.name for unit in approved]
+    # GH-859: anything that is not `Absent` is stacked, a record that cannot be read included.
+    stacked = not isinstance(stacking.parse_stack_parent(raw), stacking.Absent)
     try:
         carries, paths = unit_reads(raw, names, cfg, ports, master)
         heads = reviewed_heads(raw, names)
@@ -491,9 +493,11 @@ def slice_inputs(
             cfg.product_dir, list(heads.values()), task_head, master=master
         )
     except GitError:
-        return landing.SliceInputs(approved, {}, None, {}, frozenset(), refused, blocking, False)
+        return landing.SliceInputs(
+            approved, {}, None, {}, frozenset(), refused, blocking, False, stacked
+        )
     return landing.SliceInputs(
-        approved, carries, integration, paths, landed, refused, blocking, True
+        approved, carries, integration, paths, landed, refused, blocking, True, stacked
     )
 
 

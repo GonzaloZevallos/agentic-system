@@ -97,7 +97,40 @@ COMMENTED: tuple[str, ...] = (
     "ci_stale_exhausted",
     "ci_untrusted_no_dispatch",
     "open_escalation",
+    "stack_base_orphaned",
 )
+
+# The refusals that are not commented (GH-859): each is either not a human's to act on (the landing
+# takes a step, or waits) or already said by the task's own escalation. Every `MergeRefusal` value
+# is in this tuple or in `COMMENTED`, and `test_merge_refusal_tables` fails for a new one that is
+# in neither.
+UNCOMMENTED: tuple[str, ...] = (
+    "not_ready",
+    "pr_not_open",
+    "not_approved",
+    "head_not_reviewed",
+    "open_findings_blocking",
+    "open_findings",
+    "eval_set",
+    "merge_conflict",
+    "master_moved",
+    "ci_blocked_by_conflict",
+    "stack_parent_unmerged",
+    "stack_restack_due",
+)
+
+# What a stacking refusal says in a comment (GH-859): one fixed phrase per value, keyed by the
+# refusal, never a word of the parent, its issue or the record. Only `stack_base_orphaned` is
+# commented; the other two are listed so that no stacking value has a comment without a phrase.
+STACK_EVIDENCE: dict[str, str] = {
+    "stack_parent_unmerged": "The parent this task is stacked on has not merged yet.",
+    "stack_restack_due": "The parent merged; this task takes the base branch in once.",
+    "stack_base_orphaned": (
+        "The commit this task was built on will never reach the base branch: its parent was "
+        "rebuilt, closed without merging, merged without a merge commit, or the record of the "
+        "parent could not be read."
+    ),
+}
 
 LEFT_TO_HUMAN = "Left for the human to merge."
 
@@ -1650,6 +1683,8 @@ def _refuse(
             text = "\n\n".join(
                 part for part in (first, _fresh_run_evidence(reason, facts, cause), closing) if part
             )
+        if reason in STACK_EVIDENCE:
+            text = "\n\n".join(part for part in (first, STACK_EVIDENCE[reason], closing) if part)
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]
