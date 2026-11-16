@@ -30,7 +30,12 @@ class FilesystemReadCache:
             return {}
 
     def save(self, pages: Mapping[int, PageRecord]) -> None:
-        _write_atomic(self._path, json.dumps(_encode(pages), separators=(",", ":")))
+        """Best effort: a directory that cannot be written leaves the run reading with no
+        cache, never a crash."""
+        try:
+            _write_atomic(self._path, json.dumps(_encode(pages), separators=(",", ":")))
+        except OSError:
+            pass
 
 
 def _write_atomic(path: Path, text: str) -> None:

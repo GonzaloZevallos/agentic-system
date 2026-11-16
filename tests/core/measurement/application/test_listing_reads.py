@@ -254,9 +254,9 @@ def test_a_listing_ending_on_a_full_page_ends_with_an_empty_one_and_costs_nothin
     listing, cache, clock = CountingIssueListing(range(1, count + 1)), MemoryCache(), Clock()
     run(listing, cache, clock)
     assert listing.reads[-1] == count // PAGE_SIZE + 1
-    before = len(listing.reads)
+    before, quota_before = len(listing.reads), listing.quota_reads
     assert isinstance(run(listing, cache, clock), Listing)
-    assert len(listing.reads) == before
+    assert len(listing.reads) == before and listing.quota_reads == quota_before
 
 
 def test_a_missing_high_number_with_a_fresh_cache_makes_no_call_on_the_second_run():
@@ -304,3 +304,17 @@ def test_a_stop_reports_the_saved_pages_still_fresh_and_a_run_the_pages_served()
     assert run(listing, cache, clock) == Stopped("reserve", Spend(1, 0), 10, 2)
     done = run(CountingIssueListing(range(1, 251)), cache, clock)
     assert isinstance(done, Listing) and done.from_cache == 2
+
+
+def test_a_stop_counts_the_pages_this_run_read_though_the_clock_ran_past_their_window():
+    class Ticking(Clock):
+        def __call__(self):
+            now = self.now
+            self.advance(6000)
+            return now
+
+    listing = CountingIssueListing(
+        range(1, 251), quotas=[QuotaReading(5000)] * 2 + [QuotaReading(10)]
+    )
+    stopped = run(listing, MemoryCache(), Ticking())
+    assert isinstance(stopped, Stopped) and stopped.cause == "reserve" and stopped.cached == 2

@@ -42,8 +42,8 @@ class Listing:
 
 @dataclass(frozen=True)
 class Stopped:
-    """The reads stopped; nothing partial is offered. `cached` is the saved pages still
-    fresh: what the next run need not read."""
+    """The reads stopped; nothing partial is offered. `cached` is the saved pages fresh at the
+    run's start or read since: what the next run need not read."""
 
     cause: StopCause
     spend: Spend
@@ -67,6 +67,7 @@ class _Reader:
         self.pages = cache.load()
         self.remaining: int | None = None
         self.from_cache = 0
+        self.read_now: set[int] = set()  # the pages this run read: fresh as it saved them
 
     def walk(self, start: int, force: bool = False) -> StopCause | None:
         """Pages from `start` to the first short one, the cached fresh ones served and the
@@ -106,6 +107,7 @@ class _Reader:
             **self.pages,
             number: PageRecord(self.clock(), page_open(items, page.size < PAGE_SIZE), items),
         }
+        self.read_now.add(number)
         self.cache.save(self.pages)
         return None
 
@@ -118,7 +120,11 @@ class _Reader:
         return any(n > highest for n in needed) and age >= ABOVE_RANGE_FLOOR_S
 
     def stopped(self, cause: StopCause) -> Stopped:
-        cached = sum(1 for record in self.pages.values() if fresh(record, self.clock()))
+        cached = sum(
+            1
+            for number, record in self.pages.items()
+            if number in self.read_now or fresh(record, self.now)
+        )
         return Stopped(cause, self.listing.spent(), self.remaining, cached)
 
 

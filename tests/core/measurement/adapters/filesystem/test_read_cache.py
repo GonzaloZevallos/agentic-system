@@ -115,3 +115,11 @@ def test_every_write_of_the_file_is_the_one_atomic_function(tmp_path, monkeypatc
     store.save(PAGES)
     store.save({})
     assert len(written) == 2
+
+
+def test_a_directory_that_cannot_be_written_is_no_crash_and_the_next_load_is_a_miss(tmp_path):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x")
+    unwritable = FilesystemReadCache(blocker / "scores-reads", "o/r")
+    unwritable.save({1: PageRecord(datetime(2026, 1, 1, tzinfo=UTC), False, ())})
+    assert unwritable.load() == {}
