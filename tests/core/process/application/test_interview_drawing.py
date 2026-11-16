@@ -339,6 +339,7 @@ async def test_a_departure_of_this_round_wins_over_a_conflict_the_owner_decided(
         {**SPEC_TASK, **decided}, INTERVIEW_DEFINITION, cfg, _ports(runner)
     )
     assert transcript is None and patch["spec_cause"] == "drawing"
+    assert runner.slugs == [ASK, ANSWER]  # stopped in this round, not at the closing exit
 
 
 async def test_an_open_drawing_row_does_not_escalate_a_solution_interview(cfg):
