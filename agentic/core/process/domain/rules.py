@@ -811,8 +811,9 @@ def spec_delivery(state: TaskState) -> bool:
 
 def tracker_item_pause(state: TaskState) -> bool:
     """Whether the task is paused on typed tracker items (GH-620): `tracker_human` holds the
-    hashes of the items a person has not answered. The one place that reads it, for its three
-    callers: `resume.py`, the graph's `pause` node and `landing_plan.release`."""
+    hashes of the items a person has not answered. The one place that reads it, for its four
+    callers: `resume.py`, the graph's `pause` node, `landing_plan.release` and
+    `drawing_answer.prompt_cause`."""
     return bool(state.get("tracker_human"))
 
 

@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 5 de 8, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 5 de 9, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -25,9 +25,16 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - [domain: state (parte 7)](classes-process-domain-state-7.md)
   - [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - [domain: state (parte 9)](classes-process-domain-state-9.md)
 
 ```mermaid
 classDiagram
+    class task__DepartureRecord["DepartureRecord"]
+    class task__DependencyState["DependencyState"]
+    class task__DesignItemRecord["DesignItemRecord"]
+    class task__DrawingEscalation["DrawingEscalation"]
+    class task__EscalationPatch["EscalationPatch"]
+    class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
     class task__EstimateRevision["EstimateRevision"]
     class task__EvaluatedPatch["EvaluatedPatch"]
@@ -36,20 +43,12 @@ classDiagram
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
     class task__FinishedPatch["FinishedPatch"]
-    class task__FlakeRecord["FlakeRecord"]
-    class task__FullCheckEntry["FullCheckEntry"]
-    class task__FullChecksJob["FullChecksJob"]
-    class task__FullChecksRead["FullChecksRead"]
-    class task__FullChecksRecord["FullChecksRecord"]
-    class task__GateRecord["GateRecord"]
-    class task__HeadYield["HeadYield"]
     task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
-  - `task.FullChecksJob` hereda de `task.CiLogRecord`
+- [domain: state (parte 3)](classes-process-domain-state-3.md)
+  - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
 - [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.EvaluationRef`
-  - `task.TaskState` se asocia con `task.FullChecksRecord`

@@ -25,6 +25,7 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - [domain: state (parte 7)](classes-process-domain-state-7.md)
   - [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - [domain: state (parte 9)](classes-process-domain-state-9.md)
 
 ```mermaid
 classDiagram
