@@ -4378,6 +4378,25 @@ def test_space_holds_at_exactly_the_floor_is_not_a_hold():
     )
 
 
+@pytest.mark.parametrize(
+    ("held", "sweeps"),
+    [
+        ((), False),
+        (("scratch",), False),
+        (("/tmp",), False),
+        (("scratch", "/tmp"), False),
+        (("product",), True),
+        (("scratch", "product"), True),
+        (("product", "/tmp"), True),
+        (("scratch", "product", "/tmp"), True),
+    ],
+)
+def test_sweeps_when_held_is_true_only_when_the_product_volume_is_among_the_holds(
+    held: tuple[str, ...], sweeps: bool
+):
+    assert rules.sweeps_when_held(held) is sweeps
+
+
 def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:
     return rules.poll_plan(
         closes=[9, 4],

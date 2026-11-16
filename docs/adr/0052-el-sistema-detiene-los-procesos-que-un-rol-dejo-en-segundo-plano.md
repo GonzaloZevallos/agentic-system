@@ -218,10 +218,28 @@ Tech Lead. Las ramas nunca se borran; solo los checkouts bajo `.agentic/worktree
 cabeza separada de un checkout quitado; se pisa la evidencia de un lock muerto de un issue
 cerrado (el barrido lo toma); la latencia de un merge a mano es hasta `OPEN_TTL_ROUNDS` más
 un ciclo del cursor; la latencia al fusionar está en la ranura exenta; una ronda retenida
-nunca barre, y un volumen lleno de worktrees de tareas cerradas sigue retenido hasta que el
+sin el volumen del producto nunca barre (GH-865), y un volumen lleno de worktrees de tareas cerradas sigue retenido hasta que el
 dueño decida por el issue de seguimiento (que no se abre si la lectura acotada de issues
 abiertos pudo quedar cortada); reiniciar el poller pierde la memoria; una ronda de más de
 2 × `interval_s` saca al poller de `expected_pollers`, lo que nunca provoca una reversa.
+
+**GH-865 (2026-11-16): una ronda retenida por el volumen del producto barre.** La
+ronda retenida no barría, y un volumen del producto lleno de worktrees de tareas cerradas
+quedaba retenido por lo mismo que el barrido liberaría: un bloqueo mutuo. Ahora la ronda
+barre cuando `rules.sweeps_when_held(held)` es verdadero, es decir, cuando el volumen del
+producto está entre los retenidos; es lo único que lo decide, y `run_once` no compara
+nombres de volumen. No se exige «solo el producto»: en la máquina del dueño el scratch
+(`~/.cache`) y `<producto>/.agentic` comparten sistema de archivos, así que toda retención
+del producto es también del scratch y esa lectura literal nunca se cumpliría. El barrido no
+lanza procesos ni escribe en el scratch ni en `/tmp`, y `busy` sigue siendo el
+`registry.live()` fresco de después de `execute`. En las demás rondas retenidas la línea
+`agentic: poll: worktrees: not swept while held` se dice como antes; en la que barre no se
+dice. Con el disco lleno, un `OSError` con `ENOSPC` o `EDQUOT` es `no_space` (TTL 1): el
+barrido detiene la ronda, dice `agentic: sweep: GH-N: no space: …` una vez por proceso y
+rebobina el cursor a esa tarea; cualquier otro `OSError` sigue siendo `removal_failed`. Y el
+registro del lock de ejecución se escribe de forma atómica (archivo temporal en `runs_dir` y
+`os.replace`, con el modo que daba `write_text`): un `ENOSPC` a mitad de la escritura deja el
+registro anterior o ninguno, nunca un `.lock` truncado que rompería todo `read()` posterior.
 
 ## Gate result
 
