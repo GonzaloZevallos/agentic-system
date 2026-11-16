@@ -31,6 +31,7 @@ classDiagram
     class poll__LandingRound["LandingRound"]
     class poll__MergeAssessment["MergeAssessment"]
     class poll__OrderEntry["OrderEntry"]
+    class poll__OrderLock["OrderLock"]
 ```
 
 ## Relaciones con otras páginas

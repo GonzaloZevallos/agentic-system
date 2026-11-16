@@ -173,6 +173,7 @@ class EvaluationWorkspace:
             "integration_paths",
             "introduced_paths",
             "is_ancestor",
+            "is_checkout",
             "is_clean",
             "is_committed",
             "is_ignored",

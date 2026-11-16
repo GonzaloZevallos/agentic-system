@@ -38,6 +38,7 @@ classDiagram
     class task_path__RiskHit["RiskHit"]
     class task_path__RiskNone["RiskNone"]
     class task_path__RiskUnreadable["RiskUnreadable"]
+    class worktree_sweep__SweepMemory["SweepMemory"]
 ```
 
 ## Relaciones con otras páginas

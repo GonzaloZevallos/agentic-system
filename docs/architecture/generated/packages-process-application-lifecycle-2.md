@@ -31,6 +31,7 @@ graph TD
     m_application__split_sweep["application.split_sweep"]
     m_application__stage0_rotate["application.stage0_rotate"]
     m_application__stop["application.stop"]
+    m_application__worktree_sweep["application.worktree_sweep"]
     m_application__restore --> g_application__landing
     m_application__restore --> g_application__lifecycle__1
     m_application__restore --> g_application__support
@@ -57,4 +58,6 @@ graph TD
     m_application__stage0_rotate --> g_application__support
     m_application__stage0_rotate --> g_pkg__domain
     m_application__stop --> g_application__support
+    m_application__worktree_sweep --> g_application__support
+    m_application__worktree_sweep --> g_pkg__domain
 ```

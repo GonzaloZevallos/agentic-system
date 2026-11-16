@@ -147,6 +147,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
     "application.verifiers": "checks",
+    "application.worktree_sweep": "lifecycle",
     "domain.account_reset": "machine",
     "domain.adr_dated": "landing",
     "domain.adr_numbers": "landing",
@@ -220,6 +221,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.tracker_items": "roles",
     "domain.tracker_refs": "state",
     "domain.turn_notice": "roles",
+    "domain.worktree_sweep": "state",
 }
 
 # How the class pages of each layer are grouped, keyed `<context>/<layer>`: `clusters` takes the
