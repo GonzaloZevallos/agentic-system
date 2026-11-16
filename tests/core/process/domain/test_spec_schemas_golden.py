@@ -1,8 +1,8 @@
 """The schemas a delivery without a spec sends the model stay byte for byte what they were
 (GH-594 part 2b): the golden fixture was generated before any `*WithAssumptions` class existed,
 and is never regenerated, except for the one entry a schema change makes inevitable: the
-`Consultation` entry gained `drawing_checks` and `departures` (GH-766 part 3a). A pydantic upgrade that renders a
-schema differently turns this red on purpose."""
+`Consultation` entry gained `drawing_checks` and `departures` (GH-766 part 3a).
+A pydantic upgrade that renders a schema differently turns this red on purpose."""
 
 import json
 from pathlib import Path
