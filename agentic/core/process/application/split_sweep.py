@@ -330,7 +330,9 @@ def _judge(
 ) -> list[str]:
     """What one parent's parts come to. One `issue_state` read per part, memoised by number in
     `states`; `verdict` is asked only for a part closed `COMPLETED`. `ROUND_STOPPERS` and
-    `ValueError`/`OSError`/`KeyError` propagate to `sweep`."""
+    `ValueError`/`OSError`/`KeyError` propagate to `sweep`. An abandoned part's comment is built
+    from these same reads (which parts are still open, whether the re-point is recorded): the
+    text adds no tracker read to the abandoned path."""
     rows: list[tuple[str, str | None, rules.BlockerVerdict]] = []
     for number in numbers:
         if number not in states:
