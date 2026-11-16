@@ -5255,7 +5255,7 @@ def _cached_backfill(monkeypatch, tmp_path, ports, listing, clock, *extra) -> in
     root = tmp_path / "p"
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(
-        ["git", "remote", "add", "origin", "https://github.com/Acme/Widgets.git"],
+        ["git", "config", "remote.origin.url", "https://github.com/Acme/Widgets.git"],
         cwd=root,
         check=True,
     )
@@ -5280,14 +5280,16 @@ def test_a_live_run_after_a_dry_run_within_the_window_makes_no_page_call(
     root = close_root(tmp_path)
     ports = close_ports(root, FakePullRequestTracker())
     _many_documents(root, ports, 150)
-    listing = FakeListing([_item(number) for number in range(1, 151)])
+    items = [_item(number) for number in range(1, 151)]
+    dry = FakeListing(items)
     clock = Clock(NOW)
-    assert _cached_backfill(monkeypatch, tmp_path, ports, listing, clock, "--dry-run") == 0
-    assert listing.calls == [1, 2]
+    assert _cached_backfill(monkeypatch, tmp_path, ports, dry, clock, "--dry-run") == 0
+    assert dry.calls == [1, 2]
     assert _cost(4, 2, 4800) + ", 0 pages from cache\n" in capsys.readouterr().out
     clock.now = NOW + timedelta(seconds=300)
-    assert _cached_backfill(monkeypatch, tmp_path, ports, listing, clock) == 0
-    assert listing.calls == [1, 2]
+    live = FakeListing(items)  # a run builds its own listing, so its spend starts at zero
+    assert _cached_backfill(monkeypatch, tmp_path, ports, live, clock) == 0
+    assert live.calls == [] and live.quota_reads == 0
     out = capsys.readouterr().out.splitlines()
     assert out[-2:] == [_cost(0, 0, "unknown") + ", 2 pages from cache", out[-1]]
     assert out[-1].startswith("scored 150")
