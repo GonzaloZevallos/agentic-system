@@ -163,9 +163,7 @@ def test_a_role_output_reaches_the_drawing_schemas_only_through_those_fields(
 def test_the_empty_default_keeps_the_new_fields_out_of_an_existing_payload():
     turn = s.Answers(markdown="m", questions_for_human=[])
     assert turn.drawing_checks == [] and turn.departures == []
-    consultation = s.Consultation(
-        markdown="m", questions_for_human=[], definitions=[], glossary=[]
-    )
+    consultation = s.Consultation(markdown="m", questions_for_human=[], definitions=[], glossary=[])
     assert consultation.drawing_checks == [] and consultation.departures == []
 
 
