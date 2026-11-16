@@ -28,6 +28,7 @@ graph TD
     m_domain__plan_settlement["domain.plan_settlement"]
     m_domain__plan_view["domain.plan_view"]
     m_domain__pull_request["domain.pull_request"]
+    m_domain__stacking["domain.stacking"]
     m_domain__adr_dated --> m_domain__adr_numbers
     m_domain__board --> g_domain__state
     m_domain__cost_history --> g_domain__state
@@ -47,4 +48,5 @@ graph TD
     m_domain__plan_view --> g_domain__roles
     m_domain__plan_view --> g_domain__state
     m_domain__pull_request --> g_domain__state
+    m_domain__stacking --> g_domain__state
 ```
