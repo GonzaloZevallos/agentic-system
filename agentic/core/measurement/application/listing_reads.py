@@ -42,8 +42,9 @@ class Listing:
 
 @dataclass(frozen=True)
 class Stopped:
-    """The reads stopped; nothing partial is offered. `cached` is the saved pages still
-    fresh: what the next run need not read."""
+    """The reads stopped; nothing partial is offered. `cached` is the saved pages the next run
+    need not read: those read in this run and those fresh at the moment the run started (the
+    clock is read once, so a page expiring mid-run does not lower it)."""
 
     cause: StopCause
     spend: Spend
