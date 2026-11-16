@@ -386,3 +386,99 @@ def test_the_unit_full_checks_return_reopens_is_the_reviewed_unit_or_the_node_sa
     else:
         assert len(names) >= 2 and not with_integration
         assert rules.full_checks_excerpt_due(returned, reopened, HEAD) == "none"
+
+
+# --- repetition_for ---------------------------------------------------------------------------
+
+
+def rep_read(version: int, tests: Any, head: str = HEAD) -> FullChecksRead:
+    out: Any = {"version": version, "head": head, "jobs": [], "tests": tests}
+    return out
+
+
+def rep_state(
+    *,
+    reads: list[FullChecksRead],
+    version: int = 2,
+    head: str = HEAD,
+    subtask: dict[str, Any] | None = None,
+    record: bool = True,
+) -> Any:
+    state: Any = {
+        "subtasks": {INTEGRATION: subtask or {"status": "returned", "returned_by": "full_checks"}},
+        "full_checks_reads": reads,
+    }
+    if record:
+        state["full_checks"] = {"version": version, "head": head, "passed": False, "ran_on": "ci"}
+    return state
+
+
+REPEATING = [rep_read(1, ["aa", "bb"]), rep_read(2, ["aa", "bb"])]
+RESTART: dict[str, Any] = {"status": "pending", "attempt": 2}
+SENTENCE = "Same failing tests as full_checks v1 (overlap of recorded failing-test ids)."
+
+
+def test_repetition_for_is_the_sentence_after_a_clean_restart_and_holds_only_a_version():
+    state = rep_state(reads=REPEATING, subtask=RESTART)
+    assert rules.repetition_for(state, INTEGRATION) == SENTENCE
+    assert rules.repetition_for(state, INTEGRATION) == rules.repetition_sentence(1)
+
+
+def test_repetition_for_is_empty_when_the_full_checks_section_reaches_the_developer():
+    state = rep_state(reads=REPEATING)
+    assert rules.return_sections(state, INTEGRATION) == (rules.FULL_CHECKS,)
+    assert rules.repetition_for(state, INTEGRATION) == ""
+
+
+def test_repetition_for_is_empty_when_full_checks_only_rides_behind_final_validation():
+    unit = {
+        "status": "returned",
+        "returned_by": "final_validation",
+        "returned_with": ["full_checks"],
+    }
+    state = rep_state(reads=REPEATING, subtask=unit)
+    assert rules.FULL_CHECKS in rules.return_sections(state, INTEGRATION)
+    assert rules.repetition_for(state, INTEGRATION) == ""
+
+
+def test_repetition_for_is_empty_when_the_newest_read_is_older_than_the_record():
+    state = rep_state(reads=REPEATING, version=3, subtask=RESTART)
+    assert rules.repetition_for(state, INTEGRATION) == ""
+
+
+def test_repetition_for_is_empty_when_the_newest_read_is_of_another_head():
+    reads = [rep_read(1, ["aa"]), rep_read(2, ["aa"], OTHER)]
+    assert rules.repetition_for(rep_state(reads=reads, subtask=RESTART), INTEGRATION) == ""
+    assert (
+        rules.repetition_for(rep_state(reads=REPEATING, head=OTHER, subtask=RESTART), INTEGRATION)
+        == ""
+    )
+
+
+@pytest.mark.parametrize(
+    "reads",
+    [
+        [rep_read(1, ["aa"]), rep_read(2, ["bb"])],
+        [rep_read(1, ["aa"]), rep_read(2, None)],
+        [rep_read(1, ["aa"]), rep_read(2, [])],
+        [rep_read(1, ["aa"])],
+        [],
+    ],
+)
+def test_repetition_for_is_empty_unless_the_failure_repeats(reads: list[FullChecksRead]):
+    assert rules.repetition_for(rep_state(reads=reads, subtask=RESTART), INTEGRATION) == ""
+
+
+def test_repetition_for_is_empty_without_a_full_checks_record():
+    state = rep_state(reads=REPEATING, subtask=RESTART, record=False)
+    assert rules.repetition_for(state, INTEGRATION) == ""
+
+
+def test_repetition_for_never_raises_on_malformed_rows():
+    junk: Any = [{"head": "x"}, {"version": True}, "text", None]
+    state = rep_state(reads=[*junk, *REPEATING], subtask=RESTART)
+    assert rules.repetition_for(state, INTEGRATION) == SENTENCE
+    bad: Any = rep_state(reads=junk, subtask=RESTART)
+    assert rules.repetition_for(bad, INTEGRATION) == ""
+    bad["full_checks"] = {"version": "2"}
+    assert rules.repetition_for(bad, INTEGRATION) == ""

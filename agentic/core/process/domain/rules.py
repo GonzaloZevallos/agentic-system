@@ -3086,6 +3086,33 @@ def repetition_sentence(prev_version: int) -> str:
     )
 
 
+def repetition_for(state: TaskState, unit: str) -> str:
+    """The repetition sentence the returned Developer's `extra_input` carries, or `""`: the one
+    place that decides it (invariant 8, once per attempt). It holds only when the highest-version
+    valid read of `full_checks_reads` is that of the current `full_checks` record (same version
+    and commit; a failed read that was never stored leaves an older one, which says nothing about
+    this record), the failure `repeat`s, and the unit's `full_checks` section does not reach the
+    Developer: `_ci_red` already ends that section with this sentence, so it rides here only
+    when `return_sections` does not carry it (a clean restart). Never raises on malformed rows."""
+    record = state.get("full_checks")
+    reads = state.get("full_checks_reads", [])
+    valid = _valid_by_version(reads)
+    earlier = previous_read(reads)
+    if record is None or not valid or earlier is None:
+        return ""
+    newest = valid[-1]
+    if newest["version"] != record.get("version"):
+        return ""
+    read_head, record_head = newest.get("head"), record.get("head")
+    if not isinstance(read_head, str) or not same_commit(read_head, record_head):
+        return ""
+    if repeated_ci_failure(reads) != "repeat":
+        return ""
+    if _section_of(unit, "full_checks") in return_sections(state, unit):
+        return ""
+    return repetition_sentence(earlier["version"])
+
+
 def full_checks_excerpt_due(
     state: TaskState, unit: str, head: str
 ) -> Literal["read", "dispatch", "none"]:
