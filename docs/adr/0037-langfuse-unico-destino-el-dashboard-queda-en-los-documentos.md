@@ -1209,3 +1209,32 @@ caso (`FINAL` deja las dos filas; las vistas además agrupan por `id`); se corri
   caminos; `R` es `unknown` si no hubo ninguna lectura de cuota.
 - **Un número ausente de un listado completo** es `gh_failed` solo para esa corrida, sin
   ningún score con un tiempo inventado; una nueva corrida lo completa.
+
+## Adenda (2026-11-16, GH-803): `scores backfill` guarda en disco lo que lee de GitHub
+
+- **Dónde.** `$XDG_CACHE_HOME/agentic/scores-reads/<owner>__<repo>.json` (`~/.cache` si la
+  variable no está o está vacía), un archivo por repositorio. La clave `owner/repo` sale del
+  `origin` del checkout, en minúsculas, y es la misma que arma la ruta de cada página
+  (`repos/<owner>/<repo>/issues?...`): se construye una vez en la composición. Solo sin clave
+  (un `origin` que no es de GitHub) los marcadores `{owner}/{repo}` quedan literales y no hay
+  caché; la salida es entonces idéntica a la de antes.
+- **Qué se guarda.** Solo los items crudos de cada página (número, `created_at`, si es pull
+  request, `merged_at`, estado), la hora de lectura y si la página estaba abierta; nunca un
+  listado fusionado, un score, un id ni un resultado. Si el listado está completo se deriva al
+  leer (páginas 1..L presentes y la L corta), no se guarda. Se escribe después de cada página,
+  con un archivo temporal con el pid en el mismo directorio y `os.replace`; un archivo ilegible,
+  corrupto o de otra versión es una lectura nueva y se sobrescribe.
+- **Ventanas.** Una página es fresca 600 s si está abierta (es la última, o tiene un pull
+  request abierto y sin fusionar) y 3 horas si no. Solo eso decide la frescura: un issue
+  abierto no la acorta, y una página con hora de lectura futura nunca es fresca.
+- **Lectura por número.** Un número que la corrida necesita y está por encima del rango
+  cacheado se vuelve a leer desde la última página, una vez por corrida y solo si esa página
+  tiene 60 s o más; no es una lectura fallida. Solo un número ausente de un listado fresco y
+  completo es `gh_failed`.
+- **Salida con caché.** La línea de costo agrega `, <c> pages from cache`; la parada dice
+  `agentic: stopped reading GitHub: <causa>; <k> pages cached, the next run resumes` (con
+  `refused`: `...refused; rerun later; <k> pages cached`). Los códigos de salida no cambian.
+- **Riesgos aceptados.** Una página cerrada se confía 3 horas aunque GitHub cambie; un número
+  creado hace menos de 60 s puede salir `gh_failed` una vez; dos escritores a la vez pueden
+  perder una actualización (gana el último rename, el archivo nunca queda corrupto); y un
+  checkout sin `origin` de GitHub no tiene caché.

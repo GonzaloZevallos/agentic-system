@@ -52,7 +52,7 @@ from .core.measurement.application.eval_commands import (
     _eval_score,
 )
 from .core.measurement.application.listing_reads import Stopped, read_listing
-from .core.measurement.application.ports import NO_READS, EvalRoots, EvalSpawn, Spend
+from .core.measurement.application.ports import NO_READS, EvalRoots, EvalSpawn, NoCache, Spend
 from .core.measurement.domain import (
     evaluation,
     findings_report,
@@ -62,7 +62,13 @@ from .core.measurement.domain import (
     task_scores,
 )
 from .core.measurement.domain import metrics as delivery_metrics
-from .core.measurement.domain.issue_listing import ListedIssue, Missing, cost_line, times_for
+from .core.measurement.domain.issue_listing import (
+    ListedIssue,
+    Missing,
+    cost_line,
+    needed_numbers,
+    times_for,
+)
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
     FilesystemRunRegistry,
@@ -3381,6 +3387,25 @@ def _needs_github(loaded: Sequence[tuple[str, Mapping[str, Any] | None]]) -> boo
     )
 
 
+def _needed_by(loaded: Sequence[tuple[str, Mapping[str, Any] | None]]) -> frozenset[int]:
+    """The issue and pull request numbers the finished documents look up in the listing."""
+    return needed_numbers(
+        (task_id, str(document["pull_request"]) if document.get("pull_request") else None)
+        for task_id, document in loaded
+        if document is not None and (task_scores.scoreable(document) or document.get("closed_at"))
+    )
+
+
+def _stop_line(stopped: Stopped, cached: bool) -> str:
+    """The line a stopped read prints; with a read cache it also says what the next run keeps."""
+    line = f"agentic: stopped reading GitHub: {stopped.cause}; "
+    if not cached:
+        return line + "rerun later"
+    if stopped.cause == "refused":
+        return line + f"rerun later; {stopped.cached} pages cached"
+    return line + f"{stopped.cached} pages cached, the next run resumes"
+
+
 async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> None:
     """`agentic scores backfill [--product-dir PATH] [--dry-run]` (GH-273): every finished
     task document of the product (`ready_for_review`, `discarded` or closed) is scored on
@@ -3395,7 +3420,10 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     `unreachable`, `transient`, `refused`) stops the run before any line or score:
     `agentic: stopped reading GitHub: CAUSE; rerun later`, exit 75 (1 when the cause is
     `refused`). The cost line `agentic: github reads for PRODUCT: N calls (P core points),
-    core remaining R` follows the stop line and otherwise precedes the summary line."""
+    core remaining R` follows the stop line and otherwise precedes the summary line. With a read
+    cache (GH-803) the pages read are kept per repository: the stop line ends `K pages cached,
+    the next run resumes` (`refused`: `rerun later; K pages cached`) and the cost line `, C pages
+    from cache`."""
     try:
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
@@ -3414,14 +3442,20 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
             loaded.append((task_id, None))
     items: dict[int, ListedIssue] = {}
     reads: tuple[Spend, int | None] = (NO_READS, None)
+    from_cache: int | None = None
     if _needs_github(loaded):
-        listing = read_listing(composition.backfill_listing(cfg.product_dir))
+        listing_port, cache = composition.backfill_listing(cfg.product_dir)
+        cached = not isinstance(cache, NoCache)
+        listing = read_listing(
+            listing_port, cache, composition.backfill_clock(), _needed_by(loaded)
+        )
         reads = (listing.spend, listing.remaining)
         if isinstance(listing, Stopped):
-            print(f"agentic: stopped reading GitHub: {listing.cause}; rerun later")
+            print(_stop_line(listing, cached))
             print(cost_line(product, reads[0].calls, reads[0].points, reads[1]))
             sys.exit(1 if listing.cause == "refused" else 75)
         items = listing.items
+        from_cache = listing.from_cache if cached else None
     counts: dict[str, int] = {}
     rows: list[stage_report.StageRow] = []
     consecutive_failures = 0
@@ -3455,7 +3489,8 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
             break
     for line in stage_report.stage_lines(rows):
         print(line)
-    print(cost_line(product, reads[0].calls, reads[0].points, reads[1]))
+    spent_line = cost_line(product, reads[0].calls, reads[0].points, reads[1])
+    print(spent_line if from_cache is None else f"{spent_line}, {from_cache} pages from cache")
     scored, partial, failed = (counts.pop(k, 0) for k in ("scored", "partial", "failed"))
     skipped = ", ".join(f"{name} {n}" for name, n in sorted(counts.items()))
     print(f"scored {scored}, partial {partial}, {skipped + ', ' if skipped else ''}failed {failed}")
