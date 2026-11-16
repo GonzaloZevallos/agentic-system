@@ -9,6 +9,7 @@ Esta página muestra las clases públicas de los módulos del grupo `reports` de
 
 ```mermaid
 classDiagram
+    class playbook_window__CheckProposal["CheckProposal"]
     class playbook_window__Comparison["Comparison"]
     class playbook_window__Segment["Segment"]
     class role_usage__RoleUsage["RoleUsage"]

@@ -20,7 +20,9 @@ from ..domain.worktree_sweep import (
     checkout_fate,
     due,
     remember,
+    rewind,
     say,
+    space_outcome,
     task_of,
     verdict,
 )
@@ -30,9 +32,12 @@ from .release import release_checkout, release_task
 
 @dataclass
 class SweepCarry:
-    """What the poller keeps between rounds: the latest memory, nothing else."""
+    """What the poller keeps between rounds: the latest memory and whether the held-round line
+    was said. `held_said` is not a `SweepMemory` pair: `due` drops the pairs of tasks it is not
+    listed, and nothing resets this flag."""
 
     memory: SweepMemory = field(default_factory=SweepMemory)
+    held_said: bool = False
 
 
 def _listed(ports: Ports) -> dict[str, list[str]]:
@@ -45,15 +50,24 @@ def _listed(ports: Ports) -> dict[str, list[str]]:
 
 
 def sweep(
-    ports: Ports, lock: RunLock, memory: SweepMemory, monotonic: Callable[[], float]
+    ports: Ports,
+    lock: RunLock,
+    memory: SweepMemory,
+    monotonic: Callable[[], float],
+    *,
+    busy: frozenset[str] = frozenset(),
 ) -> tuple[list[str], SweepMemory]:
     """One round: at most `SWEEP_READS_MAX` tasks, none started after `SWEEP_WALL_S`. Returns
     the lines to say (each cause once per process) and the next memory. A `TrackerCallFailed`
     stops the reads of the round; any exception outside the ones a task's own try names
-    propagates."""
+    propagates. A task in `busy` (a live process of this product, or one the round just
+    ordered) is skipped before any read and with no memo, so the next round looks at it again. An
+    `OSError` of `ENOSPC`/`EDQUOT` memoises `no_space`, rewinds the cursor to its task and stops
+    the round; every other one is `removal_failed`."""
     started = monotonic()
     names = _listed(ports)
     ids, memory = due(names, memory)
+    ids = [task for task in ids if task not in busy]
     lines: list[str] = []
     removed = 0
     for task in ids:
@@ -68,6 +82,12 @@ def sweep(
         except LockHeld:
             memory = remember(memory, task, "held")
         except (GitError, OSError, ValueError) as exc:
+            if space_outcome(exc.errno if isinstance(exc, OSError) else None) == "no_space":
+                # A full disk fails every task the same way: say it, look at this task first
+                # next round, and stop reading issues now (GH-865).
+                full = remember(memory, task, "no_space")
+                memory = rewind(_said(full, lines, task, "no_space", f"no space: {exc}"), task)
+                break
             failed = remember(memory, task, "removal_failed")
             memory = _said(failed, lines, task, "removal_failed", f"removal failed: {exc}")
     if removed:

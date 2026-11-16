@@ -125,3 +125,36 @@ def test_a_ci_product_never_runs_local_checks_on_the_checks_failed_path():
     landing_fix.rerun(context)
     assert ports.tracker.run_reruns == [] and ports.tracker.rerun_calls == []
     assert (ports.documents.load("GH-9") or {}).get("merge_checks") == before
+
+
+def _stacked_context(ports, refusal):
+    from agentic.core.process.domain.stacking import StackFacts
+
+    context = _context(ports, refusal=refusal)
+    facts = replace(
+        context.facts,
+        stack=StackFacts(
+            record=None, parent_state="unknown", parent_in_upstream=None, child_has_parent=None
+        ),
+    )
+    return replace(context, step=landing.LandingStep("escalate", refusal), facts=facts)
+
+
+def test_a_stacked_exhaustion_on_a_refusal_off_the_stack_has_its_own_fixed_text():
+    from agentic.core.process.application import landing as landing_app
+
+    ports = _ports(9)
+    landing_app._dispatch(_stacked_context(ports, "merge_conflict"))
+    reason = (ports.documents.load("GH-9") or {})["escalated"]
+    assert reason == landing.STACK_EXHAUSTED_TEXT.format(refusal="merge_conflict")
+    assert "red on the base branch" not in reason
+
+
+def test_a_stacked_restack_exhaustion_says_the_fixed_restack_text():
+    from agentic.core.process.application import landing as landing_app
+
+    ports = _ports(9)
+    landing_app._dispatch(_stacked_context(ports, "stack_restack_due"))
+    assert (ports.documents.load("GH-9") or {})["escalated"] == landing.STACK_ESCALATION[
+        "stack_restack_due"
+    ]

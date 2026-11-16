@@ -29,6 +29,8 @@ Esta página muestra las clases públicas de los módulos del grupo `roles` de `
 
 ```mermaid
 classDiagram
+    class schemas__Ruling["Ruling"]
+    class schemas__SolutionTurn["SolutionTurn"]
     class schemas__StackProposal["StackProposal"]
     class schemas__Subtask["Subtask"]
     class schemas__TechAnswers["TechAnswers"]
@@ -46,7 +48,10 @@ classDiagram
 
 ## Relaciones con otras páginas
 
+- [domain: roles (parte 3)](classes-process-domain-roles-3.md)
+  - `schemas.SolutionTurn` hereda de `schemas.InterviewTurn`
 - [domain: roles (parte 4)](classes-process-domain-roles-4.md)
+  - `schemas.Ruling` hereda de `schemas.RoleOutput`
   - `schemas.StackProposal` hereda de `schemas.RoleOutput`
   - `schemas.TechAnswers` hereda de `schemas.RoleOutput`
   - `schemas.TechPlan` hereda de `schemas.RoleOutput`
