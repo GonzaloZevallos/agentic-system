@@ -21,22 +21,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules, spec_assumptions
+from ..domain import drawing_answer, rules, spec_assumptions
 from ..domain.document import HUMAN
 from ..domain.roles import Interview, Role
 from ..domain.task import (
     WAITING_ON_HUMAN,
     AssumptionRow,
+    DepartureRecord,
     SpecEscalationCause,
     TaskState,
+    add_drawing_departures,
     apply,
     assumption_text,
 )
+from . import interview_drawing
+from .checkouts import task_base
 from .ports import Ports
-from .run_role import Output, run_role, with_context
+from .run_role import Check, Output, run_role, with_context
 
 CLOSE = (
     "The rounds are over. Do not ask anything else: close the interview with `done` and "
@@ -174,7 +179,18 @@ async def interview(
         else None
     )
 
-    async def turn(role: Role, delta: str | None, round_: int) -> tuple[Output | None, TaskState]:
+    design = ports.stack.design(task_base(state, ports))  # read once: `None` changes nothing
+    drawn = interview_drawing.Collector(design)
+
+    def failed(patch: TaskState) -> tuple[None, TaskState]:
+        # The exit by failure composes no escalation: the failure stays as it is, and what was
+        # raised so far stays as rows with no answer for the next normal exit.
+        recorded = _record(state, spec, transcript, patch)
+        return None, apply(recorded, drawn.rows(apply(state, recorded), ports.now()))
+
+    async def turn(
+        role: Role, delta: str | None, round_: int, check: Check | None = None
+    ) -> tuple[Output | None, TaskState]:
         # Each turn sees the runs before it, so the record numbers them in order; the
         # transcript section itself is written once, at the end. Whether this seat gets
         # the full context or the shorter `delta` its session already covers for is
@@ -199,6 +215,7 @@ async def interview(
             role,
             cfg,
             ports,
+            check=check,
             section=spec.section,
             cwd=cwd,
             resume=resume,
@@ -271,9 +288,14 @@ async def interview(
     for round_ in range(start_round, max_rounds + 1):
         first_new_round = retaking and round_ == start_round
         ask_delta = retake_delta if first_new_round else _interviewer_prompt(transcript, reply)
-        asked, patch = await turn(spec.interviewer, ask_delta, round_)
+        asked, patch = await turn(
+            spec.interviewer,
+            ask_delta,
+            round_,
+            interview_drawing.check_for(spec.interviewer, design, apply(state, patch), ()),
+        )
         if asked is None:
-            return None, _record(state, spec, transcript, patch)
+            return failed(patch)
         transcript.propose(asked.data.get("invariants", []))
         if asked.data["done"]:
             transcript.rounds.append(f"### Closing\n\n{asked.text}")
@@ -284,9 +306,17 @@ async def interview(
         prompt = _questions(asked, round_, consulted, transcript)
         if first_new_round:
             prompt = f"{retake_delta}\n\n{prompt}"
-        answers, patch = await turn(spec.interviewee, prompt, round_)
+        answers, patch = await turn(
+            spec.interviewee,
+            prompt,
+            round_,
+            interview_drawing.check_for(
+                spec.interviewee, design, apply(state, patch), asked.data.get("visible", [])
+            ),
+        )
         if answers is None:
-            return None, _record(state, spec, transcript, patch)
+            return failed(patch)
+        patch = apply(patch, drawn.collect(spec.interviewee, answers.data, apply(state, patch)))
         transcript.rounds.append(f"### Round {round_}: answers\n\n{answers.text}")
         transcript.completed_rounds += 1
         reply, consulted = answers.text, None
@@ -297,6 +327,10 @@ async def interview(
             )
         if has_spec and (cause := answers.data.get("spec_conflict")):
             step = spec_assumptions.conflict_step(state, cause)
+            if step == spec_assumptions.ESCALATE and drawn.due(apply(state, patch)):
+                # The drawing wins: no more rounds, and the conflict comes back on the retake.
+                recorded = _record(state, spec, transcript, patch)
+                return None, _escalate_drawing(state, recorded, drawn, ports)
             if step == spec_assumptions.ESCALATE:
                 # Escalates in this round: its questions for PM are dropped, no consultation runs.
                 reason = spec_assumptions.conflict_reason(cause, round_)
@@ -317,7 +351,7 @@ async def interview(
         transcript.consultations += 1
         answered, patch = await consult(spec.consultant, to_pm, round_)
         if answered is None:
-            return None, _record(state, spec, transcript, patch)
+            return failed(patch)
         transcript.rounds.append(f"### Round {round_}: {decider.name} answers\n\n{answered.text}")
         transcript.withdraw(answered.data["withdrawn"])
         transcript.ask_human(
@@ -335,11 +369,13 @@ async def interview(
             spec.interviewer, _interviewer_prompt(transcript, f"{reply}\n\n{CLOSE}"), max_rounds
         )
         if asked is None:
-            return None, _record(state, spec, transcript, patch)
+            return failed(patch)
         transcript.propose(asked.data.get("invariants", []))
         transcript.rounds.append(f"### Closing\n\n{asked.text}")
 
     patch = _record(state, spec, transcript, patch)
+    if drawn.due(apply(state, patch)):
+        return None, _escalate_drawing(state, patch, drawn, ports)
     if transcript.questions_for_human:
         # Without a spec only: with one `ask_human` never fills `questions_for_human`, and
         # `rules.escalation` refuses a spec escalation without a cause.
@@ -370,6 +406,22 @@ def _escalate_questions(
     )
     patch["status"] = WAITING_ON_HUMAN
     return patch
+
+
+def _escalate_drawing(
+    state: TaskState, patch: TaskState, drawn: interview_drawing.Collector, ports: Ports
+) -> TaskState:
+    """`patch` escalated for the owner's answer on the drawing departures, once: the new rows
+    and the open ones in one `questions` pause; the questions for the human already in `patch`
+    travel in it. With a spec the cause is `drawing` (`drawing_answer.escalation_patch`)."""
+    held = apply(state, patch)
+    escalation = drawing_answer.escalation_patch(held, drawn.pending(held), ports.now())
+    new_rows = cast(list[DepartureRecord], escalation.pop("drawing_departures"))
+    rows = add_drawing_departures(patch.get("drawing_departures"), new_rows)
+    merged = cast(TaskState, {**patch, **escalation, "drawing_departures": rows})
+    escalated = rules.logged(merged, at=ports.now())
+    escalated["status"] = WAITING_ON_HUMAN
+    return escalated
 
 
 def _interviewer_prompt(transcript: Transcript, reply: str | None) -> str | None:
