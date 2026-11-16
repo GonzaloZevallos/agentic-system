@@ -175,6 +175,53 @@ llegaba. Cambia esto:
   casos (turno de rol, `full_checks`, setup, chequeo que ignora SIGTERM con un rol que
   ignora la cancelación, y un comando corrido directo en el loop).
 
+## Adenda GH-824: el barrido de worktrees de issues cerrados
+
+Dirección del dueño (issue #824): «una vez que el sistema aterriza una tarea, quita los
+worktrees de esa tarea». Barrer los issues fusionados o cerrados a mano es la extensión del
+Tech Lead. Las ramas nunca se borran; solo los checkouts bajo `.agentic/worktrees`.
+
+- **Al fusionar:** `release_after_merge` quita los worktrees de la tarea que el sistema
+  acaba de fusionar; nunca falla el merge. Si la remoción falla deja un
+  `worktree_release_lapse` (`git_failed` o `os_error`), un registro que ninguna decisión lee.
+- **Barrido del poller:** `worktree_sweep.sweep` corre al final de la ronda, después de
+  `execute`, solo con la ronda no retenida y fuera de `dry_run`. Solo juzga issues CLOSED
+  (`verdict`), lee a lo sumo `SWEEP_READS_MAX` por ronda, corta a los `SWEEP_WALL_S` y no
+  vuelve a mirar una tarea hasta que vence el TTL de su resultado (`MEMO_TTL_ROUNDS`). Una
+  tarea en `busy` se salta sin memo. `busy` se arma por producto después de `execute`, desde
+  un `registry.live()` fresco más los issues de todas las acciones de la ronda: registrarse
+  no implica tener el lock (`_land` se registra antes de que `landing.land` lo tome).
+- **Trazado de locks** (por función, sin números de línea):
+
+| Creador | Checkout | Lock |
+|---|---|---|
+| nodos del grafo (`plan`, `define`, `design`, `copy`, `develop`, `review`, `deliver`, `verifiers`, `diagnose`, `validate_prd`, `owner_rules`, `integrate`, `shadow_review`) | `GH-N`, `GH-N.<sub>`, `GH-N.shadow-<sid>` | run y resume, bajo `_locked` en `cli._run` y `cli._resume` |
+| `merge` | `merge-GH-N` | `_locked` en `cli._merge` |
+| `landing`, `landing_sync`, `landing_adr`, `landing_slice` | `GH-N`, `slice-GH-N` | `lock.acquire(task_id, "land")` en `landing.land`, dentro de `cli._land` |
+| `restore`, `close` | ninguno | `_locked` en `cli._restore` y `cli._close`; tocan ramas y documento |
+| `archive` | ninguno, quita checkouts | dentro de `cli._run`, bajo `_locked` |
+| `perf` (`perf-<hex>`), `reflect_run` (`playbook`), `integration-<hex>`, EVAL | ninguna tarea los mapea | `task_of` los devuelve `None`: nunca se barren |
+
+  `langgraph dev` es la excepción aceptada: crea checkouts sin lock. El test
+  `tests/test_checkout_creators.py` fija los módulos que llaman a los seis creadores
+  (`task_checkout`, `subtask_checkout`, `detached_checkout` y sus `_in_thread`): un llamador
+  nuevo lo rompe y obliga a trazarlo a un RunLock y listarlo aquí. Fija los sitios de
+  llamada; no prueba el lock.
+- **Nada lee el checkout de una tarea fusionada:** `_close_document` lee el documento y el
+  pull request; `board_sync`, `close_issues` y `reflect_run` no leen checkouts de tareas.
+- **Largo de la ronda:** el barrido suma como mucho `SWEEP_WALL_S` más la remoción de una
+  tarea, entre `beat("start")` y `beat("end")`, muy por debajo de la gracia de 15 minutos de
+  `rollback_due`.
+
+**Riesgos aceptados:** se pierden los archivos sin seguimiento y los commits solo en
+cabeza separada de un checkout quitado; se pisa la evidencia de un lock muerto de un issue
+cerrado (el barrido lo toma); la latencia de un merge a mano es hasta `OPEN_TTL_ROUNDS` más
+un ciclo del cursor; la latencia al fusionar está en la ranura exenta; una ronda retenida
+nunca barre, y un volumen lleno de worktrees de tareas cerradas sigue retenido hasta que el
+dueño decida por el issue de seguimiento (que no se abre si la lectura acotada de issues
+abiertos pudo quedar cortada); reiniciar el poller pierde la memoria; una ronda de más de
+2 × `interval_s` saca al poller de `expected_pollers`, lo que nunca provoca una reversa.
+
 ## Gate result
 
 **Pasó.** `uv run pytest -m llm tests/llm/test_role_process_mark.py -v -s`, con el CLI
