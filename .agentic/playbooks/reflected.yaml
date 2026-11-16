@@ -1252,3 +1252,14 @@ tasks:
     decisions: 1
   GH-848@review:
     cost_usd: 0.1101
+  GH-803@review:
+    cost_usd: 0.101
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-803
+    decisions: 1
