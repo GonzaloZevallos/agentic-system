@@ -387,3 +387,78 @@ def test_a_retire_that_runs_out_on_a_later_id_keeps_the_earlier_gone_and_a_rerun
     calls.clear()
     assert writer.retire(["a1", "b2"]) is True
     assert calls == [("DELETE", "a1"), ("DELETE", "b2")]
+
+
+class FakeLangfuse:
+    """A local stand-in for the Langfuse scores API, as the spike showed it behaves: one row
+    per score id, a re-post of an id that exists keeps the FIRST timestamp, a DELETE removes
+    the row, and a GET answers 404 once it is gone. Every call is recorded in order."""
+
+    def __init__(self, seeded: dict[str, str]) -> None:
+        self.rows = dict(seeded)  # score id -> timestamp of the row
+        self.log: list[tuple[str, str]] = []
+
+    def transport(
+        self, url: str, body: bytes, headers: dict[str, str], timeout_s: float
+    ) -> tuple[int, bytes]:
+        if url.endswith("/ingestion"):
+            for event in json.loads(body)["batch"]:
+                score = event["body"]
+                self.log.append(("POST", score["id"]))
+                self.rows.setdefault(score["id"], score["timestamp"])
+        return 200, b'{"successes":[],"errors":[]}'
+
+    def requester(self, method: str, url: str, headers: dict[str, str], timeout_s: float) -> int:
+        score_id = url.rsplit("/", 1)[1]
+        self.log.append((method, score_id))
+        if method == "DELETE":
+            return 200 if self.rows.pop(score_id, None) is not None else 404
+        return 200 if score_id in self.rows else 404
+
+    def day_of(self, score_id: str) -> str | None:
+        return self.rows[score_id][:10] if score_id in self.rows else None
+
+
+def _redate_setup() -> tuple[FakeLangfuse, LangfuseScores, list[task_scores.Score]]:
+    scores = _scores(issue_created_at="2026-10-09T08:00:00Z", pr_merged_at=MERGED)
+    ids = task_scores.identity("apostrophe", "GH-12", START)
+    old_day = f"{END:%Y-%m-%d}T09:53:20.250Z"
+    seeded = {ids.score_id(s.name): old_day for s in scores}  # written before, at task end
+    fake = FakeLangfuse(seeded)
+    writer = LangfuseScores(
+        "http://lf:3000",
+        "pk",
+        "sk",
+        product="apostrophe",
+        transport=fake.transport,
+        requester=fake.requester,
+        sleep=lambda _: None,
+    )
+    return fake, writer, scores
+
+
+def test_a_repost_without_a_retire_keeps_the_first_day_so_the_merge_never_lands() -> None:
+    fake, writer, scores = _redate_setup()
+    ids = task_scores.identity("apostrophe", "GH-12", START)
+    assert writer.write("apostrophe", "GH-12", DOCUMENT, scores, TIME, DIMENSIONS) is True
+    assert fake.day_of(ids.score_id("cycle_h")) == "2026-10-09"  # the fake models the spike
+
+
+def test_retire_then_repost_moves_the_merge_dated_scores_to_the_merge_day_and_only_those() -> None:
+    fake, writer, scores = _redate_setup()
+    ids = task_scores.identity("apostrophe", "GH-12", START)
+    merge_dated = [ids.score_id(s.name) for s in scores if task_scores.merge_dated(s.name)]
+    assert merge_dated and any(s.name == "cycle_h" for s in scores)
+
+    assert writer.retire(merge_dated) is True
+    assert all(fake.day_of(score_id) is None for score_id in merge_dated)  # the retired are gone
+    assert writer.write("apostrophe", "GH-12", DOCUMENT, scores, TIME, DIMENSIONS) is True
+
+    for score in scores:
+        score_id = ids.score_id(score.name)
+        expected = "2026-10-12" if task_scores.merge_dated(score.name) else "2026-10-09"
+        assert fake.day_of(score_id) == expected, score.name
+    deletes = [i for i, (verb, _) in enumerate(fake.log) if verb == "DELETE"]
+    posts = [i for i, (verb, _) in enumerate(fake.log) if verb == "POST"]
+    assert deletes and posts and max(deletes) < min(posts)  # every delete before any post
+    assert {fake.log[i][1] for i in deletes} == set(merge_dated)
