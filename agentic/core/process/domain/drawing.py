@@ -307,10 +307,11 @@ def interview_check(
         if reason:
             return reason
         try:
-            raised.add(departure_key(departure.drawing, departure.element))
+            key = departure_key(departure.drawing, departure.element)
         except ValueError:
             return f"a departure of {departure.drawing} cites an element that is empty"
-        if departure_key(departure.drawing, departure.element) not in departing:
+        raised.add(key)
+        if key not in departing:
             return f"a departure of {departure.drawing} has no departs check"
     for check in checks:
         if check.verdict == "departs" and check.drawing is not None and check.element is not None:
