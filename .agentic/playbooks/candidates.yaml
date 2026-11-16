@@ -2058,3 +2058,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-16T05:55:00.018+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a diff changes a flow's behaviour, update the docs and docstrings that describe it, and re-read them against the final code, including every input source and any wording the change makes false.
+  confidence: low
+  seen_in:
+  - GH-836
+  sources:
+  - finding
+  added_at: '2026-11-16T09:06:47.522+00:00'
