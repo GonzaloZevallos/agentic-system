@@ -1592,7 +1592,11 @@ def _slice_document(**record) -> dict:
 
 
 def _slice_decision(document) -> rules.MergeDecision:
-    facts = landing.slice_facts(
+    return rules.auto_merge_decision(_slice_built_facts(document))
+
+
+def _slice_built_facts(document) -> rules.MergeFacts:
+    return landing.slice_facts(
         landing.Slice(("a", "b")),
         document,
         task_id="GH-9",
@@ -1609,7 +1613,22 @@ def _slice_decision(document) -> rules.MergeDecision:
         checks_master=MASTER,
         checks_passed=True,
     )
-    return rules.auto_merge_decision(facts)
+
+
+def test_a_slice_builds_its_stack_facts_from_the_document():
+    record = {"issue": 7, "task_id": "GH-7", "head": "d" * 40, "started_at": "2026-11-16T10:00:00"}
+    assert _slice_built_facts(_slice_document()).stack is None
+    stacked = _slice_built_facts(_slice_document(stack_parent=record)).stack
+    assert stacked is not None and stacked.record is not None
+    assert stacked.record == record
+    assert (stacked.parent_state, stacked.parent_in_upstream, stacked.child_has_parent) == (
+        "unknown",
+        None,
+        None,
+    )
+    unreadable = _slice_built_facts(_slice_document(stack_parent="GH-7")).stack
+    assert unreadable is not None and unreadable.record is None
+    assert unreadable.parent_state == "unknown"
 
 
 def test_a_slice_of_a_document_without_a_stack_parent_merges_as_it_did():
