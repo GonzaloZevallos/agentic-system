@@ -626,9 +626,11 @@ async def test_the_plan_that_stands_clears_plan_due_and_the_subtask_is_built_wit
 
     assert state["plan_due"] is False
     assert list(state["subtasks"]) == ["api"] and state["tracker_items"] == [ITEM1]
-    # The item rides the delivery next to the subtask: the plan goes to the fan-in.
-    assert rules.after_plan(state) == "integrate"
-    assert rules.resume_target(state) == "integrate"
+    # GH-784: the item is asked at the end of the plan that stands, before the subtask is built.
+    assert state["escalation_class"] == "questions" and rules.after_plan(state) is None
+    answered = apply(state, rules.resumed(state, "yes", at=AT))
+    assert rules.after_plan(answered) == "integrate"
+    assert rules.resume_target(answered) == "integrate"
 
 
 async def test_a_plan_node_that_escalates_leaves_plan_due_true(tmp_path):
