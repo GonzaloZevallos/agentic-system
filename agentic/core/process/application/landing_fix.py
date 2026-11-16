@@ -288,8 +288,9 @@ def escalate_stacked(context: LandingContext) -> None:
     refusal = context.step.refusal
     reason = landing_rules.STACK_ESCALATION.get(refusal) if refusal is not None else None
     if reason is None:
-        context.log(f"agentic: land: {context.task_id}: stacked escalation without a text")
-        return
+        # A stacked task whose budget ran out on a refusal that is not about the stack: never the
+        # "red on the base branch" text, which would carry an empty list of checks.
+        reason = landing_rules.STACK_EXHAUSTED_TEXT.format(refusal=refusal or "none")
     _escalate(context, reason, "questions")
 
 

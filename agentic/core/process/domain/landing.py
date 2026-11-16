@@ -147,6 +147,14 @@ refusal value: never a word of the parent, its issue or the record. `stack_resta
 one the landing escalates (its sync budget ran out); `stack_base_orphaned` is owned by a person
 and answers `none`, so its text is the one the merge comment shares."""
 
+STACK_EXHAUSTED_TEXT = (
+    "This task is stacked on a parent and its landing budget ran out while the merge was "
+    "refused for `{refusal}`. A stacked task is never diagnosed, restarted or sliced: fix the "
+    "branch by hand, or relaunch this task from the base branch."
+)
+"""The escalation of a stacked task whose budget ran out on a refusal that is not about the
+stack (GH-859): fixed text, the closed refusal value is the only thing filled in."""
+
 
 def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None) -> rules.RunKind:
     """The kind a `land` child registers under for the step it is about to carry out
