@@ -20,7 +20,9 @@ from ..domain.worktree_sweep import (
     checkout_fate,
     due,
     remember,
+    rewind,
     say,
+    space_outcome,
     task_of,
     verdict,
 )
@@ -59,7 +61,9 @@ def sweep(
     the lines to say (each cause once per process) and the next memory. A `TrackerCallFailed`
     stops the reads of the round; any exception outside the ones a task's own try names
     propagates. A task in `busy` (a live process of this product, or one the round just
-    ordered) is skipped before any read and with no memo, so the next round looks at it again."""
+    ordered) is skipped before any read and with no memo, so the next round looks at it again. An
+    `OSError` of `ENOSPC`/`EDQUOT` memoises `no_space`, rewinds the cursor to its task and stops
+    the round; every other one is `removal_failed`."""
     started = monotonic()
     names = _listed(ports)
     ids, memory = due(names, memory)
@@ -78,6 +82,12 @@ def sweep(
         except LockHeld:
             memory = remember(memory, task, "held")
         except (GitError, OSError, ValueError) as exc:
+            if space_outcome(exc.errno if isinstance(exc, OSError) else None) == "no_space":
+                # A full disk fails every task the same way: say it, look at this task first
+                # next round, and stop reading issues now (GH-865).
+                full = remember(memory, task, "no_space")
+                memory = rewind(_said(full, lines, task, "no_space", f"no space: {exc}"), task)
+                break
             failed = remember(memory, task, "removal_failed")
             memory = _said(failed, lines, task, "removal_failed", f"removal failed: {exc}")
     if removed:

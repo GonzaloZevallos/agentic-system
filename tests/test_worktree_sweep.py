@@ -3,6 +3,7 @@ one real temp repo through `GitWorkspace` for what git does with a directory it 
 
 from __future__ import annotations
 
+import errno
 import subprocess
 from pathlib import Path
 
@@ -38,9 +39,12 @@ class Lock:
         self.held = held or set()
         self.dead = dead or set()
         self.events: list[tuple[str, str]] = []
+        self.failure: OSError | None = None
 
     def acquire(self, task_id: str, command: str) -> LockRecord | None:
         self.events.append(("acquire", task_id))
+        if self.failure is not None:
+            raise self.failure
         if task_id in self.held:
             raise LockHeld(DEAD, f"{task_id} is running")
         return DEAD if task_id in self.dead else None
@@ -57,6 +61,12 @@ class Workspace(MemoryWorkspace):
         super().__init__()
         self.stale_checkouts = list(names)
         self.unreadable: set[Path] = set()
+        self.full_for: set[str] = set()
+
+    def remove_checkout(self, name: str) -> None:
+        if name in self.full_for:
+            raise OSError(errno.EDQUOT, "Disk quota exceeded")
+        super().remove_checkout(name)
 
     def is_committed(self, path: Path) -> bool:
         if path in self.unreadable:
@@ -296,3 +306,71 @@ def test_a_busy_task_is_skipped_before_any_read_and_leaves_no_memo() -> None:
 
     _, again = sweep(ports, lock, memory, Clock())  # the next round, no longer busy
     assert 7 in tracker.reads
+
+
+def full_disk() -> OSError:
+    return OSError(errno.ENOSPC, "No space left on device")
+
+
+def test_no_space_from_the_lock_stops_the_round_after_one_read_and_one_acquire() -> None:
+    ports, workspace, tracker = world("GH-1", "GH-2", "GH-3", closed=(1, 2, 3))
+    lock = Lock()
+    lock.failure = full_disk()
+    carry = SweepCarry()
+
+    lines, carry.memory = sweep(ports, lock, carry.memory, Clock())
+
+    assert tracker.reads == [1] and lock.events == [("acquire", "GH-1")]
+    assert len(lines) == 1 and lines[0].startswith("agentic: sweep: GH-1: no space: ")
+    assert "No space left on device" in lines[0]
+    assert {t: m[1] for t, m in carry.memory.memos.items()} == {"GH-1": "no_space"}
+    assert workspace.removed_checkouts == []
+
+    lock.failure = None  # the disk has room again
+    lines, carry.memory = sweep(ports, lock, carry.memory, Clock())
+
+    assert tracker.reads == [1, 1, 2, 3]
+    assert workspace.cleaned == ["GH-1", "GH-2", "GH-3"]
+    assert [line.split(" in ")[0] for line in lines] == ["agentic: sweep: removed 3 worktrees"]
+
+
+def test_no_space_is_said_once_across_rounds() -> None:
+    ports, _, _ = world("GH-1", closed=(1,))
+    lock = Lock()
+    lock.failure = full_disk()
+    carry = SweepCarry()
+
+    first, carry.memory = sweep(ports, lock, carry.memory, Clock())
+    second, carry.memory = sweep(ports, lock, carry.memory, Clock())
+
+    assert len(first) == 1 and second == []
+    assert carry.memory.memos["GH-1"][1] == "no_space"
+
+
+def test_no_space_from_a_removal_rewinds_the_cursor_to_that_task() -> None:
+    ports, workspace, tracker = world("GH-1", "GH-2", "GH-3", closed=(1, 2, 3))
+    workspace.full_for = {"GH-2"}
+
+    lines, memory = sweep(ports, Lock(), SweepMemory(), Clock())
+
+    assert tracker.reads == [1, 2]
+    assert {t: m[1] for t, m in memory.memos.items()} == {"GH-1": "removed", "GH-2": "no_space"}
+    assert memory.cursor == 1
+    assert any(line.startswith("agentic: sweep: GH-2: no space: ") for line in lines)
+
+
+@pytest.mark.parametrize("code", [errno.EACCES, errno.EIO, errno.EROFS])
+def test_any_other_errno_is_still_removal_failed_and_the_round_goes_on(code: int) -> None:
+    ports, workspace, tracker = world("GH-1", "GH-2", closed=(1, 2))
+    lock = Lock()
+    lock.failure = OSError(code, "boom")
+
+    lines, memory = sweep(ports, lock, SweepMemory(), Clock())
+
+    assert tracker.reads == [1, 2]
+    assert {t: m[1] for t, m in memory.memos.items()} == {
+        "GH-1": "removal_failed",
+        "GH-2": "removal_failed",
+    }
+    assert len(lines) == 2 and all("removal failed: " in line for line in lines)
+    assert memory.cursor == 2

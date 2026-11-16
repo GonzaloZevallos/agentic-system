@@ -5401,6 +5401,14 @@ def space_holds(readings: Mapping[str, SpaceReading], floor_bytes: int) -> tuple
     )
 
 
+def sweeps_when_held(held: tuple[str, ...]) -> bool:
+    """Whether a round held by the floor still runs the closed-task worktree sweep (GH-865): when
+    the product volume is among the holds. The sweep starts no child and writes nothing to scratch
+    or `/tmp`, and it is what frees the product volume; scratch usually shares its filesystem, so
+    'held only by the product volume' would never be true. The only place this is decided."""
+    return PRODUCT_VOLUME in held
+
+
 def poll_plan(
     *,
     closes: Sequence[int],
