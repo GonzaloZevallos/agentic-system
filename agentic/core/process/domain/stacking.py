@@ -88,6 +88,42 @@ def parse_stack_parent(raw: Mapping[str, object]) -> Absent | StackParent | Unre
     return StackParent(issue=issue, task_id=task_id, head=head, started_at=started_at)
 
 
+def facts_of(raw: Mapping[str, object]) -> StackFacts | None:
+    """The one builder of unread facts (GH-860): `None` for a document that never was stacked,
+    so that it makes no stacking read and decides as it always did; otherwise the record (`None`
+    when unreadable) with every fact unknown. The caller that reads the facts replaces them."""
+    parsed = parse_stack_parent(raw)
+    if isinstance(parsed, Absent):
+        return None
+    return StackFacts(
+        record=None if isinstance(parsed, Unreadable) else parsed,
+        parent_state="unknown",
+        parent_in_upstream=None,
+        child_has_parent=None,
+    )
+
+
+# Whether the parent's closing merge holds the recorded head: `contains` it does, `excludes` it
+# does not, `none` the issue has no merge commit, `unread` git could not tell.
+ClosingMerge = Literal["contains", "excludes", "none", "unread"]
+
+
+def parent_state_of(state: str, closing: ClosingMerge) -> Literal["open", "closed", "unknown"]:
+    """The parent issue's state as `refusal` reads it. `closed` only when the issue is closed and
+    its closing merge does not hold the recorded head (or there is none): the parent's work was
+    left out. A closed issue whose merge holds the head is `unknown`: the parent landed and the
+    caller's upstream is stale, so the child waits a round instead of reading as orphaned."""
+    match state, closing:
+        case "OPEN", _:
+            return "open"
+        case "CLOSED", "excludes" | "none":
+            return "closed"
+        case "CLOSED", "contains" | "unread":
+            return "unknown"
+        case _:
+            return "unknown"
+
+
 def unread_facts() -> StackFacts:
     """A record that is present and no fact read: what `rules.stack_probe_wanted` substitutes to
     ask whether reading them could change the decision. The record's fields are never read."""
@@ -109,7 +145,8 @@ def refusal(stack: StackFacts, conflicts: bool | None) -> rules.MergeRefusal | N
        `unknown`, `stack_parent_unmerged`;
     4. ancestry unknown: `stack_parent_unmerged`.
 
-    Anything not known is a refusal: an unreadable fact never merges."""
+    Row 2 never reads `parent_state`. Anything not known is a refusal: an unreadable fact never
+    merges."""
     if stack.record is None:
         return "stack_base_orphaned"
     if stack.parent_in_upstream is True:

@@ -1103,18 +1103,6 @@ def slices_closed(refs: Sequence[str], at: str) -> SlicesClosedPatch:
     return {"closed_at": at, "closed_by_slices": list(refs)}
 
 
-def _slice_stack(state: TaskState) -> stacking.StackFacts | None:
-    parsed = stacking.parse_stack_parent(state)
-    if isinstance(parsed, stacking.Absent):
-        return None
-    return stacking.StackFacts(
-        record=None if isinstance(parsed, stacking.Unreadable) else parsed,
-        parent_state="unknown",
-        parent_in_upstream=None,
-        child_has_parent=None,
-    )
-
-
 def slice_facts(
     slice_: Slice,
     state: TaskState,
@@ -1174,7 +1162,7 @@ def slice_facts(
         # GH-859: only `stacking` reads the record. No fact of the parent is read for a slice, so
         # a readable record is every fact unknown (`stack_parent_unmerged`) and an unreadable
         # one is `stack_base_orphaned`: a slice of a stacked task never merges.
-        stack=_slice_stack(state),
+        stack=stacking.facts_of(state),
         status=state.get("status"),
         # GH-784: a slice lands only from the task's own landing, which the merge decision of the
         # task already held when an owner escalation was open; the slice adds no read of it.

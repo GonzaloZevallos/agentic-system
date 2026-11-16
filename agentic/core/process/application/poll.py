@@ -40,6 +40,7 @@ from ..domain import (
     merge_conflict,
     presubmit,
     rules,
+    stacking,
 )
 from ..domain import landing as landing_rules
 from ..domain import retakes as retake_rules
@@ -316,8 +317,7 @@ def _merge_facts(
 
     return rules.MergeFacts(
         task_id=task_id,
-        # GH-855: stacking is read by the poller from part 1b; until then no decision changes.
-        stack=None,
+        stack=stacking.facts_of(raw),
         status=raw.get("status"),
         open_escalation=escalation_hold(raw, comments),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
