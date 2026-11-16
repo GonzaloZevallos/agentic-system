@@ -176,3 +176,7 @@ _Campo_: sin término de arte — GitHub no distingue quién fusiona un pull req
 **Cerrado** (`closed`):
 El pull request se cerró sin fusionarse: el humano descartó la entrega.
 _Campo_: closed — GitHub, para un pull request que se cierra sin fusionar
+
+### Score con fecha de merge
+
+Un score que solo existe con un merge (`cycle_h`, `stage_h.*`, `cycle_active_h`, `stage_split_known`, `slowest_stage.*`) y que se fecha en el merge del pull request, no en el fin de la tarea (`task_scores.score_time`). El dashboard «¿Dónde se va el tiempo?» (ADR-0051, adenda de GH-819) solo lee estos scores, así que la tarea cae en la semana en que se mergeó.

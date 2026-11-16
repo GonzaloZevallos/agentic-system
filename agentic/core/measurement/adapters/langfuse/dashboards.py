@@ -1,10 +1,10 @@
 """The dashboards of a product, in Langfuse's own Postgres (GH-274, ADR-0051).
 
 The only module that imports `psycopg`. Every read and every write is scoped to one project
-(the one that owns the public key) and, for rows we own, to one product through the marker
+(the one that owns the public key) and, for rows we own, to the one scope through the marker
 at the end of `description`: a preset row (`project_id` NULL), another project's row and
-another product's row are never read, overwritten or deleted. One transaction per `apply`:
-the rows are all written or none is."""
+a row of the earlier per-product dashboards are never read, overwritten or deleted. One
+transaction per `apply`: the rows are all written or none is."""
 
 from __future__ import annotations
 
@@ -95,10 +95,10 @@ class PostgresDashboards:
             rows = conn.execute(_COLUMNS, (list(TABLES),)).fetchall()
         return frozenset((str(table), str(column)) for table, column in rows)
 
-    def read(self, product: str) -> Sequence[domain.Row]:
+    def read(self) -> Sequence[domain.Row]:
         with self._connection() as conn:
             project = self._project(conn)
-            ours = (project, domain.marker(product), domain.marker(product))
+            ours = (project, domain.MARKER, domain.MARKER)
             widgets = conn.execute(_READ_WIDGETS, ours).fetchall()
             dashboards = conn.execute(_READ_DASHBOARDS, ours).fetchall()
         found: list[domain.Row] = [domain.WidgetRow(*row) for row in widgets]
@@ -109,10 +109,9 @@ class PostgresDashboards:
         with self._connection() as conn:
             project = self._project(conn)
             for row in changes.deletes:
-                product = domain.product_of(row)
-                if product is None:
+                if not domain.in_scope(row):
                     continue
-                marker = domain.marker(product)
+                marker = domain.MARKER
                 sql = _DELETE_DASHBOARD if isinstance(row, domain.DashboardRow) else _DELETE_WIDGET
                 conn.execute(sql, (row.id, project, marker, marker))
             for row in changes.upserts:

@@ -3461,8 +3461,9 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
 
 async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
     """`agentic dashboards apply [--product-dir PATH] [--dry-run] [--verify]` (GH-274,
-    ADR-0051): the product's four dashboards, written into Langfuse's Postgres and read
-    back. One line per create, update and delete, then a count. `--verify` adds
+    ADR-0051): the one dashboard, the same from either product's directory, written
+    into Langfuse's Postgres and read back. One line per create, update and delete, then a
+    count. `--verify` adds
     `<dashboard>/<widget>: <n> rows` per widget. Exit 1 on a read-back mismatch or a widget
     that reads nothing; exit 2 before touching anything when a variable is missing or the
     tables are not the recorded ones. The adapters (and `psycopg`) load here and nowhere
@@ -3470,16 +3471,12 @@ async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
     missing = composition.missing_dashboard_variables(verify=verify)
     if missing:
         raise CannotStart(f"no Langfuse database configured: set {', '.join(missing)}")
-    try:
-        product = ports.stack.product()
-    except (ValueError, OSError) as exc:
-        raise CannotStart(str(exc)) from exc
     store = composition.dashboard_store()
     if store is None:
         raise CannotStart("no Langfuse database configured")
     try:
         data = composition.widget_data(store.project_id()) if verify else None
-        report = dashboards_app.apply_dashboards(product, store, dry_run=dry_run, data=data)
+        report = dashboards_app.apply_dashboards(store, dry_run=dry_run, data=data)
     except (
         dashboards_app.ColumnDrift,
         dashboards_app.UnknownProject,

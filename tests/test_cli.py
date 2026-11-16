@@ -5309,10 +5309,10 @@ class DashboardFake:
     def columns(self):
         return self.recorded
 
-    def read(self, product):
+    def read(self):
         from agentic.core.measurement.domain import dashboards as dom
 
-        return [r for r in self.rows.values() if dom.product_of(r) == product]
+        return [r for r in self.rows.values() if dom.in_scope(r)]
 
     def apply(self, changes):
         for row in changes.deletes:
@@ -5380,8 +5380,8 @@ def test_a_dry_run_lists_every_create_with_title_and_id_and_writes_nothing(
     code = _dashboards(monkeypatch, close_root(tmp_path), store, "--dry-run", env=DASHBOARD_ENV)
     out = capsys.readouterr().out
     assert code == 0 and store.rows == {}
-    assert "create Panorama · " in out and "create Dónde va la plata · " in out
-    assert "would created 23, updated 0, deleted 0, unchanged 0" in out
+    assert "create ¿Dónde se va el tiempo? (" in out
+    assert "would created 8, updated 0, deleted 0, unchanged 0" in out
 
 
 def test_a_second_apply_reports_everything_unchanged(monkeypatch, tmp_path, capsys):
@@ -5390,14 +5390,14 @@ def test_a_second_apply_reports_everything_unchanged(monkeypatch, tmp_path, caps
     capsys.readouterr()
     assert _dashboards(monkeypatch, root, store, env=DASHBOARD_ENV) == 0
     out = capsys.readouterr().out
-    assert "created 0, updated 0, deleted 0, unchanged 23" in out
+    assert "created 0, updated 0, deleted 0, unchanged 8" in out
     assert "create " not in out
 
 
 def test_verify_prints_rows_per_widget_and_a_zero_widget_exits_1(monkeypatch, tmp_path, capsys):
     class Data:
         def count(self, widget):
-            return 0 if widget.key == "cycle_time" else 5
+            return 0 if widget.key == "cycle_median" else 5
 
     env = {
         **DASHBOARD_ENV,
@@ -5410,9 +5410,9 @@ def test_verify_prints_rows_per_widget_and_a_zero_widget_exits_1(monkeypatch, tm
     )
     captured = capsys.readouterr()
     assert code == 1
-    assert "overview/delivered_per_week: 5 rows" in captured.out
-    assert "overview/cycle_time: 0 rows" in captured.out
-    assert "overview/cycle_time: reads 0 rows" in captured.err
+    assert "time/hours_by_stage: 5 rows" in captured.out
+    assert "time/cycle_median: 0 rows" in captured.out
+    assert "time/cycle_median: reads 0 rows" in captured.err
 
 
 def test_column_drift_refuses_with_exit_2_and_writes_nothing(monkeypatch, tmp_path, capsys):
