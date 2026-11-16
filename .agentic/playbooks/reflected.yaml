@@ -1202,3 +1202,5 @@ tasks:
     cost_usd: 0.0713
   GH-801@review:
     cost_usd: 0.073
+  GH-828@review:
+    cost_usd: 0.0453
