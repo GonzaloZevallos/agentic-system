@@ -50,6 +50,7 @@ class Row(NamedTuple):
 WALKERS = (
     "tests/test_architecture.py",
     "tests/test_language.py",
+    "tests/test_checkout_creators.py",
     "tests/test_arm_input_single_source.py",
     "tests/test_pause_stamps.py",
     "tests/core/measurement/adapters/otel/test_semconv.py",
