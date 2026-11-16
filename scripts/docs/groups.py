@@ -147,6 +147,7 @@ CLUSTERS: Mapping[str, str] = {
     "application.tracker_only": "build",
     "application.validate_prd": "definition",
     "application.verifiers": "checks",
+    "application.worktree_sweep": "lifecycle",
     "domain.account_reset": "machine",
     "domain.adr_dated": "landing",
     "domain.adr_numbers": "landing",
