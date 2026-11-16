@@ -114,6 +114,7 @@ HUMAN_OWNED_REFUSALS: frozenset[rules.MergeRefusal] = frozenset(
         "pr_not_open",
         "eval_set",
         "perf_unverified",
+        "drawing_unsettled",
         "criteria_over_cap",
         "criteria_unreadable",
         "ci_untrusted_no_dispatch",
@@ -1110,6 +1111,7 @@ def slice_facts(
         row for row in rules.open_findings(state) if set(rules.row_owners(state, row)) & set(units)
     ]
     perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(state)
+    drawing_checked, drawing_head, drawing_open = rules.drawing_merge_facts(state)
     return rules.MergeFacts(
         task_id=task_id,
         status=state.get("status"),
@@ -1149,6 +1151,9 @@ def slice_facts(
         perf_convened=perf_convened,
         perf_verdict=perf_verdict,
         perf_head=perf_head,
+        drawing_checked=drawing_checked,
+        drawing_head=drawing_head,
+        drawing_open=drawing_open,
     )
 
 
