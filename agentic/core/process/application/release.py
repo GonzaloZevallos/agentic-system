@@ -8,19 +8,29 @@ because the processes run out of the worktrees that `git worktree remove` is abo
 delete. `release_processes` is the narrower verb for a run found dead: only that run's own
 scope, never the task's. No reaper method raises (`ProcessReaper`), so a reap never stops
 a delivery, a discard, an archive or a reflection; a `GitError` from `cleanup` is the
-caller's, exactly as it was before."""
+caller's, exactly as it was before. The one exception is `release_after_merge` (GH-820): a
+merge that happened is never failed by its housekeeping, so it retries and then records a
+`worktree_release_lapse` instead of propagating."""
 
 from __future__ import annotations
 
 import sys
+import time
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from ..domain import reaping
 from ..domain.reaping import ReapedProcess
-from .ports import Ports
+from ..domain.task import WorktreeReleaseLapse
+from .ports import GitError, Ports
 
 # The scratch checkouts a merge and a landing slice make beside a task's worktrees (GH-178).
 SCRATCH_PREFIXES = ("merge", "slice")
+# The one pause before the one retry `release_after_merge` makes of a `GitError` (a lock held
+# for a moment by another git process).
+RELEASE_RETRY_PAUSE_S = 2.0
 
 
 def release_processes(ports: Ports, task_id: str, run: int) -> tuple[ReapedProcess, ...]:
@@ -55,6 +65,50 @@ def release_task(ports: Ports, task_id: str) -> tuple[ReapedProcess, ...]:
         ports.workspace.remove_checkout(name)
     ports.workspace.cleanup(task_id)
     return reaped
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def release_after_merge(
+    ports: Ports,
+    task_id: str,
+    log: Callable[[str], None],
+    clock: Callable[[], str] = _now,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """`release_task` for a task the system just merged (GH-820): the removal is housekeeping
+    after a merge that happened, so it never fails the merge. A `GitError` is retried once
+    after `RELEASE_RETRY_PAUSE_S`; an `OSError` is not. The application layer may not import
+    `subprocess`, so a `SubprocessError` is not caught here. A removal that
+    still fails leaves one `worktree_release_lapse` row in the document (a record, read by no
+    decision) and one log line. Nothing else is caught: a `TypeError` is a bug."""
+    started = time.monotonic()
+    cause: Literal["git_failed", "os_error"]
+    try:
+        try:
+            reaped = release_task(ports, task_id)
+        except GitError:
+            sleep(RELEASE_RETRY_PAUSE_S)
+            reaped = release_task(ports, task_id)
+    except GitError:
+        cause = "git_failed"
+    except OSError:
+        cause = "os_error"
+    else:
+        line = f"agentic: merge: {task_id}: worktrees released in {time.monotonic() - started:.1f}s"
+        if reaped_line := summary(reaped):
+            line += f"; {reaped_line}"
+        log(line)
+        return
+    lapse: WorktreeReleaseLapse = {"at": clock(), "cause": cause}
+    try:
+        ports.documents.record_closure(task_id, {"worktree_release_lapse": lapse})
+    except (ValueError, OSError) as exc:
+        log(f"agentic: merge: {task_id}: worktree release lapsed ({cause}), not recorded: {exc}")
+        return
+    log(f"agentic: merge: {task_id}: worktree release lapsed ({cause})")
 
 
 def summary(reaped: tuple[ReapedProcess, ...]) -> str:

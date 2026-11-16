@@ -478,6 +478,25 @@ def _adapter_page(graph: _Graph, sub: str) -> Page:
     return _checked(draw, _key(sub), sub, sentence, INDEX, _others(graph, sub))
 
 
+def _flat_draw(
+    own: Sequence[str], modules: Mapping[str, set[str]], prefix: str, layer: str
+) -> _Draw:
+    """The page of `own`, modules of `layer`: each import a node-to-node edge, a target in
+    another layer or outside the package collapsed to one ghost."""
+    draw = _Draw()
+    for source in own:
+        here = _own_end(source)
+        draw.node(here)
+        for target in sorted(modules[source]):
+            if not target.startswith(prefix):
+                draw.edge(here, _package_end(_outside(target)))
+                continue
+            relative = target.removeprefix(prefix)
+            other = relative.split(".")[0]
+            draw.edge(here, _own_end(relative) if other == layer else _package_end(other))
+    return draw
+
+
 def _flat_pages(
     on_disk: Mapping[str, bool],
     imports: Mapping[str, Iterable[str]],
@@ -488,7 +507,9 @@ def _flat_pages(
     them) and one page per layer with a module (`<layer>`: its modules, the imports they make,
     each target in another layer or outside the package collapsed to one ghost). A module whose
     layer is not in `layers` raises, and so does a layer with more than `DIAGRAM_BUDGET.classes`
-    modules or a page over the budget, naming the layer and saying to add groups."""
+    modules. A layer whose one page is over the budget is split in `chunks` of consecutive
+    modules (`<layer>-1`, `<layer>-2`; GH-804: the measurement `domain` page was at 30 of 30
+    edges); a chunk still over the budget raises, naming the layer and saying to add groups."""
     prefix = root + "."
     modules: dict[str, set[str]] = {}
     for name, names in imports.items():
@@ -507,8 +528,8 @@ def _flat_pages(
     for layer in present:
         index.node(_package_end(layer))
     pages: dict[str, Page] = {}
+    parts: dict[str, list[tuple[str, _Draw]]] = {}
     for layer in present:
-        draw = _Draw()
         own = sorted(m for m in modules if m.split(".")[0] == layer)
         if len(own) > MAX_PART:
             raise ValueError(
@@ -516,33 +537,48 @@ def _flat_pages(
                 f"per page: add groups for {root} (CLUSTERS in scripts/docs/groups.py)"
             )
         for source in own:
-            here = _own_end(source)
-            draw.node(here)
-            for target in sorted(modules[source]):
-                if not target.startswith(prefix):
-                    draw.edge(here, _package_end(_outside(target)))
-                    continue
-                relative = target.removeprefix(prefix)
-                other = relative.split(".")[0]
-                draw.edge(here, _own_end(relative) if other == layer else _package_end(other))
-                index.edge(_package_end(layer), _package_end(other))
-        if draw.over():
-            raise ValueError(
-                f"layer {layer!r} of {root} has {len(draw.nodes)} nodes and {len(draw.edges)} "
-                f"edges; the budget is {DIAGRAM_BUDGET.nodes} nodes and {DIAGRAM_BUDGET.edges} "
-                f"edges: add groups for {root} (CLUSTERS in scripts/docs/groups.py)"
+            for target in modules[source]:
+                if target.startswith(prefix):
+                    index.edge(
+                        _package_end(layer), _package_end(target.removeprefix(prefix).split(".")[0])
+                    )
+        whole = _flat_draw(own, modules, prefix, layer)
+        if not whole.over():
+            parts[layer] = [(layer, whole)]
+            continue
+        # A layer whose one page is over the budget is split in runs of consecutive modules.
+        runs = chunks(own)
+        parts[layer] = [
+            (f"{layer}-{number}", _flat_draw(run, modules, prefix, layer))
+            for number, run in enumerate(runs, 1)
+        ]
+        for _key_of_part, draw in parts[layer]:
+            if draw.over():
+                raise ValueError(
+                    f"layer {layer!r} of {root} has {len(draw.nodes)} nodes and {len(draw.edges)} "
+                    f"edges; the budget is {DIAGRAM_BUDGET.nodes} nodes and {DIAGRAM_BUDGET.edges} "
+                    f"edges: add groups for {root} (CLUSTERS in scripts/docs/groups.py)"
+                )
+    keys = [key for layer in present for key, _ in parts[layer]]
+    for layer in present:
+        for key, draw in parts[layer]:
+            split = key != layer
+            sentence = (
+                f"Esta página muestra los módulos de la capa `{layer}` de `{root}` y los imports "
+                "que hacen; un nodo `<nombre> (paquete)` es otra capa del paquete o un paquete "
+                "de fuera, que no se detalla aquí."
             )
-        sentence = (
-            f"Esta página muestra los módulos de la capa `{layer}` de `{root}` y los imports que "
-            "hacen; un nodo `<nombre> (paquete)` es otra capa del paquete o un paquete de fuera, "
-            "que no se detalla aquí."
-        )
-        others = [other for other in present if other != layer]
-        pages[layer] = draw.page(layer, f"{short}: {layer}", sentence, INDEX, others)
+            if split:
+                sentence += (
+                    " La capa no cabe en un diagrama: está partida en tandas de módulos "
+                    "consecutivos, y un módulo de otra tanda aparece como nodo sin sus imports."
+                )
+            title = f"{short}: {layer}" + (f" ({key.rsplit('-', 1)[1]})" if split else "")
+            pages[key] = draw.page(key, title, sentence, INDEX, [k for k in keys if k != key])
     names = "`, `".join(present)
     sentence = (
         f"Esta página muestra las capas de `{root}` (`{names}`), con una flecha por cada capa "
         "que importa a otra. Cada capa tiene su página, con sus módulos y los imports que hacen."
     )
-    pages[INDEX] = index.page(INDEX, f"Paquetes de {short}", sentence, None, (), present)
+    pages[INDEX] = index.page(INDEX, f"Paquetes de {short}", sentence, None, (), keys)
     return pages

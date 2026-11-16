@@ -37,6 +37,7 @@ classDiagram
     class task__TrackerFailure["TrackerFailure"]
     class task__TrackerFailureRecord["TrackerFailureRecord"]
     class task__TrackerPosted["TrackerPosted"]
+    class task__WorktreeReleaseLapse["WorktreeReleaseLapse"]
     class task_path__PathDecision["PathDecision"]
     class task_path__PromoteRequest["PromoteRequest"]
     class task_path__Promotion["Promotion"]

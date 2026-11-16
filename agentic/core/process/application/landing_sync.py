@@ -21,11 +21,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
-from ..domain import adr_dated, adr_numbers, landing, rules
+from ..domain import adr_dated, adr_numbers, landing, rules, spec_delivery
 from ..domain.adr_numbers import Renaming
 from ..domain.docs import Docs, conflict_line
 from ..domain.roles import pair_for
@@ -39,7 +40,7 @@ from ..domain.task import (
     TaskState,
     add_review_scopes,
 )
-from . import docs_settlement
+from . import docs_settlement, spec_guard
 from . import resume as resuming
 from .adr_collision import adr_collision
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout
@@ -391,15 +392,39 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
             context.log(f"agentic: land: {context.task_id}: sync closed, {merged.head} lacks {sha}")
             return None
         resolved = landing.resolve_open(written, _now(), cost)
-        subtasks, scopes = _carries(state, unit, reviewed, merged.head, holds=True, cause="clean")
+        result = _carries(
+            state, unit, reviewed, merged.head, holds=True, cause="clean", ports=ports
+        )
         ports.documents.save(
-            {**state, "subtasks": subtasks, "review_scopes": scopes, "landing": resolved}
+            {
+                **state,
+                "subtasks": result.subtasks,
+                "review_scopes": result.scopes,
+                "landing": resolved,
+            }
         )
         record_landing(context, resolved)
-        context.log(
-            f"agentic: land: {context.task_id}: master synced, verdict carried to {merged.head}"
-        )
+        if result.carried:
+            context.log(
+                f"agentic: land: {context.task_id}: master synced, verdict carried to {merged.head}"
+            )
+        else:
+            context.log(
+                f"agentic: land: {context.task_id}: master synced, pushed {merged.head} "
+                "(spec changed, review not carried)"
+            )
     return None
+
+
+@dataclass(frozen=True)
+class Carried:
+    """What `_carries` decided: the `subtasks` and `review_scopes` to store, and whether the
+    verdict moved to the new head. A log or a record that says whether a review was carried
+    reads `carried`, never the domain verdict alone."""
+
+    subtasks: dict[str, Subtask]
+    scopes: list[ReviewScopeRecord]
+    carried: bool
 
 
 def _carries(
@@ -410,21 +435,27 @@ def _carries(
     *,
     holds: bool,
     cause: ScopeCause,
+    ports: Ports,
     at: str | None = None,
-) -> tuple[dict[str, Subtask], list[ReviewScopeRecord]]:
+) -> Carried:
     """The only caller of `landing.scope_patch` in the landings (ADR-0048, ADR-0089): the
     state's `subtasks` and `review_scopes` after a carried verdict. When `holds` (the
     domain's verdict, `landing.review_scope` for a sync, `landing.renumber_carries` for a
     renumber) and the unit has a verdict to carry, `unit`'s `reviewed_head` moves to `head`
     and the `review_scopes` entry (`carried`, `cause`) is appended in the same patch; otherwise
-    both are unchanged and nothing is recorded."""
+    both are unchanged and nothing is recorded. A delivery under a spec carries only when the
+    spec is intact at `head` (`spec_guard.intact_at`, read only when `holds` and `reviewed`)."""
     scopes = state.get("review_scopes", [])
-    if not holds or not reviewed:
-        return dict(state["subtasks"]), scopes
+    if (
+        not holds
+        or not reviewed
+        or not spec_delivery.spec_carry_ok(holds, spec_guard.intact_at(state, ports, head))
+    ):
+        return Carried(dict(state["subtasks"]), scopes, False)
     subtasks, record = landing.scope_patch(
         state["subtasks"], unit, "carried", cause, reviewed, head, at or _now()
     )
-    return subtasks, add_review_scopes(scopes, [record])
+    return Carried(subtasks, add_review_scopes(scopes, [record]), True)
 
 
 def _sync_carries(
@@ -519,21 +550,28 @@ def renumber_adr(context: LandingContext) -> None:
         except GitError as failed:
             context.log(f"agentic: land: {context.task_id}: renumber: not pushed: {failed}")
             return
-    carried = landing.renumber_carries(changes) and rules.same_commit(reviewed, head)
+    result = _carries(
+        state,
+        unit,
+        reviewed,
+        new_head,
+        holds=landing.renumber_carries(changes) and rules.same_commit(reviewed, head),
+        cause="renumber",
+        ports=ports,
+    )
     record: dict[str, str | bool] = {
         "from": ", ".join(adr_numbers.old_numbers(dict(found.moves))),
         "to": ", ".join(adr_numbers.new_numbers(dict(found.moves))),
         "head_before": head,
         "head_after": new_head,
-        "carried": carried,
+        "carried": result.carried,
     }
     resolved = landing.resolve_open(all_entries(state), _now(), state.get("cost_usd", 0.0))
-    subtasks, scopes = _carries(state, unit, reviewed, new_head, holds=carried, cause="renumber")
     ports.documents.save(
         {
             **state,
-            "subtasks": subtasks,
-            "review_scopes": scopes,
+            "subtasks": result.subtasks,
+            "review_scopes": result.scopes,
             "landing": resolved,
             "adr_renumbered": [*state.get("adr_renumbered", []), record],
         }
@@ -541,7 +579,7 @@ def renumber_adr(context: LandingContext) -> None:
     record_landing(context, resolved)
     context.log(
         f"agentic: land: {context.task_id}: renumbered {record['from']} -> {record['to']}, "
-        f"pushed {new_head}" + ("" if carried else " (review not carried)")
+        f"pushed {new_head}" + ("" if result.carried else " (review not carried)")
     )
 
 
@@ -692,7 +730,16 @@ def _renamed_by_date(
         except GitError as failed:
             context.log(f"agentic: land: {task}: renumber: not pushed: {failed}")
             return
-    carried = landing.renumber_carries(changes) and rules.same_commit(reviewed, head)
+    stamped = _record_dated(context, state, "renamed")
+    carry = _carries(
+        stamped,
+        unit,
+        reviewed,
+        new_head,
+        holds=landing.renumber_carries(changes) and rules.same_commit(reviewed, head),
+        cause="renumber",
+        ports=ports,
+    )
 
     def stem(path: str) -> str:
         return path.rsplit("/", 1)[-1].removesuffix(".md")
@@ -703,21 +750,19 @@ def _renamed_by_date(
         "to": ", ".join(stem(new) for _, new in result.moves),
         "head_before": head,
         "head_after": new_head,
-        "carried": carried,
+        "carried": carry.carried,
     }
-    stamped = _record_dated(context, state, "renamed")
-    subtasks, scopes = _carries(stamped, unit, reviewed, new_head, holds=carried, cause="renumber")
     ports.documents.save(
         {
             **stamped,
-            "subtasks": subtasks,
-            "review_scopes": scopes,
+            "subtasks": carry.subtasks,
+            "review_scopes": carry.scopes,
             "adr_renumbered": [*state.get("adr_renumbered", []), record],
         }
     )
     context.log(
         f"agentic: land: {task}: renamed {record['from']} -> {record['to']}, pushed {new_head}"
-        + ("" if carried else " (review not carried)")
+        + ("" if carry.carried else " (review not carried)")
     )
 
 

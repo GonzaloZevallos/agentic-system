@@ -472,3 +472,26 @@ def test_next_section_version_ignores_other_sections_and_look_alike_keys():
 def test_next_section_version_reads_keys_never_contents():
     sections = {"Full checks": "## Full checks (v99)\n\nFull checks (v99)", "Full checks (v1)": "x"}
     assert rules.next_section_version({"sections": sections}, "Full checks") == 2
+
+
+# --- GH-790: the repetition sentence rides only the limit branch ---------------------------------
+
+_SENTENCE = rules.repetition_sentence(1)
+
+
+def test_at_the_limit_the_escalation_text_carries_the_sentence_once():
+    spent = state(changes_requested={roles.pair_for("integration").key: 2})
+    plain = rules.full_checks_return(spent, RED, 2, at=_STAMP)
+    patch = rules.full_checks_return(spent, RED, 2, at=_STAMP, repeat=_SENTENCE)
+    assert patch["escalation_class"] == "returns"
+    assert patch["escalated"].count(_SENTENCE) == 1
+    assert _SENTENCE not in plain["escalated"]
+    assert patch["subtasks"] == plain["subtasks"] and patch["findings"] == plain["findings"]
+
+
+def test_at_count_a_repeat_changes_neither_the_reason_nor_the_history_nor_the_findings():
+    counting = state()
+    plain = rules.full_checks_return(counting, RED, 3, at=_STAMP)
+    patch = rules.full_checks_return(counting, RED, 3, at=_STAMP, repeat=_SENTENCE)
+    assert patch == plain
+    assert _SENTENCE not in repr(patch)

@@ -21,6 +21,8 @@ from agentic.core.process.application import preflight
 from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
 from agentic.core.process.domain import reaping
+from agentic.core.process.domain.ci import CiCheck, CiReport, red_checks
+from agentic.core.process.domain.landing import CI_LOG_JOBS
 from agentic.core.process.domain.task import TaskState
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryCommands
@@ -439,3 +441,101 @@ def test_the_tmpdir_of_an_attempt_on_the_systems_own_repository_is_outside_it(
         assert git.repository_at(system) is not None
         assert git.repository_at(tmpdir) != git.repository_at(system)
         assert git.repository_at(tmpdir) != git.repository_at(preflight.CHECKOUT)
+
+
+HEAD_SHA = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
+
+
+def _committed_product(tmp_path, monkeypatch, stack_yaml: str):
+    """A product repo whose one commit holds `.agentic/stack.yaml` as given."""
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    (product / ".agentic").mkdir()
+    (product / ".agentic/stack.yaml").write_text(stack_yaml)
+    git = ["git", "-C", str(product), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "stack"], check=True)
+    return product
+
+
+def _report_with_an_aggregate_and_five_shards() -> CiReport:
+    # Links that do not match `JOB_LINK`: `_read` answers `unreadable` and never launches `gh`.
+    names = ["check", *(f"shard {n}" for n in range(1, 6))]
+    checks = tuple(CiCheck(n, "COMPLETED", "FAILURE", f"https://example.test/{n}") for n in names)
+    report = CiReport(HEAD_SHA, "master", None, None, checks)
+    assert len(red_checks(report)) > CI_LOG_JOBS
+    return report
+
+
+def _jobs_read(product, monkeypatch, report: CiReport) -> list[str]:
+    monkeypatch.setattr(composition, "ci_reader", lambda tracker: lambda reference: report)
+    ports = composition.default_ports(Configuration(product_dir=product), NullStopFlag())
+    assert ports.ci_logs is not None
+    return [log.job for log in ports.ci_logs.failed_job_logs("ref", HEAD_SHA)]
+
+
+def test_the_ci_logs_it_builds_read_the_shards_before_the_stacks_aggregate(tmp_path, monkeypatch):
+    product = _committed_product(
+        tmp_path, monkeypatch, "checks:\n  tests: 'true'\nci:\n  - check\n"
+    )
+    report = _report_with_an_aggregate_and_five_shards()
+    assert _jobs_read(product, monkeypatch, report) == [f"shard {n}" for n in range(1, 5)]
+
+
+def test_an_unreadable_stack_makes_the_ci_logs_select_as_if_nothing_were_declared(
+    tmp_path, monkeypatch
+):
+    product = _committed_product(tmp_path, monkeypatch, "checks: [unclosed\n  ci: {\n")
+    report = _report_with_an_aggregate_and_five_shards()
+    jobs = _jobs_read(product, monkeypatch, report)
+    assert jobs == [c.name for c in red_checks(report)[:CI_LOG_JOBS]]
+    assert jobs[0] == "check"
+
+
+class _FakeRun:
+    """A `run` that raises `error` and counts its calls, the `gh api rate_limit` ones too."""
+
+    def __init__(self, error):
+        self.error = error
+        self.calls: list[list[str]] = []
+
+    def __call__(self, command, **_kwargs):
+        self.calls.append(command)
+        raise self.error
+
+
+def _failing_with_stderr(stderr, code=1):
+    return subprocess.CalledProcessError(code, ["gh"], stderr=stderr)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_failing_with_stderr("gh: HTTP 502"), "TrackerTransient"),
+        (subprocess.TimeoutExpired(["gh"], 60), "TrackerTimedOut"),
+        (_failing_with_stderr("gh: API rate limit exceeded for user"), "TrackerRateLimited"),
+        (_failing_with_stderr("gh: Forbidden (HTTP 403)"), "TrackerRefused"),
+        (_failing_with_stderr("error connecting to api.github.com"), "TrackerUnreachable"),
+    ],
+)
+def test_the_backfill_read_makes_one_call_and_names_why_it_failed(
+    tmp_path, capsys, error, expected
+):
+    from agentic.core.process.application import ports
+
+    run = _FakeRun(error)
+    with pytest.raises(getattr(ports, expected)):
+        composition.backfill_gh_read(tmp_path, run=run)(("api", "repos/{owner}/{repo}/issues"))
+    assert run.calls == [["gh", "api", "repos/{owner}/{repo}/issues"]]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_backfill_read_says_what_is_missing_in_its_own_words(tmp_path):
+    with pytest.raises(ValueError, match="scores backfill needs the gh CLI"):
+        composition.backfill_gh_read(tmp_path, run=_FakeRun(FileNotFoundError("gh")))(("api", "x"))
+
+
+def test_the_backfill_listing_is_the_github_adapter(tmp_path):
+    from agentic.core.measurement.adapters.github.issue_listing import GhIssueListing
+
+    assert isinstance(composition.backfill_listing(tmp_path), GhIssueListing)

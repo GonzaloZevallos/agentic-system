@@ -2918,6 +2918,7 @@ def full_checks_return(
     *,
     at: str,
     mode: ReviewMode = "full",
+    repeat: str = "",
 ) -> dict[str, Any]:
     """The patch of a red `full_checks` run (GH-358), modelled on QA Performance's return:
     the integration (the single subtask when there is none) reopens with `returned_by:
@@ -2926,7 +2927,9 @@ def full_checks_return(
     same patch escalates as a pair at its limit. The record travels with it, so the state and the
     document hold the run the rows came from. A deferred row (GH-453) is not a failure: a
     record whose only non-passing rows are deferred is a passed one, and its patch holds the
-    record alone, with no return, no finding and no change of status."""
+    record alone, with no return, no finding and no change of status. `repeat` (GH-790) is the
+    one sentence that says the failure repeats; only the limit's text takes it, after the
+    reason, so the count branch (reason, history, findings) is the same whatever it holds."""
     if record["passed"]:
         return {"full_checks": record}
     subtasks = state.get("subtasks", {})
@@ -2963,7 +2966,8 @@ def full_checks_return(
         patch["changes_requested"] = record_return(state, pair)
         patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]
     else:
-        stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))}, at=at)
+        said = limit_reached(pair, limit, f"{reason} {repeat}" if repeat else reason)
+        stopped = logged({**escalation("returns", said)}, at=at)
         patch = {**patch, **stopped, "status": WAITING_ON_HUMAN}
     return patch
 
@@ -3039,6 +3043,24 @@ def _read_tests(row: FullChecksRead) -> frozenset[str] | None:
     return frozenset(tests)
 
 
+def _valid_by_version(reads: Sequence[FullChecksRead]) -> list[FullChecksRead]:
+    return sorted(
+        (r for r in reads if type(r) is dict and type(r.get("version")) is int),
+        key=lambda r: r["version"],
+    )
+
+
+def previous_read(reads: Sequence[FullChecksRead]) -> FullChecksRead | None:
+    """The read `repeated_ci_failure` compares the newest one with: the highest-version row
+    whose version differs from the newest, or `None`. Only rows that are a dict with an int
+    `version` count; never raises on a malformed row. The one place an earlier read is chosen."""
+    valid = _valid_by_version(reads)
+    if not valid:
+        return None
+    newest = valid[-1]
+    return next((r for r in reversed(valid) if r["version"] != newest["version"]), None)
+
+
 def repeated_ci_failure(
     reads: Sequence[FullChecksRead],
 ) -> Literal["repeat", "no_repeat", "unknown"]:
@@ -3047,17 +3069,11 @@ def repeated_ci_failure(
     of the smaller set, else `no_repeat`. `unknown` with fewer than two versions, or when
     either has no recorded tests (absent, empty, or not a list of str). Never raises on a
     malformed row. Note a single id shared with a set of 16 reads `repeat`."""
-    valid = sorted(
-        (r for r in reads if type(r) is dict and type(r.get("version")) is int),
-        key=lambda r: r["version"],
-    )
-    if not valid:
+    valid = _valid_by_version(reads)
+    earlier = previous_read(reads)
+    if not valid or earlier is None:
         return "unknown"
-    newest = valid[-1]
-    earlier = [r for r in valid if r["version"] != newest["version"]]
-    if not earlier:
-        return "unknown"
-    a, b = _read_tests(newest), _read_tests(earlier[-1])
+    a, b = _read_tests(valid[-1]), _read_tests(earlier)
     if a is None or b is None:
         return "unknown"
     return "repeat" if len(a & b) * 2 >= min(len(a), len(b)) else "no_repeat"

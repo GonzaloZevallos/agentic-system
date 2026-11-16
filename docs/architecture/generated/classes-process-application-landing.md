@@ -27,6 +27,7 @@ classDiagram
     class landing_plan__LandingContext["LandingContext"]
     class landing_plan__Release["Release"]
     class landing_plan__RoleRun["RoleRun"]
+    class landing_sync__Carried["Carried"]
     class landing_sync__Merges["Merges"]
     class landing_sync__ResumeContext["ResumeContext"]
     class merge__MergeResult["MergeResult"]

@@ -10,11 +10,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agentic.core.process.application.ports import GitError, Upstream
-from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, DispatchedRun
+from agentic.core.process.domain.ci import (
+    CiCheck,
+    CiReport,
+    CiUnreadable,
+    DispatchedRun,
+    JobLog,
+)
 from agentic.core.process.domain.presubmit import CiDispatch
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    FakeCiLogs,
     MemoryCommands,
     MemoryStack,
     MemoryTracker,
@@ -101,13 +108,14 @@ def state_of(speculated: str | None = HEAD, **more) -> dict:
     return state
 
 
-def ports_of(*reads, ci=("check",), workspace=None):
+def ports_of(*reads, ci=("check",), workspace=None, **more):
     stack = MemoryStack(checks={"tests": "pytest"}, delivery_checks=("tests",), ci=ci)
     return memory_ports(
         stack=stack,
         commands=MemoryCommands(),
         tracker=Tracker(*reads),
         workspace=workspace or Workspace(),
+        **more,
     )
 
 
@@ -340,6 +348,16 @@ async def test_a_red_verdict_carries_its_timing_and_the_timing_changes_nothing_e
     assert patch["full_checks"]["ci_timing"]["verdict"] == "red"
     assert patch["full_checks"]["passed"] is False
     assert patch["subtasks"][INTEGRATION]["status"] == "returned"
+
+
+async def test_a_speculative_red_run_saves_a_read_with_the_records_version():
+    text = "=== short test summary info ===\nFAILED tests/a.py::t - boom\n=== 1 failed ==="
+    logs = FakeCiLogs([JobLog("check", f"{LINK}/check", text, len(text), "read", 0)])
+    patch = await run(state_of(), ports_of(RED, ci_logs=logs))
+    [entry] = patch["full_checks_reads"]
+    assert entry["version"] == patch["full_checks"]["version"] == 1
+    assert patch["full_checks"]["speculative"] is True
+    assert logs.asked == [(REF, HEAD)]
 
 
 async def test_a_cancelled_speculative_run_is_rescued_and_never_republishes():

@@ -11,7 +11,13 @@ classDiagram
     class dashboards__UnknownProject["UnknownProject"]
     class dashboards__WidgetData["WidgetData"]
     class eval_commands__Launched["Launched"]
+    class listing_reads__Listing["Listing"]
+    class listing_reads__Stopped["Stopped"]
     class ports__EvalChild["EvalChild"]
     class ports__EvalRoots["EvalRoots"]
+    class ports__GhRead["GhRead"]
+    class ports__IssueListing["IssueListing"]
+    class ports__Page["Page"]
+    class ports__PageUnreadable["PageUnreadable"]
     eval_commands__Launched --> ports__EvalChild
 ```

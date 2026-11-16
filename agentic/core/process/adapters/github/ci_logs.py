@@ -14,6 +14,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
+import yaml
+
 from ...domain import rules
 from ...domain.ci import (
     FLAKE_BLOCK_PREFIX,
@@ -24,6 +26,7 @@ from ...domain.ci import (
     JobLog,
     JobLogCause,
     current_runs,
+    log_candidates,
     red_checks,
     runs_of,
 )
@@ -67,7 +70,9 @@ class GhCiLogs:
         timeout_s: float = CI_LOG_TIMEOUT_S,
         flake_stream: _Stream = _tail_stream,
         flake_max_bytes: int = CI_FLAKE_LOG_BYTES,
+        declared: Callable[[], Sequence[str]] = lambda: (),
     ) -> None:
+        self._declared = declared
         self._product_dir = product_dir
         self._ci_report = ci_report
         self._stream = stream
@@ -85,10 +90,19 @@ class GhCiLogs:
             return [_unread("ci", "", "unreadable")]
         if isinstance(report, CiUnreadable):
             return [_unread("ci", "", "unreadable")]
-        red = red_checks(report)[:CI_LOG_JOBS]
+        red = red_checks(report)
         if not rules.same_commit(report.head_sha, head):
-            return [_unread(check.name, check.link, "other_head") for check in red]
-        return [self._read(check) for check in red]
+            return [_unread(check.name, check.link, "other_head") for check in red[:CI_LOG_JOBS]]
+        if len(red) <= CI_LOG_JOBS:
+            return [self._read(check) for check in red]
+        try:
+            names = tuple(self._declared())
+        except (OSError, ValueError, subprocess.SubprocessError, yaml.YAMLError):
+            names = ()
+        # By identity: two equal runs are two entries of `red_checks`, equality would collapse
+        # them, and `log_candidates` reorders the same objects `red_checks` yields, uncopied.
+        chosen = {id(c) for c in log_candidates(report, names)[:CI_LOG_JOBS]}
+        return [self._read(check) for check in red if id(check) in chosen]
 
     def _read(self, check: CiCheck) -> JobLog:
         ids = JOB_LINK.search(check.link)
