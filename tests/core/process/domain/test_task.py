@@ -359,6 +359,69 @@ def test_add_drawing_escalation_is_associative(a, b, c):
     )
 
 
+def _staged(round_: int, numbers: list[int], stage: str | None, cause: str = "drawing_departure"):
+    record = {"round": round_, "numbers": numbers, "cause": cause}
+    return cast(DrawingEscalation, record if stage is None else {**record, "stage": stage})
+
+
+# Every stage (absent, plan, delivery) at rounds that tie and rounds that do not.
+_STAGED = [
+    _staged(round_, numbers, stage, cause)
+    for round_, numbers, stage, cause in [
+        (1, [1], None, "drawing_departure"),
+        (1, [2], "plan", "drawing_departure"),
+        (1, [3], "delivery", "drawing_cap"),
+        (2, [1, 4], None, "drawing_departure"),
+        (2, [5], "plan", "drawing_cap"),
+        (2, [], "delivery", "drawing_departure"),
+        (3, [2], "plan", "drawing_departure"),
+    ]
+]
+
+
+@pytest.mark.parametrize("a", _STAGED)
+@pytest.mark.parametrize("b", _STAGED)
+def test_add_drawing_escalation_with_stage_is_commutative(a, b):
+    assert add_drawing_escalation(a, b) == add_drawing_escalation(b, a)
+
+
+@pytest.mark.parametrize("a", _STAGED)
+@pytest.mark.parametrize("b", _STAGED)
+@pytest.mark.parametrize("c", _STAGED)
+def test_add_drawing_escalation_with_stage_is_associative(a, b, c):
+    assert add_drawing_escalation(add_drawing_escalation(a, b), c) == add_drawing_escalation(
+        a, add_drawing_escalation(b, c)
+    )
+
+
+@pytest.mark.parametrize("a", _STAGED)
+def test_an_empty_side_is_the_identity_of_the_staged_reducer(a):
+    empty = cast(DrawingEscalation, {})
+    assert add_drawing_escalation(empty, a) == add_drawing_escalation(None, a)
+    assert add_drawing_escalation(a, empty) == a
+    assert add_drawing_escalation(empty, a).get("stage") == (
+        "plan" if a.get("stage") == "plan" else None
+    )
+
+
+def test_the_higher_round_decides_the_stage_and_a_tie_goes_to_delivery():
+    plan_late = add_drawing_escalation(_staged(1, [1], "delivery"), _staged(2, [2], "plan"))
+    assert plan_late == _staged(2, [1, 2], "plan")
+    delivery_late = add_drawing_escalation(_staged(1, [1], "plan"), _staged(2, [2], None))
+    assert delivery_late == _escalation(2, [1, 2])
+    tie = add_drawing_escalation(_staged(2, [1], "plan"), _staged(2, [2], "delivery"))
+    assert tie == _escalation(2, [1, 2]) and "stage" not in tie
+    assert add_drawing_escalation(_staged(2, [1], "plan"), _staged(2, [2], None)) == tie
+
+
+def test_the_result_keeps_stage_only_when_plan_even_from_a_single_side():
+    assert "stage" not in add_drawing_escalation(None, _staged(1, [1], "delivery"))
+    assert add_drawing_escalation(None, _staged(1, [1], "plan"))["stage"] == "plan"
+    assert "stage" not in add_drawing_escalation(
+        _staged(1, [1], "delivery"), _staged(1, [2], "delivery")
+    )
+
+
 def test_drawing_escalation_round_trips_through_apply_and_delta():
     bare = cast(TaskState, {"id": "T-1"})
     first = cast(TaskState, {"id": "T-1", "drawing_escalation": _escalation(1, [1, 2])})
