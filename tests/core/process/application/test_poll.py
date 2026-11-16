@@ -2759,3 +2759,12 @@ def test_another_products_land_wait_neither_holds_a_launch_nor_lets_a_due_resume
     _round(_cfg(tmp_path, max_concurrent_runs=2), ports, registry, launcher, due)
     assert _launched(launcher) == ["5"]
     assert not any(argv[1] == "resume" for argv in launcher.spawned)
+
+
+def test_gather_launches_hands_back_the_blockers_it_read(tmp_path):
+    ports = memory_ports()
+    _ready(ports, 5)
+    _ready(ports, 8, native={8: (6,)})
+    seen: dict[int, tuple[int, ...]] = {}
+    poll.gather_launches(_cfg(tmp_path), ports, MemoryRunRegistry(), blockers_of=seen)
+    assert seen == {5: (), 8: (6,)}
