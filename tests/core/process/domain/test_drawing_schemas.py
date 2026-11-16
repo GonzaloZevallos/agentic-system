@@ -1,5 +1,7 @@
 """The drawing schema classes nothing consumes yet (GH-766 part 1b): they validate on
-their own and no schema a role receives reaches them, so no prompt or role output moves."""
+their own and no schema a role receives reaches them, so no prompt or role output moves.
+The one exception is the Tech Lead's plan (`TechPlan` and its subclasses, GH-766 part 4a):
+it alone declares `drawing_departures`; no role output carries a number or any other field."""
 
 from collections.abc import Iterable
 from typing import Any
@@ -19,6 +21,22 @@ from agentic.core.process.domain.schemas import (
 
 FORBIDDEN_FIELDS = {"drawing_checks", "departures", "drawing_departures", "visible"}
 FORBIDDEN_DEFS = {"DrawingDeparture", "DrawingCheck", "DefinitionTurn"}
+# What the plan author, and only it, may reach.
+PLAN_FIELDS = {"drawing_departures"}
+PLAN_DEFS = {"DrawingDeparture"}
+
+
+def _is_plan(model: type[BaseModel]) -> bool:
+    return issubclass(model, s.TechPlan)
+
+
+def _fields_forbidden_for(model: type[BaseModel]) -> set[str]:
+    return FORBIDDEN_FIELDS - (PLAN_FIELDS if _is_plan(model) else set())
+
+
+def _defs_forbidden_for(model: type[BaseModel]) -> set[str]:
+    return FORBIDDEN_DEFS - (PLAN_DEFS if _is_plan(model) else set())
+
 
 # The base schemas a role receives today. A base class added later and left out of this
 # list is not covered by this check; the walk over every Role output below is what
@@ -106,7 +124,7 @@ def test_no_base_schema_a_role_receives_has_a_drawing_field(model: type[BaseMode
 
 
 def _forbidden_properties(model: type[BaseModel]) -> set[str]:
-    return FORBIDDEN_FIELDS & set(model.model_json_schema()["properties"])
+    return _fields_forbidden_for(model) & set(model.model_json_schema()["properties"])
 
 
 @pytest.mark.parametrize("model", [DefinitionTurn], ids=lambda m: m.__name__)
@@ -169,8 +187,8 @@ def test_there_are_role_outputs_to_walk():
 @pytest.mark.parametrize("model", _role_outputs(), ids=lambda m: m.__name__)
 def test_no_role_output_reaches_a_drawing_schema_or_field(model: type[BaseModel]):
     titles, names = _reachable(model)
-    assert not FORBIDDEN_DEFS & titles
-    assert not FORBIDDEN_FIELDS & names
+    assert not _defs_forbidden_for(model) & titles
+    assert not _fields_forbidden_for(model) & names
 
 
 def _subclasses(cls: type) -> set[type]:
@@ -182,7 +200,10 @@ def _subclasses(cls: type) -> set[type]:
 
 def _writers_of_the_record(classes: Iterable[type[BaseModel]]) -> list[str]:
     return sorted(
-        c.__name__ for c in classes if {"drawing_departures", "number"} & set(c.model_fields)
+        c.__name__
+        for c in classes
+        if ({"drawing_departures", "number"} - (PLAN_FIELDS if _is_plan(c) else set()))
+        & set(c.model_fields)
     )
 
 
@@ -204,3 +225,19 @@ def test_the_writers_check_reports_a_class_with_a_number_or_the_record():
         text: str = ""
 
     assert _writers_of_the_record([WithNumber, WithRecord, Clean]) == ["WithNumber", "WithRecord"]
+
+
+def test_only_the_plan_may_declare_drawing_departures_and_never_a_number():
+    class OtherOutput(s.Delivery):
+        drawing_departures: list[DrawingDeparture] = []
+
+    class PlanWithNumber(s.TechPlan):
+        number: int = 0
+
+    assert _writers_of_the_record([s.TechPlan, s.TechPlanWithAssumptions]) == []
+    assert _writers_of_the_record([OtherOutput, PlanWithNumber]) == [
+        "OtherOutput",
+        "PlanWithNumber",
+    ]
+    assert _fields_forbidden_for(OtherOutput) & set(OtherOutput.model_json_schema()["properties"])
+    assert "drawing_departures" in s.TechPlan.model_fields

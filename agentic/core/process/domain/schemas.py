@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -848,6 +849,14 @@ class TechPlan(RoleOutput):
         "no API",
     )
 
+    drawing_departures: list[DrawingDeparture] = Field(
+        default_factory=list,
+        description="Every visible simplification of the plan against an approved drawing: "
+        "what the drawing shows, what would ship instead, and your recommendation. Declare "
+        "each one here and never decide it yourself; the system numbers them and the owner "
+        "answers each. Empty when nothing visible departs from a drawing",
+    )
+
     promote: str | None = Field(default=None, description=PROMOTE_DESCRIPTION)
 
     @model_validator(mode="after")
@@ -1608,6 +1617,22 @@ def _has_human_item(data: dict[str, Any]) -> bool:
     )
 
 
+_NO_REJECTED: Mapping[str, int] = MappingProxyType({})
+
+
+def _rejected_again_check(data: dict[str, Any], rejected: Mapping[str, int]) -> None:
+    """Refuses a plan that declares again a departure the owner rejected. The reason names
+    the path, the element and the number, never the internal key."""
+    for raw in data.get("drawing_departures") or []:
+        number = rejected.get(departure_key(raw["drawing"], raw["element"]))
+        if number is not None:
+            raise ValueError(
+                f"drawing_departures declares again departure #{number}, the element "
+                f"`{raw['element']}` of {raw['drawing']}, which the owner rejected: build "
+                "what the drawing shows and drop it from the plan"
+            )
+
+
 def plan_check_for(
     history: History,
     spent_usd: float,
@@ -1623,6 +1648,7 @@ def plan_check_for(
     size_ratio: size_budget.Ratio = size_budget.UNPROVEN_RATIO,
     has_spec: bool = False,
     spec_path: str | None = None,
+    rejected: Mapping[str, int] = _NO_REJECTED,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -1670,7 +1696,11 @@ def plan_check_for(
     refused with `spec_human_item`, unless it sets `spec_conflict`: a spec delivery never asks
     the owner a question outside the three spec causes. With `spec_path` (the same delivery's spec
     file) a plan whose subtasks' `files` or `required_paths` name it is refused with
-    `spec_protected`: no unit changes the spec. Without a spec nothing changes."""
+    `spec_protected`: no unit changes the spec. Without a spec nothing changes.
+
+    With `rejected` (departure key to number, from `drawing_answer.PlanSplit`) a plan whose
+    `drawing_departures` declares one of them again is refused, naming path, element and `#n`.
+    With the empty map the check is what it was."""
 
     # `rules` imports this module, so the one text is imported where it is used.
     from .rules import MAX_SPLIT_DEPTH, TRACKER_WITH_PARTS
@@ -1683,6 +1713,7 @@ def plan_check_for(
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
         _ci_names_check(data, workflow, stack_ci)
+        _rejected_again_check(data, rejected)
         if has_spec and not data.get("spec_conflict") and _has_human_item(data):
             raise ValueError(SPEC_HUMAN_ITEM_REFUSAL)
         if spec_path and _names_path(data, spec_path):

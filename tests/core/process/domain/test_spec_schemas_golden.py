@@ -1,6 +1,7 @@
 """The schemas a delivery without a spec sends the model stay byte for byte what they were
 (GH-594 part 2b): the golden fixture was generated before any `*WithAssumptions` class existed,
-and is never regenerated. A pydantic upgrade that renders a schema differently turns this red
+and changes only on purpose: `TechPlan` was regenerated once for `drawing_departures` (GH-766
+part 4a), the rest never. A pydantic upgrade that renders a schema differently turns this red
 on purpose."""
 
 import json
