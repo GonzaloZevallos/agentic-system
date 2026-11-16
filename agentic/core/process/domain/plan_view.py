@@ -44,8 +44,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from .task import INTEGRATION, PartRecord, Subtask
+from .task_path import TEXT_MAX
 from .tracker_items import TrackerItem, human_items, system_items
 
 # `### Subtasks` at the top level only, exactly that line (`### Subtasks:` and
@@ -200,9 +202,95 @@ def with_system_items_block(section: str, items: Sequence[TrackerItem]) -> str:
     return f"{section.rstrip()}\n\n### {SYSTEM_ITEMS_TITLE}\n\n{lines}"
 
 
+_BLOCKED_BY_PREFIX = "blocked by:"
+
+
+def part_line_refusal(number: int, field: str, text: str, *, may_be_empty: bool) -> str | None:
+    """Why `text`, a part's reason or `overlap_risk`, cannot be written into its issue, or
+    `None`. The one place that holds their limits: one line of at most `TEXT_MAX` characters,
+    no placeholder, and never a `Blocked by:` line, which would block the issue for real."""
+    if "\n" in text or "\r" in text:
+        broken = "has a newline"
+    elif not text.strip():
+        return None if may_be_empty else f"part {number} {field} is empty"
+    elif len(text) > TEXT_MAX:
+        broken = f"has {len(text)} characters, over {TEXT_MAX}"
+    elif "{{" in text or "}}" in text:
+        broken = "has `{{` or `}}`"
+    elif text.strip().lower().startswith(_BLOCKED_BY_PREFIX):
+        broken = "starts with `Blocked by:`"
+    else:
+        return None
+    return f"part {number} {field} {broken}"
+
+
+@dataclass(frozen=True)
+class PartEdge:
+    """One dependency of a split: part `part` needs part `needs`, for `reason` when the
+    record has a line that may be shown, `None` otherwise."""
+
+    part: int
+    needs: int
+    reason: str | None
+
+
+def part_edges(parts: Sequence[PartRecord]) -> list[PartEdge]:
+    """Every edge of `parts`, in part order and then `depends_on` order, each with the reason
+    at the same index of `depends_on_reasons`. The reason is `None` when it is missing (a record
+    saved before GH-837, or a list too short) or when `part_line_refusal` rejects it. That
+    second case only fires for parts saved before GH-837, edited by hand, or never checked by
+    `schemas.parts_check`: a reason it accepted always passes here. Never a role failure."""
+    edges: list[PartEdge] = []
+    for number, part in enumerate(parts, 1):
+        reasons = part.get("depends_on_reasons", [])
+        for index, needs in enumerate(part["depends_on"]):
+            reason = reasons[index] if index < len(reasons) else None
+            if reason is not None and part_line_refusal(
+                number, "depends_on_reasons", reason, may_be_empty=False
+            ):
+                reason = None
+            edges.append(PartEdge(number, needs, reason))
+    return edges
+
+
+def _shown_risk(number: int, part: PartRecord) -> str | None:
+    """The part's `overlap_risk` when it is non-empty and may be shown, else `None`."""
+    risk = part.get("overlap_risk", "")
+    if not risk.strip() or part_line_refusal(number, "overlap_risk", risk, may_be_empty=True):
+        return None
+    return risk
+
+
+def split_comment_block(parts: Sequence[PartRecord]) -> str:
+    """The text the `Split:` comment adds after the list of parts: that the parts are
+    independent when no part depends on another, else one `Dependencies:` line per edge, and in
+    both cases one line per part that may overlap another. Pure; nothing from here reaches an
+    issue body."""
+    edges = part_edges(parts)
+    if edges:
+        lines = [
+            f"- part {e.part} needs part {e.needs}" + (f": {e.reason}" if e.reason else "")
+            for e in edges
+        ]
+        lines.insert(0, "Dependencies:")
+    else:
+        lines = ["The parts are independent: all start at once."]
+    for number, part in enumerate(parts, 1):
+        if (risk := _shown_risk(number, part)) is not None:
+            lines.append(f"- part {number} may overlap: {risk}")
+    return "\n".join(lines)
+
+
 def _part_brief(number: int, part: PartRecord) -> str:
-    depends_on = ", ".join(f"part {d}" for d in part["depends_on"]) or "nothing"
-    return f"#### Part {number}: {part['title']}\n\n{part['body']}\n\nDepends on: {depends_on}."
+    needs = part_edges([part])
+    depends_on = (
+        ", ".join(f"part {e.needs} ({e.reason})" if e.reason else f"part {e.needs}" for e in needs)
+        or "nothing"
+    )
+    brief = f"#### Part {number}: {part['title']}\n\n{part['body']}\n\nDepends on: {depends_on}."
+    if (risk := _shown_risk(number, part)) is not None:
+        brief += f"\n\nOverlap risk: {risk}."
+    return brief
 
 
 def for_reader(section: str, subtask_id: str | None, subtasks: Mapping[str, Subtask]) -> str:

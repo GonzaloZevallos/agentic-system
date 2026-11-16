@@ -1,8 +1,8 @@
 """The partition of a plan that does not fit (ADR-0054): the Tech Lead wrote `parts`
 instead of subtasks, so nothing is built here. Each part becomes an issue of the product
-repo, labelled `agentic` so the poller takes it up, chained to the parts it depends on
-with a `Blocked by:` line, each with its own small pull request that lands before the
-next one starts. The original task ends in `split`; it is not relaunched.
+repo, labelled `agentic` so the poller takes it up, each with its own small pull request. The
+parts are independent by default: only a part with a real edge carries a `Blocked by:` line,
+naming the parts it needs. The original task ends in `split`; it is not relaunched.
 
 Idempotent over a cut `gh` (the receptor pattern): every body carries the marker
 `<!-- agentic-split: <task id> part <k> -->`, looked for among the open issues before a
@@ -32,7 +32,7 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, lead_time, pull_request, rules
+from ..domain import document, lead_time, plan_view, pull_request, rules
 from ..domain.landing import IssueRef
 from ..domain.roles import PJM
 from ..domain.task import WAITING_ON_HUMAN, PartRecord, TaskState, apply
@@ -123,7 +123,8 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         ports.tracker.comment(
             task_id,
             f"{SPLIT}the estimate does not fit one task, so it was split into {len(parts)} "
-            f"chained issues, each with its own pull request:\n\n{listed}\n\n"
+            f"issues, each with its own pull request:\n\n{listed}\n\n"
+            f"{plan_view.split_comment_block(parts)}\n\n"
             "This task is NOT relaunched: the parts replace it.\n\n"
             f"{unfinished}Task document: `{document.relative_path(task_id)}`",
         )

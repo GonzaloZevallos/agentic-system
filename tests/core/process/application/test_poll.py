@@ -20,6 +20,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
     Upstream,
 )
+from agentic.core.process.application.split import split
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.landing import IssueRef
 from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
@@ -337,6 +338,27 @@ def test_empty_native_blockers_with_no_body_line_launches(tmp_path):
     launcher = FakeLauncher()
     lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
     assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+
+
+@pytest.mark.anyio
+async def test_the_bodies_of_three_independent_parts_leave_nothing_to_wait_for(tmp_path):
+    """GH-841: the parts of a split with no edge carry no `Blocked by:` line, so the poller
+    reads no blocker and no unknown for any of them (the launch rules are untouched)."""
+    parts = [
+        {"title": f"Part {n}", "body": f"Do {n}.", "depends_on": [], "depends_on_reasons": []}
+        for n in (1, 2, 3)
+    ]
+    opened = memory_ports()
+    state = {"id": "GH-53", "title": "t", "description": "d", "status": "planned", "parts": parts}
+    await split(state, _cfg(tmp_path), opened)
+
+    ports = memory_ports()
+    for number, (_, body) in enumerate(opened.tracker.opened_issues, 5):
+        ports.tracker.states[number] = IssueState("OPEN", "", (), None)
+        _seed_body(ports, number, body)
+        report = poll._blocked(_cfg(tmp_path), ports, number, lambda: Upstream("HEAD", None, None))
+        assert report == rules.BlockerReport()
+        assert not report.open and not report.unknown
 
 
 def test_non_empty_native_blockers_win_over_a_contradicting_body(tmp_path):

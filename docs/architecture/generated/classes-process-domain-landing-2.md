@@ -29,7 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `landing` de
 
 ```mermaid
 classDiagram
-    class cost_history__Bucket["Bucket"]
     class cost_history__Floor["Floor"]
     class cost_history__History["History"]
     class cost_history__Pair["Pair"]
@@ -40,6 +39,8 @@ classDiagram
     class landing__LandingSpent["LandingSpent"]
     class landing__LandingStep["LandingStep"]
     class landing__LineChange["LineChange"]
+    class landing__NonCodeState["NonCodeState"]
+    class landing__ScopeFacts["ScopeFacts"]
 ```
 
 ## Relaciones con otras páginas
