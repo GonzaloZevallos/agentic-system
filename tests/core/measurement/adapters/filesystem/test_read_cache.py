@@ -82,10 +82,17 @@ def test_a_corrupt_or_wrong_version_file_is_a_miss_and_is_overwritten(tmp_path, 
     assert store.load() == PAGES
 
 
-def test_an_unreadable_file_is_a_miss(tmp_path):
+def test_an_unreadable_file_is_a_miss_and_is_overwritten(tmp_path):
     path = tmp_path / "root" / "acme__widgets.json"
-    path.mkdir(parents=True)  # reading a directory raises OSError
-    assert cache(tmp_path).load() == {}
+    path.parent.mkdir()
+    path.write_text(json.dumps({"v": 1, "pages": {}}))
+    path.chmod(0o000)
+    if os.access(path, os.R_OK):
+        pytest.skip("this user reads any file, so none is unreadable")
+    store = cache(tmp_path)
+    assert store.load() == {}
+    store.save(PAGES)
+    assert store.load() == PAGES
 
 
 def test_a_write_goes_through_a_pid_named_temp_file_and_leaves_none_behind(tmp_path, monkeypatch):
