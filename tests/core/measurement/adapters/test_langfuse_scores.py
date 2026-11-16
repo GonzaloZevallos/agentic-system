@@ -52,8 +52,11 @@ def _writer(transport: Transport, **kwargs: float) -> LangfuseScores:
     )
 
 
-def _scores() -> list[task_scores.Score]:
-    return task_scores.task_scores(DOCUMENT)
+MERGED = "2026-10-12T15:30:00Z"
+
+
+def _scores(**times: str) -> list[task_scores.Score]:
+    return task_scores.task_scores(DOCUMENT, task_time=TIME, **times)
 
 
 def _write(writer: LangfuseScores) -> bool:
@@ -110,6 +113,31 @@ def test_each_score_carries_the_derived_ids_the_task_end_the_environment_and_the
     by_name = {e["body"]["name"]: e["body"] for e in batch}
     assert by_name["cost_usd"]["value"] == 1.5 and by_name["cost_usd"]["dataType"] == "NUMERIC"
     assert by_name["type"]["value"] == "feature" and by_name["type"]["dataType"] == "CATEGORICAL"
+
+
+def test_each_score_is_stamped_with_its_own_timestamp_and_the_batch_computes_none() -> None:
+    transport = Recorder()
+    scores = _scores(issue_created_at="2026-10-09T08:00:00Z", pr_merged_at=MERGED)
+    writer = _writer(transport)
+    assert writer.write("apostrophe", "GH-12", DOCUMENT, scores, TIME, DIMENSIONS) is True
+    batch = json.loads(transport.posts[1][1])["batch"]
+    stamps = {e["body"]["name"]: e["body"]["timestamp"] for e in batch}
+    assert stamps["cycle_h"] == "2026-10-12T15:30:00.000Z"
+    assert stamps["cost_usd"] == "2026-10-09T09:53:20.250Z"
+    assert all(e["timestamp"] == e["body"]["timestamp"] for e in batch)
+    for score in scores:
+        moment = score.timestamp
+        assert stamps[score.name] == f"{moment:%Y-%m-%dT%H:%M:%S}.{moment.microsecond // 1000:03d}Z"
+
+
+def test_the_carrier_span_keeps_the_task_time_when_the_scores_are_dated_at_the_merge() -> None:
+    transport = Recorder()
+    scores = _scores(issue_created_at="2026-10-09T08:00:00Z", pr_merged_at=MERGED)
+    _writer(transport).write("apostrophe", "GH-12", DOCUMENT, scores, TIME, DIMENSIONS)
+    request = ExportTraceServiceRequest()
+    request.ParseFromString(transport.posts[0][1])
+    [span] = [s for rs in request.resource_spans for ss in rs.scope_spans for s in ss.spans]
+    assert span.end_time_unix_nano == int(END.timestamp()) * 1_000_000_000 + 250_000_000
 
 
 def test_sending_twice_yields_identical_ids() -> None:

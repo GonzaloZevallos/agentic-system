@@ -10,7 +10,7 @@ A write is a side channel and never a result: every exception is caught, one lin
 the call and the task, and `write` returns `False`. The line carries the exception's
 class and nothing of its message, because a transport's message may hold the key pair or
 an auth header; no response body is ever read into a line either. Every id comes from
-`task_scores.identity`, and every timestamp from the task's own recorded times.
+`task_scores.identity`, and every score's timestamp from the score itself (`task_scores.score_time`), never computed here.
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ class LangfuseScores:
             )
             call = "scores"
             if scores:
-                body = self._batch(product, ids, scores, task_time, dimensions)
+                body = self._batch(product, ids, scores, dimensions)
                 self._check_batch(self._post(INGESTION_PATH, body, "application/json"))
         except Exception as error:
             detail = f" ({error})" if isinstance(error, Rejected) else ""
@@ -193,10 +193,8 @@ class LangfuseScores:
         product: str,
         ids: task_scores.Identity,
         scores: Sequence[Score],
-        task_time: TaskTime,
         dimensions: Dimensions,
     ) -> bytes:
-        stamp = _iso(task_time.end)
         metadata = {
             "release": dimensions.release,
             "arm": dimensions.arm,
@@ -206,6 +204,7 @@ class LangfuseScores:
         for score in scores:
             score_id = ids.score_id(score.name)
             value = int(score.value) if score.data_type == "BOOLEAN" else score.value
+            stamp = _iso(score.timestamp)
             events.append(
                 {
                     "id": ids.event_id(score_id),
