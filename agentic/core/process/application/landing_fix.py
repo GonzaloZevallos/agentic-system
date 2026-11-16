@@ -281,6 +281,18 @@ def escalate_no_verdict(context: LandingContext) -> None:
     _escalate(context, reason, "questions")
 
 
+def escalate_stacked(context: LandingContext) -> None:
+    """The `escalate` step of a stacked task (GH-859): its restack budget ran out. Class
+    `questions`, no model run; the reason is the fixed text of `landing.STACK_ESCALATION` for the
+    refusal, never a word of the parent, its issue or the record."""
+    refusal = context.step.refusal
+    reason = landing_rules.STACK_ESCALATION.get(refusal) if refusal is not None else None
+    if reason is None:
+        context.log(f"agentic: land: {context.task_id}: stacked escalation without a text")
+        return
+    _escalate(context, reason, "questions")
+
+
 def _followup_body(rows: Sequence[FindingRecord], task_id: str, lineage: int) -> str:
     lines = [f"- `{row['location']}` ({row['category']}): {row['claim']}" for row in rows]
     return "\n".join(

@@ -634,6 +634,8 @@ def _dispatch(context: LandingContext) -> None:
         case "escalate":
             if context.step.refusal == "ci_no_verdict":
                 landing_fix.escalate_no_verdict(context)
+            elif context.step.refusal in landing_rules.STACK_ESCALATION:
+                landing_fix.escalate_stacked(context)
             else:
                 landing_fix.escalate_red_on_base(context)
         case "land_slice":
