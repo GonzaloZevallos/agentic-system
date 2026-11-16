@@ -10,7 +10,8 @@ A write is a side channel and never a result: every exception is caught, one lin
 the call and the task, and `write` returns `False`. The line carries the exception's
 class and nothing of its message, because a transport's message may hold the key pair or
 an auth header; no response body is ever read into a line either. Every id comes from
-`task_scores.identity`, and every score's timestamp from the score itself (`task_scores.score_time`), never computed here.
+`task_scores.identity`, and every timestamp from the score itself (`task_scores.score_time`),
+never computed here.
 """
 
 from __future__ import annotations

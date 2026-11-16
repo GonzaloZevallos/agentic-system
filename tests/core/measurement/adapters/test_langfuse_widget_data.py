@@ -43,7 +43,9 @@ def test_the_environment_clause_is_applied_only_when_the_widget_filters_by_one(
     sent: list[tuple[str, dict[str, list[str]]]],
 ) -> None:
     assert _count(_widget(_filter("name", ["cycle_h"]))) == 7
-    assert _count(_widget(_filter("name", ["cycle_h"]), _filter("environment", ["apostrophe"]))) == 7
+    assert (
+        _count(_widget(_filter("name", ["cycle_h"]), _filter("environment", ["apostrophe"]))) == 7
+    )
     without, with_env = sent
     assert "environment" not in without[0] and "param_environments" not in without[1]
     assert "environment in {environments:Array(String)}" in with_env[0]

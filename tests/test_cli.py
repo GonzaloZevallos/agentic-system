@@ -7,6 +7,7 @@ import subprocess
 import weakref
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -4706,7 +4707,7 @@ def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(mo
     moment = datetime(2026, 10, 17, tzinfo=UTC)
     task_time = TaskTime(moment, moment)
     dimensions = Dimensions("v", "b", "a")
-    scores = [Score("cost_usd", 1.0, "NUMERIC")]
+    scores = [Score("cost_usd", 1.0, "NUMERIC", timestamp=moment)]
 
     # Accepting control: the bound product reaches the transport, on both posts.
     assert scorer.write("apostrophe", "GH-1", {}, scores, task_time, dimensions) is True
@@ -6783,3 +6784,60 @@ def test_the_backfill_prints_the_stage_report_in_the_dry_run_and_the_live_run(
         assert any(line.startswith("GH-9 | ") for line in lines)
         assert any(line.startswith("queue>active_h (unclipped)") for line in lines)
     assert outputs[0][1:-1] == outputs[1][1:-1]
+
+
+# The merge-dated scores (GH-819): the backfill and the live write stamp them the same way.
+
+
+def _merge_dated(scores):
+    return [s for s in scores if cli.task_scores.merge_dated(s.name)]
+
+
+def test_two_backfill_one_calls_give_identical_id_and_timestamp_pairs_dated_at_the_merge():
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": stage_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    first = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    again = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    pairs = [(s.id, s.timestamp) for s in first.scores]
+    assert pairs == [(s.id, s.timestamp) for s in again.scores]
+    merge = datetime(2026, 9, 20, 13, 0, tzinfo=UTC)
+    dated = _merge_dated(first.scores)
+    assert {s.name for s in dated} >= {"cycle_h", "cycle_active_h", "stage_split_known"}
+    assert {s.timestamp for s in dated} == {merge}
+    assert {s.timestamp for s in first.scores if s not in dated} == {first.moment.end}
+
+
+def test_backfill_one_without_a_merge_emits_no_merge_dated_score():
+    tracker = FakePullRequestTracker(
+        {"https://github.com/o/r/pull/7": stage_pull_request(merged=None)}
+    )
+    tracker.issue_created["GH-9"] = "2026-09-20T09:00:00+00:00"
+    found = cli._backfill_one("p", "GH-9", finished_task(), stage_reads(tracker))
+    assert _merge_dated(found.scores) == []
+
+
+def test_the_finish_write_has_no_merge_and_sends_no_merge_dated_score(tmp_path):
+    ports = close_ports(close_root(tmp_path), FakePullRequestTracker({}))
+    ports.documents.save(finished_task())
+    scorer = FakeScorer()
+    cli._write_scores(scorer, "GH-9", ports, finished_only=True)
+    [(_, _, scores, _, _)] = scorer.calls
+    assert scores and _merge_dated(scores) == []
+
+
+def test_the_close_write_passes_the_merge_through_to_the_stamps(tmp_path):
+    ports = close_ports(close_root(tmp_path), FakePullRequestTracker({}))
+    ports.documents.save(finished_task())
+    scorer = FakeScorer()
+    cli._write_scores(
+        scorer,
+        "GH-9",
+        ports,
+        pr_created_at="2026-09-20T12:00:00+00:00",
+        pr_merged_at="2026-09-20T13:00:00+00:00",
+        issue_created_at="2026-09-20T09:00:00+00:00",
+    )
+    [(_, _, scores, _, _)] = scorer.calls
+    merge = datetime(2026, 9, 20, 13, 0, tzinfo=UTC)
+    assert {s.timestamp for s in _merge_dated(scores)} == {merge}
+    assert "cycle_h" in {s.name for s in scores}

@@ -17,10 +17,7 @@ from ...domain import dashboards as domain
 
 TIMEOUT_S = 30.0
 
-_SCORES = (
-    "select count() from scores final where project_id = {project:String} "
-    "and is_deleted = 0"
-)
+_SCORES = "select count() from scores final where project_id = {project:String} and is_deleted = 0"
 
 
 def _array(values: list[str]) -> str:

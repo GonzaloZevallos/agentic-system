@@ -159,9 +159,7 @@ def test_origin_tells_a_followup_from_an_original():
 
 def test_origin_is_absent_without_a_title():
     assert "origin" not in by_name(scores_of(document(title="")))
-    assert "origin" not in by_name(
-        scores_of({k: v for k, v in document().items() if k != "title"})
-    )
+    assert "origin" not in by_name(scores_of({k: v for k, v in document().items() if k != "title"}))
 
 
 def test_scores_carry_the_ids_of_the_identity_they_are_given():
@@ -478,9 +476,7 @@ def test_checks_red_counts_the_failed_merge_checks_and_is_absent_without_a_recor
 
 def test_a_malformed_register_reads_as_unknown_not_zero():
     got = by_name(
-        scores_of(
-            document(findings="x", merge_checks={"checks": "x"}, pause_log=None, runs=None)
-        )
+        scores_of(document(findings="x", merge_checks={"checks": "x"}, pause_log=None, runs=None))
     )
     assert "findings_important" not in got and "checks_red" not in got
 

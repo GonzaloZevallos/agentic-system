@@ -182,6 +182,9 @@ escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae ca
 | `findings_important` | filas `important` de `findings`, plegadas por ubicación y reclamo como la tabla de hallazgos | numérico | el documento no tiene `findings` |
 | `followups` | `1` si `followups_filed` (se archivó o comentó el seguimiento de fuera de alcance), `0` si hay registro `landing` de un pull request (sin `before_pr`: el pase previo al pull request no cuenta) sin él | numérico | la tarea no pasó por el aterrizaje (no es "cero", es desconocido) |
 | `checks_red` | entradas de `merge_checks.checks` con `passed: false` (las corridas del presubmit no quedan en el documento) | numérico | no hay registro `merge_checks` |
+| `cycle_active_h` | `cycle_h` menos `stage_h.human_wait` y `stage_h.account_limit`, del mismo reparto que `stage_h` | numérico | las mismas condiciones que `stage_h`: sin reparto no se escribe |
+| `stage_split_known` | `1` si el ciclo tiene reparto por etapas, `0` si no (el backfill lo llama «parcial») | booleano | el PR no se mergeó o no se pudo leer su fecha de merge |
+| `slowest_stage.<CycleStage>` | el `cycle_h` de la tarea, bajo el nombre de la etapa con más horas (empate: la primera en el orden de `CycleStage`); una por tarea | numérico | las mismas condiciones que `stage_h` |
 
 Reglas para leerlos:
 
@@ -247,8 +250,10 @@ cada dashboard lleva el producto como sufijo (`Panorama · agentic-system`); los
 Cómo leer la tabla:
 
 - **El tiempo.** Cada score se ubica por `task_time.end`, el fin de la última corrida de la
-  tarea, nunca por la fecha del merge: "PRs mergeados por semana de entrega" cuenta la semana
-  en que terminó la tarea. La fecha del merge se lee en `cycle_h`.
+  tarea, salvo los que solo existen con un merge (`cycle_h`, `stage_h.*`, `cycle_active_h`,
+  `stage_split_known`, `slowest_stage.*`): esos llevan la fecha del merge del PR, para que
+  la tendencia semanal y el rango pongan la tarea en la semana en que se mergeó
+  (`task_scores.score_time`; GH-819). Sin merge no se escriben.
 - **Versión del sistema.** El desglose `traceRelease` es el `release` de la traza portadora
   del score; en Panorama es el marcador del cambio de versión (no hay línea vertical).
 - **`unknown` es una serie visible.** Una tarea cuya versión no se registró aparece como

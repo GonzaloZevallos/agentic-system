@@ -3320,6 +3320,7 @@ def _backfill_one(
     ids = task_scores.identity(product, task_id, moment.start)
     scores = task_scores.task_scores(
         document,
+        task_time=moment,
         pr_merged_at=pr_merged,
         issue_created_at=created,
         pr_created_at=pr_created,
@@ -3630,6 +3631,7 @@ def _write_scores(
             return
         scores = task_scores.task_scores(
             document,
+            task_time=span,
             pr_merged_at=pr_merged_at,
             issue_created_at=issue_created_at,
             pr_created_at=pr_created_at,
