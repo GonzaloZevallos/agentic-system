@@ -142,8 +142,17 @@ def _read_for_developer(state: TaskState, ports: Ports, unit: str) -> str:
         if cause is None:
             return ""
         text = f"{NOT_READ}{cause}"
-    sentence = rules.repetition_for(state, unit)
+    sentence = _repetition(state, unit)
     return f"{text}\n\n{sentence}" if sentence else text
+
+
+def _repetition(state: TaskState, unit: str) -> str:
+    """The repetition sentence, or nothing when the rule cannot say: a malformed row never costs
+    the Developer the excerpt already read."""
+    try:
+        return rules.repetition_for(state, unit)
+    except Exception:
+        return ""
 
 
 def _ignore(_: str) -> None:

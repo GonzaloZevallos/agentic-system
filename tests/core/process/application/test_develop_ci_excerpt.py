@@ -352,3 +352,14 @@ def test_developer_excerpt_never_gives_log_text_without_the_notice(wired):
         text = ci_excerpt.developer_excerpt(state_of(repeats=False), case.ports, "api", HEAD)
         assert text == "" or text.startswith((NOTICE, "log no leído: "))
         assert FIRST_TEST not in text or text.startswith(NOTICE)
+
+
+def test_a_repetition_rule_that_raises_keeps_the_excerpt_it_was_to_follow(wired, monkeypatch):
+    def broken(state: Any, unit: str) -> str:
+        raise RuntimeError("malformed reads")
+
+    monkeypatch.setattr(rules, "repetition_for", broken)
+    case = wired()
+    text = ci_excerpt.developer_excerpt(state_of(), case.ports, "api", HEAD)
+    assert text.startswith(NOTICE) and FIRST_TEST in text
+    assert "malformed" not in text and "RuntimeError" not in text
