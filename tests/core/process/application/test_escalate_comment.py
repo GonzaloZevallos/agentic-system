@@ -211,8 +211,8 @@ def _drawing_state(cause="drawing_departure", **extra):
         drawing.Departure("design/home.png", e, "blue", "green", "keep", "approved", "dev")
         for e in ("hero", "footer")
     ]
-    patch = drawing_answer.escalation_patch(base, departures, "T0")  # type: ignore[arg-type]
-    patch["drawing_escalation"] = {**patch["drawing_escalation"], "cause": cause}  # type: ignore[dict-item]
+    patch = drawing_answer.escalation_patch(base, departures, "T0")
+    patch["drawing_escalation"] = {**patch["drawing_escalation"], "cause": cause}
     return {**base, **patch, **extra}
 
 
@@ -237,7 +237,7 @@ def test_a_drawing_pause_with_no_issue_number_shows_only_prose():
     from tests.fakes import memory_ports as ports_of
 
     ports = ports_of()
-    ports.inbox.issue_of = lambda task_id: None  # type: ignore[method-assign]
+    ports.inbox.issue_of = lambda task_id: None
     text = escalate.comment(_drawing_state(), Configuration(product_dir="/tmp/p"), ports)
     assert "--drawing" not in text.replace("`Drawing <n>", "")
     assert "agentic resume" not in text.split("Options:")[0]

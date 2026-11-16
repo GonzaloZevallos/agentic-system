@@ -842,11 +842,12 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
 
 
 def _drawing_lines(r: Resumption) -> list[str]:
-    flagged = [
-        f"{row['number']}={row['answer']['verdict']} (flag)"
-        for row in r.drawing_answers
-        if row["answer"] is not None and row["answer"]["by"] in ("flag",)
-    ]
+    """The `drawing:` line of the answers given by `--drawing`, grouped by how each arrived."""
+    arrived: dict[str, list[str]] = {}
+    for row in r.drawing_answers:
+        if (answer := row["answer"]) is not None:
+            arrived.setdefault(answer["by"], []).append(f"{row['number']}={answer['verdict']}")
+    flagged = [f"{item} (flag)" for item in arrived.get("flag", [])]
     return [f"drawing:   {', '.join(flagged)}"] if flagged else []
 
 

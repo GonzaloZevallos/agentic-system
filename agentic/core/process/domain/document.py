@@ -33,6 +33,7 @@ from .task import (
     CarveCause,
     CarveOutcome,
     CarveRecord,
+    DepartureRecord,
     RoleRun,
     assumption_text,
 )
@@ -236,7 +237,7 @@ def _lane_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def drawing_section(rows: Sequence[Any] | None) -> str:
+def drawing_section(rows: Sequence[DepartureRecord] | None) -> str:
     """The text of the `Drawing departures` section for `rows`, `""` when there are none. The
     lines are `drawing_answer.section_lines`; imported here because `drawing_answer` imports
     `rules`, which imports this module."""
@@ -250,7 +251,7 @@ def drawing_section(rows: Sequence[Any] | None) -> str:
 _ANSWER_BY = ("comment", "flag")
 
 
-def _departure_rows(raw: object, source: object) -> list[Any]:
+def _departure_rows(raw: object, source: object) -> list[DepartureRecord]:
     """The stored `drawing_departures` rows, each `answer` validated as `DepartureAnswer | None`
     (`verdict` accept or reject, `by` comment or flag, `at` a string). Raises `ValueError`."""
     if not isinstance(raw, list):
@@ -266,7 +267,7 @@ def _departure_rows(raw: object, source: object) -> list[Any]:
             and isinstance(answer.get("at"), str)
         ):
             raise ValueError(f"{source}: drawing_departures has a row with a bad answer: {row!r}")
-    return raw
+    return cast(list[DepartureRecord], raw)
 
 
 def _assumption_rows(raw: object) -> list[AssumptionRow]:

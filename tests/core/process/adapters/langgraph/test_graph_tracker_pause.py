@@ -4,8 +4,11 @@ decision resumes it, through the compiled graph with a checkpointer."""
 import pytest
 from langgraph.types import Command
 
-from agentic.core.process.domain import tracker_items
+from agentic.core.process.adapters.langgraph.graph import ESCALATE
+from agentic.core.process.application import resume
+from agentic.core.process.domain import drawing, drawing_answer, tracker_items
 from agentic.core.process.domain.landing import waits_on_human
+from agentic.shared.configuration import Configuration
 from tests.core.process.adapters.langgraph.test_graph import (
     TASK,
     Fakes,
@@ -14,7 +17,7 @@ from tests.core.process.adapters.langgraph.test_graph import (
     technical,
 )
 from tests.core.process.domain.test_landing import _spent
-from tests.fakes import planned
+from tests.fakes import memory_ports, planned
 
 pytestmark = pytest.mark.anyio
 
@@ -97,54 +100,63 @@ async def test_a_plan_with_one_human_item_escalates_with_needs_human_through_del
     )
 
 
-async def _drawing_paused(config):
-    from agentic.core.process.domain import drawing, drawing_answer
-
+def _drawing_state():
     departures = [
         drawing.Departure("design/home.png", e, "blue", "green", "keep", "approved", "dev")
         for e in ("hero", "footer")
     ]
     base = {"id": "GH-1", "title": "t", "description": "d", "type": "feature"}
-    patch = drawing_answer.escalation_patch(base, departures, "T0")  # type: ignore[arg-type]
-    state = {**base, **patch, "status": "waiting_on_human"}
-    app = compiled(script_for(), fakes=Fakes())
-    await app.aupdate_state(config, state, as_node="escalate")
-    return app, state
+    patch = drawing_answer.escalation_patch(base, departures, "T0")
+    return {**base, **patch, "status": "waiting_on_human"}
 
 
-async def test_a_drawing_answer_from_prepare_reaches_the_state_through_the_pause_node(config):
-    from agentic.core.process.application import resume
-    from agentic.core.process.domain import drawing_answer
-    from agentic.shared.configuration import Configuration
-    from tests.fakes import memory_ports
-
-    app, state = await _drawing_paused(config)
+def _prepared(state, source):
     ports = memory_ports()
-    ports.tracker.earlier = ["Escalated: x", "Drawing 1: accept", "Drawing 2: reject"]
-    r = resume.prepare(
+    ports.tracker.earlier = ["Escalated: x", "Drawing 1: accept"]
+    return resume.prepare(
         "GH-1",
         state,
-        "checkpoint",
+        source,
         Configuration(product_dir="/tmp/p"),
-        ports,  # type: ignore[arg-type]
+        ports,
+        drawing_flags=["2=reject"],
     )
-    async for update in app.astream(
-        Command(resume=r.answer()), config=config, stream_mode="updates"
-    ):
+
+
+async def _answered_state(app, config, r):
+    stream = app.astream(Command(resume=r.answer()), config=config, stream_mode="updates")
+    async for update in stream:
         if "pause" in update:
             break  # what runs after the pause is not what this test is about
-    final = (await app.aget_state(config)).values
+    return (await app.aget_state(config)).values
+
+
+def _answers(final):
     assert drawing_answer.unanswered(final) == []
-    assert {x["number"]: x["answer"]["by"] for x in final["drawing_departures"]} == {
-        1: "comment",
-        2: "comment",
-    }
+    return {x["number"]: x["answer"]["by"] for x in final["drawing_departures"]}
 
 
-async def test_a_plain_resume_has_no_drawing_departures_key(config):
-    from agentic.core.process.application import resume
+async def test_a_drawing_answer_resumes_a_pause_the_graph_reached_itself(config):
+    """The checkpoint path: the thread holds an interrupt at `pause`, `prepare` reads its values."""
+    app = compiled(script_for(), fakes=Fakes())
+    await app.aupdate_state(config, _drawing_state(), as_node="escalate")
+    await app.ainvoke(None, config=config)
+    snapshot = await app.aget_state(config)
+    assert snapshot.interrupts
+    r = _prepared(snapshot.values, "checkpoint")
+    final = await _answered_state(app, config, r)
+    assert _answers(final) == {1: "comment", 2: "flag"}
 
-    assert (
-        "drawing_departures"
-        not in resume.Resumption("GH-1", "checkpoint", {}, {}, "x", "plan", 1.0).answer()
-    )
+
+async def test_a_drawing_answer_resumes_a_pause_seeded_from_the_document(config):
+    """The document path: `r.paused` seeded as if `escalate` had just run, then the answer."""
+    app = compiled(script_for(), fakes=Fakes())
+    r = _prepared(_drawing_state(), "document")
+    await app.aupdate_state(config, r.paused, as_node=ESCALATE)
+    final = await _answered_state(app, config, r)
+    assert _answers(final) == {1: "comment", 2: "flag"}
+
+
+async def test_a_plain_resume_has_no_drawing_departures_key():
+    plain = resume.Resumption("GH-1", "checkpoint", {}, {}, "x", "plan", 1.0)
+    assert "drawing_departures" not in plain.answer()
