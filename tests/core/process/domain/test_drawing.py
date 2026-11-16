@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.domain import drawing as drawing_module
-from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.design import Capture, Design
 from agentic.core.process.domain.drawing import (
     DEPARTURE_ESCALATIONS_MAX,
     DRAWING_RULE,
@@ -16,7 +16,9 @@ from agentic.core.process.domain.drawing import (
     flag_verdict,
     flag_verdicts,
     normalize_drawing,
+    row_is_open,
     rule_for,
+    screens_due,
     verdicts,
 )
 
@@ -200,3 +202,106 @@ def test_drawing_is_a_leaf_that_imports_neither_task_nor_rules():
 )
 def test_the_leaf_check_rejects_a_forbidden_import_wherever_it_sits(source, found):
     assert _forbidden_imports(source) == found
+
+
+def _design(*captures: Capture) -> Design:
+    return Design(
+        prototype="pantallas", entry="Home", sample_app=None, compare=None, captures=captures
+    )
+
+
+def test_screens_due_returns_the_captures_whose_paths_match_in_declared_order():
+    home = Capture("design/home.png", "Home", ("src/home/*.py",))
+    cart = Capture("design/cart.png", "Cart", ("src/cart/*.py",))
+    admin = Capture("design/admin.png", "Admin", ("src/admin/*.py",))
+    due = screens_due(_design(home, cart, admin), ["src/admin/a.py", "src/home/b.py", "README.md"])
+    assert due == [home, admin]
+
+
+def test_a_capture_without_paths_is_always_due():
+    always = Capture("design/home.png", "Home")
+    assert screens_due(_design(always), []) == [always]
+    assert screens_due(_design(always), ["anything.txt"]) == [always]
+
+
+def test_a_capture_with_paths_is_not_due_when_nothing_matches_or_nothing_changed():
+    home = Capture("design/home.png", "Home", ("src/home/*.py",))
+    assert screens_due(_design(home), ["src/cart/a.py"]) == []
+    assert screens_due(_design(home), []) == []
+
+
+def test_two_captures_of_the_same_screen_are_two_screens_due():
+    one = Capture("design/home-1.png", "Home", ("src/*.py",))
+    two = Capture("design/home-2.png", "Home", ("src/*.py",))
+    assert screens_due(_design(one, two), ["src/a.py"]) == [one, two]
+
+
+def test_a_star_crosses_directories():
+    deep = Capture("design/home.png", "Home", ("src/*.py",))
+    assert screens_due(_design(deep), ["src/a/b.py"]) == [deep]
+
+
+def test_a_deleted_path_still_matches_textually():
+    home = Capture("design/home.png", "Home", ("src/home/*.py",))
+    assert screens_due(_design(home), ["src/home/removed.py"]) == [home]
+
+
+def test_matching_is_case_sensitive():
+    home = Capture("design/home.png", "Home", ("src/Home/*.py",))
+    assert screens_due(_design(home), ["src/home/a.py"]) == []
+
+
+def test_screens_due_without_captures_is_empty():
+    assert screens_due(_design(), ["src/a.py"]) == []
+
+
+@pytest.mark.parametrize(
+    ("verdict", "settled", "expected"),
+    [
+        ("matches", False, False),
+        ("matches", True, False),
+        ("departs", True, False),
+        ("departs", False, True),
+        ("unverified", False, True),
+        ("unverified", True, True),
+        ("invented", False, True),
+        ("invented", True, True),
+    ],
+)
+def test_row_is_open_only_for_matches_and_settled_departs_is_closed(
+    verdict: str, settled: bool, expected: bool
+):
+    assert row_is_open(verdict, settled) is expected
+
+
+def _package_imports(source: str) -> set[str]:
+    """Every import of `source`, deferred ones included, that reaches the package itself:
+    a relative one, or one under `agentic`."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom) and (
+            node.level or (node.module or "").startswith("agentic")
+        ):
+            base = "." * node.level + (node.module or "")
+            found |= {base if node.module else f"{base}{a.name}" for a in node.names}
+        elif isinstance(node, ast.Import):
+            found |= {a.name for a in node.names if a.name.startswith("agentic")}
+    return found
+
+
+def test_drawing_imports_only_design_from_the_package():
+    assert _package_imports(Path(drawing_module.__file__).read_text()) == {".design"}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from .schemas import DrawingCheck\n",
+        "from . import schemas\n",
+        "def f():\n    from .rules import x\n",
+        "import agentic.core.process.domain.task\n",
+        "from agentic.core.process.domain import drawing_answer\n",
+    ],
+)
+def test_the_package_import_check_rejects_anything_but_design(source: str):
+    assert _package_imports(source) != {".design"}
