@@ -58,7 +58,7 @@ def test_applicable_ignores_a_number_without_row_and_an_answered_row():
 
 
 def test_patch_without_spec_has_no_spec_cause_and_no_mechanical_cause():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("hero")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("hero")], AT)
     assert "spec_cause" not in patch
     assert patch["escalation_cause"] is None
     assert patch["escalation_class"] == "questions"
@@ -70,7 +70,7 @@ def test_patch_without_spec_has_no_spec_cause_and_no_mechanical_cause():
 
 def test_patch_with_spec_carries_exactly_the_drawing_spec_cause():
     state = _state(spec=cast(Any, {"issue": 7}))
-    patch = drawing_answer.escalation_patch(state, [_departure("hero")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(state, [_departure("hero")], AT)
     assert patch["spec_cause"] == "drawing"
     assert patch["escalation_cause"] is None
 
@@ -103,7 +103,7 @@ def test_round_four_is_exhausted_and_records_the_new_rows_unanswered():
     due = drawing_answer.escalation_due(state, new)
     assert isinstance(due, drawing_answer.Exhausted)
     assert (due.round, due.cause) == (4, "drawing_cap")
-    patch = drawing_answer.escalation_patch(state, new, AT, issue=7)
+    patch = drawing_answer.escalation_patch(state, new, AT)
     rows = cast(list[task.DepartureRecord], patch["drawing_departures"])
     assert [(r["number"], r["answer"]) for r in rows] == [(2, None)]
     assert patch["drawing_escalation"] == {"round": 4, "numbers": [1, 2], "cause": "drawing_cap"}
@@ -122,36 +122,43 @@ def test_round_five_is_still_the_cap():
 def test_nothing_unanswered_raises():
     state = _state(drawing_departures=_rows("a", answered=(1,)))
     with pytest.raises(ValueError, match="nothing to escalate"):
-        drawing_answer.escalation_patch(state, [_departure("a")], AT, issue=7)
+        drawing_answer.escalation_patch(state, [_departure("a")], AT)
     with pytest.raises(ValueError):
-        drawing_answer.escalation_patch(_state(), [], AT, issue=7)
+        drawing_answer.escalation_patch(_state(), [], AT)
 
 
 def test_a_contradicted_open_row_gets_its_line_and_a_row_without_one_does_not():
     state = _state(drawing_departures=_rows("a", "b", answered=(2,)))
-    patch = drawing_answer.escalation_patch(
-        state, [], AT, issue=7, contradicted=frozenset({1, 2, 99})
-    )
+    patch = drawing_answer.escalation_patch(state, [], AT, contradicted=frozenset({1, 2, 99}))
     reason = cast(str, patch["escalated"])
     assert "Drawing 1 got both accept and reject in one comment; answer it once." in reason
     assert "Drawing 2 got both" not in reason
     assert "Drawing 99 got both" not in reason
 
 
-def test_commands_carry_the_issue_number_or_n():
+def test_the_reason_carries_the_question_but_no_command():
     state = _state(drawing_departures=_rows("a", "b"))
-    reason = cast(str, drawing_answer.escalation_patch(state, [], AT, issue=42)["escalated"])
-    for n in (1, 2):
-        for template in (escalation_prompts.DRAWING_ACCEPT, escalation_prompts.DRAWING_REJECT):
-            assert template.format(issue=42).replace("<n>", str(n)) in reason
-    unknown = cast(str, drawing_answer.escalation_patch(state, [], AT, issue=None)["escalated"])
-    assert "agentic resume --issue N --drawing 1=accept" in unknown
-    assert "agentic resume --issue N --drawing 2=reject" in unknown
+    reason = cast(str, drawing_answer.escalation_patch(state, [], AT)["escalated"])
+    assert "Departure #1:" in reason and "Departure #2:" in reason
+    assert "agentic resume" not in reason
+
+
+def test_prompt_lines_are_both_commands_per_open_row_in_number_order():
+    rows = _rows("a", "b", "c", answered=(2,))
+    lines = drawing_answer.prompt_lines(rows[::-1], 42)
+    assert lines == [
+        "agentic resume --issue 42 --drawing 1=accept",
+        "agentic resume --issue 42 --drawing 1=reject",
+        "agentic resume --issue 42 --drawing 3=accept",
+        "agentic resume --issue 42 --drawing 3=reject",
+    ]
+    assert lines[0] == escalation_prompts.DRAWING_ACCEPT.format(issue=42).replace("<n>", "1")
+    assert drawing_answer.prompt_lines([], 42) == []
 
 
 def test_the_internal_key_is_in_no_reason_and_no_section_line():
     state = _with_round(3, "Hero Banner")
-    patch = drawing_answer.escalation_patch(state, [_departure("Footer")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(state, [_departure("Footer")], AT)
     rows = (
         cast(list[task.DepartureRecord], patch["drawing_departures"]) + state["drawing_departures"]
     )
@@ -166,7 +173,7 @@ def test_the_internal_key_is_in_no_reason_and_no_section_line():
 
 
 def test_an_answered_round_one_row_stays_in_numbers_and_does_not_trigger_alone():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     assert drawing_answer.prompt_cause(state) == "drawing_departure"
     answered = _state(
@@ -177,7 +184,7 @@ def test_an_answered_round_one_row_stays_in_numbers_and_does_not_trigger_alone()
 
 
 def test_prompt_cause_is_none_for_a_tracker_human_pause_with_an_old_unanswered_row():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     other = rules.escalation("questions", "typed items", tracker_human=["h1"])
     paused = _state(**{**state, **other})
@@ -186,7 +193,7 @@ def test_prompt_cause_is_none_for_a_tracker_human_pause_with_an_old_unanswered_r
 
 
 def test_prompt_cause_is_none_for_api_break_missing_with_an_unregistered_unanswered_row():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     first = _answered(state["drawing_departures"][0])
     second = task.departure_records([first], [_departure("b")], AT)[0]
@@ -203,13 +210,13 @@ def test_prompt_cause_is_none_for_api_break_missing_with_an_unregistered_unanswe
 
 
 def test_prompt_cause_is_none_when_the_pause_is_not_a_questions_one():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     state = _applied(_state(), patch)
     assert drawing_answer.prompt_cause(_state(**{**state, "escalation_class": "ci"})) is None
 
 
 def test_the_drawing_escalation_is_a_humans_pause():
-    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT, issue=7)
+    patch = drawing_answer.escalation_patch(_state(), [_departure("a")], AT)
     logged = rules.logged(cast(dict[str, Any], patch), at=AT)
     assert rules.pause_kind(logged["pause_log"]) == "human"
     state = _applied(_state(), logged)

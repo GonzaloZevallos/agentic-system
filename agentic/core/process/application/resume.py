@@ -15,17 +15,23 @@ The graph calls stay in the driving adapter; this module decides what they get."
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast, get_type_hints
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules
+from ..domain import document, drawing, drawing_answer, rules
 from ..domain import landing as landing_rules
 from ..domain.retakes import RESUMED_BY_POLLER, RETAKES_SPENT
-from ..domain.task import TaskState, TrackerFailure, TrackerFailureRecord, apply
+from ..domain.task import (
+    DepartureRecord,
+    TaskState,
+    TrackerFailure,
+    TrackerFailureRecord,
+    apply,
+)
 from ..domain.tracker_items import DONE, PLAN_NOTE
 from . import landing_plan
 from .archive import STARTED_OVER
@@ -137,12 +143,19 @@ class Resumption:
     # GH-620: a task with a pull request paused on its tracker items is settled by the owner's
     # decision alone: `settle` saves `resumed`, and no graph node runs.
     settled: bool = False
+    # GH-766: the departure rows this resume answers, each with its `answer`. They reach the graph
+    # state only through `answer()`, which the `pause` node folds by the field's reducer.
+    drawing_answers: tuple[DepartureRecord, ...] = ()
 
-    def answer(self) -> dict[str, float | str | None]:
-        """What the graph resumes with: the decision, and the `--estimate` when given."""
-        if self.estimate is None:
-            return {"decision": self.decision}
-        return {"decision": self.decision, "estimate": self.estimate}
+    def answer(self) -> dict[str, object]:
+        """What the graph resumes with: the decision, the `--estimate` when given, and the
+        `drawing_departures` answered, only when there are some."""
+        out: dict[str, object] = {"decision": self.decision}
+        if self.estimate is not None:
+            out["estimate"] = self.estimate
+        if self.drawing_answers:
+            out["drawing_departures"] = list(self.drawing_answers)
+        return out
 
 
 def state_from(raw: dict) -> TaskState:
@@ -485,12 +498,11 @@ def human_decision(comments: Sequence[str]) -> str | None:
     return "\n\n".join(after or []) or None
 
 
-def decision_since(comments: Sequence[str], prefix: str) -> str | None:
-    """The human's decision on a landing escalation (GH-328): every comment after the last one
-    that starts with `prefix` (the escalation's), joined as `human_decision` joins them. A
-    comment of any other system prefix is dropped on its own and never resets the count, so
-    the poller's refusal comment after the escalation does not swallow the answer before it.
-    `None` when nothing follows. The only place a landing reads a decision off the issue."""
+def comments_since(comments: Sequence[str], prefix: str) -> list[str]:
+    """The human's comments after the last one that starts with `prefix` (the escalation's), in
+    order. A comment of any other system prefix is dropped on its own and never resets the
+    count, so the poller's comment after the escalation does not swallow the answer before it.
+    Empty when nothing follows. The only place a decision is read off the issue by a prefix."""
     after: list[str] | None = None
     for body in comments:
         text = _text(body)
@@ -498,7 +510,13 @@ def decision_since(comments: Sequence[str], prefix: str) -> str | None:
             after = []
         elif text and after is not None and not text.startswith(SYSTEM_COMMENTS):
             after.append(text)
-    return "\n\n".join(after or []) or None
+    return after or []
+
+
+def decision_since(comments: Sequence[str], prefix: str) -> str | None:
+    """The human's decision on a landing escalation (GH-328): `comments_since` joined as
+    `human_decision` joins them, `None` when nothing follows."""
+    return "\n\n".join(comments_since(comments, prefix)) or None
 
 
 def prepare(
@@ -510,6 +528,7 @@ def prepare(
     pending: tuple[str, ...] = (),
     estimate: float | None = None,
     increment: Increment | None = None,
+    drawing_flags: Sequence[str] = (),
 ) -> Resumption:
     """Decide the resume. `pending` are the nodes a run that crashed left to run: it did
     not pause, so there is no answer to take and nothing to reset. Raises
@@ -519,7 +538,23 @@ def prepare(
     `estimate` is the human's `--estimate`: the cost estimate that goes in force when the
     task paused at the cap of its estimate. It is itself the human's decision (the poller
     never passes one); on any other pause it is a usage error. `--task-budget` stays the
-    flat cap's, read below, whatever the estimate in force."""
+    flat cap's, read below, whatever the estimate in force.
+
+    `drawing_flags` are the `--drawing <n>=accept|reject` of a pause on drawing departures
+    (GH-766): any misuse is a `ValueError`, and on such a pause the answers are read by
+    `_pending_drawing`, never from `human_decision`."""
+    flags = drawing.flag_verdicts(drawing_flags)
+    if flags and pending:
+        raise ValueError(
+            f"--drawing applies only to a task paused on drawing departures; {task_id} "
+            "crashed and has nothing to answer"
+        )
+    cause = drawing_answer.prompt_cause(paused)
+    if flags and cause is None:
+        raise ValueError(
+            f"--drawing applies only to a task paused on drawing departures; {task_id} is "
+            f"paused for `{paused.get('escalation_class') or 'another reason'}`"
+        )
     if estimate is not None and paused.get("escalation_class") != "estimate":
         raise ValueError(
             "--estimate applies only to a task paused at the cap of its estimate "
@@ -532,10 +567,17 @@ def prepare(
             "estimate: --estimate does not apply; comment on the issue and resume"
         )
     decision = None
+    answered: list[DepartureRecord] = []
     if pending:
         resumed, target = paused, ", ".join(pending)
     else:
-        decision = human_decision(ports.tracker.issue_comments(task_id))
+        comments = ports.tracker.issue_comments(task_id)
+        if cause is None:
+            decision = human_decision(comments)
+        else:
+            # GH-766: a drawing pause is answered by number; its text is the one `_pending_drawing`
+            # built, so it is never empty and the branches below that wait on `None` do not run.
+            answered, decision = _pending_drawing(task_id, paused, comments, flags, ports.now())
         held = rules.tracker_item_pause(paused)
         if held and decision is not None and not decision.strip():
             decision = None  # a blank answer decides none of the pending items
@@ -587,7 +629,10 @@ def prepare(
             )
         owed = _owed_publication(task_id, paused, source, cfg, ports)
         paused = apply(paused, {"publish_owed": owed})
-        resumed = apply(paused, rules.resumed(paused, decision, estimate, at=ports.now()))
+        patch = rules.resumed(paused, decision, estimate, at=ports.now())
+        if answered:
+            patch = {**patch, "drawing_departures": list(answered)}
+        resumed = apply(paused, patch)
         if paused.get("escalation_class") == "estimate":
             _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))
         next_node = rules.resume_target(resumed)
@@ -624,6 +669,7 @@ def prepare(
         interrupted=bool(pending),
         estimate=estimate,
         increment=increment,
+        drawing_answers=tuple(answered),
     )
 
 
@@ -679,6 +725,81 @@ def _fit_question(task_id: str, paused: TaskState) -> str:
     return rules.fit_question_text(task_id, part_of, None)
 
 
+def _pending_drawing(
+    task_id: str,
+    paused: TaskState,
+    comments: Sequence[str],
+    flags: Mapping[int, drawing.Verdict],
+    at: str,
+) -> tuple[list[DepartureRecord], str]:
+    """The answers a drawing pause resumes with (GH-766), pure: the open rows with their `answer`
+    and the decision text. The verdicts are the comment lines after the last `Escalated:` with the
+    flags laid over them (a flag wins); every open row needs one, escalated or not, or the task
+    waits. Raises `ValueError` for a number no open row can take and `WaitingOnHuman` for a
+    number with no verdict (or a contradicted one)."""
+    since = comments_since(comments, ESCALATED)
+    said = drawing.answers(since)
+    given = {**said.given, **flags}
+    take, ignored = drawing_answer.applicable(paused, given)
+    held = {row["number"]: row for row in paused.get("drawing_departures", [])}
+    unknown = sorted(n for n in {*given, *said.contradicted} if n not in held)
+    if unknown:
+        raise ValueError(_unknown_numbers(unknown, since, flags))
+    clash = sorted(
+        n
+        for n in ignored
+        if (answer := held[n]["answer"]) is not None and answer["verdict"] != given[n]
+    )
+    if clash:
+        raise ValueError(
+            f"{task_id}: drawing {', '.join(map(str, clash))} is already answered with another "
+            "verdict: leave it as it is, or edit or delete that comment on the issue"
+        )
+    missing = [n for n in drawing_answer.unanswered(paused) if n not in take]
+    if missing:
+        contradicted = sorted(said.contradicted & set(missing))
+        unsure = f" (contradicted: {', '.join(map(str, contradicted))})" if contradicted else ""
+        raise WaitingOnHuman(
+            f"{task_id} waits on drawing {', '.join(map(str, missing))}{unsure}: write a new "
+            "comment with `Drawing <n>: accept` or `Drawing <n>: reject`, or use `--drawing "
+            "<n>=accept|reject` for every number; the flags of this call were not recorded"
+        )
+    rows = [
+        cast(
+            DepartureRecord,
+            {
+                **held[n],
+                "answer": {"verdict": v, "by": "flag" if n in flags else "comment", "at": at},
+            },
+        )
+        for n, v in sorted(take.items())
+    ]
+    lines = "\n".join(f"Drawing {n}: {v} (flag)" for n, v in sorted(flags.items()))
+    return rows, "\n\n".join([*since, *([lines] if lines else [])])
+
+
+def _unknown_numbers(
+    unknown: list[int], since: Sequence[str], flags: Mapping[int, drawing.Verdict]
+) -> str:
+    """The refusal of numbers with no departure row: the flag, or the comment after `Escalated:`
+    that holds the line, to edit or delete."""
+    parts = []
+    for n in unknown:
+        if n in flags:
+            parts.append(f"--drawing {n}=...: the task has no departure {n}")
+            continue
+        holder = next(
+            c
+            for c in since
+            if n in drawing.answers([c]).given or n in drawing.answers([c]).contradicted
+        )
+        parts.append(
+            f"the comment after `Escalated:` that says {holder!r} names drawing {n}, which the "
+            f"task has no departure for: edit or delete that comment on the issue, then resume"
+        )
+    return "; ".join(parts)
+
+
 def _refuse_spent_estimate(task_id: str, resumed: TaskState, spent: float) -> None:
     """A resume that puts an estimate in force must leave room under its cap, or the first
     attempt would stop again at once."""
@@ -711,12 +832,23 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
         f"{DECISION}{_indented(r.decision) if r.decision else 'none'}",
         f"resumes:   {r.target}{_subtasks(r)}",
     ]
+    lines.extend(_drawing_lines(r))
     lines.extend(_increment_lines(r))
     lines.extend(f"session:   {line}" for line in _sessions(r))
     for path in ports.workspace.worktrees(r.task_id):
         dirty = r.interrupted and not ports.workspace.is_clean(path)
         lines.append(f"worktree:  {path}" + ("  (uncommitted changes)" if dirty else ""))
     return "\n".join(lines)
+
+
+def _drawing_lines(r: Resumption) -> list[str]:
+    """The `drawing:` line of the answers given by `--drawing`, grouped by how each arrived."""
+    arrived: dict[str, list[str]] = {}
+    for row in r.drawing_answers:
+        if (answer := row["answer"]) is not None:
+            arrived.setdefault(answer["by"], []).append(f"{row['number']}={answer['verdict']}")
+    flagged = [f"{item} (flag)" for item in arrived.get("flag", [])]
+    return [f"drawing:   {', '.join(flagged)}"] if flagged else []
 
 
 def _increment_lines(r: Resumption) -> list[str]:

@@ -28,6 +28,7 @@ graph TD
     m_domain__document --> g_domain__landing
     m_domain__document --> g_domain__roles
     m_domain__document --> g_domain__state__2
+    m_domain__document --> m_domain__drawing_answer
     m_domain__document --> m_domain__legacy_names
     m_domain__drawing_answer --> g_domain__roles
     m_domain__drawing_answer --> g_domain__state__2
