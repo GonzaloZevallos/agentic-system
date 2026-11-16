@@ -1,4 +1,4 @@
-Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 8, con las clases en orden alfabético por módulo y clase.
+Esta página muestra las clases públicas de los módulos del grupo `state` de `agentic.core.process.domain` y sus relaciones (herencia, composición, agregación y asociación); las relaciones con clases de otras páginas no se dibujan y se listan debajo del diagrama. Cada clase se identifica por su módulo y su nombre: si dos clases de la página se llaman igual, la etiqueta incluye el módulo. El grupo se dividió por cantidad: esta es la parte 2 de 9, con las clases en orden alfabético por módulo y clase.
 
 - Padre: [Clases de domain](classes-process-domain.md)
 - Hermanas:
@@ -25,9 +25,11 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
   - [domain: state (parte 6)](classes-process-domain-state-6.md)
   - [domain: state (parte 7)](classes-process-domain-state-7.md)
   - [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - [domain: state (parte 9)](classes-process-domain-state-9.md)
 
 ```mermaid
 classDiagram
+    class rules__InterviewProgress["InterviewProgress"]
     class rules__LandCandidate["LandCandidate"]
     class rules__LandWait["LandWait"]
     class rules__LaunchCandidate["LaunchCandidate"]
@@ -41,6 +43,4 @@ classDiagram
     class rules__RestoreObserved["RestoreObserved"]
     class rules__RestoreSteps["RestoreSteps"]
     class rules__ResumeCandidate["ResumeCandidate"]
-    class rules__SpendPace["SpendPace"]
-    class rules__SpendRun["SpendRun"]
 ```
