@@ -355,3 +355,17 @@ async def test_an_open_drawing_row_does_not_escalate_a_solution_interview(cfg):
         {**TASK, "drawing_departures": row}, INTERVIEW_SOLUTION_PLATFORM, cfg, _ports(runner)
     )
     assert transcript is not None and "escalated" not in patch
+
+
+def test_a_departure_already_held_as_a_row_is_not_raised_by_this_round():
+    role = INTERVIEW_DEFINITION.interviewee
+    collector = interview_drawing.Collector(DESIGN)
+    data = {"drawing_checks": [], "departures": [_departure()]}
+
+    collector.collect(role, data, {})
+    assert collector.raised_now is True
+
+    held = {"drawing_departures": task.departure_records(None, collector.pending({}), "T0")}
+    again = interview_drawing.Collector(DESIGN)
+    again.collect(role, data, held)
+    assert again.raised_now is False and again.pending(held) == []
