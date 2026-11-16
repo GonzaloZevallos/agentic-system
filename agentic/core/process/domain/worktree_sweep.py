@@ -5,6 +5,7 @@ calling `due`. The application module reads the tracker and the disk and removes
 
 from __future__ import annotations
 
+import errno
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -16,7 +17,14 @@ HELD_TTL_ROUNDS = 30
 SWEEP_WALL_S = 30
 
 Outcome = Literal[
-    "open", "removed", "dirty", "held", "removal_failed", "read_failed", "dead_lock_taken"
+    "open",
+    "removed",
+    "dirty",
+    "held",
+    "removal_failed",
+    "read_failed",
+    "dead_lock_taken",
+    "no_space",
 ]
 Fate = Literal["empty", "clean", "dirty"]
 
@@ -29,6 +37,7 @@ MEMO_TTL_ROUNDS: dict[Outcome, int] = {
     "read_failed": 5,
     "removed": 0,
     "dead_lock_taken": 0,
+    "no_space": 1,
 }
 
 _TASK_NAME = re.compile(r"^(?:(?:merge|slice)-)?(GH-\d+)(?:\..+)?$")
@@ -109,3 +118,14 @@ def say(memory: SweepMemory, task: str, cause: str) -> tuple[bool, SweepMemory]:
     if pair in memory.said:
         return False, memory
     return True, replace(memory, said=memory.said | {pair})
+
+
+def space_outcome(code: int | None) -> Outcome:
+    """The outcome of an `OSError` with errno `code` (GH-865): only `ENOSPC` and `EDQUOT` are
+    `no_space`, the full disk the whole round stops at; every other one is `removal_failed`."""
+    return "no_space" if code in (errno.ENOSPC, errno.EDQUOT) else "removal_failed"
+
+
+def rewind(memory: SweepMemory, task: str) -> SweepMemory:
+    """The memory whose cursor is just before `task`, so the next `due` starts at it."""
+    return replace(memory, cursor=_number(task) - 1)

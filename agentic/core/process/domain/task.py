@@ -1910,6 +1910,17 @@ class MergeRefusalRecord(TypedDict):
     at: str
 
 
+class StackParent(TypedDict):
+    """The parent a stacked task was started on (GH-855): its issue number, its task id, the
+    full commit id of its branch head at the start and the instant it was recorded (ISO-8601).
+    Read only through `stacking.parse_stack_parent`, never with `.get` on the document."""
+
+    issue: int
+    task_id: str
+    head: str
+    started_at: str
+
+
 def add_merge_ci(existing: list[MergeCiRecord], new: list[MergeCiRecord]) -> list[MergeCiRecord]:
     """The pairs of `existing` and `new` as one list in the order first seen, one row per
     `(head, master)`: a row for a known pair replaces it whole, so a record is written before
@@ -2164,6 +2175,9 @@ class TaskState(TaskInput, total=False):
     # The merge gate's fresh GitHub runs (GH-463), one row per `(head, master)` pair in order,
     # `add_merge_ci`. Read with `.get("merge_ci", [])`: a document written before it has none.
     merge_ci: Annotated[list[MergeCiRecord], add_merge_ci]
+    # The parent a stacked task was started on (GH-855). Absent for every task that was not
+    # stacked; read only by `stacking.parse_stack_parent`, which decides on the key's presence.
+    stack_parent: StackParent
     # The conflict git found building a fresh pair (GH-492), one row replaced whole on each write
     # (`last`). Read with `.get("merge_conflict")`: a document written before it has none, which
     # reads as no record.

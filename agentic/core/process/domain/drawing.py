@@ -5,8 +5,11 @@
 escalation text of a departure: callers use them, never repeat them. `verdicts` and `answers`
 are the only owners of the comment grammar of the owner's answer, `flag_verdict` and
 `flag_verdicts` of the `--drawing` flag's, `screens_due` of which screens a change owes a
-check for and `row_is_open` of whether a check row still blocks. The module is a leaf: it
-imports neither `task` nor `rules`, not even inside a function.
+check for and `row_is_open` of whether a check row still blocks. `question_numbers` is the only
+reader of the interviewer's `**Qn**` markers and `question_ref` the only builder of a `Q<n>` ref;
+one private classifier reads every line of a comment or an interview. `interviewer_check` and
+`interview_check` are the pure rules of the definition interview's drawing checks. The module
+is a leaf: it imports neither `task`, `rules` nor `schemas`, not even inside a function.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, Protocol
 
 from .design import Capture, Design
 
@@ -120,6 +123,8 @@ DEPARTURE_ESCALATIONS_MAX = 3
 progress): the next one is `drawing_cap`. Read by the escalation (GH-814)."""
 
 _VERDICT_LINE = re.compile(r"^\s*Drawing ([0-9]{1,6}): (accept|reject)\s*$", re.IGNORECASE)
+_DRAWING_SHAPED = re.compile(r"^\s*Drawing\s*[0-9]", re.IGNORECASE)
+_QUESTION_HEAD = re.compile(r"^\s*(?:\u2753\ufe0f?\s*)?\*\*Q([0-9]{1,6})\*\*")
 _FENCE = re.compile(r"^\s*(```|~~~)")
 
 
@@ -132,24 +137,51 @@ class Verdicts:
     contradicted: frozenset[int]
 
 
-def _lines_of(text: str) -> list[tuple[int, Verdict]]:
-    """The verdict lines of one comment in order: whole lines only, never a quoted line
-    (first non-blank character `>`) nor one inside a fenced block. Number 0 is discarded."""
-    found: list[tuple[int, Verdict]] = []
+@dataclass(frozen=True)
+class _Line:
+    """One classified line: `kind` says what it is, `number` the n of a verdict or a question
+    head, `verdict` the verdict of a `verdict` line."""
+
+    kind: Literal["verdict", "drawing_shaped", "question_head", "other"]
+    number: int = 0
+    verdict: Verdict | None = None
+
+
+def _classify(text: str) -> list[_Line]:
+    """The one classifier of a comment or an interview: every non-blank line outside a fenced
+    block and a quote (first non-blank character `>`), in order. Whole lines only; number 0 is
+    never a verdict nor a question head."""
+    out: list[_Line] = []
     fence: str | None = None
     for line in text.splitlines():
         marker = _FENCE.match(line)
         if marker:
             fence = None if fence == marker.group(1) else (fence or marker.group(1))
             continue
-        if fence is not None or line.lstrip().startswith(">"):
+        if fence is not None or line.lstrip().startswith(">") or not line.strip():
             continue
-        hit = _VERDICT_LINE.match(line)
-        if hit and int(hit.group(1)) > 0:
-            found.append(
-                (int(hit.group(1)), "accept" if hit.group(2).lower() == "accept" else "reject")
+        verdict = _VERDICT_LINE.match(line)
+        head = _QUESTION_HEAD.match(line)
+        if verdict and int(verdict.group(1)) > 0:
+            out.append(
+                _Line(
+                    "verdict",
+                    int(verdict.group(1)),
+                    "accept" if verdict.group(2).lower() == "accept" else "reject",
+                )
             )
-    return found
+        elif verdict or _DRAWING_SHAPED.match(line):
+            out.append(_Line("drawing_shaped"))
+        elif head and int(head.group(1)) > 0:
+            out.append(_Line("question_head", int(head.group(1))))
+        else:
+            out.append(_Line("other"))
+    return out
+
+
+def _lines_of(text: str) -> list[tuple[int, Verdict]]:
+    """The verdict lines of one comment in order."""
+    return [(c.number, c.verdict) for c in _classify(text) if c.verdict is not None]
 
 
 def verdicts(text: str) -> Verdicts:
@@ -179,6 +211,146 @@ def answers(comments: Sequence[str]) -> Verdicts:
             given.pop(number, None)
             contradicted.add(number)
     return Verdicts(given=given, contradicted=frozenset(contradicted))
+
+
+def question_numbers(text: str) -> frozenset[int]:
+    """The n of the `**Qn**` question heads of an interview text: a marker that opens a line
+    (an optional `❓` before it), never one inside a body, a fence or a quote."""
+    return frozenset(c.number for c in _classify(text) if c.kind == "question_head")
+
+
+def question_ref(n: int) -> str:
+    """`Q<n>`, the ref of a question's drawing check."""
+    return f"Q{n}"
+
+
+def unverified_question(ref: str, drawing: str | None) -> str:
+    """The line for the human when the approved drawing of a question could not be compared:
+    it names the ref and the drawing path, never a key."""
+    cited = "no approved drawing" if drawing is None else f"the approved drawing {drawing}"
+    return (
+        f"{ref}: {cited} could not be compared with what this question changes; "
+        "check it by eye before you answer."
+    )
+
+
+class CheckLike(Protocol):
+    """What `interview_check` reads of a drawing check (`schemas.DrawingCheck` fits it)."""
+
+    @property
+    def subject(self) -> str: ...
+    @property
+    def ref(self) -> str: ...
+    @property
+    def verdict(self) -> str: ...
+    @property
+    def drawing(self) -> str | None: ...
+    @property
+    def element(self) -> str | None: ...
+
+
+class DepartureLike(Protocol):
+    """What `interview_check` reads of a departure (`schemas.DrawingDeparture` fits it)."""
+
+    @property
+    def drawing(self) -> str: ...
+    @property
+    def element(self) -> str: ...
+
+
+def interviewer_check(visible: Sequence[int], done: bool, text: str) -> str | None:
+    """Why the interviewer's round is refused, `None` when it holds: `visible` names the
+    questions that change what a person sees, so it needs a round with questions, and each n
+    must be a `**Qn**` question of that round."""
+    if not visible:
+        return None
+    if done:
+        return "the round is done but marks questions visible: a closing summary asks nothing"
+    asked = question_numbers(text)
+    if not asked:
+        return "the round marks questions visible but has no readable **Qn** question"
+    for n in sorted(set(visible)):
+        if n not in asked:
+            return f"{question_ref(n)} is marked visible but is not a question of this round"
+    return None
+
+
+def _declared(design: Design, path: str) -> bool:
+    if any(path == capture.image for capture in design.captures):
+        return True
+    prototype = posixpath.normpath(design.prototype)
+    return prototype == "." or path.startswith(f"{prototype}/")
+
+
+def _undeclared(design: Design, drawing: str, who: str) -> str | None:
+    """Why `who`'s cited drawing is refused: a path that is not valid, or one the design does
+    not declare; never the exception text."""
+    try:
+        path = normalize_drawing(drawing)
+    except ValueError:
+        return f"{who} cites a drawing path that is not valid"
+    if not _declared(design, path):
+        return f"{who} cites {drawing}, which the design does not declare"
+    return None
+
+
+def interview_check(
+    visible: Sequence[int],
+    checks: Sequence[CheckLike],
+    departures: Sequence[DepartureLike],
+    declared: Design,
+    rejected: Mapping[str, int],
+    must_match: Mapping[str, int],
+) -> str | None:
+    """Why the interviewer's drawing checks are refused, `None` when they hold. `rejected` and
+    `must_match` map a departure key to its number. A reason names `Q<n>`, a ref or `Drawing
+    #n`, never a key."""
+    for n in sorted(set(visible)):
+        ref = question_ref(n)
+        if not any(c.subject == "question" and c.ref == ref for c in checks):
+            return f"{ref} is marked visible but has no drawing check"
+    departing: set[str] = set()
+    matched: set[str] = set()
+    for check in checks:
+        if check.drawing is not None:
+            reason = _undeclared(declared, check.drawing, check.ref)
+            if reason:
+                return reason
+        if check.verdict not in ("matches", "departs"):
+            continue
+        if check.drawing is None or check.element is None:
+            return f"{check.ref} says {check.verdict} without naming the drawing and the element"
+        try:
+            key = departure_key(check.drawing, check.element)
+        except ValueError:
+            return f"{check.ref} cites an element that is empty"
+        (departing if check.verdict == "departs" else matched).add(key)
+    raised: set[str] = set()
+    for departure in departures:
+        reason = _undeclared(declared, departure.drawing, f"a departure of {departure.drawing}")
+        if reason:
+            return reason
+        try:
+            key = departure_key(departure.drawing, departure.element)
+        except ValueError:
+            return f"a departure of {departure.drawing} cites an element that is empty"
+        raised.add(key)
+        if key not in departing:
+            return f"a departure of {departure.drawing} has no departs check"
+    for check in checks:
+        if check.verdict == "departs" and check.drawing is not None and check.element is not None:
+            if departure_key(check.drawing, check.element) not in raised:
+                return f"{check.ref} says departs but carries no departure for it"
+    for key, number in rejected.items():
+        if key in departing:
+            return (
+                f"Drawing #{number} was rejected by the owner and cannot come back as a "
+                "departure: make it match the drawing or leave it out"
+            )
+    for key, number in must_match.items():
+        if key not in matched:
+            return f"Drawing #{number} was rejected and must now match: add a matches check for it"
+    return None
 
 
 _FLAG = re.compile(r"^([0-9]+)=(accept|reject)$")

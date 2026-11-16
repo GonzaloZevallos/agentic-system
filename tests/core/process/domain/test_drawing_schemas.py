@@ -1,5 +1,5 @@
-"""The drawing schema classes nothing consumes yet (GH-766 part 1b): they validate on
-their own and no schema a role receives reaches them, so no prompt or role output moves."""
+"""The drawing schema classes (GH-766 parts 1b and 3a): they validate on their own, and only
+`Answers`, `Consultation` and their subclasses carry them, `DefinitionTurn` the `visible` field."""
 
 from collections.abc import Iterable
 from typing import Any
@@ -18,24 +18,8 @@ from agentic.core.process.domain.schemas import (
     RoleOutput,
 )
 
-FORBIDDEN_FIELDS = {"drawing_checks", "departures", "drawing_departures", "visible"}
-FORBIDDEN_DEFS = {"DrawingDeparture", "DrawingCheck", "DefinitionTurn"}
-
-# The base schemas a role receives today. A base class added later and left out of this
-# list is not covered by this check; the walk over every Role output below is what
-# catches a new one a role actually uses.
-BASE_SCHEMAS = [
-    s.TechPlan,
-    s.Consultation,
-    s.ConsultationWithAssumptions,
-    s.TechAnswers,
-    s.PlatformAnswers,
-    s.FinalValidation,
-    s.Delivery,
-    s.DesignReview,
-    s.InterviewTurn,
-    s.Answers,
-]
+DRAWING_DEFS = {"DrawingDeparture", "DrawingCheck"}
+FORBIDDEN_DEFS = DRAWING_DEFS | {"DefinitionTurn"}
 
 
 def _departure(**over: str) -> dict[str, str]:
@@ -141,20 +125,6 @@ def test_a_departure_with_an_unusable_path_or_element_is_rejected(over: dict[str
         DrawingDeparture(**_departure(**over))
 
 
-@pytest.mark.parametrize("model", BASE_SCHEMAS, ids=lambda m: m.__name__)
-def test_no_base_schema_a_role_receives_has_a_drawing_field(model: type[BaseModel]):
-    assert not _forbidden_properties(model)
-
-
-def _forbidden_properties(model: type[BaseModel]) -> set[str]:
-    return FORBIDDEN_FIELDS & set(model.model_json_schema()["properties"])
-
-
-@pytest.mark.parametrize("model", [DefinitionTurn], ids=lambda m: m.__name__)
-def test_the_base_schema_check_catches_a_model_with_a_forbidden_property(model: type[BaseModel]):
-    assert _forbidden_properties(model) == {"visible"}
-
-
 def _walk(node: Any, root: dict[str, Any], seen: set[str], titles: set[str], names: set[str]):
     if isinstance(node, list):
         for item in node:
@@ -207,11 +177,37 @@ def test_there_are_role_outputs_to_walk():
     assert len(_role_outputs()) > 10
 
 
+def _with_field(name: str) -> set[type[BaseModel]]:
+    return {c for c in _subclasses(RoleOutput) | {RoleOutput} if name in c.model_fields}
+
+
+def test_visible_exists_only_in_the_definition_turn():
+    assert _with_field("visible") == {DefinitionTurn}
+
+
+def test_drawing_checks_and_departures_exist_only_in_answers_consultation_and_subclasses():
+    owners = {s.Answers, s.Consultation} | _subclasses(s.Answers) | _subclasses(s.Consultation)
+    assert owners >= {s.Answers, s.Consultation, s.ConsultationWithAssumptions}
+    # The final review is the one other owner (a role gets it in 5.2); DesignReview stays clean.
+    owners = owners | {FinalDesignReview}
+    assert _with_field("drawing_checks") == owners
+    assert _with_field("departures") == owners
+
+
 @pytest.mark.parametrize("model", _role_outputs(), ids=lambda m: m.__name__)
-def test_no_role_output_reaches_a_drawing_schema_or_field(model: type[BaseModel]):
-    titles, names = _reachable(model)
-    assert not FORBIDDEN_DEFS & titles
-    assert not FORBIDDEN_FIELDS & names
+def test_a_role_output_reaches_the_drawing_schemas_only_through_those_fields(
+    model: type[BaseModel],
+):
+    titles, _ = _reachable(model)
+    carries = bool({"drawing_checks", "departures"} & set(model.model_fields))
+    assert bool(DRAWING_DEFS & titles) == carries
+
+
+def test_the_empty_default_keeps_the_new_fields_out_of_an_existing_payload():
+    turn = s.Answers(markdown="m", questions_for_human=[])
+    assert turn.drawing_checks == [] and turn.departures == []
+    consultation = s.Consultation(markdown="m", questions_for_human=[], definitions=[], glossary=[])
+    assert consultation.drawing_checks == [] and consultation.departures == []
 
 
 def _subclasses(cls: type) -> set[type]:

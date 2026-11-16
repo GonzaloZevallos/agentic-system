@@ -197,10 +197,15 @@ class SolutionTurn(InterviewTurn):
 
 
 class DefinitionTurn(InterviewTurn):
-    """The definition interviewer's round once it names the drawings a question depends
-    on (GH-766 part 3). No role uses it yet: `roles.py` keeps `InterviewTurn`."""
+    """The definition interviewer's round (`PRODUCT_ANALYST_INTERVIEWER`): `visible` names
+    the questions whose answer changes something a person sees, so each needs a drawing
+    check (GH-766 part 3)."""
 
-    visible: list[int] = Field(default_factory=list)
+    visible: list[int] = Field(
+        default_factory=list,
+        description="Numbers of the questions of this round whose answer changes what a "
+        "person sees (the `**Qn**` markers); empty if none or when done",
+    )
 
 
 class DrawingDeparture(BaseModel):
@@ -253,6 +258,16 @@ class Answers(RoleOutput):
         default_factory=list,
         description="Numbers, from `## With the human` as received this round, of the "
         "questions this round's answers settle after all; empty if none",
+    )
+    drawing_checks: list[DrawingCheck] = Field(
+        default_factory=list,
+        description="One check, with ref `Q<n>`, for every question marked visible; "
+        "empty when no question is visible",
+    )
+    departures: list[DrawingDeparture] = Field(
+        default_factory=list,
+        description="One departure, with the same drawing and element, for every check "
+        "that says `departs`; empty if none",
     )
 
 
@@ -428,6 +443,16 @@ class Consultation(RoleOutput):
         default_factory=list,
         description="Numbers, from `## With the human` as received this consultation, "
         "of the questions these answers settle after all; empty if none",
+    )
+    drawing_checks: list[DrawingCheck] = Field(
+        default_factory=list,
+        description="One check, with ref `Q<n>`, for every question marked visible; "
+        "empty when no question is visible",
+    )
+    departures: list[DrawingDeparture] = Field(
+        default_factory=list,
+        description="One departure, with the same drawing and element, for every check "
+        "that says `departs`; empty if none",
     )
     definitions: list[CapabilityFile] = Field(
         description="The capability files whose behaviour an answer changes or completes, "

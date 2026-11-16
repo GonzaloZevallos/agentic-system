@@ -176,3 +176,8 @@ _Campo_: sin término de arte — GitHub no distingue quién fusiona un pull req
 **Cerrado** (`closed`):
 El pull request se cerró sin fusionarse: el humano descartó la entrega.
 _Campo_: closed — GitHub, para un pull request que se cierra sin fusionar
+
+**Caché de lecturas del backfill**:
+Las páginas crudas del listado de issues y pull requests de un repositorio, guardadas en disco entre corridas de `scores backfill` para que un dry run y una corrida real, o una corrida detenida y su repetición, lean cada página una vez. Guarda solo los items tal como GitHub los lista (número, `created_at`, si es pull request, `merged_at`, estado), la hora de lectura de cada página y si estaba abierta; nunca un score, un id ni un resultado. Una página abierta (la última, o con un pull request abierto sin fusionar) se confía 10 minutos, una cerrada 3 horas. Un archivo ilegible o de otra versión es una lectura nueva, no un error.
+_Avoid_: caché de scores, caché de resultados (lo que se guarda es lo leído, no lo calculado)
+_Campo_: read-through cache — de arquitectura de software; la vecina más cercana es la caché HTTP condicional, que aquí no se usa porque cada ETag también cuesta una lectura

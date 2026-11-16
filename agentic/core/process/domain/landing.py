@@ -17,7 +17,7 @@ from difflib import SequenceMatcher
 from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
 
-from . import ci, merge_ci, presubmit, pull_request, rules
+from . import ci, merge_ci, presubmit, pull_request, rules, stacking
 from .adr_numbers import Ambiguous, Renaming
 from .document import HUMAN
 from .landing_order import Turn
@@ -119,12 +119,42 @@ HUMAN_OWNED_REFUSALS: frozenset[rules.MergeRefusal] = frozenset(
         "criteria_unreadable",
         "ci_untrusted_no_dispatch",
         "open_escalation",
+        "stack_base_orphaned",
     }
 )
 """The refusals that leave the task to a person (GH-588): `landing_step` answers `none` to each,
 whatever the budgets, and `waits_on_human` reads the same set, so a task under one is never the
 head of its product's landing order. The only list of them; `not_ready` is `none` too but is not
 here: the task is not yet at the landing, and nobody has anything to decide."""
+
+STACK_ESCALATION: dict[rules.MergeRefusal, str] = {
+    "stack_parent_unmerged": (
+        "The parent this task is stacked on has not reached the base branch. Merge the parent "
+        "by hand, or relaunch this task from the base branch."
+    ),
+    "stack_restack_due": (
+        "The parent landed, but taking the base branch into this task's branch did not settle "
+        "within the landing's budget. Merge the base branch into it by hand, or relaunch this "
+        "task from the base branch."
+    ),
+    "stack_base_orphaned": (
+        "The parent this task is stacked on was rebuilt, closed without merging, or merged "
+        "without a merge commit, so the commit this task was built on will never reach the base "
+        "branch. Relaunch this task from the base branch."
+    ),
+}
+"""What a stacked task's escalation says (GH-859), one fixed text per refusal, keyed by the
+refusal value: never a word of the parent, its issue or the record. `stack_restack_due` is the
+one the landing escalates (its sync budget ran out); `stack_base_orphaned` is owned by a person
+and answers `none`, so its text is the one the merge comment shares."""
+
+STACK_EXHAUSTED_TEXT = (
+    "This task is stacked on a parent and its landing budget ran out while the merge was "
+    "refused for `{refusal}`. A stacked task is never diagnosed, restarted or sliced: fix the "
+    "branch by hand, or relaunch this task from the base branch."
+)
+"""The escalation of a stacked task whose budget ran out on a refusal that is not about the
+stack (GH-859): fixed text, the closed refusal value is the only thing filled in."""
 
 
 def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None) -> rules.RunKind:
@@ -538,6 +568,11 @@ def landing_step(
             return step("escalate")
         if ledger_only:
             return ask_once()
+        if facts.stack is not None:
+            # GH-859: a stacked task never gets a diagnose, a slice or a restart: a restart
+            # would rebuild the branch the parent's commits are on. The budget ending is the
+            # escalation.
+            return step("escalate")
         answer = slice_or_restart(slicing()) if callable(slicing) else slicing
         if isinstance(answer, Slice):
             return step("land_slice", answer.units)
@@ -651,6 +686,13 @@ def landing_step(
             return exhausted()
         case "master_moved":
             return step("wait")
+        case "stack_parent_unmerged":
+            # GH-859: waiting for the parent costs nothing; a slow Head yields by `HEAD_BUDGET`.
+            return step("wait")
+        case "stack_restack_due":
+            # GH-859: one merge of master into the child, never a rebase (the parent's commits
+            # stay where they are); past the sync budgets it is the escalation (`exhausted`).
+            return _sync(step, exhausted, spent, conflicting=False)
         case _:
             # Only a refusal of `HUMAN_OWNED_REFUSALS` gets here (answered above); a new refusal
             # that is neither listed nor given a case fails `test_every_none_refusal_is_owned`.
@@ -918,6 +960,7 @@ class SliceInputs:
     refused: Mapping[tuple[str, ...], int]
     blocking_units: frozenset[str]
     readable: bool
+    stacked: bool = False
 
 
 def _pending(inputs: SliceInputs) -> list[SliceUnit]:
@@ -960,6 +1003,10 @@ def slice_or_restart(inputs: SliceInputs) -> Slice | RestartWhy:
     the clean prefixes were all refused."""
     if not inputs.readable:
         return "unreadable"
+    if inputs.stacked:
+        # GH-859: a slice is cut from the task's branch, which a stacked task shares with its
+        # parent; no unit is looked at.
+        return "no_clean_slice"
     pending = _pending(inputs)
     if len(pending) < 2:
         return "single_unit"
@@ -1057,6 +1104,18 @@ def slices_closed(refs: Sequence[str], at: str) -> SlicesClosedPatch:
     return {"closed_at": at, "closed_by_slices": list(refs)}
 
 
+def _slice_stack(state: TaskState) -> stacking.StackFacts | None:
+    parsed = stacking.parse_stack_parent(state)
+    if isinstance(parsed, stacking.Absent):
+        return None
+    return stacking.StackFacts(
+        record=None if isinstance(parsed, stacking.Unreadable) else parsed,
+        parent_state="unknown",
+        parent_in_upstream=None,
+        child_has_parent=None,
+    )
+
+
 def slice_facts(
     slice_: Slice,
     state: TaskState,
@@ -1114,6 +1173,10 @@ def slice_facts(
     drawing_checked, drawing_head, drawing_open = rules.drawing_merge_facts(state)
     return rules.MergeFacts(
         task_id=task_id,
+        # GH-859: only `stacking` reads the record. No fact of the parent is read for a slice, so
+        # a readable record is every fact unknown (`stack_parent_unmerged`) and an unreadable
+        # one is `stack_base_orphaned`: a slice of a stacked task never merges.
+        stack=_slice_stack(state),
         status=state.get("status"),
         # GH-784: a slice lands only from the task's own landing, which the merge decision of the
         # task already held when an owner escalation was open; the slice adds no read of it.

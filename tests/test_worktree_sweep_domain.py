@@ -5,6 +5,7 @@ remember, say, MEMO_TTL_ROUNDS)."""
 
 from __future__ import annotations
 
+import errno
 from typing import get_args
 
 import pytest
@@ -18,7 +19,9 @@ from agentic.core.process.domain.worktree_sweep import (
     checkout_fate,
     due,
     remember,
+    rewind,
     say,
+    space_outcome,
     task_of,
     verdict,
 )
@@ -136,6 +139,7 @@ def test_ttl_table_has_one_value_per_outcome() -> None:
         "read_failed": 5,
         "removed": 0,
         "dead_lock_taken": 0,
+        "no_space": 1,
     }
     assert (sweep.SWEEP_READS_MAX, sweep.SWEEP_WALL_S) == (10, 30)
     assert (sweep.OPEN_TTL_ROUNDS, sweep.HELD_TTL_ROUNDS) == (30, 30)
@@ -178,3 +182,38 @@ def test_remember_replaces_the_outcome_with_the_current_round_and_leaves_the_inp
     assert after.memos == {"GH-1": (1, "open")}
     assert memory.memos == {}
     assert remember(after, "GH-1", "held").memos == {"GH-1": (1, "held")}
+
+
+@pytest.mark.parametrize(
+    ("code", "outcome"),
+    [
+        (errno.ENOSPC, "no_space"),
+        (errno.EDQUOT, "no_space"),
+        (errno.EACCES, "removal_failed"),
+        (errno.EIO, "removal_failed"),
+        (None, "removal_failed"),
+    ],
+)
+def test_space_outcome_maps_only_enospc_and_edquot_to_no_space(
+    code: int | None, outcome: str
+) -> None:
+    assert space_outcome(code) == outcome
+
+
+def test_rewind_makes_the_next_due_start_at_the_task_even_past_the_read_cap() -> None:
+    names = listing(*range(1, 26))
+    ids, memory = due(names, SweepMemory())
+    assert ids[-1] == f"GH-{SWEEP_READS_MAX}"
+    rewound = rewind(memory, "GH-4")
+    assert rewound.cursor == 3 and rewound.round == memory.round
+    again, _ = due(names, rewound)
+    assert again[0] == "GH-4"
+    assert memory.cursor == SWEEP_READS_MAX  # the input is left as it was
+
+
+def test_a_no_space_memo_is_looked_at_again_the_next_round() -> None:
+    names = listing(1, 2)
+    _, memory = due(names, SweepMemory())
+    memory = rewind(remember(memory, "GH-1", "no_space"), "GH-1")
+    ids, _ = due(names, memory)
+    assert ids == ["GH-1", "GH-2"]

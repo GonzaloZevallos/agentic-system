@@ -55,6 +55,21 @@ sequenceDiagram
    La excepción: mientras el propio aterrizaje tiene una pregunta abierta (el documento está
    `escalated`, o su última escalación no tiene `released_at`) la retención no actúa, porque el
    aterrizaje la libera por el rechazo que la causó.
+   Tres rechazos son de una tarea apilada (GH-855, GH-859; `agentic/core/process/domain/stacking.py:refusal`
+   es su única tabla de verdad, y hoy ninguna construcción de producción pasa hechos de apilado,
+   así que no cambia ninguna decisión): `stack_parent_unmerged` (el padre no llegó al upstream, o
+   no se pudo leer la ascendencia) da `wait`, sin tope propio: una Cabeza lenta cede por
+   `HEAD_BUDGET`; `stack_restack_due` (el padre aterrizó y el hijo no tiene su cabeza) da
+   `sync_master`, un solo merge de master, nunca un rebase; `stack_base_orphaned` (registro ilegible,
+   o padre reconstruido, cerrado como NOT_PLANNED o fusionado con squash) es del humano y da
+   `none`, con una frase fija en el comentario del rechazo. Un padre fusionado con squash o rebase
+   deja al hijo huérfano: sólo un merge commit conserva la cabeza registrada. Una tarea apilada
+   con un presupuesto agotado nunca va a `diagnose`, `land_slice` ni a un reinicio: responde
+   `escalate`, con un texto fijo por rechazo (`landing.py:STACK_ESCALATION`), sin palabras del
+   padre, del issue ni del registro. Tampoco corta un slice: `slice_or_restart` responde
+   `no_clean_slice` sin mirar ninguna unidad, y `slice_facts` de una tarea apilada nunca mergea.
+   La liberación de ese escalado por restack agotado llega con la parte 1b; mientras tanto la
+   salida es mergear a mano o relanzar.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo

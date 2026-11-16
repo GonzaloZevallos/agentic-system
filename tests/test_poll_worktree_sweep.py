@@ -7,9 +7,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueState, RunRegistration, SpaceReading
+from agentic.core.process.application.scratch_sweep import TMP_ROOT
 from agentic.core.process.application.worktree_sweep import SweepCarry
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest
 from agentic.core.process.domain.worktree_sweep import SweepMemory
 from agentic.shared.configuration import Configuration
@@ -95,6 +99,7 @@ class Round:
         queue: tuple[int, ...] = (),
         live: list[RunRegistration] | None = None,
         full: bool = False,
+        holds: tuple[str, ...] = (),
     ) -> None:
         self.order = Journal()
         self.workspace = Workspace(self.order, on_disk)
@@ -108,11 +113,24 @@ class Round:
         self.launcher = Launcher(self.order)
         self.cfg = Configuration(product_dir=Path("/nonexistent-product"))
         self.full = full
+        low = SpaceReading(0, 0)
+        paths = {
+            rules.SCRATCH_VOLUME: self.cfg.scratch_dir,
+            rules.PRODUCT_VOLUME: self.cfg.product_dir / ".agentic",
+            rules.TMP_VOLUME: TMP_ROOT,
+        }
+        free_space = (
+            FakeFreeSpace(low)
+            if full
+            else FakeFreeSpace(by_path={paths[name]: low for name in holds})
+            if holds
+            else None
+        )
         self.ports = memory_ports(
             workspace=self.workspace,
             tracker=self.tracker,
             stack=MemoryStack(product=PRODUCT),
-            free_space=FakeFreeSpace(SpaceReading(0, 0)) if full else None,
+            free_space=free_space,
         )
         for number in queue:
             self.tracker.states[number] = OPEN
@@ -150,14 +168,47 @@ def test_the_sweep_runs_after_the_launch_of_the_same_round() -> None:
     assert any(line.startswith("agentic: sweep: removed 1 worktrees") for line in lines)
 
 
-def test_a_held_round_does_not_sweep() -> None:
-    world = Round(on_disk=["GH-7"], closed=(7,), full=True)
+def test_a_round_held_without_the_product_volume_does_not_sweep() -> None:
+    world = Round(on_disk=["GH-7"], closed=(7,), holds=(rules.TMP_VOLUME,))
 
     lines = world.run(SweepCarry())
 
     assert world.tracker.reads == []
     assert world.workspace.removed_checkouts == []
     assert HELD_LINE in lines
+
+
+@pytest.mark.parametrize(
+    "holds",
+    [
+        (rules.PRODUCT_VOLUME,),
+        (rules.SCRATCH_VOLUME, rules.PRODUCT_VOLUME),
+        (rules.SCRATCH_VOLUME, rules.PRODUCT_VOLUME, rules.TMP_VOLUME),
+    ],
+)
+def test_a_round_held_with_the_product_volume_sweeps_and_says_no_held_line(
+    holds: tuple[str, ...],
+) -> None:
+    world = Round(on_disk=["GH-7"], closed=(7,), holds=holds, queue=(3,))
+    carry = SweepCarry()
+
+    lines = world.run(carry)
+
+    assert "GH-7" in world.workspace.removed_checkouts
+    assert any(line.startswith("agentic: sweep: removed 1 worktrees") for line in lines)
+    assert HELD_LINE not in lines and not carry.held_said
+    assert world.launcher.spawned == []  # the round is still held: nothing starts
+
+
+def test_a_round_held_by_the_product_volume_leaves_a_task_with_a_live_merge_child() -> None:
+    world = Round(on_disk=["GH-7"], closed=(7,), holds=(rules.PRODUCT_VOLUME,))
+    world.registry.entries = [RunRegistration(1, "h", PRODUCT, "GH-7", "merge")]
+    carry = SweepCarry()
+
+    world.run(carry)
+
+    assert world.tracker.reads == [] and world.workspace.removed_checkouts == []
+    assert "GH-7" not in carry.memory.memos
 
 
 def test_a_dry_round_with_a_carry_reads_no_issue_state_and_keeps_the_memory() -> None:
@@ -175,9 +226,10 @@ def test_a_dry_round_with_a_carry_reads_no_issue_state_and_keeps_the_memory() ->
 
 def test_the_held_line_is_said_once_across_held_free_and_held_rounds() -> None:
     carry = SweepCarry()
-    first = Round(on_disk=[], full=True).run(carry)
+    tmp = (rules.TMP_VOLUME,)
+    first = Round(on_disk=[], holds=tmp).run(carry)
     free = Round(on_disk=[]).run(carry)
-    again = Round(on_disk=[], full=True).run(carry)
+    again = Round(on_disk=[], holds=tmp).run(carry)
 
     assert HELD_LINE in first
     assert HELD_LINE not in free and HELD_LINE not in again

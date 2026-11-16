@@ -1,4 +1,5 @@
 import ast
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -15,10 +16,15 @@ from agentic.core.process.domain.drawing import (
     departure_question,
     flag_verdict,
     flag_verdicts,
+    interview_check,
+    interviewer_check,
     normalize_drawing,
+    question_numbers,
+    question_ref,
     row_is_open,
     rule_for,
     screens_due,
+    unverified_question,
     verdicts,
 )
 
@@ -305,3 +311,209 @@ def test_drawing_imports_only_design_from_the_package():
 )
 def test_the_package_import_check_rejects_anything_but_design(source: str):
     assert _package_imports(source) != {".design"}
+
+
+@pytest.mark.parametrize(
+    ("text", "found"),
+    [
+        ("**Q1** one\n\n**Q2** two", {1, 2}),
+        ("  \u2753 **Q3** a\n\u2753\ufe0f**Q4** b", {3, 4}),
+        ("**Q1** see **Q3** below", {1}),
+        ("**Q1** a\n**Q1** again", {1}),
+        ("**Q10** ten", {10}),
+        ("```\n**Q1** in a fence\n```\n**Q2** out", {2}),
+        ("~~~\n**Q1**\n~~~", set()),
+        ("> **Q1** quoted\n**Q2** real", {2}),
+        ("**Q0** zero\n**Q1234567** long\nQ1 plain", set()),
+        ("text before **Q1**", set()),
+    ],
+)
+def test_question_numbers_reads_only_the_heads_of_questions(text, found):
+    assert question_numbers(text) == found
+
+
+def test_question_ref_builds_the_ref():
+    assert question_ref(7) == "Q7"
+
+
+@pytest.mark.parametrize(
+    "line", ["Drawing 0: accept", "Drawing 1234567: accept", "Drawing 1: maybe", "Drawing 1 accept"]
+)
+def test_a_line_that_is_not_the_grammar_gives_no_verdict(line):
+    assert verdicts(line) == Verdicts(given={}, contradicted=frozenset())
+
+
+def test_a_drawing_shaped_line_is_not_a_question_head():
+    assert question_numbers("Drawing 1: maybe\n**Q2** x") == {2}
+
+
+def test_unverified_question_names_the_ref_and_the_drawing():
+    line = unverified_question("Q2", "pantallas/Home.png")
+    assert "Q2" in line and "pantallas/Home.png" in line and "\n" not in line
+    assert "Q3" in unverified_question("Q3", None)
+
+
+TEXT = "**Q1** one?\nrecommendation\n\n**Q2** two?"
+
+
+def test_the_interviewer_check_accepts_a_round_without_visible_questions():
+    assert interviewer_check([], True, "") is None
+    assert interviewer_check([], False, TEXT) is None
+    assert interviewer_check([1, 2], False, TEXT) is None
+
+
+def test_the_interviewer_check_rejects_a_number_that_is_not_a_question_of_the_round():
+    reason = interviewer_check([5], False, TEXT)
+    assert reason is not None and "Q5" in reason
+
+
+def test_the_interviewer_check_rejects_visible_with_done():
+    assert interviewer_check([1], True, TEXT) is not None
+
+
+def test_the_interviewer_check_rejects_visible_without_any_question_head():
+    assert interviewer_check([1], False, "questions without markers, see **Q1**") is not None
+
+
+@dataclass(frozen=True)
+class Chk:
+    subject: str
+    ref: str
+    verdict: str
+    drawing: str | None = None
+    element: str | None = None
+
+
+@dataclass(frozen=True)
+class Dep:
+    drawing: str
+    element: str
+
+
+DESIGN = Design(
+    prototype="pantallas",
+    entry="Home",
+    sample_app=None,
+    compare=None,
+    captures=(Capture(image="capturas/Login.png", screen="Login"),),
+)
+HOME = "pantallas/Home.png"
+KEY = "pantallas/Home.png:title"
+
+
+def _check(visible=(1,), checks=None, departures=(), rejected=None, must_match=None):
+    if checks is None:
+        checks = [Chk("question", "Q1", "matches", HOME, "Title")]
+    return interview_check(visible, checks, departures, DESIGN, rejected or {}, must_match or {})
+
+
+def test_a_round_with_a_check_per_visible_question_passes():
+    assert _check() is None
+    assert _check(visible=()) is None
+
+
+def test_a_visible_question_without_a_check_is_rejected():
+    reason = _check(visible=(1, 2))
+    assert reason is not None and "Q2" in reason
+    assert _check(checks=[Chk("screen", "Q1", "matches", HOME, "Title")]) is not None
+
+
+def test_unverified_covers_a_visible_question_without_a_drawing():
+    assert _check(checks=[Chk("question", "Q1", "unverified")]) is None
+
+
+def test_departs_needs_its_departure_and_a_departure_needs_its_departs():
+    departs = Chk("question", "Q1", "departs", HOME, "Title")
+    reason = _check(checks=[departs])
+    assert reason is not None and "Q1" in reason
+    assert _check(checks=[departs], departures=[Dep(HOME, "Title")]) is None
+    assert _check(checks=[departs], departures=[Dep(HOME, " TITLE ")]) is None
+    assert _check(departures=[Dep(HOME, "Title")]) is not None
+    assert _check(checks=[departs], departures=[Dep(HOME, "Other")]) is not None
+
+
+def test_a_check_that_says_departs_or_matches_without_a_drawing_is_rejected():
+    assert _check(checks=[Chk("question", "Q1", "departs")]) is not None
+    assert _check(checks=[Chk("question", "Q1", "matches", HOME)]) is not None
+
+
+def test_a_drawing_the_design_does_not_declare_is_rejected_whatever_the_verdict():
+    for verdict in ("matches", "departs", "unverified"):
+        reason = _check(checks=[Chk("question", "Q1", verdict, "otra/Home.png", "Title")])
+        assert reason is not None and "Q1" in reason
+    assert _check(checks=[Chk("question", "Q1", "matches", "capturas/Login.png", "Logo")]) is None
+    assert _check(checks=[Chk("question", "Q1", "matches", "./pantallas/a/b.png", "x")]) is None
+    assert _check(departures=[Dep("otra/x.png", "Title")]) is not None
+
+
+def test_an_invalid_drawing_path_is_rejected_without_the_exception_text():
+    reason = _check(checks=[Chk("question", "Q1", "matches", "../x.png", "Title")])
+    assert reason is not None and "Q1" in reason and "inside the design" not in reason
+    assert _check(departures=[Dep("/abs.png", "Title")]) is not None
+
+
+def test_a_rejected_key_that_returns_as_departs_is_rejected_with_its_number():
+    departs = Chk("question", "Q1", "departs", HOME, "Title")
+    reason = _check(checks=[departs], departures=[Dep(HOME, "Title")], rejected={KEY: 4})
+    assert reason is not None and "Drawing #4" in reason and KEY not in reason
+    assert _check(rejected={KEY: 4}) is None
+
+
+def test_a_must_match_key_needs_a_matches_check():
+    assert _check(must_match={KEY: 2}) is None
+    reason = _check(checks=[Chk("question", "Q1", "matches", HOME, "Other")], must_match={KEY: 2})
+    assert reason is not None and "Drawing #2" in reason and KEY not in reason
+    assert (
+        _check(
+            checks=[Chk("screen", "home", "matches", HOME, "TITLE")],
+            visible=(),
+            must_match={KEY: 2},
+        )
+        is None
+    )
+
+
+def test_unverified_and_departs_never_satisfy_a_must_match():
+    unverified = Chk("question", "Q1", "unverified", HOME, "Title")
+    assert _check(checks=[unverified], must_match={KEY: 2}) is not None
+    departs = Chk("question", "Q1", "departs", HOME, "Title")
+    assert (
+        _check(checks=[departs], departures=[Dep(HOME, "Title")], must_match={KEY: 2}) is not None
+    )
+
+
+def test_no_reason_contains_a_key():
+    token = "zzkeyzz"
+    key = f"{HOME}:{token}"
+    departs = Chk("question", "Q1", "departs", HOME, token)
+    cases = [
+        _check(checks=[departs]),
+        _check(departures=[Dep(HOME, token)]),
+        _check(checks=[Chk("question", "Q1", "matches", HOME, token)], visible=(1, 2)),
+        _check(checks=[Chk("question", "Q1", "matches", "otra/a.png", token)]),
+        _check(checks=[Chk("question", "Q1", "matches", "../a.png", token)]),
+        _check(checks=[Chk("question", "Q1", "matches", None, token)]),
+        _check(departures=[Dep("otra/a.png", token)]),
+        _check(departures=[Dep("../a.png", token)]),
+        _check(checks=[departs], departures=[Dep(HOME, token)], rejected={key: 3}),
+        _check(checks=[Chk("question", "Q1", "matches", HOME, "Title")], must_match={key: 5}),
+        _check(checks=[Chk("question", "Q1", "matches", HOME, " ")]),
+    ]
+    for reason in cases:
+        assert reason is not None and token not in reason
+
+
+def test_the_schema_classes_fit_the_protocols():
+    from agentic.core.process.domain.schemas import DrawingCheck, DrawingDeparture
+
+    check = DrawingCheck(subject="question", ref="Q1", verdict="departs", drawing=HOME, element="T")
+    departure = DrawingDeparture(
+        drawing=HOME,
+        element="T",
+        shows="a",
+        would_ship="b",
+        recommendation="c",
+        reason="d",
+        raised_by="e",
+    )
+    assert interview_check([1], [check], [departure], DESIGN, {}, {}) is None

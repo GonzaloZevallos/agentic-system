@@ -535,7 +535,100 @@ def test_the_backfill_read_says_what_is_missing_in_its_own_words(tmp_path):
         composition.backfill_gh_read(tmp_path, run=_FakeRun(FileNotFoundError("gh")))(("api", "x"))
 
 
-def test_the_backfill_listing_is_the_github_adapter(tmp_path):
+def _checkout_with_origin(path: Path, url: str | None) -> Path:
+    path.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    if url is not None:
+        subprocess.run(["git", "remote", "add", "origin", url], cwd=path, check=True)
+    return path
+
+
+def test_the_backfill_listing_is_the_github_adapter_over_a_filesystem_cache(tmp_path, monkeypatch):
+    from agentic.core.measurement.adapters.filesystem.read_cache import FilesystemReadCache
     from agentic.core.measurement.adapters.github.issue_listing import GhIssueListing
 
-    assert isinstance(composition.backfill_listing(tmp_path), GhIssueListing)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    checkout = _checkout_with_origin(tmp_path / "co", "https://github.com/Acme/Widgets.git")
+    listing, cache = composition.backfill_listing(checkout)
+    assert isinstance(listing, GhIssueListing)
+    assert isinstance(cache, FilesystemReadCache)
+
+
+def test_the_cache_file_and_the_page_path_come_from_one_key_built_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    checkout = _checkout_with_origin(tmp_path / "co", "git@github.com:Acme/Widgets.git")
+    seen = []
+    real = composition.repo_key
+    monkeypatch.setattr(composition, "repo_key", lambda url: (seen.append(url), real(url))[1])
+    monkeypatch.setattr(composition, "backfill_gh_read", lambda product_dir: lambda args: "[]")
+    listing, cache = composition.backfill_listing(checkout)
+    assert seen == ["git@github.com:Acme/Widgets.git"]
+    listing.page(1)
+    cache.save({})
+    assert (tmp_path / "xdg" / "agentic" / "scores-reads" / "acme__widgets.json").is_file()
+
+
+def test_the_listing_path_names_the_same_repository_as_the_cache_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    checkout = _checkout_with_origin(tmp_path / "co", "https://github.com/Acme/Widgets")
+    asked = []
+
+    def gh(args):
+        asked.append(args)
+        return "[]"
+
+    monkeypatch.setattr(composition, "backfill_gh_read", lambda product_dir: gh)
+    listing, cache = composition.backfill_listing(checkout)
+    listing.page(1)
+    cache.save({})
+    assert asked[0][1].startswith("repos/acme/widgets/issues?")
+    assert [p.name for p in (tmp_path / "xdg" / "agentic" / "scores-reads").iterdir()] == [
+        "acme__widgets.json"
+    ]
+
+
+@pytest.mark.parametrize("url", [None, "https://gitlab.com/acme/widgets.git"])
+def test_without_a_github_origin_there_is_no_cache_and_the_placeholders_stay(
+    tmp_path, monkeypatch, url
+):
+    from agentic.core.measurement.application.ports import NoCache
+
+    checkout = _checkout_with_origin(tmp_path / "co", url)
+    asked = []
+
+    def gh(args):
+        asked.append(args)
+        return "[]"
+
+    monkeypatch.setattr(composition, "backfill_gh_read", lambda product_dir: gh)
+    listing, cache = composition.backfill_listing(checkout)
+    listing.page(1)
+    assert isinstance(cache, NoCache)
+    assert asked[0][1].startswith("repos/{owner}/{repo}/issues?")
+
+
+def test_the_cache_root_honours_xdg_cache_home_and_falls_back_to_the_home_cache(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert composition.backfill_cache_root() == tmp_path / "xdg" / "agentic" / "scores-reads"
+    monkeypatch.setenv("XDG_CACHE_HOME", "")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert (
+        composition.backfill_cache_root()
+        == tmp_path / "home" / ".cache" / "agentic" / "scores-reads"
+    )
+    monkeypatch.delenv("XDG_CACHE_HOME")
+    assert (
+        composition.backfill_cache_root()
+        == tmp_path / "home" / ".cache" / "agentic" / "scores-reads"
+    )
+
+
+def test_the_backfill_clock_reads_the_current_utc_time():
+    from datetime import UTC, datetime
+
+    before = datetime.now(UTC)
+    moment = composition.backfill_clock()()
+    assert before <= moment <= datetime.now(UTC)
+    assert moment.tzinfo is not None

@@ -23,8 +23,8 @@ from ...application.ports import (
 )
 from ...domain.issue_listing import PAGE_SIZE, ListedIssue
 
-# `gh` resolves the placeholders against the checkout's repository, as `gh issue view` does.
-_PATH = f"repos/{{owner}}/{{repo}}/issues?state=all&per_page={PAGE_SIZE}&sort=created&direction=asc"
+# With no repo key, `gh` resolves the placeholders against the checkout's repository.
+_QUERY = f"issues?state=all&per_page={PAGE_SIZE}&sort=created&direction=asc"
 _CAUSES: tuple[tuple[type[Exception], PageCause], ...] = (
     (TrackerRateLimited, "rate_limited"),
     (TrackerTimedOut, "timed_out"),
@@ -34,8 +34,9 @@ _CAUSES: tuple[tuple[type[Exception], PageCause], ...] = (
 
 
 class GhIssueListing:
-    def __init__(self, gh: GhRead):
+    def __init__(self, gh: GhRead, repo: str | None):
         self._gh = gh
+        self._path = f"repos/{repo or '{owner}/{repo}'}/{_QUERY}"
         self._calls = 0
         self._points = 0
 
@@ -58,7 +59,7 @@ class GhIssueListing:
         self._calls += 1
         self._points += 1
         try:
-            raw = self._gh(("api", f"{_PATH}&page={n}"))
+            raw = self._gh(("api", f"{self._path}&page={n}"))
         except (ValueError, OSError) as exc:
             return PageUnreadable(next((c for t, c in _CAUSES if isinstance(exc, t)), "refused"))
         try:
@@ -73,12 +74,16 @@ class GhIssueListing:
 
 def _item(entry: Any) -> ListedIssue:
     """One listed item; a `pull_request` object without an explicit `merged_at` is malformed."""
-    number, created_at = entry["number"], entry["created_at"]
-    if type(number) is not int or not isinstance(created_at, str):
+    number, created_at, state = entry["number"], entry["created_at"], entry["state"]
+    if (
+        type(number) is not int
+        or not isinstance(created_at, str)
+        or state not in ("open", "closed")
+    ):
         raise ValueError("malformed item")
     if "pull_request" not in entry:
-        return ListedIssue(number, created_at, False, None)
+        return ListedIssue(number, created_at, False, None, state)
     merged_at = entry["pull_request"]["merged_at"]
     if merged_at is not None and not isinstance(merged_at, str):
         raise ValueError("malformed merged_at")
-    return ListedIssue(number, created_at, True, merged_at)
+    return ListedIssue(number, created_at, True, merged_at, state)

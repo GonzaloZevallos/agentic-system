@@ -317,6 +317,8 @@ def _merge_facts(
 
     return rules.MergeFacts(
         task_id=task_id,
+        # GH-855: stacking is read by the poller from part 1b; until then no decision changes.
+        stack=None,
         status=raw.get("status"),
         open_escalation=escalation_hold(raw, comments),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
@@ -2851,9 +2853,10 @@ def run_once(
     sweep says `dry-run: skipped <name>` at the head of the output, and each action in the plan
     says `would <kind> issue <N>` where `execute`'s lines would stand. The GH-824 worktree sweep
     (`worktree_sweep.sweep`) runs at the tail, after `execute` and before the board mirror,
-    outside the exclusive section, when the round is not held, not dry and `sweep_carry` is
+    outside the exclusive section, when the round is not held or `rules.sweeps_when_held` says its
+    holds include the product volume (GH-865), not dry and `sweep_carry` is
     given: it keeps its memory in the carry, its lines join the notes and it never ends the
-    round. A held round with a carry says once per process that it did not sweep."""
+    round. A held round that did not sweep, with a carry, says once per process that it did not."""
     closes = gather_closes(ports)
     swept: list[str] = []
     dry_skipped = [f"dry-run: skipped {name}" for name in DRY_RUN_SKIPPED] if dry_run else []
@@ -3177,9 +3180,10 @@ def run_once(
                 blockers_by_issue,
             )
     # GH-824: after `execute`, so one slow removal never delays this round's launches or merges;
-    # outside the exclusive section, since it takes no slot and starts no child.
+    # outside the exclusive section, since it takes no slot and starts no child. GH-865: a round
+    # held with the product volume sweeps too, since closed worktrees are what fills that volume.
     if sweep_carry is not None and not dry_run:
-        if not held:
+        if not held or rules.sweeps_when_held(held):
             sweep_lines, sweep_carry.memory = worktree_sweep.sweep(
                 ports,
                 lock,
