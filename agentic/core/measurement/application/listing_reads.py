@@ -141,6 +141,4 @@ def read_listing(
         cause = reader.walk(max(reader.pages), force=True)
     if cause is not None:
         return reader.stopped(cause)
-    return Listing(
-        listing_of(reader.pages), listing.spent(), reader.remaining, reader.from_cache
-    )
+    return Listing(listing_of(reader.pages), listing.spent(), reader.remaining, reader.from_cache)

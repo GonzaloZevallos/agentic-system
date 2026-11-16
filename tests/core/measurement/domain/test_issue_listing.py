@@ -191,7 +191,10 @@ def test_complete_takes_an_empty_terminal_page_as_short():
 def test_listing_of_lets_the_later_read_win_and_a_dropped_number_is_gone():
     old = PageRecord(at(0), False, (issue(1, "old"), issue(2, "old")))
     new = PageRecord(at(5), False, (issue(2, "new"),))
-    assert {n: i.created_at for n, i in listing_of({1: new, 2: old}).items()} == {2: "new", 1: "old"}
+    assert {n: i.created_at for n, i in listing_of({1: new, 2: old}).items()} == {
+        2: "new",
+        1: "old",
+    }
     assert sorted(listing_of({1: new})) == [2]
 
 

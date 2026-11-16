@@ -21,7 +21,8 @@ from agentic.core.process.application.ports import (
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "issues_page.json"
-PATH = "repos/{owner}/{repo}/issues?state=all&per_page=100&sort=created&direction=asc&page="
+QUERY = "issues?state=all&per_page=100&sort=created&direction=asc&page="
+PATH = "repos/{owner}/{repo}/" + QUERY
 
 
 class FakeGh:
@@ -38,7 +39,7 @@ class FakeGh:
 
 def listing(reply):
     gh = FakeGh(reply)
-    return GhIssueListing(gh), gh
+    return GhIssueListing(gh, None), gh
 
 
 def test_pages_one_and_two_ask_gh_for_the_literal_placeholders_and_nothing_else():
@@ -53,13 +54,13 @@ def test_the_recorded_page_parses_to_one_issue_an_open_pr_and_a_merged_pr():
     page = reader.page(1)
     assert isinstance(page, Page) and page.size == 3
     issue, open_pr, merged = page.items
-    assert issue == ListedIssue(4, issue.created_at, False, None)
-    assert open_pr == ListedIssue(587, open_pr.created_at, True, None)
+    assert issue == ListedIssue(4, issue.created_at, False, None, "closed")
+    assert open_pr == ListedIssue(587, open_pr.created_at, True, None, "open")
     assert merged.is_pr and merged.number == 1 and merged.pr_merged_at == "2026-09-12T19:23:13Z"
 
 
 def test_the_size_is_the_raw_item_count():
-    items = [{"number": n, "created_at": "t"} for n in range(1, 4)]
+    items = [{"number": n, "created_at": "t", "state": "open"} for n in range(1, 4)]
     page = listing(json.dumps(items))[0].page(1)
     assert isinstance(page, Page) and page.size == 3 and len(page.items) == 3
 
@@ -72,11 +73,14 @@ def test_the_size_is_the_raw_item_count():
         '[{"number": 1}]',
         '[{"created_at": "t"}]',
         '["x"]',
-        '[{"number": "1", "created_at": "t"}]',
-        '[{"number": 1, "created_at": "t", "pull_request": {}}]',
-        '[{"number": 1, "created_at": "t", "pull_request": null}]',
-        '[{"number": 1, "created_at": "t", "pull_request": "x"}]',
-        '[{"number": 1, "created_at": "t", "pull_request": {"merged_at": 5}}]',
+        '[{"number": "1", "created_at": "t", "state": "open"}]',
+        '[{"number": 1, "created_at": "t"}]',
+        '[{"number": 1, "created_at": "t", "state": "merged"}]',
+        '[{"number": 1, "created_at": "t", "state": null}]',
+        '[{"number": 1, "created_at": "t", "state": "open", "pull_request": {}}]',
+        '[{"number": 1, "created_at": "t", "state": "open", "pull_request": null}]',
+        '[{"number": 1, "created_at": "t", "state": "open", "pull_request": "x"}]',
+        '[{"number": 1, "created_at": "t", "state": "open", "pull_request": {"merged_at": 5}}]',
     ],
 )
 def test_an_unparsable_page_or_a_malformed_item_is_refused(reply):
@@ -84,7 +88,9 @@ def test_an_unparsable_page_or_a_malformed_item_is_refused(reply):
 
 
 def test_a_null_merged_at_is_present_and_means_unmerged():
-    reply = '[{"number": 1, "created_at": "t", "pull_request": {"merged_at": null}}]'
+    reply = (
+        '[{"number": 1, "created_at": "t", "state": "open", "pull_request": {"merged_at": null}}]'
+    )
     page = listing(reply)[0].page(1)
     assert isinstance(page, Page) and page.items[0].is_pr and page.items[0].pr_merged_at is None
 
@@ -170,7 +176,13 @@ def test_the_call_is_counted_before_it_is_made():
         seen.append(reader.spent())
         raise TrackerTransient("x")
 
-    reader = GhIssueListing(gh)
+    reader = GhIssueListing(gh, None)
     reader.rate_limit()
     reader.page(1)
     assert seen == [Spend(1, 0), Spend(2, 1)]
+
+
+def test_a_repo_key_names_the_repository_in_the_path_instead_of_the_placeholders():
+    gh = FakeGh("[]")
+    GhIssueListing(gh, "o/r").page(2)
+    assert gh.calls == [("api", "repos/o/r/" + QUERY + "2")]

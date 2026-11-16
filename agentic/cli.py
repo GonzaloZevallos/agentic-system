@@ -52,7 +52,7 @@ from .core.measurement.application.eval_commands import (
     _eval_score,
 )
 from .core.measurement.application.listing_reads import Stopped, read_listing
-from .core.measurement.application.ports import NO_READS, EvalRoots, EvalSpawn, Spend
+from .core.measurement.application.ports import NO_READS, EvalRoots, EvalSpawn, NoCache, Spend
 from .core.measurement.domain import (
     evaluation,
     findings_report,
@@ -3390,7 +3390,12 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     items: dict[int, ListedIssue] = {}
     reads: tuple[Spend, int | None] = (NO_READS, None)
     if _needs_github(loaded):
-        listing = read_listing(composition.backfill_listing(cfg.product_dir))
+        listing = read_listing(
+            composition.backfill_listing(cfg.product_dir),
+            NoCache(),
+            lambda: datetime.now(UTC),
+            frozenset(),
+        )
         reads = (listing.spend, listing.remaining)
         if isinstance(listing, Stopped):
             print(f"agentic: stopped reading GitHub: {listing.cause}; rerun later")

@@ -514,7 +514,7 @@ def backfill_gh_read(product_dir: Path, run: Run = bounded_run) -> GhRead:
 
 def backfill_listing(product_dir: Path) -> IssueListing:
     """The repository's issues listing for the backfill, over `backfill_gh_read`."""
-    return GhIssueListing(backfill_gh_read(product_dir))
+    return GhIssueListing(backfill_gh_read(product_dir), None)
 
 
 def _file_name(product: str) -> str:

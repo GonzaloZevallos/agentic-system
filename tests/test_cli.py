@@ -4778,16 +4778,22 @@ class FakeListing:
         return Page(chunk, len(chunk))
 
 
+def _state(merged_at):
+    return "open" if merged_at is None else "closed"
+
+
 def listing_of(tracker: FakePullRequestTracker, **kwargs) -> FakeListing:
     """The listing GitHub would give for what `tracker` holds: its pull requests and its
     issue times (an issue it fails to read is not listed)."""
     items = [
-        ListedIssue(pull_request_number(ref), pr.created_at, True, pr.merged_at)
+        ListedIssue(
+            pull_request_number(ref), pr.created_at, True, pr.merged_at, _state(pr.merged_at)
+        )
         for ref, pr in tracker.prs.items()
         if pr is not None
     ]
     items += [
-        ListedIssue(int(task_id.removeprefix("GH-")), created, False, None)
+        ListedIssue(int(task_id.removeprefix("GH-")), created, False, None, "closed")
         for task_id, created in tracker.issue_created.items()
         if task_id not in tracker.issue_created_errors
     ]
@@ -5015,7 +5021,7 @@ def test_a_backfill_writes_no_task_document(monkeypatch, tmp_path):
 
 
 def _item(number, created=STARTED, *, pr=False, merged=None):
-    return ListedIssue(number, created, pr, merged)
+    return ListedIssue(number, created, pr, merged, "closed")
 
 
 def test_a_mixed_set_prints_each_outcome_in_order_and_a_missing_number_is_gh_failed(
