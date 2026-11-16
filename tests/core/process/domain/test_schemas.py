@@ -1877,3 +1877,14 @@ def test_a_tech_plan_declares_drawing_departures_and_validates_with_them():
     assert parsed["drawing_departures"][0]["element"] == "Sales line"
     bare = schemas.validate(schemas.TechPlan, {**_estimated(20.0, 3), **sizes}, VOCAB)
     assert bare["drawing_departures"] == []
+
+
+def test_plan_check_for_finds_a_rejected_departure_among_several_and_keys_by_drawing():
+    from agentic.core.process.domain import drawing
+
+    key = drawing.departure_key("designs/home.png", "Sales line")
+    check = schemas.plan_check_for(_history(1, []), 0.0, rejected={key: 4})
+    other_drawing = _departure(drawing="designs/report.png")  # same element, another drawing
+    check(_with_departures(other_drawing))  # does not raise
+    with pytest.raises(ValueError, match="#4"):
+        check(_with_departures(other_drawing, _departure()))
