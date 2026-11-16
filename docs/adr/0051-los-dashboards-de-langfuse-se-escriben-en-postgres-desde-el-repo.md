@@ -433,7 +433,12 @@ a mano el 2026-11-14; esta adenda los reemplaza por uno solo para los dos produc
   textual: «re-posting an id with a later timestamp leaves one row under `final`, but that
   row keeps the FIRST timestamp (2026-11-13). The second post's timestamp is ignored.»
   (`1`, sin duplicado, salida de `scripts/score_redate_spike.py`). Por eso el backfill retira
-  el id (`DELETE`, espera 404) y recién después lo escribe con la fecha nueva.
+  el id (`DELETE`, espera 404) y recién después lo escribe con la fecha nueva. Que retirar
+  y volver a escribir mueve el score al día del merge lo prueba, contra un doble local de la
+  API de scores que registra las llamadas en orden,
+  `test_retire_then_repost_moves_the_merge_dated_scores_to_the_merge_day_and_only_those`
+  (`tests/core/measurement/adapters/test_langfuse_scores.py`); la corrida con las claves
+  del entorno de prueba la hace el orquestador tras el merge.
 - **Claves de la definición.** Del golden (`tests/fixtures/langfuse_dashboards/golden.json`):
   las vistas `SCORES_NUMERIC` y `SCORES_BOOLEAN`, los tipos `NUMBER`, `HORIZONTAL_BAR`,
   `PIE`, `BAR_TIME_SERIES` y `PIVOT_TABLE`, las agregaciones `sum`, `p50`, `max` y `count`,
