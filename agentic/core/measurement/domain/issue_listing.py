@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from agentic.core.process.domain.tracker_refs import issue_number, pull_request_number
 
 PAGE_SIZE = 100
+# Core points the listing leaves in the account's quota: the pollers draw on it too.
+QUOTA_RESERVE = 1000
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,20 @@ class Missing:
     """The listing has no usable item for this number (`None`: the reference had none)."""
 
     number: int | None
+
+
+def reserve_reached(remaining: int, reserve: int) -> bool:
+    """Whether a read would leave the core quota under the reserve: stop before it."""
+    return remaining <= reserve
+
+
+def cost_line(product: str, calls: int, points: int, remaining: int | None) -> str:
+    """What the backfill spent on GitHub; `remaining` is the last quota reading, if any."""
+    left = "unknown" if remaining is None else str(remaining)
+    return (
+        f"agentic: github reads for {product}: {calls} calls ({points} core points), "
+        f"core remaining {left}"
+    )
 
 
 def merge(items: Mapping[int, ListedIssue], page: Iterable[ListedIssue]) -> dict[int, ListedIssue]:
