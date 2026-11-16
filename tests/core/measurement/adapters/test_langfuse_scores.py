@@ -358,3 +358,32 @@ def test_retire_with_no_ids_does_nothing() -> None:
     requests = Requests()
     assert _retirer(requests).retire([]) is True
     assert requests.calls == []
+
+
+def test_a_retire_that_runs_out_on_a_later_id_keeps_the_earlier_gone_and_a_rerun_finishes() -> None:
+    gone = {"a1"}
+    calls: list[tuple[str, str]] = []
+
+    def requester(method: str, url: str, headers: dict[str, str], timeout_s: float) -> int:
+        score_id = url.rsplit("/", 1)[1]
+        calls.append((method, score_id))
+        if method == "DELETE":
+            return 404 if score_id in gone else 200
+        return 404 if score_id in gone else 200  # b2 never goes away in the first run
+
+    clock = Requests()
+    writer = LangfuseScores(
+        "http://lf:3000",
+        "pk",
+        "sk",
+        product="apostrophe",
+        requester=requester,
+        sleep=clock.sleep,
+        clock=clock.clock,
+    )
+    assert writer.retire(["a1", "b2"]) is False
+    assert ("DELETE", "a1") in calls and ("DELETE", "b2") in calls
+    gone.add("b2")
+    calls.clear()
+    assert writer.retire(["a1", "b2"]) is True
+    assert calls == [("DELETE", "a1"), ("DELETE", "b2")]
