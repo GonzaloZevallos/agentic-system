@@ -398,7 +398,8 @@ def test_add_drawing_escalation_with_stage_is_associative(a, b, c):
 def test_an_empty_side_is_the_identity_of_the_staged_reducer(a):
     empty = cast(DrawingEscalation, {})
     assert add_drawing_escalation(empty, a) == add_drawing_escalation(None, a)
-    assert add_drawing_escalation(a, empty) == a
+    assert add_drawing_escalation(a, empty) == add_drawing_escalation(empty, a)
+    assert add_drawing_escalation(a, empty).get("stage") != "delivery"
     assert add_drawing_escalation(empty, a).get("stage") == (
         "plan" if a.get("stage") == "plan" else None
     )
@@ -449,7 +450,7 @@ def test_add_drawing_escalation_treats_an_empty_side_as_the_identity():
     empty = cast(DrawingEscalation, {})
     held = _escalation(2, [3, 1])
     assert add_drawing_escalation(empty, held) == _escalation(2, [1, 3])
-    assert add_drawing_escalation(held, empty) == held
+    assert add_drawing_escalation(held, empty) == _escalation(2, [1, 3])
     assert add_drawing_escalation(empty, empty) == {}
     assert add_drawing_escalation(None, empty) == {}
 
@@ -464,10 +465,12 @@ _GRID = [
 
 
 def test_staged_escalation_reducer_laws_hold_over_the_whole_grid():
+    empty = cast(DrawingEscalation, {})
     for a in _GRID:
-        for b in _GRID:
+        assert add_drawing_escalation(a, empty) == add_drawing_escalation(empty, a)
+        for b in [*_GRID, empty]:
             assert add_drawing_escalation(a, b) == add_drawing_escalation(b, a)
-            for c in _GRID[::5]:
+            for c in [*_GRID[::5], empty]:
                 assert add_drawing_escalation(
                     add_drawing_escalation(a, b), c
                 ) == add_drawing_escalation(a, add_drawing_escalation(b, c))

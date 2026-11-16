@@ -672,7 +672,14 @@ def add_drawing_escalation(
     `existing` may be `None`. The graph's channel starts from the empty `DrawingEscalation()`
     and may fold an empty update: an empty side is the identity, never an error."""
     if not new:
-        return existing if existing is not None else cast(DrawingEscalation, {})
+        if not existing:
+            return cast(DrawingEscalation, {})
+        return _drawing_escalation(
+            existing["round"],
+            set(existing["numbers"]),
+            existing["cause"],
+            _escalation_stage(existing),
+        )
     if not existing:
         return _drawing_escalation(
             new["round"], set(new["numbers"]), new["cause"], _escalation_stage(new)
