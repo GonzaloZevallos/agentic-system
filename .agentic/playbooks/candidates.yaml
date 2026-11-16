@@ -2067,3 +2067,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-16T09:06:47.522+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When you change a flow, contract or payload that a hand-written doc under docs/ describes, update that doc in the same change and check its steps against the new code before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-813
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-16T09:36:38.785+00:00'

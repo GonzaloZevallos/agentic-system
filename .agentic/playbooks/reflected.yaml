@@ -1230,3 +1230,20 @@ tasks:
       - GH-836
   GH-841@review:
     cost_usd: 0.0432
+  GH-813@review:
+    cost_usd: 0.0815
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-813
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-813
