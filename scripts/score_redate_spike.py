@@ -129,7 +129,9 @@ def main() -> None:
     stamp = _timestamp(score_id)
     print(f"   timestamp after the repost: {stamp}")
     moved = stamp.startswith(second.strftime("%Y-%m-%d"))
-    print("result: retire then repost re-dates the score" if moved else "result: NOT re-dated")
+    if not moved:
+        raise SystemExit("result: NOT re-dated; change the approach and escalate")
+    print("result: retire then repost re-dates the score")
 
 
 if __name__ == "__main__":
