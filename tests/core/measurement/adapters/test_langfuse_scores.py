@@ -268,3 +268,93 @@ def test_a_writer_built_without_a_transport_cannot_reach_the_real_one_inside_the
     writer = LangfuseScores("http://127.0.0.1:9", "pk", "sk", product="apostrophe")
     assert _write(writer) is False
     assert capsys.readouterr().out.strip() == "Langfuse span write failed for GH-12: AssertionError"
+
+
+# --- retire: a re-post keeps the first timestamp, so a re-dated score is deleted first (GH-819) ---
+
+
+class Requests:
+    """A requester that records `(method, path)` and answers each from a script; the clock
+    only moves when `sleep` is called, so a 60 s bound runs instantly."""
+
+    def __init__(self, deleted_after: int = 0, delete_status: int = 200) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.deleted_after = deleted_after
+        self.delete_status = delete_status
+        self.now = 0.0
+        self.polls: dict[str, int] = {}
+
+    def __call__(self, method: str, url: str, headers: dict[str, str], timeout_s: float) -> int:
+        path = url.removeprefix("http://lf:3000")
+        self.calls.append((method, path))
+        if method == "DELETE":
+            return self.delete_status
+        self.polls[path] = self.polls.get(path, 0) + 1
+        return 404 if self.polls[path] > self.deleted_after else 200
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def clock(self) -> float:
+        return self.now
+
+
+def _retirer(requests: Requests) -> LangfuseScores:
+    return LangfuseScores(
+        "http://lf:3000",
+        "pk-lf-pub",
+        "sk-lf-secret",
+        product="apostrophe",
+        requester=requests,
+        sleep=requests.sleep,
+        clock=requests.clock,
+    )
+
+
+def test_retire_deletes_each_id_then_polls_until_the_score_is_gone() -> None:
+    requests = Requests(deleted_after=2)
+    assert _retirer(requests).retire(["a1", "b2"]) is True
+    path = "/api/public/scores/"
+    assert requests.calls == [
+        ("DELETE", path + "a1"),
+        *[("GET", path + "a1")] * 3,
+        ("DELETE", path + "b2"),
+        *[("GET", path + "b2")] * 3,
+    ]
+
+
+def test_retire_counts_a_404_on_the_delete_as_done_and_does_not_poll() -> None:
+    requests = Requests(delete_status=404)
+    assert _retirer(requests).retire(["a1"]) is True
+    assert requests.calls == [("DELETE", "/api/public/scores/a1")]
+
+
+def test_retire_gives_up_after_sixty_seconds_in_total_and_touches_no_later_id() -> None:
+    requests = Requests(deleted_after=10**6)
+    assert _retirer(requests).retire(["a1", "b2"]) is False
+    assert requests.now >= 60.0 and requests.now < 70.0
+    assert all(path.endswith("a1") for _, path in requests.calls)
+
+
+def test_retire_sends_the_basic_authorization_and_refuses_a_rejected_delete(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    seen: list[dict[str, str]] = []
+
+    def requester(method: str, url: str, headers: dict[str, str], timeout_s: float) -> int:
+        seen.append(headers)
+        return 500
+
+    writer = LangfuseScores(
+        "http://lf:3000", "pk", "sk-secret-value", product="apostrophe", requester=requester
+    )
+    assert writer.retire(["a1"]) is False
+    assert seen[0]["Authorization"] == "Basic " + base64.b64encode(b"pk:sk-secret-value").decode()
+    out = capsys.readouterr().out
+    assert "sk-secret-value" not in out and "a1" in out
+
+
+def test_retire_with_no_ids_does_nothing() -> None:
+    requests = Requests()
+    assert _retirer(requests).retire([]) is True
+    assert requests.calls == []

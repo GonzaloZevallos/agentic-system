@@ -4739,12 +4739,21 @@ class FakeScorer:
     """`LangfuseScores.write`'s shape: records every call, answers `results` in order
     (`True` once they run out)."""
 
-    def __init__(self, results=()):
+    def __init__(self, results=(), retire_results=()):
         self.calls = []
+        self.retired = []
+        self.events = []
         self._results = list(results)
+        self._retire_results = list(retire_results)
+
+    def retire(self, score_ids):
+        self.retired.append(list(score_ids))
+        self.events.append("retire")
+        return self._retire_results.pop(0) if self._retire_results else True
 
     def write(self, product, task_id, document, scores, task_time, dimensions):
         self.calls.append((product, task_id, tuple(scores), task_time, dimensions))
+        self.events.append("write")
         return self._results.pop(0) if self._results else True
 
 
@@ -6841,3 +6850,58 @@ def test_the_close_write_passes_the_merge_through_to_the_stamps(tmp_path):
     merge = datetime(2026, 9, 20, 13, 0, tzinfo=UTC)
     assert {s.timestamp for s in _merge_dated(scores)} == {merge}
     assert "cycle_h" in {s.name for s in scores}
+
+
+def _merged_backfill(tmp_path):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports)
+    return root, ports
+
+
+def test_the_backfill_retires_the_merge_dated_ids_of_a_document_before_writing_it(
+    monkeypatch, tmp_path
+):
+    root, ports = _merged_backfill(tmp_path)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    assert scorer.events == ["retire", "write"]
+    (written,) = (call[2] for call in scorer.calls)
+    dated = {s.id for s in written if cli.task_scores.merge_dated(s.name)}
+    assert dated and set(scorer.retired[0]) == dated
+
+
+def test_a_retire_that_times_out_skips_the_task_counts_it_partial_and_exits_one(
+    monkeypatch, tmp_path, capsys
+):
+    root, ports = _merged_backfill(tmp_path)
+    scorer = FakeScorer(retire_results=[False])
+    assert _backfill(monkeypatch, root, ports, scorer) == 1
+    out = capsys.readouterr().out
+    assert "agentic: GH-9: skipped:retire_timeout" in out.splitlines()
+    assert scorer.calls == []  # never half-written
+    assert "scored 0, partial 1" in out.splitlines()[-1]
+
+
+def test_a_dry_run_retires_nothing(monkeypatch, tmp_path):
+    root, ports = _merged_backfill(tmp_path)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, "--dry-run") == 0
+    assert scorer.events == []
+
+
+def test_a_document_with_no_merge_has_nothing_to_retire(monkeypatch, tmp_path):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker(
+        {"https://github.com/o/r/pull/7": stage_pull_request(merged=None)}
+    )
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports, outcome="closed")
+    scorer = FakeScorer()
+    _backfill(monkeypatch, root, ports, scorer)
+    assert scorer.events == ["write"]

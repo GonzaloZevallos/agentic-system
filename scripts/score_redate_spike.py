@@ -5,8 +5,9 @@ Run by a person with the local Langfuse keys, never in CI and never against a pr
 `agentic-gate-probe`, on a throwaway id, and prints every step so the output can be pasted
 whole. Reads `AGENTIC_LANGFUSE_HOST`, `_PUBLIC_KEY`, `_SECRET_KEY` and the ClickHouse trio.
 Step 1 posts the score, step 2 posts the same id one day later, step 3 counts rows with
-`final`. A count of 2 means the backfill must retire an id before re-dating it; the script
-then runs the delete, poll-until-404, repost and count sequence, 60 s at most."""
+`final` (a re-post keeps the first timestamp, GH-819). It then runs the delete, poll-until-404
+(60 s at most), repost and count sequence and prints the timestamp the row ends with, so the
+output shows whether retire then repost re-dates it."""
 
 from __future__ import annotations
 
@@ -81,6 +82,23 @@ def _count(score_id: str) -> int:
         return int(json.load(response)["data"][0]["count()"])
 
 
+def _timestamp(score_id: str) -> str:
+    params = urllib.parse.urlencode({"param_id": score_id})
+    sql = "select toString(timestamp) as t from scores final where id = {id:String} format JSON"
+    request = urllib.request.Request(
+        f"{_env('CLICKHOUSE_URL').rstrip('/')}/?{params}",
+        data=sql.encode(),
+        method="POST",
+        headers={
+            "X-ClickHouse-User": _env("CLICKHOUSE_USER"),
+            "X-ClickHouse-Key": _env("CLICKHOUSE_PASSWORD"),
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        rows = json.load(response)["data"]
+    return str(rows[0]["t"]) if rows else "(no row)"
+
+
 def _settle() -> None:
     time.sleep(8)  # ingestion is asynchronous: wait for the flush before counting
 
@@ -95,9 +113,7 @@ def main() -> None:
     _settle()
     rows = _count(score_id)
     print(f"3. select count() from scores final where id = {score_id!r}: {rows}")
-    if rows != 2:
-        print("result: no duplicate; retire is not needed")
-        return
+    print(f"   timestamp kept by the first row: {_timestamp(score_id)}")
     path = f"/api/public/scores/{score_id}"
     print(f"4. DELETE {path}: HTTP {_call('DELETE', path)}")
     deadline = time.monotonic() + POLL_LIMIT_S
@@ -110,7 +126,10 @@ def main() -> None:
     print(f"5. post again at {second.isoformat()}: HTTP {_post(score_id, trace_id, second)}")
     _settle()
     print(f"6. count after the repost: {_count(score_id)}")
-    print("result: duplicate on re-date; retire is needed (repost must land: count 1)")
+    stamp = _timestamp(score_id)
+    print(f"   timestamp after the repost: {stamp}")
+    moved = stamp.startswith(second.strftime("%Y-%m-%d"))
+    print("result: retire then repost re-dates the score" if moved else "result: NOT re-dated")
 
 
 if __name__ == "__main__":
