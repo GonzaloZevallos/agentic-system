@@ -42,6 +42,7 @@ classDiagram
     class task_path__RiskHit["RiskHit"]
     class task_path__RiskNone["RiskNone"]
     class task_path__RiskUnreadable["RiskUnreadable"]
+    class worktree_sweep__SweepMemory["SweepMemory"]
     task__Subtask --> task_path__PromoteRequest
     task__TaskState --|> task__TaskInput
     task__TaskState --> task_path__Promotion

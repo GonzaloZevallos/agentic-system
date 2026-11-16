@@ -1536,6 +1536,12 @@ class Workspace(Protocol):
         are none. Filesystem only: no git."""
         ...
 
+    def is_checkout(self, path: Path) -> bool:
+        """Whether `path/.git` exists, as a file (a linked worktree) or a directory (GH-824:
+        the worktree sweep tells a checkout from a directory git lost). Filesystem only,
+        never raises: an `OSError` answers False."""
+        ...
+
     def contains(self, head: str, master: str) -> Containment:
         """Whether the commit `head` has the commit `master` among its ancestors (GH-216),
         after fetching both shas: `yes` or `no`, and `unknown` for anything that could not

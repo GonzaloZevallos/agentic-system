@@ -219,6 +219,7 @@ CLUSTERS: Mapping[str, str] = {
     "domain.tracker_items": "roles",
     "domain.tracker_refs": "state",
     "domain.turn_notice": "roles",
+    "domain.worktree_sweep": "state",
 }
 
 # How the class pages of each layer are grouped, keyed `<context>/<layer>`: `clusters` takes the

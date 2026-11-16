@@ -25,6 +25,7 @@ graph TD
     m_domain__task["domain.task"]
     m_domain__task_path["domain.task_path"]
     m_domain__tracker_refs["domain.tracker_refs"]
+    m_domain__worktree_sweep["domain.worktree_sweep"]
     m_domain__size_budget --> g_domain__checks
     m_domain__spec_assumptions --> g_domain__roles
     m_domain__spec_assumptions --> g_domain__state__1

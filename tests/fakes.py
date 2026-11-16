@@ -862,6 +862,8 @@ class MemoryWorkspace:
         self.indexes: dict[Path, dict[str, str]] = {}
         self.dirty: set[Path] = set()
         self.uncommitted: set[Path] = set()
+        # Paths with no `.git` (`is_checkout` is True for every other one, GH-824).
+        self.not_checkouts: set[Path] = set()
         # ADR-0065: the tree a checkout holds (scripted per path; `tree:<path>` otherwise),
         # the setup-tree records `record_setup_tree` made and each call in order.
         self.trees: dict[Path, str] = {}
@@ -1620,6 +1622,9 @@ class MemoryWorkspace:
 
     def checkout_names(self, prefix: str) -> list[str]:
         return sorted(name for name in self.stale_checkouts if name.startswith(prefix))
+
+    def is_checkout(self, path: Path) -> bool:
+        return path not in self.not_checkouts
 
     def remove_checkout(self, name: str) -> None:
         self._noted("remove", name)
