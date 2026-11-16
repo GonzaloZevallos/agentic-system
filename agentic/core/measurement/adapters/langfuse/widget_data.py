@@ -2,8 +2,8 @@
 
 Read-only, over the HTTP interface with `urllib`. `FINAL` collapses only the replacing-merge
 duplicates that share a sort key (Langfuse's own views also group by id, ADR-0037), and every
-count is filtered to the project and to the environment of the widget's own `environment`
-filter: a product's numbers are never summed with another's. Query values travel as
+count is filtered to the project and to what the widget's own filters say: its names, its
+`environment` when it has one and its `booleanValue`. Query values travel as
 ClickHouse query parameters, never spliced into the SQL."""
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ TIMEOUT_S = 30.0
 
 _SCORES = (
     "select count() from scores final where project_id = {project:String} "
-    "and is_deleted = 0 and environment in {environments:Array(String)}"
+    "and is_deleted = 0"
 )
 
 
@@ -42,14 +42,19 @@ class ClickHouseWidgetData:
         self._project = project_id
 
     def count(self, widget: domain.WidgetSpec) -> int:
-        params = {
-            "param_project": self._project,
-            "param_environments": _array(_values(widget, "environment")),
-        }
-        sql = _SCORES + " and name in {names:Array(String)}"
+        """The rows the widget reads: its project, its names, its `environment` filter when
+        it declares one and its `booleanValue` filter, true or false, as `value = 1|0`."""
+        params = {"param_project": self._project}
+        sql = _SCORES
+        environments = _values(widget, "environment")
+        if any(f["column"] == "environment" for f in widget.filters):
+            sql += " and environment in {environments:Array(String)}"
+            params["param_environments"] = _array(environments)
+        sql += " and name in {names:Array(String)}"
         params["param_names"] = _array(_values(widget, "name"))
-        if any(f["column"] == "booleanValue" and f["value"] is True for f in widget.filters):
-            sql += " and value = 1"
+        for f in widget.filters:
+            if f["column"] == "booleanValue":
+                sql += " and value = 1" if f["value"] is True else " and value = 0"
         return self._query(sql, params)
 
     def _query(self, sql: str, params: dict[str, str]) -> int:
