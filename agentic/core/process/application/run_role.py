@@ -303,6 +303,10 @@ def context_for(
     parts = [text for text in (standards, design, product_knowledge) if text]
     spec = state.get("spec")
     for name in (*role.reads, *extra_sections, HUMAN):
+        if name == HUMAN and (
+            departures := document.drawing_section(state.get("drawing_departures"))
+        ):
+            parts.append(f"## {document.DRAWING_DEPARTURES}\n\n{departures}")
         if name == HUMAN and spec:
             # The approved slice (GH-594) goes after the declared sections and before the
             # human's decisions: the one way it reaches a role (ADR-0096).

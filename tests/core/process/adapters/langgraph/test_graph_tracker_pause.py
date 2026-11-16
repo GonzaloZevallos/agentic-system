@@ -95,3 +95,56 @@ async def test_a_plan_with_one_human_item_escalates_with_needs_human_through_del
         needs_human=False,
         stranded=False,
     )
+
+
+async def _drawing_paused(config):
+    from agentic.core.process.domain import drawing, drawing_answer
+
+    departures = [
+        drawing.Departure("design/home.png", e, "blue", "green", "keep", "approved", "dev")
+        for e in ("hero", "footer")
+    ]
+    base = {"id": "GH-1", "title": "t", "description": "d", "type": "feature"}
+    patch = drawing_answer.escalation_patch(base, departures, "T0")  # type: ignore[arg-type]
+    state = {**base, **patch, "status": "waiting_on_human"}
+    app = compiled(script_for(), fakes=Fakes())
+    await app.aupdate_state(config, state, as_node="escalate")
+    return app, state
+
+
+async def test_a_drawing_answer_from_prepare_reaches_the_state_through_the_pause_node(config):
+    from agentic.core.process.application import resume
+    from agentic.core.process.domain import drawing_answer
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    app, state = await _drawing_paused(config)
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: x", "Drawing 1: accept", "Drawing 2: reject"]
+    r = resume.prepare(
+        "GH-1",
+        state,
+        "checkpoint",
+        Configuration(product_dir="/tmp/p"),
+        ports,  # type: ignore[arg-type]
+    )
+    async for update in app.astream(
+        Command(resume=r.answer()), config=config, stream_mode="updates"
+    ):
+        if "pause" in update:
+            break  # what runs after the pause is not what this test is about
+    final = (await app.aget_state(config)).values
+    assert drawing_answer.unanswered(final) == []
+    assert {x["number"]: x["answer"]["by"] for x in final["drawing_departures"]} == {
+        1: "comment",
+        2: "comment",
+    }
+
+
+async def test_a_plain_resume_has_no_drawing_departures_key(config):
+    from agentic.core.process.application import resume
+
+    assert (
+        "drawing_departures"
+        not in resume.Resumption("GH-1", "checkpoint", {}, {}, "x", "plan", 1.0).answer()
+    )

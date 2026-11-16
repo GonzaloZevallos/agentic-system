@@ -129,9 +129,7 @@ def test_nothing_unanswered_raises():
 
 def test_a_contradicted_open_row_gets_its_line_and_a_row_without_one_does_not():
     state = _state(drawing_departures=_rows("a", "b", answered=(2,)))
-    patch = drawing_answer.escalation_patch(
-        state, [], AT, contradicted=frozenset({1, 2, 99})
-    )
+    patch = drawing_answer.escalation_patch(state, [], AT, contradicted=frozenset({1, 2, 99}))
     reason = cast(str, patch["escalated"])
     assert "Drawing 1 got both accept and reject in one comment; answer it once." in reason
     assert "Drawing 2 got both" not in reason

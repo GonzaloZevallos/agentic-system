@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast, get_args
 
@@ -44,6 +44,9 @@ EVAL_DOCS_SUBDIR = Path(".agentic/eval/docs")
 ORIGINAL = "Original request"
 # What the human decided on each escalation, written by the system on a resume (ADR-0003).
 HUMAN = "Human"
+# The departures from an approved drawing (GH-766), derived from `drawing_departures` and never a
+# stored section: `render` writes it, `parse` drops it, every role reads it.
+DRAWING_DEPARTURES = "Drawing departures"
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _SECTION = re.compile(r"^## (.+?)\s*$", re.M)
@@ -233,6 +236,39 @@ def _lane_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def drawing_section(rows: Sequence[Any] | None) -> str:
+    """The text of the `Drawing departures` section for `rows`, `""` when there are none. The
+    lines are `drawing_answer.section_lines`; imported here because `drawing_answer` imports
+    `rules`, which imports this module."""
+    from . import drawing_answer
+
+    if not rows:
+        return ""
+    return "\n".join(f"- {line}" for line in drawing_answer.section_lines(rows))
+
+
+_ANSWER_BY = ("comment", "flag")
+
+
+def _departure_rows(raw: object, source: object) -> list[Any]:
+    """The stored `drawing_departures` rows, each `answer` validated as `DepartureAnswer | None`
+    (`verdict` accept or reject, `by` comment or flag, `at` a string). Raises `ValueError`."""
+    if not isinstance(raw, list):
+        raise ValueError(f"{source}: drawing_departures is not a list")
+    for row in raw:
+        answer = row.get("answer") if isinstance(row, Mapping) else None
+        if answer is None and isinstance(row, Mapping):
+            continue
+        if not (
+            isinstance(answer, Mapping)
+            and answer.get("verdict") in ("accept", "reject")
+            and answer.get("by") in _ANSWER_BY
+            and isinstance(answer.get("at"), str)
+        ):
+            raise ValueError(f"{source}: drawing_departures has a row with a bad answer: {row!r}")
+    return raw
+
+
 def _assumption_rows(raw: object) -> list[AssumptionRow]:
     """The rows of a stored `assumptions` list that `assumption_text` accepts, deduplicated by
     canonical text with the first row kept. A row that is not `{role, text}` strings, or whose
@@ -317,6 +353,8 @@ def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[
         state["carve_out"] = _carve_record(state["carve_out"], source)
     if "assumptions" in state:
         state["assumptions"] = _assumption_rows(state["assumptions"])
+    if "drawing_departures" in state:
+        state["drawing_departures"] = _departure_rows(state["drawing_departures"], source)
     # The size records come back as `size_budget`'s own types; one that is not whole is
     # dropped, so a document older than the fields reads as "no size", never as zero.
     for key, record in (
@@ -631,6 +669,8 @@ def render(
     ]
     for name, text in ordered(state.get("sections", {})).items():
         parts.append(f"## {name}\n\n{text.strip()}\n")
+    if departures := drawing_section(state.get("drawing_departures")):
+        parts.append(f"## {DRAWING_DEPARTURES}\n\n{departures}\n")
     return "\n".join(parts)
 
 
@@ -756,4 +796,5 @@ def parse(raw: str, source: object = "document") -> dict[str, Any]:
     raw_frontmatter["sections"] = sections
     data = from_frontmatter(raw_frontmatter, source)
     data["description"] = data["sections"].pop(ORIGINAL, "")
+    data["sections"].pop(DRAWING_DEPARTURES, None)  # derived from the rows on every render
     return data
