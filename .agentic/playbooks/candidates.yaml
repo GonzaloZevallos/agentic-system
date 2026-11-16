@@ -2097,3 +2097,12 @@ candidates:
   - finding
   - return
   added_at: '2026-11-16T13:50:31.679+00:00'
+- slug: developer_integrator
+  category: spec-behaviour
+  lesson: When you add a mode to a shared flow, trace every exit and refusal outcome, not just the new mode's own. Check that each one reaches the right escalation message with real data, not an empty list.
+  confidence: low
+  seen_in:
+  - GH-859
+  sources:
+  - finding
+  added_at: '2026-11-16T17:18:21.587+00:00'
