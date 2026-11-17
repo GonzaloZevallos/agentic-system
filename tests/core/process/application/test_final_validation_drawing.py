@@ -241,10 +241,7 @@ async def test_a_rejected_departure_returns_citing_its_number_and_counts_the_fix
         "Drawing 3" in patch["findings"][0]["claim"] and "reject" in patch["findings"][0]["claim"]
     )
     assert [r["fix_passes"] for r in patch["drawing_departures"]] == [1]
-    assert (
-        patch["changes_requested"] == {"pm_final_validation_to_tech_lead": 1}
-        or patch["changes_requested"]
-    )
+    assert patch["changes_requested"]
     again = apply(held, patch)
     script = runner(lead([]), lead([check("departs")], [departure()]), pm=False)
     second, _ = await run(again, script, tmp_path, design())
