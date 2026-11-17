@@ -336,3 +336,17 @@ async def test_without_a_design_no_new_key_and_the_same_rendered_prompts(tmp_pat
         )
         (system,) = [c["system_prompt"] for c in script.calls if c["slug"] == role.slug]
         assert system.startswith(master.text) and "{{" not in system
+
+
+async def test_two_elements_of_one_image_leave_one_row_and_one_claim(tmp_path):
+    # `merge_checks` keeps one row per image (invariant 3): the second element a lead cites on
+    # the same image is not recorded, and the return still cites the one that was.
+    ui = lead(
+        [check("departs"), check("departs", element="Cancel")],
+        [departure("Save"), departure("Cancel")],
+    )
+    script = runner(lead([]), ui, pm=False)
+    patch, _ = await run(state(), script, tmp_path, design())
+    assert len(patch["drawing_checks"]["rows"]) == 1 and patch["drawing_checks"]["open"] == 1
+    claims = [f["claim"] for f in patch["findings"]]
+    assert len(claims) == 1 and "Save" in claims[0] and "Cancel" not in claims[0]
