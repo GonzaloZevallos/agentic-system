@@ -33,6 +33,7 @@ from agentic.core.process.domain.task import (
     first,
     last,
     merge,
+    sticky_true,
 )
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryDocuments, memory_ports
@@ -504,6 +505,9 @@ def value_for(key: str, branch: str, n: int):
         # One row per version, a function of the version alone: the last row seen wins, so a
         # row that differed by branch would depend on which branch landed first.
         return [{"version": n % 3 + 1, "head": "h", "jobs": [], "tests": ["aaaaaaaa"]}]
+    if reducer is sticky_true:
+        # A flag that only ever turns on: an OR, so the order of the branches never matters.
+        return n % 2 == 0
     if reducer is last:
         return f"{branch}:{key}:{n}"
     return f"{branch}:{key}:{n}"
@@ -530,6 +534,7 @@ def test_every_reducer_key_of_the_state_has_a_generator():
             add_tracker_actions,
             add_tracker_failures,
             last,
+            sticky_true,
         ), key
 
 
