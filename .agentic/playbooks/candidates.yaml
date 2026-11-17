@@ -2106,3 +2106,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-16T17:18:21.587+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters a key flow or a contract between modules (new reads, changed signatures), update the matching architecture doc page in the same change, and remove statements it makes false.
+  confidence: medium
+  seen_in:
+  - GH-860
+  sources:
+  - finding
+  added_at: '2026-11-17T03:04:06.173+00:00'
