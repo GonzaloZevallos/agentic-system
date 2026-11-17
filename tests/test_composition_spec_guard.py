@@ -101,7 +101,9 @@ def test_spec_intake_over_the_real_ports_records_the_spec_at_the_upstream_commit
 
     assert patch is not None and "escalated" not in patch
     assert patch["spec"]["path"] == PATH
-    assert patch["spec"]["commit"] == ports.workspace.upstream().sha == git(clone, "rev-parse", "HEAD")
+    assert (
+        patch["spec"]["commit"] == ports.workspace.upstream().sha == git(clone, "rev-parse", "HEAD")
+    )
     assert patch["spec"]["sha256"] == body_sha256(approved_text())
 
 
