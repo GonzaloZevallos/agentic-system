@@ -12,13 +12,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agentic import composition
 from agentic.core.knowledge.adapters.spec_validator import DomainSpecValidator
 from agentic.core.process.adapters.langgraph.graph import build_graph
-from agentic.core.process.application.ports import SpecUnreadable, Upstream
+from agentic.core.process.application.ports import IssueState, SpecUnreadable, Upstream
 from agentic.core.process.domain.spec_delivery import (
     body_sha256,
     render_approved_front_matter,
     render_draft_front_matter,
 )
 from tests.fakes import (
+    MemoryTracker,
     MemoryWorkspace,
     ScriptedRunner,
     answers,
@@ -115,9 +116,13 @@ def definition(**queues):
     return {**defaults, **queues}
 
 
-async def run(task, script, reader=None, owner=OWNER, tmp_path=None):
+async def run(task, script, reader=None, owner=OWNER, tmp_path=None, tracker=None):
     ports = memory_ports(
-        script, workspace=Workspace(), spec_reader=reader, spec_validator=DomainSpecValidator()
+        script,
+        workspace=Workspace(),
+        tracker=tracker,
+        spec_reader=reader,
+        spec_validator=DomainSpecValidator(),
     )
     ports.workspace.moved.update({MemoryWorkspace.ROOT / "GH-1", MemoryWorkspace.ROOT / "GH-1.api"})
     app = build_graph(lambda cfg: ports, arm_for=composition._arm_for).compile(
@@ -225,3 +230,22 @@ async def test_a_spec_line_without_an_owner_login_escalates_before_any_role(tmp_
     assert script.slugs == []
     assert final["escalation_class"] == "classification"
     assert final["spec_refusal"] == {"cause": "spec_unapproved", "detail": ["owner_login"]}
+
+
+async def test_a_light_path_task_without_a_spec_line_runs_the_same_roles(tmp_path):
+    light = classified()
+    light.structured_output.update(size="small", risk=[])
+    script = ScriptedRunner(pjm=[light], **technical())
+    tracker = MemoryTracker()
+    tracker.states[1] = IssueState("OPEN", "", None, None, ())
+
+    final = await run(PLAIN_TASK, script, Reader(), tmp_path=tmp_path, tracker=tracker)
+
+    assert final["path"] == "light"
+    assert script.slugs == [
+        "pjm",
+        "tech_lead_ephemeral",
+        "tech_lead",
+        "developer",
+        "tech_lead_review",
+    ]
