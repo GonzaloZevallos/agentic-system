@@ -23,7 +23,7 @@ from typing import Any, cast, get_args
 
 import yaml
 
-from . import size_budget, tracker_items
+from . import size_budget, spec_delivery, tracker_items
 from .landing_order import LANE_MERGES_MAX, YieldReason, instant
 from .legacy_names import rename_legacy_roles
 from .task import (
@@ -648,6 +648,9 @@ def render(
         **({"spec_cause": e} if (e := state.get("spec_cause")) else {}),
         # Why a spec was refused (GH-594), written only when set.
         **({"spec_refusal": e} if (e := state.get("spec_refusal")) else {}),
+        # The measurement record of a spec delivery (GH-594), kept once written even without
+        # `state["spec"]`; read only by `eval compare`.
+        **({"spec_delivery": True} if spec_delivery.recorded(state) else {}),
         **({"assumptions": e} if (e := state.get("assumptions")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         **({"fit_question": True} if state.get("fit_question") else {}),

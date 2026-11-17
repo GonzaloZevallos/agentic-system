@@ -316,7 +316,9 @@ el documento y el cuerpo del pull request son idénticos a los de antes.
 
 Las preguntas sobre la mecánica de la entrega (aterrizaje, CI, colisión de ADR) no llevan
 `spec_cause`: están eximidas en la lista de permitidos del test AST, cada una con su razón.
-Todo esto queda inerte hasta que la parte 4b ponga `state["spec"]`.
+La ruta está encendida: un issue con una línea `Spec:` va de `classify` directo a `plan`
+(`rules.definition_entry`), sin pasar por la definición, y `agentic eval compare` cuenta estas
+entregas en la línea `spec_delivery: n of m`.
 
 ### Pausar una corrida (GH-355, GH-466)
 

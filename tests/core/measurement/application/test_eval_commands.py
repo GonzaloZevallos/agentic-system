@@ -378,3 +378,25 @@ async def test_the_scorecard_section_is_identical_with_and_without_the_new_keys(
     assert plain != keyed
     assert plain.split(PATH_BLOCK)[0] == keyed.split(PATH_BLOCK)[0]
     assert "unrecorded=2" in plain and "unrecorded=0" in keyed
+
+
+@pytest.mark.anyio
+async def test_compare_prints_the_spec_delivery_line_after_the_excluded_line(root, capsys):
+    done = {"closed_at": "2026-10-20T14:00:00.000Z"}
+    write(root, "GH-1", "bl-a", spec_delivery=True, **done)
+    write(root, "GH-2", "bl-a", **done)
+    write(root, "GH-5", "bl-b", spec_delivery="yes", **done)
+    out = await compare(root, "bl-a", "bl-b", capsys)
+    first, second = out.split(PATH_BLOCK)[1:3]
+    assert first.index("excluded:") < first.index("spec_delivery: 1 of 2\n")
+    assert "spec_delivery: 0 of 1\n" in second
+    # Outside the verdict: nothing before the path block mentions it.
+    assert "spec_delivery" not in out.split(PATH_BLOCK)[0]
+
+
+@pytest.mark.anyio
+async def test_compare_prints_zero_of_zero_for_a_baseline_with_no_ended_task(root, capsys):
+    write(root, "GH-1", "bl-a", closed_at="2026-10-20T14:00:00.000Z")
+    write(root, "GH-5", "bl-b", status="developing")
+    out = await compare(root, "bl-a", "bl-b", capsys)
+    assert "spec_delivery: 0 of 0\n" in out

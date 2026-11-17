@@ -808,7 +808,9 @@ def escalation(
 def spec_delivery(state: TaskState) -> bool:
     """Whether the task is a spec delivery (GH-594): `state["spec"]` is non-empty. The graph's
     empty default (`{}`) is no spec. `escalation` reads the same signal, `bool(spec)`, so the
-    two cannot disagree: there is no second key such as a `spec_delivery` flag."""
+    two cannot disagree. A `spec_delivery` record also exists in the state and the document, for
+    measurement only: `document.render` writes it through `spec_delivery.recorded`, `parse` reads
+    it back, and no rule or node consults it."""
     return bool(state.get("spec"))
 
 

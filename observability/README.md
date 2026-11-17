@@ -138,6 +138,17 @@ muestre (la compuerta de ADR-0037 dio `unreachable`/`unfavorable` en tres de sus
 respuestas), así que el lector sigue siendo `agentic eval compare`, sobre los mismos
 documentos que este mismo módulo ya recorría.
 
+### El bloque informativo por ruta de `agentic eval compare` (GH-599, GH-594)
+
+Después del veredicto del scorecard, `agentic eval compare` imprime por línea de base un
+bloque informativo: el tiempo de ciclo por `initial_path`, las promociones por tipo, las tareas
+excluidas por motivo y la línea `spec_delivery: n of m`, con `n` las tareas terminadas que
+vinieron de una especificación y `m` las tareas terminadas. Ninguna de estas líneas entra en el
+veredicto ni la lee nada que decida. La clave `spec_delivery` del documento de tarea es un
+registro, no una señal: no hay atributo de span, métrica ni etiqueta nueva. La cifra es un
+piso: los documentos escritos antes de este cambio no llevan la clave, así que `0 of m` sobre
+una línea de base vieja quiere decir «no registrado», no «ninguna».
+
 ### Qué se pierde, dicho en ADR-0037
 
 - **La lectura agregada de 13 meses** que sostenía Prometheus: `observability/langfuse/
