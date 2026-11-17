@@ -211,7 +211,7 @@ def test_an_unstarted_pass_is_run_by_land_on_its_own_entry(monkeypatch):
         state = ports.documents.load("GH-5")
         seen.append(len(state["landing"]))
         marked = landing_rules.with_cost_base(
-            state["landing"], context.head, context.step.kind, state["cost_usd"]
+            state["landing"], context.head, context.step.kind, state["cost_usd"], 0
         )
         ports.documents.save({**state, "landing": marked})
 

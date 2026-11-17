@@ -192,7 +192,11 @@ def _reopened(
     and resumes the task."""
     reopened = reopen(state, [unit], reason, CROSSCUT, status)
     marked = landing.with_cost_base(
-        all_entries(state), context.head, context.step.kind, state.get("cost_usd", 0.0)
+        all_entries(state),
+        context.head,
+        context.step.kind,
+        state.get("cost_usd", 0.0),
+        len(state.get("runs", [])),
     )
     context.ports.documents.save({**reopened, "landing": marked})
     record_landing(context, marked)

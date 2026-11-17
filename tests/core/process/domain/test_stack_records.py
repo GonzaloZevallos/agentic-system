@@ -3,6 +3,7 @@ restack row a closed `sync_master` writes and the pure views of `stack_parent`."
 
 from __future__ import annotations
 
+from agentic.core.process.domain import landing
 from agentic.core.process.domain.task import (
     REDUCERS,
     StackPause,
@@ -76,3 +77,119 @@ def test_apply_and_delta_fold_the_new_keys_through_their_reducers():
     assert patch["stack_pauses"] == [_pause(resumed_at="t9")]
     assert apply(before, patch) == after
     assert delta(after, after) == {}
+
+
+# ---- runs_base and the restack row --------------------------------------------------------
+
+
+def _closed(**more) -> dict:
+    return {
+        "head": HEAD,
+        "step": "sync_master",
+        "refusal": "merge_conflict",
+        "upstream": UP,
+        "cost_usd": 2.5,
+        "runs_base": 1,
+        "resolved_at": "t5",
+        **more,
+    }
+
+
+def _run(tokens: dict[str, int] | None = None, **more) -> dict:
+    return {"role": "Developer", **({"tokens": tokens} if tokens is not None else {}), **more}
+
+
+def test_with_cost_base_writes_both_bases_on_the_same_entry_in_one_call():
+    entries = [{"head": HEAD, "step": "sync_master"}]
+
+    (out,) = landing.with_cost_base(entries, HEAD, "sync_master", 4.0, 3)
+
+    assert (out["cost_base"], out["runs_base"]) == (4.0, 3)
+    assert landing.with_cost_base(entries, HEAD, "fix", 4.0, 3) == entries
+
+
+def test_runs_base_survives_an_entry_of_round_trip():
+    entry = {"head": HEAD, "step": "sync_master", "cost_base": 1.0, "runs_base": 4}
+
+    assert landing.entry_of(landing.entry_of(entry))["runs_base"] == 4
+    assert "runs_base" not in landing.entry_of({**entry, "runs_base": True})
+    assert "runs_base" not in landing.entry_of({**entry, "runs_base": "4"})
+    assert "runs_base" not in landing.entry_of({**entry, "runs_base": 4.0})
+
+
+def test_a_conflicting_restack_records_conflict_with_its_cost():
+    row = landing.restack_row(_closed(), [_run(), _run({"input": 3})], True)
+
+    assert row == {
+        "at": "t5",
+        "upstream": UP,
+        "conflict": True,
+        "cost_usd": 2.5,
+        "tokens": {"input": 3},
+    }
+
+
+def test_a_failed_checks_refusal_is_a_conflict_and_any_other_is_not():
+    assert landing.restack_row(_closed(refusal="checks_failed"), [], True)["conflict"] is True
+    assert landing.restack_row(_closed(refusal="attempts_exhausted"), [], True)["conflict"] is False
+    assert landing.restack_row(_closed(refusal=None), [], True)["conflict"] is False
+
+
+def test_an_unsynced_close_writes_a_row_stamped_closed_at():
+    entry = {k: v for k, v in _closed().items() if k != "resolved_at"}
+
+    row = landing.restack_row({**entry, "closed_at": "t6", "lacks": UP}, [], True)
+
+    assert row is not None and row["at"] == "t6"
+
+
+def test_no_row_unless_stacked_a_sync_master_and_closed():
+    assert landing.restack_row(_closed(), [], False) is None
+    assert landing.restack_row(_closed(step="fix"), [], True) is None
+    assert (
+        landing.restack_row({k: v for k, v in _closed().items() if k != "resolved_at"}, [], True)
+        is None
+    )
+    assert landing.restack_row({"step": "sync_master", "resolved_at": "t"}, [], True) is not None
+
+
+def test_a_run_inside_the_window_counts_in_tokens_and_a_failed_attempt_only_in_cost():
+    runs = [_run({"input": 99}), _run(), _run({"input": 4, "output": 1})]
+
+    row = landing.restack_row(_closed(cost_usd=7.0), runs, True)
+
+    assert row["tokens"] == {"input": 4, "output": 1}  # the failure left no run: cost only
+    assert row["cost_usd"] == 7.0
+
+
+def test_tokens_window_edges():
+    runs = [_run({"input": 1}), _run({"input": 2})]
+
+    assert landing.restack_row(_closed(runs_base=2), runs, True)["tokens"] == {}
+    assert "tokens" not in landing.restack_row(_closed(runs_base=3), runs, True)
+    assert "tokens" not in landing.restack_row(_closed(runs_base=-1), runs, True)
+    absent = {k: v for k, v in _closed().items() if k != "runs_base"}
+    assert "tokens" not in landing.restack_row(absent, runs, True)
+
+
+def test_the_runs_slice_is_stable_when_runs_only_grows():
+    base = [_run({"input": 1}), _run({"input": 2})]
+    later = [*base, _run({"input": 10})]
+
+    first = landing.restack_row(_closed(runs_base=1), base, True)
+    restarted = landing.restack_row(_closed(runs_base=1), base, True)
+
+    assert first == restarted and first["tokens"] == {"input": 2}
+    assert landing.restack_row(_closed(runs_base=1), later, True)["tokens"] == {"input": 12}
+
+
+def test_restack_close_gives_a_row_only_for_an_entry_that_closed_in_this_step():
+    opened = [{"head": HEAD, "step": "sync_master", "upstream": UP}]
+    closed = [_closed()]
+    state = {"runs": [_run(), _run({"input": 3})]}
+
+    assert landing.restack_close(opened, closed, state, True)["tokens"] == {"input": 3}
+    assert landing.restack_close(closed, closed, state, True) is None
+    assert landing.restack_close([], closed, state, True) is None
+    assert landing.restack_close(opened, opened, state, True) is None
+    assert landing.restack_close(opened, closed, state, False) is None
