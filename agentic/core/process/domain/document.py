@@ -528,6 +528,11 @@ def render(
         # reviewed before it is byte-identical to one written before; parsed back under the
         # same name. Nothing reads it to decide.
         **({"review_scopes": r} if (r := state.get("review_scopes")) else {}),
+        # The restack cost and the parent waits of a stacked task (GH-897): written only when
+        # there is a row, so a document that was never stacked is byte-identical to one written
+        # before; parsed back under the same names, nothing reads them to decide.
+        **({"stack_restacks": r} if (r := state.get("stack_restacks")) else {}),
+        **({"stack_pauses": r} if (r := state.get("stack_pauses")) else {}),
         # What reading the CI logs of a red `full_checks` run gave (GH-741): hashes and closed
         # causes only, written only when there is a row, parsed back under the same name.
         **({"full_checks_reads": r} if (r := state.get("full_checks_reads")) else {}),

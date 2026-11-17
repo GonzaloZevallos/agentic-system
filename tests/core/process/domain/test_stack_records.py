@@ -3,7 +3,9 @@ restack row a closed `sync_master` writes and the pure views of `stack_parent`."
 
 from __future__ import annotations
 
-from agentic.core.process.domain import landing
+from agentic.core.process.domain import landing, stacking
+from agentic.core.process.domain.document import parse, render
+from agentic.core.process.domain.pull_request import stacked_line
 from agentic.core.process.domain.task import (
     REDUCERS,
     StackPause,
@@ -193,3 +195,52 @@ def test_restack_close_gives_a_row_only_for_an_entry_that_closed_in_this_step():
     assert landing.restack_close([], closed, state, True) is None
     assert landing.restack_close(opened, opened, state, True) is None
     assert landing.restack_close(opened, closed, state, False) is None
+
+
+# ---- the views of stack_parent and the PR line --------------------------------------------
+
+PARENT = {"issue": 7, "task_id": "GH-7", "head": HEAD, "started_at": "2026-11-17T00:00:00+00:00"}
+
+
+def test_stacked_is_true_for_every_record_but_absent_and_stacked_on_only_for_a_readable_one():
+    assert not stacking.stacked({"id": "GH-1"})
+    assert stacking.stacked({"stack_parent": PARENT})
+    assert stacking.stacked({"stack_parent": "junk"})  # unreadable still gets rows
+    assert stacking.stacked({"stack_parent": None})
+    assert stacking.stacked_on({"id": "GH-1"}) is None
+    assert stacking.stacked_on({"stack_parent": PARENT}) == 7
+    assert stacking.stacked_on({"stack_parent": {**PARENT, "issue": True}}) is None
+    assert stacking.stacked_on({"stack_parent": "junk"}) is None
+
+
+def test_the_stacked_line_names_the_parent_or_is_empty():
+    assert stacked_line(7) == "Stacked on #7: merges only after it."
+    assert stacked_line(None) == ""
+
+
+# ---- the document ---------------------------------------------------------------------------
+
+
+def _doc(**more) -> dict:
+    return {"id": "GH-1", "title": "t", "description": "d", **more}
+
+
+def test_both_keys_and_a_runs_base_entry_round_trip_through_the_document():
+    state = _doc(
+        stack_restacks=[_restack(tokens={"input": 2})],
+        stack_pauses=[_pause(resumed_at="t9")],
+        landing=[{"head": HEAD, "step": "sync_master", "cost_base": 1.0, "runs_base": 3}],
+    )
+
+    parsed = parse(render(state))
+
+    assert parsed["stack_restacks"] == state["stack_restacks"]
+    assert parsed["stack_pauses"] == state["stack_pauses"]
+    assert parsed["landing"][0]["runs_base"] == 3
+
+
+def test_a_state_without_the_keys_renders_without_them():
+    text = render(_doc(stack_restacks=[], stack_pauses=[]))
+
+    assert "stack_restacks" not in text and "stack_pauses" not in text
+    assert text == render(_doc())
