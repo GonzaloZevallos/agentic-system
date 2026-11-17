@@ -282,7 +282,13 @@ PRECEDENCE = "a rule dated after the ADR wins and the task leaves an `outside` f
 
 def rendered(role: roles.Role, tmp_path: Path) -> str:
     raw, source = FilesystemPrompts(tmp_path).raw(role)
-    values = {**PLACEHOLDERS, "max_changes": 2, "max_turns": role.max_turns, "flags": "- none"}
+    values = {
+        **PLACEHOLDERS,
+        "max_changes": 2,
+        "max_turns": role.max_turns,
+        "flags": "- none",
+        "drawing_rule": "",
+    }
     return " ".join(roles.render(raw, source, **values).text.split())
 
 
