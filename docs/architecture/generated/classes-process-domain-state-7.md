@@ -41,9 +41,9 @@ classDiagram
     class task__PlanSettledRow["PlanSettledRow"]
     class task__PullRequest["PullRequest"]
     class task__PullRequestCommit["PullRequestCommit"]
+    class task__RefusalNoted["RefusalNoted"]
     class task__ReleasePatch["ReleasePatch"]
     class task__RestartPending["RestartPending"]
-    class task__RestartSettledRow["RestartSettledRow"]
 ```
 
 ## Relaciones con otras páginas

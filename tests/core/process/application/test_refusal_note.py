@@ -16,7 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from agentic.core.process.application import landing_plan, merge, refusal_note
-from agentic.core.process.domain import landing, rules
+from agentic.core.process.domain import landing, rules, task
+from agentic.core.process.domain.task import TrackerFailure
 
 ROOT = Path(__file__).resolve().parents[4]
 HEAD = "a" * 40
@@ -270,3 +271,89 @@ def test_the_module_is_under_the_type_checker():
     config = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
     assert "agentic/core/process/application/refusal_note.py" in config["tool"]["mypy"]["files"]
+
+
+# --- note_refusal (routing, part 2 of the move) ---
+
+
+class _SealedDocuments:
+    """Every method raises: `note_refusal` must never reach the document."""
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"note_refusal touched documents.{name}")
+
+
+def _noted(reason, facts, document=None, bodies=(), failure=None):
+    step = landing_plan.step_for(document or {}, reason, facts, turn="head")
+    tracker = _Tracker()
+    if failure is not None:
+        tracker.note = lambda task_id, text: tracker.notes.append(text) or failure
+    ports = SimpleNamespace(tracker=tracker, documents=_SealedDocuments())
+    result = refusal_note.note_refusal(ports, "GH-5", HEAD, reason, facts, step, bodies)
+    return result, tracker.notes
+
+
+@pytest.mark.parametrize("name", GOLDEN)
+def test_note_refusal_says_each_poller_noted_refusal_as_the_verb_does(name):
+    reason, keywords, expected = GOLDEN[name]
+
+    assert _noted(reason, _facts(**keywords)) == (None, [expected])
+
+
+@pytest.mark.parametrize("document", ROWS)
+@pytest.mark.parametrize("name", STEPPED)
+def test_note_refusal_follows_the_step_and_never_posts_a_landing_line(name, document):
+    reason, keywords, with_closing = GOLDEN[name]
+    kind, _ = ROWS[document]
+
+    _, notes = _noted(reason, _facts(**keywords), DOCUMENTS[document])
+
+    assert notes == [with_closing if kind == "none" else STEPPED[name]]
+    assert not any(note.startswith("Landing:") for note in notes)
+
+
+def test_note_refusal_skips_when_the_last_refusal_has_the_same_first_line():
+    bodies = ["hello", f"{FIRST}perf_unverified\n\nverdict none"]
+
+    assert _noted("perf_unverified", _facts(), bodies=bodies) == (None, [])
+
+
+def test_note_refusal_posts_when_only_an_earlier_refusal_matches():
+    bodies = [f"{FIRST}perf_unverified\n\nverdict none", f"{FIRST}criteria_unreadable"]
+
+    assert refusal_note.said(bodies, HEAD, "perf_unverified")
+    _, notes = _noted("perf_unverified", _facts(), bodies=bodies)
+    assert notes == [GOLDEN["perf_none"][2]]
+
+
+def test_note_refusal_returns_the_failure_of_the_note():
+    failure = TrackerFailure("comment", "timed_out", "2026-11-17T00:00:00+00:00")
+
+    assert _noted("perf_unverified", _facts(), failure=failure)[0] == failure
+
+
+def test_a_failed_note_through_the_verb_is_recorded_as_a_tracker_failure():
+    failure = TrackerFailure("comment", "timed_out", "2026-11-17T00:00:00+00:00")
+    closures = []
+    documents = _Documents({})
+    documents.record_closure = lambda task_id, fields: closures.append(fields)
+    tracker = _Tracker()
+    tracker.note = lambda task_id, text: tracker.notes.append(text) or failure
+    ports = SimpleNamespace(tracker=tracker, documents=documents)
+
+    merge._refuse("GH-5", HEAD, "perf_unverified", ports, facts=_facts())
+
+    assert tracker.notes == [GOLDEN["perf_none"][2]]
+    assert closures == [
+        {"tracker_failures": [{"target": "comment", "cls": "timed_out", "at": failure.at}]}
+    ]
+
+
+def test_the_refusal_noted_record_is_the_head_the_reason_and_the_instant():
+    at = "2026-11-17T00:00:00+00:00"
+
+    assert task.refusal_noted_record("h", "perf_unverified", at) == {
+        "head": "h",
+        "reason": "perf_unverified",
+        "at": at,
+    }

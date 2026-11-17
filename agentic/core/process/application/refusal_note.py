@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 from ..domain import rules
 from ..domain.landing import LandingStep
+from ..domain.task import TrackerFailure
 from .ports import IssueComment, Ports
 
 # The comment the automatic merge posts (GH-178, ADR-0045), registered into
@@ -81,3 +82,34 @@ def said(bodies: Sequence[str], head: str, reason: str) -> bool:
     choose one of the two rules and say which."""
     first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
     return any(body.splitlines()[:1] == [first] for body in bodies)
+
+
+def note_refusal(
+    ports: Ports,
+    task_id: str,
+    head: str,
+    reason: rules.MergeRefusal,
+    facts: rules.MergeFacts,
+    step: LandingStep | None,
+    bodies: Sequence[str],
+) -> TrackerFailure | None:
+    """Comments one of the `POLLER_NOTED` refusals with the words the merge verb always used
+    and returns the failure of the post, if any (the caller records it).
+
+    The landing `step` is the caller's: this module never reads the task document and never
+    announces a `Landing:` line. It posts unless the LAST `Auto-merge refused:` body already
+    opens with the same line, the verb's rule and not `said`'s."""
+    first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
+    closing = closing_for(step)
+    evidence = ""
+    if reason == "perf_unverified":
+        evidence = _perf_evidence(facts)
+    elif reason == "criteria_over_cap":
+        evidence = _criteria_evidence(facts)
+    elif reason in STACK_EVIDENCE:
+        evidence = STACK_EVIDENCE[reason]
+    text = "\n\n".join(part for part in (first, evidence, closing) if part)
+    refused = [body for body in bodies if body.startswith(AUTO_MERGE_REFUSED)]
+    if refused and refused[-1].splitlines()[0] == first:
+        return None
+    return ports.tracker.note(task_id, text)
