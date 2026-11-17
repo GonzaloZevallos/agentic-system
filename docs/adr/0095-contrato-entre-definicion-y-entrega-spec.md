@@ -43,10 +43,6 @@ solo por su marcador `GH-594 parte N`.
 
 ### Decidido, aún sin código
 
-- **La línea `Spec:`**, con un `#<rebanada>` opcional, que dice a la entrega qué Spec leer y qué
-  parte construir: GH-594 parte 4a (parseo y ruteo puro) y GH-594 parte 4b (la ruta).
-- **Supuestos en lugar de preguntas** en una entrega con Spec, con `spec_cause` (`contradiction`,
-  `conflict`, `data_loss`): GH-594 parte 2a y GH-594 parte 2b.
 - **Fallback** cuando una feature no tiene Spec, con aprobación del dueño antes de construir:
   GH-594 parte 5c.
 
@@ -55,12 +51,12 @@ solo por su marcador `GH-594 parte N`.
 | regla | aplicada por | parte | vigente hoy |
 | --- | --- | --- | --- |
 | 1a formato y hash | `spec.py`, `spec_delivery.py` | GH-594 parte 1a | sí |
-| 1b lectura y forma de ruta | `spec_reader.py`, `spec_delivery.py`, `ports.py` | GH-594 parte 1b | sí, sin llamador |
-| 2a supuestos y `spec_cause` | — | GH-594 parte 2a | no |
-| 2b campos de supuestos en los esquemas de rol | — | GH-594 parte 2b | no |
+| 1b lectura y forma de ruta | `spec_reader.py`, `spec_delivery.py`, `ports.py` | GH-594 parte 1b | sí |
+| 2a supuestos y `spec_cause` | `spec_assumptions.py` (`schema_for`, `assumption_rows`, llamadas por `run_role.py`), `rules.escalation` (`spec_cause`) | GH-594 parte 2a | sí |
+| 2b campos de supuestos en los esquemas de rol | `spec_conflict` en `schemas.py`, leído por `plan.py` (`spec_assumptions.conflict_step`) y por `interview.py` | GH-594 parte 2b | sí |
 | 3 revisión de Tech Writer sobre la Spec | — | GH-594 parte 3 | no |
-| 4a parseo de la línea `Spec:` y ruteo puro | — | GH-594 parte 4a | no |
-| 4b la ruta | — | GH-594 parte 4b | no |
+| 4a parseo de la línea `Spec:` y ruteo puro | `spec_delivery.parse_spec_line`, `spec_delivery.body_source`, `rules.spec_delivery` | GH-594 parte 4a | sí |
+| 4b la ruta | `classify.py:spec_intake`, `spec_guard.py`, `review.py` (`spec-scope`), `landing_plan.py` (`spec_carry_ok`), `agentic/composition.py:_ports` | GH-594 parte 4b | sí |
 | 4c eval compare y README | — | GH-594 parte 4c | no |
 | 5a Spec borrador en la cadena de definición | — | GH-594 parte 5a | no |
 | 5b reglas de aprobación | — | GH-594 parte 5b | no |
@@ -68,8 +64,11 @@ solo por su marcador `GH-594 parte N`.
 
 ### Qué rige hoy, en palabras llanas
 
-Hasta que salga GH-594 parte 4b, master no enruta por `Spec:`: el lector existe, pero nadie lo
-llama. Hasta que salga GH-594 parte 5c, una feature se construye sin Spec, como hoy.
+Master ya enruta por `Spec:`: un issue que trae la línea se entrega desde la Spec aprobada, sin
+definición, y uno que no la trae no cambia (la entrada «Entrega desde Spec» de
+`agentic/core/process/CONTEXT.md` lo detalla). Sigue en `no` la revisión de Tech Writer sobre la
+Spec (fila 3), el `eval compare` y el README (4c) y la Spec borrador, las reglas de aprobación y el
+fallback (5a, 5b y 5c). Hasta que salga GH-594 parte 5c, una feature se construye sin Spec, como hoy.
 
 ## Consecuencias
 
@@ -78,8 +77,8 @@ llama. Hasta que salga GH-594 parte 5c, una feature se construye sin Spec, como 
   objeto que se lee.
 - El segundo chequeo, sobre los bytes ya cargados (`len(stdout) > SPEC_MAX_BYTES`), es defensa en
   profundidad.
-- Cuando salgan GH-594 parte 4b y GH-594 parte 5c, la tabla y el párrafo «Qué rige hoy» dejan de
-  ser ciertos y se actualizan en esa parte.
+- Cuando salga GH-594 parte 5c, la tabla y el párrafo «Qué rige hoy» dejan de ser ciertos y se
+  actualizan en esa parte.
 
 ## Adenda (GH-809): la línea `Spec:` se lee del issue al reanudar
 
