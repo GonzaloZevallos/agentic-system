@@ -56,8 +56,8 @@ sequenceDiagram
    `escalated`, o su última escalación no tiene `released_at`) la retención no actúa, porque el
    aterrizaje la libera por el rechazo que la causó.
    Tres rechazos son de una tarea apilada (GH-855, GH-859; `agentic/core/process/domain/stacking.py:refusal`
-   es su única tabla de verdad, y hoy ninguna construcción de producción pasa hechos de apilado,
-   así que no cambia ninguna decisión): `stack_parent_unmerged` (el padre no llegó al upstream, o
+   es su única tabla de verdad; `stacking.facts_of` arma los hechos sin leer y no da nada para un
+   documento sin `stack_parent`, que no hace ninguna lectura y decide como siempre): `stack_parent_unmerged` (el padre no llegó al upstream, o
    no se pudo leer la ascendencia) da `wait`, sin tope propio: una Cabeza lenta cede por
    `HEAD_BUDGET`; `stack_restack_due` (el padre aterrizó y el hijo no tiene su cabeza) da
    `sync_master`, un solo merge de master, nunca un rebase; `stack_base_orphaned` (registro ilegible,
@@ -68,8 +68,20 @@ sequenceDiagram
    `escalate`, con un texto fijo por rechazo (`landing.py:STACK_ESCALATION`), sin palabras del
    padre, del issue ni del registro. Tampoco corta un slice: `slice_or_restart` responde
    `no_clean_slice` sin mirar ninguna unidad, y `slice_facts` de una tarea apilada nunca mergea.
-   La liberación de ese escalado por restack agotado llega con la parte 1b; mientras tanto la
+   La liberación de ese escalado por restack agotado llega con una parte posterior; mientras tanto la
    salida es mergear a mano o relanzar.
+   Los hechos del hijo apilado los lee el poller (GH-860): `agentic/core/process/application/poll.py:assess_merge`
+   llama a `stack_facts` (`agentic/core/process/application/stack_facts.py`) solo cuando el par es
+   aterrizable (el veredicto no es `unlandable`), todo rechazo anterior a la fila de apilado está
+   descartado y `rules.stack_probe_wanted` lo pide; lee el estado del issue del padre en el tracker
+   y la ascendencia en git, tras comprobar que ambos objetos existen (un objeto ausente o un error
+   de git queda desconocido, nunca `False`), y decide de nuevo. Las lecturas se memorizan en un
+   `StackMemo` sin valor por defecto, que `assess_merge`, `evaluate_landing_order` y
+   `gather_merges` reciben como parámetro: uno por ronda en `poll.py:run_once`, de modo que los
+   hijos de un mismo padre comparten la lectura, y uno nuevo por llamada en `landing.py:land`
+   (una para `_note_order`, otra para `_land`) y en `resume.py`. El verbo `agentic merge` aún no
+   lee esos hechos y rechaza un registro con hechos sin leer como `stack_parent_unmerged`; su
+   lectura llega con #876.
 2. **El poller lanza `land`.** `agentic/core/process/application/poll.py:gather_merges`
    reúne también los candidatos a aterrizar, pero solo los de la Cabeza del orden de aterrizaje
    de cada producto. `agentic/core/process/application/poll.py:evaluate_landing_order` (solo

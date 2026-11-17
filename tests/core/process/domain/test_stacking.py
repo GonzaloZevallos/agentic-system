@@ -171,3 +171,43 @@ def test_the_placeholder_of_the_probe_is_an_unmerged_parent_whatever_the_conflic
     assert placeholder.record is not None
     for conflicts in (None, False, True):
         assert refusal(placeholder, conflicts) == "stack_parent_unmerged"
+
+
+# --- the builder of unread facts and the parent state (GH-860) ---------------------------------
+
+
+def test_facts_of_a_document_without_the_key_is_none():
+    assert stacking.facts_of({"status": "x"}) is None
+
+
+def test_facts_of_a_readable_record_is_every_fact_unknown():
+    record = _record()
+    assert stacking.facts_of({"stack_parent": record}) == StackFacts(
+        record=StackParent(**record),
+        parent_state="unknown",
+        parent_in_upstream=None,
+        child_has_parent=None,
+    )
+
+
+@pytest.mark.parametrize("value", [None, "GH-7", _record(head="short"), _record(issue=True)])
+def test_facts_of_an_unreadable_record_has_no_record(value):
+    assert stacking.facts_of({"stack_parent": value}) == StackFacts(
+        record=None, parent_state="unknown", parent_in_upstream=None, child_has_parent=None
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "closing", "expected"),
+    [
+        *[("OPEN", c, "open") for c in ("contains", "excludes", "none", "unread")],
+        ("CLOSED", "contains", "unknown"),
+        ("CLOSED", "excludes", "closed"),
+        ("CLOSED", "none", "closed"),
+        ("CLOSED", "unread", "unknown"),
+        *[("closed", c, "unknown") for c in ("contains", "excludes", "none", "unread")],
+        *[("unknown", c, "unknown") for c in ("contains", "excludes", "none", "unread")],
+    ],
+)
+def test_parent_state_of(state, closing, expected):
+    assert stacking.parent_state_of(state, closing) == expected

@@ -10,6 +10,7 @@ import dataclasses
 from agentic.core.process.application import landing_plan, poll
 from agentic.core.process.application.ports import IssueComment, IssueState, RawResult
 from agentic.core.process.application.resume import state_from
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import pull_request
 from agentic.core.process.domain.ci import CiCheck
 from agentic.core.process.domain.landing import LandingStep
@@ -238,11 +239,14 @@ def test_a_pull_request_closed_by_an_open_fix_is_not_an_abandoned_result(tmp_pat
     ports = _world()
     ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
     raw = state_from(_doc(ports))
-    assert isinstance(poll.assess_merge(ports, "GH-5", raw, 5, None, MASTER), poll.Abandoned)
+    assert isinstance(
+        poll.assess_merge(ports, "GH-5", raw, 5, None, MASTER, cfg=None, memo=StackMemo()),
+        poll.Abandoned,
+    )
 
     _open_fix(ports)
     raw = state_from(_doc(ports))
-    found = poll.assess_merge(ports, "GH-5", raw, 5, None, MASTER)
+    found = poll.assess_merge(ports, "GH-5", raw, 5, None, MASTER, cfg=None, memo=StackMemo())
 
     assert not isinstance(found, poll.Abandoned)
     assert found.facts.pr_state == "OPEN"

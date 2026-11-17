@@ -184,27 +184,47 @@ def test_the_stack_probe_is_wanted_only_when_the_decision_reaches_the_stacking_c
 # --- every production builder passes `stack=` ------------------------------------------------
 
 
-def _merge_facts_calls_without_stack(root: Path) -> list[str]:
-    missing: list[str] = []
+def _callee(func: ast.expr) -> str | None:
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+
+
+def _merge_facts_calls_off_contract(root: Path) -> list[str]:
+    """Every `MergeFacts(...)` call without `stack=facts_of(...)`, and every import that aliases
+    the class (a call under another name would escape the scan)."""
+    off: list[str] = []
     for path in sorted(root.rglob("*.py")):
+        where = path.relative_to(root.parent)
         for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
-            if not isinstance(node, ast.Call):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == "MergeFacts" and alias.asname for alias in node.names
+            ):
+                off.append(f"{where}:{node.lineno}")
+            if not isinstance(node, ast.Call) or _callee(node.func) != "MergeFacts":
                 continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-            if name == "MergeFacts" and "stack" not in {kw.arg for kw in node.keywords}:
-                missing.append(f"{path.relative_to(root.parent)}:{node.lineno}")
-    return missing
+            stack = {kw.arg: kw.value for kw in node.keywords}.get("stack")
+            if not (isinstance(stack, ast.Call) and _callee(stack.func) == "facts_of"):
+                off.append(f"{where}:{node.lineno}")
+    return off
 
 
-def test_every_production_merge_facts_call_passes_stack():
-    assert _merge_facts_calls_without_stack(Path(rules.__file__).parents[3]) == []
+def test_every_production_merge_facts_call_passes_stack_from_facts_of():
+    assert _merge_facts_calls_off_contract(Path(rules.__file__).parents[3]) == []
 
 
-def test_the_scan_rejects_a_call_without_stack(tmp_path):
-    """The scan is only worth its name if a builder that forgets `stack=` fails it."""
+def test_the_scan_rejects_a_call_without_stack_or_with_anything_but_facts_of(tmp_path):
+    """The scan is only worth its name if a builder that forgets `stack=`, passes the literal
+    `None` or aliases the class fails it."""
     package = tmp_path / "agentic"
     package.mkdir()
     (package / "builder.py").write_text("facts = MergeFacts(task_id='x')\n")
-    (package / "ok.py").write_text("facts = rules.MergeFacts(task_id='x', stack=None)\n")
-    assert _merge_facts_calls_without_stack(package) == ["agentic/builder.py:1"]
+    (package / "none.py").write_text("facts = rules.MergeFacts(task_id='x', stack=None)\n")
+    (package / "alias.py").write_text("from x import MergeFacts as MF\n")
+    (package / "ok.py").write_text(
+        "facts = rules.MergeFacts(task_id='x', stack=stacking.facts_of(raw))\n"
+        "more = MergeFacts(stack=facts_of(raw))\n"
+    )
+    assert _merge_facts_calls_off_contract(package) == [
+        "agentic/alias.py:1",
+        "agentic/builder.py:1",
+        "agentic/none.py:1",
+    ]

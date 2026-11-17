@@ -20,6 +20,7 @@ from itertools import chain, combinations
 
 from agentic.core.process.application import adr_collision, poll
 from agentic.core.process.application.ports import AddedAdr
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import adr_numbers
 from agentic.core.process.domain.adr_dated import Undated
 from agentic.core.process.domain.adr_numbers import Ambiguous, OwnAdr, OwnLine, Renaming
@@ -36,7 +37,14 @@ def _tick(ports, *, status: str = "ready_for_review", state: str = "OPEN", head:
     raw = ports.documents.load("GH-5")
     assert raw is not None
     return poll.assess_merge(
-        ports, "GH-5", {**raw, "status": status}, 5, frozenset(), ports.workspace.master_sha
+        ports,
+        "GH-5",
+        {**raw, "status": status},
+        5,
+        frozenset(),
+        ports.workspace.master_sha,
+        cfg=None,
+        memo=StackMemo(),
     )
 
 

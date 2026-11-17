@@ -13,6 +13,7 @@ from pathlib import Path
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application import merge, poll
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import exempt_queue, rules
 from tests.core.process.application.test_merge_ci_run import _world
 from tests.core.process.application.test_poll import _cfg
@@ -55,7 +56,7 @@ def _plan(ports, now: datetime, master: str = MASTER) -> rules.PollPlan:
     """What the next round decides: `gather_merges` splits the backoff from the merges."""
     backed_off: list[int] = []
     merges = poll.gather_merges(
-        ports, frozenset(), master, _Locks(), [], now=now, backed_off=backed_off
+        ports, frozenset(), master, _Locks(), [], now=now, backed_off=backed_off, memo=StackMemo()
     )
     return rules.poll_plan(
         closes=[],
@@ -115,6 +116,7 @@ def test_the_refusal_is_not_honoured_once_the_head_moves(tmp_path):
         lines,
         now=NOW + timedelta(minutes=5),
         backed_off=backed_off,
+        memo=StackMemo(),
     )
 
     # The new head is decided afresh (here it waits on its own CI), never held by the old row.

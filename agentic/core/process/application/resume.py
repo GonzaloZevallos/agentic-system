@@ -54,6 +54,7 @@ from .poll import (
 )
 from .ports import GitError, Ports, Workspace
 from .run_role import task_cap
+from .stack_facts import StackMemo
 from .tracker_only import TRACKER_WORK
 
 # How the system's comment on a resume starts.
@@ -372,7 +373,9 @@ def _landing_owns_line(task_id: str, ports: Ports, cfg: Configuration, state: Ta
     if master is None:
         return land
     try:
-        assessed = assess_merge(ports, task_id, state, number, frozenset(), master)
+        assessed = assess_merge(
+            ports, task_id, state, number, frozenset(), master, cfg=cfg, memo=StackMemo()
+        )
     except StackUnreadable:
         return land
     if isinstance(assessed, Abandoned) or assessed.decision.reason is None:

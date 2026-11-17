@@ -17,6 +17,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
     Upstream,
 )
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import ci, document, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.landing import LandingStepKind
@@ -83,7 +84,7 @@ def _ready(ports, number: int, checks: bool = True, **more) -> None:
 
 def _merges(ports, eval_set=frozenset(), master: str | None = MASTER, lock=None):
     lines: list[str] = []
-    found = poll.gather_merges(ports, eval_set, master, lock or _Locks(), lines)
+    found = poll.gather_merges(ports, eval_set, master, lock or _Locks(), lines, memo=StackMemo())
     return found, lines
 
 
@@ -832,7 +833,7 @@ def _stuck(**entry):
 
 def _lands(ports, now):
     lands: list[rules.LandCandidate] = []
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, now=now)
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, now=now, memo=StackMemo())
     return [c.issue for c in lands]
 
 
@@ -868,7 +869,14 @@ def test_an_unstarted_pass_of_a_locked_task_enqueues_nothing():
     lands: list[rules.LandCandidate] = []
     now = datetime(2026, 10, 14, tzinfo=UTC)
     poll.gather_merges(
-        _unstarted(), frozenset(), MASTER, _Locks(alive={"GH-5"}), [], lands, now=now
+        _unstarted(),
+        frozenset(),
+        MASTER,
+        _Locks(alive={"GH-5"}),
+        [],
+        lands,
+        now=now,
+        memo=StackMemo(),
     )
     assert lands == []
 
@@ -981,7 +989,14 @@ def _ci_no_verdict_world(**pair_over):
 
 def _assessed(ports):
     found = poll.assess_merge(
-        ports, "GH-5", ports.documents.load("GH-5") or {}, 5, frozenset(), MASTER
+        ports,
+        "GH-5",
+        ports.documents.load("GH-5") or {},
+        5,
+        frozenset(),
+        MASTER,
+        cfg=None,
+        memo=StackMemo(),
     )
     assert isinstance(found, poll.MergeAssessment)
     return found.decision

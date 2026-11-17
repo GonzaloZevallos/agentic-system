@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 
 from agentic.core.process.application import merge, poll
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.ci import CiReport
 from tests.core.process.application.test_conflict_probe import _declaring, _land
@@ -48,7 +49,7 @@ def test_a_conflicting_pull_request_with_no_ci_is_refused_on_the_first_poll(tmp_
 
     lands: list = []
     lines: list[str] = []
-    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands)
+    found = poll.gather_merges(ports, frozenset(), MASTER, _Locks(), lines, lands, memo=StackMemo())
 
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: merge_conflict (github)"]
@@ -62,7 +63,14 @@ def test_a_conflicting_pull_request_with_no_ci_is_refused_on_the_first_poll(tmp_
 
 def _assess(ports, number=5):
     return poll.assess_merge(
-        ports, f"GH-{number}", ports.documents.load(f"GH-{number}"), number, frozenset(), MASTER
+        ports,
+        f"GH-{number}",
+        ports.documents.load(f"GH-{number}"),
+        number,
+        frozenset(),
+        MASTER,
+        cfg=None,
+        memo=StackMemo(),
     )
 
 

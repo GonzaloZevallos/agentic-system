@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import ci, rules
 from tests.core.process.application.test_poll import _Locks
 from tests.core.process.application.test_poll_merge import (
@@ -45,7 +46,14 @@ def _ports(tmp_path, *numbers: int, stuck: tuple[int, ...] = (), checks: bool = 
 def _round(ports, minutes: float, **more):
     lines: list[str] = []
     found = poll.gather_merges(
-        ports, frozenset(), MASTER, _Locks(), lines, now=T0 + timedelta(minutes=minutes), **more
+        ports,
+        frozenset(),
+        MASTER,
+        _Locks(),
+        lines,
+        now=T0 + timedelta(minutes=minutes),
+        memo=StackMemo(),
+        **more,
     )
     return found, lines
 
@@ -145,7 +153,9 @@ def test_a_held_round_writes_no_head_key_and_still_says_its_order(tmp_path):
 def test_member_of_a_busy_task_with_a_running_ci_does_not_wait_on_ci(tmp_path):
     ports = _ports(tmp_path, 5)
     raw = _doc(ports, 5)
-    assessed = poll.assess_merge(ports, "GH-5", raw, 5, frozenset(), MASTER)
+    assessed = poll.assess_merge(
+        ports, "GH-5", raw, 5, frozenset(), MASTER, cfg=None, memo=StackMemo()
+    )
     assert not isinstance(assessed, poll.Abandoned)
     waiting = dataclasses.replace(
         assessed, decision=dataclasses.replace(assessed.decision, kind="wait")
@@ -178,7 +188,7 @@ def test_a_busy_head_left_unobserved_for_forty_minutes_keeps_the_head(tmp_path):
         "GH-6", {"head_seen_at": seen, "head_turn_at": seen, "head_charged_s": 600.0}
     )
     round_ = poll.evaluate_landing_order(
-        ports, frozenset(), MASTER, _Locks(), frozenset({"GH-6"}), None, T0
+        ports, frozenset(), MASTER, _Locks(), frozenset({"GH-6"}), None, T0, memo=StackMemo()
     )
     assert round_.head == 6
     turned = next(e.turned for e in round_.entries if e.number == 6)
@@ -309,7 +319,9 @@ def test_a_member_of_a_product_with_an_account_limit_pause_is_paused_unless_busy
     paused = [
         rules.ResumeCandidate(9, "account_limit", ESCALATED_0105, 0, 24, 0, resets_at=RESET_0540)
     ]
-    assessed = poll.assess_merge(ports, "GH-5", raw, 5, frozenset(), MASTER)
+    assessed = poll.assess_merge(
+        ports, "GH-5", raw, 5, frozenset(), MASTER, cfg=None, memo=StackMemo()
+    )
     assert not isinstance(assessed, poll.Abandoned)
     now = ESCALATED_0105 + timedelta(minutes=16)
 

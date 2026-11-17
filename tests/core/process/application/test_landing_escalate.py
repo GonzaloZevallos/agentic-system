@@ -12,6 +12,7 @@ from agentic.core.process.application import landing, landing_fix, landing_plan,
 from agentic.core.process.application.landing_plan import LandingContext
 from agentic.core.process.application.poll import assess_merge
 from agentic.core.process.application.ports import GitError, IssueComment, IssueState, Upstream
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import adr_numbers, ci, rules
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain.task import apply
@@ -483,7 +484,9 @@ def test_land_releases_a_ci_escalation_once_the_base_is_green_and_takes_the_tabl
     ports, dispatched = _red_world(monkeypatch, _green_base(), ancestor=ancestor)
     # GH-374 before the release: the refusal is `ci_failed`, conflicts are not True, nothing is
     # red on the base, and the escalated document's table step is the diagnose.
-    before = poll.assess_merge(ports, "GH-5", _doc(ports), 5, frozenset(), MERGE_MASTER)
+    before = poll.assess_merge(
+        ports, "GH-5", _doc(ports), 5, frozenset(), MERGE_MASTER, cfg=None, memo=StackMemo()
+    )
     assert before.decision.reason == "ci_failed" and before.facts.conflicts is not True
     assert before.facts.ci_red_on_base == ()
     assert (
@@ -599,6 +602,7 @@ def _poll(ports, tmp_path):
         [],
         lands,
         cfg=landing_fix_cfg(tmp_path),
+        memo=StackMemo(),
     )
     return lands
 

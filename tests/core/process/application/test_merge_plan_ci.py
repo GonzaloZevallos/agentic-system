@@ -13,6 +13,7 @@ from agentic.core.process.application.poll import (
     ci_wait_line,
     with_ci,
 )
+from agentic.core.process.application.stack_facts import StackMemo
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable, ci_state
 from tests.core.process.application.test_landing_fix import _land
@@ -69,7 +70,7 @@ def _red_web_world(base: CiReport | CiUnreadable):
 
 def _step(ports) -> str:
     raw = ports.documents.load("GH-5") or {}
-    assessed = assess_merge(ports, "GH-5", raw, 5, frozenset(), MASTER)
+    assessed = assess_merge(ports, "GH-5", raw, 5, frozenset(), MASTER, cfg=None, memo=StackMemo())
     assert isinstance(assessed, MergeAssessment)
     assert assessed.decision == rules.MergeDecision("refuse", "ci_failed")
     return landing_plan.step_for(raw, "ci_failed", assessed.facts, turn="head").kind
@@ -141,7 +142,7 @@ def test_a_task_with_no_required_names_and_no_stack_ci_reads_no_tracker_ci(tmp_p
     assert result.kind == "merged"
     assert "auto_merge_via" not in _doc(ports)
     raw = ports.documents.load("GH-5") or {}
-    assessed = assess_merge(ports, "GH-5", raw, 5, frozenset(), MASTER)
+    assessed = assess_merge(ports, "GH-5", raw, 5, frozenset(), MASTER, cfg=None, memo=StackMemo())
     assert isinstance(assessed, MergeAssessment)
     assert assessed.facts.ci_required == () and assessed.facts.ci_plan_only == ()
     assert ports.tracker.ci_reads == [] and ports.tracker.branch_reads == []
