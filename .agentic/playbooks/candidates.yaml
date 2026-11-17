@@ -2134,3 +2134,13 @@ candidates:
   sources:
   - finding
   added_at: '2026-11-17T04:35:31.113+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the plan says reads go through a shared memo or cache, route every new read through it, keyed at the granularity the invariant names, and add a test with doubles that counts the calls.
+  confidence: medium
+  seen_in:
+  - GH-898
+  sources:
+  - finding
+  - return
+  added_at: '2026-11-17T18:33:25.133+00:00'
