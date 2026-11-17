@@ -38,7 +38,13 @@ classDiagram
     class plan_view__PartEdge["PartEdge"]
     class pull_request__BoundedBody["BoundedBody"]
     class stacking__Absent["Absent"]
+    class stacking__ParentLink["ParentLink"]
     class stacking__StackFacts["StackFacts"]
     class stacking__Unreadable["Unreadable"]
     landing_order__Yield --> landing_order__Member
 ```
+
+## Relaciones con otras páginas
+
+- [domain: state (parte 8)](classes-process-domain-state-8.md)
+  - `stacking.ParentLink` se asocia con `task.StackParent`

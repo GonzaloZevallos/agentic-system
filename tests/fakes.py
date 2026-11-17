@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import dataclasses
 import threading
+from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -1777,6 +1778,9 @@ class MemoryTracker:
         # blocker predicate's "an error of `gh` counts as unresolved" has a rejected
         # input to reject, not only the happy structured answer `states` gives.
         self.state_errors: set[int] = set()
+        # GH-898: how many times `issue_state` was asked for each issue number, failed ones
+        # counted, so a test says how many reads a window made of one parent.
+        self.issue_state_calls: Counter[int] = Counter()
         # `timestamped_comments`'s own answer, keyed by task id -- separate from
         # `earlier`/`issue_comments`, which stay bodies-only, and from `self.comments`
         # above, which is every comment *this fake posted*, not the issue's own.
@@ -2110,6 +2114,7 @@ class MemoryTracker:
             self.close_comments[task_id] = comment
 
     def issue_state(self, number: int) -> IssueState:
+        self.issue_state_calls[number] += 1
         # An issue nobody scripted reads like one `gh` could not read: a `ValueError`, the
         # real adapter's failure, not a `KeyError` no caller catches.
         if number in self.state_errors or number not in self.states:
