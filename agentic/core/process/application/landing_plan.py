@@ -899,6 +899,7 @@ def pending(
             facts.current_master,
             unstarted=landing.landing_pass(raw) == "unstarted",
             names=step.names,
+            stack_since=step.stack_since,
         )
     ):
         return None
