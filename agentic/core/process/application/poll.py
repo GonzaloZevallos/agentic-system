@@ -1372,6 +1372,7 @@ def gather_merges(
     integrating: frozenset[str] = frozenset(),
     *,
     memo: StackMemo,
+    dry_run: bool,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -3012,6 +3013,7 @@ def run_once(
                 resumes,
                 integrating=integrating,
                 memo=stack_memo,
+                dry_run=dry_run,
             )
         for number in reruns:
             blocker_reports.append(rules.BlockerReport())

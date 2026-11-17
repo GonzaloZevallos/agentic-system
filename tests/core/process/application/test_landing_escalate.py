@@ -602,6 +602,7 @@ def _poll(ports, tmp_path):
         [],
         lands,
         cfg=landing_fix_cfg(tmp_path),
+        dry_run=False,
         memo=StackMemo(),
     )
     return lands

@@ -91,7 +91,9 @@ def _ready(ports, number: int, checks: bool = True, **more) -> None:
 
 def _merges(ports, eval_set=frozenset(), master: str | None = MASTER, lock=None):
     lines: list[str] = []
-    found = poll.gather_merges(ports, eval_set, master, lock or _Locks(), lines, memo=StackMemo())
+    found = poll.gather_merges(
+        ports, eval_set, master, lock or _Locks(), lines, dry_run=False, memo=StackMemo()
+    )
     return found, lines
 
 
@@ -840,7 +842,9 @@ def _stuck(**entry):
 
 def _lands(ports, now):
     lands: list[rules.LandCandidate] = []
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, now=now, memo=StackMemo())
+    poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), [], lands, now=now, dry_run=False, memo=StackMemo()
+    )
     return [c.issue for c in lands]
 
 
@@ -883,6 +887,7 @@ def test_an_unstarted_pass_of_a_locked_task_enqueues_nothing():
         [],
         lands,
         now=now,
+        dry_run=False,
         memo=StackMemo(),
     )
     assert lands == []
