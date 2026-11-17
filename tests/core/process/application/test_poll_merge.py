@@ -10,7 +10,14 @@ from datetime import UTC, datetime
 from typing import Literal, get_args
 
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.application import landing, landing_sync, merge, poll, resume
+from agentic.core.process.application import (
+    landing,
+    landing_sync,
+    merge,
+    poll,
+    refusal_note,
+    resume,
+)
 from agentic.core.process.application.ports import (
     IssueComment,
     LockRecord,
@@ -476,9 +483,9 @@ def test_execute_spawns_the_merge_verb_and_never_comments(tmp_path):
 
 
 def test_both_prefixes_start_the_way_the_plan_says_and_are_system_comments():
-    assert poll.AUTO_MERGE_REFUSED == "Auto-merge refused: "
+    assert refusal_note.AUTO_MERGE_REFUSED == "Auto-merge refused: "
     assert poll.AUTO_MERGED == "Auto-merged: "
-    assert poll.AUTO_MERGE_REFUSED in resume.SYSTEM_COMMENTS
+    assert refusal_note.AUTO_MERGE_REFUSED in resume.SYSTEM_COMMENTS
     assert poll.AUTO_MERGED in resume.SYSTEM_COMMENTS
 
 

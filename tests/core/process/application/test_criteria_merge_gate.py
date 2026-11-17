@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from agentic.core.knowledge.domain import knowledge
-from agentic.core.process.application import landing, landing_plan, merge
+from agentic.core.process.application import landing, landing_plan, merge, refusal_note
 from agentic.core.process.application.ports import GitError, Upstream
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -169,7 +169,7 @@ def test_the_merge_verb_refuses_on_the_same_facts_and_comments_the_files(tmp_pat
     [(_, comment)] = ports.tracker.comments
     assert comment.splitlines()[0] == f"Auto-merge refused: {HEAD} criteria_over_cap"
     assert f"`{DOC}`: {CAP + 5} lines (cap {CAP})" in comment
-    assert comment.endswith(merge.LEFT_TO_HUMAN)
+    assert comment.endswith(refusal_note.LEFT_TO_HUMAN)
     assert ports.workspace.merge_base_asks == [(HEAD, MASTER)]
 
 

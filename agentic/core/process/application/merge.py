@@ -52,7 +52,6 @@ from .deliver import READY
 from .delivered import files_patch, size_patch
 from .escalate import ESCALATED
 from .poll import (
-    AUTO_MERGE_REFUSED,
     AUTO_MERGED,
     LANDING,
     _merge_facts,
@@ -76,6 +75,15 @@ from .ports import (
 )
 from .preflight import criteria_regressed, product_name
 from .presubmit import CheckoutPresubmit, readiness_of, reuse_of
+from .refusal_note import (
+    AUTO_MERGE_REFUSED,
+    LEFT_TO_HUMAN,
+    STACK_EVIDENCE,
+    _criteria_evidence,
+    _perf_evidence,
+    closing_for,
+    read_comments,
+)
 from .release import release_after_merge, release_checkout
 from .stack_facts import StackMemo, stack_facts
 
@@ -121,21 +129,6 @@ UNCOMMENTED: tuple[str, ...] = (
     "stack_restack_due",
 )
 
-# What a stacking refusal says in a comment (GH-859): one fixed phrase per value, keyed by the
-# refusal, never a word of the parent, its issue or the record. Only `stack_base_orphaned` is
-# commented; the other two are listed so that no stacking value has a comment without a phrase.
-STACK_EVIDENCE: dict[str, str] = {
-    "stack_parent_unmerged": "The parent this task is stacked on has not merged yet.",
-    "stack_restack_due": "The parent merged; this task takes the base branch in once.",
-    "stack_base_orphaned": (
-        "The commit this task was built on will never reach the base branch: its parent was "
-        "rebuilt, closed without merging, merged without a merge commit, or the record of the "
-        "parent could not be read."
-    ),
-}
-
-LEFT_TO_HUMAN = "Left for the human to merge."
-
 # Nothing was committed before the merge worktree existed: every head differs from it, so
 # `CheckoutPresubmit` runs the checks even when the upstream was already in the head.
 _NOTHING_BEFORE = ""
@@ -161,15 +154,6 @@ class MergeResult:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def read_comments(ports: Ports, task_id: str) -> list[IssueComment] | None:
-    """The issue's comments with their instants, read once per merge decision (GH-784); `None`
-    when the read fails, which `escalation_hold` turns into an unknown fact, never a clear one."""
-    try:
-        return ports.tracker.timestamped_comments(task_id)
-    except (ValueError, OSError):
-        return None
 
 
 def _held_by_state(state: TaskState) -> bool:
@@ -1625,14 +1609,6 @@ def _adr_evidence(facts: rules.MergeFacts) -> str:
     return ""
 
 
-def _perf_evidence(facts: rules.MergeFacts) -> str:
-    """What a `perf_unverified` refusal says, one fixed line from the structured facts: the
-    run's head when it differs from the pull request's, else its verdict (`none`: no run)."""
-    if facts.perf_verdict == "approved":
-        return f"measured {facts.perf_head or 'none'}, head {facts.pr_head}"
-    return f"verdict {facts.perf_verdict or 'none'}"
-
-
 def _drawing_evidence(facts: rules.MergeFacts) -> str:
     """What a `drawing_unsettled` refusal says, one fixed line from the structured facts: how
     many rows are open and whether the record's head still covers the pull request's:
@@ -1645,12 +1621,6 @@ def _drawing_evidence(facts: rules.MergeFacts) -> str:
     else:
         head = "moved"
     return f"open={facts.drawing_open} head={head}"
-
-
-def _criteria_evidence(facts: rules.MergeFacts) -> str:
-    """What a `criteria_over_cap` refusal says: the messages `knowledge` wrote, one per
-    line (file, count, cap), and nothing this module counted. An unreadable read has none."""
-    return "\n".join(f"- {message}" for message in facts.criteria_regressed or ())
 
 
 def _summary_line(comment: str) -> str:
@@ -1685,7 +1655,7 @@ def _refuse(
             if facts is not None
             else None
         )
-        closing = LEFT_TO_HUMAN if step is None or step.kind == "none" else ""
+        closing = closing_for(step)
         first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
         summary = ""
         text = "\n\n".join(part for part in (first, closing) if part)
