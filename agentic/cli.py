@@ -620,8 +620,8 @@ def build_parser() -> CommandTree:
         ("dashboards", "apply"),
         dashboards_sub,
         "apply",
-        help="write the product's four dashboards into the local Langfuse's Postgres, "
-        "idempotently (ADR-0051)",
+        help="write the one dashboard, the same for both products, into the local "
+        "Langfuse's Postgres, idempotently (ADR-0051)",
     )
     dashboards_apply.add_argument(
         "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"
@@ -3351,6 +3351,7 @@ def _backfill_one(
     ids = task_scores.identity(product, task_id, moment.start)
     scores = task_scores.task_scores(
         document,
+        task_time=moment,
         pr_merged_at=pr_merged,
         issue_created_at=created,
         pr_created_at=pr_created,
@@ -3387,6 +3388,19 @@ def _needs_github(loaded: Sequence[tuple[str, Mapping[str, Any] | None]]) -> boo
     )
 
 
+RETIRE_TIMEOUT = "skipped:retire_timeout"
+"""The outcome of a document whose merge-dated scores could not be retired in time: nothing of
+it is written, it counts as partial and the exit is 1."""
+
+
+def _retire_merge_dated(scorer: LangfuseScores, scores: Sequence[task_scores.Score]) -> bool:
+    """Deletes the merge-dated scores of a document before the backfill writes them again
+    (GH-819): Langfuse keeps the first timestamp of an id, so a score first written at the
+    task's end would stay on that day. `True` when there was nothing to retire or all are gone."""
+    ids = [score.id for score in scores if task_scores.merge_dated(score.name)]
+    return scorer.retire(ids) if ids else True
+
+
 def _needed_by(loaded: Sequence[tuple[str, Mapping[str, Any] | None]]) -> frozenset[int]:
     """The issue and pull request numbers the finished documents look up in the listing."""
     return needed_numbers(
@@ -3410,7 +3424,11 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     """`agentic scores backfill [--product-dir PATH] [--dry-run]` (GH-273): every finished
     task document of the product (`ready_for_review`, `discarded` or closed) is scored on
     its own carrier trace, read-only over the documents. Ids are derived, so a rerun sends
-    the same ones and fills gaps without duplicating (ADR-0037, addendum). One line per
+    the same ones and fills gaps without duplicating (ADR-0037, addendum). Langfuse keeps the
+    first timestamp of an id, so the merge-dated scores of a document are retired (deleted,
+    then awaited) before they are written again at the merge; a retire that runs out of time
+    prints `skipped:retire_timeout`, writes nothing of that document, counts as partial.
+    One line per
     document, then a count by outcome; exit 1 when any document was partial or failed.
     After `BACKFILL_TRANSPORT_FAILURES` consecutive failed writes it stops and says so.
     `--dry-run` reads everything (`gh` included) and writes nothing to Langfuse. GitHub is
@@ -3476,13 +3494,16 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
             and moment is not None
             and dims is not None
         ):
-            if scorer.write(product, task_id, document, scores, moment, dims):
+            retired = _retire_merge_dated(scorer, scores)
+            if not retired:
+                outcome = RETIRE_TIMEOUT
+            elif scorer.write(product, task_id, document, scores, moment, dims):
                 consecutive_failures = 0
             else:
                 outcome = "failed"
                 consecutive_failures += 1
         print(f"agentic: {task_id}: {outcome}")
-        key = "partial" if outcome.startswith("partial") else outcome
+        key = "partial" if outcome.startswith("partial") or outcome == RETIRE_TIMEOUT else outcome
         counts[key] = counts.get(key, 0) + 1
         if consecutive_failures >= BACKFILL_TRANSPORT_FAILURES:
             print(f"agentic: stopped after {consecutive_failures} consecutive failed writes")
@@ -3500,8 +3521,9 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
 
 async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
     """`agentic dashboards apply [--product-dir PATH] [--dry-run] [--verify]` (GH-274,
-    ADR-0051): the product's four dashboards, written into Langfuse's Postgres and read
-    back. One line per create, update and delete, then a count. `--verify` adds
+    ADR-0051): the one dashboard, the same from either product's directory, written
+    into Langfuse's Postgres and read back. One line per create, update and delete, then a
+    count. `--verify` adds
     `<dashboard>/<widget>: <n> rows` per widget. Exit 1 on a read-back mismatch or a widget
     that reads nothing; exit 2 before touching anything when a variable is missing or the
     tables are not the recorded ones. The adapters (and `psycopg`) load here and nowhere
@@ -3509,16 +3531,12 @@ async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
     missing = composition.missing_dashboard_variables(verify=verify)
     if missing:
         raise CannotStart(f"no Langfuse database configured: set {', '.join(missing)}")
-    try:
-        product = ports.stack.product()
-    except (ValueError, OSError) as exc:
-        raise CannotStart(str(exc)) from exc
     store = composition.dashboard_store()
     if store is None:
         raise CannotStart("no Langfuse database configured")
     try:
         data = composition.widget_data(store.project_id()) if verify else None
-        report = dashboards_app.apply_dashboards(product, store, dry_run=dry_run, data=data)
+        report = dashboards_app.apply_dashboards(store, dry_run=dry_run, data=data)
     except (
         dashboards_app.ColumnDrift,
         dashboards_app.UnknownProject,
@@ -3690,6 +3708,7 @@ def _write_scores(
             return
         scores = task_scores.task_scores(
             document,
+            task_time=span,
             pr_merged_at=pr_merged_at,
             issue_created_at=issue_created_at,
             pr_created_at=pr_created_at,

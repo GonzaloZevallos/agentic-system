@@ -1,7 +1,7 @@
-"""The Langfuse dashboard definitions, their diff and the README widget table (GH-274,
-ADR-0051): `agentic.core.measurement.domain.dashboards`."""
+"""The Langfuse dashboard definition, its diff and the README widget table (GH-274, GH-819,
+ADR-0051): `agentic.core.measurement.domain.dashboards`. The golden fixture is the oracle for
+the shape of every row."""
 
-import hashlib
 import json
 import re
 from dataclasses import replace
@@ -19,103 +19,162 @@ GOLDEN = json.loads(
         Path(__file__).resolve().parents[4] / "tests/fixtures/langfuse_dashboards/golden.json"
     ).read_text(encoding="utf-8")
 )
-PRODUCT = "agentic-system"
+TITLE = "¿Dónde se va el tiempo?"
 
 
 def built() -> tuple[d.DashboardSpec, ...]:
-    return d.build_dashboards(PRODUCT)
+    return d.build_dashboards()
 
 
 def widgets() -> list[d.WidgetSpec]:
     return [w for dash in built() for w in dash.widgets]
 
 
-def all_rows(product: str = PRODUCT) -> list[d.Row]:
-    return d.rows(d.build_dashboards(product))
+def by_key(key: str) -> d.WidgetSpec:
+    return next(w for w in widgets() if w.key == key)
 
 
-def env_filter(product: str) -> dict:
-    return {
+def all_rows() -> list[d.Row]:
+    return d.rows(built())
+
+
+# --- one dashboard for both products ---------------------------------------------------------
+
+
+def test_exactly_one_dashboard_is_built_and_it_names_no_old_one():
+    assert [dash.key for dash in built()] == ["time"]
+    assert built()[0].title == TITLE
+    source = Path(d.__file__).read_text(encoding="utf-8")
+    for old in ("_overview", "_improvement", "_operation", "_money", "Panorama", "Operación"):
+        assert old not in source
+
+
+def test_no_widget_carries_an_environment_filter_and_the_dashboard_stores_none():
+    for widget in widgets():
+        assert all(f["column"] != "environment" for f in widget.row().filters), widget.key
+    assert built()[0].row().filters == []
+
+
+def test_a_widget_with_an_environment_filter_cannot_be_constructed():
+    good = widgets()[0]
+    env = {
         "column": "environment",
         "type": "stringOptions",
         "operator": "any of",
-        "value": [product],
+        "value": ["agentic-system"],
     }
-
-
-# --- the four dashboards and the environment filter ---------------------------------------
-
-
-def test_the_four_dashboards_are_built_with_spanish_titles_and_the_product_suffix():
-    titles = [dash.title for dash in built()]
-    assert titles == [
-        f"Panorama · {PRODUCT}",
-        f"Mejora del sistema · {PRODUCT}",
-        f"Operación · {PRODUCT}",
-        f"Dónde va la plata · {PRODUCT}",
-    ]
-    assert [dash.key for dash in built()] == ["overview", "improvement", "operation", "money"]
-
-
-def test_every_widget_carries_the_environment_filter_of_its_product():
-    assert widgets()
-    for widget in widgets():
-        assert env_filter(PRODUCT) in widget.row().filters, widget.key
-
-
-def test_widgets_are_built_for_the_product_asked_never_for_another():
-    other = [w for dash in d.build_dashboards("other") for w in dash.widgets]
-    for widget in other:
-        assert env_filter("other") in widget.row().filters
-        assert env_filter(PRODUCT) not in widget.row().filters
-
-
-def test_a_widget_without_the_environment_filter_cannot_be_constructed():
-    good = widgets()[0]
     with pytest.raises(ValueError, match="environment"):
-        replace(good, filters=tuple(f for f in good.filters if f["column"] != "environment"))
-
-
-def test_a_widget_whose_environment_filter_names_another_product_cannot_be_constructed():
-    good = widgets()[0]
-    wrong = tuple(env_filter("other") if f["column"] == "environment" else f for f in good.filters)
-    with pytest.raises(ValueError, match="environment"):
-        replace(good, filters=wrong)
+        replace(good, filters=(*good.filters, env))
 
 
 def test_a_widget_reading_a_name_that_is_not_a_score_cannot_be_constructed():
-    good = next(w for w in widgets() if w.scores)
+    good = widgets()[0]
     bad = tuple({**f, "value": ["made_up"]} if f["column"] == "name" else f for f in good.filters)
     with pytest.raises(ValueError, match="not a task score"):
         replace(good, filters=bad)
 
 
-def test_no_widget_filters_unknown_out_of_a_breakdown():
-    for widget in widgets():
-        for f in widget.filters:
-            assert d.UNKNOWN not in json.dumps(f["value"]), widget.key
-            if f["column"] == "traceRelease":
-                raise AssertionError(f"{widget.key} filters the release axis")
-
-
-def test_a_filter_that_drops_unknown_cannot_be_constructed():
+def test_a_filter_that_drops_unknown_or_touches_the_release_cannot_be_constructed():
     good = widgets()[0]
+    release = {
+        "column": "traceRelease",
+        "type": "stringOptions",
+        "operator": "none of",
+        "value": ["unknown"],
+    }
     with pytest.raises(ValueError, match="unknown"):
-        replace(
-            good,
-            filters=(
-                *good.filters,
-                {
-                    "column": "traceRelease",
-                    "type": "stringOptions",
-                    "operator": "none of",
-                    "value": ["unknown"],
-                },
-            ),
-        )
+        replace(good, filters=(*good.filters, release))
+    dropping = {**release, "column": "name", "operator": "none of", "value": ["cycle_h"]}
+    with pytest.raises(ValueError, match="unknown"):
+        replace(good, filters=(*good.filters, dropping))
 
 
-# --- the stored shape ----------------------------------------------------------------------
+def test_a_chart_config_key_nobody_verified_cannot_be_constructed():
+    good = by_key("hours_by_stage")
+    with pytest.raises(ValueError, match="not verified"):
+        replace(good, extra={"made_up_key": True})
+    with pytest.raises(ValueError, match="not verified"):
+        replace(by_key("share_by_stage"), extra={"show_value_labels": True})
+
+
+def test_a_widget_on_the_observations_view_cannot_be_built():
+    bad: dict[str, Any] = {"view": "OBSERVATIONS"}
+    with pytest.raises(ValueError, match="OBSERVATIONS"):
+        replace(widgets()[0], **bad)
+
+
+# --- the widgets the owner approved ------------------------------------------------------------
+
+
+def test_the_main_chart_is_horizontal_bars_of_stage_hours_with_value_labels_and_a_pie_beside():
+    bars, pie = by_key("hours_by_stage").row(), by_key("share_by_stage").row()
+    for row, chart in ((bars, "HORIZONTAL_BAR"), (pie, "PIE")):
+        assert row.chart_type == chart and row.view == "SCORES_NUMERIC"
+        assert row.dimensions == [{"field": "name"}]
+        assert row.metrics == [{"measure": "value", "agg": "sum"}]
+        assert row.filters[0]["value"] == list(task_scores.FAMILIES["stage_h"])
+    assert bars.chart_config == {
+        "type": "HORIZONTAL_BAR",
+        "row_limit": 100,
+        "show_value_labels": True,
+    }
+    assert pie.chart_config == {"type": "PIE", "row_limit": 100}
+
+
+def test_the_headline_numbers_are_the_two_medians_and_the_count_of_tasks_without_a_split():
+    one = by_key("cycle_median").row()
+    two = by_key("cycle_active_median").row()
+    assert (one.chart_type, one.metrics, one.filters[0]["value"]) == (
+        "NUMBER",
+        [{"measure": "value", "agg": "p50"}],
+        ["cycle_h"],
+    )
+    assert (two.metrics, two.filters[0]["value"]) == (
+        [{"measure": "value", "agg": "p50"}],
+        ["cycle_active_h"],
+    )
+    partial = by_key("tasks_without_split").row()
+    assert partial.view == "SCORES_BOOLEAN" and partial.chart_type == "NUMBER"
+    assert partial.metrics == [{"measure": "count", "agg": "count"}]
+    assert partial.filters == [
+        {
+            "column": "name",
+            "type": "stringOptions",
+            "operator": "any of",
+            "value": ["stage_split_known"],
+        },
+        {"column": "booleanValue", "type": "boolean", "operator": "=", "value": False},
+    ]
+
+
+def test_the_weekly_trend_stacks_the_ten_stages_placed_by_the_merge():
+    trend = by_key("hours_by_stage_per_week")
+    assert trend.row().chart_type == "BAR_TIME_SERIES"
+    assert trend.scores == task_scores.FAMILIES["stage_h"] and len(trend.scores) == 10
+    assert trend.placed_by == "pr_merged_at"
+
+
+def test_the_slowest_table_lists_ten_tasks_by_cycle_hours_with_their_slowest_stage():
+    row = by_key("slowest_tasks").row()
+    assert row.chart_type == "PIVOT_TABLE"
+    assert row.dimensions == [{"field": "traceName"}, {"field": "name"}]
+    assert row.metrics == [{"measure": "value", "agg": "max"}]
+    assert row.filters[0]["value"] == list(task_scores.FAMILIES["slowest_stage"])
+    assert row.chart_config == {
+        "type": "PIVOT_TABLE",
+        "row_limit": 10,
+        "defaultSort": {"column": "max_value", "order": "DESC"},
+    }
+
+
+def test_no_range_and_no_bucket_are_stored():
+    for row in all_rows():
+        text = json.dumps(row.columns())
+        for stored in ("granularity", "dateRange", "fromTimestamp", "bucket"):
+            assert stored not in text
+
+
+# --- the stored shape, against the golden ---------------------------------------------------------
 
 WIDGET_COLUMNS = {
     c["column"]
@@ -129,18 +188,17 @@ DASHBOARD_COLUMNS = {
     if c["table"] == "dashboards"
     and c["column"] not in {"created_at", "updated_at", "created_by", "updated_by", "project_id"}
 }
+BUNDLE_KEYS = set(d.BUNDLE_CONFIG_KEYS)
+"""`chart_config` keys read in the image bundle, not in the golden (ADR-0051 addendum)."""
 
 
-def test_a_widget_row_has_the_field_set_of_the_golden():
+def test_a_widget_row_has_the_field_set_and_chart_config_keys_of_the_golden_or_the_bundle():
     preset = GOLDEN["preset_widgets"][0]
+    golden_keys = set(preset["chart_config"]) | {"type", "row_limit"}
     for widget in widgets():
         stored = widget.row().columns()
-        assert (
-            set(stored)
-            == WIDGET_COLUMNS
-            == set(preset) - {"created_at", "updated_at", "created_by", "updated_by", "project_id"}
-        )
-        assert set(stored["chart_config"]) <= set(preset["chart_config"]) | {"type", "row_limit"}
+        assert set(stored) == WIDGET_COLUMNS
+        assert set(stored["chart_config"]) <= golden_keys | BUNDLE_KEYS, widget.key
         assert stored["chart_config"]["type"] == stored["chart_type"]
         assert all(set(x) == {"field"} for x in stored["dimensions"])
         assert all(set(x) == {"measure", "agg"} for x in stored["metrics"])
@@ -158,13 +216,11 @@ def test_widget_values_are_ones_the_golden_catalogues():
         assert stored["view"] in GOLDEN["enums"]['"DashboardWidgetViews"']
         assert stored["chart_type"] in GOLDEN["enums"]['"DashboardWidgetChartType"']
         view = GOLDEN["views_v2"][views[stored["view"]]]
-        dimensions = view["dimensions"]
-        measures = view["measures"]
-        assert all(x["field"] in dimensions for x in stored["dimensions"]), widget.key
-        assert all(m["measure"] in measures for m in stored["metrics"]), widget.key
+        assert all(x["field"] in view["dimensions"] for x in stored["dimensions"]), widget.key
+        assert all(m["measure"] in view["measures"] for m in stored["metrics"]), widget.key
         assert all(m["agg"] in GOLDEN["aggregations"] for m in stored["metrics"])
         for f in stored["filters"]:
-            assert f["column"] in dimensions, (widget.key, f)
+            assert f["column"] in view["dimensions"], (widget.key, f)
             assert f["operator"] in GOLDEN["filter_types"][f["type"]], (widget.key, f)
 
 
@@ -183,7 +239,7 @@ def test_a_dashboard_row_has_the_field_set_of_the_golden_and_places_every_widget
         assert len({(p["x"], p["y"]) for p in placed}) == len(placed)
 
 
-# --- ids and the marker --------------------------------------------------------------------
+# --- ids and the marker -------------------------------------------------------------------
 
 
 def test_ids_are_deterministic_and_unique_across_dashboards_widgets_and_placements():
@@ -196,23 +252,23 @@ def test_ids_are_deterministic_and_unique_across_dashboards_widgets_and_placemen
     assert len(set(every)) == len(every)
 
 
-def test_an_id_is_derived_from_the_product_and_the_stable_keys():
+def test_an_id_is_derived_from_the_scope_and_the_stable_keys():
     dash = built()[0]
     widget = dash.widgets[0]
-    assert dash.row().id == str(d.uuid.uuid5(d.NAMESPACE, f"{PRODUCT}/{dash.key}"))
-    assert widget.row().id == str(d.uuid.uuid5(d.NAMESPACE, f"{PRODUCT}/{dash.key}/{widget.key}"))
-    assert {r.id for r in all_rows("other")}.isdisjoint(r.id for r in all_rows())
+    assert dash.row().id == str(d.uuid.uuid5(d.NAMESPACE, f"all/{dash.key}"))
+    assert widget.row().id == str(d.uuid.uuid5(d.NAMESPACE, f"all/{dash.key}/{widget.key}"))
 
 
-def test_every_row_ends_its_description_with_the_marker_of_its_product():
+def test_every_row_ends_its_description_with_the_scope_marker():
+    assert d.MARKER == "[agentic-dashboards scope=all]"
     for row in all_rows():
-        assert row.description.endswith("\n" + d.marker(PRODUCT)), row.id
-        assert d.product_of(row) == PRODUCT
+        assert row.description.endswith("\n" + d.MARKER), row.id
+        assert d.in_scope(row)
 
 
-def test_a_row_without_a_marker_has_no_product():
-    row = replace(all_rows()[0], description="made by hand")
-    assert d.product_of(row) is None
+def test_a_row_without_the_marker_is_not_in_scope():
+    for text in ("made by hand", f"see {d.MARKER} in the middle"):
+        assert not d.in_scope(replace(all_rows()[0], description=text))
 
 
 # --- descriptions are English; only titles are Spanish -----------------------------------------
@@ -233,24 +289,13 @@ def test_the_spanish_guard_rejects_spanish_with_and_without_accents():
 def test_every_description_is_english_once_its_marker_line_is_removed():
     for row in all_rows():
         text, _, last = row.description.rpartition("\n")
-        assert last == d.marker(PRODUCT), row.id
-        assert text, row.id
-        assert not _spanish(text), (row.id, text)
-
-
-# --- scores read ---------------------------------------------------------------------------
+        assert last == d.MARKER, row.id
+        assert text and not _spanish(text), (row.id, text)
 
 
 def test_every_score_a_widget_reads_is_a_score_name():
     for widget in widgets():
         assert set(widget.scores) <= set(task_scores.SCORE_NAMES), widget.key
-
-
-def test_a_widget_reading_a_family_reads_every_member_of_its_closed_set():
-    by_key = {w.key: w for w in widgets()}
-    assert by_key["returns_by_category"].scores == task_scores.FAMILIES["returns"]
-    assert by_key["failures_by_reason"].scores == task_scores.FAMILIES["failures"]
-    assert by_key["cost_by_role"].scores == task_scores.FAMILIES["cost_usd.role"]
 
 
 # --- plan ----------------------------------------------------------------------------------
@@ -289,36 +334,37 @@ def test_a_marked_row_no_longer_desired_is_deleted_dashboards_before_widgets():
     assert changes.upserts == ()
 
 
-def test_a_row_without_our_marker_or_of_another_product_is_never_deleted():
+def test_a_legacy_product_row_an_unmarked_row_and_a_quoted_marker_survive_plan():
     desired = all_rows()
-    unmarked = replace(desired[0], id="by-hand", description="made by hand")
-    other = all_rows("other")[0]
-    marker_text = replace(
-        desired[0], id="quoted", description=f"see {d.marker(PRODUCT)} in the middle"
+    legacy = replace(
+        desired[0],
+        id="legacy",
+        description="old\n[agentic-dashboards product=agentic-system]",
     )
-    changes = d.plan(desired, [*desired, unmarked, other, marker_text])
+    unmarked = replace(desired[0], id="by-hand", description="made by hand")
+    quoted = replace(desired[0], id="quoted", description=f"see {d.MARKER} in the middle")
+    changes = d.plan(desired, [*desired, legacy, unmarked, quoted])
     assert changes.deletes == ()
 
 
-def test_planning_without_desired_rows_deletes_nothing():
-    assert d.plan([], all_rows()).deletes == ()
-
-
-def test_desired_rows_of_two_products_are_refused():
-    with pytest.raises(ValueError, match="one product"):
-        d.plan([*all_rows(), *all_rows("other")], [])
+def test_planning_without_desired_rows_deletes_only_what_carries_the_marker():
+    stored = all_rows()
+    legacy = replace(stored[0], id="legacy", description="x\n[agentic-dashboards product=p]")
+    assert {r.id for r in d.plan([], [*stored, legacy]).deletes} == {r.id for r in stored}
 
 
 # --- the rows a zero count may be --------------------------------------------------------
 
 
-def test_every_zero_row_exception_names_a_built_widget_and_gives_a_reason():
-    assert d.ZERO_ROW_EXCEPTIONS
+def test_the_only_zero_row_exception_is_the_partial_count_with_its_reason():
+    assert d.ZERO_ROW_EXCEPTIONS == (
+        ("time", "tasks_without_split", "zero is the good case: every merged task had its split"),
+    )
     assert d.exception_problems(d.ZERO_ROW_EXCEPTIONS, built()) == []
 
 
 def test_an_exception_for_a_widget_nobody_builds_is_refused():
-    problems = d.exception_problems((("overview", "nothing", "because"),), built())
+    problems = d.exception_problems((("time", "nothing", "because"),), built())
     assert any("names no widget" in p for p in problems)
 
 
@@ -327,18 +373,12 @@ def test_an_exception_without_a_reason_is_refused():
     assert any("reason" in p for p in d.exception_problems(((key[0], key[1], " "),), built()))
 
 
-def test_an_exception_on_a_base_score_or_on_delivered_cost_is_refused():
-    by_key = {(dash.key, w.key): w for dash in built() for w in dash.widgets}
-    base = next(k for k, w in by_key.items() if set(w.scores) & set(task_scores.BASE_SCORE_NAMES))
-    fixed = next(
-        k
-        for k, w in by_key.items()
-        if "delivered_cost_usd" in w.scores
-        or set(w.scores) & set(task_scores.FAMILIES["delivered_cost_usd.type"])
-    )
-    for key in (base, fixed):
-        problems = d.exception_problems(((*key, "no rows yet"),), built())
-        assert any("may not be empty" in p for p in problems), key
+def test_an_exception_on_a_widget_that_reads_a_score_always_written_is_refused():
+    for widget in widgets():
+        if widget.key == "tasks_without_split":
+            continue
+        problems = d.exception_problems((("time", widget.key, "no rows yet"),), built())
+        assert any("may not be empty" in p for p in problems), widget.key
 
 
 # --- the README table ----------------------------------------------------------------------
@@ -395,12 +435,12 @@ def built_rows() -> list[dict]:
             stored = w.row()
             out.append(
                 {
-                    "dashboard": dash.title.removesuffix(f" · {PRODUCT}"),
+                    "dashboard": dash.title,
                     "title": stored.name,
                     "view": stored.view,
                     "measure": stored.metrics[0]["measure"],
                     "agg": stored.metrics[0]["agg"],
-                    "reads": list(w.scores) or [stored.metrics[0]["measure"]],
+                    "reads": list(w.scores),
                     "breakdown": [x["field"] for x in stored.dimensions],
                     "time": w.placed_by,
                 }
@@ -427,14 +467,14 @@ TABLE_HEAD = "| Dashboard | T | V | M | R | B | Time | N |\n|---|---|---|---|---
 
 def test_a_table_missing_a_widget_is_rejected():
     head = f"{HEADING}\n\n{TABLE_HEAD}\n"
-    row = "| Panorama | Costo | `SCORES_NUMERIC` | `value` · `p50` | `cycle_h` | | | |\n"
+    row = "| Tiempo | Ciclo | `SCORES_NUMERIC` | `value` · `p50` | `cycle_h` | | | |\n"
     documented = documented_widgets(head + row + "\nrest")
     assert len(documented) == 1 != len(built_rows())
 
 
 def test_a_table_naming_a_family_nothing_builds_is_rejected():
     head = f"{HEADING}\n\n{TABLE_HEAD}\n"
-    row = "| Panorama | x | `SCORES_NUMERIC` | `value` · `p50` | `made_up.<Nothing>` | | | |\n"
+    row = "| Tiempo | x | `SCORES_NUMERIC` | `value` · `p50` | `made_up.<Nothing>` | | | |\n"
     with pytest.raises(AssertionError, match="names a family nothing builds"):
         documented_widgets(head + row + "\nrest")
 
@@ -442,81 +482,3 @@ def test_a_table_naming_a_family_nothing_builds_is_rejected():
 def test_a_readme_without_the_section_is_rejected():
     with pytest.raises(AssertionError, match="heading not found"):
         documented_widgets("# nothing here")
-
-
-def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
-    for widget in widgets():
-        assert widget.placed_by == "task_time.end"
-
-
-# --- Costo por modelo reads the per-model score family (GH-283) ----------------------------
-
-# The sha256 of every row but "Costo por modelo" (widgets, then the dashboards that place
-# them), as built before GH-283, for each product. A widget whose planned row moves breaks it.
-# Re-pinned once by GH-299: the failure-reason family iterates `FailureReason`, so the new
-# `stall` reason adds itself to the one row that lists the reasons (nothing else moved).
-# Re-pinned again by GH-319: the role-cost and returns families iterate `ROLES` and
-# `ChangeCategory`, so the Tech Writer roles and the copy categories add their score names.
-# Re-pinned by GH-321: QA Performance joins `ROLES`, so its role-cost score names join the row.
-# Re-pinned by GH-358: the `system_delivery` escalation class joins the escalations row.
-# Re-pinned by GH-391: the `disk_full` failure reason joins the failure-reason row.
-# Re-pinned by GH-409: the `render` failure reason joins the failure-reason row.
-# Re-pinned by GH-462: the `ci` escalation class joins the escalations row.
-# Re-pinned by GH-472: the plan sizer and the plan critics join `ROLES`, so their role-cost score
-# names join the row.
-UNCHANGED_ROWS = {
-    "agentic-system": "d2cdf761df77dc450a5b8d6aca8bf8fdb9230121cb7d14475257a9f4061f6a14",
-    "apostrophe": "e007ff7983ae3f657cb3f08e3fb426640907d4454f8c9bac1bf9bae5cd4a4ac2",
-}
-
-
-def cost_by_model(product: str = PRODUCT) -> d.WidgetSpec:
-    return next(
-        w
-        for dash in d.build_dashboards(product)
-        for w in dash.widgets
-        if (dash.key, w.key) == ("money", "cost_by_model")
-    )
-
-
-def test_costo_por_modelo_sums_the_model_score_family_by_name_in_the_product_environment():
-    widget = cost_by_model()
-    row = widget.row()
-    assert row.name == "Costo por modelo"
-    assert row.view == "SCORES_NUMERIC"
-    assert row.metrics == [{"measure": "value", "agg": "sum"}]
-    assert row.dimensions == [{"field": "name"}]
-    assert row.chart_type == "VERTICAL_BAR"
-    assert env_filter(PRODUCT) in widget.filters
-    assert widget.scores == task_scores.FAMILIES["cost_usd.model"]
-    assert widget.placed_by == "task_time.end"
-
-
-@pytest.mark.parametrize("product", UNCHANGED_ROWS)
-def test_no_widget_but_costo_por_modelo_changes_its_planned_row(product):
-    others = [
-        r.columns() for r in all_rows(product) if getattr(r, "name", "") != "Costo por modelo"
-    ]
-    digest = hashlib.sha256(json.dumps(others, sort_keys=True).encode()).hexdigest()
-    assert digest == UNCHANGED_ROWS[product]
-
-
-@pytest.mark.parametrize("product", UNCHANGED_ROWS)
-def test_the_rows_re_applied_change_nothing(product):
-    desired = all_rows(product)
-    changes = d.plan(desired, all_rows(product))
-    assert changes.upserts == () and changes.deletes == ()
-
-
-def test_the_old_observations_row_is_replaced_not_kept():
-    stale = replace(cost_by_model().row(), view="OBSERVATIONS", dimensions=[])
-    desired = all_rows()
-    stored = [stale if r.id == stale.id else r for r in desired]
-    changes = d.plan(desired, stored)
-    assert [r.id for r in changes.upserts] == [stale.id]
-
-
-def test_a_widget_on_the_observations_view_cannot_be_built():
-    bad: dict[str, Any] = {"view": "OBSERVATIONS"}
-    with pytest.raises(ValueError, match="OBSERVATIONS"):
-        replace(widgets()[0], **bad)

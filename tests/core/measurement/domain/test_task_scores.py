@@ -48,12 +48,21 @@ def document(**over):
     return {**base, **over}
 
 
+END = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+TASK_TIME = ts.TaskTime(START, END)
+
+
+def scores_of(doc, **kwargs):
+    """`task_scores` with the task's own time, which every call needs for its stamps."""
+    return ts.task_scores(doc, task_time=kwargs.pop("task_time", TASK_TIME), **kwargs)
+
+
 def by_name(scores):
     return {s.name: s for s in scores}
 
 
 def test_a_finished_document_gives_every_score_it_has_inputs_for():
-    got = by_name(ts.task_scores(document()))
+    got = by_name(scores_of(document()))
     assert set(got) == {
         "cost_usd",
         "active_h",
@@ -72,7 +81,7 @@ def test_a_finished_document_gives_every_score_it_has_inputs_for():
 
 
 def test_the_base_names_follow_the_closed_list_in_order():
-    got = ts.task_scores(
+    got = scores_of(
         document(delivery_outcome="merged"),
         pr_merged_at="2026-10-02T09:00:00Z",
         issue_created_at="2026-10-01T08:00:00Z",
@@ -84,29 +93,29 @@ def test_the_base_names_follow_the_closed_list_in_order():
 
 def test_a_score_outside_the_closed_list_is_refused():
     with pytest.raises(ValueError):
-        ts.Score(name="made_up", value=1.0, data_type="NUMERIC")
+        ts.Score(name="made_up", value=1.0, data_type="NUMERIC", timestamp=END)
 
 
 def test_active_h_is_run_time_minus_queue_wait_in_hours():
     runs = [run(queue_wait_s=1800.0), run("2026-10-01T11:00:00Z", "2026-10-01T11:30:00Z")]
-    got = by_name(ts.task_scores(document(runs=runs)))
+    got = by_name(scores_of(document(runs=runs)))
     assert got["active_h"].value == pytest.approx(0.5 + 0.5)
 
 
 def test_active_h_is_absent_for_a_document_with_no_timestamps():
-    got = by_name(ts.task_scores(document(runs=[run(started=None, ended=None)])))
+    got = by_name(scores_of(document(runs=[run(started=None, ended=None)])))
     assert "active_h" not in got
 
 
 def test_active_h_is_absent_when_any_run_lacks_or_garbles_a_timestamp():
-    assert "active_h" not in by_name(ts.task_scores(document(runs=[run(), run(ended=None)])))
-    assert "active_h" not in by_name(ts.task_scores(document(runs=[run(started="not a date")])))
-    assert "active_h" not in by_name(ts.task_scores(document(runs=[])))
+    assert "active_h" not in by_name(scores_of(document(runs=[run(), run(ended=None)])))
+    assert "active_h" not in by_name(scores_of(document(runs=[run(started="not a date")])))
+    assert "active_h" not in by_name(scores_of(document(runs=[])))
 
 
 def test_cycle_h_runs_from_the_issue_to_the_merge():
     got = by_name(
-        ts.task_scores(
+        scores_of(
             document(delivery_outcome="merged"),
             pr_merged_at="2026-10-02T12:00:00Z",
             issue_created_at="2026-10-01T09:00:00Z",
@@ -118,46 +127,44 @@ def test_cycle_h_runs_from_the_issue_to_the_merge():
 def test_cycle_h_is_absent_for_a_closed_unmerged_pr_or_a_failed_read():
     closed = document(delivery_outcome="closed")
     assert "cycle_h" not in by_name(
-        ts.task_scores(closed, pr_merged_at=None, issue_created_at="2026-10-01T09:00:00Z")
+        scores_of(closed, pr_merged_at=None, issue_created_at="2026-10-01T09:00:00Z")
     )
     assert "cycle_h" not in by_name(
-        ts.task_scores(closed, pr_merged_at="2026-10-02T12:00:00Z", issue_created_at=None)
+        scores_of(closed, pr_merged_at="2026-10-02T12:00:00Z", issue_created_at=None)
     )
 
 
 @pytest.mark.parametrize("outcome", ["merged", "merged_with_changes", "auto_merged"])
 def test_a_merged_outcome_is_delivered(outcome):
-    got = by_name(ts.task_scores(document(delivery_outcome=outcome)))
+    got = by_name(scores_of(document(delivery_outcome=outcome)))
     assert got["delivered"].value == 1.0
     assert got["delivered"].data_type == "BOOLEAN"
 
 
 def test_a_closed_outcome_is_not_delivered():
-    got = by_name(ts.task_scores(document(delivery_outcome="closed")))
+    got = by_name(scores_of(document(delivery_outcome="closed")))
     assert got["delivered"].value == 0.0
 
 
 def test_delivered_is_absent_without_a_delivery_outcome():
-    assert "delivered" not in by_name(ts.task_scores(document()))
-    assert "delivered" not in by_name(ts.task_scores(document(delivery_outcome="unheard-of")))
+    assert "delivered" not in by_name(scores_of(document()))
+    assert "delivered" not in by_name(scores_of(document(delivery_outcome="unheard-of")))
 
 
 def test_origin_tells_a_followup_from_an_original():
-    follow = by_name(ts.task_scores(document(title=f"{FOLLOWUP_TITLE_PREFIX}12: more")))
+    follow = by_name(scores_of(document(title=f"{FOLLOWUP_TITLE_PREFIX}12: more")))
     assert follow["origin"].value == "followup"
-    assert by_name(ts.task_scores(document()))["origin"].value == "original"
+    assert by_name(scores_of(document()))["origin"].value == "original"
 
 
 def test_origin_is_absent_without_a_title():
-    assert "origin" not in by_name(ts.task_scores(document(title="")))
-    assert "origin" not in by_name(
-        ts.task_scores({k: v for k, v in document().items() if k != "title"})
-    )
+    assert "origin" not in by_name(scores_of(document(title="")))
+    assert "origin" not in by_name(scores_of({k: v for k, v in document().items() if k != "title"}))
 
 
 def test_scores_carry_the_ids_of_the_identity_they_are_given():
     who = ts.identity("shop", "GH-1", START)
-    got = ts.task_scores(document(), identity=who)
+    got = scores_of(document(), identity=who)
     assert {s.id for s in got} == {who.score_id(s.name) for s in got}
     assert len({s.id for s in got}) == len(got)
 
@@ -288,9 +295,9 @@ def test_adding_a_member_to_a_closed_set_adds_a_name():
 
 def test_a_name_no_family_builds_is_refused():
     with pytest.raises(ValueError):
-        ts.Score(name="returns.not_a_category", value=1.0, data_type="NUMERIC")
+        ts.Score(name="returns.not_a_category", value=1.0, data_type="NUMERIC", timestamp=END)
     with pytest.raises(ValueError):
-        ts.Score(name="cost_usd.role.nobody", value=1.0, data_type="NUMERIC")
+        ts.Score(name="cost_usd.role.nobody", value=1.0, data_type="NUMERIC", timestamp=END)
 
 
 def history(*categories, by=None):
@@ -305,7 +312,7 @@ def test_returns_equals_the_sum_of_its_categories():
         changes_requested={"a→b": 2, "c→d": 1},
         change_history=history("spec-behaviour", "spec-behaviour", "definition"),
     )
-    got = by_name(ts.task_scores(doc))
+    got = by_name(scores_of(doc))
     parts = {n: s.value for n, s in got.items() if n.startswith("returns.")}
     assert parts == {"returns.spec-behaviour": 2.0, "returns.definition": 1.0}
     assert got["returns"].value == sum(parts.values())
@@ -317,11 +324,11 @@ def test_a_landing_reopen_is_not_a_return_category():
         changes_requested={"a→b": 1},
         change_history=history("spec-behaviour") + history("definition", by="landing"),
     )
-    assert "returns.definition" not in by_name(ts.task_scores(doc))
+    assert "returns.definition" not in by_name(scores_of(doc))
 
 
 def test_a_category_nobody_returned_is_omitted_not_zero():
-    got = by_name(ts.task_scores(document(change_history=[])))
+    got = by_name(scores_of(document(change_history=[])))
     assert not [n for n in got if n.startswith("returns.")]
 
 
@@ -335,7 +342,7 @@ def test_failures_count_by_reason_and_skip_an_unknown_reason():
             {"reason": "from_the_future", "cost_usd": 0.1},
         ]
     )
-    got = by_name(ts.task_scores(doc))
+    got = by_name(scores_of(doc))
     assert got["failures.account_limit"].value == 2.0
     assert got["failures.schema"].value == 1.0
     assert {n for n in got if n.startswith("failures.")} == {
@@ -354,7 +361,7 @@ def test_escalations_count_by_class_from_the_pause_log_only():
             {"kind": "escalation", "value": "cap"},
         ]
     )
-    got = by_name(ts.task_scores(doc))
+    got = by_name(scores_of(doc))
     assert got["escalations.returns"].value == 2.0
     assert got["escalations.cap"].value == 1.0
     assert {n for n in got if n.startswith("escalations.")} == {
@@ -371,7 +378,7 @@ def test_escalations_score_the_same_with_and_without_at():
         {"kind": "escalation", "value": "cap"},
     ]
     stamped = [{**e, "at": "2026-11-06T10:00:00+00:00"} for e in bare]
-    assert ts.task_scores(document(pause_log=stamped)) == ts.task_scores(document(pause_log=bare))
+    assert scores_of(document(pause_log=stamped)) == scores_of(document(pause_log=bare))
 
 
 def test_cost_by_role_sums_the_runs_of_a_slug():
@@ -384,35 +391,35 @@ def test_cost_by_role_sums_the_runs_of_a_slug():
             run(slug="removed_role", cost_usd=9.0),
         ]
     )
-    got = by_name(ts.task_scores(doc))
+    got = by_name(scores_of(doc))
     assert got["cost_usd.role.developer"].value == 1.5
     assert got["cost_usd.role.pm"].value == 0.25
     assert len([n for n in got if n.startswith("cost_usd.role.")]) == 2
 
 
 def test_delivered_cost_is_the_task_cost_only_when_delivered():
-    got = by_name(ts.task_scores(document(delivery_outcome="merged")))
+    got = by_name(scores_of(document(delivery_outcome="merged")))
     assert got["delivered_cost_usd"].value == 2.5
     assert got["delivered_cost_usd.type.feature"].value == 2.5
-    closed = by_name(ts.task_scores(document(delivery_outcome="closed")))
-    undecided = by_name(ts.task_scores(document()))
+    closed = by_name(scores_of(document(delivery_outcome="closed")))
+    undecided = by_name(scores_of(document()))
     for absent in (closed, undecided):
         assert not [n for n in absent if n.startswith("delivered_cost_usd")]
 
 
 def test_delivered_cost_by_type_needs_a_known_type():
-    got = by_name(ts.task_scores(document(delivery_outcome="merged", type="mystery")))
+    got = by_name(scores_of(document(delivery_outcome="merged", type="mystery")))
     assert "delivered_cost_usd" in got
     assert not [n for n in got if n.startswith("delivered_cost_usd.type.")]
 
 
 def test_cost_by_origin_follows_the_title():
-    original = by_name(ts.task_scores(document()))
+    original = by_name(scores_of(document()))
     assert original["cost_usd.origin.original"].value == 2.5
     assert "cost_usd.origin.followup" not in original
-    follow = by_name(ts.task_scores(document(title=f"{FOLLOWUP_TITLE_PREFIX}12: more")))
+    follow = by_name(scores_of(document(title=f"{FOLLOWUP_TITLE_PREFIX}12: more")))
     assert follow["cost_usd.origin.followup"].value == 2.5
-    assert not [n for n in by_name(ts.task_scores(document(title=""))) if "origin." in n]
+    assert not [n for n in by_name(scores_of(document(title=""))) if "origin." in n]
 
 
 def finding(location, severity="important", subtask="s", claim="c", status="open"):
@@ -437,18 +444,18 @@ def test_findings_important_counts_each_folded_important_row_once():
             finding("c.py:3", severity="observation"),
         ]
     )
-    assert by_name(ts.task_scores(doc))["findings_important"].value == 2.0
+    assert by_name(scores_of(doc))["findings_important"].value == 2.0
 
 
 def test_findings_important_is_zero_with_an_empty_register_and_absent_without_one():
-    assert by_name(ts.task_scores(document(findings=[])))["findings_important"].value == 0.0
-    assert "findings_important" not in by_name(ts.task_scores(document()))
+    assert by_name(scores_of(document(findings=[])))["findings_important"].value == 0.0
+    assert "findings_important" not in by_name(scores_of(document()))
 
 
 def test_followups_is_one_when_filed_zero_after_a_landing_and_unknown_before_it():
-    assert by_name(ts.task_scores(document(followups_filed=True)))["followups"].value == 1.0
-    assert by_name(ts.task_scores(document(landing=[{"step": "merge"}])))["followups"].value == 0.0
-    assert "followups" not in by_name(ts.task_scores(document()))
+    assert by_name(scores_of(document(followups_filed=True)))["followups"].value == 1.0
+    assert by_name(scores_of(document(landing=[{"step": "merge"}])))["followups"].value == 0.0
+    assert "followups" not in by_name(scores_of(document()))
 
 
 def test_checks_red_counts_the_failed_merge_checks_and_is_absent_without_a_record():
@@ -461,17 +468,15 @@ def test_checks_red_counts_the_failed_merge_checks_and_is_absent_without_a_recor
             "not an entry",
         ],
     }
-    assert by_name(ts.task_scores(document(merge_checks=record)))["checks_red"].value == 2.0
+    assert by_name(scores_of(document(merge_checks=record)))["checks_red"].value == 2.0
     green = {"passed": True, "checks": [{"name": "tests", "passed": True}]}
-    assert by_name(ts.task_scores(document(merge_checks=green)))["checks_red"].value == 0.0
-    assert "checks_red" not in by_name(ts.task_scores(document()))
+    assert by_name(scores_of(document(merge_checks=green)))["checks_red"].value == 0.0
+    assert "checks_red" not in by_name(scores_of(document()))
 
 
 def test_a_malformed_register_reads_as_unknown_not_zero():
     got = by_name(
-        ts.task_scores(
-            document(findings="x", merge_checks={"checks": "x"}, pause_log=None, runs=None)
-        )
+        scores_of(document(findings="x", merge_checks={"checks": "x"}, pause_log=None, runs=None))
     )
     assert "findings_important" not in got and "checks_red" not in got
 
@@ -506,7 +511,7 @@ def test_no_real_model_key_lands_in_other():
     runs = [
         run(cost_by_model={key: 1.0 + i}, slug="developer") for i, key in enumerate(REAL_MODEL_KEYS)
     ]
-    got = by_name(ts.task_scores(document(runs=runs)))
+    got = by_name(scores_of(document(runs=runs)))
     assert "cost_usd.model.other" not in got
     assert sum(s.value for n, s in got.items() if n.startswith("cost_usd.model.")) == pytest.approx(
         sum(1.0 + i for i in range(len(REAL_MODEL_KEYS)))
@@ -531,7 +536,7 @@ def test_cost_by_model_sums_every_run_into_its_family_and_a_run_without_it_adds_
             run(),
         ]
     )
-    got = by_name(ts.task_scores(doc))
+    got = by_name(scores_of(doc))
     assert got["cost_usd.model.opus"].value == pytest.approx(2.0)
     assert got["cost_usd.model.haiku"].value == pytest.approx(0.0125)
     assert got["cost_usd.model.other"].value == pytest.approx(0.5)
@@ -542,15 +547,15 @@ def test_cost_by_model_sums_every_run_into_its_family_and_a_run_without_it_adds_
 
 
 def test_a_document_without_cost_by_model_emits_no_model_score():
-    got = by_name(ts.task_scores(document(runs=[run(), run(cost_by_model={})])))
+    got = by_name(scores_of(document(runs=[run(), run(cost_by_model={})])))
     assert not [n for n in got if n.startswith("cost_usd.model.")]
 
 
 def test_a_pass_written_before_the_pull_request_is_no_landing_run_for_the_followups_score():
     before = document(landing=[{"step": "fix_important", "before_pr": True}])
-    assert "followups" not in by_name(ts.task_scores(before))
+    assert "followups" not in by_name(scores_of(before))
     both = document(landing=[{"step": "fix_important", "before_pr": True}, {"step": "merge"}])
-    assert by_name(ts.task_scores(both))["followups"].value == 0.0
+    assert by_name(scores_of(both))["followups"].value == 0.0
 
 
 def test_assignment_alone_gives_one_arm_to_arm_of_eligibility_and_the_score_label():
@@ -621,7 +626,7 @@ def staged_document(resumed=True):
 
 
 def staged_scores(doc=None, **times):
-    return ts.task_scores(
+    return scores_of(
         doc if doc is not None else staged_document(),
         issue_created_at=times.get("issue", ISSUE_AT),
         pr_created_at=times.get("pr", PR_AT),
@@ -647,7 +652,7 @@ def test_the_stage_family_is_the_ten_cycle_stages_and_follows_the_base_names():
 
 def test_a_merged_document_emits_the_ten_stage_hours_numeric_under_the_identity():
     ids = ts.identity("p", "GH-1", START)
-    scores = ts.task_scores(
+    scores = scores_of(
         staged_document(),
         issue_created_at=ISSUE_AT,
         pr_created_at=PR_AT,
@@ -683,7 +688,7 @@ def test_an_open_pause_is_unknown_and_emits_none_of_the_family():
 
 
 def test_the_emitted_stage_names_are_the_whole_family_or_none():
-    for scores in (staged_scores(), staged_scores(merged=None), ts.task_scores(document())):
+    for scores in (staged_scores(), staged_scores(merged=None), scores_of(document())):
         assert stage_names(scores) in (set(STAGE_NAMES), set())
 
 
@@ -692,7 +697,7 @@ def test_the_close_and_the_backfill_calls_give_equal_stage_hours():
     first = {s.name: s.value for s in staged_scores() if s.name in STAGE_NAMES}
     second = {
         s.name: s.value
-        for s in ts.task_scores(
+        for s in scores_of(
             staged_document(),
             pr_merged_at=MERGED_AT,
             issue_created_at=ISSUE_AT,
@@ -731,3 +736,134 @@ def test_stage_row_carries_the_active_hours_of_a_readable_document():
         pr_merged_at=MERGED_AT,
     )
     assert row.active_h == pytest.approx(1.0)
+
+
+# --- merge-dated scores and the stage-derived ones (GH-819) ----------------------------------
+
+MERGE_DATED = (
+    "cycle_h",
+    *ts.FAMILIES["stage_h"],
+    "cycle_active_h",
+    "stage_split_known",
+    *ts.FAMILIES["slowest_stage"],
+)
+MERGE_INSTANT = datetime(2026, 10, 1, 13, 0, tzinfo=UTC)
+
+
+def merged_scores(doc=None, identity=None, **times):
+    return scores_of(
+        doc if doc is not None else staged_document(),
+        identity=identity,
+        issue_created_at=times.get("issue", ISSUE_AT),
+        pr_created_at=times.get("pr", PR_AT),
+        pr_merged_at=times.get("merged", MERGED_AT),
+    )
+
+
+def test_score_time_is_the_merge_for_the_merge_dated_names_and_the_task_end_otherwise():
+    for name in MERGE_DATED:
+        assert ts.score_time(name, TASK_TIME, MERGED_AT) == MERGE_INSTANT
+    for name in ts.SCORE_NAMES:
+        if name not in MERGE_DATED:
+            assert ts.score_time(name, TASK_TIME, MERGED_AT) == END
+            assert ts.score_time(name, TASK_TIME, None) == END
+
+
+def test_score_time_has_no_instant_for_a_merge_dated_name_without_a_readable_merge():
+    for merge in (None, "", "not a date"):
+        assert all(ts.score_time(name, TASK_TIME, merge) is None for name in MERGE_DATED)
+
+
+def test_score_time_reads_the_merge_in_any_offset_as_the_same_instant():
+    assert ts.score_time("cycle_h", TASK_TIME, "2026-10-01T15:00:00+02:00") == MERGE_INSTANT
+    assert ts.score_time("cycle_h", TASK_TIME, "2026-10-01T13:00:00") == MERGE_INSTANT
+
+
+def test_every_emitted_score_is_stamped_by_score_time():
+    for merge in (MERGED_AT, None):
+        for score in merged_scores(merged=merge):
+            assert score.timestamp == ts.score_time(score.name, TASK_TIME, merge)
+
+
+def test_a_merged_document_is_dated_at_the_merge_for_cycle_and_stages():
+    got = by_name(merged_scores())
+    assert got["cycle_h"].timestamp == MERGE_INSTANT
+    assert {got[n].timestamp for n in STAGE_NAMES} == {MERGE_INSTANT}
+    assert got["cost_usd"].timestamp == END
+
+
+def test_the_finish_write_has_no_merge_and_emits_no_merge_dated_score():
+    names = {s.name for s in scores_of(staged_document(), pr_created_at=PR_AT)}
+    assert names.isdisjoint(MERGE_DATED)
+
+
+def test_the_new_scores_follow_the_existing_names_and_the_fixed_ones_keep_their_place():
+    assert ts.FAMILIES["slowest_stage"] == tuple(f"slowest_stage.{n[8:]}" for n in STAGE_NAMES)
+    assert ts.SCORE_NAMES[: len(ts.BASE_SCORE_NAMES)] == ts.BASE_SCORE_NAMES
+    fixed = ts.SCORE_NAMES.index(ts.FIXED_SCORE_NAMES[-1])
+    assert ts.SCORE_NAMES[fixed + 1 :] == ("cycle_active_h", "stage_split_known")
+    assert len(set(ts.SCORE_NAMES)) == len(ts.SCORE_NAMES)
+
+
+def test_cycle_active_h_is_the_cycle_without_the_two_waits():
+    got = by_name(merged_scores())
+    expected = (
+        got["cycle_h"].value - got["stage_h.human_wait"].value - got["stage_h.account_limit"].value
+    )
+    assert got["cycle_active_h"].value == pytest.approx(expected)
+    assert got["cycle_active_h"].data_type == "NUMERIC"
+    assert got["cycle_active_h"].value < got["cycle_h"].value
+
+
+def test_stage_split_known_is_true_with_a_split():
+    got = by_name(merged_scores())["stage_split_known"]
+    assert (got.value, got.data_type) == (1.0, "BOOLEAN")
+
+
+def test_a_split_that_is_unknown_emits_only_stage_split_known_false_among_the_new_scores():
+    scores = merged_scores(staged_document(resumed=False))
+    got = by_name(scores)
+    assert got["stage_split_known"].value == 0.0
+    assert got["stage_split_known"].timestamp == MERGE_INSTANT
+    assert "cycle_active_h" not in got
+    assert not any(n.startswith("slowest_stage.") for n in got)
+    assert stage_names(scores) == set()
+
+
+def test_no_merge_emits_no_stage_split_known_either():
+    assert "stage_split_known" not in by_name(merged_scores(merged=None))
+
+
+def test_slowest_stage_is_one_score_valued_the_cycle_under_the_stage_with_most_hours():
+    got = by_name(merged_scores())
+    slowest = [s for s in got.values() if s.name.startswith("slowest_stage.")]
+    assert len(slowest) == 1
+    hours = {n: got[n].value for n in STAGE_NAMES}
+    top = max(hours, key=lambda n: hours[n])
+    assert slowest[0].name == "slowest_stage." + top.removeprefix("stage_h.")
+    assert slowest[0].value == got["cycle_h"].value
+    assert slowest[0].data_type == "NUMERIC"
+    assert slowest[0].timestamp == MERGE_INSTANT
+
+
+def test_a_tie_for_the_slowest_stage_goes_to_the_first_in_cycle_stage_order(monkeypatch):
+    flat_hours = {name.removeprefix("stage_h."): 1.0 for name in STAGE_NAMES}
+    monkeypatch.setattr(ts.stage_report, "hours", lambda split: flat_hours)
+    got = by_name(merged_scores())
+    assert [n for n in got if n.startswith("slowest_stage.")] == ["slowest_stage.queue"]
+
+
+def test_the_stage_hours_the_active_cycle_and_the_slowest_stage_agree():
+    got = by_name(merged_scores())
+    waits = got["stage_h.human_wait"].value + got["stage_h.account_limit"].value
+    assert got["cycle_active_h"].value == pytest.approx(
+        sum(got[n].value for n in STAGE_NAMES) - waits
+    )
+    assert merged_scores() == merged_scores()
+
+
+def test_two_calls_over_the_same_document_give_the_same_ids_and_timestamps():
+    ids = ts.identity("p", "GH-1", START)
+    first = [(s.id, s.timestamp) for s in merged_scores(identity=ids)]
+    again = [(s.id, s.timestamp) for s in merged_scores(identity=ids)]
+    assert first == again and all(i for i, _ in first)

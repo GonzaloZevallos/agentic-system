@@ -10,7 +10,8 @@ A write is a side channel and never a result: every exception is caught, one lin
 the call and the task, and `write` returns `False`. The line carries the exception's
 class and nothing of its message, because a transport's message may hold the key pair or
 an auth header; no response body is ever read into a line either. Every id comes from
-`task_scores.identity`, and every timestamp from the task's own recorded times.
+`task_scores.identity`, and every timestamp from the score itself (`task_scores.score_time`),
+never computed here.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -43,6 +45,13 @@ INGESTION_PATH = "/api/public/ingestion"
 # `(url, body, headers, timeout_s)` in, `(status, body)` out; raises on anything else.
 Transport = Callable[[str, bytes, dict[str, str], float], tuple[int, bytes]]
 
+# `(method, url, headers, timeout_s)` in, the HTTP status out (an error status is an answer).
+Requester = Callable[[str, str, dict[str, str], float], int]
+
+SCORE_PATH = "/api/public/scores"
+RETIRE_TIMEOUT_S: float = 60
+RETIRE_POLL_S: float = 2
+
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _SERVICE = "agentic-system"
 
@@ -62,6 +71,17 @@ def urllib_transport(
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, b""
+
+
+def urllib_requester(method: str, url: str, headers: dict[str, str], timeout_s: float) -> int:
+    """The default requester: a stdlib request without a body, bounded by `timeout_s`. An
+    HTTP error status is returned, its body is never read."""
+    request = urllib.request.Request(url, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as error:
+        return int(error.code)
 
 
 class _Derived(IdGenerator):
@@ -110,6 +130,11 @@ class LangfuseScores:
         product: str,
         transport: Transport | None = None,
         timeout_s: float = LANGFUSE_TIMEOUT_S,
+        requester: Requester | None = None,
+        retire_timeout_s: float = RETIRE_TIMEOUT_S,
+        poll_interval_s: float = RETIRE_POLL_S,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._host = host.rstrip("/")
         self._product = product
@@ -117,6 +142,45 @@ class LangfuseScores:
         self._authorization = f"Basic {token}"
         self._transport: Transport = transport or urllib_transport
         self._timeout_s = timeout_s
+        self._requester: Requester = requester or urllib_requester
+        self._retire_timeout_s = retire_timeout_s
+        self._poll_interval_s = poll_interval_s
+        self._sleep = sleep
+        self._clock = clock
+
+    def retire(self, score_ids: Sequence[str]) -> bool:
+        """Deletes the scores and waits until Langfuse no longer has them: re-posting an id
+        keeps its first timestamp, so a score that must move to another day has to be gone
+        before it is written again. A `404` on the delete means it is already gone. `True`
+        when every id is gone; `False` when the whole wait (`retire_timeout_s` for all of
+        them) ran out, or a call failed (one line names the id and the exception's class)."""
+        deadline = self._clock() + self._retire_timeout_s
+        for score_id in score_ids:
+            try:
+                if not self._retire_one(score_id, deadline):
+                    return False
+            except Exception as error:
+                detail = f" ({error})" if isinstance(error, Rejected) else ""
+                print(
+                    f"Langfuse retire failed for {score_id}: {type(error).__name__}{detail}",
+                    flush=True,
+                )
+                return False
+        return True
+
+    def _retire_one(self, score_id: str, deadline: float) -> bool:
+        url = f"{self._host}{SCORE_PATH}/{score_id}"
+        headers = {"Authorization": self._authorization}
+        status = self._requester("DELETE", url, headers, self._timeout_s)
+        if status == 404:
+            return True
+        if not 200 <= status < 300:
+            raise Rejected(f"HTTP {status}")
+        while self._requester("GET", url, headers, self._timeout_s) != 404:
+            if self._clock() >= deadline:
+                return False
+            self._sleep(self._poll_interval_s)
+        return True
 
     def write(
         self,
@@ -149,7 +213,7 @@ class LangfuseScores:
             )
             call = "scores"
             if scores:
-                body = self._batch(product, ids, scores, task_time, dimensions)
+                body = self._batch(product, ids, scores, dimensions)
                 self._check_batch(self._post(INGESTION_PATH, body, "application/json"))
         except Exception as error:
             detail = f" ({error})" if isinstance(error, Rejected) else ""
@@ -193,10 +257,8 @@ class LangfuseScores:
         product: str,
         ids: task_scores.Identity,
         scores: Sequence[Score],
-        task_time: TaskTime,
         dimensions: Dimensions,
     ) -> bytes:
-        stamp = _iso(task_time.end)
         metadata = {
             "release": dimensions.release,
             "arm": dimensions.arm,
@@ -206,6 +268,7 @@ class LangfuseScores:
         for score in scores:
             score_id = ids.score_id(score.name)
             value = int(score.value) if score.data_type == "BOOLEAN" else score.value
+            stamp = _iso(score.timestamp)
             events.append(
                 {
                     "id": ids.event_id(score_id),
