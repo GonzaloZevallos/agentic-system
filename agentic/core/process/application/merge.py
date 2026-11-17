@@ -91,6 +91,7 @@ COMMENTED: tuple[str, ...] = (
     "ci_unknown_names",
     "ci_unreadable",
     "perf_unverified",
+    "drawing_unsettled",
     "criteria_over_cap",
     "criteria_unreadable",
     "ci_no_verdict",
@@ -1616,6 +1617,20 @@ def _perf_evidence(facts: rules.MergeFacts) -> str:
     return f"verdict {facts.perf_verdict or 'none'}"
 
 
+def _drawing_evidence(facts: rules.MergeFacts) -> str:
+    """What a `drawing_unsettled` refusal says, one fixed line from the structured facts: how
+    many rows are open and whether the record's head still covers the pull request's:
+    `current` (`rules.head_reviewed` holds), `unreadable` (it is not a full commit id) or
+    `moved` (anything else)."""
+    if not rules.full_commit_id(facts.drawing_head):
+        head = "unreadable"
+    elif rules.head_reviewed(facts.drawing_head, facts.close_docs, facts.pr_head):
+        head = "current"
+    else:
+        head = "moved"
+    return f"open={facts.drawing_open} head={head}"
+
+
 def _criteria_evidence(facts: rules.MergeFacts) -> str:
     """What a `criteria_over_cap` refusal says: the messages `knowledge` wrote, one per
     line (file, count, cap), and nothing this module counted. An unreadable read has none."""
@@ -1677,6 +1692,8 @@ def _refuse(
             )
         if facts is not None and reason == "perf_unverified":
             text = "\n\n".join(part for part in (first, _perf_evidence(facts), closing) if part)
+        if facts is not None and reason == "drawing_unsettled":
+            text = "\n\n".join(part for part in (first, _drawing_evidence(facts), closing) if part)
         if facts is not None and reason == "criteria_over_cap":
             text = "\n\n".join(part for part in (first, _criteria_evidence(facts), closing) if part)
         if reason in ("ci_no_verdict", "ci_stale_exhausted", "ci_untrusted_no_dispatch"):

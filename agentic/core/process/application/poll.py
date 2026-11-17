@@ -309,6 +309,7 @@ def _merge_facts(
     step = checks.get("failed_step")
     partition = rules.important_partition(raw)
     perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(raw)
+    drawing_checked, drawing_head, drawing_open = rules.drawing_merge_facts(raw)
     # GH-784: the one call of `merge.escalation_hold`, in the assembly the poller and the verb both
     # build their facts on (`merge` imports this module, so the import is late). `comments` is
     # the issue's thread, `None` when it was not read or could not be.
@@ -356,6 +357,9 @@ def _merge_facts(
         perf_convened=perf_convened,
         perf_verdict=perf_verdict,
         perf_head=perf_head,
+        drawing_checked=drawing_checked,
+        drawing_head=drawing_head,
+        drawing_open=drawing_open,
         # GH-395: GitHub's reading of this head, off the pull request already read.
         github_conflicting=rules.github_conflicting(pull_request, pr_head),
     )

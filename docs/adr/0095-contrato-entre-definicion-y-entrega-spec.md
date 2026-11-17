@@ -80,3 +80,20 @@ llama. Hasta que salga GH-594 parte 5c, una feature se construye sin Spec, como 
   profundidad.
 - Cuando salgan GH-594 parte 4b y GH-594 parte 5c, la tabla y el párrafo «Qué rige hoy» dejan de
   ser ciertos y se actualizan en esa parte.
+
+## Adenda (GH-809): la línea `Spec:` se lee del issue al reanudar
+
+Una tarea rechazada por `spec_line_malformed`, `slice_unknown` o `slice_missing` se arregla
+editando la línea `Spec:` del issue, pero al reanudar `description` se reconstruye desde la sección
+«Original request» del documento y nadie vuelve a leer el issue.
+
+- En una reanudación (la `pause_log` tiene una entrada `resumed`) de una tarea cuya `description`
+  tenía una línea `Spec:` candidata, bien formada o mal formada, `spec_intake` lee esa línea del
+  issue por el puerto `Inbox` y no de `description` (`spec_delivery.body_source`). El texto leído
+  solo se parsea: no se escribe en el estado ni en el documento.
+- Una lectura fallida (`ValueError` u `OSError`) o un cuerpo vacío es `spec_unreadable` con detalle
+  `unreachable` y una frase fija; ningún texto del cuerpo ni de `gh` llega al motivo, al detalle ni
+  al documento. Un cuerpo leído sin línea no enruta por la spec.
+- «Original request» puede entonces mostrar la línea rota junto a una `spec` válida. La traza es el
+  escalado de clasificación y la entrada `resumed` en la `pause_log`, y la `spec` registrada con su
+  `path`, `slice` y `commit`.

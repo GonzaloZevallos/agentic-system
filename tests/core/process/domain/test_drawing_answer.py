@@ -1,9 +1,9 @@
-"""The drawing-answer domain (GH-766 part 2a-2): which row an answer reaches, when the escalation
-is due, what it says, and which cause a pause carries."""
+"""The drawing-answer domain (GH-766 parts 2a-2, 4a and 5): which row an answer reaches, when the
+escalation is due, what it says, which cause a pause carries, the plan gate and the checks."""
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -15,6 +15,7 @@ from agentic.core.process.domain import (
     rules,
     task,
 )
+from agentic.core.process.domain.schemas import DrawingCheck, DrawingDeparture
 
 AT = "2026-11-15T10:00:00Z"
 
@@ -397,3 +398,134 @@ def test_resume_patch_after_a_document_round_trip_still_goes_to_plan():
     assert again["drawing_escalation"]["stage"] == "plan"
     patch = drawing_answer.resume_patch(again, "ok", None, _answers(again), at=AT)
     assert rules.resume_target(_applied(again, patch)) == "plan"
+
+
+# ---- classify (GH-766 part 5.1) -------------------------------------------------------------
+
+
+def _check(
+    verdict: Literal["matches", "departs", "unverified"],
+    ref: str = "home",
+    element: str | None = "Save",
+) -> DrawingCheck:
+    named = verdict != "unverified"
+    return DrawingCheck(
+        subject="screen",
+        ref=ref,
+        verdict=verdict,
+        drawing="design/home.png" if named else None,
+        element=element if named else None,
+    )
+
+
+def _entry(element: str = "Save") -> DrawingDeparture:
+    return DrawingDeparture(
+        drawing="design/home.png",
+        element=element,
+        shows="a blue button",
+        would_ship="a green button",
+        recommendation="keep the drawing",
+        reason="the owner approved it",
+        raised_by="ux_lead_final",
+    )
+
+
+def _row(element: str = "Save", *, verdict: str | None, fix_passes: int = 0):
+    (row,) = task.departure_records(None, [_departure(element)], AT)
+    answer = None if verdict is None else {"verdict": verdict, "by": "comment", "at": "T1"}
+    return cast(task.DepartureRecord, {**row, "answer": answer, "fix_passes": fix_passes})
+
+
+KEY = "design/home.png:save"
+
+
+def test_a_departs_row_with_no_row_is_raised_with_its_departure():
+    result = drawing_answer.classify(_state(), [_check("departs")], [_entry()])
+    assert result.outcomes == {KEY: "raise"}
+    assert result.raised == [
+        drawing.Departure(
+            drawing="design/home.png",
+            element="Save",
+            shows="a blue button",
+            would_ship="a green button",
+            recommendation="keep the drawing",
+            reason="the owner approved it",
+            raised_by="ux_lead_final",
+        )
+    ]
+    assert [c.verdict for c in result.open] == ["departs"]
+
+
+def test_an_unanswered_row_is_raised_again_without_duplicating_the_row():
+    state = _state(drawing_departures=[_row(verdict=None)])
+    result = drawing_answer.classify(state, [_check("departs")], [_entry()])
+    assert result.outcomes == {KEY: "raise"}
+    assert result.raised == []
+
+
+def test_an_unanswered_row_with_no_entry_is_refused_like_a_missing_one():
+    state = _state(drawing_departures=[_row(verdict=None)])
+    with pytest.raises(drawing_answer.ClassifyMismatch) as error:
+        drawing_answer.classify(state, [_check("departs")], [])
+    assert error.value.cause == "departs_unraised"
+
+
+def test_an_accepted_row_is_settled_and_not_open():
+    state = _state(drawing_departures=[_row(verdict="accept")])
+    result = drawing_answer.classify(state, [_check("departs")], [])
+    assert result.outcomes == {KEY: "settled_accept"}
+    assert result.open == []
+
+
+@pytest.mark.parametrize(
+    ("fix_passes", "outcome"), [(0, "fix_due"), (1, "return_due"), (2, "return_due")]
+)
+def test_a_rejected_row_is_a_fix_then_a_return(fix_passes: int, outcome: str):
+    state = _state(drawing_departures=[_row(verdict="reject", fix_passes=fix_passes)])
+    result = drawing_answer.classify(state, [_check("departs")], [])
+    assert result.outcomes == {KEY: outcome}
+    assert result.raised == []
+    assert [c.verdict for c in result.open] == ["departs"]
+
+
+def test_the_key_ignores_case_and_spaces_of_the_element_and_the_path_spelling():
+    check = DrawingCheck(
+        subject="screen", ref="h", verdict="departs", drawing="./design/home.png", element=" SAVE "
+    )
+    state = _state(drawing_departures=[_row(verdict="accept")])
+    assert drawing_answer.classify(state, [check], []).outcomes == {KEY: "settled_accept"}
+
+
+def test_a_departs_check_with_no_entry_and_no_answered_row_is_refused():
+    with pytest.raises(drawing_answer.ClassifyMismatch) as error:
+        drawing_answer.classify(_state(), [_check("departs")], [])
+    assert error.value.cause == "departs_unraised"
+    assert KEY in str(error.value) and "departures" in str(error.value)
+    assert isinstance(error.value, ValueError)
+
+
+def test_a_departure_without_its_departs_check_is_refused():
+    with pytest.raises(drawing_answer.ClassifyMismatch) as error:
+        drawing_answer.classify(_state(), [_check("matches")], [_entry()])
+    assert error.value.cause == "departure_without_check"
+    assert KEY in str(error.value) and "departs" in str(error.value)
+
+
+def test_open_keeps_input_order_with_unverified_and_unsettled_departs_only():
+    state = _state(drawing_departures=[_row("Done", verdict="accept")])
+    checks = [
+        _check("unverified", ref="a"),
+        _check("matches", ref="b"),
+        _check("departs", ref="c", element="Done"),
+        _check("departs", ref="d", element="Save"),
+        _check("unverified", ref="e"),
+    ]
+    result = drawing_answer.classify(state, checks, [_entry("Save")])
+    assert [c.ref for c in result.open] == ["a", "d", "e"]
+    assert result.outcomes == {"design/home.png:done": "settled_accept", KEY: "raise"}
+
+
+def test_an_unverified_check_is_never_turned_into_a_match():
+    result = drawing_answer.classify(_state(), [_check("unverified")], [])
+    assert result.outcomes == {}
+    assert [c.verdict for c in result.open] == ["unverified"]

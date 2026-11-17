@@ -29,11 +29,11 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__DepartureAnswer["DepartureAnswer"]
-    class task__DepartureRecord["DepartureRecord"]
     class task__DependencyState["DependencyState"]
     class task__DesignItemRecord["DesignItemRecord"]
+    class task__DrawingChecksRecord["DrawingChecksRecord"]
     class task__DrawingEscalation["DrawingEscalation"]
+    class task__DrawingRow["DrawingRow"]
     class task__EscalationPatch["EscalationPatch"]
     class task__EscalationPauseEntry["EscalationPauseEntry"]
     class task__EstimateRecord["EstimateRecord"]
@@ -43,13 +43,13 @@ classDiagram
     class task__Failure["Failure"]
     class task__FailurePauseEntry["FailurePauseEntry"]
     class task__FindingRecord["FindingRecord"]
+    class task__FinishedPatch["FinishedPatch"]
+    task__EvaluatedPatch --|> task__FinishedPatch
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: state (parte 4)](classes-process-domain-state-4.md)
+- [domain: state (parte 3)](classes-process-domain-state-3.md)
   - `spec_route.SpecRefusalPatch` hereda de `task.EscalationPatch`
-- [domain: state (parte 6)](classes-process-domain-state-6.md)
-  - `task.EvaluatedPatch` hereda de `task.FinishedPatch`
 - [domain: state (parte 8)](classes-process-domain-state-8.md)
   - `task.TaskState` se asocia con `task.EvaluationRef`

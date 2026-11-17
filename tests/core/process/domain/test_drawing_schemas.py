@@ -16,6 +16,7 @@ from agentic.core.process.domain.schemas import (
     DefinitionTurn,
     DrawingCheck,
     DrawingDeparture,
+    FinalDesignReview,
     RoleOutput,
 )
 
@@ -75,6 +76,46 @@ def test_a_check_with_an_invalid_drawing_path_is_rejected(path: str):
 def test_a_check_with_an_invalid_path_is_rejected_even_when_unverified():
     with pytest.raises(ValidationError):
         DrawingCheck(subject="screen", ref="h", verdict="unverified", drawing="a:b", element="x")
+
+
+def test_the_final_design_review_has_the_two_drawing_fields_and_accepts_empty_lists():
+    assert {"drawing_checks", "departures"} <= set(FinalDesignReview.model_fields)
+    assert issubclass(FinalDesignReview, s.DesignReview)
+    review = FinalDesignReview(
+        markdown="m", verdict="approved", reason="ok", items=[], drawing_checks=[], departures=[]
+    )
+    assert review.drawing_checks == [] and review.departures == []
+    with pytest.raises(ValidationError):
+        FinalDesignReview(markdown="m", verdict="approved", reason="ok", items=[], departures=[])
+    with pytest.raises(ValidationError):
+        FinalDesignReview(
+            markdown="m", verdict="approved", reason="ok", items=[], drawing_checks=[]
+        )
+
+
+def test_the_final_design_review_validates_its_rows():
+    ok = FinalDesignReview(
+        markdown="m",
+        verdict="returned",
+        reason="r",
+        items=[],
+        drawing_checks=[
+            DrawingCheck(
+                subject="screen", ref="home", verdict="departs", drawing="a.png", element="x"
+            )
+        ],
+        departures=[DrawingDeparture(**_departure())],
+    )
+    assert len(ok.drawing_checks) == 1 and len(ok.departures) == 1
+    with pytest.raises(ValidationError):
+        FinalDesignReview(
+            markdown="m",
+            verdict="approved",
+            reason="r",
+            items=[],
+            drawing_checks=[{"subject": "screen", "ref": "h", "verdict": "departs"}],
+            departures=[],
+        )
 
 
 def test_a_definition_turn_validates_without_visible():
@@ -160,6 +201,8 @@ def test_visible_exists_only_in_the_definition_turn():
 def test_drawing_checks_and_departures_exist_only_in_answers_consultation_and_subclasses():
     owners = {s.Answers, s.Consultation} | _subclasses(s.Answers) | _subclasses(s.Consultation)
     assert owners >= {s.Answers, s.Consultation, s.ConsultationWithAssumptions}
+    # The final review is the one other owner (a role gets it in 5.2); DesignReview stays clean.
+    owners = owners | {FinalDesignReview}
     assert _with_field("drawing_checks") == owners
     assert _with_field("departures") == owners
 

@@ -142,6 +142,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
             _perf_preface(state),
+            _drawing_preface(state),
             _landing_preface(state, ports),
             unconfirmed,
             undone,
@@ -413,6 +414,13 @@ def _perf_preface(state: TaskState) -> str:
         "(reason, spread and load averages per metric below), so the auto-merge is held and "
         f"the pull request is left to the human:\n\n{rows}"
     )
+
+
+def _drawing_preface(state: TaskState) -> str:
+    """The open rows of the `drawing_checks` record, one fixed line each
+    (`rules.drawing_body_lines`, the one writer of them), after `Performance not verified`.
+    Nothing for a task with no record."""
+    return "\n".join(rules.drawing_body_lines(state))
 
 
 def _landing_preface(state: TaskState, ports: Ports) -> str:

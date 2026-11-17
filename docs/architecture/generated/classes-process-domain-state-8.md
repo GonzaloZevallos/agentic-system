@@ -29,9 +29,6 @@ Esta página muestra las clases públicas de los módulos del grupo `state` de `
 
 ```mermaid
 classDiagram
-    class task__ReleasePatch["ReleasePatch"]
-    class task__RestartPending["RestartPending"]
-    class task__RestartSettledRow["RestartSettledRow"]
     class task__Restoration["Restoration"]
     class task__ResumedPauseEntry["ResumedPauseEntry"]
     class task__ReviewScopeRecord["ReviewScopeRecord"]
@@ -43,14 +40,16 @@ classDiagram
     class task__Subtask["Subtask"]
     class task__TaskInput["TaskInput"]
     class task__TaskState["TaskState"]
+    class task__TrackerActionDone["TrackerActionDone"]
+    class task__TrackerFailure["TrackerFailure"]
+    class task__TrackerFailureRecord["TrackerFailureRecord"]
+    class task__TrackerPosted["TrackerPosted"]
     task__TaskState --> task__StackParent
     task__TaskState --|> task__TaskInput
 ```
 
 ## Relaciones con otras páginas
 
-- [domain: landing (parte 2)](classes-process-domain-landing-2.md)
-  - `landing.ApiBreakAnswer` se asocia con `task.ReleasePatch`
 - [domain: state (parte 4)](classes-process-domain-state-4.md)
   - `task.TaskState` se asocia con `task.ArmAssignment`
 - [domain: state (parte 5)](classes-process-domain-state-5.md)
