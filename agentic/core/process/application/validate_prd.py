@@ -19,6 +19,7 @@ from ..domain.roles import PAIR_PM_PA, PM, PM_BUG, Role
 from ..domain.schemas import VerdictWithSpecDraft
 from ..domain.spec_brief import DRAFT_BLOCK
 from ..domain.task import WAITING_ON_HUMAN, TaskState
+from . import spec_draft
 from .checkouts import SetupFailed, task_checkout_in_thread
 from .ports import Ports
 from .run_role import finish, run_role
@@ -64,6 +65,8 @@ async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> Ta
         if data["definitions"] or data["glossary"]:
             ports.knowledge.consolidate(data, task.path)
             ports.workspace.commit_all(task.path, f"{state['id']}: product definition")
+        if rules.spec_fallback_due(state):
+            patch["spec_draft"] = spec_draft.deliver(state, data, task, cfg, ports)
         patch["status"] = "definition_ready"
     elif rules.on_return_limit(state, PAIR_PM_PA, limit) == "count":
         patch["changes_requested"] = rules.record_return(state, PAIR_PM_PA)

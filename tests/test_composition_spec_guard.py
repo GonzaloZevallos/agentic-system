@@ -135,3 +135,20 @@ def test_a_body_without_a_spec_line_reads_nothing(clone):
 
     assert patch is None
     assert reads == []
+
+
+def test_the_real_validator_calls_a_well_formed_draft_valid_and_a_malformed_one_not(tmp_path):
+    """GH-594 part 5a: `draft_valid` over `DomainSpecValidator` on `draft_text`, the text the
+    system writes: one slice and a Screens section of prose only pass, a body without the
+    sections does not."""
+    validator = default_ports(Configuration(product_dir=tmp_path, owner_login=OWNER)).spec_validator
+    assert validator is not None
+    commit = "a" * 40
+
+    good = validator.validate(spec_delivery.draft_text(BODY), PATH, commit, None, OWNER)
+    bad = validator.validate(
+        spec_delivery.draft_text("# Title\n\nNo sections.\n"), PATH, commit, None, OWNER
+    )
+
+    assert spec_delivery.draft_valid(good) is True
+    assert spec_delivery.draft_valid(bad) is False
