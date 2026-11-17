@@ -3138,6 +3138,9 @@ def design_findings(
             "verdict": kind,
             "reason": reason,
             "items": items or [],
+            # The final leads' `FinalDesignReview` requires both; the design branch ignores them.
+            "drawing_checks": [],
+            "departures": [],
         },
         cost,
     )
