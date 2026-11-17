@@ -123,6 +123,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "lane_admitted",
         "lane_merges",
         "worktree_release_lapse",
+        "stack_unfetchable",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
